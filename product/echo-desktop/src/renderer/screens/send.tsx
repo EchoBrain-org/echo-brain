@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { Member, OpenItemView } from '../../shared/protocol.js';
 import { colorFor, initials } from '../format.js';
-import { itemNames, itemParts, itemTitle, monthDay, nameList, shortNames } from '../needs.js';
+import { approvedMeeting, itemKind, itemNames, itemTitle, monthDay, nameList, shortNames } from '../needs.js';
 import {
   clearPick, closePicker, goHome, pickOwner, searchOwner, sendDecision, sendDetails, sendRecipients, sendToOwners, tickSend, type SendState, type State,
 } from '../store.js';
+import { CardHead, Face } from './card.js';
 import { Close } from './icons.js';
 import { Chip } from './open-items.js';
 
@@ -63,62 +64,111 @@ function sendLabel(send: SendState, me: string | undefined): string {
   return recipients.length === 0 ? 'Keep on my Home' : `Send to ${nameList(shortNames(recipients))}`;
 }
 
+/** What an item says now, as its tool gave it to you just now; else why it is not shown. */
+function saysNow(item: OpenItemView): string {
+  const current = item.current;
+  if (!current) return item.reach === 'unavailable' ? 'ECHO couldn’t read it just now' : item.reach === 'no_access' ? 'You can’t open it' : 'Not read';
+  const due = current.due_at === undefined ? null : `Due ${monthDay(current.due_at) ?? current.due_at}`;
+  return [due, current.says_now ? `“${current.says_now}”` : null].filter(Boolean).join(' · ');
+}
+
+/** Who each ticked item goes to, with how many: picked, matched, or you until you pick someone. */
+function goesTo(send: SendState, me: string | undefined): { key: string; name: string; you: boolean; waiting: boolean; count: number }[] {
+  const rows = new Map<string, { key: string; name: string; you: boolean; waiting: boolean; count: number }>();
+  for (const item of send.items) {
+    if (!send.ticks[item.item_id]) continue;
+    const pick = send.picks[item.item_id];
+    const owner = pick ? { membership_id: pick.membership_id, name: pick.display_name } : item.owner;
+    const you = owner.membership_id === me;
+    const waiting = you && !pick && item.owner.match === 'approver';
+    const key = `${owner.membership_id}:${waiting}`;
+    const row = rows.get(key) ?? { key, name: owner.name, you, waiting, count: 0 };
+    row.count += 1;
+    rows.set(key, row);
+  }
+  return [...rows.values()];
+}
+
 /**
- * Tell the owners? (canvas 9.3): what a decision you approved changes, one
- * ticked line per item with who it goes to. Send tells them on their Home;
- * unticked items are not relevant; Not now leaves the row on your Home.
+ * Tell the owners? What a decision you approved changes: each item with what
+ * it says now beside what the decision needs, and who it goes to. Send tells
+ * them on their Home; an unticked item is not relevant; Not now leaves the
+ * row on your Home.
  */
 export function Send({ state, send }: { state: State; send: SendState }) {
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { box.current?.querySelector<HTMLElement>('.decision-foot button:not(:disabled)')?.focus({ preventScroll: true }); }, [send.loading]);
+  useEffect(() => { box.current?.querySelector<HTMLElement>('.card-panel button:not(:disabled)')?.focus({ preventScroll: true }); }, [send.loading]);
   if (send.loading) return <div class="column center" aria-busy="true" data-testid="send-loading"><span class="asking"><i /><i /><i /></span></div>;
   const me = state.status?.account?.membership_id;
   const decision = sendDecision(state);
   const approved = decision ? monthDay(decision.approved_at) : null;
   const names = itemNames(send.items);
+  const count = send.items.length;
+  const assessed = send.items.every(item => item.relation !== null);
+  const title = count === 0 ? 'Tell the owners?' : assessed ? `${count} ${count === 1 ? 'item doesn’t' : 'items don’t'} match what you approved`
+    : `${count} ${count === 1 ? 'item' : 'items'} may need updating`;
+  const recipients = goesTo(send, me);
   return (
-    <div class="column decision" ref={box}>
-      <article class="decision-card" data-testid="send" aria-labelledby="send-ask" aria-busy={send.busy}>
-        <h1 id="send-ask" class="decision-ask">Tell the owners?</h1>
-        {decision && (
-          <div class="decision-from">You approved <b>{decision.title}</b>{approved ? ` on ${approved}` : ''}. ECHO found what it changes.</div>
-        )}
-        {decision?.first_line && <div class="decision-line">{decision.first_line}</div>}
-        {send.items.length > 0 ? (
-          <section class="decision-section" aria-labelledby="must-change">
-            <div class="section-label" id="must-change">Must change</div>
-            {send.items.map(item => {
-              const name = names.get(item.item_id) ?? itemTitle(item);
-              // Its name tells it apart from the card's other items (R37), as its buttons do.
-              const { title, change } = itemParts(item, name);
-              return (
-                <div class="send-item" key={item.item_id} data-testid="send-item">
-                  <div class="send-line">
-                    <label class="check send-tick">
-                      <input type="checkbox" checked={send.ticks[item.item_id] === true} disabled={send.busy} onChange={() => tickSend(item.item_id)} />
-                      <span><b>{title}</b>{change && <span class="faint"> {change}</span>}</span>
-                    </label>
-                    <Owner send={send} item={item} me={me} name={name} />
+    <div class="column card" ref={box}>
+      <div class="card-page" data-testid="send" aria-busy={send.busy}>
+        <article class="card-main" aria-labelledby="send-ask">
+          <CardHead kind="send" verb="Send" id="send-ask" title={title}
+            where={approved ? `Impact of a decision you approved on ${approved}` : 'Impact of a decision you approved'}
+            meta={count > 0 ? 'Untick any that’s wrong. Each goes to its owner’s Home.' : null} />
+          {count > 0 ? (
+            <div class="card-list" role="group" aria-label="Items to send">
+              {send.items.map(item => {
+                const name = names.get(item.item_id) ?? itemTitle(item);
+                const status = item.current?.status;
+                return (
+                  <div key={item.item_id}>
+                    <div class="card-row send-row" data-testid="send-item">
+                      <input type="checkbox" class="send-box" aria-label={name} checked={send.ticks[item.item_id] === true} disabled={send.busy} onChange={() => tickSend(item.item_id)} />
+                      <div class="card-row-body">
+                        <div class="send-name"><b>{name}</b><span class="faint"> · {itemKind(item, state.tools?.items)}{status ? ` · ${status}` : ''}</span></div>
+                        <div class="card-delta">
+                          <div><span class="card-delta-label">Says now</span><span class="card-delta-now">{saysNow(item)}</span></div>
+                          {item.expected !== null && <div><span class="card-delta-label needs">Decision needs</span><span>{item.expected}</span></div>}
+                        </div>
+                      </div>
+                      <Owner send={send} item={item} me={me} name={name} />
+                    </div>
+                    {send.picker?.item_id === item.item_id && <Picker send={send} item={item} />}
                   </div>
-                  {send.picker?.item_id === item.item_id && <Picker send={send} item={item} />}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+          ) : !send.failure && <div class="notice" data-testid="send-none">Nothing is waiting to be sent.</div>}
+        </article>
+        <aside class="card-rail" aria-label="Send">
+          <section class="card-panel" aria-labelledby="send-goes-to">
+            <div class="section-label" id="send-goes-to">Goes to</div>
+            {recipients.length === 0 && <div class="notice-line">No one: unticked items are marked not relevant.</div>}
+            {recipients.map(row => (
+              <div class={`card-person${row.waiting ? ' faint' : ''}`} key={row.key}>
+                <Face name={row.name} keyed={row.key.split(':')[0]} />
+                <span class="card-person-name">{row.you ? row.waiting ? 'You, until you pick someone' : 'You' : row.name}</span>
+                <span class="card-person-count">{row.count === 1 ? '1 item' : `${row.count} items`}</span>
+              </div>
+            ))}
+            {send.failure && <div class="error" data-testid="send-error" aria-live="polite">{send.failure}</div>}
+            <div class="card-rule" />
+            <button type="button" class="primary-button" data-testid="send-go" disabled={send.busy || count === 0} onClick={() => void sendToOwners()}>
+              {sendLabel(send, me)}
+            </button>
+            <button type="button" class="plain-button" data-testid="send-later" disabled={send.busy} onClick={goHome}>Not now</button>
+            {send.busy && <span class="asking card-busy"><i /><i /><i /><span>Sending</span></span>}
           </section>
-        ) : !send.failure && <div class="notice" data-testid="send-none">Nothing is waiting to be sent.</div>}
-        <div class="send-note">
-          <span class="notice">Untick anything that's wrong. Owners get it on their Home.</span>
-          {decision && <button type="button" class="link-button" data-testid="send-details" disabled={send.busy} onClick={sendDetails}>Details</button>}
-        </div>
-        {send.failure && <div class="error" data-testid="send-error" aria-live="polite">{send.failure}</div>}
-        <div class="decision-foot">
-          <button type="button" class="primary-button small" data-testid="send-go" disabled={send.busy || send.items.length === 0} onClick={() => void sendToOwners()}>
-            {sendLabel(send, me)}
-          </button>
-          <button type="button" class="plain-button" data-testid="send-later" disabled={send.busy} onClick={goHome}>Not now</button>
-          {send.busy && <span class="asking"><i /><i /><i /><span>Sending</span></span>}
-        </div>
-      </article>
+          {decision && (
+            <section class="card-side" aria-labelledby="send-decision">
+              <div class="section-label" id="send-decision">The decision</div>
+              {decision.first_line && <div class="card-side-text selectable">{decision.first_line}</div>}
+              <div class="card-side-meta">{approvedMeeting(decision, ' · ')}</div>
+              <button type="button" class="link-button card-side-link" data-testid="send-details" disabled={send.busy} onClick={sendDetails}>Open the decision</button>
+            </section>
+          )}
+        </aside>
+      </div>
     </div>
   );
 }

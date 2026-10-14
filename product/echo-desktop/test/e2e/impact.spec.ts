@@ -32,7 +32,7 @@ async function openImpactCard(page: Page) {
   const row = page.getByTestId('need-row');
   await expect(row).toHaveAttribute('data-kind', 'send', { timeout: 30_000 });
   await row.click();
-  await expect(page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
+  await expect(page.getByTestId('send')).toBeVisible();
   await page.getByTestId('send-details').click();
   return page.getByTestId('decision');
 }
@@ -65,7 +65,7 @@ test('approving a meeting shows its impact card once the check finishes', async 
   // The card is a page of its own: no Got it. Back returns to Tell the owners?, as it was.
   await expect(page.getByRole('button', { name: 'Got it' })).toHaveCount(0);
   await page.getByTestId('back').click();
-  await expect(page.getByRole('heading', { name: 'Tell the owners?' })).toBeVisible();
+  await expect(page.getByTestId('send')).toBeVisible();
   expect(runOperations()).toEqual(expect.arrayContaining(['list', 'start', 'home', 'items', 'view']));
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(1);
 });

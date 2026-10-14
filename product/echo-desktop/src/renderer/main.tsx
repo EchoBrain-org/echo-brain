@@ -25,8 +25,8 @@ import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeItemCard,
   closeItemStatus, closeOpenItems, closePicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, getState, goHome,
   hostFailed, itemCardShown, itemStatusShown, keepNewProject, matchesShown, newProjectProgress, openCapture, openItemsShown, openMine, pageCovered, projectSettingsModal,
-  readUpdate, refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
-  toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
+  readUpdate, reassignHeldItem, refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
+  toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleReassign, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -80,7 +80,9 @@ function back(): void {
   // Escape closes the Projects list first, and only the list.
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
   if (state.ask) return closeAsk();
-  if (itemCardShown(state)) return closeItemCard();
+  const card = itemCardShown(state);
+  if (card?.reassign) return card.reassign.busy ? undefined : toggleReassign();
+  if (card) return closeItemCard();
   if (itemStatusShown(state)) return closeItemStatus();
   if (openItemsShown(state)) return closeOpenItems();
   if (state.reader?.menu !== undefined && state.reader.menu !== 'closed') return toggleReaderMenu();
@@ -191,7 +193,7 @@ function App() {
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
           : itemCard ? <ItemCard state={state} card={itemCard} />
-          : itemStatus ? <ItemStatus page={itemStatus} />
+          : itemStatus ? <ItemStatus page={itemStatus} held={reassignHeldItem(state)} />
           : openItems ? <OpenItems page={openItems} />
           : state.reader ? <Reader state={state} reader={state.reader} backTo={pageName ?? 'Home'} />
           : inProject ? <Project state={state} project={inProject} />

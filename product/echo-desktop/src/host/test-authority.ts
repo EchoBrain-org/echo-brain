@@ -57,7 +57,7 @@ interface Contract {
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
   operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true; open_only?: true;
-  item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant';
+  item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
 
@@ -84,7 +84,7 @@ interface OpenItem {
   /** Null for a row the check did not assess: it has no expected phrase either (ruling 12). */
   relation: 'conflicts' | 'needs_updating' | null; expected: string | null;
   approver: { membership_id: string; name: string };
-  owner: { membership_id: string; name: string; match: 'jira_account' | 'name' | 'picked' | 'approver' };
+  owner: { membership_id: string; name: string; match: 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned' };
   state: 'unsent' | 'open' | 'done' | 'not_relevant';
   created_at: string; sent_at: string | null; state_set_at: string | null;
   check: Check | null;
@@ -102,7 +102,7 @@ interface SweepRun {
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
 const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-checked', 'granola-review',
-  'granola-sweep', 'granola-sweep-requeued', 'granola-alike']);
+  'granola-review-assign-lost', 'granola-sweep', 'granola-sweep-requeued', 'granola-alike']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 /** Who an impact check names, besides Ari: fictional people of the organization. */
@@ -624,12 +624,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // planning into Thermostat redesign and sent what its check found: ECHO-12 to Mina, the PRD page kept
   // by Ari, and a supplier page Ari cannot open to Rafael. In granola-checked Mina's sweep checked them
   // two hours ago; granola-review is the same, except that ECHO-12, Mina's to update, changed and still
-  // does not match (a Review row on Ari's Home). In the sweep modes none has been checked, so Home says a
+  // does not match (a Review row on Ari's Home); granola-review-assign-lost also loses the first assign's
+  // reply, once it is made. In the sweep modes none has been checked, so Home says a
   // sweep is due. granola-alike: the
   // check is done and nothing is sent yet; it also found items whose titles nothing tells apart: two
   // supplier pages Ari cannot open, with the same expected phrase, and two tickets Jira did not answer
   // for just now, not assessed (no expected phrase).
-  if (mode === 'granola-checked' || mode === 'granola-review' || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
+  if (mode === 'granola-checked' || mode.startsWith('granola-review') || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
     granolaReview = { action: 'approve', project_ids: [THERMOSTAT] };
     granolaRun = { state: 'done', error_code: null, retried: false };
@@ -656,10 +657,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         opens: false, live: { citation: SUPPLIER_BRIEF, says_now: 'Parts are ordered with six weeks of lead time.' }, owner: { ...RAFAEL, match: 'picked' } });
       const sentAt = '2026-10-07T11:00:00.000Z';
       const checkedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
-      const checked: Readonly<Record<string, Check['verdict']>> = mode === 'granola-review' ? { ...SWEPT, 'itm_00000000-0000-4000-8000-000000000031': 'changed' } : SWEPT;
+      const checked: Readonly<Record<string, Check['verdict']>> = mode.startsWith('granola-review') ? { ...SWEPT, 'itm_00000000-0000-4000-8000-000000000031': 'changed' } : SWEPT;
       for (const item of openItems.filter(entry => entry.run_id === PILOT_RUN)) {
         Object.assign(item, { state: 'open', sent_at: sentAt, state_set_at: sentAt,
-          check: mode === 'granola-checked' || mode === 'granola-review' ? { verdict: checked[item.item_id]!, checked_at: checkedAt, checked_by: 'Mina Patel' } : null });
+          check: mode === 'granola-checked' || mode.startsWith('granola-review') ? { verdict: checked[item.item_id]!, checked_at: checkedAt, checked_by: 'Mina Patel' } : null });
       }
     }
   }
@@ -685,6 +686,20 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   /** Ari's sweeps, newest first. */
   const sweepRuns: SweepRun[] = [];
   let homeReads = 0;
+  let assigns = 0;
+
+  // The proposal as the Authority writes it for review (approvalProposalTextV1) now that meetings are cited by numbered
+  // units: every signal quotes each unit it cites (a note line, or a transcript part that may hold blank lines, each line
+  // after its first indented four spaces), and the meeting's start (the review's meeting_at) and time zone come before
+  // its participants.
+  const PILOT_PROPOSAL = ['Pilot planning', 'actual start at: 2026-10-06T16:00:00.000Z', 'timezone: America/Los_Angeles',
+    'Participant: Ari', 'Participant: Mina Patel', 'Participant: Rafael Moreno',
+    '', 'Decisions', '• Launch the pilot next week.', '  Status: decided', '  From the meeting: “Launch the pilot next week.”',
+    '  From the meeting: “[09:02] Ari: Let\'s launch the pilot next week.', '    ', '    [09:03] Mina Patel: Agreed. The freeze lifts on Friday.”',
+    '', 'Actions', '• Send the revised quote', '  Due: Not specified', '  From the meeting: “[09:04] Ari: Rafael, can you send the revised quote?”',
+    '• Confirm the trace', '  Due: 2026-10-10', '  From the meeting: “[09:05] Mina Patel: I\'ll confirm the trace by Friday.”',
+    '', 'Rationales', '• The freeze lifts on Friday, so next week is the first clear window.',
+    '  From the meeting: “[09:03] Mina Patel: Agreed. The freeze lifts on Friday.”'].join('\n');
 
   // Your connections to the organization's tools, as Tools changes them.
   let slackLinked = true;
@@ -759,7 +774,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         case 'watch': granolaWatch = true; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
         case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added' ? [review] : [] });
-        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: 'Pilot planning\nDecisions\nLaunch the pilot next week.',
+        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: PILOT_PROPOSAL,
           owners: [{ signal_id: 'act-1', action: 'Send the revised quote', proposed: 'Rafael Moreno' }, { signal_id: 'act-2', action: 'Confirm the trace', proposed: 'Mina Patel' }],
           suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
         case 'review':
@@ -948,6 +963,22 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           if (item.state === 'unsent') return failure('invalid_request', 400);
           Object.assign(item, { state: request.state, state_set_at: now() });
           return result('set_state', { state: request.state });
+        }
+        // Reassign…, from an item's card: the item is the person's to update now.
+        case 'assign': {
+          const item = shown.find(entry => entry.item_id === request.item_id && involved(entry));
+          const person = desktop.people.find(entry => entry.membership_id === request.owner_membership_id);
+          if (!item) return failure('not_found', 404);
+          if (!person) return failure('invalid_request', 400);
+          item.owner = { membership_id: person.membership_id, name: person.display_name, match: 'reassigned' };
+          // Made, but the first reply is lost on its way back.
+          if (mode === 'granola-review-assign-lost' && ++assigns === 1) return failure('unavailable', 503);
+          return result('assign', { owner: { membership_id: person.membership_id, name: person.display_name, active: true } });
+        }
+        // One item, as Ari sees it now.
+        case 'item': {
+          const item = shown.find(entry => entry.item_id === request.item_id);
+          return item ? result('item', { item: itemView(item) }) : failure('not_found', 404);
         }
         // A sweep of the open items Ari can see in a scope (mine: those Ari sent or owns), queued; with
         // none open, nothing to check. Asked for again while that scope's sweep waits, it is that one.

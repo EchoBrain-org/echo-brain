@@ -10,7 +10,7 @@ import type {
   ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt, ExternalAnswerSource,
   UpdateState,
 } from '../shared/protocol.js';
-import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
+import { isWriteCall, MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
@@ -886,24 +886,31 @@ function outcomeUnknown(failure: Failure, resend: boolean): boolean {
 
 /** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
 export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
-  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } }));
+  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } }),
+    isWriteCall('tools.meetings', { request: operation }));
 }
 
 /** Account-fenced runs request: your own approvals' checks, and the open items you can see. */
 export function runsCommand<K extends PersonRunsRequestV1['operation']>(request: PersonRunsRequestV1 & { readonly operation: K }): Promise<RunsResults[K]> {
-  return fencedCommand<RunsResults[K]>(account => rpc('runs', { expect: account, request }));
+  return fencedCommand<RunsResults[K]>(account => rpc('runs', { expect: account, request }), isWriteCall('runs', { request }));
 }
 
 /**
  * Sends for the account shown; a reply once the account changed is refused,
- * and a failure is thrown. Another app in front changes nothing: the reply is
- * the Authority's answer, and the page it is for fences it by itself.
+ * and a failure is thrown. A write's, as the host says of one it sent before a
+ * switch, may have landed, unless the host says it never went: only a read of
+ * it settles that. Another app in front changes nothing: the reply is the
+ * Authority's answer, and the page it is for fences it by itself.
  */
-async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>): Promise<T> {
+async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>, write: boolean): Promise<T> {
   const account = expect();
   if (!account) throw new Error('Sign in to use meetings.');
   const result = await send(account);
-  if (JSON.stringify(expect()) !== JSON.stringify(account)) throw new Error('Account changed.');
+  if (JSON.stringify(expect()) !== JSON.stringify(account)) {
+    if (!write) throw new Error('Account changed.');
+    const unsent = !result.ok && result.failure.mutation_outcome === 'not_submitted';
+    throw new CommandFailed({ code: 'account_changed', retryable: false, mutation_outcome: unsent ? 'not_submitted' : 'unknown' });
+  }
   if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
   return result.value as T;
 }
@@ -945,13 +952,15 @@ export function signOutHeld(): boolean {
   const status = state.compose?.status;
   const sheet = state.sheet;
   return status === 'sending' || status === 'checking' || status === 'unknown' || state.change?.status === 'sending' ||
-    state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null;
+    state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null ||
+    reassignHeld();
 }
 
 /** What to settle first, where an unknown outcome shows: sign out and the update row say the same. */
 export function settleWords(current: State = state): string {
   return current.compose?.status === 'unknown' ? 'A save may not have arrived. Check it in Capture first.'
     : current.change?.status === 'unknown' ? 'A project change may not have finished. Try it again or dismiss it first.'
+    : current.itemCard?.reassign?.unknown ? REASSIGN_UNSETTLED
     : 'Finish the current save first.';
 }
 
@@ -3456,20 +3465,21 @@ const TOO_LONG = 'Up to 8 KiB of text.';
 let unresolvedTold = '';
 
 /**
- * What main's quit guard, and its update_held, go by: a note, a file or a
- * project change (a create, and New project's adds, included) on its way, or
- * not yet confirmed either way.
+ * What main's quit guard, and its update_held, go by: a note, a file, a
+ * project change (a create, and New project's adds, included) or a
+ * reassignment on its way, or not yet confirmed either way.
  */
-function unresolvedWork(): { unresolved: boolean; file?: true; change?: true } {
+function unresolvedWork(): { unresolved: boolean; file?: true; change?: true; reassignment?: true } {
   const compose = state.compose;
   const saving = compose?.status === 'sending' || compose?.status === 'unknown' || compose?.status === 'checking';
   const sheet = state.sheet?.kind === 'new-project' ? state.sheet : null;
   const uploading = sheet?.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown') === true;
   const changing = changeBlocked() || projectSettingsBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown' ||
     sheet?.picks.some(pick => pick.status === 'adding' || pick.status === 'unknown') === true;
+  const reassigning = reassignHeld();
   return {
-    unresolved: saving || uploading || changing,
-    ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : {}),
+    unresolved: saving || uploading || changing || reassigning,
+    ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : reassigning ? { reassignment: true } : {}),
   };
 }
 
@@ -4247,7 +4257,7 @@ function updateDecisionRun(runs: readonly PersonRunV1[]): void {
  */
 export async function closeItem(item: OpenItemView, to: 'done' | 'not_relevant'): Promise<void> {
   const home = state.home;
-  if (!home || !expect() || state.concealed || Object.hasOwn(home.closing, item.item_id)) return;
+  if (!home || !expect() || state.concealed || Object.hasOwn(home.closing, item.item_id) || item.item_id === reassignHeldItem()) return;
   const { [item.item_id]: _failed, ...closeFailures } = home.closeFailures;
   set({ home: withRows({ ...home, closing: { ...home.closing, [item.item_id]: null }, closeFailures }) });
   let failure: string | null = null;
@@ -4738,8 +4748,8 @@ export function openItemsShown(current: State = state): OpenItemsState | null {
 /** The Impact line or the project line: what the decision or the project has open, grouped by owner. */
 export function openOpenItems(scope: ItemsLine['scope'], id: string, title: string): Promise<void> {
   if (!expect() || state.concealed) return Promise.resolve();
-  set({ openItems: { route: state.route, scope, id, title, seq: ++seq, loading: true, items: [], next: null }, itemCard: null, itemStatus: null, ask: null, sources: null,
-    toast: null });
+  set({ openItems: { route: state.route, scope, id, title, seq: ++seq, loading: true, items: [], next: null }, itemCard: reassignHeld() ? state.itemCard : null,
+    itemStatus: null, ask: null, sources: null, toast: null });
   return loadOpenItems(false);
 }
 
@@ -4802,11 +4812,36 @@ export interface ItemCardState {
   route: Route;
   /** The item as Home read it. */
   item: OpenItemView;
+  /**
+   * Reassign…, open: the organization's people by name, to give the item to.
+   * `unknown`: the person picked, when the pick may have arrived; nothing more
+   * is sent from the card until Check status reads the item.
+   */
+  reassign?: { query: string; results: readonly Member[]; loading: boolean; failure?: string; busy: boolean; unknown?: Member } | null;
+}
+
+/** Reassign… on its way, or whose outcome is unknown: its card stays, and sign out, Restart and Quit wait. */
+function reassignHeld(card: ItemCardState | null = state.itemCard): boolean {
+  return card?.reassign?.busy === true || card?.reassign?.unknown !== undefined;
+}
+
+/** What sign out, the update row and Close say while a reassignment may have arrived. */
+export const REASSIGN_UNSETTLED = 'A reassignment may not have arrived. Check it on Home first.';
+
+/** Items a Close or Close all is closing now: Reassign… waits for it, since each may be closed a moment later. */
+const closingItems = new Set<string>();
+export function itemClosing(item_id: string): boolean { return closingItems.has(item_id); }
+
+/** The item a held Reassign… is for: nothing else closes it until its card's Check status reads it, since it may be someone else's now. */
+export function reassignHeldItem(current: State = state): string | null {
+  const card = current.itemCard;
+  return card && reassignHeld(card) ? card.item.item_id : null;
 }
 
 export function itemCardShown(current: State = state): ItemCardState | null {
   const card = current.itemCard;
-  return card && card.route === current.route ? card : null;
+  // One that is held comes back over Home, however Home was reached since: only it settles what it sent.
+  return card && (card.route === current.route || (current.route.page === 'home' && reassignHeld(card))) ? card : null;
 }
 
 /** A changed item's row, Update or Review: its item, over Home. */
@@ -4815,12 +4850,125 @@ export function openItemCard(item: OpenItemView): void {
   set({ itemCard: { route: state.route, item }, itemStatus: null, openItems: null, ask: null, sources: null, toast: null });
 }
 
-export function closeItemCard(): void { set({ itemCard: null }); }
+export function closeItemCard(): void { if (!reassignHeld()) set({ itemCard: null }); }
+
+/** Reassign…, or Cancel: the card's people picker opens with the organization's first people, or closes. */
+export function toggleReassign(): void {
+  const card = itemCardShown();
+  if (!card || !card.item.can.assign || reassignHeld(card) || closingItems.has(card.item.item_id)) return;
+  if (card.reassign) { set({ itemCard: { ...card, reassign: null } }); return; }
+  set({ itemCard: { ...card, reassign: { query: '', results: [], loading: true, busy: false } } });
+  void findReassignee('');
+}
+
+/** Typing in Reassign…, counted: a read for an older name is dropped. */
+let reassignSeq = 0;
+
+/** The organization's people by name, but the item's owner now. */
+export async function findReassignee(query: string): Promise<void> {
+  const card = itemCardShown();
+  const account = expect();
+  if (!card?.reassign || !account || reassignHeld(card)) return;
+  const mine = ++reassignSeq;
+  const typing = query !== card.reassign.query;
+  set({ itemCard: { ...card, reassign: { ...card.reassign, query, loading: true, failure: undefined } } });
+  if (typing) await new Promise(resolve => setTimeout(resolve, SEARCH_PAUSE_MS));
+  if (mine !== reassignSeq || itemCardShown()?.item.item_id !== card.item.item_id) return;
+  const name = query.trim();
+  const result = await rpc('people.directory', { expect: account, ...(name === '' ? {} : { query: name }) });
+  const current = itemCardShown();
+  if (mine !== reassignSeq || !current?.reassign || current.item.item_id !== card.item.item_id) return;
+  if (!result.ok) {
+    set({ itemCard: { ...current, reassign: { ...current.reassign, loading: false, results: [], failure: message(result.failure) } } });
+    accountLost(result.failure);
+    return;
+  }
+  const owner = current.item.owner.membership_id;
+  set({ itemCard: { ...current, reassign: { ...current.reassign, loading: false, results: result.value.items.filter(person => person.membership_id !== owner) } } });
+}
+
+/** The card a pick or its Check status was sent from, shown or not, while it waits on the answer. */
+function reassignFrom(item_id: string): ItemCardState | null {
+  const card = state.itemCard;
+  return card?.item.item_id === item_id && card.reassign?.busy ? card : null;
+}
+
+/** Its card, as a pick or Check status left it: where it shows now, it stays. */
+function settleReassign(card: ItemCardState, patch: Partial<ItemCardState>): void {
+  set({ itemCard: { ...card, ...patch, ...(itemCardShown() === card ? { route: state.route } : {}) } });
+}
+
+/** It went: its card goes, shown or not, and the toast says so. */
+function reassigned(item_id: string, person: Member): void {
+  set({ ...(reassignFrom(item_id) ? { itemCard: null } : {}), toast: `Reassigned to ${person.display_name}` });
+  unresolvedChanged();
+  void loadHome();
+}
+
+/**
+ * A person picked: the item is theirs to update now, on their Home; the card
+ * goes and says so. One whose outcome is unknown stays on its card, shown or
+ * not, until Check status settles it.
+ */
+export async function reassignCardItem(person: Member): Promise<void> {
+  const card = itemCardShown();
+  if (!card?.reassign || reassignHeld(card) || !card.item.can.assign || closingItems.has(card.item.item_id)) return;
+  const { item_id } = card.item;
+  set({ itemCard: { ...card, reassign: { ...card.reassign, busy: true, failure: undefined } } });
+  unresolvedChanged();
+  try {
+    await runsCommand({ schema_version: 1, operation: 'assign', item_id, owner_membership_id: person.membership_id });
+  } catch (error) {
+    const current = reassignFrom(item_id);
+    const failure = error instanceof Error ? error.message : 'That was not sent. Try again.';
+    // A reply that came after the account changed is unknown too, unless the host says it never went (fencedCommand).
+    const unknown = outcomeUnknown(failureOf(error), false);
+    // A card gone with its account (another signed in since) says nothing to the one signed in now.
+    if (current) {
+      settleReassign(current, { reassign: { ...current.reassign!, busy: false, failure, ...(unknown ? { unknown: person } : {}) } });
+      if (!itemCardShown()) set({ toast: failure });
+    }
+    unresolvedChanged();
+    return;
+  }
+  reassigned(item_id, person);
+}
+
+/**
+ * Check status, after a pick whose outcome is unknown: the item, read again,
+ * settles it. Its owner the person picked, it went; anyone else, it did not,
+ * and the card shows the item as it is now. No longer yours to see, the card
+ * goes. A read that fails leaves it unknown.
+ */
+export async function checkReassign(): Promise<void> {
+  const card = itemCardShown();
+  const person = card?.reassign?.unknown;
+  if (!card?.reassign || !person || card.reassign.busy) return;
+  const { item_id } = card.item;
+  set({ itemCard: { ...card, reassign: { ...card.reassign, busy: true } } });
+  let item: OpenItemView | null = null;
+  let failure: Failure | null = null;
+  try {
+    item = await runsCommand({ schema_version: 1, operation: 'item', item_id });
+  } catch (error) {
+    failure = failureOf(error);
+  }
+  const current = reassignFrom(item_id);
+  if (!current?.reassign) return;
+  if (item?.owner.membership_id === person.membership_id) { reassigned(item_id, person); return; }
+  if (failure?.code === 'not_found') { set({ itemCard: null, toast: message(failure) }); unresolvedChanged(); void loadHome(); return; }
+  if (!item) { settleReassign(current, { reassign: { ...current.reassign, busy: false } }); return; }
+  const { unknown: _settled, ...reassign } = current.reassign;
+  const owner = item.owner.membership_id;
+  settleReassign(current, { item, reassign: item.can.assign ? { ...reassign, busy: false, failure: message({ code: 'not_saved', retryable: true }),
+    results: reassign.results.filter(entry => entry.membership_id !== owner) } : null });
+  unresolvedChanged();
+}
 
 /** Mark updated or No change needed, on an item's card: the card goes, and the item closes as an Update row's Mark updated does. */
 export function closeCardItem(to: 'done' | 'not_relevant'): void {
   const card = itemCardShown();
-  if (!card) return;
+  if (!card || reassignHeld(card)) return;
   set({ itemCard: null });
   void closeItem(card.item, to);
 }
@@ -4865,7 +5013,7 @@ export function itemStatusShown(current: State = state): ItemStatusState | null 
 export function openItemStatus(scope: ItemStatusState['scope'], id: string | undefined, title: string | null): Promise<void> {
   if (!expect() || state.concealed) return Promise.resolve();
   set({ itemStatus: { route: state.route, scope, ...(id === undefined ? {} : { id }), title, seq: ++seq, loading: true, items: [], next: null, open: null, checked_at: null,
-    busy: false }, itemCard: null, openItems: null, ask: null, sources: null, toast: null });
+    busy: false }, itemCard: reassignHeld() ? state.itemCard : null, openItems: null, ask: null, sources: null, toast: null });
   return loadItemStatus(false);
 }
 
@@ -4886,22 +5034,31 @@ function loadItemStatus(more: boolean): Promise<void> {
 /**
  * Close (one line) or Close all N that match: each matching item you may close
  * is set done, one at a time. The view stays, without the items it closed; an
- * item that could not be closed stays, with why.
+ * item that could not be closed stays, with why. The item a held Reassign… is
+ * for is not closed: its card's Check status settles it first.
  */
 async function closeMatches(items: readonly OpenItemView[]): Promise<void> {
   const page = itemStatusShown();
-  const closing = page ? closable(items.filter(item => page.items.some(entry => entry.item_id === item.item_id))) : [];
+  const held = reassignHeldItem();
+  const closing = page ? closable(items.filter(item => item.item_id !== held && page.items.some(entry => entry.item_id === item.item_id))) : [];
   if (!page || page.busy || page.loading || closing.length === 0) return;
   set({ itemStatus: { ...page, busy: true, closeFailure: undefined } });
   const closed = new Set<string>();
   let failure: string | undefined;
-  for (const item of closing) {
-    try {
-      await runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' });
-      closed.add(item.item_id);
-    } catch (error) {
-      failure ??= error instanceof Error ? error.message : 'That was not sent. Try again.';
+  for (const item of closing) closingItems.add(item.item_id);
+  try {
+    for (const item of closing) {
+      // Checked again before each close: a held Reassign… keeps its item open.
+      if (reassignHeldItem() === item.item_id) continue;
+      try {
+        await runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' });
+        closed.add(item.item_id);
+      } catch (error) {
+        failure ??= error instanceof Error ? error.message : 'That was not sent. Try again.';
+      }
     }
+  } finally {
+    for (const item of closing) closingItems.delete(item.item_id);
   }
   const current = itemStatusShown();
   if (current?.seq !== page.seq) return;

@@ -48,7 +48,7 @@ for (const event of ['shown', 'resume'] as const) {
     await expect(card.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
     await card.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
     await card.getByRole('radio', { name: 'Only me' }).check();
-    await card.getByLabel('Share the transcript with the selected audience').check();
+    await card.getByLabel('Share the transcript with them too').check();
     const before = lists();
     if (event === 'resume') {
       await emit(app, 'echo-test:conceal');
@@ -60,7 +60,7 @@ for (const event of ['shown', 'resume'] as const) {
     expect(lists()).toBe(before + 1);
     await expect(card.getByLabel('Owner for: Send the revised quote')).toHaveValue('Rafael M.');
     await expect(card.getByRole('radio', { name: 'Only me' })).toHaveAttribute('aria-checked', 'true');
-    await expect(card.getByLabel('Share the transcript with the selected audience')).toBeChecked();
+    await expect(card.getByLabel('Share the transcript with them too')).toBeChecked();
     expect(run.calls().filter(call => call.method === 'POST' && call.path === '/v1/person/projects')).toHaveLength(0);
     expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(0);
   });

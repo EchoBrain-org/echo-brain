@@ -31,6 +31,18 @@ let sweep: PersonRunV1 | null = null;
 let sweepStarts: 'running' | 'busy' | 'done' | 'failed' | 'fails' = 'running';
 /** What an items read answers, when a test says. */
 let page: OpenItemsView | null = null;
+/** How an assign fails, when a test says; what a read of one item answers (unavailable while null). */
+let assignFailure: { code: string; retryable: boolean; mutation_outcome?: 'unknown' } | null = null;
+let readItem: OpenItemView | null = null;
+/** The next assign waits until the test answers it, with whatever reply the test gives. */
+let holdAssign = false;
+let answerAssign: ((reply: unknown) => void) | null = null;
+/** Status reads say signed out while set: the session ended elsewhere. */
+let signedOut = false;
+/** set_state replies wait while set, until the test answers them in order. */
+let holdSetState = false;
+let answerSetState: (() => void)[] = [];
+const RAFAEL = { membership_id: 'mem_00000000-0000-4000-8000-000000000088', display_name: 'Rafael Moreno' };
 
 const impactRun = (state: PersonRunV1['state'], id = '20', event = approval): PersonRunV1 => ({
   run_id: `run_00000000-0000-4000-8000-0000000000${id}`, trigger: 'approved_record', event_ref: event, state,
@@ -85,12 +97,20 @@ beforeEach(() => {
   sweep = null;
   sweepStarts = 'running';
   page = null;
+  assignFailure = null;
+  readItem = null;
+  holdAssign = false;
+  answerAssign = null;
+  signedOut = false;
+  holdSetState = false;
+  answerSetState = [];
   rpc.mockReset();
   rpc.mockImplementation(async (method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; state?: string } }) => {
     const ok = (value: unknown) => ({ ok: true, value });
     const unavailable = { ok: false, failure: { code: 'unavailable', retryable: true } };
     switch (method) {
-      case 'app.status': return ok({ signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } });
+      case 'app.status': return ok(signedOut ? { signed_in: false, account: null }
+        : { signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } });
       case 'projects.list': return ok({ items: [], next_cursor: null });
       case 'projects.members': return ok({ items: [], next_cursor: null });
       case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
@@ -98,6 +118,7 @@ beforeEach(() => {
       // A project's tools line: it reads nothing.
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
       case 'app.setUnresolved': return ok(null);
+      case 'people.directory': return ok({ items: [RAFAEL], next_cursor: null });
       case 'account.tools': return ok({ tools: granola === null ? [] : [{ tool_id: 'granola', status: granola }] });
       case 'tools.meetings':
         if (params.request?.operation === 'reviews') {
@@ -132,7 +153,15 @@ beforeEach(() => {
           if ('run_id' in sweepAnswer) sweep = sweepRun('pending');
           return ok(sweepAnswer);
         }
-        if (params.request?.operation === 'set_state') return failSetState ? unavailable : ok({ state: params.request.state });
+        if (params.request?.operation === 'set_state') {
+          const reply = failSetState ? unavailable : ok({ state: params.request.state });
+          return holdSetState ? new Promise(resolve => { answerSetState.push(() => resolve(reply)); }) : reply;
+        }
+        if (params.request?.operation === 'assign') {
+          if (holdAssign) { holdAssign = false; return new Promise(resolve => { answerAssign = resolve; }); }
+          return assignFailure ? { ok: false, failure: assignFailure } : ok({ owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true } });
+        }
+        if (params.request?.operation === 'item') return readItem ? ok(readItem) : unavailable;
         if (params.request?.operation === 'items') {
           if (failItems) return unavailable;
           if (page) return ok(page);
@@ -945,6 +974,182 @@ describe('The item card and Your open items', () => {
     await store.closeAllMatching();
     expect(store.itemStatusShown()).toMatchObject({ busy: false, closeFailure: 'ECHO is unavailable right now. Try again.' });
     expect(store.itemStatusShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002']);
+  });
+
+  /** What main's quit guard was told last. */
+  const told = () => rpc.mock.calls.filter(([method]) => method === 'app.setUnresolved').map(([, params]) => params).at(-1);
+  /** A card open on the Review row's item, Reassign… picked Rafael, and the assign's reply lost. */
+  async function reassignLost() {
+    granola = null;
+    home = { ...emptyHome(), items: [item('1', 'changed')] };
+    assignFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    const store = await start();
+    store.openItemCard(store.getState().home!.open!.items[0]!);
+    store.toggleReassign();
+    await flush();
+    await store.reassignCardItem(RAFAEL);
+    return store;
+  }
+
+  it('sends nothing more from a card whose reassignment may have gone, and holds sign out, Restart and Quit, until Check status reads the item', async () => {
+    const store = await reassignLost();
+    expect(store.itemCardShown()?.reassign).toMatchObject({ busy: false, unknown: RAFAEL, failure: 'This may not have been sent.' });
+    // No other pick, no close, no Cancel: the card stays as it is.
+    await store.reassignCardItem(RAFAEL);
+    store.closeCardItem('done');
+    store.toggleReassign();
+    expect(requests('assign')).toHaveLength(1);
+    expect(requests('set_state')).toEqual([]);
+    expect(store.itemCardShown()?.reassign?.unknown).toEqual(RAFAEL);
+    expect(store.signOutHeld()).toBe(true);
+    expect(store.settleWords()).toBe('A reassignment may not have arrived. Check it on Home first.');
+    expect(told()).toEqual({ unresolved: true, reassignment: true });
+    // Another page and back: only its card settles it, so it comes back over Home.
+    await store.openMine();
+    expect(store.itemCardShown()).toBeNull();
+    store.goHome();
+    expect(store.itemCardShown()?.reassign?.unknown).toEqual(RAFAEL);
+    // The item read again is Rafael's: it went, as a pick that went says.
+    readItem = { ...item('1', 'changed'), owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true, match: 'reassigned' } };
+    await store.checkReassign();
+    expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: 'itm_00000001' }]);
+    expect(store.itemCardShown()).toBeNull();
+    expect(store.getState().toast).toBe('Reassigned to Rafael Moreno');
+    expect(store.signOutHeld()).toBe(false);
+    expect(told()).toEqual({ unresolved: false });
+  });
+
+  it('stays unknown while the item cannot be read, and unlocks the card as the item now is once it shows its owner unchanged', async () => {
+    const store = await reassignLost();
+    await store.checkReassign();
+    expect(store.itemCardShown()?.reassign).toMatchObject({ busy: false, unknown: RAFAEL });
+    expect(store.signOutHeld()).toBe(true);
+    // Back over Home from another page, it stays there once it is settled.
+    await store.openMine();
+    store.goHome();
+    // Still Fixture's, and checked again since: nothing went.
+    readItem = { ...item('1', 'changed'), check: { verdict: 'still_open', checked_at: '2026-10-08T13:00:00.000Z', checked_by: 'Mina Patel' } };
+    await store.checkReassign();
+    expect(store.itemCardShown()?.item).toEqual(readItem);
+    expect(store.itemCardShown()?.reassign).toMatchObject({ busy: false, failure: 'It was not saved. Try again.' });
+    expect(store.itemCardShown()?.reassign?.unknown).toBeUndefined();
+    expect(store.signOutHeld()).toBe(false);
+    expect(told()).toEqual({ unresolved: false });
+    store.closeCardItem('done');
+    await flush();
+    expect(requests('set_state')).toEqual([{ schema_version: 1, operation: 'set_state', item_id: 'itm_00000001', state: 'done' }]);
+  });
+
+  it('closes nothing a reassignment that may have gone holds, from Your open items or Home, until its card\'s Check status settles it', async () => {
+    const store = await reassignLost();
+    expect(store.reassignHeldItem()).toBe('itm_00000001');
+    // A project's Check now: the held item matches, and so does another.
+    page = { items: [landedItem('1'), landedItem('2')], next_cursor: null, stages: [], summary: { ...summary, open: 2, landed: 2 } };
+    await store.openProject(project);
+    await store.openItemStatus('project', project.project_id, project.name);
+    await store.closeMatching(store.itemStatusShown()!.items[0]!);
+    expect(requests('set_state')).toEqual([]);
+    // Close all closes the other only.
+    await store.closeAllMatching();
+    expect(requests('set_state')).toEqual([{ schema_version: 1, operation: 'set_state', item_id: 'itm_00000002', state: 'done' }]);
+    expect(store.itemStatusShown()).toMatchObject({ busy: false, open: 1, closed: true });
+    expect(store.itemStatusShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001']);
+    expect(store.itemStatusShown()?.closeFailure).toBeUndefined();
+    // Home's Mark updated waits as well.
+    store.goHome();
+    await store.closeItem(store.getState().home!.open!.items[0]!, 'done');
+    expect(requests('set_state')).toHaveLength(1);
+    expect(requests('item')).toEqual([]);
+    // Check status finds it still Fixture's: nothing went, and Close closes it now.
+    readItem = item('1', 'changed');
+    await store.checkReassign();
+    expect(store.reassignHeldItem()).toBeNull();
+    page = { items: [landedItem('1')], next_cursor: null, stages: [], summary: { ...summary, open: 1, landed: 1 } };
+    await store.openItemStatus('mine', undefined, null);
+    await store.closeMatching(store.itemStatusShown()!.items[0]!);
+    expect(requests('set_state').map(request => request.item_id)).toEqual(['itm_00000002', 'itm_00000001']);
+  });
+
+  it('starts no Reassign… for an item Close all is closing, so the loop never closes one that may be someone else\'s', async () => {
+    granola = null;
+    home = { ...emptyHome(), items: [landedItem('2'), landedItem('1')], landed: 2 };
+    page = { items: [landedItem('2'), landedItem('1')], next_cursor: null, stages: [], summary: { ...summary, open: 2, landed: 2 } };
+    const store = await start();
+    await store.openItemStatus('mine', undefined, null);
+    holdSetState = true;
+    const closing = store.closeAllMatching();
+    await flush();
+    expect(requests('set_state').map(request => request.item_id)).toEqual(['itm_00000002']);
+    // Meanwhile: Home, the other item's card, Reassign… Its close is on the way, so the picker does not open and nothing is assigned.
+    store.goHome();
+    await flush();
+    store.openItemCard(store.getState().home!.open!.items.find(entry => entry.item_id === 'itm_00000001')!);
+    store.toggleReassign();
+    expect(store.itemCardShown()?.reassign).toBeFalsy();
+    expect(store.itemClosing('itm_00000001')).toBe(true);
+    await store.reassignCardItem(RAFAEL);
+    expect(requests('assign')).toEqual([]);
+    holdSetState = false;
+    answerSetState.shift()!();
+    await flush();
+    answerSetState.shift()?.();
+    await closing;
+    // Both closed as Close all asked; once it is done, Reassign… opens again.
+    expect(requests('set_state').map(request => request.item_id)).toEqual(['itm_00000002', 'itm_00000001']);
+    expect(store.itemClosing('itm_00000001')).toBe(false);
+  });
+
+  /** A card open on the Review row's item, Reassign… picked Rafael, and the session ended elsewhere while the assign was on its way. */
+  async function reassignSignedOut(reply: unknown) {
+    granola = null;
+    home = { ...emptyHome(), items: [item('1', 'changed')] };
+    const store = await start();
+    store.openItemCard(store.getState().home!.open!.items[0]!);
+    store.toggleReassign();
+    await flush();
+    holdAssign = true;
+    const assigning = store.reassignCardItem(RAFAEL);
+    await flush();
+    signedOut = true;
+    await store.refreshStatus();
+    expect(store.getState().status?.signed_in).toBe(false);
+    answerAssign!(reply);
+    await assigning;
+    return store;
+  }
+
+  it.each([
+    ['lost', { ok: false, failure: { code: 'timeout', retryable: true, mutation_outcome: 'unknown' } }],
+    ['made', { ok: true, value: { owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true } } }],
+  ])('holds a reassignment whose reply (%s) came back after a sign out, so the same person signing back in checks it before anything is sent', async (_, reply) => {
+    const store = await reassignSignedOut(reply);
+    // Whatever the reply said, it came after the account changed: it may have gone.
+    expect(store.getState().itemCard?.reassign).toMatchObject({ busy: false, unknown: RAFAEL, failure: 'This may not have been sent.' });
+    expect(told()).toEqual({ unresolved: true, reassignment: true });
+    // The same person signs back in: the card is as it was, and sends nothing until Check status reads the item.
+    signedOut = false;
+    await store.refreshStatus();
+    await flush();
+    expect(store.itemCardShown()?.reassign?.unknown).toEqual(RAFAEL);
+    expect(store.signOutHeld()).toBe(true);
+    expect(store.settleWords()).toBe('A reassignment may not have arrived. Check it on Home first.');
+    store.closeCardItem('done');
+    await store.reassignCardItem(RAFAEL);
+    await flush();
+    expect(requests('assign')).toHaveLength(1);
+    expect(requests('set_state')).toEqual([]);
+    readItem = { ...item('1', 'changed'), owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true, match: 'reassigned' } };
+    await store.checkReassign();
+    expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: 'itm_00000001' }]);
+    expect(store.getState().toast).toBe('Reassigned to Rafael Moreno');
+    expect(told()).toEqual({ unresolved: false });
+  });
+
+  it('settles a reassignment the host says never went, though the account changed before its reply', async () => {
+    const store = await reassignSignedOut({ ok: false, failure: { code: 'account_changed', retryable: false, mutation_outcome: 'not_submitted' } });
+    expect(store.getState().itemCard?.reassign).toMatchObject({ busy: false, failure: 'Your account changed. Try again.' });
+    expect(store.getState().itemCard?.reassign?.unknown).toBeUndefined();
+    expect(told()).toEqual({ unresolved: false });
   });
 });
 

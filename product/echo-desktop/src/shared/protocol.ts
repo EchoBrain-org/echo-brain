@@ -555,7 +555,7 @@ export interface MainMethods {
   /** Save original…: where to save it, chosen in main's dialog. The page gets a handle, never the path. */
   'dialog.saveDocument': { params: { name: string }; result: FileHandle | null };
   /** A save's or a project change's outcome is unknown: quitting asks first, naming a note, a file or a change. */
-  'app.setUnresolved': { params: { unresolved: boolean; file?: boolean; change?: boolean }; result: null };
+  'app.setUnresolved': { params: { unresolved: boolean; file?: boolean; change?: boolean; reassignment?: boolean }; result: null };
   /** After the host gave up: start it again. */
   'app.retryHost': { params: Record<string, never>; result: null };
   /** Pops up the Account menu at a point in the window, in CSS pixels. */
