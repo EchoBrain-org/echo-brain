@@ -229,7 +229,7 @@ supplies the installed release reads, a race guard captured before download
 (the CLI's is its wrapper digest), the install step (whose input gains the
 verified feed bytes), the activation (`immediate` for the CLI, `restart` for
 the app), and the downloaded archive's file name and download timeout. The app
-turns off the CLI's signal re-raise, which would otherwise end Electron
+adds none of the CLI's signal handlers, whose re-raise would end Electron
 without its normal quit. `configureClientUpdates` takes the adapter too, so
 on first run the app pins its identity's `update_bootstrap`. A later app with
 a different publisher, feed, channel or sequence floor cannot change that pin;
@@ -460,10 +460,9 @@ an ordering mechanism.
 
 The private `updater/.lock` serializes updates. An interrupt (SIGINT, SIGTERM or
 SIGHUP) before the installer starts releases the lock and any partial download
-and leaves the installed release unchanged. The desktop app turns those
-handlers off. If it quits during a check or download, it leaves
-`updater/.lock` and the partial download behind, and removes both at its next
-launch. An interrupted/uncertain installer retains that lock and staging
+and leaves the installed release unchanged. If the desktop app quits during a
+check or download, it leaves `updater/.lock` and the partial download behind,
+and removes both at its next launch. An interrupted/uncertain installer retains that lock and staging
 evidence; inspect whether the installer is still running, the stable wrapper
 and retained release before recovery. Do not remove locks speculatively.
 Recover to a retained release through the reviewed installer and recheck its

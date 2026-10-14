@@ -423,8 +423,10 @@ reverse.
    authenticated read in the app with that seat's own account.
 
 A cancelled password prompt keeps A; select the row again. A failed install
-keeps or reopens A and shows **Couldn't update · Try again**. Record it as an
-open desktop-updater issue. The seat may then take the manual reinstall from
+keeps or reopens A and shows **Couldn't update · Try again**. On Linux, apt-get
+can unpack B and still fail; ECHO then reopens on B with no failure row, so also
+check that `dpkg -s echo-desktop` reports `install ok installed`. Record a failed
+install as an open desktop-updater issue. The seat may then take the manual reinstall from
 [Enroll a desktop](#enroll-a-desktop) so the person keeps working, but that
 reinstall does not verify the in-app update. On macOS, App Management may block
 the swap, which keeps the old app; this is unverified until the first seat

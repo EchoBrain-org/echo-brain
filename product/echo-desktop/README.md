@@ -223,7 +223,8 @@ An update fails safely:
 - A failed background check shows nothing, and the current version keeps
   running.
 - If the install fails, ECHO keeps or reopens the old version and shows
-  **Couldn't update · Try again**.
+  **Couldn't update · Try again**. On Linux, a rare failure after the new files
+  are unpacked reopens the new version instead.
 - On macOS, a failed swap puts the previous app back. macOS App Management may
   block the swap; that keeps the old app too.
 - ECHO refuses a feed older than the last one it verified, within the
