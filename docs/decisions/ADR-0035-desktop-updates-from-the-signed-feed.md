@@ -100,7 +100,7 @@ the release, the Person-client digest, the target and the update bootstrap. A
 build without these inputs has no identity file, and its updater is off. Before
 publication the feed's `prepare` checks each desktop artifact's identity,
 bootstrap and embedded Person client against the release. On Linux it also
-reads every member of the `.deb`. What dpkg runs or installs as root must equal
+reads every member of the `.deb`. What runs as root, or grants root, must equal
 the reviewed files at `release.source_sha`: the maintainer scripts, the
 AppArmor profile, the root helper and the package's dependencies. Nothing may
 install outside the app's own files. This extends
@@ -144,17 +144,20 @@ conditions, cadence and activation steps.
   only by the signature, the checkpoint and the explicit password prompt. Key
   rotation remains a separately reviewed bootstrap.
 - **Downgrade window.** The app refuses a feed older than the last one it
-  verified, and the Linux helper one older than the last one it installed.
+  verified. The Linux helper refuses one older than the last one it began to
+  install. It keeps one floor for the whole machine, and saves it after the
+  app exits and before `apt-get` runs, so a failed install still raises it.
   Until a seat has those records, it accepts any unexpired signed feed at or
   above `minimum_sequence`, as a newly enrolled CLI does. On Linux that is a
-  seat installed by hand, or a new user, until its first helper install, and
-  installing also needs the admin password. On macOS there is no root helper,
-  and the swap does not check the sequence. The only floor is the app's own
-  checkpoint in its per-user updater folder. So a new user, or an app with no
-  updater state, accepts such a feed at its first check, and installing it
-  needs only the person's click. Using either window needs a compromised feed
-  origin or a TLS interception, and it is limited to publisher-signed releases
-  within their validity.
+  machine where the helper has never begun an install, such as one where ECHO
+  was only installed by hand. A new user on an updated machine may be offered
+  an older release, but the helper refuses it. Installing also needs the admin
+  password. On macOS there is no root helper, and the swap does not check the
+  sequence. The only floor is the app's own checkpoint in its per-user updater
+  folder. So a new user, or an app with no updater state, accepts such a feed
+  at its first check, and installing it needs only the person's click. Using
+  either window needs a compromised feed origin or a TLS interception, and it
+  is limited to publisher-signed releases within their validity.
 - **What the feed gate proves.** `prepare` checks the identity, `Info.plist`
   and the embedded Person-client tree. On Linux it also binds everything that
   runs as root or grants root to reviewed source at `release.source_sha`:
@@ -165,7 +168,8 @@ conditions, cadence and activation steps.
 
   No package member may be setuid, setgid, a device, a hard link, or writable
   or owned by anyone but root. Outside `/opt/ECHO` the package may hold only
-  the desktop entry, its icons and its changelog, and no symlink may leave
+  the desktop entry, its icons and files directly in
+  `/usr/share/doc/echo-desktop/` (fpm's changelog), and no symlink may leave
   `/opt/ECHO`.
 - **What it does not prove.** The rest of `/opt/ECHO`, including the Electron
   binaries and `app.asar`, and the rest of the macOS bundle are not checked

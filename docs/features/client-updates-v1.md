@@ -211,11 +211,13 @@ Linux package also ships the root helper
 not running `--smoke`, the identity is valid, and the installation is
 supported: macOS arm64 running from an `ECHO.app` bundle, or Linux x64 running
 from `/opt/ECHO` with the root-owned helper and `/usr/bin/pkexec` present.
-Development, CI, test and ad hoc builds and the Linux `.tar.gz` never update.
-Without `/usr/bin/pkexec` the manual reinstall remains. A macOS app that is
-translocated, in a folder it cannot write, or on another volume than its
-updater state still checks, and on finding a release shows **Move ECHO to
-Applications to update** right away.
+Development, CI, test and ad hoc builds never update. A release `.tar.gz`
+carries the same identity and helper, so it updates only if it is placed at
+`/opt/ECHO` with the helper owned by root and `pkexec` present. Its update then
+installs the `.deb`. Without `/usr/bin/pkexec` the manual reinstall remains. A
+macOS app that is translocated, in a folder it cannot write, or on another
+volume than its updater state still checks, and on finding a release shows
+**Move ECHO to Applications to update** right away.
 
 **The core.** The Electron main process loads the updater from the embedded,
 release-bound client (`person-client/package/dist/client-update.js`), the same
@@ -226,7 +228,7 @@ anti-rollback checkpoint and state file, the lock and the bounded download
 supplies the installed release reads, a race guard captured before download
 (the CLI's is its wrapper digest), the install step (whose input gains the
 verified feed bytes), the activation (`immediate` for the CLI, `restart` for
-the app), and the staged archive's file name and download timeout. The app
+the app), and the downloaded archive's file name and download timeout. The app
 turns off the CLI's signal re-raise, which would otherwise end Electron
 without its normal quit. `configureClientUpdates` takes the adapter too, so
 on first run the app pins its identity's `update_bootstrap`. A later app with
@@ -275,18 +277,21 @@ bytes in its updater folder. It starts a detached bash relauncher that runs
 install attempt has its own id, so an earlier attempt's progress or outcome is
 never taken for this one's. The helper runs as root:
 
-1. It copies both files with `O_NOFOLLOW` into a root-owned `0700` folder under
+1. It waits for the machine-wide lock `/var/lib/echo-desktop/update.lock` and
+   holds it to the end. So one helper runs at a time for all users, and the
+   checkpoint it checks is the one it replaces.
+2. It copies both files with `O_NOFOLLOW` into a root-owned `0700` folder under
    `/var/lib/echo-desktop/`.
-2. It reads the trust config from the root-owned installed identity file and
+3. It reads the trust config from the root-owned installed identity file and
    verifies the Ed25519 signature with `openssl pkeyutl -verify -rawin`.
-3. It checks the manifest's kind, channel, freshness, sequence floor and
+4. It checks the manifest's kind, channel, freshness, sequence floor and
    origin, the `linux/x64/glibc/electron` artifact's size and digest against
    the copied package, and the package control fields.
-4. It checks the root checkpoint `/var/lib/echo-desktop/update-checkpoint.json`.
+5. It checks the root checkpoint `/var/lib/echo-desktop/update-checkpoint.json`.
    The sequence must be greater than the saved one, or equal to it with the
    same manifest digest.
-5. It prints `verified`. Once the progress file says so, the app quits.
-6. It waits up to two minutes for the app to exit and saves the checkpoint
+6. It prints `verified`. Once the progress file says so, the app quits.
+7. It waits up to two minutes for the app to exit and saves the checkpoint
    first, so a failed or interrupted install never leaves the floor below an
    installed release. Then it runs `apt-get install --reinstall -y` on the copy
    and removes the copy. The package's `postrm` acts only on removal, so the
@@ -294,18 +299,30 @@ never taken for this one's. The helper runs as root:
 
 The helper's exit codes are: 0 installed, 2 invalid input, 3 verification
 failed, 4 the app did not exit, 5 installation failed. The relauncher records
-the outcome and reopens `/usr/bin/echo-desktop`. After a cancelled prompt
-(exit 126) or refused authentication (127) the app is still open, so the row
-goes back to available or failed. After any later failure the relauncher
-reopens the old app.
+the outcome. It reopens `/usr/bin/echo-desktop` only if the app has already
+quit, and the app quits for the update only after the helper prints `verified`.
+A cancelled prompt (pkexec's 126) leaves the app open, with the row back at
+available. Refused authentication (127), invalid input (2), a failed check (3)
+or an app that did not quit within two minutes (4) leaves the app open, with
+the failure row. After an install (0) or a failed `apt-get` (5) the app has
+quit, and the relauncher reopens whatever `/usr/bin/echo-desktop` now runs.
+After a failed `apt-get` that may already be the new release, because
+`apt-get` can unpack it and still fail.
 
 ## Preparing an approved feed
 
 Build the Person client, each platform kit and each desktop package from a
-clean release commit using the existing release workflow. The publisher
-requires that commit to be present locally and compares the kit's setup sources
-with it. It checks the canonical release record, client/runtime hashes and
-materialized client identity.
+clean release commit using the existing release workflow. The feed, signer and
+publisher tools load the built Person client. In each checkout that runs them,
+run `npm ci` and then `node tools/build.mjs --person-client` first.
+
+Preparation checks all four artifacts, and signing, sealing and every publish
+action (plan, execute, status and the replace actions) check them again. So
+each machine that runs them needs `xz` (`xz-utils`, or Homebrew's `xz` on
+macOS), `unzip` and `tar` on `PATH`, and its checkout needs the release commit.
+The tools compare the kit's setup sources with that commit. They check the
+canonical release record, client/runtime hashes and materialized client
+identity.
 
 ```sh
 node tools/client-update-feed.mjs prepare \
@@ -316,7 +333,7 @@ node tools/client-update-feed.mjs prepare \
   --macos-app /absolute/path/to/ECHO-mac.zip \
   --linux-deb /absolute/path/to/echo-desktop.deb \
   --sequence 1 \
-  --expires 2026-10-01T00:00:00.000Z \
+  --expires '<YYYY-MM-DDTHH:MM:SS.sssZ, at most 31 days ahead>' \
   --out /absolute/path/to/new-feed-bundle
 ```
 
@@ -345,24 +362,25 @@ each desktop artifact, `prepare` also checks that:
     `postrm`;
   - `postinst`, `postrm`, the AppArmor profile and the root helper equal their
     files in `product/echo-desktop/linux/` at `release.source_sha`;
-  - outside `/opt/ECHO` there is only the desktop entry, its icons and the
-    changelog;
-  - no member is setuid, setgid, a device, a hard link, writable or owned by
-    anyone but root, or a symlink that leaves `/opt/ECHO`.
+  - outside `/opt/ECHO` there is only the desktop entry, its icons and files
+    directly in `/usr/share/doc/echo-desktop/` (fpm's changelog);
+  - no member is setuid, setgid or sticky, a device, a FIFO or a hard link, and
+    every member is owned by root. No file or folder is group- or
+    world-writable, and no symlink leaves `/opt/ECHO` or uses `..`.
 
-Reading the `.deb` needs `xz` on `PATH` (`xz-utils`, or Homebrew's `xz` on
-macOS). These checks do not cover the Electron binaries, `app.asar` or the rest
-of the bundle; see what
+These checks do not cover the Electron binaries, `app.asar` or the rest of the
+bundle; see what
 [the feed gate proves](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#consequences).
 
 Historical single-platform and two-artifact feeds remain readable by clients
 and auditable through publication status, but cannot be published again.
 
 Choose a sequence at least the bootstrap minimum and strictly higher than the
-previously published sequence; choose a future expiry no more than 31 days
-after issuance. `prepare` produces `manifest.json`, the public bootstrap
-configuration, the canonical release record and all four content-addressed
-artifacts.
+previously published sequence. `prepare` sets issuance to the time it runs.
+Choose a future expiry no more than 31 days after that, written in UTC exactly
+as `YYYY-MM-DDTHH:MM:SS.sssZ` (for example `2026-11-10T00:00:00.000Z`).
+`prepare` produces `manifest.json`, the public bootstrap configuration, the
+canonical release record and all four content-addressed artifacts.
 It does not publish anything or read a private signing key. Unsigned `prepare`
 needs no final release authorization and may use the candidate canonical record;
 the signing preview itself requires the existing final release authorization.
@@ -442,12 +460,15 @@ an ordering mechanism.
 
 The private `updater/.lock` serializes updates. An interrupt (SIGINT, SIGTERM or
 SIGHUP) before the installer starts releases the lock and any partial download
-and leaves the installed release unchanged. An interrupted/uncertain installer
-retains that lock and staging evidence; inspect whether the installer is still
-running, the stable wrapper and retained release before recovery. Do not remove
-locks speculatively. Recover to a retained release through the reviewed installer
-and recheck its build and authenticated reads. A network or metadata error
-alone does not trigger rollback or alter the session.
+and leaves the installed release unchanged. The desktop app turns those
+handlers off. If it quits during a check or download, it leaves
+`updater/.lock` and the partial download behind, and removes both at its next
+launch. An interrupted/uncertain installer retains that lock and staging
+evidence; inspect whether the installer is still running, the stable wrapper
+and retained release before recovery. Do not remove locks speculatively.
+Recover to a retained release through the reviewed installer and recheck its
+build and authenticated reads. A network or metadata error alone does not
+trigger rollback or alter the session.
 
 Acceptance: publish B; a supported seat on A reports B during a normal Person
 command while its wrapper and command build identity remain A. Then an explicit

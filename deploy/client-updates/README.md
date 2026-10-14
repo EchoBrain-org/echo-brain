@@ -96,12 +96,12 @@ exactly four artifacts for one `release_id`:
 | `darwin/arm64/native/electron` | `ECHO.app` ZIP | `artifacts/<sha256>.zip` | `application/zip` |
 | `linux/x64/glibc/electron` | desktop `.deb` | `artifacts/<sha256>.deb` | `application/vnd.debian.binary-package` |
 
-The signed `feed.json` is `application/json`. At publication, set
-`Cache-Control: no-store` on the feed and
-`Cache-Control: public,max-age=31536000,immutable` on content-addressed artifacts.
-Upload their original bytes without content encoding or website redirects. Do
-not overwrite an artifact key or upload private records, session state,
-invitations, or signing keys.
+The signed `feed.json` is `application/json`. The publisher sets
+`Cache-Control` itself: `no-store` on the feed and
+`public, max-age=31536000, immutable` on content-addressed artifacts. It then
+checks both values exactly. Upload the original bytes without content encoding
+or website redirects. Do not overwrite an artifact key or upload private
+records, session state, invitations, or signing keys.
 
 Use the output URL in the public bootstrap configuration. The release signer
 keeps the Ed25519 private key outside the artifact bucket and client kit. The
@@ -114,9 +114,11 @@ npm run client-update:sign -- init --directory /absolute/private/new-staging-sig
 ```
 
 Keep `private-key.pkcs8.der` in that private directory. `signer.json` contains
-only the public key and its fingerprint. Copy its `public_key_spki` into the
-bootstrap configuration with the deployed S3 `feed_url`, intended channel,
-sequence floor, `automatic: true`, and `installation: "cli-kit"`. For
+only the public key and its fingerprint. Write the bootstrap configuration
+with exactly these keys: `schema_version: 1`,
+`kind: "echo-client-update-config-v1"`, the intended `channel`, the deployed S3
+`feed_url`, `public_key_spki` copied from `signer.json`, the sequence floor
+`minimum_sequence`, `automatic: true` and `installation: "cli-kit"`. For
 [desktop release packaging](../release/README.md#desktop-release-packages),
 keep a copy that differs only in `installation: "electron"`. No client, kit,
 desktop package, feed, repository or publication receipt receives the private
@@ -125,12 +127,15 @@ key.
 Run the [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed)
 with the exact canonical release and all four artifacts, each with the same
 source SHA and Person-client artifact. Keep the prepared bundle, authorization
-and receipts in private mode-0700 directories with mode-0600 files.
-Preparation needs `xz` on `PATH` to read the `.deb`. It refuses a `.deb` whose
-maintainer scripts, AppArmor profile, root helper or dependencies differ from
-the reviewed files at the release's source SHA, or that installs anything
-outside the app's own files. The Electron binaries under `/opt/ECHO` are not
-checked against source
+and receipts in private mode-0700 directories with mode-0600 files. Keep the
+prepared bundle and the receipts outside the checkout too; the publisher
+refuses them inside it. Every machine that prepares, signs, seals or publishes
+needs the build, tools and source commit that
+[preparing an approved feed](../../docs/features/client-updates-v1.md#preparing-an-approved-feed)
+lists. Preparation refuses a `.deb` whose maintainer scripts, AppArmor
+profile, root helper or dependencies differ from the reviewed files at the
+release's source SHA, or that installs anything outside the app's own files.
+The Electron binaries under `/opt/ECHO` are not checked against source
 ([what the gate proves](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#consequences)).
 
 Unsigned preparation may use a candidate release before final acceptance; it
@@ -331,9 +336,9 @@ embedded in its identity.
 - macOS: quit ECHO and replace `~/Applications/ECHO.app` with the release's
   `ECHO.app`, in a folder the user can write
   ([install on macOS](../../product/echo-desktop/README.md#install-on-macos)).
-- Linux: `sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb`. The
-  `.tar.gz` has no updater. Without `/usr/bin/pkexec` the updater stays off,
-  and this manual reinstall remains the way to update.
+- Linux: `sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb`. Enroll
+  with the deb, not the `.tar.gz`. Without `/usr/bin/pkexec` the updater stays
+  off, and this manual reinstall remains the way to update.
 
 Use the exact artifacts from the published release, transferred through the
 authenticated operator channel. Enrolling the app does not enroll the CLI, and
@@ -407,7 +412,11 @@ reverse.
 1. Before publication, record the tray menu's `Build <sha7>` for A.
 2. After publication, wait for the app's next check, up to about 70 minutes;
    relaunching does not force a check. The sidebar then shows
-   **New version · Restart**.
+   **New version · Restart**. On macOS it may show **Move ECHO to Applications
+   to update** instead: the app is not where it can replace itself
+   ([install on macOS](../../product/echo-desktop/README.md#install-on-macos)).
+   Move `ECHO.app` to `~/Applications`, relaunch and wait for the next check.
+   That is an install-location fault, not a failed install.
 3. Select it. On Linux, enter an admin password at the system prompt. The app
    quits, installs B and reopens.
 4. Check that the tray shows `Build <sha7>` for B's source SHA. Then complete an
@@ -433,6 +442,7 @@ first enrollment, with the coordinated release handoff. Until they pass, report
 updater-capable seat keeps that result after a manual reinstall. State the
 seats tested and those outstanding rather than claiming fleet-wide completion.
 Publishing reaches only enrolled installations: a desktop installed before
-ADR-0035 or from the `.tar.gz` stays on its release until it is reinstalled by
-hand. Local packaging/updater tests and an already-current client do not prove
-a live A-to-B update or fleet-wide rollout of the new update policy.
+ADR-0035, or one whose updater is off, such as a `.tar.gz` outside `/opt/ECHO`,
+stays on its release until it is reinstalled by hand. Local packaging/updater
+tests and an already-current client do not prove a live A-to-B update or
+fleet-wide rollout of the new update policy.

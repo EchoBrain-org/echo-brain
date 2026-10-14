@@ -34,7 +34,9 @@ It can:
 - find people in the organization directory;
 - bind the signed-in identity to Slack and read organization tool link status;
 - let an owner list, invite, reissue or revoke employees; and
-- install signed CLI updates from a configured feed.
+- install signed updates from a configured feed: the CLI with
+  `echo-brain update`, and the desktop app from its sidebar row
+  ([ADR-0035](docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
 
 It does not run meeting processing, hold provider OAuth or Slack service
 credentials, manage a LaunchAgent, keep a local product database, write a

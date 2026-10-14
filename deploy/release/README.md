@@ -81,17 +81,20 @@ representative acceptance is not proof that every enrolled seat updated.
    and recovery plan identified before activation. A candidate canary after
    staging cannot protect those seats from a breaking API change.
 3. Prepare one canonical release record, immutable image, matching runtime
-   profile and exact Person-client tarball using the sections below. Build both
-   CLI kits and both desktop packages from those release inputs: on a macOS
-   arm64 machine, the macOS CLI kit and the `ECHO.app` ZIP; on a Linux x64
-   machine, the Linux CLI kit and the `.deb`
+   profile and exact Person-client tarball using the sections below. Keep the
+   enrolled feed URL, channel and public key in the bootstrap configuration
+   before any build: the Linux CLI kit embeds it, and both desktop packages
+   embed its `electron` copy. A first release sets up the hosting and signer
+   before this step. Build both CLI kits and both desktop packages from those
+   release inputs: on a macOS arm64 machine, the macOS CLI kit and the
+   `ECHO.app` ZIP; on a Linux x64 machine, the Linux CLI kit and the `.deb`
    ([desktop release packages](#desktop-release-packages)). Preserve the
    accepted baseline and operation receipts.
 4. Prepare the unsigned feed bundle using the existing
    [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed).
    `prepare` needs no final authorization and can use the candidate's canonical
-   record. Keep the enrolled feed URL, channel and public key, advance the
-   sequence, and choose sufficient validity for approval and distribution.
+   record. Give it the same bootstrap configuration, advance the sequence, and
+   choose sufficient validity for approval and distribution.
    For replacement, bind the predecessor to the preserved most-recent succeeded
    publication/replacement receipt's `hashes.feed.json`, not a guessed value
    from the mutable endpoint. Ensure the existing hosting and signer are ready.
@@ -1063,8 +1066,10 @@ same signed feed
 [what a person sees](../../product/echo-desktop/README.md#updates)).
 Build each package on the matching machine, from the clean release commit, with
 the same canonical release record and exact Person-client tarball as the kits.
-At the repository root run `npm ci` first. Release packaging rebuilds the
-Person client and the workspaces the desktop host bundles from `HEAD`, and
+The Linux x64 machine also needs the
+[build tools](../../product/echo-desktop/README.md#build) the desktop README
+lists. At the repository root run `npm ci` first. Release packaging rebuilds
+the Person client and the workspaces the desktop host bundles from `HEAD`, and
 refuses a built identity that does not name the release's commit and version.
 Then:
 
@@ -1077,18 +1082,27 @@ npm run package -- --mac \
   --update-config /absolute/private/bootstrap-config.electron.json
 ```
 
-Use `--linux` on the Linux x64 machine. The three release inputs go together,
-as absolute paths. `--update-config` is the feed's bootstrap configuration with
-`installation: "electron"` and `automatic: true`, and is otherwise equal to the
-CLI bootstrap. Packaging requires a clean `HEAD` equal to the release's
-`source_sha` and the tarball digest the release names. It writes the
-[desktop identity](../../docs/features/client-updates-v1.md#desktop-app) that
-`prepare` checks. A package built without these inputs has no updater.
+Use `--linux` on the Linux x64 machine, after `umask 022` in the same shell.
+The deb check refuses any group- or world-writable file or folder, and
+packaging sets the mode of only three files. The three release inputs go
+together, as absolute paths. `--update-config` is the feed's bootstrap
+configuration with `installation: "electron"` and `automatic: true`, and is
+otherwise equal to the CLI bootstrap. Packaging requires a clean `HEAD` equal
+to the release's `source_sha` and the tarball digest the release names. It
+writes the [desktop identity](../../docs/features/client-updates-v1.md#desktop-app)
+that `prepare` checks. A package built without these inputs has no updater.
 
 Give the feed's `prepare` the `ECHO.app` ZIP as `--macos-app` and the `.deb` as
-`--linux-deb`. The `.tar.gz` is not in the feed and never updates. On the Linux
-machine, `node scripts/check-deb.mjs dist-app/ECHO-<version>-linux-amd64.deb`
-runs the package check that `prepare` repeats against the release commit.
+`--linux-deb`. The `.tar.gz` is not in the feed. On the Linux machine,
+`node scripts/check-deb.mjs dist-app/ECHO-<version>-linux-amd64.deb` runs the
+package check that `prepare` repeats against the release commit.
+
+The macOS ZIP is `product/echo-desktop/dist-app/ECHO-<version>-arm64-mac.zip`.
+Copy it and the `.deb` out of `dist-app/` before packaging again, because each
+run empties that folder. `prepare` takes all four artifacts in one run, so move
+the ones built elsewhere to the machine that runs it over the authenticated
+operator channel. Compare each file's SHA-256 there with the one taken on its
+build machine.
 
 ## Advanced client-only install or reinstall
 

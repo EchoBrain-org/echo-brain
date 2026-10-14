@@ -118,16 +118,20 @@ Linux outputs are in `dist-app/`:
 - `ECHO-<version>-linux-amd64.deb`: Debian/Ubuntu installer with the Electron
   runtime, dependencies, desktop launcher, sandbox integration and the update
   helper. It depends on `python3` and `openssl` and recommends `pkexec`;
-  without `/usr/bin/pkexec` the updater stays off. What dpkg runs or installs
-  as root is reviewed source in `linux/`: `postinst`, `postrm`, the AppArmor
-  profile and `deb-relationships.json`. `postinst` never makes
-  `chrome-sandbox` setuid, so the system must allow unprivileged user
-  namespaces; Ubuntu 24.04 does through the AppArmor profile.
-  `scripts/check-deb.mjs PACKAGE.deb` checks a built deb against `HEAD`.
+  without `/usr/bin/pkexec` the updater stays off. What runs as root, or
+  grants root, must equal reviewed source in `linux/`: `postinst`, `postrm`,
+  the AppArmor profile, the update helper and `deb-relationships.json`.
+  `postinst` never makes `chrome-sandbox` setuid, so the system must allow
+  unprivileged user namespaces; Ubuntu 24.04 does through the AppArmor
+  profile. `scripts/check-deb.mjs PACKAGE.deb` checks a built deb against
+  `HEAD`, including
+  [the rest of the deb gate](../../docs/features/client-updates-v1.md#preparing-an-approved-feed),
+  such as what may sit outside `/opt/ECHO`.
 - `ECHO-<version>-linux-x64.tar.gz`: the app directory for manual distribution;
   the receiving system must supply Electron's system libraries and permit its
-  sandbox. It never updates itself. Prefer the deb on Ubuntu, where the
-  installer supplies an AppArmor profile.
+  sandbox. It updates itself only when placed as
+  [the updater requires](../../docs/features/client-updates-v1.md#desktop-app).
+  Prefer the deb on Ubuntu, where the installer supplies an AppArmor profile.
 - `linux-unpacked/echo-desktop`: the executable used by the package smoke test.
 
 The macOS output is a ZIP of `ECHO.app` in `dist-app/`.
@@ -233,8 +237,8 @@ If updating keeps failing, install the release by hand: on Linux with
 `--reinstall` as in [Install and verify on Linux](#install-and-verify-on-linux),
 and on macOS by quitting ECHO and replacing `~/Applications/ECHO.app` with the
 release's app. A desktop installed before this change also needs this once,
-with a release package, before it can update itself. The `.tar.gz`,
-development runs (`npm start`) and test builds never update.
+with a release package, before it can update itself. Development runs
+(`npm start`) and test builds never update.
 
 ## Compatibility evidence and remaining desktop checks
 
