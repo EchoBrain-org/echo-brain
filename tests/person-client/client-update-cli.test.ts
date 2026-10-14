@@ -8,6 +8,7 @@ import {
 
 const result = (status: string, overrides: Partial<{
   installed_release: string;
+  running_release: string | null;
   available_release: string | null;
   checked_at: number | null;
 }> = {}) => ({
@@ -15,6 +16,7 @@ const result = (status: string, overrides: Partial<{
   status,
   platform: 'darwin/arm64/native/cli-kit',
   installed_release: 'clean-v1-release-a',
+  running_release: 'clean-v1-release-a',
   available_release: null,
   checked_at: Date.parse('2026-09-25T18:00:00.000Z'),
   ...overrides,
@@ -67,6 +69,22 @@ describe('client update CLI presentation', () => {
     expect(text).toContain('Run echo-brain update to install it.');
     expect(renderClientUpdateResult(result('not_due'), presentation)).toContain('Automatic availability check is not due yet.');
     expect(renderClientUpdateResult(result('automatic_disabled'), presentation)).toContain('Automatic availability checks are disabled.');
+  });
+
+  it('tells a launcher running another release how to reach the managed command in every mode', () => {
+    const mismatch = result('running_release_mismatch', { installed_release: 'clean-v1-release-b' });
+    const command = "/home/seat's data/echo/person/bin/echo-brain";
+    for (const mode of ['apply', 'check', 'status', 'automatic'] as const) {
+      const text = renderClientUpdateResult(mismatch, { tty: true, json: false, mode, automatic: true, command });
+      expect(text).toContain('This command ran ECHO release clean-v1-release-a, but the managed ECHO command selects clean-v1-release-b.');
+      expect(text).toContain('keep its own sign-in and session settings');
+      expect(text).toContain(`  '/home/seat'\\''s data/echo/person/bin/echo-brain'\n`);
+      expect(text).not.toContain('up to date');
+    }
+    expect(renderClientUpdateResult(mismatch, { tty: false, json: false, mode: 'check', automatic: true, command })).toBe(JSON.stringify(mismatch) + '\n');
+    const unsafe = renderClientUpdateResult(mismatch, { tty: true, json: false, mode: 'check', automatic: true, command: '/tmp/\u001b[2J/bin/echo-brain' });
+    expect(unsafe).not.toContain('\u001b');
+    expect(unsafe).toContain('the bin/echo-brain command in this ECHO installation');
   });
 
   it('gives safe guidance for uncertain installation and does not render unsafe local strings', () => {

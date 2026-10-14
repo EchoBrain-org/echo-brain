@@ -254,7 +254,8 @@ it.skipIf(!nativeTarget)('announces a signed update without changing Person disp
     // Only the explicit update command downloads and activates release B.
     envelope = signedEnvelope;
     const applied = JSON.parse((await runAsync(cli, ['update', '--json'], updateEnvironment)).stdout);
-    expect(applied).toMatchObject({ status: 'updated', installed_release: releaseB });
+    // The update itself runs on A and installs B; that is the normal transition.
+    expect(applied).toMatchObject({ status: 'updated', installed_release: releaseB, running_release: releaseA });
     expect(feedRequests).toBe(3);
     expect(artifactRequests).toBe(1);
     const afterUpdate = await runAsync(cli, ['person', 'status'], updateEnvironment);
@@ -265,6 +266,33 @@ it.skipIf(!nativeTarget)('announces a signed update without changing Person disp
     expect(readFileSync(cli, 'utf8')).toContain(`/releases/${releaseB}/`);
     expect(readFileSync(cli, 'utf8')).not.toContain(`/releases/${releaseA}/`);
     expect(readFileSync(join(cliRoot, 'releases', releaseA, '.echo-owned-release-v1'), 'utf8').trim()).toBe(releaseA);
+
+    // A custom seat launcher that execs release A directly bypasses the managed
+    // command. It must not report B's state as its own or act on B's behalf.
+    const seatLauncher = join(root, 'echo1-launcher');
+    const pinnedRelease = join(cliRoot, 'releases', releaseA);
+    writeFileSync(seatLauncher, `#!/usr/bin/env bash\nexec '${pinnedRelease}/node' '${pinnedRelease}/package/dist/main.js' "$@"\n`, { mode: 0o700 });
+    const mismatch = { status: 'running_release_mismatch', installed_release: releaseB, running_release: releaseA };
+    expect(JSON.parse((await runAsync(seatLauncher, ['update', '--check', '--json'], updateEnvironment, 1)).stdout)).toMatchObject(mismatch);
+    expect(JSON.parse((await runAsync(seatLauncher, ['update', '--json'], updateEnvironment, 1)).stdout)).toMatchObject(mismatch);
+    expect(JSON.parse((await runAsync(seatLauncher, ['update', '--status', '--json'], updateEnvironment, 1)).stdout)).toMatchObject(mismatch);
+    const pinnedStatus = await runAsync(seatLauncher, ['person', 'status'], updateEnvironment);
+    expect(JSON.parse(pinnedStatus.stdout)).toMatchObject({ client_build: { source_sha: clientA.sourceSha } });
+    expect(pinnedStatus.stderr).toContain(`ran ${releaseA}, but the managed ECHO command selects ${releaseB}`);
+    expect(feedRequests).toBe(3);
+    expect(artifactRequests).toBe(1);
+    expect(readFileSync(cli, 'utf8')).toContain(`/releases/${releaseB}/`);
+    expect(readFileSync(seatLauncher, 'utf8')).toContain(`/releases/${releaseA}/`);
+
+    // Delegating that launcher to the managed command runs B in the same environment.
+    writeFileSync(seatLauncher, `#!/usr/bin/env bash\nexec '${cli}' "$@"\n`);
+    const delegated = await runAsync(seatLauncher, ['person', 'status'], updateEnvironment);
+    expect(JSON.parse(delegated.stdout)).toMatchObject({ client_build: { source_sha: clientB.sourceSha } });
+    expect(delegated.stderr).not.toContain(releaseA);
+    const delegatedCheck = JSON.parse((await runAsync(seatLauncher, ['update', '--check', '--json'], updateEnvironment)).stdout);
+    expect(delegatedCheck).toMatchObject({ status: 'current', installed_release: releaseB, running_release: releaseB });
+    expect(feedRequests).toBe(4);
+    expect(readFileSync(sessionSentinel, 'utf8')).toBe('preserve synthetic session');
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolveClosed, rejectClosed) => server.close(error => error ? rejectClosed(error) : resolveClosed()));

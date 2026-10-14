@@ -25,13 +25,17 @@ export interface ClientUpdateResult {
   kind: 'echo-client-update-result-v1';
   status: string;
   platform: string;
+  /** The release the managed `bin/echo-brain` command selects. */
   installed_release: string;
+  /** The release whose code ran this call, when known. A launcher can bypass the managed command. */
+  running_release: string | null;
   available_release: string | null;
   checked_at: number | null;
 }
 export interface ClientUpdateDependencies {
   root: string;
   platform: UpdatePlatform;
+  running_release?: string;
   fetch?: typeof fetch;
   now?: () => number;
   install?: (input: UpdateInstallerInput) => void | Promise<void>;
@@ -128,7 +132,12 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   const { root, platform } = dependencies;
   const current = installedRelease(root);
   const config = readClientUpdateConfig(root);
-  const result = (status: string, state?: ClientUpdateState): ClientUpdateResult => ({ kind: 'echo-client-update-result-v1', status, platform: platformKey(platform), installed_release: current, available_release: state?.available_release ?? null, checked_at: state?.checked_at ?? null });
+  const running = dependencies.running_release ?? null;
+  const result = (status: string, state?: ClientUpdateState): ClientUpdateResult => ({ kind: 'echo-client-update-result-v1', status, platform: platformKey(platform), installed_release: current, running_release: running, available_release: state?.available_release ?? null, checked_at: state?.checked_at ?? null });
+  // A launcher that runs another release directly is not served by the managed
+  // command, so the managed release's state is not its state. Compare on entry:
+  // an apply that starts on A and installs B is the normal transition.
+  if (running !== null && running !== current) return result('running_release_mismatch');
   if (!config) return result('not_configured');
   const directory = updateDirectory(root);
   if (config.installation !== platform.installation) rejectUpdate('installation_mismatch');

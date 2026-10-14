@@ -42,9 +42,19 @@ runtime/client before switching the wrapper.
 The normal installation is the versioned release directory and stable wrapper
 under the documented shared CLI root. A custom Person wrapper outside the
 managed wrapper path may remain pinned to a versioned binary inside that shared
-root. After an update, verify the actual executable used for the required
-Person reads, rather than relying on a PATH lookup or a version string from
-another wrapper.
+root. The client compares the release it runs from with the release the managed
+wrapper selects. When they differ on entry, `update`, `--check`, `--status`
+and `--if-due` return `running_release_mismatch` (exit 1) with `running_release` and
+`installed_release`, without contacting the feed, writing update state or
+installing; automatic checks before Person commands print the same mismatch on
+stderr and continue. An `update` that starts on A and installs B is the normal
+transition and reports `updated`. Recovery keeps the launcher's own sign-in and
+session environment and makes it run the managed wrapper with the same
+arguments. ECHO never rewrites custom launchers or removes retained releases.
+Clients built before this check still report the managed installation as their
+own, and a new release cannot change them. After an update, verify the actual
+executable used for the required Person reads, rather than relying on a PATH
+lookup or a version string from another wrapper.
 
 The contract supports desktop and container targets, but activation returns
 `adapter_unavailable`. Desktop app updates belong to the separate Electron

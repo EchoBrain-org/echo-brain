@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientUpdateError, UPDATE_METADATA_LIMIT } from './client-update-contract.js';
 import { readUpdateFile } from './client-update-files.js';
@@ -45,6 +45,8 @@ interface UpdatePresentation {
 interface UpdateResultPresentation extends UpdatePresentation {
   mode: Exclude<UpdateCliMode, 'configure'>;
   automatic: boolean;
+  /** The managed command a mismatched launcher should run instead. */
+  command?: string;
 }
 
 export function parseClientUpdateCliArguments(argv: readonly string[]): ParsedClientUpdateCliArguments | undefined {
@@ -96,6 +98,18 @@ function updateProblem(code: string): string {
   if (['unsafe_installation', 'unsafe_update_file', 'invalid_update_state'].includes(code)) return 'ECHO could not safely use this installation or its update files. Contact the release operator before retrying.';
   return 'ECHO update failed. Please try again or contact the release operator.';
 }
+function runningReleaseMismatch(result: ClientUpdateResult, command: string | undefined): string {
+  const running = safeRelease(result.running_release);
+  // Shell-quoted for pasting into a launcher; the Mac root always contains a space.
+  const managed = command && !/[\p{Cc}\p{Cf}]/u.test(command) ? `'${command.replaceAll("'", "'\\''")}'` : 'the bin/echo-brain command in this ECHO installation';
+  return [
+    'This command ran ECHO release ' + running + ', but the managed ECHO command selects ' + safeRelease(result.installed_release) + '.',
+    'Its launcher starts release ' + running + ' directly, so updates to the managed command do not reach it.',
+    'To recover, edit that launcher: keep its own sign-in and session settings, and make it run this command with the same arguments:',
+    '  ' + managed,
+    'Then run update --check through that launcher. If you ran the managed command itself, an update finished meanwhile; run it again.',
+  ].join('\n') + '\n';
+}
 function savedResultProblem(code: string): string | undefined {
   if (code === 'updated') return 'Last saved update result: updated successfully.';
   if (code === 'current') return undefined;
@@ -109,6 +123,7 @@ export function formatClientUpdateError(code: string, presentation: UpdatePresen
 
 export function renderClientUpdateResult(result: ClientUpdateResult, presentation: UpdateResultPresentation): string {
   if (!presentation.tty || presentation.json) return jsonOutput(result);
+  if (result.status === 'running_release_mismatch') return runningReleaseMismatch(result, presentation.command);
   const installed = safeRelease(result.installed_release);
   const available = safeRelease(result.available_release);
   if (presentation.mode === 'status') {
@@ -136,8 +151,16 @@ export function renderClientUpdateResult(result: ClientUpdateResult, presentatio
   return updateProblem(result.status) + '\n';
 }
 
+function releaseRootOf(moduleUrl: string): string {
+  return resolve(dirname(fileURLToPath(moduleUrl)), '../..');
+}
+/** The release folder this code runs from; meaningful once installedUpdateRoot() accepted it. */
+function runningRelease(): string {
+  return basename(releaseRootOf(import.meta.url));
+}
+
 export function installedUpdateRoot(moduleUrl = import.meta.url): string | undefined {
-  const releaseRoot = resolve(dirname(fileURLToPath(moduleUrl)), '../..');
+  const releaseRoot = releaseRootOf(moduleUrl);
   if (!existsSync(join(releaseRoot, '.echo-owned-release-v1')) || dirname(releaseRoot).split(/[\\/]/).at(-1) !== 'releases') return undefined;
   if (process.platform === 'darwin') {
     if (!process.env.HOME || dirname(dirname(releaseRoot)) !== join(process.env.HOME, 'Library/Application Support/ECHO/cli')) return undefined;
@@ -172,13 +195,15 @@ export async function runClientUpdateCli(argv: readonly string[]): Promise<numbe
     }
     const config = readClientUpdateConfig(root);
     const platform = detectUpdatePlatform(config?.installation ?? 'cli-kit');
-    const result = await runClientUpdate(args.mode, { root, platform });
+    const result = await runClientUpdate(args.mode, { root, platform, running_release: runningRelease() });
     process.stdout.write(renderClientUpdateResult(result, {
       tty: process.stdout.isTTY,
       json: args.json,
       mode: args.mode,
       automatic: config?.automatic ?? false,
+      command: join(root, 'bin', 'echo-brain'),
     }));
+    if (result.status === 'running_release_mismatch') return 1;
     return args.mode === 'status' || ['updated', 'current', 'available', 'not_due', 'automatic_disabled'].includes(result.status) ? 0 : 1;
   } catch (error) {
     process.stderr.write(formatClientUpdateError(error instanceof ClientUpdateError ? error.code : 'update_failed', {
@@ -197,7 +222,12 @@ export async function updateBeforePersonCommand(): Promise<void> {
     if (!root) return;
     const config = readClientUpdateConfig(root);
     if (!config?.automatic) return;
-    const result = await runClientUpdate('automatic', { root, platform: detectUpdatePlatform(config.installation) });
+    const result = await runClientUpdate('automatic', { root, platform: detectUpdatePlatform(config.installation), running_release: runningRelease() });
+    if (result.status === 'running_release_mismatch') {
+      const running = safeRelease(result.running_release);
+      process.stderr.write(`ECHO update: this command ran ${running}, but the managed ECHO command selects ${safeRelease(result.installed_release)}; continuing with ${running}. Run update --status through the same command for details.\n`);
+      return;
+    }
     if (result.status === 'available') {
       const available = safeRelease(result.available_release);
       if (available !== 'unknown' && available !== result.installed_release) {
