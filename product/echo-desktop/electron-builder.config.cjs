@@ -68,6 +68,10 @@ module.exports = {
     const resources = mac ? join(app, 'Contents', 'Resources') : join(context.appOutDir, 'resources');
     if (existsSync(join(resources, identity))) chmodSync(join(resources, identity), 0o644);
     if (!mac) chmodSync(join(resources, helper), 0o755);
+    // The signed deb never ships a setuid sandbox (the feed gate refuses one),
+    // whatever mode the Electron download staged it with.
+    const sandbox = join(context.appOutDir, 'chrome-sandbox');
+    if (!mac && existsSync(sandbox)) chmodSync(sandbox, 0o755);
     await flipFuses(app, {
       version: FuseVersion.V1,
       resetAdHocDarwinSignature: mac,
