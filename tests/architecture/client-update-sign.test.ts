@@ -64,7 +64,7 @@ function fixture() {
     execFileSync('zip', ['-qr', archive, 'echo-person-onboarding-kit'], { cwd: directory });
     return [`--${target.name}-kit`, archive];
   });
-  const desktops = desktopArtifacts({ root, clientArchive: client, release, releaseSha256: updateDigest(readFileSync(releasePath)), config, helper: committedSource('product/echo-desktop/linux/echo-desktop-update-helper') });
+  const desktops = desktopArtifacts({ root, clientArchive: client, release, releaseSha256: updateDigest(readFileSync(releasePath)), config, committed: committedSource });
   archives.push('--macos-app', desktops['macos-app'].path, '--linux-deb', desktops['linux-deb'].path);
   const prepared = join(root, 'prepared');
   const prepare = spawnSync(process.execPath, [join(REPO, 'tools/client-update-feed.mjs'), 'prepare', '--config', configPath, '--release', releasePath, ...archives, '--sequence', '1', '--expires', new Date(Date.now() + 86_400_000).toISOString(), '--out', prepared], { cwd: REPO, encoding: 'utf8' });

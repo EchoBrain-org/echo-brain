@@ -9,12 +9,12 @@ import { parseArgs } from 'node:util';
 import { canonicalJson, readCleanV1Release } from './clean-v1-release.mjs';
 import { parseUpdateConfig, parseUpdateManifest, updateDigest, verifyUpdateEnvelope, UPDATE_ARTIFACT_LIMIT, UPDATE_METADATA_LIMIT } from '../src/product/person-client/dist/client-update-contract.js';
 import { extractClientUpdateKit, validateClientUpdateRelease } from '../src/product/person-client/dist/client-update-kit.js';
+import { checkDesktopDeb } from '../product/echo-desktop/scripts/check-deb.mjs';
 
 const REPO = resolve(import.meta.dirname, '..');
 // Archive tools get a bound well above a ~130 MB app's extraction time.
 const TOOL_TIMEOUT_MS = 120_000;
 const DESKTOP_IDENTITY = 'echo-desktop-identity.v1.json';
-const LINUX_HELPER = 'echo-desktop-update-helper';
 
 // ADR-0035: every release carries exactly these four targets. Every prepare
 // option, object key, local path, URL and content type derives from this table.
@@ -107,12 +107,12 @@ function committed(release, source) {
   return execFileSync('git', ['show', `${release.source_sha}:${source}`], { cwd: REPO, maxBuffer: 1024 * 1024 });
 }
 
-// Desktop artifacts (ADR-0035 "Desktop release identity"). Both are read with
-// archive tools and only named members are extracted, into a private folder.
+// Desktop artifacts (ADR-0035 "Desktop release identity"). The ZIP is read
+// with archive tools and only named members are extracted, into a private
+// folder; every member of the .deb is read from its headers.
 const APP = 'ECHO.app/';
 const APP_RESOURCES = 'ECHO.app/Contents/Resources/';
 const DEB_RESOURCES = './opt/ECHO/resources/';
-const TAR_COMPRESSION = { xz: '-J', gz: '-z', zst: '--zstd' };
 function tool(command, args, options = {}) {
   return execFileSync(command, args, { timeout: TOOL_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], ...options });
 }
@@ -207,54 +207,26 @@ function macosEmbeddedClient(archive, directory, target, manifest, release, conf
   return join(directory, APP_RESOURCES, 'person-client');
 }
 
-// Linux: a .deb is an ar archive of exactly three members. fpm writes it with
-// GNU ar, whose slash-terminated member names macOS ar cannot extract, so the
-// members are read here and then given to tar.
-function debMembers(bytes) {
-  if (bytes.subarray(0, 8).toString('latin1') !== '!<arch>\n') fail('desktop_package_invalid');
-  const members = [];
-  for (let offset = 8; offset < bytes.length;) {
-    const header = bytes.subarray(offset, offset + 60).toString('latin1');
-    const size = header.slice(48, 58).trimEnd();
-    const end = offset + 60 + Number(size);
-    if (header.length !== 60 || header.slice(58) !== '`\n' || !/^\d+$/.test(size) || end > bytes.length) fail('desktop_package_invalid');
-    members.push({ name: header.slice(0, 16).trimEnd().replace(/\/$/, ''), bytes: bytes.subarray(offset + 60, end) });
-    offset = end + (end % 2);
-  }
-  const [binary, control, data] = members;
-  if (members.length !== 3 || binary.name !== 'debian-binary' || binary.bytes.toString('latin1') !== '2.0\n' ||
-      !/^control\.tar\.(xz|gz|zst)$/.test(control.name) || !/^data\.tar\.(xz|gz|zst)$/.test(data.name)) fail('desktop_package_invalid');
-  return { control, data };
-}
-function untar(member, directory, paths) {
-  const archive = join(directory, member.name);
-  const into = join(directory, member.name.split('.')[0]);
-  writeFileSync(archive, member.bytes, { mode: 0o600, flag: 'wx' });
-  mkdirSync(into, { mode: 0o700 });
-  // A named path missing from the archive makes tar fail, which refuses it.
-  tool('tar', [TAR_COMPRESSION[member.name.split('.').at(-1)], '-xf', archive, '-C', into, ...paths]);
-  return into;
-}
-function debFields(text) {
-  const fields = new Map();
-  for (const line of text.split('\n')) {
-    if (!line || line[0] === ' ' || line[0] === '\t') continue;
-    const colon = line.indexOf(':');
-    const name = line.slice(0, colon).toLowerCase();
-    if (colon <= 0 || fields.has(name)) fail('desktop_package_mismatch');
-    fields.set(name, line.slice(colon + 1).trim());
-  }
-  return fields;
-}
+// Linux: check-deb.mjs first refuses anything dpkg would run or place as root
+// that is not reviewed source at release.source_sha, and anything outside the
+// app's footprint. Then the identity, and the embedded client written out for
+// the file-for-file comparison.
 function debEmbeddedClient(path, directory, target, manifest, release, config) {
-  const { control, data } = debMembers(read(path, UPDATE_ARTIFACT_LIMIT));
-  const fields = debFields(read(join(untar(control, directory, ['./control']), 'control'), 1024 * 1024).toString('utf8'));
-  if (fields.get('package') !== 'echo-desktop' || fields.get('architecture') !== 'amd64') fail('desktop_package_mismatch');
-  const resources = join(untar(data, directory, [DEB_RESOURCES + DESKTOP_IDENTITY, DEB_RESOURCES + LINUX_HELPER, `${DEB_RESOURCES}person-client`]), DEB_RESOURCES);
-  // The root helper re-verifies every Linux install, so it is reviewed source too.
-  if (!committed(release, `product/echo-desktop/linux/${LINUX_HELPER}`).equals(read(join(resources, LINUX_HELPER), 1024 * 1024))) fail('desktop_helper_mismatch');
-  checkDesktopIdentity(read(join(resources, DESKTOP_IDENTITY)), target, manifest, release, config);
-  return join(resources, 'person-client');
+  const members = checkDesktopDeb(read(path, UPDATE_ARTIFACT_LIMIT), source => committed(release, source));
+  const identity = members.get(DEB_RESOURCES + DESKTOP_IDENTITY);
+  if (identity?.type !== 'file') fail('desktop_identity_mismatch');
+  checkDesktopIdentity(identity.bytes, target, manifest, release, config);
+  const prefix = `${DEB_RESOURCES}person-client`;
+  const client = join(directory, 'person-client');
+  // Members come parents first, with checked relative paths.
+  for (const [name, member] of members) {
+    if (name !== prefix && !name.startsWith(`${prefix}/`)) continue;
+    const into = join(client, name.slice(prefix.length));
+    if (member.type === 'directory') mkdirSync(into, { mode: 0o700 });
+    else if (member.type === 'file') writeFileSync(into, member.bytes, { mode: 0o600, flag: 'wx' });
+    else fail('desktop_client_mismatch');
+  }
+  return client;
 }
 
 /** Checks an ECHO.app ZIP or .deb: identity, bootstrap, platform metadata and embedded client. */

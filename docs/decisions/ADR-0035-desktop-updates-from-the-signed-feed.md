@@ -99,8 +99,11 @@ carries `echo-desktop-identity.v1.json` outside `app.asar`. The identity names
 the release, the Person-client digest, the target and the update bootstrap. A
 build without these inputs has no identity file, and its updater is off. Before
 publication the feed's `prepare` checks each desktop artifact's identity,
-bootstrap and embedded Person client against the release, and on Linux the root
-helper's bytes against `release.source_sha`. This extends
+bootstrap and embedded Person client against the release. On Linux it also
+reads every member of the `.deb`. What dpkg runs or installs as root must equal
+the reviewed files at `release.source_sha`: the maintainer scripts, the
+AppArmor profile, the root helper and the package's dependencies. Nothing may
+install outside the app's own files. This extends
 [INV-RELEASE-001](../invariants/INV-RELEASE-001-worktree-bound-artifact.md)
 to the desktop. Its embedded identity must match the release claim before
 publication. [Client updates](../features/client-updates-v1.md#desktop-app)
@@ -152,11 +155,29 @@ conditions, cadence and activation steps.
   needs only the person's click. Using either window needs a compromised feed
   origin or a TLS interception, and it is limited to publisher-signed releases
   within their validity.
-- **What the feed gate proves.** `prepare` checks the identity, `Info.plist`,
-  the embedded Person-client tree and, on Linux, the root helper's bytes. It
-  does not check `app.asar` or the rest of the bundle, so a compromised build
-  machine is outside what the gate proves. The same holds for ZIP local-header
-  tricks, such as local file headers that disagree with the central directory.
+- **What the feed gate proves.** `prepare` checks the identity, `Info.plist`
+  and the embedded Person-client tree. On Linux it also binds everything that
+  runs as root or grants root to reviewed source at `release.source_sha`:
+  - `postinst` and `postrm`, the only maintainer scripts allowed;
+  - the AppArmor profile `postinst` loads, and the root helper;
+  - the control file's `Depends` and `Recommends`, with no field that lets apt
+    remove or replace other packages.
+
+  No package member may be setuid, setgid, a device, a hard link, or writable
+  or owned by anyone but root. Outside `/opt/ECHO` the package may hold only
+  the desktop entry, its icons and its changelog, and no symlink may leave
+  `/opt/ECHO`.
+- **What it does not prove.** The rest of `/opt/ECHO`, including the Electron
+  binaries and `app.asar`, and the rest of the macOS bundle are not checked
+  against source. They run as the person, with the same trust as `ECHO.app`,
+  so a compromised build machine can still change what the app does for that
+  person. The same holds for ZIP local-header tricks, such as local file
+  headers that disagree with the central directory.
+- **Linux sandbox.** `postinst` never makes Chromium's `chrome-sandbox`
+  setuid root, unlike electron-builder's default. The app needs unprivileged
+  user namespaces: Ubuntu 24.04 grants them through the package's AppArmor
+  profile, and older Ubuntu and Debian allow them. A system that disables them
+  cannot start the app.
 - **Quit and owner actions.** An owner's in-flight invite or revoke is not part
   of the quit's unresolved-work question. This is true of every quit, not only
   the update's.
@@ -190,8 +211,11 @@ conditions, cadence and activation steps.
   - desktop unit and end-to-end tests with the update state injected.
 - **CI:**
   - packages both apps;
+  - checks the built `.deb` against the commit with the gate's own check,
+    before installing it;
   - reinstalls the Linux package over itself and checks that the AppArmor
-    profile and the smoke test survive.
+    profile and the smoke test survive, and that `chrome-sandbox` is not
+    setuid.
 
   CI cannot show a polkit prompt or a real macOS swap.
 - **Live qualification (outstanding):** one A-to-B update on a native macOS

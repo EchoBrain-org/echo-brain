@@ -1086,7 +1086,9 @@ CLI bootstrap. Packaging requires a clean `HEAD` equal to the release's
 `prepare` checks. A package built without these inputs has no updater.
 
 Give the feed's `prepare` the `ECHO.app` ZIP as `--macos-app` and the `.deb` as
-`--linux-deb`. The `.tar.gz` is not in the feed and never updates.
+`--linux-deb`. The `.tar.gz` is not in the feed and never updates. On the Linux
+machine, `node scripts/check-deb.mjs dist-app/ECHO-<version>-linux-amd64.deb`
+runs the package check that `prepare` repeats against the release commit.
 
 ## Advanced client-only install or reinstall
 

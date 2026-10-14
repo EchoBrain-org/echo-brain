@@ -118,7 +118,12 @@ Linux outputs are in `dist-app/`:
 - `ECHO-<version>-linux-amd64.deb`: Debian/Ubuntu installer with the Electron
   runtime, dependencies, desktop launcher, sandbox integration and the update
   helper. It depends on `python3` and `openssl` and recommends `pkexec`;
-  without `/usr/bin/pkexec` the updater stays off.
+  without `/usr/bin/pkexec` the updater stays off. What dpkg runs or installs
+  as root is reviewed source in `linux/`: `postinst`, `postrm`, the AppArmor
+  profile and `deb-relationships.json`. `postinst` never makes
+  `chrome-sandbox` setuid, so the system must allow unprivileged user
+  namespaces; Ubuntu 24.04 does through the AppArmor profile.
+  `scripts/check-deb.mjs PACKAGE.deb` checks a built deb against `HEAD`.
 - `ECHO-<version>-linux-x64.tar.gz`: the app directory for manual distribution;
   the receiving system must supply Electron's system libraries and permit its
   sandbox. It never updates itself. Prefer the deb on Ubuntu, where the
@@ -250,11 +255,13 @@ parallel. Whenever CI selects it, both runs are required; a failure on one does
 not cancel the other.
 Each typechecks the desktop, runs unit and full Electron end-to-end tests,
 builds the platform's packages, and verifies release fuses and packaged startup.
-Linux uses Xvfb and additionally installs the deb, validates its desktop entry,
+Linux uses Xvfb and additionally checks the deb with `scripts/check-deb.mjs`
+against the commit, then installs it, validates its desktop entry,
 and smokes the installed executable under Ubuntu's default user-namespace
 restriction, so it starts only through the deb's AppArmor profile. It then
 reinstalls the deb over itself, as the update helper does, and checks that the
-AppArmor profile, the root-owned helper and the smoke test survive. macOS
+AppArmor profile, the root-owned helper, a non-setuid `chrome-sandbox` and the
+smoke test survive. macOS
 verifies the app's code signature.
 A pull request into `main` selects the matrix when its tested merge changes the
 desktop inputs listed in

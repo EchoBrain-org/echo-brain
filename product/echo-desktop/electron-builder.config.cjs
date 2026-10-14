@@ -8,6 +8,7 @@ const { join } = require('node:path');
 // without it has no updater.
 const identity = 'echo-desktop-identity.v1.json';
 const helper = 'echo-desktop-update-helper';
+const debRelationships = require('./linux/deb-relationships.json');
 
 module.exports = {
   appId: 'org.echobrain.echo-desktop',
@@ -41,13 +42,21 @@ module.exports = {
     extraResources: [{ from: `linux/${helper}`, to: helper }],
   },
   deb: {
-    // Setting depends replaces electron-builder 26's default list, so it is
-    // repeated in full before what the update helper needs.
-    depends: ['libgtk-3-0', 'libnotify4', 'libnss3', 'libxss1', 'libxtst6', 'xdg-utils', 'libatspi2.0-0', 'libuuid1', 'libsecret-1-0',
-      'python3', 'openssl'],
-    // Likewise for recommends. Without pkexec an update fails safely and the
-    // manual reinstall remains.
-    recommends: ['libappindicator3-1', 'pkexec | policykit-1'],
+    // What dpkg runs as root, and the profile postinst loads, are reviewed
+    // files in linux/ that the update feed binds to the release commit
+    // (scripts/check-deb.mjs). None has template macros, so electron-builder
+    // copies each unchanged.
+    afterInstall: 'linux/postinst',
+    afterRemove: 'linux/postrm',
+    appArmorProfile: 'linux/apparmor-profile',
+    // apt installs these as root, so the feed binds them too. Setting depends
+    // replaces electron-builder 26's default list, so the file repeats it in
+    // full before python3 and openssl, which the update helper needs. Likewise
+    // for recommends: without pkexec an update fails safely and the manual
+    // reinstall remains. fpm joins each list with ", " unchanged, which the
+    // feed expects, so an entry is a plain name or a `|` alternative.
+    depends: debRelationships.depends,
+    recommends: debRelationships.recommends,
   },
   async afterPack(context) {
     if (!['darwin', 'linux'].includes(context.electronPlatformName)) return;

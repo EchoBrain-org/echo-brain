@@ -369,6 +369,13 @@ jobs:
           else
             npm run smoke
           fi
+      # The update helper installs a signed deb as root (ADR-0035): what dpkg
+      # runs or places as root must equal linux/ at this commit, and nothing
+      # may land outside the app's footprint. The feed's prepare runs the same
+      # check against the release commit.
+      - name: Check the deb's root-run files and footprint against the commit
+        if: runner.os == 'Linux'
+        run: node scripts/check-deb.mjs dist-app/*.deb
       - name: Install and smoke the deb and validate its desktop launcher
         if: runner.os == 'Linux'
         run: |
@@ -385,6 +392,8 @@ jobs:
             sha256sum --check "$RUNNER_TEMP/coreutils-echo.sha256"
             # pkexec runs this helper as root, so only root may change it.
             test "$(stat -c '%U:%G %a' /opt/ECHO/resources/echo-desktop-update-helper)" = 'root:root 755'
+            # postinst never makes Chromium's sandbox helper setuid root.
+            test "$(stat -c '%U:%G %a' /opt/ECHO/chrome-sandbox)" = 'root:root 755'
             xvfb-run -a dbus-run-session -- npm run smoke -- /opt/ECHO/echo-desktop
           }
           sudo apt-get install -y "./${packages[0]}"

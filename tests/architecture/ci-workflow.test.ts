@@ -464,6 +464,9 @@ describe("CI workflow", () => {
       "- name: Run the full desktop end-to-end suite",
       "run: npm run package",
       "- name: Verify release fuses and smoke the packaged app",
+      // The deb's root-relevant contents are checked before it is installed.
+      "run: node scripts/check-deb.mjs dist-app/*.deb",
+      "- name: Install and smoke the deb and validate its desktop launcher",
       'test -z "$(git status --porcelain=v1 --untracked-files=all)"',
     ].map((step) => [step, desktopJob.indexOf(step)] as const);
 
@@ -491,13 +494,14 @@ describe("CI workflow", () => {
     const conditionalSteps = desktopJob
       .split(/(?=^      - )/m)
       .filter((step) => /^        if:/m.test(step));
-    expect(conditionalSteps).toHaveLength(4);
+    expect(conditionalSteps).toHaveLength(5);
     expect(conditionalSteps).toContainEqual(expect.stringContaining(
       "- name: Preserve desktop diagnostics\n        if: ${{ !cancelled() }}",
     ));
     for (const [name, os] of [
       ["Prepare Linux for sandboxed Electron", "Linux"],
       ["Verify the macOS signature", "macOS"],
+      ["Check the deb's root-run files and footprint against the commit", "Linux"],
       ["Install and smoke the deb and validate its desktop launcher", "Linux"],
     ]) {
       expect(conditionalSteps).toContainEqual(
@@ -527,6 +531,7 @@ describe("CI workflow", () => {
     // The installed deb is smoked under Ubuntu's default userns restriction.
     expect(desktopJob).toContain("sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1");
     expect(desktopJob).toContain("desktop-file-validate");
+    expect(desktopJob).toContain("test \"$(stat -c '%U:%G %a' /opt/ECHO/chrome-sandbox)\" = 'root:root 755'");
     expect(desktopJob).toContain("codesign --verify --deep --strict");
     const packager = readFileSync(
       resolve(REPO, "product/echo-desktop/scripts/package.mjs"), "utf8",

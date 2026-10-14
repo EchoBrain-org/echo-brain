@@ -289,7 +289,8 @@ never taken for this one's. The helper runs as root:
 6. It waits up to two minutes for the app to exit and saves the checkpoint
    first, so a failed or interrupted install never leaves the floor below an
    installed release. Then it runs `apt-get install --reinstall -y` on the copy
-   and removes the copy.
+   and removes the copy. The package's `postrm` acts only on removal, so the
+   reinstall keeps the AppArmor profile and `/usr/bin/echo-desktop` in place.
 
 The helper's exit codes are: 0 installed, 2 invalid input, 3 verification
 failed, 4 the app did not exit, 5 installation failed. The relauncher records
@@ -334,10 +335,24 @@ each desktop artifact, `prepare` also checks that:
   tarball the CLI kits carry;
 - on macOS, every ZIP entry is under `ECHO.app/` and `CFBundleIdentifier` is
   `org.echobrain.echo-desktop`;
-- on Linux, the package is `echo-desktop` for `amd64`, and the root helper's
-  bytes equal the helper at `release.source_sha`.
+- on Linux, every member of the `.deb` passes
+  [`check-deb.mjs`](../../product/echo-desktop/scripts/check-deb.mjs), the
+  check CI also runs on each built package:
+  - the package is `echo-desktop` for `amd64`, and its `Depends` and
+    `Recommends` equal `linux/deb-relationships.json`, with no other
+    relationship field;
+  - the control tarball holds only `control`, `md5sums`, `postinst` and
+    `postrm`;
+  - `postinst`, `postrm`, the AppArmor profile and the root helper equal their
+    files in `product/echo-desktop/linux/` at `release.source_sha`;
+  - outside `/opt/ECHO` there is only the desktop entry, its icons and the
+    changelog;
+  - no member is setuid, setgid, a device, a hard link, writable or owned by
+    anyone but root, or a symlink that leaves `/opt/ECHO`.
 
-These checks do not cover `app.asar` or the rest of the bundle; see what
+Reading the `.deb` needs `xz` on `PATH` (`xz-utils`, or Homebrew's `xz` on
+macOS). These checks do not cover the Electron binaries, `app.asar` or the rest
+of the bundle; see what
 [the feed gate proves](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#consequences).
 
 Historical single-platform and two-artifact feeds remain readable by clients

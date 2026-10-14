@@ -1,0 +1,14 @@
+# The ECHO desktop AppArmor profile, which postinst loads as root (ADR-0035).
+# It is the electron-builder 26 template written out for /opt/ECHO: it lets
+# the app use unprivileged user namespaces for the Chromium sandbox under the
+# Ubuntu 24.04 restriction. The update feed refuses a deb whose copy differs
+# from this file at the release commit.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile "echo-desktop" "/opt/ECHO/echo-desktop" flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/echo-desktop>
+}

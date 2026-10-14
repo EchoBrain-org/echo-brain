@@ -126,6 +126,12 @@ Run the [feed preparation command](../../docs/features/client-updates-v1.md#prep
 with the exact canonical release and all four artifacts, each with the same
 source SHA and Person-client artifact. Keep the prepared bundle, authorization
 and receipts in private mode-0700 directories with mode-0600 files.
+Preparation needs `xz` on `PATH` to read the `.deb`. It refuses a `.deb` whose
+maintainer scripts, AppArmor profile, root helper or dependencies differ from
+the reviewed files at the release's source SHA, or that installs anything
+outside the app's own files. The Electron binaries under `/opt/ECHO` are not
+checked against source
+([what the gate proves](../../docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#consequences)).
 
 Unsigned preparation may use a candidate release before final acceptance; it
 requires no release authorization. Review the resulting manifest bytes and
