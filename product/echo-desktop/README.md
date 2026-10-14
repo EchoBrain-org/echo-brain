@@ -18,7 +18,7 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   is one of your active projects), transcript sharing, **Approve** (off while
   Projects is chosen and none is ticked) and **Reject**, and who was in the
   meeting. The card reads the proposal text the Authority sends; a text it
-  cannot read shows as written.
+  cannot read, or could read two ways, shows as written.
 - **Checking**: a meeting you approved, while its record publishes and its
   impact check runs. It has no action and is not counted.
 - **Check failed** (verb **Retry**): "Approved · the check did not finish". It

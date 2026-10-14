@@ -2,7 +2,8 @@
 // Authority sends for review (approvalProposalTextV1): the meeting's title,
 // its time and participants, then Decisions, Actions and Rationales, each a
 // "• " line with its Subject, Status or Due, and its quotes. A text that does
-// not read this way has no signals, and the card shows it as written.
+// not read this way, or reads more than one way, has no signals, and the card
+// shows it as written.
 
 export interface ProposalSignal {
   text: string;
@@ -30,107 +31,99 @@ export interface SaidLine {
   text: string;
 }
 
-const SECTIONS = { Decisions: 'decisions', Actions: 'actions', Rationales: 'rationales' } as const;
-type Section = typeof SECTIONS[keyof typeof SECTIONS];
+const NAMES = ['Decisions', 'Actions', 'Rationales'] as const;
+const LISTS = ['decisions', 'actions', 'rationales'] as const;
 const QUOTE = '  From the meeting: “';
-const FIELDS = ['  Subject: ', '  Status: ', '  Due: '];
-/** The field the Authority always writes for a decision and for an action, so a "• " line before it is still the signal's text. */
-const REQUIRED: Readonly<Record<Section, string | null>> = { decisions: '  Status: ', actions: '  Due: ', rationales: null };
-
-function section(line: string | undefined): Section | null {
-  return line !== undefined && Object.hasOwn(SECTIONS, line) ? SECTIONS[line as keyof typeof SECTIONS] : null;
-}
-
-/** A section heading really begins one: after a blank line, followed by a signal or None. */
-function heading(lines: readonly string[], index: number): Section | null {
-  const found = lines[index - 1] === '' ? section(lines[index]) : null;
-  const next = lines[index + 1];
-  return found && (next === undefined || next === 'None' || next.startsWith('• ')) ? found : null;
-}
-
-/** A line a quote could end on: it ends with ” before the end, a "• " line, another quote or the next section. */
-function closable(lines: readonly string[], index: number): boolean {
-  if (!lines[index]!.endsWith('”')) return false;
-  const next = lines[index + 1];
-  return next === undefined || next.startsWith('• ') || next.startsWith(QUOTE) || (next === '' && (lines[index + 2] === undefined || heading(lines, index + 2) !== null));
-}
+/** The one line a decision and an action have after their text and Subject; a reason has none. */
+const REQUIRED = ['  Status: ', '  Due: ', null] as const;
+/** The Authority's own lines: never in a signal's text, Subject or quote. */
+const FIELDS = ['  Subject: ', '  Status: ', '  Due: ', QUOTE];
 
 /**
- * A "• " line at `index` begins a signal of this section: it reaches the field every such signal has before anything
- * else could begin. The signal's own text may hold "• " lines (a list in a decision); another quote, the next section,
- * or a line the quote could still end on, before that field, means the "• " line is still in the quote.
+ * Where a reading stands, per section: at its name, at None or its first signal, after None, in a signal's text or
+ * Subject, after its Status or Due, in a quote, after a quote. Then in the meeting's own lines, and before them.
  */
-function begins(lines: readonly string[], index: number, kind: Section): boolean {
-  const required = REQUIRED[kind];
-  if (required === null) return true;
-  for (let at = index; at < lines.length; at += 1) {
-    const line = lines[at]!;
-    if (line.startsWith(required)) return true;
-    if (line.startsWith(QUOTE) || (line === '' && heading(lines, at + 1)) || closable(lines, at)) return false;
+const NAME = 0, BLOCK = 1, NONE = 2, TEXT = 3, SUBJECT = 4, READY = 5, OPEN = 6, QUOTED = 7, HEADER = 24, START = 25, STATES = 26;
+type Step = readonly [to: number, op: 'skip' | 'signal' | 'more' | 'subject' | 'field' | 'quote' | 'quoted' | 'close'];
+
+/**
+ * Where one line may take a reading, as approvalProposalTextV1 writes a signal: "• " and its text, any Subject, a
+ * decision's Status or an action's Due, then a quote for each unit it cites (every signal cites one). A text, Subject or
+ * quote runs on over any lines but the Authority's own, and a quote ends on a line that ends with ”.
+ */
+function steps(state: number, line: string): Step[] {
+  if (state >= HEADER) return state === START || line !== '' ? [[HEADER, 'skip']] : [[HEADER, 'skip'], [NAME, 'skip']];
+  const at = state - state % 8, kind = state % 8, section = at / 8, required = REQUIRED[section] ?? null;
+  const quote: Step[] = !line.startsWith(QUOTE) ? []
+    : line.length > QUOTE.length + 1 && line.endsWith('”') ? [[at + OPEN, 'quote'], [at + QUOTED, 'quoted']] : [[at + OPEN, 'quote']];
+  const content = !FIELDS.some(field => line.startsWith(field));
+  switch (kind) {
+    case NAME: return line === NAMES[section] ? [[at + BLOCK, 'skip']] : [];
+    case BLOCK: return line === 'None' ? [[at + NONE, 'skip']] : line.startsWith('• ') ? [[at + TEXT, 'signal']] : [];
+    case NONE: return line === '' && section < 2 ? [[at + 8, 'skip']] : [];
+    case READY: return quote;
+    case QUOTED: return line.startsWith('• ') ? [[at + TEXT, 'signal']] : line === '' && section < 2 ? [[at + 8, 'skip']] : quote;
+    case OPEN: return !content ? [] : line.endsWith('”') ? [[state, 'more'], [at + QUOTED, 'close']] : [[state, 'more']];
   }
-  return false;
+  if (content) return [[state, 'more']];
+  if (kind === TEXT && line.startsWith('  Subject: ')) return [[at + SUBJECT, 'subject']];
+  return required === null ? quote : line.startsWith(required) ? [[at + READY, 'field']] : [];
 }
 
-/** Where a quote may end: the next field or signal, the next section, or the end. A quote may hold blank lines. */
-function boundary(lines: readonly string[], index: number, kind: Section): boolean {
-  const next = lines[index + 1];
-  if (next === undefined) return true;
-  if (next.startsWith('• ')) return begins(lines, index + 1, kind);
-  if (next.startsWith(QUOTE) || FIELDS.some(field => next.startsWith(field))) return true;
-  return next === '' && (lines[index + 2] === undefined || heading(lines, index + 2) !== null);
+/** The one reading of these lines, a step for each; null when they read no way, or more than one. */
+function reading(lines: readonly string[]): Step[] | null {
+  // ways[index * STATES + state]: how many readings lines index.. have from that state, counted to 2. The text ends
+  // after the Rationales' None or a reason's quote.
+  const ways = new Uint8Array((lines.length + 1) * STATES);
+  ways[lines.length * STATES + 2 * 8 + NONE] = ways[lines.length * STATES + 2 * 8 + QUOTED] = 1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    for (let state = 0; state < STATES; state += 1) {
+      ways[index * STATES + state] = Math.min(2, steps(state, lines[index]!).reduce((sum, [to]) => sum + ways[(index + 1) * STATES + to]!, 0));
+    }
+  }
+  if (ways[START] !== 1) return null;
+  const path: Step[] = [];
+  for (let index = 0, state = START; index < lines.length; index += 1) {
+    const step = steps(state, lines[index]!).find(([to]) => ways[(index + 1) * STATES + to]! > 0)!;
+    path.push(step);
+    state = step[0];
+  }
+  return path;
 }
 
 export function readProposal(text: string): Proposal {
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lines = text.split('\n');
   const proposal: Proposal = { title: lines[0] ?? '', participants: [], decisions: [], actions: [], rationales: [] };
-  let index = 1;
   // The meeting's time and participants, up to the first blank line.
-  for (; index < lines.length && lines[index] !== ''; index += 1) {
+  for (let index = 1; index < lines.length && lines[index] !== ''; index += 1) {
     const line = lines[index]!;
     if (line.startsWith('Participant: ')) proposal.participants.push(line.slice('Participant: '.length).trim());
   }
-  let list: ProposalSignal[] | null = null;
-  let kind: Section = 'decisions';
+  const path = reading(lines) ?? [];
   let signal: ProposalSignal | null = null;
-  /** The signal has not reached its required field yet: a "• " line is still its text. */
-  let open = false;
-  let quote: string[] | null = null;
-  const close = (last: string) => {
-    const lines = [...quote!.slice(0, -1), last.endsWith('”') ? last.slice(0, -1) : last];
-    signal!.quotes.push(lines.join('\n').trim());
-    quote = null;
-  };
-  for (; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    if (quote) {
-      (quote as string[]).push(line);
-      if (line.endsWith('”') && boundary(lines, index, kind)) close(line);
-      continue;
-    }
-    const begun = heading(lines, index);
-    if (begun) { list = proposal[begun]; kind = begun; signal = null; open = false; continue; }
-    if (line === '' || !list) continue;
-    if (line.startsWith('• ') && !(signal && open)) {
-      signal = { text: line.slice(2).trim(), subject: null, status: null, due: null, quotes: [] };
-      list.push(signal);
-      open = REQUIRED[kind] !== null;
-      continue;
-    }
-    if (!signal) continue;
-    if (line.startsWith('  Subject: ')) signal.subject = line.slice('  Subject: '.length).trim() || null;
-    else if (line.startsWith('  Status: ')) { signal.status = line.slice('  Status: '.length).trim() || null; if (kind === 'decisions') open = false; }
-    else if (line.startsWith('  Due: ')) {
+  let quote: string | null = null;
+  for (let index = 0; index < path.length; index += 1) {
+    const [to, op] = path[index]!, line = lines[index]!;
+    if (op === 'signal') {
+      signal = { text: line.slice(2), subject: null, status: null, due: null, quotes: [] };
+      proposal[LISTS[Math.floor(to / 8)]!].push(signal);
+    } else if (!signal || op === 'skip') continue;
+    else if (op === 'more' && quote !== null) quote = `${quote}\n${line}`;
+    else if (op === 'more' && to % 8 === SUBJECT) signal.subject = `${signal.subject}\n${line}`;
+    else if (op === 'more') signal.text = `${signal.text}\n${line}`;
+    else if (op === 'subject') signal.subject = line.slice('  Subject: '.length);
+    else if (op === 'field' && to < 8) signal.status = line.slice('  Status: '.length).trim() || null;
+    else if (op === 'field') {
       const due = line.slice('  Due: '.length).trim();
       signal.due = due === '' || due === 'Not specified' ? null : due;
-      if (kind === 'actions') open = false;
-    } else if (line.startsWith(QUOTE)) {
-      open = false;
-      const first = line.slice(QUOTE.length);
-      quote = [first];
-      if (first.endsWith('”') && boundary(lines, index, kind)) close(first);
-    } else signal.text = `${signal.text}\n${line}`.trim();
+    } else if (op === 'quote') quote = line.slice(QUOTE.length);
+    else if (op === 'quoted') signal.quotes.push(line.slice(QUOTE.length, -1).trim());
+    else { signal.quotes.push(`${quote}\n${line.slice(0, -1)}`.trim()); quote = null; }
   }
-  if (quote) close((quote as string[]).at(-1)!);
+  for (const read of [...proposal.decisions, ...proposal.actions, ...proposal.rationales]) {
+    read.text = read.text.trim();
+    read.subject = read.subject?.trim() || null;
+  }
   return proposal;
 }
 
