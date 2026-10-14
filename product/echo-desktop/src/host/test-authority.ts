@@ -689,12 +689,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let assigns = 0;
 
   // The proposal as the Authority writes it for review (approvalProposalTextV1) now that meetings are cited by numbered
-  // units: every signal quotes each unit it cites (a note line, or a transcript part that may hold blank lines), and the
-  // meeting's start (the review's meeting_at) and time zone come before its participants.
+  // units: every signal quotes each unit it cites (a note line, or a transcript part that may hold blank lines, each line
+  // after its first indented four spaces), and the meeting's start (the review's meeting_at) and time zone come before
+  // its participants.
   const PILOT_PROPOSAL = ['Pilot planning', 'actual start at: 2026-10-06T16:00:00.000Z', 'timezone: America/Los_Angeles',
     'Participant: Ari', 'Participant: Mina Patel', 'Participant: Rafael Moreno',
     '', 'Decisions', '• Launch the pilot next week.', '  Status: decided', '  From the meeting: “Launch the pilot next week.”',
-    '  From the meeting: “[09:02] Ari: Let\'s launch the pilot next week.', '', '[09:03] Mina Patel: Agreed. The freeze lifts on Friday.”',
+    '  From the meeting: “[09:02] Ari: Let\'s launch the pilot next week.', '    ', '    [09:03] Mina Patel: Agreed. The freeze lifts on Friday.”',
     '', 'Actions', '• Send the revised quote', '  Due: Not specified', '  From the meeting: “[09:04] Ari: Rafael, can you send the revised quote?”',
     '• Confirm the trace', '  Due: 2026-10-10', '  From the meeting: “[09:05] Mina Patel: I\'ll confirm the trace by Friday.”',
     '', 'Rationales', '• The freeze lifts on Friday, so next week is the first clear window.',

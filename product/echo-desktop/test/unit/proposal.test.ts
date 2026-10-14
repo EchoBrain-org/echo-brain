@@ -10,6 +10,8 @@ const { approvalProposalTextV1 } = await built('services/organization-authority/
 const { compileDecisionBrief } = await built('packages/organization-processing/dist/core/processing/brief.js') as {
   compileDecisionBrief(id: string, meeting: unknown, decisions: unknown): Brief };
 const { validateApprovedDecisionSnapshotV2 } = await built('packages/organization-protocol/dist/record-codec-support-v4.js') as { validateApprovedDecisionSnapshotV2(snapshot: unknown): unknown };
+const { LlmDecisionProcessor } = await built('packages/organization-processing/dist/llm/llm-decision-processor.js') as { LlmDecisionProcessor: new (config: unknown, options: unknown) => {
+  identity: { version: string }; extract(meeting: unknown, context: { processor_version: string; input_fingerprint: string }): Promise<unknown> } };
 
 interface Signal { text: string; subject?: string | null; status?: string; due_at?: string | null; evidence: { quote?: string }[] }
 interface Brief { meeting: { title?: string; time?: Record<string, string>; participants: { id: string; display_name?: string }[] };
@@ -17,6 +19,15 @@ interface Brief { meeting: { title?: string; time?: Record<string, string>; part
 
 /** The proposal as the Authority writes it for this brief. */
 const proposalText = (brief: Brief) => approvalProposalTextV1(JSON.stringify({ approved_payload: { brief } }));
+const DIGEST = `sha256:${'0'.repeat(64)}`, AT = '2026-10-13T09:00:00.000Z';
+/** The proposal for this brief once the record codec accepts it as an approved snapshot's, as the Authority sends it. */
+function approvedText(brief: Brief, id: string): string {
+  const snapshot = { schema_version: 2, kind: 'echo-approved-decision-snapshot-v2', approval_id: `approval-${id}`, staged_content_sha256: DIGEST, final_content_sha256: DIGEST,
+    payload_contract_id: 'organization-record-approval-payload-v1', approved_payload: { brief, alternatives: [], links: null, reviewed_at: AT, surface: 'echo-approval-core',
+      source: { adapter_id: 'granola', instance_id: 'workspace', external_id: id } } };
+  validateApprovedDecisionSnapshotV2(snapshot);
+  return approvalProposalTextV1(JSON.stringify(snapshot));
+}
 
 // Since meetings are cited by numbered units, every signal has at least one quote, one per unit it cites: a
 // transcript turn without its "Label: ", a note line without its list marker, or a sentence-packed part.
@@ -61,7 +72,7 @@ describe('readProposal', () => {
     const proposal = readProposal(proposalText({
       meeting: { title: 'Rollout', participants: [] },
       decisions: [
-        { text: 'Ship X:\n• in EU first\n• then US', status: 'unresolved', evidence: [{ quote: 'Mina said “ship it” first\n• Next item\n\nActions\nmore' }] },
+        { text: 'Ship X:\n• in EU first\n• then US', status: 'unresolved', evidence: [{ quote: 'Mina said “ship it”\n• Next item\n\nActions\nmore' }] },
         { text: 'Keep the freeze.', status: 'decided', evidence: [{ quote: 'The freeze stays.' }] },
       ],
       actions: [{ text: 'Write the plan:\n• scope\n• dates', due_at: null, evidence: [{ quote: 'Someone writes the plan.' }] }],
@@ -70,7 +81,7 @@ describe('readProposal', () => {
     expect(proposal.decisions.map(decision => [decision.text, decision.status])).toEqual([
       ['Ship X:\n• in EU first\n• then US', 'unresolved'], ['Keep the freeze.', 'decided'],
     ]);
-    expect(proposal.decisions[0]!.quotes).toEqual(['Mina said “ship it” first\n• Next item\n\nActions\nmore']);
+    expect(proposal.decisions[0]!.quotes).toEqual(['Mina said “ship it”\n• Next item\n\nActions\nmore']);
     expect(proposal.actions.map(action => action.text)).toEqual(['Write the plan:\n• scope\n• dates']);
   });
 
@@ -111,14 +122,68 @@ describe('readProposal', () => {
     expect(proposal.rationales.map(reason => [reason.text, reason.quotes])).toEqual([['Because:\n• cost\n• timing', ['It costs less.', 'And the timing works.']]]);
   });
 
-  // After a quote, `• Call it “the fix”` may end that quote or begin the next decision; the text reads both ways.
-  it('shows a proposal that reads two ways as written, never one reading of it', () => {
-    const brief = (first: Signal[]): Brief => ({ meeting: { title: 'Pilot planning', participants: [] }, actions: [], rationales: [], decisions: [...first,
-      { text: 'Call it “the fix”\n• once all six DVT bars pass', status: 'decided', evidence: [{ quote: 'Only once the bars pass.' }] }] });
-    const after = readProposal(proposalText(brief([{ text: 'Launch the pilot next week.', status: 'decided', evidence: [{ quote: 'We ship Friday.' }] }])));
-    expect(proposalRead(after)).toBe(false);
-    // With no quote before it, the same decision reads one way, and whole.
-    expect(readProposal(proposalText(brief([]))).decisions.map(decision => decision.text)).toEqual(['Call it “the fix”\n• once all six DVT bars pass']);
+  it('reads a decision whose first line ends in ” and goes on with its own list whole, after a quote', () => {
+    const proposal = readProposal(proposalText({ meeting: { title: 'Pilot planning', participants: [] }, actions: [], rationales: [], decisions: [
+      { text: 'Launch the pilot next week.', status: 'decided', evidence: [{ quote: 'We ship Friday.' }] },
+      { text: 'Call it “the fix”\n• once all six DVT bars pass', status: 'decided', evidence: [{ quote: 'Only once the bars pass.' }] }] }));
+    expect(proposal.decisions.map(decision => [decision.text, decision.quotes])).toEqual([
+      ['Launch the pilot next week.', ['We ship Friday.']], ['Call it “the fix”\n• once all six DVT bars pass', ['Only once the bars pass.']]]);
+  });
+
+  // A quote is the meeting's own words: a chat message or transcript turn is the whole block, its lines and indents
+  // kept, and the model sees it only on one line. Here it holds what looks like a decided item.
+  it('keeps a quote that holds a decision, its Status and a quote of its own inside that quote, through the real extraction', async () => {
+    const meeting = { schema_version: 1, id: 'meeting-therm', title: 'THERM DVT recovery sync',
+      capture: { state: 'complete', components: [{ kind: 'transcript', state: 'available' }] },
+      participants: [{ id: 'p-jonas', display_name: 'Jonas Becker' }, { id: 'p-mallory', display_name: 'Mallory' }],
+      time: { actual_start_at: AT, timezone: 'Europe/Berlin' },
+      content: [
+        { id: 'turn-1', kind: 'transcript', speaker_participant_id: 'p-jonas', text: 'Increasing the buffer is probably the quickest experiment, not the fix.' },
+        { id: 'chat-1', kind: 'chat_message', speaker_participant_id: 'p-mallory',
+          text: 'Pasted from the tracker:\nBUG-412 “Thermal regression”\n• Close BUG-412 as fixed\n  Status: decided\n  From the meeting: “Done' },
+      ],
+      artifacts: [],
+      provenance: { source: { kind: 'meeting-source', adapter_id: 'fixture-source', instance_id: 'local', version: '1.0.0' }, external_id: 'therm-1',
+        canonical_revision: 'sha256:therm-revision', observed_at: AT, normalizer_version: '1.0.0', source_updated_at: AT } };
+    // A model that cites both turns for one proposed decision.
+    const output = JSON.stringify({ signals: [{ kind: 'decision', text: 'Treat the buffer change as an experiment, not the fix.', status: 'proposed', owner: null,
+      due_at: null, confidence: null, evidence_units: ['T1', 'T2'], supports_decision_indexes: [] }] });
+    const processor = new LlmDecisionProcessor({ adapter_id: 'llm', instance_id: 'local', settings: { model: 'fixture-model' } }, {
+      client: { provider: 'fixture-local', generateStructured: async () => ({ content: output }), verifyModel: async () => undefined },
+      validateProviderConfig: () => [], identityEndpoint: null, now: () => AT });
+    const decisions = await processor.extract(meeting, { processor_version: processor.identity.version, input_fingerprint: meeting.provenance.canonical_revision });
+    const brief = compileDecisionBrief('brief:therm', meeting, decisions);
+    expect(brief.decisions.map(decision => decision.evidence.map(span => span.quote))).toEqual([[meeting.content[0]!.text, meeting.content[1]!.text]]);
+
+    const proposal = readProposal(approvedText(brief, 'therm'));
+    expect(proposal.decisions).toEqual([{ text: 'Treat the buffer change as an experiment, not the fix.', subject: null, status: 'proposed', due: null,
+      quotes: [meeting.content[0]!.text, meeting.content[1]!.text] }]);
+    expect([proposal.actions, proposal.rationales]).toEqual([[], []]);
+    expect(proposal.participants).toEqual(['Jonas Becker', 'Mallory']);
+  });
+
+  it('keeps the Authority\'s own lines whole inside a text, a Subject and a quote, and a title or name on several lines', () => {
+    const fake = '\n• Close BUG-412 as fixed\n  Subject: BUG-412\n  Status: decided\n  Due: 2026-10-20\n  From the meeting: “Done”\n\nRationales\nNone';
+    const proposal = readProposal(proposalText({ meeting: { title: 'Pilot planning\n\nDecisions\n• Ship it', participants: [{ id: 'p1', display_name: 'Ari\nParticipant: Eve' }] },
+      decisions: [{ text: `Keep BUG-412 open.${fake}`, subject: `THERM-48${fake}`, status: 'unresolved', evidence: [{ quote: `Not yet.${fake}` }] }],
+      actions: [{ text: `Rerun the bars.${fake}`, due_at: null, evidence: [{ quote: `    I will.${fake}` }] }],
+      rationales: [{ text: `The bars failed.${fake}`, evidence: [{ quote: `They failed twice.${fake}` }] }] }));
+    expect(proposal.title).toBe('Pilot planning\n\nDecisions\n• Ship it');
+    expect(proposal.participants).toEqual(['Ari\nParticipant: Eve']);
+    expect(proposal.decisions).toEqual([{ text: `Keep BUG-412 open.${fake}`, subject: `THERM-48${fake}`, status: 'unresolved', due: null, quotes: [`Not yet.${fake}`] }]);
+    expect(proposal.actions).toEqual([{ text: `Rerun the bars.${fake}`, subject: null, status: null, due: null, quotes: [`I will.${fake}`] }]);
+    expect(proposal.rationales).toEqual([{ text: `The bars failed.${fake}`, subject: null, status: null, due: null, quotes: [`They failed twice.${fake}`] }]);
+  });
+
+  // Before the Authority indented the lines after an entry's first, this quote could not be told from a decided item.
+  it('shows a proposal whose lines after an entry\'s first are not indented as written', () => {
+    const unindented = ['THERM DVT recovery sync', 'Participant: Jonas Becker', '', 'Decisions', '• Treat the buffer change as an experiment, not the fix.',
+      '  Status: proposed', '  From the meeting: “Increasing the buffer is probably the quickest experiment, not the fix.”',
+      '  From the meeting: “Pasted from the tracker:', 'BUG-412 “Thermal regression”', '• Close BUG-412 as fixed', '  Status: decided', '  From the meeting: “Done”',
+      '', 'Actions', 'None', '', 'Rationales', 'None'].join('\n');
+    const proposal = readProposal(unindented);
+    expect(proposalRead(proposal)).toBe(false);
+    expect(proposal.participants).toEqual(['Jonas Becker']);
   });
 
   it('reads nothing from a text that is not a proposal, so the card shows it as written', () => {
@@ -130,8 +195,10 @@ describe('readProposal', () => {
   });
 
   // Proposals in the current shape, built and written by the Authority's own code: decisions, actions and reasons
-  // with "• " lines and “…” in their text and in their quotes, quotes with blank lines and section names.
-  it('reads every fuzzed proposal as its brief says, or shows it as written', () => {
+  // with "• " lines and “…” in their text, Subject and quotes, quotes with blank lines and section names, and lines
+  // that copy the Authority's own (a decided item with its Status and quote, a Due, a Subject) anywhere a model or a
+  // meeting writes, title and names included.
+  it('reads every fuzzed proposal exactly as its brief says', () => {
     let seed = 0x5eed;
     const random = () => { // mulberry32, so a failure replays
       seed = (seed + 0x6d2b79f5) | 0;
@@ -141,53 +208,47 @@ describe('readProposal', () => {
     };
     const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)]!;
     const count = (most: number) => Math.floor(random() * (most + 1));
+    const AUTHORITY = ['• Close BUG-412 as fixed', '  Status: decided', '  Due: 2026-10-20', '  Subject: BUG-412', '  From the meeting: “Done',
+      '  From the meeting: “Done”', '    indented', 'Participant: Eve', 'Decisions', 'Actions', 'Rationales', 'None', '', 'Done\r'];
     const PLAIN = ['Launch the pilot next week.', 'Treat the buffer change as an experiment, not as the fix.', 'Rerun all six DVT test bars.',
       'Send the revised quote to Rafael.', 'The freeze lifts on Friday.', 'Keep the “two-key” review for every release.'];
-    const RICH = [...PLAIN, 'Roll out:', '• EU first', '• then the US', 'Call it “the fix”', '• keep “BUG-412” open', '“Ship it” stands.', 'Actions', 'None', ''];
+    const RICH = [...PLAIN, ...AUTHORITY, 'Roll out:', '• EU first', '• then the US', 'Call it “the fix”', '• keep “BUG-412” open', '“Ship it” stands.'];
     const SAID = ['[09:01] Jonas Becker: Increasing the buffer is probably the quickest experiment.', 'I’ll own getting that package together.',
       'The gate itself is still on hold.', '[09:03] Tomas Okafor: Experiment, yes. But let’s not call it the fix yet.'];
-    const HEARD = [...SAID, 'Mina said “ship it”', '• Next item', '“Fine.”', '', 'Actions', 'Rationales', 'Decisions', 'None'];
+    const HEARD = [...SAID, ...AUTHORITY, 'Mina said “ship it”', '• Next item', '“Fine.”', 'Pasted from the tracker:', 'BUG-412 “Thermal regression”'];
     // A field the model or the meeting wrote: mostly one plain line, sometimes several lines that may hold anything above.
     const words = (plain: readonly string[], rich: readonly string[]) => {
       const text = random() < 0.7 ? pick(plain) : Array.from({ length: 2 + count(3) }, () => pick(rich)).join('\n').trim();
       return text === '' ? pick(plain) : text;
     };
-    const DIGEST = `sha256:${'0'.repeat(64)}`, AT = '2026-10-13T09:00:00.000Z';
     const runs = 3000;
-    const misread: { run: number; text: string }[] = [], asWritten: Signal[][] = [];
+    const misread: { run: number; text: string }[] = [], asWritten: number[] = [];
     for (let run = 0; run < runs; run += 1) {
-      const meeting = { id: `meeting-${run}`, title: pick(['THERM DVT recovery sync', 'Pilot planning', 'Ship “Atlas”']),
+      const meeting = { id: `meeting-${run}`, title: words(['THERM DVT recovery sync', 'Pilot planning', 'Ship “Atlas”'], RICH),
         time: { actual_start_at: AT, ...(random() < 0.5 ? { timezone: 'America/Los_Angeles' } : {}) },
-        participants: Array.from({ length: count(3) }, (_, index) => ({ id: `p${index}`, display_name: pick(['Ari', 'Mina Patel', 'Jonas Becker']) })),
+        participants: Array.from({ length: count(3) }, (_, index) => ({ id: `p${index}`, display_name: words(['Ari', 'Mina Patel', 'Jonas Becker'], RICH) })),
         provenance: { canonical_revision: 'r1' } };
       let id = 0;
-      const signal = (kind: string, extra: Record<string, unknown>) => ({ id: `${kind}-${(id += 1)}`, kind, text: words(PLAIN, RICH), subject: null, confidence: null,
+      const signal = (kind: string, extra: Record<string, unknown>) => ({ id: `${kind}-${(id += 1)}`, kind, text: words(PLAIN, RICH),
+        subject: random() < 0.2 ? words(['BUG-412', 'THERM-48'], RICH) : null, confidence: null,
         evidence: Array.from({ length: 1 + count(2) }, (_, index) => ({ meeting_id: meeting.id, block_id: `b${index}`, quote: words(SAID, HEARD) })), ...extra });
       const decisions = Array.from({ length: count(3) }, () => signal('decision', { status: pick(['proposed', 'decided', 'unresolved']) }));
       const actions = Array.from({ length: (decisions.length === 0 ? 1 : 0) + count(3) }, () => signal('action', { owner: null, due_at: random() < 0.5 ? null : '2026-10-20T00:00:00.000Z' }));
       const rationales = decisions.length === 0 ? [] : Array.from({ length: count(2) }, () => signal('rationale', { supports_signal_ids: [decisions[0]!.id] }));
       const brief = compileDecisionBrief(`brief:${run}`, meeting, { meeting_id: meeting.id, meeting_revision: 'r1', generated_at: AT,
         processor: { kind: 'decision-processor', adapter_id: 'llm', instance_id: 'default', version: '1' }, signals: [...decisions, ...actions, ...rationales] });
-      const snapshot = { schema_version: 2, kind: 'echo-approved-decision-snapshot-v2', approval_id: `approval-${run}`, staged_content_sha256: DIGEST, final_content_sha256: DIGEST,
-        payload_contract_id: 'organization-record-approval-payload-v1', approved_payload: { brief, alternatives: [], links: null, reviewed_at: AT, surface: 'echo-approval-core',
-          source: { adapter_id: 'granola', instance_id: 'workspace', external_id: meeting.id } } };
-      validateApprovedDecisionSnapshotV2(snapshot);
-      const text = approvalProposalTextV1(JSON.stringify(snapshot));
+      const text = approvedText(brief, meeting.id);
       const read = readProposal(text);
-      if (!proposalRead(read)) { asWritten.push([...brief.decisions, ...brief.actions, ...brief.rationales]); continue; }
+      if (!proposalRead(read)) { asWritten.push(run); continue; }
       const want = (signals: Signal[]): ProposalSignal[] => signals.map(signal => ({ text: signal.text, subject: signal.subject ?? null, status: signal.status ?? null,
         due: signal.due_at ?? null, quotes: signal.evidence.map(span => span.quote!) }));
-      const got = { decisions: read.decisions, actions: read.actions, rationales: read.rationales };
-      if (!isDeepStrictEqual(got, { decisions: want(brief.decisions), actions: want(brief.actions), rationales: want(brief.rationales) })) misread.push({ run, text });
+      const got = { title: read.title, participants: read.participants, decisions: read.decisions, actions: read.actions, rationales: read.rationales };
+      if (!isDeepStrictEqual(got, { title: meeting.title, participants: meeting.participants.map(person => person.display_name), decisions: want(brief.decisions),
+        actions: want(brief.actions), rationales: want(brief.rationales) })) misread.push({ run, text });
     }
+    // Nothing is misread, and nothing needs showing as written: the text reads one way.
     expect(misread).toEqual([]);
-    // Shown as written only when it reads two ways, which takes a line ending in ” inside a signal's text or a quote:
-    // about one in twenty here, where two in three proposals have such a line.
-    const curly = (lines: string[]) => lines.some(line => line.endsWith('”'));
-    for (const signals of asWritten) {
-      expect(signals.some(signal => curly(signal.text.split('\n')) || signal.evidence.some(span => curly(span.quote!.split('\n').slice(0, -1))))).toBe(true);
-    }
-    expect(asWritten.length / runs).toBeLessThan(0.1);
+    expect(asWritten).toEqual([]);
   });
 });
 

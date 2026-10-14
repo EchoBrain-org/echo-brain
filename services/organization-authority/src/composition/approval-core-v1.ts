@@ -188,20 +188,24 @@ function checkAuthorization(surface: ApprovalSurfaceV1, organizationId: string, 
   });
 }
 
-/** personMeetingReviewTextV1 moved; identical except an action prints `  Due: <due_at | Not specified>` and never an owner. */
+/** personMeetingReviewTextV1 moved; identical except an action prints `  Due: <due_at | Not specified>` and never an owner, and every line after the
+ *  first of an entry (the title, a time, a participant, a signal's text, Subject or quote) starts with four spaces. A quote is the meeting's own
+ *  words and a text is the model's, so either may hold a line like "• …" or "  Status: decided"; indented, it never reads as one the Authority
+ *  wrote, and the desktop's Approve card takes each entry back whole. */
 export function approvalProposalTextV1(snapshotJson: string): string {
   const brief = (JSON.parse(snapshotJson) as { approved_payload: { brief: DecisionBrief } }).approved_payload.brief;
+  const entry = (line: string) => line.replaceAll('\n', '\n    ');
   const lines = [brief.meeting.title ?? 'Meeting', ...Object.entries(brief.meeting.time ?? {}).map(([key, value]) => `${key.replaceAll('_', ' ')}: ${value}`),
-    ...brief.meeting.participants.map(person => `Participant: ${person.display_name ?? person.id}`)];
+    ...brief.meeting.participants.map(person => `Participant: ${person.display_name ?? person.id}`)].map(entry);
   for (const [name, signals] of [['Decisions', brief.decisions], ['Actions', brief.actions], ['Rationales', brief.rationales]] as const) {
     lines.push('', name);
     if (signals.length === 0) lines.push('None');
     for (const signal of signals) {
-      lines.push(`• ${signal.text}`);
-      if (signal.subject) lines.push(`  Subject: ${signal.subject}`);
-      if ('status' in signal) lines.push(`  Status: ${signal.status}`);
-      if ('due_at' in signal) lines.push(`  Due: ${signal.due_at ?? 'Not specified'}`);
-      for (const span of signal.evidence) if (span.quote) lines.push(`  From the meeting: “${span.quote}”`);
+      lines.push(entry(`• ${signal.text}`));
+      if (signal.subject) lines.push(entry(`  Subject: ${signal.subject}`));
+      if ('status' in signal) lines.push(entry(`  Status: ${signal.status}`));
+      if ('due_at' in signal) lines.push(entry(`  Due: ${signal.due_at ?? 'Not specified'}`));
+      for (const span of signal.evidence) if (span.quote) lines.push(entry(`  From the meeting: “${span.quote}”`));
     }
   }
   return lines.join('\n');
