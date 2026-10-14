@@ -8,7 +8,7 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-10-13
 reviewed_at: 2026-10-13
-reviewed_ref: f0f6cc77e950b47239174f0d717d3535e28a4efd
+reviewed_ref: b70742c8d2e621e2eb3968fc022eadb7e861418e
 status: accepted
 supersedes: []
 superseded_by: []
