@@ -31,6 +31,10 @@ let sweep: PersonRunV1 | null = null;
 let sweepStarts: 'running' | 'busy' | 'done' | 'failed' | 'fails' = 'running';
 /** What an items read answers, when a test says. */
 let page: OpenItemsView | null = null;
+/** How an assign fails, when a test says; what a read of one item answers (unavailable while null). */
+let assignFailure: { code: string; retryable: boolean; mutation_outcome?: 'unknown' } | null = null;
+let readItem: OpenItemView | null = null;
+const RAFAEL = { membership_id: 'mem_00000000-0000-4000-8000-000000000088', display_name: 'Rafael Moreno' };
 
 const impactRun = (state: PersonRunV1['state'], id = '20', event = approval): PersonRunV1 => ({
   run_id: `run_00000000-0000-4000-8000-0000000000${id}`, trigger: 'approved_record', event_ref: event, state,
@@ -85,6 +89,8 @@ beforeEach(() => {
   sweep = null;
   sweepStarts = 'running';
   page = null;
+  assignFailure = null;
+  readItem = null;
   rpc.mockReset();
   rpc.mockImplementation(async (method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; state?: string } }) => {
     const ok = (value: unknown) => ({ ok: true, value });
@@ -98,6 +104,7 @@ beforeEach(() => {
       // A project's tools line: it reads nothing.
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
       case 'app.setUnresolved': return ok(null);
+      case 'people.directory': return ok({ items: [RAFAEL], next_cursor: null });
       case 'account.tools': return ok({ tools: granola === null ? [] : [{ tool_id: 'granola', status: granola }] });
       case 'tools.meetings':
         if (params.request?.operation === 'reviews') {
@@ -133,6 +140,8 @@ beforeEach(() => {
           return ok(sweepAnswer);
         }
         if (params.request?.operation === 'set_state') return failSetState ? unavailable : ok({ state: params.request.state });
+        if (params.request?.operation === 'assign') return assignFailure ? { ok: false, failure: assignFailure } : ok({ owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true } });
+        if (params.request?.operation === 'item') return readItem ? ok(readItem) : unavailable;
         if (params.request?.operation === 'items') {
           if (failItems) return unavailable;
           if (page) return ok(page);
@@ -945,6 +954,70 @@ describe('The item card and Your open items', () => {
     await store.closeAllMatching();
     expect(store.itemStatusShown()).toMatchObject({ busy: false, closeFailure: 'ECHO is unavailable right now. Try again.' });
     expect(store.itemStatusShown()?.items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002']);
+  });
+
+  /** What main's quit guard was told last. */
+  const told = () => rpc.mock.calls.filter(([method]) => method === 'app.setUnresolved').map(([, params]) => params).at(-1);
+  /** A card open on the Review row's item, Reassign… picked Rafael, and the assign's reply lost. */
+  async function reassignLost() {
+    granola = null;
+    home = { ...emptyHome(), items: [item('1', 'changed')] };
+    assignFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    const store = await start();
+    store.openItemCard(store.getState().home!.open!.items[0]!);
+    store.toggleReassign();
+    await flush();
+    await store.reassignCardItem(RAFAEL);
+    return store;
+  }
+
+  it('sends nothing more from a card whose reassignment may have gone, and holds sign out, Restart and Quit, until Check status reads the item', async () => {
+    const store = await reassignLost();
+    expect(store.itemCardShown()?.reassign).toMatchObject({ busy: false, unknown: RAFAEL, failure: 'This may not have been sent.' });
+    // No other pick, no close, no Cancel: the card stays as it is.
+    await store.reassignCardItem(RAFAEL);
+    store.closeCardItem('done');
+    store.toggleReassign();
+    expect(requests('assign')).toHaveLength(1);
+    expect(requests('set_state')).toEqual([]);
+    expect(store.itemCardShown()?.reassign?.unknown).toEqual(RAFAEL);
+    expect(store.signOutHeld()).toBe(true);
+    expect(store.settleWords()).toBe('A reassignment may not have arrived. Check it on Home first.');
+    expect(told()).toEqual({ unresolved: true, reassignment: true });
+    // Another page and back: only its card settles it, so it comes back over Home.
+    await store.openMine();
+    expect(store.itemCardShown()).toBeNull();
+    store.goHome();
+    expect(store.itemCardShown()?.reassign?.unknown).toEqual(RAFAEL);
+    // The item read again is Rafael's: it went, as a pick that went says.
+    readItem = { ...item('1', 'changed'), owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true, match: 'reassigned' } };
+    await store.checkReassign();
+    expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: 'itm_00000001' }]);
+    expect(store.itemCardShown()).toBeNull();
+    expect(store.getState().toast).toBe('Reassigned to Rafael Moreno');
+    expect(store.signOutHeld()).toBe(false);
+    expect(told()).toEqual({ unresolved: false });
+  });
+
+  it('stays unknown while the item cannot be read, and unlocks the card as the item now is once it shows its owner unchanged', async () => {
+    const store = await reassignLost();
+    await store.checkReassign();
+    expect(store.itemCardShown()?.reassign).toMatchObject({ busy: false, unknown: RAFAEL });
+    expect(store.signOutHeld()).toBe(true);
+    // Back over Home from another page, it stays there once it is settled.
+    await store.openMine();
+    store.goHome();
+    // Still Fixture's, and checked again since: nothing went.
+    readItem = { ...item('1', 'changed'), check: { verdict: 'still_open', checked_at: '2026-10-08T13:00:00.000Z', checked_by: 'Mina Patel' } };
+    await store.checkReassign();
+    expect(store.itemCardShown()?.item).toEqual(readItem);
+    expect(store.itemCardShown()?.reassign).toMatchObject({ busy: false, failure: 'It was not saved. Try again.' });
+    expect(store.itemCardShown()?.reassign?.unknown).toBeUndefined();
+    expect(store.signOutHeld()).toBe(false);
+    expect(told()).toEqual({ unresolved: false });
+    store.closeCardItem('done');
+    await flush();
+    expect(requests('set_state')).toEqual([{ schema_version: 1, operation: 'set_state', item_id: 'itm_00000001', state: 'done' }]);
   });
 });
 

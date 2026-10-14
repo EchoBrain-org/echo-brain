@@ -5,7 +5,8 @@ import { colorFor, initials, when } from '../format.js';
 import { message } from '../messages.js';
 import { approvedMeeting, checkLine, itemChange, itemKind, itemNow, itemTitle, itemWhose, monthDay, STAGES, stageSince } from '../needs.js';
 import {
-  closeCardItem, findReassignee, moreOpenItems, openItemInTool, openOpenItems, reassignCardItem, toggleReassign, type ItemCardState, type ItemsLine, type OpenItemsState, type State,
+  checkReassign, closeCardItem, findReassignee, moreOpenItems, openItemInTool, openOpenItems, reassignCardItem, toggleReassign, type ItemCardState, type ItemsLine, type OpenItemsState,
+  type State,
 } from '../store.js';
 import { CardHead, Face, Facts } from './card.js';
 
@@ -96,20 +97,21 @@ export function OpenInTool({ state, item, name, card = false }: { state: State; 
   </>;
 }
 
-/** Reassign…: the organization's people by name; picking one gives them the item. */
-function Reassign({ card }: { card: ItemCardState }) {
+/** Reassign…: the organization's people by name; picking one gives them the item. One that may have gone waits on Check status. */
+function Reassign({ card, frozen }: { card: ItemCardState; frozen: boolean }) {
   const field = useRef<HTMLInputElement>(null);
+  const check = useRef<HTMLButtonElement>(null);
   const picker = card.reassign!;
-  // The field has the caret when it opens, and again when a pick did not go through.
-  useEffect(() => { field.current?.focus(); }, [picker.failure]);
+  // The field has the caret when it opens, and again when a pick did not go through; Check status, when it may have.
+  useEffect(() => { (picker.unknown ? check : field).current?.focus(); }, [picker.failure, picker.unknown, picker.busy]);
   return (
     <div class="picker card-picker" data-testid="reassign-picker">
       <input ref={field} class="field small" type="search" autocomplete="off" maxLength={240} placeholder="Find a person" aria-label="Find a person"
-        value={picker.query} disabled={picker.busy} onInput={event => void findReassignee((event.target as HTMLInputElement).value)} />
+        value={picker.query} disabled={frozen} onInput={event => void findReassignee((event.target as HTMLInputElement).value)} />
       <div class="picker-list" role="listbox" aria-label="People" aria-busy={picker.loading}>
         {picker.results.map(person => (
-          <button type="button" role="option" aria-selected={false} class="picker-option" key={person.membership_id} disabled={picker.busy}
-            onClick={() => void reassignCardItem(person)}>
+          <button type="button" role="option" aria-selected={picker.unknown?.membership_id === person.membership_id} class="picker-option" key={person.membership_id}
+            disabled={frozen} onClick={() => void reassignCardItem(person)}>
             <Face name={person.display_name} keyed={person.membership_id} />
             <span class="name">{person.display_name}</span>
           </button>
@@ -117,7 +119,11 @@ function Reassign({ card }: { card: ItemCardState }) {
       </div>
       {picker.failure && <div class="error">{picker.failure}</div>}
       {!picker.loading && !picker.failure && picker.results.length === 0 && <div class="notice">{picker.query.trim() ? 'No one by that name' : 'No one to pick'}</div>}
-      <div class="picker-foot"><button type="button" class="link-button" disabled={picker.busy} onClick={toggleReassign}>Cancel</button></div>
+      <div class="picker-foot">
+        {picker.unknown
+          ? <button type="button" class="link-button" data-testid="reassign-check" ref={check} disabled={picker.busy} onClick={() => void checkReassign()}>Check status</button>
+          : <button type="button" class="link-button" disabled={picker.busy} onClick={toggleReassign}>Cancel</button>}
+      </div>
     </div>
   );
 }
@@ -152,7 +158,8 @@ export function ItemCard({ state, card }: { state: State; card: ItemCardState })
   const current = item.current;
   const { decision } = item;
   const assignable = item.can.assign;
-  const reassigning = card.reassign?.busy === true;
+  // Reassign… sending, or maybe sent: nothing else is sent from the card until Check status reads the item.
+  const frozen = card.reassign?.busy === true || card.reassign?.unknown !== undefined;
   // Reassign… closed (Cancel, Escape): the caret goes back to its button.
   const picking = Boolean(card.reassign);
   const opened = useRef(false);
@@ -194,12 +201,12 @@ export function ItemCard({ state, card }: { state: State; card: ItemCardState })
             <Facts facts={[['Status', current?.status], ['Due', current?.due_at ? monthDay(current.due_at) ?? current.due_at : null], ['Assignee', current?.assignee]]} />
             {(current?.status || current?.due_at || current?.assignee) && <div class="card-rule" />}
             {item.can.set_state && <>
-              <button type="button" class="primary-button" disabled={reassigning} onClick={() => closeCardItem('done')}>Mark updated</button>
-              <button type="button" class="plain-button" disabled={reassigning} onClick={() => closeCardItem('not_relevant')}>No change needed</button>
+              <button type="button" class="primary-button" disabled={frozen} onClick={() => closeCardItem('done')}>Mark updated</button>
+              <button type="button" class="plain-button" disabled={frozen} onClick={() => closeCardItem('not_relevant')}>No change needed</button>
             </>}
             <OpenInTool state={state} item={item} name={title} card />
             {assignable && !card.reassign && <button type="button" class="outline-button" data-testid="reassign" onClick={toggleReassign}>Reassign…</button>}
-            {card.reassign && <Reassign card={card} />}
+            {card.reassign && <Reassign card={card} frozen={frozen} />}
           </section>
         </aside>
       </div>

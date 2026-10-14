@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { emit, launch, type Launched } from './launch.js';
+import { emit, launch, setUpdateState, updateInstalls, type Launched } from './launch.js';
+import { quitPrompts } from './native.js';
 
 let app: Launched;
 test.afterEach(async () => { await app?.close(); });
@@ -316,6 +317,41 @@ test('the approver reassigns an item someone else owns from its card', async () 
   await expect(app.page.getByTestId('item-card')).toHaveCount(0);
   expect(app.calls().find(call => call.body?.operation === 'assign')?.body)
     .toMatchObject({ item_id: 'itm_00000000-0000-4000-8000-000000000031', owner_membership_id: expect.any(String) });
+});
+
+test('a reassignment whose reply was lost holds its card, Restart and Quit until Check status reads the item', async () => {
+  app = await launch('granola-review-assign-lost');
+  const { page } = app;
+  await page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
+  const card = page.getByTestId('item-card');
+  await card.getByTestId('reassign').click();
+  await card.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
+  await card.getByRole('option', { name: 'Rafael Moreno' }).click();
+  // It may have gone: nothing more is sent from the card, and Escape keeps it.
+  const picker = card.getByTestId('reassign-picker');
+  await expect(picker).toContainText('This may not have been sent.');
+  await expect(card.getByTestId('reassign-check')).toBeFocused();
+  await expect(picker.getByRole('option', { name: 'Rafael Moreno' })).toBeDisabled();
+  for (const name of ['Mark updated', 'No change needed']) await expect(card.getByRole('button', { name, exact: true })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(card.getByTestId('reassign-check')).toBeVisible();
+  // Another page and back: the card comes back over Home.
+  await page.getByTestId('sidebar-tools').click();
+  await expect(page.getByTestId('item-card')).toHaveCount(0);
+  await page.getByTestId('sidebar-home').click();
+  await expect(card.getByTestId('reassign-check')).toBeVisible();
+  await setUpdateState(app, { state: 'available', release: 'clean-v1-release-b' });
+  await page.getByTestId('sidebar-update').click();
+  await expect(page.getByTestId('sidebar-update-note')).toHaveText('A reassignment may not have arrived. Check it on Home first.');
+  expect(await updateInstalls(app)).toEqual([]);
+  expect(await quitPrompts(app)).toEqual(['A reassignment may not have been sent.']);
+  // The item read again is Rafael's: it went, as a pick that went says, and nothing is held.
+  await card.getByTestId('reassign-check').click();
+  await expect(page.getByTestId('toast')).toHaveText('Reassigned to Rafael Moreno');
+  await expect(page.getByTestId('item-card')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar-update-note')).toHaveCount(0);
+  expect(app.calls().filter(call => call.body?.operation === 'assign')).toHaveLength(1);
+  expect(app.calls().filter(call => call.body?.operation === 'item').map(call => call.body?.item_id)).toEqual(['itm_00000000-0000-4000-8000-000000000031']);
 });
 
 test('Check now on a decision checks only that decision', async () => {

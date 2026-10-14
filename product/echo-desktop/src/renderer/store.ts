@@ -945,13 +945,15 @@ export function signOutHeld(): boolean {
   const status = state.compose?.status;
   const sheet = state.sheet;
   return status === 'sending' || status === 'checking' || status === 'unknown' || state.change?.status === 'sending' ||
-    state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null;
+    state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null ||
+    reassignHeld();
 }
 
 /** What to settle first, where an unknown outcome shows: sign out and the update row say the same. */
 export function settleWords(current: State = state): string {
   return current.compose?.status === 'unknown' ? 'A save may not have arrived. Check it in Capture first.'
     : current.change?.status === 'unknown' ? 'A project change may not have finished. Try it again or dismiss it first.'
+    : current.itemCard?.reassign?.unknown ? 'A reassignment may not have arrived. Check it on Home first.'
     : 'Finish the current save first.';
 }
 
@@ -3456,20 +3458,21 @@ const TOO_LONG = 'Up to 8 KiB of text.';
 let unresolvedTold = '';
 
 /**
- * What main's quit guard, and its update_held, go by: a note, a file or a
- * project change (a create, and New project's adds, included) on its way, or
- * not yet confirmed either way.
+ * What main's quit guard, and its update_held, go by: a note, a file, a
+ * project change (a create, and New project's adds, included) or a
+ * reassignment on its way, or not yet confirmed either way.
  */
-function unresolvedWork(): { unresolved: boolean; file?: true; change?: true } {
+function unresolvedWork(): { unresolved: boolean; file?: true; change?: true; reassignment?: true } {
   const compose = state.compose;
   const saving = compose?.status === 'sending' || compose?.status === 'unknown' || compose?.status === 'checking';
   const sheet = state.sheet?.kind === 'new-project' ? state.sheet : null;
   const uploading = sheet?.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown') === true;
   const changing = changeBlocked() || projectSettingsBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown' ||
     sheet?.picks.some(pick => pick.status === 'adding' || pick.status === 'unknown') === true;
+  const reassigning = reassignHeld();
   return {
-    unresolved: saving || uploading || changing,
-    ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : {}),
+    unresolved: saving || uploading || changing || reassigning,
+    ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : reassigning ? { reassignment: true } : {}),
   };
 }
 
@@ -4738,8 +4741,8 @@ export function openItemsShown(current: State = state): OpenItemsState | null {
 /** The Impact line or the project line: what the decision or the project has open, grouped by owner. */
 export function openOpenItems(scope: ItemsLine['scope'], id: string, title: string): Promise<void> {
   if (!expect() || state.concealed) return Promise.resolve();
-  set({ openItems: { route: state.route, scope, id, title, seq: ++seq, loading: true, items: [], next: null }, itemCard: null, itemStatus: null, ask: null, sources: null,
-    toast: null });
+  set({ openItems: { route: state.route, scope, id, title, seq: ++seq, loading: true, items: [], next: null }, itemCard: reassignHeld() ? state.itemCard : null,
+    itemStatus: null, ask: null, sources: null, toast: null });
   return loadOpenItems(false);
 }
 
@@ -4802,13 +4805,23 @@ export interface ItemCardState {
   route: Route;
   /** The item as Home read it. */
   item: OpenItemView;
-  /** Reassign…, open: the organization's people by name, to give the item to. */
-  reassign?: { query: string; results: readonly Member[]; loading: boolean; failure?: string; busy: boolean } | null;
+  /**
+   * Reassign…, open: the organization's people by name, to give the item to.
+   * `unknown`: the person picked, when the pick may have arrived; nothing more
+   * is sent from the card until Check status reads the item.
+   */
+  reassign?: { query: string; results: readonly Member[]; loading: boolean; failure?: string; busy: boolean; unknown?: Member } | null;
+}
+
+/** Reassign… on its way, or whose outcome is unknown: its card stays, and sign out, Restart and Quit wait. */
+function reassignHeld(card: ItemCardState | null = state.itemCard): boolean {
+  return card?.reassign?.busy === true || card?.reassign?.unknown !== undefined;
 }
 
 export function itemCardShown(current: State = state): ItemCardState | null {
   const card = current.itemCard;
-  return card && card.route === current.route ? card : null;
+  // One that is held comes back over Home, however Home was reached since: only it settles what it sent.
+  return card && (card.route === current.route || (current.route.page === 'home' && reassignHeld(card))) ? card : null;
 }
 
 /** A changed item's row, Update or Review: its item, over Home. */
@@ -4817,12 +4830,12 @@ export function openItemCard(item: OpenItemView): void {
   set({ itemCard: { route: state.route, item }, itemStatus: null, openItems: null, ask: null, sources: null, toast: null });
 }
 
-export function closeItemCard(): void { set({ itemCard: null }); }
+export function closeItemCard(): void { if (!reassignHeld()) set({ itemCard: null }); }
 
 /** Reassign…, or Cancel: the card's people picker opens with the organization's first people, or closes. */
 export function toggleReassign(): void {
   const card = itemCardShown();
-  if (!card || !card.item.can.assign || card.reassign?.busy) return;
+  if (!card || !card.item.can.assign || reassignHeld(card)) return;
   if (card.reassign) { set({ itemCard: { ...card, reassign: null } }); return; }
   set({ itemCard: { ...card, reassign: { query: '', results: [], loading: true, busy: false } } });
   void findReassignee('');
@@ -4835,7 +4848,7 @@ let reassignSeq = 0;
 export async function findReassignee(query: string): Promise<void> {
   const card = itemCardShown();
   const account = expect();
-  if (!card?.reassign || !account || card.reassign.busy) return;
+  if (!card?.reassign || !account || reassignHeld(card)) return;
   const mine = ++reassignSeq;
   const typing = query !== card.reassign.query;
   set({ itemCard: { ...card, reassign: { ...card.reassign, query, loading: true, failure: undefined } } });
@@ -4854,32 +4867,84 @@ export async function findReassignee(query: string): Promise<void> {
   set({ itemCard: { ...current, reassign: { ...current.reassign, loading: false, results: result.value.items.filter(person => person.membership_id !== owner) } } });
 }
 
-/** A person picked: the item is theirs to update now, on their Home; the card goes and says so. */
+/** The card a pick or its Check status was sent from, shown or not, while it waits on the answer. */
+function reassignFrom(item_id: string): ItemCardState | null {
+  const card = state.itemCard;
+  return card?.item.item_id === item_id && card.reassign?.busy ? card : null;
+}
+
+/** Its card, as a pick or Check status left it: where it shows now, it stays. */
+function settleReassign(card: ItemCardState, patch: Partial<ItemCardState>): void {
+  set({ itemCard: { ...card, ...patch, ...(itemCardShown() === card ? { route: state.route } : {}) } });
+}
+
+/** It went: its card goes, shown or not, and the toast says so. */
+function reassigned(item_id: string, person: Member): void {
+  set({ ...(reassignFrom(item_id) ? { itemCard: null } : {}), toast: `Reassigned to ${person.display_name}` });
+  unresolvedChanged();
+  void loadHome();
+}
+
+/**
+ * A person picked: the item is theirs to update now, on their Home; the card
+ * goes and says so. One whose outcome is unknown stays on its card, shown or
+ * not, until Check status settles it.
+ */
 export async function reassignCardItem(person: Member): Promise<void> {
   const card = itemCardShown();
-  if (!card?.reassign || card.reassign.busy || !card.item.can.assign) return;
+  if (!card?.reassign || reassignHeld(card) || !card.item.can.assign) return;
+  const { item_id } = card.item;
   set({ itemCard: { ...card, reassign: { ...card.reassign, busy: true, failure: undefined } } });
-  let failure: string | null = null;
+  unresolvedChanged();
   try {
-    await runsCommand({ schema_version: 1, operation: 'assign', item_id: card.item.item_id, owner_membership_id: person.membership_id });
+    await runsCommand({ schema_version: 1, operation: 'assign', item_id, owner_membership_id: person.membership_id });
   } catch (error) {
-    failure = error instanceof Error ? error.message : 'That was not sent. Try again.';
-  }
-  const current = itemCardShown();
-  const shown = current?.reassign && current.item.item_id === card.item.item_id ? current : null;
-  if (failure !== null) {
-    if (shown) set({ itemCard: { ...shown, reassign: { ...shown.reassign!, busy: false, failure } } });
-    else set({ toast: failure });
+    const current = reassignFrom(item_id);
+    const failure = error instanceof Error ? error.message : 'That was not sent. Try again.';
+    const unknown = outcomeUnknown(failureOf(error), false);
+    if (current) settleReassign(current, { reassign: { ...current.reassign!, busy: false, failure, ...(unknown ? { unknown: person } : {}) } });
+    if (!itemCardShown()) set({ toast: failure });
+    unresolvedChanged();
     return;
   }
-  set({ ...(shown ? { itemCard: null } : {}), toast: `Reassigned to ${person.display_name}` });
-  void loadHome();
+  reassigned(item_id, person);
+}
+
+/**
+ * Check status, after a pick whose outcome is unknown: the item, read again,
+ * settles it. Its owner the person picked, it went; anyone else, it did not,
+ * and the card shows the item as it is now. No longer yours to see, the card
+ * goes. A read that fails leaves it unknown.
+ */
+export async function checkReassign(): Promise<void> {
+  const card = itemCardShown();
+  const person = card?.reassign?.unknown;
+  if (!card?.reassign || !person || card.reassign.busy) return;
+  const { item_id } = card.item;
+  set({ itemCard: { ...card, reassign: { ...card.reassign, busy: true } } });
+  let item: OpenItemView | null = null;
+  let failure: Failure | null = null;
+  try {
+    item = await runsCommand({ schema_version: 1, operation: 'item', item_id });
+  } catch (error) {
+    failure = failureOf(error);
+  }
+  const current = reassignFrom(item_id);
+  if (!current?.reassign) return;
+  if (item?.owner.membership_id === person.membership_id) { reassigned(item_id, person); return; }
+  if (failure?.code === 'not_found') { set({ itemCard: null, toast: message(failure) }); unresolvedChanged(); void loadHome(); return; }
+  if (!item) { settleReassign(current, { reassign: { ...current.reassign, busy: false } }); return; }
+  const { unknown: _settled, ...reassign } = current.reassign;
+  const owner = item.owner.membership_id;
+  settleReassign(current, { item, reassign: item.can.assign ? { ...reassign, busy: false, failure: message({ code: 'not_saved', retryable: true }),
+    results: reassign.results.filter(entry => entry.membership_id !== owner) } : null });
+  unresolvedChanged();
 }
 
 /** Mark updated or No change needed, on an item's card: the card goes, and the item closes as an Update row's Mark updated does. */
 export function closeCardItem(to: 'done' | 'not_relevant'): void {
   const card = itemCardShown();
-  if (!card || card.reassign?.busy) return;
+  if (!card || reassignHeld(card)) return;
   set({ itemCard: null });
   void closeItem(card.item, to);
 }
@@ -4924,7 +4989,7 @@ export function itemStatusShown(current: State = state): ItemStatusState | null 
 export function openItemStatus(scope: ItemStatusState['scope'], id: string | undefined, title: string | null): Promise<void> {
   if (!expect() || state.concealed) return Promise.resolve();
   set({ itemStatus: { route: state.route, scope, ...(id === undefined ? {} : { id }), title, seq: ++seq, loading: true, items: [], next: null, open: null, checked_at: null,
-    busy: false }, itemCard: null, openItems: null, ask: null, sources: null, toast: null });
+    busy: false }, itemCard: reassignHeld() ? state.itemCard : null, openItems: null, ask: null, sources: null, toast: null });
   return loadItemStatus(false);
 }
 
