@@ -24,7 +24,7 @@ import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
   hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, projectSettingsModal, readUpdate, refreshStatus, resume, retryStart,
-  sheetShown, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS,
+  sheetShown, shownItem, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS,
   windowShown, windowTakesDrop, type State,
 } from './store.js';
 
@@ -170,7 +170,7 @@ function App() {
     : state.route.page === 'follow-ups' ? 'Follow-ups' : null;
   // A follow-ups view names itself: Follow-ups, the meeting or the project; an item; a decision.
   const viewName = view?.kind === 'list' ? view.title ?? 'Follow-ups'
-    : view?.kind === 'item' ? (view.item ? itemTitle(view.item) : 'Follow-up') : view?.kind === 'decision' ? 'Decision' : null;
+    : view?.kind === 'item' ? (view.item ? itemTitle(shownItem(view.item, view.live)) : 'Follow-up') : view?.kind === 'decision' ? 'Decision' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : viewName ?? pageName ?? 'ECHO';
   // Back leaves Ask for the page it was asked from; asked over a reader (or a follow-ups view), Back goes to it.
   // A follow-ups view goes back to the one before it, or to the reader it was opened over.

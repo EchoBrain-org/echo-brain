@@ -121,6 +121,8 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await expect(item.getByRole('heading', { name: 'Thermostat PRD · Pilot scope' })).toBeVisible();
   // What the page says now, and the tool's facts under it.
   await expect(item).toContainText('“starts after freeze”');
+  // Once read live, the window is named as the page is, not by its kind.
+  await expect(page.getByTestId('title')).toHaveText('Thermostat PRD · Pilot scope');
   await item.getByRole('button', { name: /^from Pilot planning/ }).click();
   await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
   await expect(row(unsent, 'Thermostat PRD').locator('.follow-up-open')).toBeFocused();
