@@ -591,7 +591,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // The whole visible scope, counted with no live read. Last checks count on open items only: a check reads open items.
       const verdicts = (verdict: string) => open.filter(entry => entry.row.check?.verdict === verdict).length;
       // A decision is named, with its counts, only to those the policy shows its decision part. Of its open items, those whose
-      // last check landed or could not read them, so a decision's open count reads as its Impact line does (R35).
+      // last check landed or could not read them.
       const byDecision = new Map<Sha256Digest, { unsent: number; open: number; landed: number; unreadable: number; latest: string }>();
       for (const { row, access } of visible) {
         if (!access.see_decision) continue;
@@ -631,8 +631,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         }];
       }).slice(0, SCOPE_DECISIONS_MAX);
 
-      // Counts only (the project and Impact lines): no item is listed, so none is opened and no desk is bound. Rows only: the same
-      // page with no live read, so a list shows its rows at once and reads live only what it shows (follow-ups thread v1).
+      // Counts (a meeting's and a project's Follow-ups line): no item is listed, so none is opened and no desk is bound. Rows: the
+      // same page with no live read, so a list shows its rows at once and reads live only what it shows (follow-ups thread v1).
       const countsOnly = request.read === 'counts';
       return checked('items', {
         items: countsOnly ? [] : await present(viewer, context, page, { signal: input.signal, live: request.read === undefined }),

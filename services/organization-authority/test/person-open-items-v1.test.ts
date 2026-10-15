@@ -114,7 +114,7 @@ describe('open items: who sees what', () => {
     expect(await stages('ari')).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null, mine: true }]);
     expect(await stages('mina')).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null, mine: false }]);
     await f.finishImpactRun();
-    // The Impact line reads counts only: Ari may Send, Mina only sees the check.
+    // The Follow-ups line reads counts only: Ari may Send, Mina only sees the check.
     expect((await stages('ari', true)).map(stage => [stage.state, stage.mine])).toEqual([['done', true]]);
     expect((await stages('mina', true)).map(stage => [stage.state, stage.mine])).toEqual([['done', false]]);
     expect((await stages('rafael')).map(stage => stage.mine)).toEqual([false]);
