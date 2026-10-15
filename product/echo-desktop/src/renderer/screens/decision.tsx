@@ -151,11 +151,10 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   );
 }
 
-/** The approved meeting's follow-ups, counted by its check (by its record when opened from its list), and what opens them when there are any. */
+/** The approved meeting's follow-ups, counted by its check, and what opens them when there are any. */
 function followUps(state: State, decision: DecisionState) {
   const line = state.impactLine;
-  const counted = decision.record === undefined ? line?.scope === 'run' && line.id === decision.run?.run_id : line?.scope === 'record' && line.id === decision.record;
-  return line && counted ? meetingFollowUps(line, decision.open?.review.title ?? '') : null;
+  return line?.scope === 'run' && line.id === decision.run?.run_id ? meetingFollowUps(line, decision.open?.review.title ?? '') : null;
 }
 
 /**

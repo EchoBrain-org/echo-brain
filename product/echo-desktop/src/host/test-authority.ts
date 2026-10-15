@@ -889,8 +889,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           }
         }
       }
-      // Mina sends Ari another item after Home's second read, or once the test asks (the `mina-sends` file).
-      if ((mode === 'granola-home-fails-once' && request.operation === 'home' && live && homeReads === 2)
+      // Mina sends Ari another item after Home's second live read, or once the test asks (the `mina-sends` file).
+      if ((mode === 'granola-home-fails-once' && request.operation === 'home' && homeReads === 2)
           || (mode === 'granola-owner-later' && existsSync(join(home, 'mina-sends')))) {
         const later = openItems.find(item => item.state === 'unsent' && item.approver.membership_id === MINA.membership_id);
         if (later) Object.assign(later, { state: 'open', sent_at: now(), state_set_at: now(), state_set_by: MINA, send_included: true });

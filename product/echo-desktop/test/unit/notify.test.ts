@@ -2,6 +2,7 @@
 // every five minutes while signed in, and one notification for what newly
 // waits on you.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ItemPage } from '../../src/renderer/store.js';
 import type { Account, HomeView, OpenItemView } from '../../src/shared/protocol.js';
 import { ACCOUNT, fail, flush, Held, ok, rpcFor, startStore, stubWindow } from './harness.js';
 
@@ -19,12 +20,13 @@ const decision = {
 };
 const id = (n: number) => `itm_00000000-0000-4000-8000-00000000000${n}`;
 
-/** A meeting's action Mina approved and sent to you ("member"). */
+/** A meeting's action Mina approved and sent to you ("member"), n minutes past ten: the higher n, the later sent. */
 function followUp(n: number, extra: Partial<OpenItemView> = {}): OpenItemView {
+  const sent = `2026-10-14T10:${String(n).padStart(2, '0')}:00.000Z`;
   return {
     item_id: id(n), run_id: 'run_00000000-0000-4000-8000-000000000001', kind: 'action', decision, relation: 'needs_updating', expected: `Action ${n}`,
     approver: MINA, owner: { ...ME, match: 'name' }, waits_on: 'owner', state: 'open', created_at: '2026-10-14T09:05:00.000Z',
-    sent_at: '2026-10-14T10:00:00.000Z', state_set_at: '2026-10-14T10:00:00.000Z', state_set_by: MINA, owner_set_at: null, owner_set_by: null,
+    sent_at: sent, state_set_at: sent, state_set_by: MINA, owner_set_at: null, owner_set_by: null,
     send_included: true, check: null, can: { set_state: true, assign: true }, reach: 'not_read', ...extra,
   };
 }
@@ -38,11 +40,8 @@ let holdQuiet: boolean;
 let released: (() => void)[];
 
 const homeOf = (rows: readonly OpenItemView[]): HomeView => ({ send: [], items: rows, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
-/** A full read of Home: Home sends one right before each of its own rows-only reads, side by side. */
-const fullHome = (call: unknown[] | undefined) => call?.[0] === 'runs' && (call[1] as { request: { operation: string; read?: 'rows' } }).request.operation === 'home'
-  && (call[1] as { request: { read?: 'rows' } }).request.read !== 'rows';
-/** The quiet check's reads: rows only, and never Home's own (each of which goes with a full read of Home). */
-const quietReads = () => rpc.mock.calls.filter(([method, params], at, calls) => method === 'runs' && params.request.read === 'rows' && !fullHome(calls[at - 1]))
+/** Reads of Home's rows: the quiet check's, and Home's own, each of which also tells the quiet check what is there. */
+const quietReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'home' && params.request.read === 'rows')
   .map(([, params]) => params);
 const notices = () => rpc.mock.calls.filter(([method]) => method === 'notify.followUps').map(([, params]) => params);
 
@@ -88,9 +87,10 @@ async function nextCheck(): Promise<void> {
 }
 
 describe('the quiet check', () => {
-  it('learns what waits on you at sign-in, then tells each new follow-up once', async () => {
+  it('learns what waits on you at sign-in from Home\'s own read, then tells each new follow-up once', async () => {
     items = [followUp(1)];
     await startStore();
+    // One read of Home's rows at sign-in: Home's, which the quiet check learns from.
     expect(quietReads()).toEqual([{ expect: { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id }, request: { schema_version: 1, operation: 'home', read: 'rows' } }]);
     expect(notices()).toEqual([]);
     items = [followUp(1), followUp(2, { expected: 'Update the pricing page' })];
@@ -156,6 +156,19 @@ describe('the quiet check', () => {
     await nextCheck();
     expect(notices()).toHaveLength(2);
     expect(notices()[1]).toEqual({ item_ids: [id(2)], from: 'Mina', title: 'Action 2' });
+  });
+
+  it('tells again of one reopened to you, or handed back to you', async () => {
+    await startStore();
+    items = [followUp(1)];
+    await nextCheck();
+    // Done, then reopened by Mina: it waits on you again.
+    items = [followUp(1, { state_set_at: '2026-10-14T12:00:00.000Z' })];
+    await nextCheck();
+    // Handed to Rafael, and back to you by him.
+    items = [followUp(1, { state_set_at: '2026-10-14T12:00:00.000Z', owner_set_at: '2026-10-14T13:00:00.000Z', owner_set_by: RAFAEL })];
+    await nextCheck();
+    expect(notices().map(notice => notice.from)).toEqual(['Mina', 'Mina', 'Rafael']);
   });
 
   it('does not tell of an item whose page is open now, and counts it seen', async () => {
@@ -245,9 +258,16 @@ describe('the quiet check', () => {
 });
 
 describe('a notification clicked', () => {
-  it('opens the item page over the page on screen, with another app in front', async () => {
-    items = [followUp(1)];
+  /** Signed in with nothing waiting; then `waiting` is sent to you, and the next check tells of it. */
+  async function told(waiting: OpenItemView) {
     const store = await startStore();
+    items = [waiting];
+    await nextCheck();
+    return store;
+  }
+
+  it('opens the item page over the page on screen, with another app in front', async () => {
+    const store = await told(followUp(1));
     store.conceal();
     store.openNotified(id(1));
     await flush();
@@ -260,19 +280,20 @@ describe('a notification clicked', () => {
   });
 
   it('shows the row its check read at once, while the page reads it live', async () => {
-    items = [followUp(1, { kind: 'ticket', expected: 'launch next week' })];
-    const store = await startStore();
+    const store = await told(followUp(1, { kind: 'ticket', expected: 'launch next week' }));
     // The live read of the item waits: the row the quiet check read shows meanwhile.
     let answer: (() => void) | undefined;
     const runs = rpc.getMockImplementation()!;
-    rpc.mockImplementation((method: string, params: { request?: { operation?: string } }) => (method === 'runs' && params.request?.operation === 'item'
-      ? new Promise(resolve => { answer = () => resolve(ok({ ...items[0]!, reach: 'no_access' })); }) : runs(method, params)));
+    rpc.mockImplementation((method: string, params: { request?: { operation?: string; read?: string } }) => (method === 'runs' && params.request?.operation === 'item'
+      && params.request.read === undefined ? new Promise(resolve => { answer = () => resolve(ok({ ...items[0]!, reach: 'no_access' })); }) : runs(method, params)));
     store.openNotified(id(1));
     await flush();
     expect(store.followUpShown()).toMatchObject({ kind: 'item', item_id: id(1), loading: true, item: { item_id: id(1), reach: 'not_read', expected: 'launch next week' } });
     answer!();
     await flush();
-    expect(store.followUpShown()).toMatchObject({ kind: 'item', loading: false, item: { reach: 'no_access' } });
+    const page = store.followUpShown() as ItemPage;
+    expect(page.loading).toBe(false);
+    expect(store.shownItem(page.item!, page.live).reach).toBe('no_access');
   });
 
   it('opens the Follow-ups page for several', async () => {

@@ -80,7 +80,7 @@ function back(): void {
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
   if (state.ask) return closeAsk();
   const view = followUpShown(state);
-  if (view?.picker) return closeOwnerPicker();
+  if (view?.kind !== 'decision' && view?.picker) return closeOwnerPicker();
   if (view) return closeFollowUp();
   if (state.reader?.menu !== undefined && state.reader.menu !== 'closed') return toggleReaderMenu();
   if (state.reader) return closeReader();

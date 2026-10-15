@@ -15,11 +15,11 @@ let granola: ToolStatus | null = 'linked';
 let failNextList = false;
 let failNextReviews = false;
 let failLists = false;
-/** Home's next read of what waits on you fails: its full read and the rows-only read beside it. */
+/** Home's next read of its rows fails (and so nothing of it is read live). */
 let failNextHome = false;
-/** Home's next full read fails, while the rows-only read beside it answers. */
+/** Home's next live read fails, its rows read. */
 let failNextLive = false;
-/** Home's full reads wait while set, until the test answers them, each with what `home` holds then; so do Home's rows-only reads. */
+/** Live reads (Home's, a list's, an item's) wait while set, until the test answers them, each with what the test held when asked; so do Home's rows reads. */
 let holdLive = false;
 let answerLive: (() => void)[] = [];
 let holdRows = false;
@@ -30,11 +30,6 @@ let failLiveItems = 0;
 let holdTools = false;
 let failTools = false;
 let answerTools: (() => void)[] = [];
-/** Home reads to hold until the test answers them, each with what `home` holds then: a full read and the rows-only read beside it, together. */
-let holdHome = 0;
-let held: (() => void)[] = [];
-/** What happens to Home's rows-only read beside a full read that was held (it is answered with it) or failed. */
-let pairedRows: 'fails' | { answer: (() => void) | null } | null = null;
 let sendFailure: { code: string; retryable: boolean; mutation_outcome?: 'unknown' } | null = null;
 /** A send of this run fails as `sendFailure` says; any other run's goes. Null: every send fails so. */
 let sendFailsFor: string | null = null;
@@ -104,11 +99,10 @@ const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pi
 const opened = (id: string, extra: Partial<OpenItemView> = {}): OpenItemView => ({ ...item(id), reach: 'opened', current: { source: ticket, says_now: `Says ${id}` }, ...extra });
 const summary: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
-/**
- * The runs requests sent, but for Home's rows-only reads: the quiet check's (notify.test.ts), and Home's own, each sent beside a
- * full read of Home, which counts it.
- */
+/** The runs requests sent, but for reads of Home's rows (Home's own, each before its live read, and the quiet check's: notify.test.ts). */
 const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows'));
+/** Reads of what waits on you: each Home read starts with its rows. */
+const rowsReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'home' && params.request.read === 'rows').length;
 const operations = () => homeCalls().map(([, params]) => params.request.operation);
 /** The runs requests sent with one operation, as sent. */
 const requests = (operation: string) => homeCalls().filter(([, params]) => params.request.operation === operation).map(([, params]) => params.request);
@@ -135,9 +129,6 @@ beforeEach(() => {
   failTools = false;
   answerTools = [];
   failLiveItems = 0;
-  holdHome = 0;
-  held = [];
-  pairedRows = null;
   sendFailure = null;
   sendFailsFor = null;
   holdSend = false;
@@ -190,25 +181,11 @@ beforeEach(() => {
           return ok({ runs: [...(sweep ? [{ ...sweep }] : []), ...(run ? [{ ...run }] : [])] });
         }
         if (params.request?.operation === 'home') {
+          // Its rows (Home's, and the quiet check's), answered with what `home` holds when the test lets them go; and its live read.
           if (params.request.read === 'rows') {
-            // Home's own rows-only read comes right after its full read and goes as the test says; the quiet check reads what Home
-            // holds, and is never held or failed with Home's reads.
-            const before = rpc.mock.calls.at(-2);
-            if (before?.[0] !== 'runs' || before[1].request?.operation !== 'home' || before[1].request.read === 'rows') return ok(rowsOf(home));
-            const paired = pairedRows;
-            pairedRows = null;
-            if (paired === 'fails') return unavailable;
-            if (paired !== null) return new Promise(resolve => { paired.answer = () => resolve(ok(rowsOf(home))); });
-            if (holdRows) return new Promise(resolve => { answerRows.push(() => resolve(ok(rowsOf(home)))); });
-            return ok(rowsOf(home));
+            if (failNextHome) { failNextHome = false; return unavailable; }
+            return holdRows ? new Promise(resolve => { answerRows.push(() => resolve(ok(rowsOf(home)))); }) : ok(rowsOf(home));
           }
-          if (holdHome > 0) {
-            holdHome -= 1;
-            const pair: { answer: (() => void) | null } = { answer: null };
-            pairedRows = pair;
-            return new Promise(resolve => { held.push(() => { resolve(ok(home)); pair.answer?.(); }); });
-          }
-          if (failNextHome) { failNextHome = false; pairedRows = 'fails'; return unavailable; }
           if (failNextLive) { failNextLive = false; return unavailable; }
           if (holdLive) return new Promise(resolve => { answerLive.push(() => resolve(ok(home))); });
           return ok(home);
@@ -235,12 +212,13 @@ beforeEach(() => {
         if (params.request?.operation === 'assign') {
           return assignFailure ? { ok: false, failure: assignFailure } : ok({ owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true } });
         }
-        // One item: the one the test says, else the row a list read holds now.
+        // One item: the one the test says, else the row a list read holds now; read rows only, nothing of it read live.
         if (params.request?.operation === 'item') {
           if (itemGone) return { ok: false, failure: { code: 'not_found', retryable: false } };
+          if (failItems > 0) { failItems -= 1; return unavailable; }
           const found = readItem?.item_id === params.request.item_id ? readItem : page?.items.find(entry => entry.item_id === params.request?.item_id);
-          const answer = found ? ok(found) : unavailable;
-          return holdLive ? new Promise(resolve => { answerLive.push(() => resolve(answer)); }) : answer;
+          const answer = found ? ok(params.request.read === 'rows' ? rowOnly(found) : found) : unavailable;
+          return holdLive && params.request.read === undefined ? new Promise(resolve => { answerLive.push(() => resolve(answer)); }) : answer;
         }
         if (params.request?.operation === 'items') {
           if (failItems > 0) { failItems -= 1; return unavailable; }
@@ -294,27 +272,30 @@ describe('Home rows', () => {
     granola = status;
     home = { ...emptyHome(), items: [item('1')], waiting: 2 };
     const store = await start();
-    expect(store.getState().home).toMatchObject({ meetings: false, loading: false, open: { waiting: 2 }, rows: [{ kind: 'update', item: { item_id: item('1').item_id } }] });
+    expect(store.getState().home).toMatchObject({ meetings: false, loading: false, open: { waiting: 2 } });
+    expect(store.homeRows()).toMatchObject([{ kind: 'update', item: { item_id: item('1').item_id } }]);
     expect(store.needsCount()).toBe(1);
     expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
     // The row's copy shows at once, then the item is read again.
     readItem = { ...item('1'), expected: 'launch this week' };
-    const opening = store.openFollowUp(item('1').item_id, store.getState().home!.open!.items[0]!);
+    const row = store.homeRows()[0]!;
+    const opening = store.openFollowUp(item('1').item_id, 'item' in row ? row.item : null);
     expect(store.followUpShown()).toMatchObject({ kind: 'item', loading: true, item: { expected: 'launch next week' } });
     await opening;
     expect(store.followUpShown()).toMatchObject({ kind: 'item', loading: false, item: { expected: 'launch this week' } });
-    expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: item('1').item_id }]);
+    // What Home read live of it came with it: it is read again rows only.
+    expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: item('1').item_id, read: 'rows' }]);
     expect(store.getState().route).toEqual({ page: 'home' });
   });
 
   it('keeps open items when Granola becomes unavailable and stops reading meeting reviews', async () => {
     home = { ...emptyHome(), items: [item('1')] };
     const store = await start();
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['approve', 'update']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
     granola = 'unavailable';
     rpc.mockClear();
     await store.loadHome();
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['update']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
     expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
     expect(operations()).toContain('home');
   });
@@ -322,7 +303,7 @@ describe('Home rows', () => {
   it('merges Home loads asked for while one is on its way: one set of reads, then at most one more', async () => {
     const store = await start();
     rpc.mockClear();
-    holdHome = 1;
+    holdRows = true;
     const first = store.loadHome();
     await flush();
     // The window comes forward (resume and shown) while that load waits: both join it.
@@ -330,7 +311,8 @@ describe('Home rows', () => {
     await flush();
     const loads = () => rpc.mock.calls.filter(([method]) => method === 'account.tools').length;
     expect(loads()).toBe(1);
-    held.shift()!();
+    holdRows = false;
+    answerRows.shift()!();
     await Promise.all([first, ...joined]);
     expect(loads()).toBe(2);
     expect(operations().filter(operation => operation === 'home')).toEqual(['home', 'home']);
@@ -371,7 +353,7 @@ describe('Home rows', () => {
     home = { ...emptyHome(), items: [item('1', 'changed'), { ...item('2', 'changed'), owner: { membership_id: 'member', name: 'Fixture', active: true, match: 'jira_account' } }] };
     granola = null;
     const store = await start();
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['review', 'update']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['review', 'update']);
   });
 
   it('names an Approve row\'s meeting without writing "meeting" twice (R76)', async () => {
@@ -443,7 +425,7 @@ describe('Home decisions and impact checks', () => {
   it('keeps a publishing approval visible and shows what its check found once it finishes', async () => {
     review = { ...review, status: 'publishing', decided_on: 'desktop' };
     const store = await start();
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'checking', review: { status: 'publishing' } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking', review: { status: 'publishing' } }]);
     expect(store.needsCount()).toBe(0);
     review = { ...review, status: 'approved' };
     run = impactRun('pending');
@@ -452,7 +434,7 @@ describe('Home decisions and impact checks', () => {
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
     expect(store.needsCount()).toBe(1);
     const requests = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
@@ -472,7 +454,7 @@ describe('Home decisions and impact checks', () => {
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send' }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
   });
 
   it('refreshes an open decision when its check finishes while the app is hidden', async () => {
@@ -499,13 +481,13 @@ describe('Home decisions and impact checks', () => {
     failNextList = true;
     await vi.advanceTimersByTimeAsync(5_000);
     // The failed read kept the run it had: still checking.
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'checking' }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking' }]);
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send' }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
   });
 
   it('reads what waits on you on a poll only once a check ends, since that read opens each item live', async () => {
@@ -521,14 +503,14 @@ describe('Home decisions and impact checks', () => {
     home = { ...emptyHome(), send: [sendRow()] };
     await vi.advanceTimersByTimeAsync(5_000);
     expect(homeReads()).toBe(2);
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send' }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
   });
 
   it('reads what a finished check found again, more slowly, until that read succeeds', async () => {
     review = { ...review, status: 'approved', decided_on: 'desktop' };
     run = impactRun('running');
     const store = await start();
-    const homeReads = () => operations().filter(operation => operation === 'home').length;
+    const homeReads = rowsReads;
     expect(homeReads()).toBe(1);
     // The check ends, and the read of what it found fails on that poll.
     run = impactRun('done');
@@ -536,13 +518,13 @@ describe('Home decisions and impact checks', () => {
     failNextHome = true;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(homeReads()).toBe(2);
-    expect(store.getState().home?.rows).toEqual([]);
+    expect(store.homeRows()).toEqual([]);
     // Home keeps looking, from 10 s, until the read succeeds; then it stops.
     await vi.advanceTimersByTimeAsync(9_000);
     expect(homeReads()).toBe(2);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(homeReads()).toBe(3);
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send' }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
     const requests = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(rpc.mock.calls).toHaveLength(requests);
@@ -555,7 +537,7 @@ describe('Home decisions and impact checks', () => {
     const store = await start();
     expect(store.getState().home?.open).toBeNull();
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(operations().filter(operation => operation === 'home')).toHaveLength(2);
+    expect(rowsReads()).toBe(2);
     expect(store.getState().home?.open).toEqual(emptyHome());
   });
 
@@ -572,10 +554,10 @@ describe('Home decisions and impact checks', () => {
   it('keeps the rows a failed home read had, and shows no error for it', async () => {
     home = { ...emptyHome(), items: [item('1')], waiting: 1 };
     const store = await start();
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['approve', 'update']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
     failNextHome = true;
     await store.loadHome();
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['approve', 'update']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
     expect(store.getState().home?.open?.waiting).toBe(1);
     expect(store.getState().home?.failure).toBeUndefined();
   });
@@ -587,21 +569,22 @@ describe('Home decisions and impact checks', () => {
     // The check ends, and the poll's read of what it found is slow.
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
-    holdHome = 1;
+    holdRows = true;
     await vi.advanceTimersByTimeAsync(5_000);
     await flush();
-    expect(held).toHaveLength(1);
+    expect(answerRows).toHaveLength(1);
     // Meanwhile Home is read again, and that read of what the check found fails.
+    holdRows = false;
     failNextHome = true;
     await store.loadHome();
-    expect(store.getState().home?.rows).toEqual([]);
+    expect(store.homeRows()).toEqual([]);
     // The slow read answers now. It is no longer Home's read: it shows nothing, and settles nothing Home still owes.
-    held.shift()!();
+    answerRows.shift()!();
     await flush();
-    expect(store.getState().home?.rows).toEqual([]);
+    expect(store.homeRows()).toEqual([]);
     // So Home keeps looking, and its next read brings the Send row.
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
   });
 
   it('keeps an initial runs-list failure silent and recovers when Home is read again', async () => {
@@ -615,7 +598,7 @@ describe('Home decisions and impact checks', () => {
     expect(rpc.mock.calls).toHaveLength(requests);
     await store.loadHome();
     expect(store.getState().home?.failure).toBeUndefined();
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
   });
 
   it.each([false, true])('resumes a failed Home while work is outstanding, result owed: %s', async owed => {
@@ -630,7 +613,7 @@ describe('Home decisions and impact checks', () => {
     failNextReviews = true;
     await store.loadHome();
     expect(store.getState().home?.failure).toMatchObject({ code: 'unavailable' });
-    if (owed) expect(store.getState().home?.rows).toHaveLength(0);
+    if (owed) expect(store.homeRows()).toHaveLength(0);
     store.conceal();
     await vi.advanceTimersByTimeAsync(60_000);
     run = impactRun('done');
@@ -638,7 +621,7 @@ describe('Home decisions and impact checks', () => {
     store.resume();
     await flush();
     expect(store.getState().home?.failure).toBeUndefined();
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
   });
 
   it.each([false, true])('preserves and retries a failed resume with an open decision: %s', async (openCard) => {
@@ -650,7 +633,7 @@ describe('Home decisions and impact checks', () => {
     failNextList = true;
     store.resume();
     await flush();
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
     expect(store.getState().home?.failure).toBeUndefined();
     if (openCard) expect(store.getState().decision?.run?.state).toBe('running');
     // A second focus change must not strand the retry after stopping its timer.
@@ -662,7 +645,7 @@ describe('Home decisions and impact checks', () => {
     home = { ...emptyHome(), send: [sendRow()] };
     await vi.advanceTimersByTimeAsync(20_000);
     expect(store.getState().home?.failure).toBeUndefined();
-    expect(store.getState().home?.rows).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
     if (openCard) {
       expect(store.getState().decision?.run?.state).toBe('done');
       expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: run.run_id });
@@ -707,7 +690,7 @@ describe('Sweeps from Home', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'mine' }]);
     expect(requests('start').at(-1)).toEqual({ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id });
-    expect(store.getState().home?.rows).toEqual([]);
+    expect(store.homeRows()).toEqual([]);
     // Home still says a sweep is due while it runs and once it is done: this Home load asks no more.
     await vi.advanceTimersByTimeAsync(5_000);
     sweep = sweepRun('done');
@@ -725,13 +708,13 @@ describe('Sweeps from Home', () => {
     home = { ...emptyHome(), sweep_due: true, items: [item('1')] };
     sweepAnswer = { run_id: sweepRun('pending').run_id };
     const store = await start();
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['update']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
     expect(requests('sweep')).toHaveLength(1);
     // Done before the next look.
     sweep = sweepRun('done');
     home = { ...emptyHome(), items: [item('1', 'changed')], landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' };
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['review']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['review']);
     expect(store.getState().home?.open).toMatchObject({ landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' });
     // Then Home stops looking.
     const calls = rpc.mock.calls.length;
@@ -765,7 +748,7 @@ describe('Sweeps from Home', () => {
     sweep = sweepRun('done');
     home = { ...emptyHome(), items: [item('1', 'changed')] };
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.getState().home?.rows.map(row => row.kind)).toEqual(['review']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['review']);
     expect(requests('sweep')).toHaveLength(1);
   });
 
@@ -831,13 +814,14 @@ describe('Sweeps from Home', () => {
     sweepStarts = 'failed';
     const store = await start();
     expect(requests('sweep')).toHaveLength(1);
-    expect(store.getState().home).toMatchObject({ loading: false, failure: undefined, rows: [] });
+    expect(store.getState().home).toMatchObject({ loading: false, failure: undefined });
+    expect(store.homeRows()).toEqual([]);
     // A sweep that failed at once is seen ended on the next look at most; then nothing more is read.
     await vi.advanceTimersByTimeAsync(5_000);
     const calls = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(rpc.mock.calls).toHaveLength(calls);
-    expect(store.getState().home?.rows).toEqual([]);
+    expect(store.homeRows()).toEqual([]);
   });
 });
 
@@ -848,7 +832,7 @@ describe('Follow-up lists and item pages', () => {
     ...summary, decisions: 1, unsent: items.filter(entry => entry.state === 'unsent').length, open: items.filter(entry => entry.state === 'open').length,
     done: items.filter(entry => entry.state === 'done').length, not_relevant: items.filter(entry => entry.state === 'not_relevant').length } });
   const list = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown() as FollowUpList;
-  const said = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown()?.said;
+  const said = (store: Awaited<ReturnType<typeof start>>) => (store.followUpShown() as FollowUpList | ItemPage | null)?.said;
   /** What main's quit guard was told last. */
   const told = () => rpc.mock.calls.filter(([method]) => method === 'app.setUnresolved').map(([, params]) => params).at(-1);
   const other = 'run_00000000-0000-4000-8000-000000000021';
@@ -862,16 +846,15 @@ describe('Follow-up lists and item pages', () => {
     await store.openFollowUps('record', record, 'Pilot planning');
     expect(list(store)).toMatchObject({ kind: 'list', scope: 'record', id: record, title: 'Pilot planning', loading: false });
     expect(list(store).ticks).toEqual({ itm_00000001: true, itm_00000002: true });
-    // Current work first, rows only; with no next page, the closed part; then what shows, read live (nothing closed here).
-    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'record', id: record, states: ['unsent', 'open'], read: 'rows' },
-      { schema_version: 1, operation: 'items', scope: 'record', id: record, states: ['done', 'not_relevant'], read: 'rows' },
-      { schema_version: 1, operation: 'items', scope: 'record', id: record, states: ['unsent', 'open'] }]);
-    // The Follow-ups page: yours, every status, nothing ticked.
+    // Every group of a meeting's list shows: one read of them all, rows only, then one live read of them all.
+    const all = ['unsent', 'open', 'done', 'not_relevant'];
+    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'record', id: record, states: all, read: 'rows' },
+      { schema_version: 1, operation: 'items', scope: 'record', id: record, states: all }]);
+    // The Follow-ups page: yours, its closed groups closed, nothing ticked.
     await store.openYourFollowUps();
     expect(store.getState().route).toEqual({ page: 'follow-ups' });
     expect(list(store)).toMatchObject({ scope: 'mine', ticks: {} });
-    expect(requests('items').slice(-3)).toEqual([{ schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'], read: 'rows' },
-      { schema_version: 1, operation: 'items', scope: 'mine', states: ['done', 'not_relevant'], read: 'rows' },
+    expect(requests('items').slice(-2)).toEqual([{ schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'], read: 'rows' },
       { schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'] }]);
     // Back from it is Home.
     store.closeFollowUp();
@@ -931,8 +914,8 @@ describe('Follow-up lists and item pages', () => {
     sendFailure = { code: 'conflict', retryable: false };
     await store.sendTicked(true);
     expect(said(store)).toEqual({ words: 'That changed meanwhile.', error: true });
-    // The list read again rows only, both parts as far as they showed: a change reads nothing live.
-    expect(requests('items').slice(reads).map(request => request.read)).toEqual(['rows', 'rows']);
+    // The list read again rows only, as far as it showed: a change reads nothing live.
+    expect(requests('items').slice(reads).map(request => request.read)).toEqual(['rows']);
     expect(requests('item')).toEqual([]);
     await flush();
     expect(statusReads()).toBe(before);
@@ -960,12 +943,11 @@ describe('Follow-up lists and item pages', () => {
     // Undo is offered once, after Mark done or a Dismiss of an open item.
     await store.undoFollowUp();
     expect(requests('set_state')).toHaveLength(2);
-    const homeReads = () => operations().filter(operation => operation === 'home').length;
-    const before = homeReads();
+    const before = rowsReads();
     store.closeFollowUp();
     await flush();
     expect(store.followUpShown()).toBeNull();
-    expect(homeReads()).toBe(before + 1);
+    expect(rowsReads()).toBe(before + 1);
   });
 
   it('sends one follow-up from its page, opened by its id alone, and offers one dismissed before it was sent back to its owner', async () => {
@@ -1014,16 +996,18 @@ describe('Follow-up lists and item pages', () => {
     await store.openFollowUp('itm_00000002', item('2'));
     const reads = requests('items').length;
     await store.setFollowUpState('done');
+    // The item read again on its own, rows only.
+    expect(requests('item').at(-1)).toEqual({ schema_version: 1, operation: 'item', item_id: 'itm_00000002', read: 'rows' });
     store.closeFollowUp();
     await flush();
-    // The item read again among its check's rows; then, back on the list, both its parts as far as they showed: all rows only.
-    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.read === 'rows' ? 'rows' : 'live'}`)).toEqual(['run rows', 'record rows', 'record rows']);
+    // Back on the list, it is read again as far as it showed, rows only.
+    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.read === 'rows' ? 'rows' : 'live'}`)).toEqual(['record rows']);
     expect(store.followUpShown()).toMatchObject({ kind: 'list', said: null, stale: false });
     // Back from a page where nothing changed reads nothing again.
     await store.openFollowUp('itm_00000002', item('2'));
     store.closeFollowUp();
     await flush();
-    expect(requests('items')).toHaveLength(reads + 3);
+    expect(requests('items')).toHaveLength(reads + 1);
   });
 
   it('changes an owner at once, before Send or after, and settles an unknown outcome by reading the item', async () => {
@@ -1032,7 +1016,7 @@ describe('Follow-up lists and item pages', () => {
     await store.openFollowUps('record', record, 'Pilot planning');
     store.toggleOwnerPicker('itm_00000001');
     await flush();
-    const picker = store.followUpShown()!.picker!;
+    const picker = (store.followUpShown() as FollowUpList).picker!;
     expect(picker).toMatchObject({ item_id: 'itm_00000001', loading: false, results: [RAFAEL] });
     const opened = requests('items').length;
     page = listPage([{ ...unsent('1'), owner: { ...rafael, match: 'picked' } }]);
@@ -1040,11 +1024,11 @@ describe('Follow-up lists and item pages', () => {
     expect(requests('assign')).toEqual([{ schema_version: 1, operation: 'assign', item_id: 'itm_00000001', owner_membership_id: RAFAEL.membership_id }]);
     // By first name, as the chips say.
     expect(said(store)).toEqual({ words: 'Owner changed to Rafael' });
-    // The row moved in place as the list was read again, rows only: nothing read live, no item read on its own.
+    // The row read again on its own, rows only, and the list's counts: it moves in place, and nothing is read live.
     expect(list(store).items[0]?.owner.name).toBe('Rafael Moreno');
-    expect(requests('items').slice(opened).map(request => request.read === 'rows')).toEqual([true, true]);
-    expect(requests('item')).toEqual([]);
-    // A reply that was lost: the rows read again say whether it went.
+    expect(requests('items').slice(opened).map(request => request.read)).toEqual(['counts']);
+    expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: 'itm_00000001', read: 'rows' }]);
+    // A reply that was lost: the row read again says whether it went.
     assignFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
     for (const [owner, words] of [[unsent('1').owner, { words: 'It was not saved. Try again.', error: true }], [{ ...rafael, match: 'picked' as const }, { words: 'Owner changed to Rafael' }]] as const) {
       page = listPage([{ ...unsent('1'), owner }]);
@@ -1054,7 +1038,7 @@ describe('Follow-up lists and item pages', () => {
       expect(said(store)).toEqual(words);
     }
     expect(told()).toEqual({ unresolved: false });
-    // One that was refused says why, and reads nothing.
+    // One that was refused says why, and its row is read again to show what is so now.
     assignFailure = { code: 'not_found', retryable: false };
     const reads = rpc.mock.calls.filter(([method]) => method === 'runs').length;
     store.toggleOwnerPicker('itm_00000001');
@@ -1062,7 +1046,7 @@ describe('Follow-up lists and item pages', () => {
     await store.pickFollowUpOwner(RAFAEL);
     expect(said(store)).toEqual({ words: 'This is no longer available to you.', error: true });
     expect(requests('assign')).toHaveLength(4);
-    expect(rpc.mock.calls.filter(([method]) => method === 'runs')).toHaveLength(reads + 1);
+    expect(rpc.mock.calls.filter(([method]) => method === 'runs').slice(reads).map(([, params]) => params.request.operation)).toEqual(['assign', 'item', 'items']);
   });
 
   it('offers you first and never the owner now, unless the item only fell back to you', async () => {
@@ -1085,7 +1069,7 @@ describe('Follow-up lists: current work first, results in place', () => {
       ...summary, decisions: 1, unsent: items.filter(entry => entry.state === 'unsent').length, open: items.filter(entry => entry.state === 'open').length,
       done: items.filter(entry => entry.state === 'done').length, not_relevant: items.filter(entry => entry.state === 'not_relevant').length } });
   const list = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown() as FollowUpList;
-  const said = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown()?.said;
+  const said = (store: Awaited<ReturnType<typeof start>>) => (store.followUpShown() as FollowUpList | ItemPage | null)?.said;
   const ids = (store: Awaited<ReturnType<typeof start>>) => list(store).items.map(entry => entry.item_id.slice(-1));
   /** The list's reads: rows only, or live (" live"), by states and cursor; never a line's counts or a check's rows. */
   const reads = () => requests('items').filter(request => request.read !== 'counts' && request.scope !== 'run')
@@ -1095,29 +1079,33 @@ describe('Follow-up lists: current work first, results in place', () => {
 
   beforeEach(() => { granola = null; });
 
-  it('reads current work first, closed rows after it, each with its own More, and Try again repeats the read that failed', async () => {
+  it('reads current work first, each closed group once it opens, each with its own More, and Try again repeats the read that failed', async () => {
     // Three closed rows older than all current work: a read of every status would show only them on its first page.
     page = listPage([done('1'), done('2'), done('3'), unsent('4'), item('5'), item('6')]);
     pageSize = 2;
     const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    await store.openFollowUps('project', project.project_id, project.name);
     expect(ids(store)).toEqual(['4', '5']);
-    expect(list(store)).toMatchObject({ active: { next: 'c2' }, closed: null, summary: { unsent: 1, open: 2, done: 3 } });
+    expect(list(store)).toMatchObject({ summary: { unsent: 1, open: 2, done: 3 } });
+    expect(store.moreAfter(list(store))).toEqual(['active']);
     await store.moreFollowUps('active');
-    // Current work read to its end: the closed part's first page follows.
+    expect(ids(store)).toEqual(['4', '5', '6']);
+    expect(store.moreAfter(list(store))).toEqual([]);
+    // Done opened: its first page, then its own More.
+    store.toggleClosedGroup('done');
+    await flush();
     expect(ids(store)).toEqual(['4', '5', '6', '1', '2']);
-    expect(list(store)).toMatchObject({ active: { next: null }, closed: { next: 'c2' } });
+    expect(store.moreAfter(list(store))).toEqual(['done']);
     failItems = 1;
-    await store.moreFollowUps('closed');
-    expect(list(store)).toMatchObject({ failed: 'closed', failure: { code: 'unavailable' } });
+    await store.moreFollowUps('done');
+    expect(list(store).failed).toMatchObject({ read: 'done', failure: { code: 'unavailable' } });
     expect(ids(store)).toEqual(['4', '5', '6', '1', '2']);
     await store.retryFollowUps();
     expect(ids(store)).toEqual(['4', '5', '6', '1', '2', '3']);
-    expect(list(store)).toMatchObject({ closed: { next: null } });
-    expect(list(store).failure).toBeUndefined();
-    // Each page read rows only, then read live, page by page, only as far as the rows that show: the failed page, once read, too.
-    expect(reads()).toEqual(['unsent+open', 'unsent+open live', 'unsent+open c2', 'done+not_relevant', 'unsent+open c2 live', 'done+not_relevant live',
-      'done+not_relevant c2', 'done+not_relevant c2', 'done+not_relevant c2 live']);
+    expect(store.moreAfter(list(store))).toEqual([]);
+    expect(list(store).failed).toBeUndefined();
+    // Each page read rows only, then that page read live: the failed page, once read, too.
+    expect(reads()).toEqual(['unsent+open', 'unsent+open live', 'unsent+open c2', 'unsent+open c2 live', 'done', 'done live', 'done c2', 'done c2', 'done c2 live']);
   });
 
   it('tries the first read again when it failed, and reads again as far as each part showed', async () => {
@@ -1125,19 +1113,21 @@ describe('Follow-up lists: current work first, results in place', () => {
     pageSize = 2;
     failItems = 1;
     const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
-    expect(list(store)).toMatchObject({ failed: 'first', items: [] });
+    await store.openFollowUps('project', project.project_id, project.name);
+    expect(list(store)).toMatchObject({ failed: { read: 'first' }, items: [] });
     await store.retryFollowUps();
     await store.moreFollowUps('active');
+    store.toggleClosedGroup('done');
+    await flush();
     expect(ids(store)).toEqual(['3', '4', '5', '1', '2']);
-    // A change made on a row's page: Back reads both parts again, as far as they showed.
+    // A change made on a row's page: Back reads each part again, as far as it showed.
     readItem = item('4');
     await store.openFollowUp('itm_00000004', item('4'));
     await store.setFollowUpState('done');
     const before = reads().length;
     store.closeFollowUp();
     await flush();
-    expect(reads().slice(before)).toEqual(['unsent+open', 'unsent+open c2', 'done+not_relevant']);
+    expect(reads().slice(before)).toEqual(['unsent+open', 'unsent+open c2', 'done']);
     expect(ids(store)).toEqual(['3', '4', '5', '1', '2']);
     // A read again that fails keeps what showed, and Try again reads it again.
     await store.openFollowUp('itm_00000004', item('4'));
@@ -1145,7 +1135,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     failItems = 1;
     store.closeFollowUp();
     await flush();
-    expect(list(store)).toMatchObject({ failed: 'again' });
+    expect(list(store).failed).toMatchObject({ read: 'again' });
     expect(ids(store)).toEqual(['3', '4', '5', '1', '2']);
   });
 
@@ -1163,7 +1153,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(list(store).items.find(entry => entry.item_id === 'itm_00000001')?.state).toBe('open');
     // Read again in place: the list's rows, rows only, which settle it; no item read on its own, nothing read live.
     expect(requests('item')).toEqual([]);
-    expect(requests('items').slice(-2).map(request => request.read)).toEqual(['rows', 'rows']);
+    expect(requests('items').at(-1)?.read).toBe('rows');
   });
 
   it('stops sending once the list closes, and says what went and what did not when only some did', async () => {
@@ -1227,8 +1217,9 @@ describe('Follow-up lists: current work first, results in place', () => {
     await store.openFollowUps('record', record, 'Pilot planning');
     await store.openListDecision();
     expect(store.followUpShown()).toMatchObject({ kind: 'decision' });
-    expect(store.getState().decision).toMatchObject({ approval_id: approval, record, loading: false, run: { state: 'done' } });
-    expect(store.getState().impactLine).toMatchObject({ scope: 'record', id: record, summary: { unsent: 1 } });
+    expect(store.getState().decision).toMatchObject({ approval_id: approval, loading: false, run: { state: 'done' } });
+    // Its follow-ups line counts them by its check, as the decision's own page does.
+    expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: impactRun('done').run_id, summary: { unsent: 1 } });
     expect(operations()).not.toContain('view');
     // Its follow-ups line: Back to the list, not a list of its own.
     await store.openFollowUps('record', record, 'Pilot planning');
@@ -1292,12 +1283,13 @@ describe('Follow-up lists: current work first, results in place', () => {
     await store.openFollowUps('record', record, 'Pilot planning');
     store.toggleOwnerPicker('itm_00000002');
     await flush();
-    // Given away, it leaves what you see: the list read again no longer holds it, nor do its check's rows.
+    // Given away, it leaves what you see: read again, it is not found, and its row goes.
     page = listPage([item('3')]);
+    itemGone = true;
     await store.pickFollowUpOwner(RAFAEL);
     expect(said(store)).toEqual({ words: 'Owner changed to Rafael · You no longer see it' });
     expect(ids(store)).toEqual(['3']);
-    expect(requests('items').at(-1)).toMatchObject({ scope: 'run', id: item('2').run_id, read: 'rows' });
+    expect(requests('items').at(-1)).toMatchObject({ scope: 'record', id: record, read: 'counts' });
   });
 
   it('clears what Check now said when the list is read again, and keeps a project\'s line through a failed read', async () => {
@@ -1361,8 +1353,8 @@ describe('Check now', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
     expect(check(store)).toBeNull();
-    // The list read again: both its parts.
-    expect(requests('items')).toHaveLength(reads + 2);
+    // The list read again, as far as it showed, rows only.
+    expect(requests('items')).toHaveLength(reads + 1);
     expect((store.followUpShown() as FollowUpList).items[0]?.check?.verdict).toBe('landed');
     expect(requests('sweep')).toHaveLength(1);
   });
@@ -1473,8 +1465,15 @@ describe('Rows first, then what each says now', () => {
   const listPage = (items: OpenItemView[]): OpenItemsView => ({ items, next_cursor: null, stages: [], summary: {
     ...summary, decisions: 1, unsent: items.filter(entry => entry.state === 'unsent').length, open: items.filter(entry => entry.state === 'open').length,
     done: items.filter(entry => entry.state === 'done').length, not_relevant: items.filter(entry => entry.state === 'not_relevant').length } });
-  const list = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown() as FollowUpList;
-  const shownPage = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown() as ItemPage;
+  type Store = Awaited<ReturnType<typeof start>>;
+  const list = (store: Store) => store.followUpShown() as FollowUpList;
+  const shownPage = (store: Store) => store.followUpShown() as ItemPage;
+  /** A list's rows as they show: each its row, with what its live reads brought. */
+  const shown = (store: Store) => list(store).items.map(entry => store.shownItem(entry, list(store).live));
+  /** An item page's item as it shows. */
+  const pageItem = (store: Store) => store.shownItem(shownPage(store).item!, shownPage(store).live);
+  /** Home's items as they show. */
+  const homeItems = (store: Store) => store.homeRows().flatMap(row => ('item' in row ? [row.item] : []));
   const reads = () => requests('items').filter(request => request.read !== 'counts' && request.scope !== 'run')
     .map(request => `${(request.states as string[]).join('+')}${request.cursor ? ` ${request.cursor}` : ''}${request.read === 'rows' ? '' : ' live'}`);
   const closedAs = (state: 'done' | 'not_relevant') => (id: string): OpenItemView => opened(id, { state, state_set_at: '2026-10-08T12:00:00.000Z' });
@@ -1482,48 +1481,35 @@ describe('Rows first, then what each says now', () => {
 
   beforeEach(() => { granola = null; });
 
-  it('keeps each row\'s live part when it is read again rows only, and takes every ECHO field from the fresh read', async () => {
-    const { keepLive, withLive } = await import('../../src/renderer/store.js');
-    const shown = [opened('1'), { ...item('2'), reach: 'unavailable' as const }, rowOnly(item('3'))];
-    const fresh = [rowOnly({ ...item('1'), state: 'done', owner: { ...RAFAEL, name: RAFAEL.display_name, active: true, match: 'reassigned' } }),
-      rowOnly({ ...item('2'), check: { verdict: 'landed', checked_at: '2026-10-09T10:00:00.000Z', checked_by: 'Mina Patel' } }), rowOnly(item('3')), rowOnly(item('4'))];
-    const merged = keepLive(shown, fresh);
-    // What it says now, and how that read went, from what showed; everything else from the fresh read.
-    expect(merged[0]).toEqual({ ...fresh[0], reach: 'opened', current: opened('1').current });
-    expect(merged[1]).toEqual({ ...fresh[1], reach: 'unavailable' });
-    // Never read live, or new: as read.
-    expect(merged.slice(2)).toEqual(fresh.slice(2));
-    // A row read live again takes its new live part.
-    expect(keepLive(shown, [opened('2')])).toEqual([opened('2')]);
-    // A live read lays only its live parts over the rows that show: never its ECHO fields (a rows-only read since knows them
-    // better), and never a row that does not show.
-    const filled = withLive(merged, [{ ...opened('3'), state: 'unsent' }, { ...item('4'), reach: 'no_access' }, opened('9')]);
-    expect(filled.map(entry => entry.item_id)).toEqual(merged.map(entry => entry.item_id));
-    expect(filled[2]).toEqual({ ...fresh[2], reach: 'opened', current: opened('3').current });
-    expect(filled[3]).toEqual({ ...fresh[3], reach: 'no_access' });
-    expect(filled[3]).not.toHaveProperty('current');
+  it('shows a row with what a live read brought of it, every other field as its rows were last read', async () => {
+    const { shownItem } = await import('../../src/renderer/store.js');
+    const row = rowOnly({ ...item('1'), state: 'done', owner: { ...RAFAEL, name: RAFAEL.display_name, active: true, match: 'reassigned' } });
+    expect(shownItem(row, { itm_00000001: { reach: 'opened', current: opened('1').current } })).toEqual({ ...row, reach: 'opened', current: opened('1').current });
+    expect(shownItem(row, { itm_00000001: { reach: 'no_access' } })).toEqual({ ...row, reach: 'no_access' });
+    // Never read live: as read.
+    expect(shownItem(row, { itm_00000002: { reach: 'unavailable' } })).toEqual(row);
   });
 
-  it('shows Home\'s rows at once from the rows-only read, then fills what each says now from the full read, which alone says a sweep is due', async () => {
+  it('shows Home\'s rows at once from their rows read, then fills what each says now from the live read, which alone says a sweep is due', async () => {
     review = { ...review, status: 'approved', decided_on: 'desktop' };
     home = { ...emptyHome(), items: [opened('1'), { ...item('2'), kind: 'action', expected: 'Send the revised quote', reach: 'not_read' }], waiting: 1, sweep_due: true };
     holdLive = true;
     const store = await start();
-    // The full read still on its way: the rows show, by ECHO's own fields, and Home is loaded; only the live part waits.
+    // The live read still on its way: the rows show, by ECHO's own fields, and Home is loaded; only the live part waits.
     expect(store.getState().home).toMatchObject({ loading: false, reading: true, open: { waiting: 1 } });
-    expect(store.getState().home!.rows.map(row => ('item' in row ? [row.kind, row.item.item_id, row.item.reach] : [row.kind]))).toEqual([
+    expect(store.homeRows().map(row => ('item' in row ? [row.kind, row.item.item_id, row.item.reach] : [row.kind]))).toEqual([
       ['update', 'itm_00000001', 'not_read'], ['update', 'itm_00000002', 'not_read'],
     ]);
-    expect(store.getState().home!.open!.items[0]).not.toHaveProperty('current');
-    expect(store.awaitingLive(store.getState().home!.open!.items[0]!)).toBe(true);
+    expect(homeItems(store)[0]).not.toHaveProperty('current');
+    expect(store.awaitingLive(homeItems(store)[0]!)).toBe(true);
     // A meeting's action is never read live: it has nothing to wait for.
-    expect(store.awaitingLive(store.getState().home!.open!.items[1]!)).toBe(false);
+    expect(store.awaitingLive(homeItems(store)[1]!)).toBe(false);
     expect(requests('sweep')).toEqual([]);
     answerLive.shift()!();
     await flush();
     expect(store.getState().home).toMatchObject({ reading: false });
-    expect(store.getState().home!.open!.items[0]).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
-    // The full read says a sweep is due: Home asks for it once it answered.
+    expect(homeItems(store)[0]).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
+    // The live read says a sweep is due: Home asks for it once it answered.
     expect(requests('sweep')).toHaveLength(1);
   });
 
@@ -1532,10 +1518,34 @@ describe('Rows first, then what each says now', () => {
     failNextLive = true;
     const store = await start();
     expect(store.getState().home).toMatchObject({ loading: false, reading: false, failure: undefined });
-    expect(store.getState().home!.open!.items[0]).toMatchObject({ item_id: 'itm_00000001', reach: 'unavailable' });
-    // Read again, the full read answers: what it says now fills in.
+    expect(homeItems(store)[0]).toMatchObject({ item_id: 'itm_00000001', reach: 'unavailable' });
+    // Read again, the live read answers: what it says now fills in.
     await store.loadHome();
-    expect(store.getState().home!.open!.items[0]).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
+    expect(homeItems(store)[0]).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
+  });
+
+  it('reads Home live only while it shows: rows only under follow-ups, and back on it after a change only the rows new to it', async () => {
+    home = { ...emptyHome(), items: [opened('1')] };
+    const store = await start();
+    const live = () => homeCalls().filter(([, params]) => params.request.read === undefined && ['home', 'item'].includes(params.request.operation)).length;
+    const before = live();
+    // A follow-up's page covers Home, and the window comes forward: Home's rows are read again, rows only.
+    readItem = opened('1');
+    await store.openFollowUp('itm_00000001', homeItems(store)[0]!);
+    home = { ...emptyHome(), items: [opened('1'), opened('2')] };
+    const rows = rowsReads();
+    await store.windowShown();
+    await flush();
+    expect(rowsReads()).toBe(rows + 1);
+    expect(live()).toBe(before);
+    // A change on the page, then Back: Home's rows read again, and only the new one read live, on its own.
+    await store.setFollowUpState('done');
+    page = listPage([opened('2')]);
+    store.closeFollowUp();
+    await flush();
+    expect(live()).toBe(before + 1);
+    expect(requests('item').at(-1)).toEqual({ schema_version: 1, operation: 'item', item_id: 'itm_00000002' });
+    expect(homeItems(store).map(entry => entry.reach)).toEqual(['opened', 'opened']);
   });
 
   it('reads the tools beside Home\'s other reads: only the meeting reviews wait on them', async () => {
@@ -1546,10 +1556,10 @@ describe('Rows first, then what each says now', () => {
     // Runs and what waits on you were read without waiting for the tools; the reviews were not read yet.
     expect(operations()).toEqual(expect.arrayContaining(['list', 'home']));
     expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
-    expect(store.getState().home!.rows.map(row => row.kind)).toEqual(['update']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
     answerTools.shift()!();
     await flush();
-    expect(store.getState().home!.rows.map(row => row.kind)).toEqual(['approve', 'update']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
     expect(store.getState().home).toMatchObject({ meetings: true, loading: false });
   });
 
@@ -1561,7 +1571,7 @@ describe('Rows first, then what each says now', () => {
     failTools = true;
     const store = await start();
     expect(store.getState().home).toMatchObject({ loading: false, reading: false, failure: { code: 'transport_failed' } });
-    expect(store.getState().home!.rows.map(row => row.kind)).toEqual(['update']);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
     expect(requests('start')).toEqual([]);
     const calls = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
@@ -1579,15 +1589,14 @@ describe('Rows first, then what each says now', () => {
     holdLive = true;
     const opening = store.openFollowUps('record', record, 'Pilot planning');
     await flush();
-    expect(list(store)).toMatchObject({ loading: false, live: { active: { reading: true } } });
-    expect(list(store).items.map(entry => entry.reach)).toEqual(['not_read', 'not_read', 'not_read']);
-    expect(list(store).items.map(entry => store.rowReading(list(store), entry))).toEqual([true, true, false]);
-    expect(reads()).toEqual(['unsent+open', 'done+not_relevant', 'unsent+open live']);
+    expect(list(store)).toMatchObject({ loading: false, reading: true });
+    expect(shown(store).map(entry => entry.reach)).toEqual(['not_read', 'not_read', 'not_read']);
+    expect(shown(store).map(entry => list(store).reading && store.awaitingLive(entry))).toEqual([true, true, false]);
+    expect(reads()).toEqual(['unsent+open+done+not_relevant', 'unsent+open+done+not_relevant live']);
     answerLive.shift()!();
     await opening;
-    expect(list(store).items.map(entry => entry.reach)).toEqual(['opened', 'opened', 'not_read']);
-    expect(list(store).items.map(entry => store.rowReading(list(store), entry))).toEqual([false, false, false]);
-    expect(list(store).live.active).toMatchObject({ reading: false, ended: true });
+    expect(shown(store).map(entry => entry.reach)).toEqual(['opened', 'opened', 'not_read']);
+    expect(list(store).reading).toBe(false);
   });
 
   it('leaves a list\'s rows saying ECHO couldn\'t read them just now when their live read fails, with no error for the list', async () => {
@@ -1595,45 +1604,45 @@ describe('Rows first, then what each says now', () => {
     const store = await start();
     failLiveItems = 1;
     await store.openFollowUps('record', record, 'Pilot planning');
-    expect(list(store)).toMatchObject({ loading: false, live: { active: { reading: false } } });
-    expect(list(store).failure).toBeUndefined();
-    expect(list(store).items.map(entry => entry.reach)).toEqual(['unavailable', 'not_read']);
-    // Read again after a change, rows only, the row keeps saying so: nothing is read live after a change.
+    expect(list(store)).toMatchObject({ loading: false, reading: false });
+    expect(list(store).failed).toBeUndefined();
+    expect(shown(store).map(entry => entry.reach)).toEqual(['unavailable', 'not_read']);
+    // Opened again, it is read live again.
     const live = reads().filter(entry => entry.endsWith(' live')).length;
     store.closeFollowUp();
     await store.openFollowUps('record', record, 'Pilot planning');
     expect(reads().filter(entry => entry.endsWith(' live'))).toHaveLength(live + 1);
-    expect(list(store).items.map(entry => entry.reach)).toEqual(['opened', 'not_read']);
+    expect(shown(store).map(entry => entry.reach)).toEqual(['opened', 'not_read']);
   });
 
-  it('starts yours and a project\'s closed groups closed, reading their rows live only once opened; a meeting\'s show theirs', async () => {
+  it('starts yours and a project\'s closed groups closed, reading their rows only once opened; a meeting\'s open, read with the rest', async () => {
     page = listPage([opened('1'), closedAs('done')('2'), closedAs('not_relevant')('3')]);
     const store = await start();
     await store.openYourFollowUps();
-    // Both parts rows only; live, current work only.
-    expect(reads()).toEqual(['unsent+open', 'done+not_relevant', 'unsent+open live']);
+    // Current work only, rows only and then live.
+    expect(reads()).toEqual(['unsent+open', 'unsent+open live']);
     expect(list(store).expanded).toEqual({});
-    expect(list(store).items.map(entry => entry.reach)).toEqual(['opened', 'not_read', 'not_read']);
-    // Done opened: its rows show, and are read live, Done alone.
+    expect(shown(store).map(entry => entry.reach)).toEqual(['opened']);
+    // Done opened: its rows read, rows only and then live, Done alone.
     store.toggleClosedGroup('done');
     await flush();
     expect(list(store).expanded).toEqual({ done: true });
-    expect(reads().slice(3)).toEqual(['done live']);
-    expect(list(store).items.map(entry => entry.reach)).toEqual(['opened', 'opened', 'not_read']);
+    expect(reads().slice(2)).toEqual(['done', 'done live']);
+    expect(shown(store).map(entry => entry.reach)).toEqual(['opened', 'opened']);
     // Closed and opened again, it reads nothing more; Dismissed opened reads its own.
     store.toggleClosedGroup('done');
     store.toggleClosedGroup('done');
     store.toggleClosedGroup('not_relevant');
     await flush();
-    expect(reads().slice(3)).toEqual(['done live', 'not_relevant live']);
+    expect(reads().slice(2)).toEqual(['done', 'done live', 'not_relevant', 'not_relevant live']);
     expect(list(store).expanded).toEqual({ done: true, not_relevant: true });
-    // A meeting's list shows its closed rows, and reads them live together.
+    // A meeting's list shows its closed rows, and reads them with its current work: one read rows only, one live.
     await store.openFollowUps('record', record, 'Pilot planning');
     expect(list(store).expanded).toEqual({ done: true, not_relevant: true });
-    expect(reads().slice(5)).toEqual(['unsent+open', 'done+not_relevant', 'unsent+open live', 'done+not_relevant live']);
-    // Its groups do not close.
+    expect(reads().slice(6)).toEqual(['unsent+open+done+not_relevant', 'unsent+open+done+not_relevant live']);
+    // Its groups close too.
     store.toggleClosedGroup('done');
-    expect(list(store).expanded).toEqual({ done: true, not_relevant: true });
+    expect(list(store).expanded).toEqual({ not_relevant: true });
   });
 
   it('keeps what a list read live through a change, and never lets a slower live read undo the change', async () => {
@@ -1647,17 +1656,17 @@ describe('Rows first, then what each says now', () => {
     page = listPage([{ ...opened('1'), approver: unsent('1').approver }, unsentOpened('2')]);
     holdLive = false;
     await store.sendTicked(true);
-    expect(list(store).items.map(entry => [entry.state, entry.reach])).toEqual([['open', 'not_read'], ['unsent', 'not_read']]);
+    expect(shown(store).map(entry => [entry.state, entry.reach])).toEqual([['open', 'not_read'], ['unsent', 'not_read']]);
     answerLive.shift()!();
     await opening;
     // What it says now fills in; what Send did stays.
-    expect(list(store).items.map(entry => [entry.state, entry.reach])).toEqual([['open', 'opened'], ['unsent', 'opened']]);
+    expect(shown(store).map(entry => [entry.state, entry.reach])).toEqual([['open', 'opened'], ['unsent', 'opened']]);
     // Another change, read again rows only: each keeps what it read live, and nothing is read live again.
     const live = reads().filter(entry => entry.endsWith(' live')).length;
     page = listPage([{ ...opened('1'), approver: unsent('1').approver }, { ...unsentOpened('2'), state: 'not_relevant', send_included: false }]);
     store.tickFollowUp('itm_00000002');
     await store.sendTicked(false);
-    expect(list(store).items.map(entry => [entry.state, entry.reach])).toEqual([['open', 'opened'], ['not_relevant', 'opened']]);
+    expect(shown(store).map(entry => [entry.state, entry.reach])).toEqual([['open', 'opened'], ['not_relevant', 'opened']]);
     expect(reads().filter(entry => entry.endsWith(' live'))).toHaveLength(live);
   });
 
@@ -1667,18 +1676,30 @@ describe('Rows first, then what each says now', () => {
     holdLive = true;
     const opening = store.openFollowUp('itm_00000001', rowOnly(opened('1')));
     await flush();
-    expect(shownPage(store)).toMatchObject({ kind: 'item', loading: true, item: { reach: 'not_read' } });
+    expect(shownPage(store)).toMatchObject({ kind: 'item', loading: true });
+    expect(pageItem(store).reach).toBe('not_read');
     answerLive.shift()!();
     await opening;
-    expect(shownPage(store)).toMatchObject({ loading: false, item: { reach: 'opened', current: { says_now: 'Says 1' } } });
+    expect(shownPage(store).loading).toBe(false);
+    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
     holdLive = false;
     readItem = { ...opened('1'), state: 'done', state_set_at: '2026-10-09T12:00:00.000Z' };
     await store.setFollowUpState('done');
-    // One rows-only read of its check's rows: the item is done, and still says what it said.
-    expect(requests('item')).toHaveLength(1);
-    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'run', id: item('1').run_id, read: 'rows' }]);
-    expect(shownPage(store)).toMatchObject({ busy: false, said: { words: 'Done', undo: true },
-      item: { state: 'done', state_set_at: '2026-10-09T12:00:00.000Z', reach: 'opened', current: { says_now: 'Says 1' } } });
+    // Its rows, then it live, then, after the change, its rows again: the item is done, and still says what it said.
+    expect(requests('item').map(request => request.read)).toEqual(['rows', undefined, 'rows']);
+    expect(requests('items')).toEqual([]);
+    expect(shownPage(store)).toMatchObject({ busy: false, said: { words: 'Done', undo: true } });
+    expect(pageItem(store)).toMatchObject({ state: 'done', state_set_at: '2026-10-09T12:00:00.000Z', reach: 'opened', current: { says_now: 'Says 1' } });
+  });
+
+  it('opens a page with what its view read live of its item, reading it again rows only; a meeting\'s action is never read live', async () => {
+    readItem = opened('1');
+    const store = await start();
+    await store.openFollowUp('itm_00000001', opened('1'));
+    readItem = { ...item('2'), kind: 'action', expected: 'Book the lab', reach: 'not_read' };
+    await store.openFollowUp('itm_00000002', rowOnly(readItem));
+    expect(requests('item').map(request => request.read)).toEqual(['rows', 'rows']);
+    expect(pageItem(store)).toMatchObject({ reach: 'not_read' });
   });
 
   it('shows what the Authority answered on an item page when the read after the change fails', async () => {
@@ -1687,15 +1708,17 @@ describe('Rows first, then what each says now', () => {
     await store.openFollowUp('itm_00000001', opened('1'));
     failItems = 1;
     await store.setFollowUpState('done');
-    expect(shownPage(store)).toMatchObject({ busy: false, said: { words: 'Done', undo: true }, item: { state: 'done', reach: 'opened' } });
+    expect(shownPage(store)).toMatchObject({ busy: false, said: { words: 'Done', undo: true } });
+    expect(pageItem(store)).toMatchObject({ state: 'done', reach: 'opened' });
     expect(shownPage(store).failure).toBeUndefined();
   });
 
-  it('keeps an item page\'s row when its live read fails for an outage, saying ECHO couldn\'t read it just now', async () => {
+  it('keeps an item page\'s row when its read fails for an outage, saying ECHO couldn\'t read it just now', async () => {
     readItem = null;
     const store = await start();
     await store.openFollowUp('itm_00000001', rowOnly(opened('1')));
-    expect(shownPage(store)).toMatchObject({ loading: false, item: { reach: 'unavailable' } });
+    expect(shownPage(store).loading).toBe(false);
+    expect(pageItem(store).reach).toBe('unavailable');
     expect(shownPage(store).failure).toBeUndefined();
   });
 });

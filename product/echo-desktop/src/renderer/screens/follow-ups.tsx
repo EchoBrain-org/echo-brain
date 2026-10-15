@@ -1,15 +1,16 @@
+import { Fragment } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Member, OpenItemView } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
-  checkWords, CLOSED_STATES, firstName, followUpCount, itemGroups, itemHistory, itemKind, itemNames, itemTitle, joined, liveFacts, matchesNow, monthDay,
+  ACTIVE_STATES, checkWords, CLOSED_STATES, firstName, followUpCount, itemGroups, itemHistory, itemKind, itemNames, itemTitle, joined, liveFacts, matchesNow, monthDay,
   reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
 } from '../needs.js';
 import {
-  awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, listDecision, moreFollowUps, openFollowUp, openFollowUps, openImpactSource, openListDecision,
-  ownerChoices, pickFollowUpOwner, retryFollowUp, retryFollowUps, rowReading, sendable, sendFollowUp, sendTicked, setFollowUpState, tickFollowUp, toggleClosedGroup,
-  toggleOwnerPicker, undoFollowUp, type FollowUpList, type ItemPage, type OwnerPicker as Picker, type Said, type State,
+  awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps, openImpactSource,
+  openListDecision, ownerChoices, pickFollowUpOwner, retryFollowUp, retryFollowUps, sendable, sendFollowUp, sendTicked, setFollowUpState, shownItem, tickFollowUp,
+  toggleClosedGroup, toggleOwnerPicker, undoFollowUp, type FollowUpList, type ItemPage, type OwnerPicker as Picker, type Said, type State,
 } from '../store.js';
 import { Face } from './card.js';
 import { within } from './change.js';
@@ -140,7 +141,7 @@ function CheckNow({ list }: { list: FollowUpList }) {
 function Row({ state, list, item, label, name }: { state: State; list: FollowUpList; item: OpenItemView; label: string; name: string }) {
   const sub = joined([itemKind(item, state.tools?.items), list.scope === 'record' ? null : item.decision?.title ?? null, matchesNow(item)]);
   // Read rows only first: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
-  const reading = rowReading(list, item);
+  const reading = list.reading && awaitingLive(item);
   return <>
     <div class="follow-up-row" data-testid="follow-up-row" data-item={item.item_id} data-state={item.state}
       onClick={event => { if (!within(event, '.send-box, .owner-slot')) void openFollowUp(item.item_id, item); }}>
@@ -184,10 +185,11 @@ function Head({ list }: { list: FollowUpList }) {
 /**
  * A follow-ups list: a meeting's, a project's, or yours (everything you sent
  * or own), grouped Not sent, Open, Done and Dismissed, each counted over the
- * whole list. Current work comes first, with its own More; closed rows after
- * it, with theirs. Send N and Dismiss N act on the ticked Not sent rows; the
- * list stays where it was, and its foot says what happened. Every row opens
- * its page, and Back returns to that row.
+ * whole list. Current work comes first, with its own More; once it is read to
+ * its end, each closed group, which opens and closes (yours and a project's
+ * start closed), with its own. Send N and Dismiss N act on the ticked Not sent
+ * rows; the list stays where it was, and its foot says what happened. Every
+ * row opens its page, and Back returns to that row.
  */
 export function FollowUps({ state, list }: { state: State; list: FollowUpList }) {
   const { column, returned } = useKeptPlace(`follow-ups:${list.seq}`);
@@ -202,55 +204,60 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
   useEffect(() => { if (!list.loading && returned.current && focusLost()) openedRow()?.focus({ preventScroll: true }); }, [list.loading]);
   usePickerFocus(list.picker?.item_id, column, said);
   useSaidFocus(list.said, said);
-  // Each row's names, worked out once each time the rows change.
-  const names = useMemo(() => itemNames(list.items), [list.items]);
+  // Each row as it shows, its live part laid over it, and its names, worked out once each time the rows change.
+  const items = useMemo(() => list.items.map(item => shownItem(item, list.live)), [list.items, list.live]);
+  const names = useMemo(() => itemNames(items), [items]);
   const counts = list.summary;
-  const groups = itemGroups(list.items);
-  const ticked = list.items.filter(item => sendable(item) && list.ticks[item.item_id]).length;
-  const rows = (items: readonly OpenItemView[]) => (
+  const groups = itemGroups(items);
+  const ticked = items.filter(item => sendable(item) && list.ticks[item.item_id]).length;
+  const mores = moreAfter(list);
+  const rowsOf = (status: OpenItemView['state']) => groups.find(entry => entry.state === status)?.items ?? [];
+  const rows = (entries: readonly OpenItemView[]) => (
     <div class="follow-ups-rows">
-      {items.map(item => <Row key={item.item_id} state={state} list={list} item={item} label={names.get(item.item_id)!.label} name={names.get(item.item_id)!.name} />)}
+      {entries.map(item => <Row key={item.item_id} state={state} list={list} item={item} label={names.get(item.item_id)!.label} name={names.get(item.item_id)!.name} />)}
     </div>
   );
-  const group = ({ state: status, items }: (typeof groups)[number]) => (
+  const more = (part: 'active' | (typeof CLOSED_STATES)[number]) => mores.includes(part) && (
+    <button type="button" class="link-button more" data-testid={part === 'active' ? 'follow-ups-more' : 'follow-ups-more-closed'} disabled={list.loading}
+      onClick={() => void moreFollowUps(part)}>More</button>
+  );
+  const group = (status: (typeof ACTIVE_STATES)[number]) => rowsOf(status).length > 0 && (
     <section key={status} class="follow-ups-group" aria-label={STAGES[status]}>
-      <div class="section-label">{STAGES[status]} · {counts?.[status] ?? items.length}</div>
-      {rows(items)}
+      <div class="section-label">{STAGES[status]} · {counts?.[status] ?? rowsOf(status).length}</div>
+      {rows(rowsOf(status))}
     </section>
   );
-  // Yours and a project's closed groups start closed ("Done · 12"), each counted over the whole list: opened, its rows show and are
-  // read live. Shown once current work is read, as a meeting's are.
+  // Current work read to its end, each closed group shows, counted over the whole list ("Done · 12"); opened, its rows show.
+  const ended = list.reads.some(read => read.parts.includes('active') && read.next === null);
   const closedGroup = (status: (typeof CLOSED_STATES)[number]) => {
-    const items = groups.find(entry => entry.state === status)?.items ?? [];
-    const count = counts?.[status] ?? items.length;
-    if (count === 0 && items.length === 0) return null;
+    const count = counts?.[status] ?? rowsOf(status).length;
+    if (!ended && !list.reads.some(read => read.parts.includes(status))) return null;
     const open = list.expanded[status] === true;
     return (
-      <section key={status} class="follow-ups-group" aria-label={STAGES[status]}>
-        <button type="button" class="section-label disclosure" aria-expanded={open}
-          onClick={() => toggleClosedGroup(status)}><Chevron /><span>{STAGES[status]} · {count}</span></button>
-        {open && items.length > 0 && rows(items)}
-      </section>
+      <Fragment key={status}>
+        {(count > 0 || rowsOf(status).length > 0) && (
+          <section class="follow-ups-group" aria-label={STAGES[status]}>
+            <button type="button" class="section-label disclosure" aria-expanded={open}
+              onClick={() => toggleClosedGroup(status)}><Chevron /><span>{STAGES[status]} · {count}</span></button>
+            {open && rowsOf(status).length > 0 && rows(rowsOf(status))}
+          </section>
+        )}
+        {more(status)}
+      </Fragment>
     );
   };
-  const closedShown = list.scope === 'record' || CLOSED_STATES.some(status => list.expanded[status]);
   const foot = ticked > 0 || list.said !== null;
   return (
     <div class="column follow-ups" data-testid="follow-ups" ref={column} aria-busy={list.loading || list.busy}>
       <Head list={list} />
-      {groups.filter(entry => entry.state === 'unsent' || entry.state === 'open').map(group)}
-      {list.active.next && (
-        <button type="button" class="link-button more" data-testid="follow-ups-more" disabled={list.loading} onClick={() => void moreFollowUps('active')}>More</button>
-      )}
-      {list.scope === 'record' ? groups.filter(entry => entry.state === 'done' || entry.state === 'not_relevant').map(group) : list.closed && CLOSED_STATES.map(closedGroup)}
-      {list.closed?.next && closedShown && (
-        <button type="button" class="link-button more" data-testid="follow-ups-more-closed" disabled={list.loading} onClick={() => void moreFollowUps('closed')}>More</button>
-      )}
+      {ACTIVE_STATES.map(group)}
+      {more('active')}
+      {CLOSED_STATES.map(closedGroup)}
       {list.loading && list.items.length === 0 && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
-      {!list.loading && !list.failure && list.items.length === 0 && <div class="notice">No follow-ups</div>}
-      {list.failure && (
+      {!list.loading && !list.failed && list.items.length === 0 && <div class="notice">No follow-ups</div>}
+      {list.failed && (
         <div class="error more">
-          {message(list.failure)}
+          {message(list.failed.failure)}
           <button type="button" class="link-button" disabled={list.loading} onClick={() => void retryFollowUps()}>Try again</button>
         </div>
       )}
@@ -339,7 +346,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
   useEffect(() => { box.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }); }, [page.seq, page.item !== null, page.gone === true]);
   usePickerFocus(page.picker?.item_id, box, said);
   useSaidFocus(page.said, said);
-  const item = page.item;
+  const item = page.item && shownItem(page.item, page.live);
   if (!item) {
     return (
       <div class="column center" data-testid="follow-up-loading" aria-busy={page.loading}>

@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { colorFor, initial, when } from '../format.js';
 import { message } from '../messages.js';
 import { actionCount, homeFooter, itemNames, itemNeeds, itemWhy, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
-import { awaitingLive, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openYourFollowUps, type NeedRow, type State } from '../store.js';
+import { awaitingLive, homeRows, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openYourFollowUps, type NeedRow, type State } from '../store.js';
 import { Plus, Saved } from './icons.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
@@ -127,7 +127,7 @@ function Footer({ state }: { state: State }) {
  */
 export function Home({ state }: { state: State }) {
   const home = state.home;
-  const rows = home?.rows ?? [];
+  const rows = homeRows(state);
   const noProjects = !state.projects.loading && !state.projects.failure && state.projects.items.length === 0 &&
     !state.archivedProjects.loading && !state.archivedProjects.failure && state.archivedProjects.items.length === 0;
   if (home?.failure && rows.length === 0) {
