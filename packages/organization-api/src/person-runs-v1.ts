@@ -40,7 +40,8 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * in the last hour, and none is running (at most hourly, so a sweep that
  * keeps failing is not asked for on every load; a sweep still waiting after
  * the hour is asked for again, and `sweep` hands back that run to start; an
- * explicit `sweep` request is never limited).
+ * explicit `sweep` request is never limited). `home` with `rows_only` never
+ * reports a sweep due.
  */
 export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 
@@ -51,7 +52,10 @@ export type PersonRunErrorCodeV1 = 'no_access' | 'unavailable' | 'timed_out' | '
 export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'list' }
   | { readonly schema_version: 1; readonly operation: 'home';
-      /** Rows only (follow-ups thread v1, F8): the same answer with no live read, so every item's reach is `not_read`. A quiet background check. */
+      /**
+       * Rows only (follow-ups thread v1, F8): the same answer with no live read, so every item's reach is `not_read`, and
+       * `sweep_due` is always false, so a quiet background check never starts a sweep.
+       */
       readonly rows_only?: true }
   | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: PersonDiagnosticCaptureIdV1 }
   | { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }

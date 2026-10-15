@@ -108,7 +108,8 @@ statuses, the list and the item page.
 - `assign`: allowed on unsent items for the approver (F2).
 - Item view: new kind `action`; new keys `state_set_by`, `owner_set_at`,
   `owner_set_by`, `reached_owner` (F3).
-- `home`: optional `rows_only: true` (F8).
+- `home`: optional `rows_only: true` (F8): no live reads, and `sweep_due`
+  is always false, so the quiet check never starts a sweep.
 
 The response validators check exact keys, so a desktop older than this change
 cannot read item views from an Authority that has it. Deploy the Authority and

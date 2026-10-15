@@ -521,15 +521,17 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // A sweep is due (section 6) for one of those items that a sweep would check and nobody checked in the last day, unless the
       // caller asked for a sweep in the last hour (R32: one that keeps failing, or leaves items unassessed, is not asked for on every
       // load) or one of theirs is running. A sweep still waiting after the hour lets the desktop ask again, which hands back that run
-      // to start (R58). Check now is the caller's own request, and never limited.
+      // to start (R58). Check now is the caller's own request, and never limited. Rows only never makes one due: the quiet
+      // background check (F8) must never start a sweep.
+      const rowsOnly = input.request.rows_only === true;
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
-      const stale = theirs.some(entry => (entry.row.check === null || entry.row.check.at < dayAgo) && sweepTakesItem(entry.row));
+      const stale = !rowsOnly && theirs.some(entry => (entry.row.check === null || entry.row.check.at < dayAgo) && sweepTakesItem(entry.row));
       const newest = stale ? options.runs.newestSweep(actor) : undefined;
       const sweep_due = stale && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString()) && options.runs.runningSweep(actor) === undefined;
       return checked('home', {
         // Rows only: the same rows with no live read, so a background check costs no Jira or Confluence call.
-        send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, input.signal, input.request.rows_only !== true),
+        send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, input.signal, !rowsOnly),
         landed: theirs.filter(entry => entry.row.check?.verdict === 'landed').length,
         waiting: theirs.filter(entry => approvedBy(entry.row, viewer) && !entry.access.waits_on_viewer).length,
         last_checked_at: checks.at(-1) ?? null,

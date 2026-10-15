@@ -675,16 +675,21 @@ describe('open items: Home', () => {
     f.check(f.ticket.item_id, 'landed');
     const binds = f.bindDesk.mock.calls.length;
     const opens = f.opened.length;
+    const sweepReads = [vi.spyOn(f.runs, 'newestSweep'), vi.spyOn(f.runs, 'runningSweep')];
     const quiet = await f.app.home({ access_token: 'mina', request: { schema_version: 1, operation: 'home', rows_only: true } });
     expect(f.bindDesk.mock.calls.length).toBe(binds);                  // no desk bound, nothing opened
     expect(f.opened.length).toBe(opens);
     expect(quiet.items).toHaveLength(2);
     expect(quiet.items.map(entry => entry.reach)).toEqual(['not_read', 'not_read']);
     expect(quiet.items.some(entry => Object.hasOwn(entry, 'current'))).toBe(false);
-    // Everything else is what a full Home read answers.
+    // The quiet check never says a sweep is due, so it never starts one, and does not even ask about sweeps.
+    expect(quiet.sweep_due).toBe(false);
+    expect(sweepReads.map(read => read.mock.calls.length)).toEqual([0, 0]);
+    // Everything else is what a full Home read answers, which does find a sweep due: Mina's action was never checked.
     const full = await f.app.home({ access_token: 'mina' });
     expect(full.items.map(entry => entry.reach)).toEqual(['opened', 'opened']);
-    const rows = (home: typeof full) => ({ ...home, items: home.items.map(({ current: _current, reach: _reach, ...rest }) => rest) });
+    expect(full.sweep_due).toBe(true);
+    const rows = (home: typeof full) => ({ ...home, sweep_due: undefined, items: home.items.map(({ current: _current, reach: _reach, ...rest }) => rest) });
     expect(rows(quiet)).toEqual(rows(full));
     // A Send row needs no live read either.
     const unsent = await openItemsFixture(); await unsent.finishImpactRun();
