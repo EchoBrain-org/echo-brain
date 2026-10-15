@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, externalSourcePermalink, followUpsNotification, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, STATUS_METHODS,
+  externalUrl, externalSourcePermalink, followUpsNotification, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Result, type UpdateState,
 } from '../shared/protocol.js';
@@ -412,7 +412,8 @@ ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> 
   const method = typeof named === 'string' && (hostMethods.has(named) || mainMethods.has(named)) ? named : '?';
   if (result.ok && STATUS_METHODS.has(method)) accountChanged(result.value as AppStatus);
   const requestId = (request as { params?: { request_id?: unknown } })?.params?.request_id;
-  log(`${method} ${result.ok ? 'ok' : result.failure.code}` +
+  // A runs call names its operation ("runs.items rows_only"), so a slow live read can be told from a quick rows-only one.
+  log(`${rpcLogName(method, (request as { params?: unknown })?.params)} ${result.ok ? 'ok' : result.failure.code}` +
     `${typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId) ? ` ${requestId}` : ''} ${Date.now() - started}ms`);
   return result;
 });
@@ -639,7 +640,8 @@ function accountItems(fromTray: boolean): MenuItemConstructorOptions[] {
     return [
       { label: `Signed in as ${account.display_name} · ${account.role}`, enabled: false },
       { label: `Organization: ${account.authority}`, enabled: false },
-      { label: `ECHO ${accountStatus!.client_version}`, enabled: false },
+      // Releases share a version: the build tells them apart, as the tray's Build line does.
+      { label: versionLine(accountStatus!.client_version, buildInfo()), enabled: false },
       { type: 'separator' },
       { label: 'Switch account…', click: run('switch') },
       { label: 'Sign out…', click: run('signout') },

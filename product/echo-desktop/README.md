@@ -212,7 +212,10 @@ the same file name and version. When a seat already has ECHO installed, apt can
 report "already the newest version" and leave the old app, including its
 embedded Person client, in place. Once installed, a release package updates
 itself (see [Updates](#updates)). When you install by hand over an existing
-ECHO, the first time or after a failed update, use `--reinstall`:
+ECHO, the first time or after a failed update, first quit ECHO from its tray
+(Quit ECHO) in every seat signed in on the machine, then use `--reinstall`.
+The deb installs ECHO for the whole machine, so one reinstall covers every
+seat on it:
 
 ```sh
 sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb
@@ -220,7 +223,8 @@ sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb
 
 Then prove the installed build rather than its version string: run
 `npm run smoke -- /opt/ECHO/echo-desktop` (described below) from the release's
-clean build checkout, or check that the tray menu's `Build <sha7>` matches the
+clean build checkout, or check that the tray menu's `Build <sha7>` (also on the
+Account menu's version line, `ECHO 0.1.0-internal.1 · 038f099`) matches the
 release's source SHA.
 
 The application appears as **ECHO** in the desktop launcher. The executable is

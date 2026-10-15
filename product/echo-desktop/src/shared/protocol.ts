@@ -594,6 +594,29 @@ export function isWriteCall(method: string, params: unknown): boolean {
   const operation = (params as { request?: { operation?: unknown } | null } | null | undefined)?.request?.operation;
   return !(typeof operation === 'string' && READ_OPERATIONS[method]?.has(operation) === true);
 }
+/** Every runs operation: only these reach the log by name. */
+const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
+  ['list', 'home', 'start', 'retry', 'view', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
+);
+/**
+ * A call as desktop.log names it, content-free: the method, and for runs its operation and whether it read rows only or counts
+ * only ("runs.home", "runs.items rows_only"). Never an id, a scope id or a cursor; an operation not known is left out.
+ */
+export function rpcLogName(method: string, params: unknown): string {
+  if (method !== 'runs') return method;
+  const request = (params as { request?: unknown } | null | undefined)?.request;
+  if (request === null || typeof request !== 'object') return method;
+  const { operation, rows_only: rowsOnly, summary_only: summaryOnly } = request as Record<string, unknown>;
+  if (typeof operation !== 'string' || !RUNS_OPERATIONS.has(operation)) return method;
+  return `runs.${operation}${rowsOnly === true ? ' rows_only' : summaryOnly === true ? ' summary_only' : ''}`;
+}
+/**
+ * The Account menu's version line: "ECHO 0.1.0-internal.1 · 038f099". Releases can share a version, so the commit the app was
+ * built from tells them apart, as the tray's Build line does; "(modified)" when it was built with changes beside that commit.
+ */
+export function versionLine(version: string, build: { readonly source_sha: string; readonly dirty: boolean } | null): string {
+  return build === null ? `ECHO ${version}` : `ECHO ${version} · ${build.source_sha.slice(0, 7)}${build.dirty ? ' (modified)' : ''}`;
+}
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);
 

@@ -23,11 +23,14 @@ test('the Account menu names who is signed in, and the tray holds the same items
   await openAccountMenu(run, page.getByTestId('account-row'));
   const account = await menuLabels(run, 'account');
   expect(account.slice(0, 2)).toEqual(['Signed in as Ari · employee', 'Organization: https://authority.example']);
-  expect(account[2]).toMatch(/^ECHO \S+$/);
   expect(account.slice(3)).toEqual(['Switch account…', 'Sign out…', 'Connected tools…']);
 
   const tray = await menuLabels(run, 'tray');
   expect(tray.filter(label => !label.startsWith('Build '))).toEqual(['Open ECHO', 'Capture', 'Account', 'Quit ECHO']);
+  // Releases share a version: the version line names the build, as the tray does ("ECHO 0.1.0-internal.1 · 038f099").
+  const build = tray.find(label => label.startsWith('Build '))!.slice('Build '.length);
+  expect(account[2]).toMatch(/^ECHO \S+ · [0-9a-f]{7}/);
+  expect(account[2]!.endsWith(` · ${build}`)).toBe(true);
   expect(await menuLabels(run, 'tray-account')).toEqual(account);
   // The tray's items reach the window.
   await chooseFromTray(run, 'Sign out…');

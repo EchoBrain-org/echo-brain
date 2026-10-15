@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { followUpsNotification, hostGoneFailure, isWriteCall, MAIN_METHODS, remoteDebuggingRequested } from '../../src/shared/protocol.js';
+import { followUpsNotification, hostGoneFailure, isWriteCall, MAIN_METHODS, remoteDebuggingRequested, rpcLogName, versionLine } from '../../src/shared/protocol.js';
 
 describe('remote debugging refusal', () => {
   const none = () => false;
@@ -45,6 +45,28 @@ describe('a call no host answered', () => {
     expect(isWriteCall('runs', { request: { operation: 'send' } })).toBe(true);
     expect(isWriteCall('runs', { request: null })).toBe(true);
     expect(isWriteCall('projects.list', {})).toBe(false);
+  });
+});
+
+describe('desktop.log and the Account menu', () => {
+  it('names a runs call by its operation, and whether it read rows only or counts only, and nothing else', () => {
+    expect(rpcLogName('runs', { request: { schema_version: 1, operation: 'home' } })).toBe('runs.home');
+    expect(rpcLogName('runs', { request: { schema_version: 1, operation: 'home', rows_only: true } })).toBe('runs.home rows_only');
+    const id = 'sha256:' + '1'.repeat(64);
+    expect(rpcLogName('runs', { request: { operation: 'items', scope: 'record', id, states: ['unsent', 'open'], cursor: 'c2', rows_only: true } })).toBe('runs.items rows_only');
+    expect(rpcLogName('runs', { request: { operation: 'items', scope: 'project', id, summary_only: true } })).toBe('runs.items summary_only');
+    expect(rpcLogName('runs', { request: { operation: 'item', item_id: 'itm_00000001' } })).toBe('runs.item');
+    // Anything the page made up stays out of the log.
+    expect(rpcLogName('runs', { request: { operation: 'ECHO-12 Pilot launch' } })).toBe('runs');
+    expect(rpcLogName('runs', { request: null })).toBe('runs');
+    expect(rpcLogName('runs', null)).toBe('runs');
+    expect(rpcLogName('projects.list', { request: { operation: 'home' } })).toBe('projects.list');
+  });
+
+  it('names the build beside the version, since releases share a version', () => {
+    expect(versionLine('0.1.0-internal.1', { source_sha: '038f099aa4b1c2d3e4f5', dirty: false })).toBe('ECHO 0.1.0-internal.1 · 038f099');
+    expect(versionLine('0.1.0-internal.1', { source_sha: '038f099aa4b1c2d3e4f5', dirty: true })).toBe('ECHO 0.1.0-internal.1 · 038f099 (modified)');
+    expect(versionLine('0.1.0-internal.1', null)).toBe('ECHO 0.1.0-internal.1');
   });
 });
 
