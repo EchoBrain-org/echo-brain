@@ -274,8 +274,11 @@ export interface PersonRecordActionsV1 {
   /**
    * The approved record's brief actions in brief order, each with its
    * confirmed owner. The exact Layer 1 read (`admittedRecord`) as this
-   * reader first: `not_found` when they cannot read the record. A lookup, not
-   * a release: nothing is audited, like `recordAnchor`.
+   * reader first: `not_found` when they cannot read the record. Nothing is
+   * audited here, like `recordAnchor`, but this is not only a lookup: each
+   * action's text is stored as its open item's line and shown to whoever
+   * sees the row, so once the approver sends it (their Send choice) its
+   * owner reads that line whether or not they can read the record.
    */
   recordActions(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): readonly PersonRecordActionV1[];
 }

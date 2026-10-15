@@ -52,8 +52,9 @@ statuses, the list and the item page.
   Pointer `{ kind: 'meeting_action', record_sha256, signal_id }`; `relation`
   `needs_updating`; `expected` is the action's text as one line of at most 120
   characters. Its owner is the name the approver confirmed on Approve, matched
-  to the one active member with exactly that display name, else the approver
-  (shown as "Pick owner"). Never read live, never swept: it is closed by hand.
+  to the one active member with the same display name, ignoring case and
+  spacing, else the approver (shown as "Pick owner"). Never read live, never
+  swept: it is closed by hand.
 - **Document** (kinds `ticket`, `page`, `slack_message`, `record`,
   `document`): as before, except that the meeting's own record is never a
   follow-up of itself.
@@ -123,4 +124,7 @@ publish the desktop update together.
   only.
 - Action items for meetings approved before this change: items are made when
   an impact run finishes.
+- Follow-ups from a failed or timed-out impact check: it makes none, the
+  meeting's actions included, until Try again succeeds (the V14 insert
+  trigger accepts items only for a finished run).
 - Notifications outside the desktop (Slack, email).

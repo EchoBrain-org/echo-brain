@@ -40,8 +40,10 @@ import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
  * question goes to the open-items policy (`openItemAccessV1`, and
  * `openItemSendAccessV1` for Send); this module only gathers its facts.
  * A row's own fields are ECHO's. An item's title, text, assignee, status and
- * due date are read live on every call, as the viewer, on one desk per
- * request, and shown only when the policy says the viewer opened the item.
+ * due date are read live, as the viewer, on one desk per request, and shown
+ * only when the policy says the viewer opened the item. No read is tried for
+ * a meeting action (ECHO's own data), for any row of Home's quiet check
+ * (`rows_only`), or for a counts-only `items` read; such a row is `not_read`.
  * Each row says how its read went (`reach`): a refusal by the viewer's own
  * access is `no_access`; anything else that stops a read (an outage, a rate
  * limit, a timeout) is `unavailable` and is reported without content, so an
@@ -419,8 +421,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
    * Rows the policy lets the viewer see, as the API carries them, with live parts from one open each. `live: false` opens nothing
    * and binds no desk: every row is `not_read` (Home's quiet check, F8).
    */
-  const present = async (viewer: Viewer, context: Context, shown: readonly Assessed[], signal?: AbortSignal, live = true): Promise<readonly PersonOpenItemV1[]> => {
-    const reads = live ? await openLive(viewer, shown.map(entry => entry.row), signal) : new Map<Sha256Digest, LiveRead>();
+  const present = async (viewer: Viewer, context: Context, shown: readonly Assessed[], read: { readonly signal?: AbortSignal | undefined; readonly live?: boolean } = {}): Promise<readonly PersonOpenItemV1[]> => {
+    const reads = read.live !== false ? await openLive(viewer, shown.map(entry => entry.row), read.signal) : new Map<Sha256Digest, LiveRead>();
     const decisionPart = openItemDecisionPartsV1(options, context);
     const unshowable = () => report('open', 'invalid_output');
     return Object.freeze(shown.map(entry => {
@@ -531,7 +533,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const sweep_due = stale && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString()) && options.runs.runningSweep(actor) === undefined;
       return checked('home', {
         // Rows only: the same rows with no live read, so a background check costs no Jira or Confluence call.
-        send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, input.signal, !rowsOnly),
+        send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, { signal: input.signal, live: !rowsOnly }),
         landed: theirs.filter(entry => entry.row.check?.verdict === 'landed').length,
         waiting: theirs.filter(entry => approvedBy(entry.row, viewer) && !entry.access.waits_on_viewer).length,
         last_checked_at: checks.at(-1) ?? null,
@@ -620,7 +622,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // Counts only (the project and Impact lines): no item is listed, so none is opened and no desk is bound.
       const countsOnly = request.summary_only === true;
       return checked('items', {
-        items: countsOnly ? [] : await present(viewer, context, page, input.signal),
+        items: countsOnly ? [] : await present(viewer, context, page, { signal: input.signal }),
         next_cursor: !countsOnly && following.length > page.length ? cursorOf(page.at(-1)!.row) : null,
         summary, stages,
       });
@@ -633,7 +635,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const context = assess(viewer, [row]);
       const entry = context.assessed[0];
       if (entry === undefined || !entry.access.see_row) throw notFound();
-      return checked('item', { item: (await present(viewer, context, [entry], input.signal))[0] });
+      return checked('item', { item: (await present(viewer, context, [entry], { signal: input.signal }))[0] });
     },
 
     async send(input: Parameters<PersonOpenItemsApplicationV1['send']>[0]) {

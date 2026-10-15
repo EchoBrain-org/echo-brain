@@ -7,7 +7,7 @@ import type { TriggerRunRowV1 } from './trigger-runs-v1.js';
 export type ImpactItemStateV1 = 'unsent' | 'open' | 'done' | 'not_relevant';
 export type ImpactItemVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unreadable';
 export type ImpactOwnerMatchV1 = 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned';
-/** One affected item an impact run found, as its finishing transaction stores it. */
+/** One item an impact run found (an affected item or one of the meeting's own actions), as its finishing transaction stores it. */
 export interface ImpactItemDraftV1 {
   readonly item_key: Sha256Digest;
   /** A stored citation pointer, no text. */
@@ -182,7 +182,8 @@ export class SqliteImpactItemsV1 {
         .all(input.run_id) as Pick<StoredItemV1, 'item_id' | 'owner_membership_id' | 'owner_match' | 'state'>[];
       const unsent = new Map(items.filter(item => item.state === 'unsent').map(item => [item.item_id, item]));
       const chosen = new Set(input.choices.map(choice => choice.item_id));
-      if (unsent.size === 0 || chosen.size === 0 || chosen.size !== input.choices.length || [...chosen].some(id => !unsent.has(id))) {
+      // With nothing left unsent, any choice names an item that is not unsent.
+      if (chosen.size === 0 || chosen.size !== input.choices.length || [...chosen].some(id => !unsent.has(id))) {
         return Object.freeze({ kind: 'stale' as const });
       }
       const timestamp = this.timestamp();
