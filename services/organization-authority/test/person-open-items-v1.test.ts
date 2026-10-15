@@ -533,6 +533,39 @@ describe('open items: send, update, reassign', () => {
     expect(f.items.read(ticket.item_id)).toMatchObject({ owner_membership_id: f.membership('mina'), owner_match: 'reassigned' });
   });
 
+  it('lets the approver take an item ECHO gave them for want of a match, so it no longer asks for an owner (F2)', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const action = (await scope(f, 'ari', 'run')).items.find(entry => entry.kind === 'record')!;   // no member is named Nobody Here
+    expect(action.owner).toMatchObject({ membership_id: f.membership('ari'), match: 'approver' });
+    f.advance(5_000);
+    await expect(assign(f, 'ari', action.item_id, 'ari')).resolves.toEqual({ owner: { membership_id: f.membership('ari'), name: 'Ari', active: true } });
+    const ari = { membership_id: f.membership('ari'), name: 'Ari', active: true };
+    expect((await item(f, 'ari', action.item_id)).item).toMatchObject({ state: 'unsent', owner: { ...ari, match: 'picked' }, owner_set_by: ari, owner_set_at: f.clock().toISOString() });
+    // Picked now: picking them again writes nothing, and Send keeps it.
+    const before = f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(action.item_id);
+    f.advance(5_000);
+    await expect(assign(f, 'ari', action.item_id, 'ari')).resolves.toEqual({ owner: ari });
+    expect(f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(action.item_id)).toEqual(before);
+    await expect(f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id: 'c1', items: [{ item_id: action.item_id, include: true }] } }))
+      .resolves.toEqual({ sent: 1, not_relevant: 0 });
+    expect(f.items.read(action.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.membership('ari'), owner_match: 'picked' });
+  });
+
+  it('takes the approver ECHO fell back to as picked at Send, and as reassigned once sent (F2)', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const unsent = (await scope(f, 'ari', 'run')).items;
+    f.advance(1_000);
+    await expect(sendAll(f, unsent, 'c1', entry => ({ include: true, ...(entry.kind === 'record' ? { owner_membership_id: f.membership('ari') } : {}) })))
+      .resolves.toEqual({ sent: 2, not_relevant: 0 });
+    const action = unsent.find(entry => entry.kind === 'record')!.item_id;
+    expect(f.items.read(action)).toMatchObject({ state: 'open', owner_membership_id: f.membership('ari'), owner_match: 'picked', owner_set_by: f.membership('ari'), owner_set_at: f.clock().toISOString() });
+    // Sent with no pick, it still reads as the fallback; taking it afterwards is a reassignment to the same person.
+    const sent = await sentFixture();
+    expect(sent.items.read(sent.action.item_id)).toMatchObject({ state: 'open', owner_membership_id: sent.membership('ari'), owner_match: 'approver', owner_set_by: null });
+    await expect(assign(sent, 'ari', sent.action.item_id, 'ari')).resolves.toMatchObject({ owner: { name: 'Ari' } });
+    expect(sent.items.read(sent.action.item_id)).toMatchObject({ owner_membership_id: sent.membership('ari'), owner_match: 'reassigned', owner_set_by: sent.membership('ari'), owner_set_at: sent.clock().toISOString() });
+  });
+
   it('refuses an owner pick before Send to an approver who can no longer read the decision', async () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
     const ticket = (await scope(f, 'ari', 'run')).items.find(entry => entry.kind === 'ticket')!;

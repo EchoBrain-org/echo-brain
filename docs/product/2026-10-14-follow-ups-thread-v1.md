@@ -69,6 +69,9 @@ statuses, the list and the item page.
 - F2. **Owners before sending.** The approver may `assign` an unsent item they
   may send; the owner is stored at once (`owner_match = picked`). After Send,
   `assign` works as before (`reassigned`). Send's per-item pick still works.
+  Picking the approver for an item that fell back to them is stored too, so
+  it no longer shows "Pick owner"; any other pick of the current owner
+  changes nothing.
 - F3. **Who and when.** Every item view carries `state_set_by`,
   `owner_set_at`, `owner_set_by` and `reached_owner` (the policy's
   `sent_to_owner`). The desktop shows "Done · ECHO 2", and dates a reassigned

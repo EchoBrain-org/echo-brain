@@ -168,18 +168,18 @@ export class SqliteImpactItemsV1 {
    * stale when it lists any others (`sentBy`).
    * `choices` is any non-empty subset of the run's unsent items (follow-ups thread v1, F1): stale when
    * the run has no unsent item, or a choice names an item twice or names one that is not an unsent item
-   * of the run. Included → open (with the picked owner, `owner_match = picked`, when one is given and
-   * differs); excluded → not_relevant (dismissed); an unsent item `choices` leaves out stays unsent,
-   * untouched. Freezes send_included, sets sent_at, send_command_id, state_set_by/at = `by` on each
-   * chosen item.
+   * of the run. Included → open, with the picked owner (`owner_match = picked`) when one is given and
+   * differs, or is the approver the item fell back to (`approver`); excluded → not_relevant
+   * (dismissed); an unsent item `choices` leaves out stays unsent, untouched. Freezes send_included,
+   * sets sent_at, send_command_id, state_set_by/at = `by` on each chosen item.
    */
   send(input: { readonly run_id: string; readonly by: string; readonly command_id: string; readonly choices: readonly ImpactSendChoiceV1[] }):
     { readonly kind: 'sent' | 'replayed'; readonly sent: number; readonly not_relevant: number } | { readonly kind: 'stale' } {
     return this.immediate(() => {
       const earlier = this.sentBy(input.run_id, input.command_id, input.choices.map(choice => choice.item_id));
       if (earlier !== undefined) return earlier;
-      const items = this.database.prepare('SELECT item_id, owner_membership_id, state FROM authority_impact_items_v1 WHERE run_id=?')
-        .all(input.run_id) as Pick<StoredItemV1, 'item_id' | 'owner_membership_id' | 'state'>[];
+      const items = this.database.prepare('SELECT item_id, owner_membership_id, owner_match, state FROM authority_impact_items_v1 WHERE run_id=?')
+        .all(input.run_id) as Pick<StoredItemV1, 'item_id' | 'owner_membership_id' | 'owner_match' | 'state'>[];
       const unsent = new Map(items.filter(item => item.state === 'unsent').map(item => [item.item_id, item]));
       const chosen = new Set(input.choices.map(choice => choice.item_id));
       if (unsent.size === 0 || chosen.size === 0 || chosen.size !== input.choices.length || [...chosen].some(id => !unsent.has(id))) {
@@ -193,7 +193,9 @@ export class SqliteImpactItemsV1 {
       let sent = 0;
       for (const choice of input.choices) {
         const owner = choice.owner_membership_id;
-        if (choice.include && owner !== undefined && owner !== unsent.get(choice.item_id)!.owner_membership_id) {
+        const current = unsent.get(choice.item_id)!;
+        // The approver ECHO fell back to, picked, is picked: the item no longer waits for an owner to be chosen.
+        if (choice.include && owner !== undefined && (owner !== current.owner_membership_id || current.owner_match === 'approver')) {
           pick.run(owner, input.by, timestamp, timestamp, choice.item_id, input.run_id);
         }
         const changes = move.run(choice.include ? 'open' : 'not_relevant', timestamp, input.command_id, choice.include ? 1 : 0, input.by, timestamp, timestamp, choice.item_id, input.run_id).changes;
@@ -216,7 +218,9 @@ export class SqliteImpactItemsV1 {
 
   /**
    * Stores the owner at once, with who set it and when: `owner_match = picked` on an item still unsent (an owner picked before
-   * Send, follow-ups thread v1, F2), `reassigned` once it is sent. Undefined when the item is missing.
+   * Send, follow-ups thread v1, F2), `reassigned` once it is sent. It writes even when the owner is the current one: the caller
+   * decides when that changes nothing (the runs service: unless the item fell back to its approver). Undefined when the item is
+   * missing.
    */
   assign(itemId: string, ownerMembershipId: string, by: string): ImpactItemRowV1 | undefined {
     return this.immediate(() => {

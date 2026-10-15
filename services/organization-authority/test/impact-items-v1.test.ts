@@ -159,8 +159,24 @@ describe('SQLite open items v1', () => {
     expect(f.items.send({ run_id: 'run_missing', by: f.owner.membership_id, command_id: 'cmd-1', choices: [] })).toEqual({ kind: 'stale' });
     expect(f.items.forRun(f.run.run_id).map(row => row.state)).toEqual(['unsent', 'unsent']);
     f.advance(1_000);
-    expect(send([{ item_id: a!.item_id, include: true, owner_membership_id: ARI }, { item_id: b!.item_id, include: true }])).toEqual({ kind: 'sent', sent: 2, not_relevant: 0 });
+    expect(send([{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: true }])).toEqual({ kind: 'sent', sent: 2, not_relevant: 0 });
     expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: ARI, owner_match: 'approver', sent_at: f.clock().toISOString(), send_command_id: 'cmd-1', state_set_by: ARI, state_set_at: f.clock().toISOString() });
+  });
+
+  it('stores the approver picked at Send over the fallback to them, and writes nothing for a matched owner picked again (F2)', async () => {
+    const f = await doneRunFixture();
+    f.db.transaction(() => f.items.insertForRun(f.db, f.run, [draft('46'), draft('47', { owner_membership_id: f.mina, owner_match: 'jira_account' })]))();
+    const rows = f.items.forRun(f.run.run_id);
+    const fallback = rows.find(row => row.pointer.ticket_id === '46')!;
+    const matched = rows.find(row => row.pointer.ticket_id === '47')!;
+    expect(fallback).toMatchObject({ owner_membership_id: ARI, owner_match: 'approver' });
+    f.advance(1_000);
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [
+      { item_id: fallback.item_id, include: true, owner_membership_id: ARI }, { item_id: matched.item_id, include: true, owner_membership_id: f.mina },
+    ] })).toEqual({ kind: 'sent', sent: 2, not_relevant: 0 });
+    // The approver confirmed: no longer an owner ECHO fell back to for want of a match.
+    expect(f.items.read(fallback.item_id)).toMatchObject({ state: 'open', owner_membership_id: ARI, owner_match: 'picked', owner_set_by: ARI, owner_set_at: f.clock().toISOString() });
+    expect(f.items.read(matched.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.mina, owner_match: 'jira_account', owner_set_by: null, owner_set_at: null });
   });
 
   it.each([true, false])('replays the original include=%s counts after state and owner changes', async include => {
