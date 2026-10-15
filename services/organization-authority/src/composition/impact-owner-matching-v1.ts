@@ -10,7 +10,7 @@ export interface ImpactOwnerCandidateV1 {
 export interface ImpactOwnerMatchResultV1 { readonly owner_membership_id: string; readonly owner_match: 'jira_account' | 'name' | 'approver' }
 /** ECHO's member directory as owner matching reads it: the open items' people store. */
 export interface ImpactOwnerPeopleV1 {
-  activeByName(organizationId: string, name: string): readonly string[];
+  activeByName(organizationId: string): (name: string) => readonly string[];
   isActiveMember(organizationId: string, membershipId: string): boolean;
 }
 
@@ -29,7 +29,8 @@ const NAMED_OWNER_KINDS: readonly unknown[] = ['approved_record', 'source_revisi
  * ticket's assignee account. An ECHO record or document action, or the
  * approved meeting's own action (its approver-confirmed owner; follow-ups
  * thread v1): the one active member whose display name equals the owner name
- * (`activeByName`). Anything else, and any failure: the approver. Never throws.
+ * (`activeByName`, the roster read once a call). Anything else, and any
+ * failure: the approver. Never throws.
  */
 export async function matchImpactOwnersV1(input: {
   readonly candidates: readonly ImpactOwnerCandidateV1[];
@@ -54,6 +55,7 @@ export async function matchImpactOwnersV1(input: {
       assignees = await owners.assignees({ access_token: input.access_token, ticket_ids: ticketIds, ...(input.signal === undefined ? {} : { signal: input.signal }) });
     } catch { /* A failed read matches no one. */ }
   }
+  let named: ((name: string) => readonly string[]) | undefined;
   return Object.freeze(input.candidates.map((candidate, index): ImpactOwnerMatchResultV1 => {
     try {
       const ticket = tickets[index];
@@ -66,7 +68,7 @@ export async function matchImpactOwnersV1(input: {
           .map(person => person.membership_id), 'jira_account');
       }
       const name = candidate.owner_name?.trim();
-      return NAMED_OWNER_KINDS.includes(candidate.pointer.kind) && name !== undefined && name !== '' ? theOne(people.activeByName(organization, name), 'name') : fallback;
+      return NAMED_OWNER_KINDS.includes(candidate.pointer.kind) && name !== undefined && name !== '' ? theOne((named ??= people.activeByName(organization))(name), 'name') : fallback;
     } catch { return fallback; }
   }));
 }

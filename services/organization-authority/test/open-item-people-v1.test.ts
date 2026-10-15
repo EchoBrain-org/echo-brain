@@ -37,19 +37,19 @@ function peopleFixture(rows: readonly PersonRow[]) {
 describe('SQLite open item people v1', () => {
   it('matches an exact name held by exactly one active member', () => {
     const f = peopleFixture([['mem_a', 'Rafael Moreno', 'active'], ['mem_b', 'Mina Patel', 'active'], ['mem_c', 'Mina  patel', 'active'], ['mem_d', 'Ari Lee', 'revoked']]);
-    expect(f.people.activeByName(f.org, 'rafael moreno')).toEqual(['mem_a']);
-    expect(f.people.activeByName(f.org, 'Mina Patel')).toEqual(['mem_b', 'mem_c']);   // two holders: the caller treats it as no match
-    expect(f.people.activeByName(f.org, 'Ari Lee')).toEqual([]);
+    expect(f.people.activeByName(f.org)('rafael moreno')).toEqual(['mem_a']);
+    expect(f.people.activeByName(f.org)('Mina Patel')).toEqual(['mem_b', 'mem_c']);   // two holders: the caller treats it as no match
+    expect(f.people.activeByName(f.org)('Ari Lee')).toEqual([]);
   });
 
   it('compares names after NFC, ignoring case and runs of whitespace, and only whole names', () => {
     const f = peopleFixture([['mem_a', 'Rafael Moreno', 'active'], ['mem_e', 'José Ruiz', 'active'], ['mem_f', 'S. Okafor', 'active']]);
-    expect(f.people.activeByName(f.org, '  RAFAEL\t moreno\n')).toEqual(['mem_a']);
-    expect(f.people.activeByName(f.org, 'José ruiz')).toEqual(['mem_e']);
-    expect(f.people.activeByName(f.org, 's. okafor')).toEqual(['mem_f']);
-    expect(f.people.activeByName(f.org, 'Rafael')).toEqual([]);
-    expect(f.people.activeByName(f.org, '   ')).toEqual([]);
-    expect(f.people.activeByName('org_other', 'Rafael Moreno')).toEqual([]);
+    expect(f.people.activeByName(f.org)('  RAFAEL\t moreno\n')).toEqual(['mem_a']);
+    expect(f.people.activeByName(f.org)('José ruiz')).toEqual(['mem_e']);
+    expect(f.people.activeByName(f.org)('s. okafor')).toEqual(['mem_f']);
+    expect(f.people.activeByName(f.org)('Rafael')).toEqual([]);
+    expect(f.people.activeByName(f.org)('   ')).toEqual([]);
+    expect(f.people.activeByName('org_other')('Rafael Moreno')).toEqual([]);
   });
 
   it('reads names and whether each membership is active, within the organization', () => {

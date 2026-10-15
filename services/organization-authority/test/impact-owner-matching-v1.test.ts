@@ -35,7 +35,7 @@ function fakeJira(options: { readonly assignees: ReadonlyMap<string, string> | E
 /** ECHO's directory: active members by exact display name; `inactive` memberships have left. */
 function people(byName: Readonly<Record<string, readonly string[]>>, inactive: readonly string[] = []): ImpactOwnerPeopleV1 {
   return {
-    activeByName: (organizationId, name) => (organizationId === ARI.organization_id ? byName[name] ?? [] : []),
+    activeByName: organizationId => name => (organizationId === ARI.organization_id ? byName[name] ?? [] : []),
     isActiveMember: (organizationId, membershipId) => organizationId === ARI.organization_id && !inactive.includes(membershipId),
   };
 }
@@ -94,6 +94,7 @@ describe('impact owner matching', () => {
 
   it('matches a meeting action\'s confirmed owner by a name exactly one active member holds, else gives it to the approver', async () => {
     const directory = people({ 'Rafael Moreno': ['mem_rafael'], 'Mina Patel': ['mem_mina', 'mem_mina_2'] });
+    const roster = vi.spyOn(directory, 'activeByName');
     expect(await matchImpactOwnersV1({ candidates: [
       { pointer: meetingAction(), owner_name: 'Rafael Moreno' },
       { pointer: meetingAction(), owner_name: ' Rafael Moreno ' },
@@ -105,6 +106,8 @@ describe('impact owner matching', () => {
       { owner_membership_id: 'mem_rafael', owner_match: 'name' }, { owner_membership_id: 'mem_rafael', owner_match: 'name' },
       APPROVER, APPROVER, APPROVER, APPROVER,
     ]);
+    // The roster is read once for every named owner of the call.
+    expect(roster).toHaveBeenCalledTimes(1);
   });
 
   it('matches an ECHO document action by name and leaves every other item with the approver', async () => {
