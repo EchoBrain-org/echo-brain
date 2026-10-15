@@ -66,25 +66,25 @@ describe('what is open over a project', () => {
     const store = await startStore();
     await store.openProject(apollo);
     await flush();
-    await store.openOpenItems('project', apollo.project_id, 'Apollo');
+    await store.openFollowUps('project', apollo.project_id, 'Apollo');
     await store.openPeople();
     await flush();
     store.closeSheet();
-    expect(store.openItemsShown()).not.toBeNull();
+    expect(store.followUpShown()).toMatchObject({ kind: 'list', scope: 'project', id: apollo.project_id });
   });
 
   it('stays open after the project is renamed', async () => {
     const store = await startStore();
     await store.openProject(apollo);
     await flush();
-    await store.openOpenItems('project', apollo.project_id, 'Apollo');
+    await store.openFollowUps('project', apollo.project_id, 'Apollo');
     store.toggleProjectSettings(apollo, 'header');
     store.beginProjectRename();
     store.setProjectRename('Apollo 2');
     store.confirmProjectSetting();
     await flush();
     expect(store.getState().route).toMatchObject({ page: 'project', project: { name: 'Apollo 2' } });
-    expect(store.openItemsShown()).not.toBeNull();
+    expect(store.followUpShown()).toMatchObject({ kind: 'list', scope: 'project' });
   });
 });
 

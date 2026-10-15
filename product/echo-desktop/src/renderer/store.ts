@@ -16,11 +16,11 @@ import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import { message } from './messages.js';
-import { closable } from './needs.js';
+import { sentWords } from './needs.js';
 
-/** Mine: only what you added, to see and to ask about. Send: Tell the owners?, for one check's run. */
+/** Mine: only what you added, to see and to ask about. Follow-ups: Your follow-ups, everything you sent or own. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision' }
-  | { page: 'send'; run_id: string };
+  | { page: 'follow-ups' };
 
 /** A question, in the scope it was asked in. */
 export interface AskQuestion {
@@ -477,17 +477,11 @@ export interface State {
   home: HomeState | null;
   /** The decision open from Home, while it is the page. */
   decision: DecisionState | null;
-  /** Tell the owners?, while it is the page, and while its Details are. */
-  send: SendState | null;
-  /** A decision's or a project's open items, over the page they were opened from. */
-  openItems: OpenItemsState | null;
-  /** The item a changed item's row (Update or Review) opened, over Home. */
-  itemCard: ItemCardState | null;
-  /** Your open items (a scope's open items and how each stands), over the page it was opened from. */
-  itemStatus: ItemStatusState | null;
-  /** The Impact line of the approved meeting the reader shows. */
+  /** Follow-up lists and item pages, over the page they were opened from. */
+  followUps: FollowUpsState | null;
+  /** The follow-ups line of the approved meeting the reader or the decision page shows. */
   impactLine: ItemsLine | null;
-  /** The open-items line above the feed of the project on screen. */
+  /** The follow-ups line above the feed of the project on screen. */
   projectLine: ItemsLine | null;
   /** The tools line above the feed of the project on screen. */
   projectReads: ProjectReads | null;
@@ -508,7 +502,7 @@ let state: State = {
   archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, toastShown: 0, concealed: false,
   signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null, employeeWrite: null,
-  home: null, decision: null, send: null, openItems: null, itemCard: null, itemStatus: null, impactLine: null, projectLine: null, projectReads: null,
+  home: null, decision: null, followUps: null, impactLine: null, projectLine: null, projectReads: null,
   update: { state: 'none' }, updateFailure: null,
 };
 const listeners = new Set<() => void>();
@@ -663,8 +657,8 @@ function forgetAccount(): void {
   emptyBar();
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, archivedProjects: { items: [], next: null, loading: false },
-    projectSettings: null, organization: null, tools: null, employeeWrite: null, home: null, decision: null, send: null, openItems: null, itemCard: null,
-    itemStatus: null, impactLine: null, projectLine: null, projectReads: null });
+    projectSettings: null, organization: null, tools: null, employeeWrite: null, home: null, decision: null, followUps: null, impactLine: null, projectLine: null,
+    projectReads: null });
   listChanged();
   setCompose(null);
   setChange(null);
@@ -952,15 +946,13 @@ export function signOutHeld(): boolean {
   const status = state.compose?.status;
   const sheet = state.sheet;
   return status === 'sending' || status === 'checking' || status === 'unknown' || state.change?.status === 'sending' ||
-    state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null ||
-    reassignHeld();
+    state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null;
 }
 
 /** What to settle first, where an unknown outcome shows: sign out and the update row say the same. */
 export function settleWords(current: State = state): string {
   return current.compose?.status === 'unknown' ? 'A save may not have arrived. Check it in Capture first.'
     : current.change?.status === 'unknown' ? 'A project change may not have finished. Try it again or dismiss it first.'
-    : current.itemCard?.reassign?.unknown ? REASSIGN_UNSETTLED
     : 'Finish the current save first.';
 }
 
@@ -1111,7 +1103,7 @@ function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
 export function goHome(): void {
   readSeq += 1;
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
-    organization: null, decision: null, send: null });
+    organization: null, decision: null });
   syncSearch();
   void loadHome();
 }
@@ -1356,7 +1348,7 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string): Prom
   if (!account) return;
   const mine = ++readSeq;
   const shown = sameRef(state.reader?.ref, ref) ? state.reader : null;
-  // An approved meeting's first page says what it changes: its Impact line.
+  // An approved meeting's first page counts its follow-ups: its line.
   if (ref.kind === 'meeting' && cursor === undefined) void loadLine('impactLine', 'record', ref.id);
   const kept = {
     ...(shown?.content ? { content: shown.content, importedNext: shown.importedNext } : {}),
@@ -2119,19 +2111,13 @@ export function keepProjectSetting(): void {
 
 /**
  * The project on screen, as it is now (renamed, archived, your role in it
- * read again): the same page, with open items, an item's card or Your open
- * items still open over it.
+ * read again): the same page, with its follow-ups still open over it.
  */
 function sameProjectRoute(project: ProjectSummary): Partial<State> {
   if (state.route.page !== 'project' || state.route.project.project_id !== project.project_id) return {};
   const was = state.route;
   const route: Route = { page: 'project', project };
-  return {
-    route,
-    ...(state.openItems?.route === was ? { openItems: { ...state.openItems, route } } : {}),
-    ...(state.itemCard?.route === was ? { itemCard: { ...state.itemCard, route } } : {}),
-    ...(state.itemStatus?.route === was ? { itemStatus: { ...state.itemStatus, route } } : {}),
-  };
+  return { route, ...(state.followUps?.route === was ? { followUps: { ...state.followUps, route } } : {}) };
 }
 
 function replaceProject(project: ProjectSummary): void {
@@ -3435,14 +3421,13 @@ export function matchesShown(current: State = state): boolean {
 
 /**
  * Another app is in front and the page is covered: a project, Mine, People &
- * invites, Tools, Home, a decision, Tell the owners?, open items, an item's
- * card, Your open items, an answer or an original. The bar's text is covered
- * with it.
+ * invites, Tools, Home, a decision, follow-ups and an item's page, an answer
+ * or an original. The bar's text is covered with it.
  */
 export function pageCovered(current: State = state): boolean {
   const { route } = current;
-  return current.concealed && (current.ask !== null || route.page === 'home' || route.page === 'decision' || route.page === 'send' || route.page === 'project' ||
-    route.page === 'mine' || current.reader !== null || openItemsShown(current) !== null || itemCardShown(current) !== null || itemStatusShown(current) !== null ||
+  return current.concealed && (current.ask !== null || route.page === 'home' || route.page === 'decision' || route.page === 'follow-ups' || route.page === 'project' ||
+    route.page === 'mine' || current.reader !== null || followUpsShown(current) !== null ||
     (route.page === 'organization' && current.organization !== null) || (route.page === 'tools' && current.tools !== null));
 }
 
@@ -3465,21 +3450,20 @@ const TOO_LONG = 'Up to 8 KiB of text.';
 let unresolvedTold = '';
 
 /**
- * What main's quit guard, and its update_held, go by: a note, a file, a
- * project change (a create, and New project's adds, included) or a
- * reassignment on its way, or not yet confirmed either way.
+ * What main's quit guard, and its update_held, go by: a note, a file or a
+ * project change (a create, and New project's adds, included) on its way, or
+ * not yet confirmed either way.
  */
-function unresolvedWork(): { unresolved: boolean; file?: true; change?: true; reassignment?: true } {
+function unresolvedWork(): { unresolved: boolean; file?: true; change?: true } {
   const compose = state.compose;
   const saving = compose?.status === 'sending' || compose?.status === 'unknown' || compose?.status === 'checking';
   const sheet = state.sheet?.kind === 'new-project' ? state.sheet : null;
   const uploading = sheet?.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown') === true;
   const changing = changeBlocked() || projectSettingsBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown' ||
     sheet?.picks.some(pick => pick.status === 'adding' || pick.status === 'unknown') === true;
-  const reassigning = reassignHeld();
   return {
-    unresolved: saving || uploading || changing || reassigning,
-    ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : reassigning ? { reassignment: true } : {}),
+    unresolved: saving || uploading || changing,
+    ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : {}),
   };
 }
 
@@ -3876,20 +3860,18 @@ export async function windowShown(): Promise<void> {
 
 /**
  * One row on Home (open items and Home v1, section 8; R63–R65). `approve`: a
- * meeting's decisions wait for you. `send`: a check of a decision you
- * approved found what it changes, and the owners have not been told.
- * `update`: an item waits on you; `changed` when ECHO saw it change since it
- * was sent and it still does not match. `review`: an item someone else owns
- * changed, and still does not match, since you sent it. `failed`: the impact
- * check did not finish. `checking`: it is on its way.
+ * meeting's decisions wait for you. `send`: a meeting you approved has
+ * follow-ups not sent yet. `update`: a follow-up waits on you. `review`: one
+ * someone else owns changed, and still does not match, since you sent it.
+ * `failed`: the impact check did not finish. `checking`: it is on its way.
+ * Every item row opens the item's page (F5).
  */
 export type NeedRow =
   | { kind: 'approve'; review: PersonMeetingReviewV2 }
   | { kind: 'checking'; review: PersonMeetingReviewV2; run?: PersonRunV1 }
   | { kind: 'failed'; review: PersonMeetingReviewV2; run: PersonRunV1 }
   | { kind: 'send'; send: HomeView['send'][number] }
-  | { kind: 'update'; item: OpenItemView; changed: boolean }
-  | { kind: 'review'; item: OpenItemView };
+  | { kind: 'update' | 'review'; item: OpenItemView };
 export interface HomeState {
   seq: number;
   loading: boolean;
@@ -3901,20 +3883,6 @@ export interface HomeState {
   runs: readonly PersonRunV1[];
   open: HomeView | null;
   rows: NeedRow[];
-  /**
-   * Items whose Done was clicked: their rows leave at once. Null while Done is
-   * on its way; then how many Home reads had begun when it was answered, so a
-   * read begun after that (which has it closed) no longer needs it hidden.
-   */
-  closing: Readonly<Record<string, number | null>>;
-  /** Items whose Done failed: their rows came back with this line. */
-  closeFailures: Readonly<Record<string, string>>;
-  /**
-   * Checks whose items were sent from Tell the owners?, by run: their Send
-   * rows stay off Home until a read of it begun after the send was answered
-   * (the value: how many Home reads had begun by then).
-   */
-  sent: Readonly<Record<string, number>>;
 }
 
 type ReviewOpen = PersonMeetingResultsV2['review_open'];
@@ -3938,8 +3906,6 @@ export interface DecisionState {
   /** The impact check of an approved decision, and its card once read. */
   run: PersonRunV1 | null;
   impact: ImpactView | null | undefined;
-  /** Opened as Details from Tell the owners? for this run: Back returns to it. */
-  back?: string;
 }
 
 /**
@@ -3972,8 +3938,8 @@ export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readon
   return [
     ...approve,
     ...(open?.send ?? []).map(send => ({ kind: 'send' as const, send })),
-    ...items.filter(changed).map((item): NeedRow => (me === null || item.owner.membership_id === me ? { kind: 'update', item, changed: true } : { kind: 'review', item })),
-    ...items.filter(item => !changed(item)).map((item): NeedRow => ({ kind: 'update', item, changed: false })),
+    ...items.filter(changed).map((item): NeedRow => ({ kind: me === null || item.owner.membership_id === me ? 'update' : 'review', item })),
+    ...items.filter(item => !changed(item)).map((item): NeedRow => ({ kind: 'update', item })),
     ...failed, ...checking,
   ];
 }
@@ -3988,14 +3954,9 @@ function homeShown(mine?: number): HomeState | null {
   return home && !state.concealed && state.status?.signed_in && (state.route.page === 'home' || state.route.page === 'decision') && (mine === undefined || home.seq === mine) ? home : null;
 }
 
-/** Home's rows from its parts, less the items whose Done was clicked and the checks already sent. */
+/** Home's rows from its parts. */
 function withRows(home: HomeState): HomeState {
-  const open = home.open && (Object.keys(home.closing).length > 0 || Object.keys(home.sent).length > 0) ? {
-    ...home.open,
-    send: home.open.send.filter(row => !Object.hasOwn(home.sent, row.run_id)),
-    items: home.open.items.filter(item => !Object.hasOwn(home.closing, item.item_id)),
-  } : home.open;
-  return { ...home, rows: needRows(home.reviews, home.runs, open, state.status?.account?.membership_id ?? null) };
+  return { ...home, rows: needRows(home.reviews, home.runs, home.open, state.status?.account?.membership_id ?? null) };
 }
 
 function homeNeedsPolling(): boolean {
@@ -4033,7 +3994,7 @@ async function loadHomeOnce(): Promise<void> {
   stopRunPolling();
   homeLoads += 1;
   const mine = ++seq;
-  const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { meetings: false, reviews: [], runs: [], open: null, rows: [], closing: {}, closeFailures: {}, sent: {} };
+  const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { meetings: false, reviews: [], runs: [], open: null, rows: [] };
   set({ home: { ...previous, seq: mine, loading: true, failure: undefined } });
   const tools = await rpc('account.tools', { expect: account });
   if (!homeShown(mine)) return;
@@ -4045,8 +4006,6 @@ async function loadHomeOnce(): Promise<void> {
   await readHome(mine, false);
 }
 
-/** Home reads begun, counted: a Done answered before a read began is closed in that read's answer. */
-let homeReads = 0;
 /** The last read of what waits on you failed: the next poll reads it again. */
 let openUnread = false;
 /** A check ended and what it found has not been read since: Home keeps looking until it has. */
@@ -4079,7 +4038,6 @@ function checkEnded(before: readonly PersonRunV1[], after: readonly PersonRunV1[
  * (`quiet`) reads it only once a check has ended, or after that read failed.
  */
 async function readHome(mine: number, quiet: boolean): Promise<void> {
-  const begun = ++homeReads;
   const before = state.home?.runs ?? [];
   const readOpen = () => runsCommand({ schema_version: 1, operation: 'home' });
   const [reviews, runs, eager] = await Promise.allSettled([
@@ -4106,15 +4064,8 @@ async function readHome(mine: number, quiet: boolean): Promise<void> {
     runs: runs.status === 'fulfilled' ? runs.value.runs : previous.runs,
     open: open.status === 'fulfilled' && open.value !== null ? open.value : previous.open,
   };
-  // A Done or a Send answered before this read began is in its answer: its row needs hiding no longer.
-  // A read that did not bring what waits on you keeps every row hidden.
-  const fresh = open.status === 'fulfilled' && open.value !== null;
-  const closing = fresh ? Object.fromEntries(Object.entries(previous.closing).filter(([, answered]) => answered === null || begun <= answered)) : previous.closing;
-  const sent = fresh ? Object.fromEntries(Object.entries(previous.sent).filter(([, answered]) => begun <= answered)) : previous.sent;
-  const shown = new Set(next.open?.items.map(item => item.item_id) ?? []);
-  const closeFailures = Object.fromEntries(Object.entries(previous.closeFailures).filter(([item]) => shown.has(item)));
   const failure: Failure | undefined = reviews.status === 'fulfilled' ? undefined : quiet ? previous.failure : { code: 'unavailable', retryable: true };
-  set({ home: withRows({ ...previous, ...next, closing, closeFailures, sent, loading: false, failure }) });
+  set({ home: withRows({ ...previous, ...next, loading: false, failure }) });
   updateDecisionRun(next.runs);
   // The next poll waits longer after a failed runs read, or a failed read of what a check found.
   const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed && open.status === 'rejected' ? failureOf(open.reason) : undefined;
@@ -4250,29 +4201,6 @@ function updateDecisionRun(runs: readonly PersonRunV1[]): void {
   }
 }
 
-/**
- * Mark updated (`done`: an Update row, or an item's card) or No change needed
- * (`not_relevant`: an item's card): the item is closed for everyone. Its row
- * leaves Home at once, and comes back with a line saying why if this fails.
- */
-export async function closeItem(item: OpenItemView, to: 'done' | 'not_relevant'): Promise<void> {
-  const home = state.home;
-  if (!home || !expect() || state.concealed || Object.hasOwn(home.closing, item.item_id) || item.item_id === reassignHeldItem()) return;
-  const { [item.item_id]: _failed, ...closeFailures } = home.closeFailures;
-  set({ home: withRows({ ...home, closing: { ...home.closing, [item.item_id]: null }, closeFailures }) });
-  let failure: string | null = null;
-  try {
-    await runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: to });
-  } catch (error) {
-    failure = error instanceof Error ? error.message : 'That was not sent. Try again.';
-  }
-  const current = state.home;
-  if (!current || !Object.hasOwn(current.closing, item.item_id)) return;
-  if (failure === null) { set({ home: withRows({ ...current, closing: { ...current.closing, [item.item_id]: homeReads } }) }); return; }
-  const { [item.item_id]: _back, ...closing } = current.closing;
-  set({ home: withRows({ ...current, closing, closeFailures: { ...current.closeFailures, [item.item_id]: failure } }) });
-}
-
 /** Open in Jira (or the item's own tool), from an item ECHO opened for you: the tool checks your access when it opens. */
 export async function openItemInTool(item: OpenItemView): Promise<boolean> {
   const source = item.reach === 'opened' ? item.current?.source : undefined;
@@ -4284,12 +4212,8 @@ function decisionShown(mine: number): DecisionState | null {
   return decision && state.route.page === 'decision' && decision.seq === mine ? decision : null;
 }
 
-/**
- * A decision, from its Home row or from Tell the owners?'s Details: what was
- * proposed, and what it changed once approved. `back` names the Tell the
- * owners? card it was opened from.
- */
-export async function openDecision(approval_id: string, run: PersonRunV1 | null = null, back?: string): Promise<void> {
+/** A decision, from its Home row: what was proposed, and, once approved, its check and its follow-ups. */
+export async function openDecision(approval_id: string, run: PersonRunV1 | null = null): Promise<void> {
   if (!expect() || state.concealed) return;
   readSeq += 1;
   const mine = ++seq;
@@ -4297,7 +4221,7 @@ export async function openDecision(approval_id: string, run: PersonRunV1 | null 
     route: { page: 'decision' }, reader: null, ask: null, sources: null, toast: null, organization: null, list: null, roster: null,
     barScope: { kind: 'global' },
     decision: { approval_id, seq: mine, loading: true, open: null, command: crypto.randomUUID(), audience: 'only-me', project_ids: [], share: false,
-      owners: [], busy: false, run, impact: undefined, ...(back === undefined ? {} : { back }) },
+      owners: [], busy: false, run, impact: undefined },
   });
   syncSearch();
   if (run?.state === 'done') void readImpact(mine, run.run_id);
@@ -4314,7 +4238,9 @@ export async function openDecision(approval_id: string, run: PersonRunV1 | null 
   }
 }
 
+/** A finished check's card, and its follow-ups counted for its line. */
 async function readImpact(mine: number, runId: string): Promise<void> {
+  void loadLine('impactLine', 'run', runId);
   try {
     const view = await runsCommand({ schema_version: 1, operation: 'view', run_id: runId });
     const decision = decisionShown(mine);
@@ -4384,207 +4310,22 @@ export async function retryImpact(): Promise<void> {
   } catch { /* the card still offers Try again */ }
 }
 
-// ---- Tell the owners? -------------------------------------------------------------
-
-/** Tell the owners?: the run's unsent items, ticked, with owner picks. */
-export interface SendState {
-  run_id: string;
-  seq: number;
-  loading: boolean;
-  failure?: string;
-  items: readonly OpenItemView[];
-  ticks: Record<string, boolean>;
-  /** Owners picked where ECHO matched no one; an item left unpicked stays yours. */
-  picks: Record<string, Member>;
-  /** The send's command id: a new one whenever a choice changes, so a resend repeats only the same choices. */
-  command: string;
-  busy: boolean;
-  /** Pick a person, open under one item: the organization's people by name. */
-  picker: { item_id: string; query: string; results: readonly Member[]; loading: boolean; failure?: string } | null;
-}
-
-function sendShown(mine?: number): SendState | null {
-  const send = state.send;
-  const route = state.route;
-  return send && route.page === 'send' && route.run_id === send.run_id && (mine === undefined || send.seq === mine) ? send : null;
-}
-
-function editSend(patch: Partial<SendState>): void {
-  const send = sendShown();
-  if (send) set({ send: { ...send, ...patch } });
-}
-
-/** Tell the owners?, from a Send row or a decision's Impact line: what the check found that has not been sent. */
-export async function openSend(run_id: string): Promise<void> {
-  if (!expect() || state.concealed) return;
-  readSeq += 1;
-  const mine = ++seq;
-  set({
-    route: { page: 'send', run_id }, reader: null, ask: null, sources: null, toast: null, organization: null, list: null, roster: null,
-    barScope: { kind: 'global' }, decision: null,
-    send: { run_id, seq: mine, loading: true, items: [], ticks: {}, picks: {}, command: crypto.randomUUID(), busy: false, picker: null },
-  });
-  syncSearch();
-  try {
-    const page = await runsCommand({ schema_version: 1, operation: 'items', scope: 'run', id: run_id });
-    const send = sendShown(mine);
-    if (!send) return;
-    const items = page.items.filter(item => item.state === 'unsent');
-    set({ send: { ...send, loading: false, items, ticks: Object.fromEntries(items.map(item => [item.item_id, true])) } });
-  } catch (error) {
-    const send = sendShown(mine);
-    if (send) set({ send: { ...send, loading: false, failure: error instanceof Error ? error.message : 'These could not be read. Try again.' } });
-  }
-}
-
-/** The decision a Tell the owners? card is about: from its items, or from Home's Send row. */
-export function sendDecision(current: State = state): OpenItemView['decision'] {
-  const send = current.send;
-  if (!send) return undefined;
-  return send.items.find(item => item.decision)?.decision ?? current.home?.open?.send.find(row => row.run_id === send.run_id)?.decision;
-}
-
-/** Who the ticked items go to other than you, each once, in the card's order: an item's pick, else its owner. */
-export function sendRecipients(send: SendState, me: string | undefined): string[] {
-  const names: string[] = [];
-  for (const item of send.items) {
-    if (!send.ticks[item.item_id]) continue;
-    const pick = send.picks[item.item_id];
-    const owner = pick ? { membership_id: pick.membership_id, name: pick.display_name } : item.owner;
-    if (owner.membership_id !== me && !names.includes(owner.name)) names.push(owner.name);
-  }
-  return names;
-}
-
-export function tickSend(item_id: string): void {
-  const send = sendShown();
-  if (!send || send.busy) return;
-  editSend({ ticks: { ...send.ticks, [item_id]: !send.ticks[item_id] }, command: crypto.randomUUID(), failure: undefined,
-    picker: send.picker?.item_id === item_id ? null : send.picker });
-}
-
-/** Typing in Pick a person, counted: a read for an older name is dropped. */
-let pickerSeq = 0;
-
-/** Pick a person: the organization's people by name, from the people directory. Opening it shows the first ones. */
-export async function searchOwner(item_id: string, query: string): Promise<void> {
-  const send = sendShown();
-  const account = expect();
-  if (!send || !account || send.busy) return;
-  const typing = send.picker?.item_id === item_id;
-  const mine = ++pickerSeq;
-  editSend({ picker: { item_id, query, results: typing ? send.picker!.results : [], loading: true } });
-  // Typing reads once it pauses.
-  if (typing) await new Promise(resolve => setTimeout(resolve, SEARCH_PAUSE_MS));
-  if (mine !== pickerSeq || !sendShown(send.seq)) return;
-  const name = query.trim();
-  const result = await rpc('people.directory', { expect: account, ...(name === '' ? {} : { query: name }) });
-  const picker = sendShown(send.seq)?.picker;
-  if (mine !== pickerSeq || !picker || picker.item_id !== item_id) return;
-  if (!result.ok) {
-    editSend({ picker: { ...picker, loading: false, results: [], failure: message(result.failure) } });
-    accountLost(result.failure);
-    return;
-  }
-  // An item no one is picked for stays yours, so the list is everyone else.
-  editSend({ picker: { item_id, query: picker.query, loading: false, results: result.value.items.filter(person => person.membership_id !== account.membership_id) } });
-}
-
-export function pickOwner(item_id: string, member: Member): void {
-  const send = sendShown();
-  if (!send || send.busy) return;
-  pickerSeq += 1;
-  editSend({ picks: { ...send.picks, [item_id]: member }, picker: null, command: crypto.randomUUID(), failure: undefined });
-}
-
-/** × on a picked person: the item goes back to you. */
-export function clearPick(item_id: string): void {
-  const send = sendShown();
-  if (!send || send.busy) return;
-  const { [item_id]: _cleared, ...picks } = send.picks;
-  editSend({ picks, command: crypto.randomUUID(), failure: undefined });
-}
-
-export function closePicker(): void {
-  pickerSeq += 1;
-  editSend({ picker: null });
-}
-
-/** Said when a card drawn before its items changed is refused (a `conflict`): nothing was sent. */
-const ITEMS_CHANGED = 'These items changed meanwhile. Open them again from Home.';
+// ---- a meeting's and a project's follow-ups line ------------------------------------------
 
 /**
- * Send: the ticked items go to their owners and the unticked ones are not
- * relevant, in one step, once per command. Home shows where they went.
+ * A meeting's or a project's follow-ups, counted: the line of the meeting the
+ * reader shows (by its record) or the decision page shows (by its check), and
+ * the line above a project's feed.
  */
-export async function sendToOwners(): Promise<void> {
-  const send = sendShown();
-  const account = expect();
-  if (!send || !account || send.busy || send.loading || send.items.length === 0) return;
-  const mine = send.seq;
-  const ticked = send.items.some(item => send.ticks[item.item_id]);
-  const kept = sendRecipients(send, account.membership_id).length === 0;
-  pickerSeq += 1;
-  editSend({ busy: true, failure: undefined, picker: null });
-  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'send', run_id: send.run_id, command_id: send.command,
-    items: send.items.map(item => {
-      const include = send.ticks[item.item_id] === true;
-      const pick = include ? send.picks[item.item_id] : undefined;
-      return { item_id: item.item_id, include, ...(pick ? { owner_membership_id: pick.membership_id } : {}) };
-    }) } });
-  // Sent, whatever page is showing now: its row leaves Home at once, and no read begun before now brings it back.
-  const home = state.home;
-  if (result.ok && home && JSON.stringify(expect()) === JSON.stringify(account)) {
-    set({ home: withRows({ ...home, sent: { ...home.sent, [send.run_id]: homeReads } }) });
-  }
-  if (!sendShown(mine)) return;
-  if (!result.ok) {
-    // Items that changed since the card was drawn are a conflict, not lost access: the account stays.
-    const changed = result.failure.code === 'conflict';
-    if (!changed) accountLost(result.failure);
-    editSend({ busy: false, failure: changed ? ITEMS_CHANGED : message(result.failure) });
-    return;
-  }
-  goHome();
-  set({ toast: !ticked ? 'Nothing to change' : kept ? 'Kept on your Home' : 'Sent' });
-}
-
-/** Details: the decision's page with its full impact card. Back returns to the card as it was; not while it is sending. */
-export function sendDetails(): void {
-  const send = sendShown();
-  const decision = sendDecision();
-  if (!send || !decision || send.busy) return;
-  // A Send row's check is done; Home's runs have it unless Tell the owners? came from elsewhere.
-  const run: PersonRunV1 = state.home?.runs.find(entry => entry.run_id === send.run_id) ?? {
-    run_id: send.run_id, trigger: 'approved_record', event_ref: decision.approval_id, state: 'done', error_code: null,
-    created_at: decision.approved_at, updated_at: decision.approved_at,
-  };
-  void openDecision(decision.approval_id, run, send.run_id);
-}
-
-/** Back, from Details: Tell the owners? as it was left. */
-export function returnToSend(): void {
-  const send = state.send;
-  if (!send || state.route.page !== 'decision' || state.decision?.back !== send.run_id) { goHome(); return; }
-  readSeq += 1;
-  set({ route: { page: 'send', run_id: send.run_id }, decision: null });
-  syncSearch();
-}
-
-// ---- a decision's and a project's open items -----------------------------------------
-
-/** A decision's or a project's open items, counted: the reader's Impact line, and the line above a project's feed. */
 export interface ItemsLine {
-  scope: 'record' | 'project';
+  scope: 'record' | 'run' | 'project';
   id: string;
   seq: number;
   loading: boolean;
   summary: OpenItemsView['summary'] | null;
-  /** A decision's own check; `mine` when you approved the decision, so Send and Try again are yours. */
+  /** The meeting's own check; `mine` when you approved the meeting, so Try again is yours. */
   stage: PersonImpactStageV1 | null;
   busy: boolean;
-  /** Check now: its sweep is on its way, there was nothing open to check, or the sweep failed. */
-  check: 'checking' | 'nothing' | 'failed' | null;
 }
 
 type LineKey = 'impactLine' | 'projectLine';
@@ -4602,7 +4343,7 @@ async function loadLine(key: LineKey, scope: ItemsLine['scope'], id: string): Pr
   const account = expect();
   if (!account || state.concealed) return;
   const mine = ++seq;
-  setLine(key, { scope, id, seq: mine, loading: true, summary: null, stage: null, busy: false, check: null });
+  setLine(key, { scope, id, seq: mine, loading: true, summary: null, stage: null, busy: false });
   const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope, id, summary_only: true } });
   if (state[key]?.seq !== mine) return;
   if (!result.ok) {
@@ -4611,91 +4352,565 @@ async function loadLine(key: LineKey, scope: ItemsLine['scope'], id: string): Pr
     return;
   }
   const page = result.value as OpenItemsView;
-  const stage = scope === 'record' ? page.stages.find(entry => entry.record_sha256 === id) ?? null : null;
+  const stage = scope === 'project' ? null : page.stages.find(entry => (scope === 'record' ? entry.record_sha256 : entry.run_id) === id) ?? null;
   setLine(key, { ...state[key]!, loading: false, summary: page.summary, stage });
 }
 
-/** Try again, on a decision's Impact line: its check runs again, from your desktop. */
+/** The meeting a meeting's line counts: the record it names, or the one its check found. */
+export function lineRecord(line: ItemsLine): string | null {
+  return line.scope === 'record' ? line.id : line.stage?.record_sha256 ?? line.summary?.by_decision[0]?.record_sha256 ?? null;
+}
+
+/** Try again, on a meeting's line: its check runs again, from your desktop. */
 export async function retryLineCheck(): Promise<void> {
   const line = state.impactLine;
   if (!line?.stage || line.stage.state !== 'failed' || !line.stage.mine || line.busy) return;
-  const { id, stage } = line;
+  const { scope, id, stage } = line;
   set({ impactLine: { ...line, busy: true } });
   try {
     await runsCommand({ schema_version: 1, operation: 'retry', run_id: stage.run_id });
     await driveRuns((await runsCommand({ schema_version: 1, operation: 'list' })).runs);
   } catch { /* the line offers Try again again */ }
-  if (state.impactLine?.seq === line.seq) await loadLine('impactLine', 'record', id);
+  if (state.impactLine?.seq === line.seq) await loadLine('impactLine', scope, id);
 }
 
-/** The line's page still shows: its meeting in the reader, or its project. */
-function linePageShown(key: LineKey, line: ItemsLine): boolean {
-  if (key === 'impactLine') return state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id;
-  return state.route.page === 'project' && state.route.project.project_id === line.id;
+// ---- follow-ups: lists and item pages (follow-ups thread v1) ---------------------------------
+
+/** People by name under an owner chip, to give its item to. */
+export interface OwnerPicker {
+  item_id: string;
+  query: string;
+  results: readonly Member[];
+  loading: boolean;
+  failure?: string;
 }
 
-/** The line is in sight: its page shows, with nothing over it. */
-function lineInSight(key: LineKey, line: ItemsLine): boolean {
-  return linePageShown(key, line) && !state.concealed && state.ask === null && openItemsShown() === null && itemCardShown() === null &&
-    itemStatusShown() === null && (key === 'impactLine' || state.reader === null);
+/** What the last change did, said in place (F6): "Sent to Mina Patel", "Done · Undo", or why it did not go. */
+export interface Said {
+  words: string;
+  /** Undo opens the item again: after Mark done, or a Dismiss of an open item. */
+  undo?: true;
+  error?: true;
+}
+
+/** A send, kept while its outcome is unknown: sending exactly the same again replays it, so nothing goes twice. */
+interface SendCommand { command: string; key: string }
+
+/** What a list and an item page share. Under another view, `stale` once a change was made over it: it is read again when it shows. */
+interface FollowUpViewBase {
+  seq: number;
+  /** A change on its way. */
+  busy: boolean;
+  said: Said | null;
+  picker: OwnerPicker | null;
+  stale: boolean;
 }
 
 /**
- * Check now, on a decision's Impact line or a project's line (canvas 9.6,
- * 9.7): a sweep of that scope. With nothing open the line says so; otherwise
- * it says "Checking…" until the sweep ends, then the scope's open items open
- * as a status view (Your open items), named `title`. A sweep that fails says so, and Try again asks for
- * another.
+ * A follow-ups list: a meeting's (by its record), a project's, or yours
+ * (everything you sent or own), every status, a page at a time. Not sent rows
+ * you may send are ticked to Send or Dismiss them.
  */
-export async function checkNow(key: LineKey, title: string): Promise<void> {
-  const line = state[key];
-  if (!line || line.check === 'checking' || !expect() || state.concealed) return;
-  setLine(key, { ...line, check: 'checking' });
-  // Still this line's check, on its page.
-  const ours = (): ItemsLine | null => {
-    const now = state[key];
-    return now?.seq === line.seq && now.check === 'checking' && linePageShown(key, now) ? now : null;
+export interface FollowUpList extends FollowUpViewBase {
+  kind: 'list';
+  scope: 'mine' | 'record' | 'project';
+  /** The meeting's record or the project; yours name none. */
+  id?: string;
+  /** The meeting's title or the project's name; null for yours. */
+  title: string | null;
+  loading: boolean;
+  failure?: Failure;
+  items: readonly OpenItemView[];
+  next: string | null;
+  summary: OpenItemsView['summary'] | null;
+  /** Not sent rows ticked. A meeting's list ticks every one on its first read; nothing keeps them past the list. */
+  ticks: Readonly<Record<string, boolean>>;
+  /** Sends whose outcome is unknown, by check (run). */
+  sends: Readonly<Record<string, SendCommand>>;
+  /** Check now: its sweep on its way, nothing open to check, or the sweep failed. */
+  check: 'checking' | 'nothing' | 'failed' | null;
+}
+
+/** One follow-up's page (F5): from a row with the row's copy, or by its id alone, then read again. */
+export interface ItemPage extends FollowUpViewBase {
+  kind: 'item';
+  item_id: string;
+  /** Null until the first read, when opened by its id alone. */
+  item: OpenItemView | null;
+  loading: boolean;
+  failure?: Failure;
+  send: SendCommand | null;
+}
+
+export type FollowUpView = FollowUpList | ItemPage;
+
+/**
+ * Follow-up lists and item pages opened over the page on screen (`route`):
+ * the last one shows, and Back goes to the one before. Your follow-ups is a
+ * page of its own (`follow-ups`), its list the first view.
+ */
+export interface FollowUpsState {
+  /** The page they show over: another page closes them. */
+  route: Route;
+  /** Oldest first. */
+  views: readonly FollowUpView[];
+  /** A change was made from them: the page under them is read again once they close. */
+  changed: boolean;
+}
+
+/** The follow-ups over the page on screen, if any. */
+export function followUpsShown(current: State = state): FollowUpsState | null {
+  const stack = current.followUps;
+  return stack && stack.route === current.route && stack.views.length > 0 ? stack : null;
+}
+
+/** The list or item page that shows. */
+export function followUpShown(current: State = state): FollowUpView | null {
+  return followUpsShown(current)?.views.at(-1) ?? null;
+}
+
+function shownView<Kind extends FollowUpView['kind']>(kind: Kind): Extract<FollowUpView, { kind: Kind }> | null {
+  const view = followUpShown();
+  return view?.kind === kind ? view as Extract<FollowUpView, { kind: Kind }> : null;
+}
+
+/** A view still open, shown or under another; a reply for one since closed is dropped. */
+function viewOf<Kind extends FollowUpView['kind']>(kind: Kind, mine: number): Extract<FollowUpView, { kind: Kind }> | null {
+  const view = followUpsShown()?.views.find(entry => entry.seq === mine);
+  return view?.kind === kind ? view as Extract<FollowUpView, { kind: Kind }> : null;
+}
+
+function setView(view: FollowUpView): void {
+  const stack = followUpsShown();
+  if (stack?.views.some(entry => entry.seq === view.seq)) set({ followUps: { ...stack, views: stack.views.map(entry => (entry.seq === view.seq ? view : entry)) } });
+}
+
+/** A view opened over what shows: the page, or the view before it. */
+function pushView(view: FollowUpView): void {
+  const stack = followUpsShown();
+  set({ followUps: { route: state.route, views: [...(stack?.views ?? []), view], changed: stack?.changed ?? false }, ask: null, sources: null, toast: null });
+}
+
+const UNCHANGED = { busy: false, said: null, picker: null, stale: false } as const;
+
+function newList(scope: FollowUpList['scope'], id: string | undefined, title: string | null): FollowUpList {
+  return { kind: 'list', seq: ++seq, scope, ...(id === undefined ? {} : { id }), title, loading: true, items: [], next: null, summary: null, ticks: {}, sends: {},
+    check: null, ...UNCHANGED };
+}
+
+/** A meeting's follow-ups (by its record) or a project's, over the page on screen: from a Send row, a meeting's or a project's line, or an item's meeting. */
+export function openFollowUps(scope: 'record' | 'project', id: string, title: string): Promise<void> {
+  if (!expect() || state.concealed) return Promise.resolve();
+  const list = newList(scope, id, title);
+  pushView(list);
+  return readList(list.seq, 'first');
+}
+
+/** Your follow-ups, from the sidebar or Home's footer: everything you sent or own, as a page of its own. The bar searches all context. */
+export function openYourFollowUps(): Promise<void> {
+  if (!expect() || state.concealed) return Promise.resolve();
+  readSeq += 1;
+  const route: Route = { page: 'follow-ups' };
+  const list = newList('mine', undefined, null);
+  set({ route, followUps: { route, views: [list], changed: false }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null,
+    barScope: { kind: 'global' }, organization: null, decision: null });
+  syncSearch();
+  return readList(list.seq, 'first');
+}
+
+/** A Not sent row you may send: before Send only its approver may pick its owner, exactly when they may send it. */
+export function sendable(item: OpenItemView): boolean {
+  return item.state === 'unsent' && item.can.assign;
+}
+
+/**
+ * A list's first page (opening it), its next page (More), or what it shows
+ * read again (`again`: after a change, or Back to it), as many pages as it
+ * shows, so rows move between groups in place. A meeting's first read ticks
+ * every Not sent row you may send; reading again keeps the ticks of rows still
+ * not sent.
+ */
+async function readList(mine: number, how: 'first' | 'more' | 'again'): Promise<void> {
+  const account = expect();
+  const list = viewOf('list', mine);
+  if (!account || !list || (how === 'more' && (!list.next || list.loading))) return;
+  setView({ ...list, loading: true, failure: undefined });
+  const pages: OpenItemsView[] = [];
+  let cursor = how === 'more' ? list.next ?? undefined : undefined;
+  let failure: Failure | undefined;
+  for (;;) {
+    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: list.scope, ...(list.id === undefined ? {} : { id: list.id }),
+      ...(cursor === undefined ? {} : { cursor }) } });
+    if (!result.ok) { failure = result.failure; break; }
+    const page = result.value as OpenItemsView;
+    pages.push(page);
+    cursor = page.next_cursor ?? undefined;
+    if (how !== 'again' || cursor === undefined || pages.reduce((count, read) => count + read.items.length, 0) >= list.items.length) break;
+  }
+  const current = viewOf('list', mine);
+  if (!current) return;
+  const last = pages.at(-1);
+  if (failure || !last) { setView({ ...current, loading: false, failure }); if (failure) accountLost(failure); return; }
+  const read = pages.flatMap(page => page.items);
+  const items = how === 'more' ? appendPage(current.items, read, item => item.item_id) : read;
+  const ticked = how === 'first' && current.scope === 'record' ? items.filter(sendable) : items.filter(item => sendable(item) && current.ticks[item.item_id]);
+  setView({ ...current, loading: false, items, next: last.next_cursor, summary: last.summary, ticks: Object.fromEntries(ticked.map(item => [item.item_id, true])),
+    stale: false });
+}
+
+/** More: the list's next page. */
+export function moreFollowUps(): Promise<void> {
+  const list = shownView('list');
+  return list ? readList(list.seq, 'more') : Promise.resolve();
+}
+
+/** Try again: the first page when nothing shows, or else the page More could not read. */
+export function retryFollowUps(): Promise<void> {
+  const list = shownView('list');
+  return list ? readList(list.seq, list.items.length === 0 ? 'first' : 'more') : Promise.resolve();
+}
+
+/** A Not sent row's tick. */
+export function tickFollowUp(item_id: string): void {
+  const list = shownView('list');
+  if (list && !list.busy) setView({ ...list, ticks: { ...list.ticks, [item_id]: !list.ticks[item_id] }, said: null });
+}
+
+/** What a change that did not go says. A conflict shows what changed at once, as the view is read again, so it asks for no Refresh. */
+function changeFailed(failure: Failure): Said {
+  return { words: failure.code === 'conflict' ? 'That changed meanwhile.' : message(failure), error: true };
+}
+
+/** A change made from a view (sent, or maybe sent): every view under it, and the page under them all, are read again when they show. */
+function changedFrom(mine: number): void {
+  const stack = followUpsShown();
+  const at = stack?.views.findIndex(view => view.seq === mine) ?? -1;
+  if (!stack || at < 0) return;
+  set({ followUps: { ...stack, changed: true, views: stack.views.map((view, index) => (index < at ? { ...view, stale: true } : view)) } });
+}
+
+/**
+ * Send N or Dismiss N: the ticked Not sent rows, one send per check (run)
+ * listing only those items, to their owners (`include`) or dismissed (F1).
+ * The list stays and is read again, and one line says what happened. A send
+ * whose outcome is unknown keeps its command, so sending the same items again
+ * replays it; any other choice is a new command.
+ */
+export async function sendTicked(include: boolean): Promise<void> {
+  const list = shownView('list');
+  if (!list || list.busy || list.loading || state.concealed) return;
+  const ticked = list.items.filter(item => list.ticks[item.item_id] && sendable(item));
+  if (ticked.length === 0) return;
+  const me = expect()?.membership_id ?? null;
+  setView({ ...list, busy: true, said: null, picker: null });
+  const sends: Record<string, SendCommand> = { ...list.sends };
+  const went: OpenItemView[] = [];
+  let failure: Failure | undefined;
+  for (const run_id of [...new Set(ticked.map(item => item.run_id))]) {
+    const items = ticked.filter(item => item.run_id === run_id).map(item => ({ item_id: item.item_id, include }));
+    const key = JSON.stringify(items);
+    const command = sends[run_id]?.key === key ? sends[run_id].command : crypto.randomUUID();
+    try {
+      await runsCommand({ schema_version: 1, operation: 'send', run_id, command_id: command, items });
+      delete sends[run_id];
+      went.push(...ticked.filter(item => item.run_id === run_id));
+    } catch (error) {
+      failure = failureOf(error);
+      if (outcomeUnknown(failure, false)) sends[run_id] = { command, key };
+      else delete sends[run_id];
+      break;
+    }
+  }
+  if (!viewOf('list', list.seq)) return;
+  if (went.length > 0 || Object.keys(sends).length > 0) changedFrom(list.seq);
+  setView({ ...viewOf('list', list.seq)!, busy: false, sends, said: failure ? changeFailed(failure)
+    : { words: include ? sentWords(went.map(item => item.owner), me) : `Dismissed ${went.length}` } });
+  await readList(list.seq, 'again');
+}
+
+/**
+ * A follow-up's page (F5), over the page on screen: from any row, with the
+ * row's copy at once, then read again; or by its id alone (a notification).
+ * Back returns to where it was opened.
+ */
+export function openFollowUp(item_id: string, shown: OpenItemView | null = null): Promise<void> {
+  if (!expect() || state.concealed) return Promise.resolve();
+  const page: ItemPage = { kind: 'item', seq: ++seq, item_id, item: shown, loading: true, send: null, ...UNCHANGED };
+  pushView(page);
+  return readItem(page.seq).then(() => undefined);
+}
+
+/** The item as it is now. A read that fails keeps what shows, and says why. */
+async function readItem(mine: number): Promise<OpenItemView | null> {
+  const page = viewOf('item', mine);
+  if (!page) return null;
+  setView({ ...page, loading: true, failure: undefined });
+  let item: OpenItemView | null = null;
+  let failure: Failure | undefined;
+  try {
+    item = await runsCommand({ schema_version: 1, operation: 'item', item_id: page.item_id });
+  } catch (error) {
+    failure = failureOf(error);
+  }
+  const current = viewOf('item', mine);
+  if (!current) return null;
+  setView({ ...current, loading: false, stale: false, ...(item ? { item } : { failure }) });
+  return item;
+}
+
+/**
+ * A change to the item on its page: sent, then the item read again. The page
+ * stays and says what happened (F6); one whose outcome is unknown is shown as
+ * the item now is.
+ */
+async function changeItem(page: ItemPage, write: () => Promise<unknown>, done: Said, after: (unknown: boolean) => Partial<ItemPage> = () => ({})): Promise<void> {
+  setView({ ...page, busy: true, said: null, picker: null });
+  let failure: Failure | undefined;
+  try {
+    await write();
+  } catch (error) {
+    failure = failureOf(error);
+  }
+  const unknown = failure !== undefined && outcomeUnknown(failure, false);
+  if (!viewOf('item', page.seq)) return;
+  if (!failure || unknown) changedFrom(page.seq);
+  setView({ ...viewOf('item', page.seq)!, busy: false, said: failure ? changeFailed(failure) : done, ...after(unknown) });
+  await readItem(page.seq);
+}
+
+/**
+ * Send to <owner> (Keep it myself) or Dismiss, on a follow-up not sent yet:
+ * one send of this item alone. One whose outcome is unknown keeps its
+ * command, so the same click again replays it and never sends twice.
+ */
+export async function sendFollowUp(include: boolean): Promise<void> {
+  const page = shownView('item');
+  const item = page?.item;
+  if (!page || !item || page.busy || !sendable(item) || state.concealed) return;
+  const items = [{ item_id: item.item_id, include }];
+  const key = JSON.stringify(items);
+  const command = page.send?.key === key ? page.send.command : crypto.randomUUID();
+  const mine = item.owner.membership_id === expect()?.membership_id;
+  await changeItem(page, () => runsCommand({ schema_version: 1, operation: 'send', run_id: item.run_id, command_id: command, items }),
+    { words: !include ? 'Dismissed' : mine ? 'Kept for you' : `Sent to ${item.owner.name}` }, unknown => ({ send: unknown ? { command, key } : null }));
+}
+
+/**
+ * Mark done or Dismiss, on an open follow-up; Reopen on a closed one, which
+ * reads "Send to <owner>" on one dismissed before it was sent: reopening it
+ * reaches its owner. Mark done and that Dismiss offer Undo.
+ */
+export async function setFollowUpState(to: 'open' | 'done' | 'not_relevant'): Promise<void> {
+  const page = shownView('item');
+  const item = page?.item;
+  if (!page || !item || page.busy || !item.can.set_state || item.state === 'unsent' || state.concealed) return;
+  const reaches = to === 'open' && !item.reached_owner && item.owner.membership_id !== expect()?.membership_id;
+  const said: Said = to === 'done' ? { words: 'Done', undo: true } : to === 'not_relevant' ? { words: 'Dismissed', undo: true }
+    : { words: reaches ? `Sent to ${item.owner.name}` : 'Reopened' };
+  await changeItem(page, () => runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: to }), said);
+}
+
+/** Undo, after Mark done or a Dismiss of an open item: it is open again. */
+export function undoFollowUp(): Promise<void> {
+  return shownView('item')?.said?.undo ? setFollowUpState('open') : Promise.resolve();
+}
+
+/** Typing in an owner picker, counted: a read for an older name is dropped. */
+let pickerSeq = 0;
+
+/** An owner chip: its people picker opens with you first, then the organization's first people; or closes. */
+export function toggleOwnerPicker(item_id: string): void {
+  const view = followUpShown();
+  if (!view || view.busy) return;
+  pickerSeq += 1;
+  if (view.picker?.item_id === item_id) { setView({ ...view, picker: null }); return; }
+  setView({ ...view, picker: { item_id, query: '', results: [], loading: true }, said: null });
+  void findOwner('');
+}
+
+/** Escape or Cancel: the picker closes. */
+export function closeOwnerPicker(): void {
+  const view = followUpShown();
+  if (!view?.picker) return;
+  pickerSeq += 1;
+  setView({ ...view, picker: null });
+}
+
+/** The organization's people by name, from the people directory. Typing reads once it pauses. */
+export async function findOwner(query: string): Promise<void> {
+  const view = followUpShown();
+  const account = expect();
+  if (!view?.picker || !account) return;
+  const { item_id } = view.picker;
+  const mine = ++pickerSeq;
+  const typing = query !== view.picker.query;
+  setView({ ...view, picker: { ...view.picker, query, loading: true, failure: undefined } });
+  if (typing) await new Promise(resolve => setTimeout(resolve, SEARCH_PAUSE_MS));
+  if (mine !== pickerSeq) return;
+  const name = query.trim();
+  const result = await rpc('people.directory', { expect: account, ...(name === '' ? {} : { query: name }) });
+  const current = viewOf(view.kind, view.seq);
+  if (mine !== pickerSeq || current?.picker?.item_id !== item_id) return;
+  if (!result.ok) {
+    setView({ ...current, picker: { ...current.picker, loading: false, results: [], failure: message(result.failure) } });
+    accountLost(result.failure);
+    return;
+  }
+  setView({ ...current, picker: { ...current.picker, loading: false, results: result.value.items } });
+}
+
+/**
+ * Who an owner picker offers: you first ("Me") while no name is typed, then
+ * the people found, never the owner now, unless the item only fell back to
+ * its approver (Pick owner): picking them claims it.
+ */
+export function ownerChoices(picker: OwnerPicker, item: OpenItemView, me: Member | null): { person: Member; me: boolean }[] {
+  const offered = (person: Member) => person.membership_id !== item.owner.membership_id || item.owner.match === 'approver';
+  const found = picker.results.filter(person => person.membership_id !== me?.membership_id && offered(person));
+  return [...(me && picker.query.trim() === '' && offered(me) ? [{ person: me, me: true }] : []), ...found.map(person => ({ person, me: false }))];
+}
+
+/** The item a view shows with this id: its page's, or one of its list's rows. */
+function itemIn(view: FollowUpView, item_id: string): OpenItemView | undefined {
+  return view.kind === 'item' ? (view.item?.item_id === item_id ? view.item : undefined) : view.items.find(item => item.item_id === item_id);
+}
+
+/** One row read again in place after its owner changed; one that cannot be read is left to a read of the whole list. */
+async function readListItem(mine: number, item_id: string): Promise<OpenItemView | null> {
+  let item: OpenItemView | null = null;
+  try {
+    item = await runsCommand({ schema_version: 1, operation: 'item', item_id });
+  } catch { /* the list is read again below */ }
+  const list = viewOf('list', mine);
+  if (!list) return item;
+  if (!item) { await readList(mine, 'again'); return null; }
+  const fresh = item;
+  setView({ ...list, items: list.items.map(entry => (entry.item_id === item_id ? fresh : entry)) });
+  return fresh;
+}
+
+/**
+ * A person picked under an owner chip: the item is theirs at once (F2),
+ * before Send or after; the view stays and says so, with the item read
+ * again. An assign whose outcome is unknown is settled by that read: it says
+ * what the item is now.
+ */
+export async function pickFollowUpOwner(person: Member): Promise<void> {
+  const view = followUpShown();
+  const item = view?.picker ? itemIn(view, view.picker.item_id) : undefined;
+  if (!view || !item || view.busy || !item.can.assign || state.concealed) return;
+  pickerSeq += 1;
+  const changed: Said = { words: `Owner changed to ${person.membership_id === expect()?.membership_id ? 'you' : person.display_name}` };
+  setView({ ...view, picker: null, busy: true, said: null });
+  let failure: Failure | undefined;
+  try {
+    await runsCommand({ schema_version: 1, operation: 'assign', item_id: item.item_id, owner_membership_id: person.membership_id });
+  } catch (error) {
+    failure = failureOf(error);
+  }
+  const unknown = failure !== undefined && outcomeUnknown(failure, false);
+  if (!viewOf(view.kind, view.seq)) return;
+  if (failure && !unknown) { setView({ ...viewOf(view.kind, view.seq)!, busy: false, said: changeFailed(failure) }); return; }
+  changedFrom(view.seq);
+  setView({ ...viewOf(view.kind, view.seq)!, busy: false, said: unknown ? null : changed });
+  const fresh = view.kind === 'item' ? await readItem(view.seq) : await readListItem(view.seq, item.item_id);
+  const current = viewOf(view.kind, view.seq);
+  if (!unknown || !current) return;
+  const went = fresh?.owner.membership_id === person.membership_id;
+  setView({ ...current, said: went ? changed : { words: message(fresh ? { code: 'not_saved', retryable: true } : failure!), error: true } });
+}
+
+/**
+ * Back from a list or an item page: the view before it shows again, read
+ * again when a change was made over it; from the first, the page they were
+ * opened over, read again when anything changed (Your follow-ups goes Home).
+ * Not while a change is on its way.
+ */
+export function closeFollowUp(): void {
+  const stack = followUpsShown();
+  const top = stack?.views.at(-1);
+  if (!stack || !top || top.busy) return;
+  pickerSeq += 1;
+  const views = stack.views.slice(0, -1);
+  if (views.length === 0) {
+    set({ followUps: null });
+    if (state.route.page === 'follow-ups') goHome();
+    else if (stack.changed) refreshUnder();
+    return;
+  }
+  // What changed over the view under it is read again, and what it said last no longer holds.
+  const under = views.at(-1)!;
+  set({ followUps: { ...stack, views: under.stale ? [...views.slice(0, -1), { ...under, said: null }] : views } });
+  if (under.stale) void (under.kind === 'list' ? readList(under.seq, 'again') : readItem(under.seq));
+}
+
+/** After follow-ups changed, what they were over is read again: Home, a meeting's line (in the reader or on its decision), a project's line. */
+function refreshUnder(): void {
+  const route = state.route;
+  if (route.page === 'home') void loadHome();
+  if (route.page === 'project' && state.projectLine?.id === route.project.project_id) void loadLine('projectLine', 'project', route.project.project_id);
+  const line = state.impactLine;
+  if (line && (route.page === 'decision' || (state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id))) void loadLine('impactLine', line.scope, line.id);
+}
+
+/**
+ * Check now, faint on a meeting's or a project's list (canvas 9.6, 9.7): a
+ * sweep of that scope. With nothing open the list says so; otherwise
+ * "Checking…" until the sweep ends, then the list is read again. A sweep that
+ * fails says so, and Try again asks for another.
+ */
+export async function checkNow(): Promise<void> {
+  const list = shownView('list');
+  if (!list || list.scope === 'mine' || list.id === undefined || list.check === 'checking' || !expect() || state.concealed) return;
+  const request = { schema_version: 1 as const, operation: 'sweep' as const, scope: list.scope, id: list.id };
+  setView({ ...list, check: 'checking' });
+  // Still this list's check, while the list is open.
+  const ours = (): FollowUpList | null => {
+    const now = viewOf('list', list.seq);
+    return now?.check === 'checking' ? now : null;
   };
   let runId: string;
   try {
-    const asked = await runsCommand({ schema_version: 1, operation: 'sweep', scope: line.scope, id: line.id });
+    const asked = await runsCommand(request);
     const now = ours();
     if (!now) return;
-    if (!('run_id' in asked)) { setLine(key, { ...now, check: 'nothing' }); return; }
+    if (!('run_id' in asked)) { setView({ ...now, check: 'nothing' }); return; }
     runId = asked.run_id;
   } catch {
     const now = ours();
-    if (now) setLine(key, { ...now, check: 'failed' });
+    if (now) setView({ ...now, check: 'failed' });
     return;
   }
-  await followSweep(key, runId, title, ours);
+  const ended = await followSweep(runId, () => ours() !== null);
+  const now = ours();
+  if (!now || ended === null) return;
+  setView({ ...now, check: ended === 'done' ? null : 'failed' });
+  if (ended === 'done') await readList(now.seq, 'again');
 }
 
 /**
- * Check now's sweep, followed until it ends. It is started at once; if
- * another run goes first (`busy`), each runs list says what starts next,
- * impact checks before sweeps. The list is read at Home's pace
- * (`runPollDelay`): longer after a failed read or a start that started
- * nothing, and not while ECHO is behind another app. It follows only while
- * its line's page shows: a project, or a decision's reader, which opens over
- * a project or Mine. Home's loop polls only while Home shows, so the two
- * never read the runs at once (one poller per run).
+ * Check now's sweep, followed until it ends (`done` or `failed`; null once
+ * nothing waits on it, `ours`). It is started at once; if another run goes
+ * first (`busy`), each runs list says what starts next, impact checks before
+ * sweeps. The list is read at Home's pace (`runPollDelay`): longer after a
+ * failed read or a start that started nothing, and not while ECHO is behind
+ * another app.
  */
-async function followSweep(key: LineKey, runId: string, title: string, ours: () => ItemsLine | null): Promise<void> {
+async function followSweep(runId: string, ours: () => boolean): Promise<'done' | 'failed' | null> {
   let next: string | undefined = runId;
   let failures = 0;
   let lastFailure: Failure | undefined;
   for (;;) {
     if (next !== undefined) {
       const refused = await startRun(next);
-      if (!ours()) return;
+      if (!ours()) return null;
       failures = refused ? failures + 1 : 0;
       lastFailure = refused;
     }
-    // The line waits on its sweep: it is in flight until a list shows it ended.
+    // The list waits on its sweep: it is in flight until a runs list shows it ended.
     await new Promise(resolve => setTimeout(resolve, runPollDelay({ runs: [], publishing: false, failures, lastFailure, owed: true })!));
     next = undefined;
-    if (!ours()) return;
+    if (!ours()) return null;
     if (state.concealed) continue;
     let runs: readonly PersonRunV1[];
     try {
@@ -4705,17 +4920,10 @@ async function followSweep(key: LineKey, runId: string, title: string, ours: () 
       lastFailure = failureOf(error);
       continue;
     }
-    const line = ours();
-    if (!line) return;
+    if (!ours()) return null;
     const run = runs.find(entry => entry.run_id === runId);
-    if (run?.state === 'done') {
-      // What it found: the scope's open items and how each stands, when the line is in sight; the line's counts are read again either way.
-      const inSight = lineInSight(key, line);
-      void loadLine(key, line.scope, line.id);
-      if (inSight) void openItemStatus(line.scope, line.id, title);
-      return;
-    }
-    if (!run || run.state === 'failed') { setLine(key, { ...line, check: 'failed' }); return; }
+    if (run?.state === 'done') return 'done';
+    if (!run || run.state === 'failed') return 'failed';
     next = runToStart(runs)?.run_id;
     // Nothing to start: a run is going, ours or one before it; look again at the usual pace.
     if (next === undefined) {
@@ -4723,368 +4931,4 @@ async function followSweep(key: LineKey, runId: string, title: string, ours: () 
       lastFailure = undefined;
     }
   }
-}
-
-/** A decision's or a project's items, grouped by owner, in place of the page they were opened over. Read-only in this version. */
-export interface OpenItemsState {
-  /** The page it shows over: another page closes it. */
-  route: Route;
-  scope: ItemsLine['scope'];
-  id: string;
-  /** The decision's title or the project's name. */
-  title: string;
-  seq: number;
-  loading: boolean;
-  failure?: Failure;
-  items: readonly OpenItemView[];
-  next: string | null;
-}
-
-export function openItemsShown(current: State = state): OpenItemsState | null {
-  const page = current.openItems;
-  return page && page.route === current.route ? page : null;
-}
-
-/** The Impact line or the project line: what the decision or the project has open, grouped by owner. */
-export function openOpenItems(scope: ItemsLine['scope'], id: string, title: string): Promise<void> {
-  if (!expect() || state.concealed) return Promise.resolve();
-  set({ openItems: { route: state.route, scope, id, title, seq: ++seq, loading: true, items: [], next: null }, itemCard: reassignHeld() ? state.itemCard : null,
-    itemStatus: null, ask: null, sources: null, toast: null });
-  return loadOpenItems(false);
-}
-
-/** More: the next page. */
-export function moreOpenItems(): Promise<void> { return loadOpenItems(true); }
-
-function loadOpenItems(more: boolean): Promise<void> {
-  return loadItemsPage(openItemsShown, page => set({ openItems: page }), more);
-}
-
-/** What a page of a scope's items shows over another page: open items, and Your open items. */
-interface ItemsPage {
-  seq: number;
-  loading: boolean;
-  failure?: Failure;
-  scope: 'mine' | 'record' | 'project';
-  /** The decision or the project; your own items name none. */
-  id?: string;
-  items: readonly OpenItemView[];
-  next: string | null;
-}
-
-/** How a page of a scope's items is read: which items it keeps, what else it takes from the read, and whether it asks for open items alone. */
-interface ItemsPageOptions<View extends ItemsPage> {
-  keep?: (item: OpenItemView) => boolean;
-  withRead?: (view: View, read: OpenItemsView) => View;
-  /** Open items alone, on More too (R51). */
-  openOnly?: boolean;
-}
-
-/**
- * The first page of a scope's items, or the next one (More), each opened live
- * for you, joined to what `shown` shows: the items `keep` keeps, then what
- * `withRead` takes from the read. A read for a view since left is dropped.
- */
-async function loadItemsPage<View extends ItemsPage>(shown: () => View | null, show: (view: View) => void, more: boolean,
-  { keep = () => true, withRead = view => view, openOnly = false }: ItemsPageOptions<View> = {}): Promise<void> {
-  const account = expect();
-  const page = shown();
-  if (!account || !page || (more && (!page.next || page.loading))) return;
-  const mine = page.seq;
-  show({ ...page, loading: true, failure: undefined });
-  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: page.scope, ...(page.id === undefined ? {} : { id: page.id }),
-    ...(openOnly ? { open_only: true as const } : {}), ...(more && page.next ? { cursor: page.next } : {}) } });
-  const current = shown();
-  if (current?.seq !== mine) return;
-  if (!result.ok) { show({ ...current, loading: false, failure: result.failure }); accountLost(result.failure); return; }
-  const read = result.value as OpenItemsView;
-  show(withRead({ ...current, loading: false, items: appendPage(more ? current.items : [], read.items.filter(keep), item => item.item_id),
-    next: read.next_cursor }, read));
-}
-
-export function closeOpenItems(): void { set({ openItems: null }); }
-
-// ---- an item's card, and Your open items ------------------------------------------------
-
-/** The item a changed item's row opened (ruling 3), over Home: nothing closes until Mark updated or No change needed is chosen. */
-export interface ItemCardState {
-  /** The page it shows over: another page closes it. */
-  route: Route;
-  /** The item as Home read it. */
-  item: OpenItemView;
-  /**
-   * Reassign…, open: the organization's people by name, to give the item to.
-   * `unknown`: the person picked, when the pick may have arrived; nothing more
-   * is sent from the card until Check status reads the item.
-   */
-  reassign?: { query: string; results: readonly Member[]; loading: boolean; failure?: string; busy: boolean; unknown?: Member } | null;
-}
-
-/** Reassign… on its way, or whose outcome is unknown: its card stays, and sign out, Restart and Quit wait. */
-function reassignHeld(card: ItemCardState | null = state.itemCard): boolean {
-  return card?.reassign?.busy === true || card?.reassign?.unknown !== undefined;
-}
-
-/** What sign out, the update row and Close say while a reassignment may have arrived. */
-export const REASSIGN_UNSETTLED = 'A reassignment may not have arrived. Check it on Home first.';
-
-/** Items a Close or Close all is closing now: Reassign… waits for it, since each may be closed a moment later. */
-const closingItems = new Set<string>();
-export function itemClosing(item_id: string): boolean { return closingItems.has(item_id); }
-
-/** The item a held Reassign… is for: nothing else closes it until its card's Check status reads it, since it may be someone else's now. */
-export function reassignHeldItem(current: State = state): string | null {
-  const card = current.itemCard;
-  return card && reassignHeld(card) ? card.item.item_id : null;
-}
-
-export function itemCardShown(current: State = state): ItemCardState | null {
-  const card = current.itemCard;
-  // One that is held comes back over Home, however Home was reached since: only it settles what it sent.
-  return card && (card.route === current.route || (current.route.page === 'home' && reassignHeld(card))) ? card : null;
-}
-
-/** A changed item's row, Update or Review: its item, over Home. */
-export function openItemCard(item: OpenItemView): void {
-  if (!expect() || state.concealed) return;
-  set({ itemCard: { route: state.route, item }, itemStatus: null, openItems: null, ask: null, sources: null, toast: null });
-}
-
-export function closeItemCard(): void { if (!reassignHeld()) set({ itemCard: null }); }
-
-/** Reassign…, or Cancel: the card's people picker opens with the organization's first people, or closes. */
-export function toggleReassign(): void {
-  const card = itemCardShown();
-  if (!card || !card.item.can.assign || reassignHeld(card) || closingItems.has(card.item.item_id)) return;
-  if (card.reassign) { set({ itemCard: { ...card, reassign: null } }); return; }
-  set({ itemCard: { ...card, reassign: { query: '', results: [], loading: true, busy: false } } });
-  void findReassignee('');
-}
-
-/** Typing in Reassign…, counted: a read for an older name is dropped. */
-let reassignSeq = 0;
-
-/** The organization's people by name, but the item's owner now. */
-export async function findReassignee(query: string): Promise<void> {
-  const card = itemCardShown();
-  const account = expect();
-  if (!card?.reassign || !account || reassignHeld(card)) return;
-  const mine = ++reassignSeq;
-  const typing = query !== card.reassign.query;
-  set({ itemCard: { ...card, reassign: { ...card.reassign, query, loading: true, failure: undefined } } });
-  if (typing) await new Promise(resolve => setTimeout(resolve, SEARCH_PAUSE_MS));
-  if (mine !== reassignSeq || itemCardShown()?.item.item_id !== card.item.item_id) return;
-  const name = query.trim();
-  const result = await rpc('people.directory', { expect: account, ...(name === '' ? {} : { query: name }) });
-  const current = itemCardShown();
-  if (mine !== reassignSeq || !current?.reassign || current.item.item_id !== card.item.item_id) return;
-  if (!result.ok) {
-    set({ itemCard: { ...current, reassign: { ...current.reassign, loading: false, results: [], failure: message(result.failure) } } });
-    accountLost(result.failure);
-    return;
-  }
-  const owner = current.item.owner.membership_id;
-  set({ itemCard: { ...current, reassign: { ...current.reassign, loading: false, results: result.value.items.filter(person => person.membership_id !== owner) } } });
-}
-
-/** The card a pick or its Check status was sent from, shown or not, while it waits on the answer. */
-function reassignFrom(item_id: string): ItemCardState | null {
-  const card = state.itemCard;
-  return card?.item.item_id === item_id && card.reassign?.busy ? card : null;
-}
-
-/** Its card, as a pick or Check status left it: where it shows now, it stays. */
-function settleReassign(card: ItemCardState, patch: Partial<ItemCardState>): void {
-  set({ itemCard: { ...card, ...patch, ...(itemCardShown() === card ? { route: state.route } : {}) } });
-}
-
-/** It went: its card goes, shown or not, and the toast says so. */
-function reassigned(item_id: string, person: Member): void {
-  set({ ...(reassignFrom(item_id) ? { itemCard: null } : {}), toast: `Reassigned to ${person.display_name}` });
-  unresolvedChanged();
-  void loadHome();
-}
-
-/**
- * A person picked: the item is theirs to update now, on their Home; the card
- * goes and says so. One whose outcome is unknown stays on its card, shown or
- * not, until Check status settles it.
- */
-export async function reassignCardItem(person: Member): Promise<void> {
-  const card = itemCardShown();
-  if (!card?.reassign || reassignHeld(card) || !card.item.can.assign || closingItems.has(card.item.item_id)) return;
-  const { item_id } = card.item;
-  set({ itemCard: { ...card, reassign: { ...card.reassign, busy: true, failure: undefined } } });
-  unresolvedChanged();
-  try {
-    await runsCommand({ schema_version: 1, operation: 'assign', item_id, owner_membership_id: person.membership_id });
-  } catch (error) {
-    const current = reassignFrom(item_id);
-    const failure = error instanceof Error ? error.message : 'That was not sent. Try again.';
-    // A reply that came after the account changed is unknown too, unless the host says it never went (fencedCommand).
-    const unknown = outcomeUnknown(failureOf(error), false);
-    // A card gone with its account (another signed in since) says nothing to the one signed in now.
-    if (current) {
-      settleReassign(current, { reassign: { ...current.reassign!, busy: false, failure, ...(unknown ? { unknown: person } : {}) } });
-      if (!itemCardShown()) set({ toast: failure });
-    }
-    unresolvedChanged();
-    return;
-  }
-  reassigned(item_id, person);
-}
-
-/**
- * Check status, after a pick whose outcome is unknown: the item, read again,
- * settles it. Its owner the person picked, it went; anyone else, it did not,
- * and the card shows the item as it is now. No longer yours to see, the card
- * goes. A read that fails leaves it unknown.
- */
-export async function checkReassign(): Promise<void> {
-  const card = itemCardShown();
-  const person = card?.reassign?.unknown;
-  if (!card?.reassign || !person || card.reassign.busy) return;
-  const { item_id } = card.item;
-  set({ itemCard: { ...card, reassign: { ...card.reassign, busy: true } } });
-  let item: OpenItemView | null = null;
-  let failure: Failure | null = null;
-  try {
-    item = await runsCommand({ schema_version: 1, operation: 'item', item_id });
-  } catch (error) {
-    failure = failureOf(error);
-  }
-  const current = reassignFrom(item_id);
-  if (!current?.reassign) return;
-  if (item?.owner.membership_id === person.membership_id) { reassigned(item_id, person); return; }
-  if (failure?.code === 'not_found') { set({ itemCard: null, toast: message(failure) }); unresolvedChanged(); void loadHome(); return; }
-  if (!item) { settleReassign(current, { reassign: { ...current.reassign, busy: false } }); return; }
-  const { unknown: _settled, ...reassign } = current.reassign;
-  const owner = item.owner.membership_id;
-  settleReassign(current, { item, reassign: item.can.assign ? { ...reassign, busy: false, failure: message({ code: 'not_saved', retryable: true }),
-    results: reassign.results.filter(entry => entry.membership_id !== owner) } : null });
-  unresolvedChanged();
-}
-
-/** Mark updated or No change needed, on an item's card: the card goes, and the item closes as an Update row's Mark updated does. */
-export function closeCardItem(to: 'done' | 'not_relevant'): void {
-  const card = itemCardShown();
-  if (!card || reassignHeld(card)) return;
-  set({ itemCard: null });
-  void closeItem(card.item, to);
-}
-
-/**
- * Your open items (R68): a status view of a scope's open items, over the page
- * it was opened from: your own, a decision's or a project's, each with how it
- * stands since ECHO last checked it.
- */
-export interface ItemStatusState {
-  /** The page it shows over: another page closes it. */
-  route: Route;
-  /** Your own items (sent or owned), a decision's, or a project's. */
-  scope: 'mine' | 'record' | 'project';
-  /** The decision or the project. */
-  id?: string;
-  /** The decision's title or the project's name; null for your own items. */
-  title: string | null;
-  seq: number;
-  loading: boolean;
-  failure?: Failure;
-  /** The scope's open items read so far, oldest first. */
-  items: readonly OpenItemView[];
-  next: string | null;
-  /** How many open items the scope has (null until a read of them succeeded), and when ECHO last checked one of its items. */
-  open: number | null;
-  checked_at: string | null;
-  /** Close or Close all is on its way. */
-  busy: boolean;
-  /** Why Close left an item open. */
-  closeFailure?: string;
-  /** It closed items: what the page below shows is stale. */
-  closed?: true;
-}
-
-export function itemStatusShown(current: State = state): ItemStatusState | null {
-  const page = current.itemStatus;
-  return page && page.route === current.route ? page : null;
-}
-
-/** Your open items: from Home's footer for your own, or after Check now for that decision or project (named `title`). */
-export function openItemStatus(scope: ItemStatusState['scope'], id: string | undefined, title: string | null): Promise<void> {
-  if (!expect() || state.concealed) return Promise.resolve();
-  set({ itemStatus: { route: state.route, scope, ...(id === undefined ? {} : { id }), title, seq: ++seq, loading: true, items: [], next: null, open: null, checked_at: null,
-    busy: false }, itemCard: reassignHeld() ? state.itemCard : null, openItems: null, ask: null, sources: null, toast: null });
-  return loadItemStatus(false);
-}
-
-/** More: the next page. */
-export function moreItemStatus(): Promise<void> { return loadItemStatus(true); }
-
-/**
- * A page of the scope's open items only, each opened live (R51): closed ones
- * are never read, so they never hide open ones behind More. The open check
- * stays as a guard. With the scope's open count and latest check.
- */
-function loadItemStatus(more: boolean): Promise<void> {
-  return loadItemsPage(itemStatusShown, page => set({ itemStatus: page }), more, {
-    keep: item => item.state === 'open', withRead: (page, read) => ({ ...page, open: read.summary.open, checked_at: read.summary.last_checked_at }), openOnly: true,
-  });
-}
-
-/**
- * Close (one line) or Close all N that match: each matching item you may close
- * is set done, one at a time. The view stays, without the items it closed; an
- * item that could not be closed stays, with why. The item a held Reassign… is
- * for is not closed: its card's Check status settles it first.
- */
-async function closeMatches(items: readonly OpenItemView[]): Promise<void> {
-  const page = itemStatusShown();
-  const held = reassignHeldItem();
-  const closing = page ? closable(items.filter(item => item.item_id !== held && page.items.some(entry => entry.item_id === item.item_id))) : [];
-  if (!page || page.busy || page.loading || closing.length === 0) return;
-  set({ itemStatus: { ...page, busy: true, closeFailure: undefined } });
-  const closed = new Set<string>();
-  let failure: string | undefined;
-  for (const item of closing) closingItems.add(item.item_id);
-  try {
-    for (const item of closing) {
-      // Checked again before each close: a held Reassign… keeps its item open.
-      if (reassignHeldItem() === item.item_id) continue;
-      try {
-        await runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' });
-        closed.add(item.item_id);
-      } catch (error) {
-        failure ??= error instanceof Error ? error.message : 'That was not sent. Try again.';
-      }
-    }
-  } finally {
-    for (const item of closing) closingItems.delete(item.item_id);
-  }
-  const current = itemStatusShown();
-  if (current?.seq !== page.seq) return;
-  set({ itemStatus: { ...current, busy: false, items: current.items.filter(item => !closed.has(item.item_id)),
-    open: current.open === null ? null : Math.max(0, current.open - closed.size),
-    closeFailure: failure, ...(closed.size > 0 || current.closed ? { closed: true as const } : {}) } });
-}
-
-/** Close, on a line that matches its decision now. */
-export function closeMatching(item: OpenItemView): Promise<void> { return closeMatches([item]); }
-
-/** Close all N that match. */
-export function closeAllMatching(): Promise<void> { return closeMatches(itemStatusShown()?.items ?? []); }
-
-/** Back, from Your open items: not while Close is on its way. */
-export function closeItemStatus(): void {
-  const page = itemStatusShown();
-  if (page && !page.busy) leaveItemStatus(page, page.closed === true);
-}
-
-/** Your open items goes; after it closed items, what it was over is read again: Home, or the lines on the page. */
-function leaveItemStatus(page: ItemStatusState, closed: boolean): void {
-  set({ itemStatus: null });
-  if (!closed) return;
-  if (page.route.page === 'home') { void loadHome(); return; }
-  const reader = state.reader;
-  if (reader?.ref.kind === 'meeting' && state.impactLine?.id === reader.ref.id) void loadLine('impactLine', 'record', reader.ref.id);
-  if (state.route.page === 'project' && state.projectLine?.id === state.route.project.project_id) void loadLine('projectLine', 'project', state.route.project.project_id);
 }

@@ -1,4 +1,4 @@
-import { Fragment, type ComponentChildren } from 'preact';
+import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { colorFor, initials } from '../format.js';
 import { monthDay } from '../needs.js';
@@ -6,12 +6,12 @@ import { saidLines, type ProposalSignal } from '../proposal.js';
 import { Chevron } from './icons.js';
 
 /**
- * The four Home cards (Approve, Send, Update, Review) share one shape: on the
- * left the verb, one headline and only what you decide on; on the right a
- * panel with the main button at its top, and the facts.
+ * The decision page's head (Approve, or what an approved meeting changed): on
+ * the left the verb, one headline and only what you decide on; on the right a
+ * panel with the main button at its top.
  */
 export function CardHead({ kind, verb, where, title, meta, id }: {
-  kind: 'approve' | 'send' | 'update' | 'review' | 'done'; verb: string; where?: ComponentChildren; title: string; meta?: ComponentChildren; id: string;
+  kind: 'approve' | 'done'; verb: string; where?: ComponentChildren; title: string; meta?: ComponentChildren; id: string;
 }) {
   return (
     <header class="card-head">
@@ -88,11 +88,4 @@ export function Reasons({ reasons }: { reasons: readonly ProposalSignal[] }) {
       {open && <ul class="card-reasons selectable">{reasons.map((reason, index) => <li key={index}>{reason.text}</li>)}</ul>}
     </section>
   );
-}
-
-/** The item's facts beside its card: only those its tool gave. */
-export function Facts({ facts }: { facts: readonly (readonly [string, ComponentChildren | null | undefined])[] }) {
-  const shown = facts.filter(([, value]) => value !== null && value !== undefined && value !== '');
-  if (shown.length === 0) return null;
-  return <dl class="card-facts">{shown.map(([name, value]) => <Fragment key={name}><dt>{name}</dt><dd>{value}</dd></Fragment>)}</dl>;
 }

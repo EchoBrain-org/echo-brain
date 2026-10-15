@@ -410,17 +410,12 @@ function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = fals
 }
 
 /**
- * A finished impact check, validated by the client: the card as the Authority
- * rebuilt it for this viewer, each citation a source the meeting card can name
- * or open (a source without a label is "Item n").
+ * A finished impact check, validated by the client: what was decided, as the
+ * Authority rebuilt the card for this viewer. Nothing it found crosses: that
+ * is the meeting's follow-ups.
  */
 export function impactCardView(result: PersonRunsResultsV1['view']): ImpactView {
-  const { card } = result;
-  return {
-    status: card.status, decided: card.decided, affected: card.affected, unconfirmed: card.unconfirmed, people: card.people,
-    sources: card.citations.map((entry, index) => v4Source(entry, `Item ${index + 1}`, true, true)),
-    checked_at: result.checked_at, hidden: result.hidden,
-  };
+  return { decided: result.card.decided };
 }
 
 /**

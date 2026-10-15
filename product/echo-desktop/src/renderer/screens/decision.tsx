@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
 import { dateTime } from '../format.js';
+import { followUpsWords, openTotal } from '../needs.js';
 import { proposalRead, readProposal, type Proposal as Read, type ProposalSignal } from '../proposal.js';
 import {
-  decide, loadProjects, retryImpact, setDecisionAudience, setDecisionOwner, setDecisionShare, tickDecisionProject, type DecisionState, type State,
+  decide, lineRecord, loadProjects, openFollowUps, retryImpact, setDecisionAudience, setDecisionOwner, setDecisionShare, tickDecisionProject, type DecisionState,
+  type State,
 } from '../store.js';
 import { Passage } from './ask.js';
 import { CardHead, dueWords, Face, Reasons, SignalRow } from './card.js';
@@ -150,10 +152,21 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   );
 }
 
+/** The approved meeting's follow-ups, counted by its check, and what opens them when there are any. */
+function followUps(state: State, decision: DecisionState): { words: string; open: (() => void) | null } | null {
+  const line = state.impactLine;
+  if (line?.scope !== 'run' || line.id !== decision.run?.run_id || !line.summary) return null;
+  const { summary } = line;
+  const record = lineRecord(line);
+  const title = decision.open?.review.title ?? '';
+  const found = openTotal(summary) + summary.done + summary.not_relevant > 0;
+  return { words: followUpsWords(summary, line.stage), open: found && record !== null ? () => void openFollowUps('record', record, title) : null };
+}
+
 /**
- * What did it change? The approved decision's impact card, or where the
- * check stands (Tell the owners?' Details, and a failed check's Try again),
- * then what was decided.
+ * What did it change? Where the approved meeting's check stands (a failed
+ * check's Try again), what was decided and its follow-ups, then the
+ * proposal's own decisions and actions.
  */
 function Impact({ state, decision }: { state: State; decision: DecisionState }) {
   const open = decision.open!;
@@ -168,7 +181,7 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
       <article class="card-main" aria-labelledby="decision-ask">
         <CardHead kind="done" verb={standing} where={open.review.title} title={ask} id="decision-ask" />
         <ImpactSection run={run ?? undefined} view={decision.impact} publishing={open.review.status === 'publishing'} busy={decision.busy}
-          tools={state.tools?.items ?? undefined} onRetry={() => void retryImpact()} />
+          followUps={followUps(state, decision)} onRetry={() => void retryImpact()} />
         {proposalRead(read) ? <>
           <Decided read={read} />
           {read.actions.length > 0 && (
@@ -189,7 +202,7 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
 /** The decision page, from a Home row: the proposal to approve, or what an approved one changed. */
 export function Decision({ state, decision }: { state: State; decision: DecisionState }) {
   const box = useRef<HTMLDivElement>(null);
-  // The heading takes the focus, as on Your open items: Enter or Space must not change a choice or open a source.
+  // The heading takes the focus, as on a follow-ups list: Enter or Space must not change a choice or open a source.
   useEffect(() => { box.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }); }, [decision.loading]);
   if (decision.loading) return <div class="column center" aria-busy="true" data-testid="decision-loading"><span class="asking"><i /><i /><i /></span></div>;
   if (!decision.open) {

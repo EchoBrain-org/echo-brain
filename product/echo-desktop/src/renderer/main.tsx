@@ -5,28 +5,26 @@ import { ConfirmSignOut } from './screens/account.js';
 import { AskView, Bar, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Decision } from './screens/decision.js';
+import { FollowUp, FollowUps } from './screens/follow-ups.js';
 import { Home } from './screens/home.js';
-import { ItemStatus } from './screens/item-status.js';
 import { ChangeLine, changeShownInPlace } from './screens/change.js';
 import { Back, Saved, SidebarIcon, Warning } from './screens/icons.js';
 import { Mine } from './screens/mine.js';
 import { NewProject } from './screens/new-project.js';
-import { ItemCard, OpenItems } from './screens/open-items.js';
 import { Organization } from './screens/organization.js';
 import { People } from './screens/people.js';
 import { MembersButton, Project } from './screens/project.js';
 import { ProjectSettings, ProjectSettingsButton, ProjectToolsButton } from './screens/project-settings.js';
 import { Reader } from './screens/reader.js';
-import { Send } from './screens/send.js';
 import { Sidebar, UpdateRow } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
-  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeItemCard,
-  closeItemStatus, closeOpenItems, closePicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, getState, goHome,
-  hostFailed, itemCardShown, itemStatusShown, keepNewProject, matchesShown, newProjectProgress, openCapture, openItemsShown, openMine, pageCovered, projectSettingsModal,
-  readUpdate, reassignHeldItem, refreshStatus, resume, retryStart, returnToSend, sheetShown, signinPhase, toastOpensMine,
-  toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleReassign, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS, windowShown, windowTakesDrop, type State,
+  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
+  closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
+  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, pageCovered, projectSettingsModal, readUpdate, refreshStatus, resume, retryStart,
+  sheetShown, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS,
+  windowShown, windowTakesDrop, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -59,9 +57,9 @@ function escape(): void {
 
 /**
  * Back steps back one level: a sheet (or what is open in it), compose, the
- * answer (and the source beside it), an item's card, Your open items, open
- * items, reader, then a project or People & invites. Pick a person closes
- * first; a decision opened as Tell the owners?' Details goes back to the card.
+ * answer (and the source beside it), an item page or a follow-ups list (the
+ * one before it, or the page under them), reader, then a project or People &
+ * invites. An owner picker closes first.
  */
 function back(): void {
   const state = getState();
@@ -80,17 +78,13 @@ function back(): void {
   // Escape closes the Projects list first, and only the list.
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
   if (state.ask) return closeAsk();
-  const card = itemCardShown(state);
-  if (card?.reassign) return card.reassign.busy ? undefined : toggleReassign();
-  if (card) return closeItemCard();
-  if (itemStatusShown(state)) return closeItemStatus();
-  if (openItemsShown(state)) return closeOpenItems();
+  const view = followUpShown(state);
+  if (view?.picker) return closeOwnerPicker();
+  if (view) return closeFollowUp();
   if (state.reader?.menu !== undefined && state.reader.menu !== 'closed') return toggleReaderMenu();
   if (state.reader) return closeReader();
   if (state.organization?.confirm) return cancelRevoke();
   if (state.organization?.menu) return toggleEmployeeMenu(state.organization.menu);
-  if (state.route.page === 'send' && state.send?.picker) return closePicker();
-  if (state.route.page === 'decision' && state.decision?.back !== undefined) return returnToSend();
   if (state.route.page !== 'home') return goHome();
 }
 
@@ -158,10 +152,9 @@ function App() {
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
   const decision = state.route.page === 'decision' ? state.decision : null;
-  const send = state.route.page === 'send' ? state.send : null;
-  const openItems = openItemsShown(state);
-  const itemCard = itemCardShown(state);
-  const itemStatus = itemStatusShown(state);
+  const view = followUpShown(state);
+  // Your follow-ups is a page whose list is the first view: only views over it count as over the page.
+  const over = (followUpsShown(state)?.views.length ?? 0) - (state.route.page === 'follow-ups' ? 1 : 0);
   const organization = state.route.page === 'organization' ? state.organization : null;
   const mine = state.route.page === 'mine';
   const tools = state.route.page === 'tools' ? state.tools : null;
@@ -169,14 +162,15 @@ function App() {
   // answer or an original shows until ECHO is back. The sidebar's project rows
   // stay, so a file dragged from Finder can still be dropped on one.
   const covered = pageCovered(state);
-  const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision || send ? 'Decision' : null;
+  const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision ? 'Decision'
+    : state.route.page === 'follow-ups' ? 'Follow-ups' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
-  // Back leaves Ask for the page it was asked from; asked over a reader (or open items, an item's card or Your open items), Back goes to it.
-  // Open items and Your open items opened over a reader go back to the reader; Details go back to Tell the owners?.
-  const overlay = openItems !== null || itemCard !== null || itemStatus !== null;
-  const over = state.reader !== null || overlay;
-  const backLabel = covered ? null : (state.ask && over) || (overlay && state.reader) ? 'Back'
-    : state.ask || over ? pageName ?? 'Home' : decision?.back !== undefined ? 'Back' : pageName ? 'Home' : null;
+  // Back leaves Ask for the page it was asked from; asked over a reader (or a follow-ups view), Back goes to it.
+  // A follow-ups view goes back to the one before it, or to the reader it was opened over.
+  const overlay = over > 0;
+  const covering = state.reader !== null || overlay;
+  const backLabel = covered ? null : (state.ask && covering) || (overlay && (state.reader !== null || over > 1)) ? 'Back'
+    : state.ask || covering ? pageName ?? 'Home' : pageName ? 'Home' : null;
   const pane = !covered && state.ask !== null && state.sources?.open != null;
   // A project change not shown where it was asked for shows at the top of the page.
   const banner = state.change && !state.concealed && !changeShownInPlace(state) ? state.change : null;
@@ -192,15 +186,13 @@ function App() {
       <main class="page">
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
-          : itemCard ? <ItemCard state={state} card={itemCard} />
-          : itemStatus ? <ItemStatus page={itemStatus} held={reassignHeldItem(state)} />
-          : openItems ? <OpenItems page={openItems} />
+          : view?.kind === 'item' ? <FollowUp state={state} page={view} />
+          : view?.kind === 'list' ? <FollowUps state={state} list={view} />
           : state.reader ? <Reader state={state} reader={state.reader} backTo={pageName ?? 'Home'} />
           : inProject ? <Project state={state} project={inProject} />
           : organization ? <Organization state={state} page={organization} />
           : tools ? <Tools state={state} page={tools} />
           : decision ? <Decision state={state} decision={decision} />
-          : send ? <Send state={state} send={send} />
           : mine ? <Mine state={state} /> : <Home state={state} />}
       </main>
       {/* Always there, so a screen reader announces each toast as it appears. A save only Mine shows opens it. */}

@@ -500,14 +500,6 @@ button.toast:hover { background: #211f1f; }
 .impact-head .asking { font-size: 12.5px; }
 .impact-section { display: flex; flex-direction: column; gap: 6px; }
 .impact h5 { margin: 4px 0 0; font-size: 12.5px; font-weight: 600; color: var(--muted); }
-.impact-items { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.impact-item-head { display: flex; align-items: baseline; gap: 8px; }
-.impact-label { font-weight: 500; }
-.record-item .status.conflicts { color: var(--danger); }
-.record-item .status.confirms { color: #9ed3a2; }
-.impact-open .link-button { margin-left: -8px; padding: 2px 8px; }
-.impact-person { flex-direction: row; flex-wrap: wrap; gap: 4px; }
-.impact-foot { padding-top: 2px; }
 
 /* Home: only what needs you. One row per decision or item, the verb on the left, the project on the right. */
 .column.needs { overflow-y: auto; gap: 2px; padding: 4px 0; }
@@ -527,12 +519,8 @@ button.toast:hover { background: #211f1f; }
 .need-change { font-size: 14px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
 .need-detail { font-size: 13px; color: var(--faint); }
 .need-detail b { font-weight: 500; color: rgba(240, 236, 230, 0.72); }
-.need-error { font-size: 12px; }
-.need-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
 .need-open { padding: 2px 8px; border: 0; border-radius: 6px; font-size: 13px; color: rgba(240, 236, 230, 0.5); background: transparent; }
 .need-open:hover { color: var(--text); background: var(--hover); }
-.need-act { height: 30px; padding: 0 14px; border: 0; border-radius: 15px; font-size: 13px; font-weight: 600; color: var(--on-accent); background: var(--accent); }
-.need-act:disabled { opacity: 0.5; cursor: default; }
 .need-side { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; padding-top: 2px; }
 .need-when { font-size: 12.5px; color: rgba(240, 236, 230, 0.5); }
 .need-project { display: flex; align-items: center; gap: 6px; max-width: 200px; font-size: 13px; color: var(--faint); }
@@ -541,7 +529,7 @@ button.toast:hover { background: #211f1f; }
 .need-side .asking { gap: 4px; }
 .home-clear { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 14px; color: var(--faint); }
 .home-clear svg { opacity: 0.6; }
-/* Under the rows, and under "Nothing needs you": what matches its decision now, what waits on others, when ECHO last checked; View. */
+/* Under the rows, and on an empty Home: what waits on others, when ECHO last checked, and Your follow-ups. */
 .needs-foot { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 12px 14px 4px; font-size: 13px; color: rgba(240, 236, 230, 0.45); }
 .needs-foot-words { flex-grow: 1; min-width: 0; }
 .side-row .badge { min-width: 18px; height: 18px; padding: 0 6px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--on-accent); background: var(--accent); }
@@ -549,35 +537,18 @@ button.toast:hover { background: #211f1f; }
 .sidebar-list .archived-heading { padding: 8px 10px 4px; }
 
 /* A decision, from Home: one card, the question on top, the button at its foot. */
-.column.decision { overflow-y: auto; }
-.decision-card { display: flex; flex-direction: column; gap: 14px; padding: 20px 22px 18px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--panel); }
-.decision-ask { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.3; }
-.decision-from { margin-top: -6px; font-size: 13px; color: var(--faint); }
-.decision-from b { font-weight: 500; color: var(--muted); }
-/* The decided line, large: the proposal's first decision, or what Tell the owners? is about. */
-.decision-line { font-size: 20px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; user-select: text; }
 .decision-body { font-size: 15px; line-height: 1.55; }
-.decision-section { display: flex; flex-direction: column; gap: 8px; }
 .decision-action { display: flex; align-items: center; gap: 10px; font-size: 14px; }
 .decision-action-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .decision-action .field.small { flex: 0 1 190px; min-width: 120px; height: 32px; }
-.decision-card .readers-row { display: flex; gap: 8px; }
-.decision-card .well.picker { flex: none; max-height: 200px; min-height: 0; overflow-y: auto; padding: 8px; }
 .decision-foot { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
 .decision-foot .asking { font-size: 13px; }
-.decision-card .impact { margin-top: 0; }
 
-/* Tell the owners?: one ticked line per item, its owner on the right; Pick a person opens under it. */
-.send-item { display: flex; flex-direction: column; gap: 8px; }
-.send-line { display: flex; align-items: center; gap: 10px; }
-.send-tick { flex: 1 1 0; min-width: 0; font-size: 14px; }
-.send-tick b { font-weight: 500; }
-.send-tick .faint { overflow-wrap: anywhere; }
+/* An owner: a chip, a dashed Pick owner, and the people picker that opens under it. */
 .owner-slot { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
 .owner-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; max-width: 180px; padding: 0 10px 0 4px; border-radius: 12px; font-size: 12.5px; background: rgba(240, 236, 230, 0.08); }
 .owner-chip .face { width: 18px; height: 18px; border-radius: 9px; font-size: 8px; }
 .owner-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.owner-slot .icon-button { width: 22px; height: 22px; border-radius: 11px; }
 .pick-button { flex-shrink: 0; height: 24px; padding: 0 10px; border: 1px dashed rgba(240, 236, 230, 0.3); border-radius: 12px; font-size: 12.5px; color: var(--accent-text); background: transparent; }
 .pick-button:hover:not(:disabled) { border-color: var(--accent); }
 .pick-button:disabled { opacity: 0.5; cursor: default; }
@@ -588,66 +559,19 @@ button.toast:hover { background: #211f1f; }
 .picker-option .name { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picker .notice { padding: 4px 8px; font-size: 13px; }
 .picker-foot { display: flex; justify-content: flex-end; }
-.send-note { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-.send-note .notice { flex-grow: 1; }
 
-/* What a decision, or a project, has open: the Impact line under a decision's title, the line above a project's feed. */
+/* A meeting's or a project's follow-ups line: under a meeting's title, above a project's feed. */
 .items-line { flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 8px 12px; border: 0; border-radius: 10px; font-size: 13px; text-align: left; color: inherit; background: rgba(240, 236, 230, 0.05); }
 .items-line b { font-weight: 600; }
 .items-line-open { flex-grow: 1; min-width: 0; padding: 2px 0; border: 0; font-size: 13px; text-align: left; color: inherit; background: transparent; }
 button.items-line-open:hover, button.items-line:hover { color: var(--text); }
 button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 .items-line .link-button { flex-shrink: 0; padding: 2px 6px; }
-.items-line .need-open { flex-shrink: 0; }
 .items-line-check { flex-shrink: 0; display: flex; align-items: center; padding: 2px 6px; white-space: nowrap; }
 .items-line-check .link-button { padding: 2px 4px; }
 .project-line { margin-bottom: 6px; }
 
-/* An item's card: whose it is, the decision, what it says now beside what the decision needs, and ECHO's last check. */
-.item-card-head { display: flex; align-items: flex-start; gap: 12px; }
-.item-card-name { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.item-card-name .decision-from { margin-top: 0; }
-.item-card-head .need-open { flex-shrink: 0; margin-top: 1px; }
-.item-card-label { font-size: 12px; font-weight: 600; color: var(--faint); }
-.item-card-decision { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
-.item-card-decided { font-size: 16px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
-.item-card-boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
-.item-card-box { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.4; background: rgba(240, 236, 230, 0.05); overflow-wrap: anywhere; }
-.item-card-check { font-size: 13px; color: var(--muted); }
-.item-card-check.changed { color: var(--danger); }
-.item-card-check.landed { color: #9ed3a2; }
-
-/* Your open items: one line per item, how it stands and its owner; a match you may close has Close. */
-#item-status-head:focus, #decision-ask:focus { outline: none; }
-.status-group-head { font-size: 12px; font-weight: 600; color: var(--muted); }
-.status-line { display: flex; align-items: center; gap: 10px; font-size: 14px; }
-.status-text { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
-.status-text b { font-weight: 500; }
-.status-word { flex-shrink: 0; font-size: 12.5px; white-space: nowrap; }
-.status-word.landed { color: #9ed3a2; }
-.status-word.still_open { color: var(--accent-text); }
-.status-word.changed { color: var(--danger); }
-.status-word.unreadable, .status-word.unchecked { color: rgba(240, 236, 230, 0.45); }
-.status-line .need-open { flex-shrink: 0; }
-.status-foot { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
 .item-row .open-count { flex-shrink: 0; font-size: 12px; color: var(--faint); white-space: nowrap; }
-
-/* A decision's or a project's open items: grouped by owner, oldest first, each with its stage and age. */
-.column.open-items { gap: 14px; padding: 4px 0; }
-.open-items-head { flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; }
-.open-items-head h1 { margin: 0; font-size: 22px; }
-.open-items-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
-.open-items-owner { display: flex; align-items: center; gap: 8px; }
-.open-items-owner .face { width: 20px; height: 20px; border-radius: 10px; font-size: 9px; }
-.open-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: 10px; font-size: 14.5px; line-height: 1.5; background: rgba(240, 236, 230, 0.05); }
-.open-item-text { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
-.open-item-title { font-weight: 500; }
-.open-item-change { font-size: 13.5px; color: var(--faint); }
-.open-item-side { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12.5px; }
-.open-item-stage { color: var(--muted); }
-.open-item-stage.unsent { color: #8fb8e8; }
-.open-item-stage.done, .open-item-stage.not_relevant { color: var(--faint); }
-.open-item-when { color: rgba(240, 236, 230, 0.45); }
 
 /* A project's Tools: on its title bar, above its feed, and its one sheet, a section per tool. */
 .tools-pill { height: 26px; flex-shrink: 0; display: flex; align-items: center; gap: 5px; padding: 0 10px 0 7px; border: 1px solid rgba(240, 236, 230, 0.14); border-radius: 13px; font-size: 12.5px; color: rgba(240, 236, 230, 0.85); background: transparent; }
@@ -690,7 +614,7 @@ button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 /* New project, working out of sight after Create. */
 .toast-count { flex-shrink: 0; color: var(--faint); }
 
-/* The four Home cards (Approve, Send, Update, Review): what is asked on the left, your decision on the right, using the window. */
+/* The decision page and a follow-up's page: what is asked on the left, your decision on the right, using the window. */
 .column.card { width: min(1180px, calc(100% - 64px)); max-width: none; }
 .card-page { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 28px; padding: 4px 0 8px; }
 .card-main { flex: 999 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 22px; }
@@ -699,13 +623,9 @@ button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 .card-top { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 13px; color: var(--faint); }
 .card-kind { font-size: 11px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; }
 .card-kind.approve { color: var(--accent-text); }
-.card-kind.send { color: #8fb8e8; }
-.card-kind.update { color: #9ed3a2; }
-.card-kind.review { color: var(--danger); }
 .card-kind.done { color: var(--muted); }
 .card-title { margin: 0; font-size: 24px; font-weight: 650; line-height: 1.25; overflow-wrap: anywhere; user-select: text; }
 .card-meta { font-size: 13.5px; color: rgba(240, 236, 230, 0.6); }
-.card-owner-line { display: inline-flex; align-items: center; gap: 8px; }
 .card-section { display: flex; flex-direction: column; gap: 10px; }
 .card-list { display: flex; flex-direction: column; border-radius: 12px; background: rgba(240, 236, 230, 0.045); }
 .card-list > * + * { border-top: 1px solid var(--line); }
@@ -741,36 +661,50 @@ button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 .card-panel .picker { margin-left: 0; }
 .card-rule { height: 1px; margin: 2px 0; background: var(--line); }
 .card-busy { align-self: center; font-size: 13px; }
-.outline-button { height: 38px; padding: 0 16px; border: 1px solid rgba(240, 236, 230, 0.14); border-radius: 19px; font-size: 14px; background: transparent; }
-.outline-button:hover { background: var(--hover); }
 .card-side { display: flex; flex-direction: column; gap: 10px; padding: 0 4px; }
-.card-side-text { font-size: 15px; line-height: 1.5; }
-.card-side-meta { font-size: 13px; color: var(--faint); }
 .card-side-link { align-self: flex-start; margin-left: -8px; }
 .card-person { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
-.card-person-name { flex-grow: 1; min-width: 0; overflow-wrap: anywhere; }
-.card-person-count { flex-shrink: 0; font-size: 13px; color: var(--faint); }
-.card-person.faint { color: var(--faint); }
-/* Send: each item, what it says now beside what the decision needs, and who it goes to. */
-.send-row .send-box { flex-shrink: 0; width: 17px; height: 17px; margin: 3px 0 0; accent-color: var(--accent); cursor: pointer; }
-.send-name { font-size: 16px; overflow-wrap: anywhere; }
-.send-name b { font-weight: 550; }
+/* An item page's why: what it says now beside what the meeting decided. */
+.send-box { flex-shrink: 0; width: 17px; height: 17px; margin: 3px 0 0; accent-color: var(--accent); cursor: pointer; }
 .card-delta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; font-size: 14.5px; line-height: 1.45; }
 .card-delta-label { display: block; margin-bottom: 3px; font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--faint); }
 .card-delta-label.needs { color: #9ed3a2; }
 .card-delta-now { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: rgba(240, 236, 230, 0.72); }
-.card-list .picker { margin: 0 16px 14px 47px; }
-/* Update and Review: what the item says now, beside what the decision needs. */
-.card-compare { display: flex; align-items: stretch; flex-wrap: wrap; gap: 12px; }
-.card-pane { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 18px 20px; border-radius: 12px; font-size: 17px; line-height: 1.45; background: rgba(240, 236, 230, 0.045); overflow-wrap: anywhere; user-select: text; }
-.card-pane.needs { background: rgba(158, 211, 162, 0.08); box-shadow: inset 0 0 0 1px rgba(158, 211, 162, 0.28); }
-.card-pane.needs .section-label { color: #9ed3a2; }
-.card-pane-now { color: rgba(240, 236, 230, 0.75); }
-.card-arrow { align-self: center; font-size: 18px; color: rgba(240, 236, 230, 0.4); }
-.card-check { font-size: 14px; color: var(--muted); }
-.card-check.changed { color: var(--danger); }
-.card-check.landed { color: #9ed3a2; }
-.card-decided { font-size: 15.5px; line-height: 1.5; }
-.card-facts { display: grid; grid-template-columns: 84px minmax(0, 1fr); row-gap: 10px; column-gap: 12px; margin: 0; font-size: 14px; }
-.card-facts dt { font-size: 13px; color: var(--faint); }
-.card-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Follow-ups (follow-ups thread v1): a list grouped by status, each row opening its page; Send and Dismiss at its foot. */
+.column.follow-ups { gap: 18px; padding: 4px 0; }
+.follow-ups-head { flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; }
+.follow-ups-head h1 { margin: 0; font-size: 22px; }
+.follow-ups-head h1:focus, #follow-up-title:focus, #decision-ask:focus { outline: none; }
+.follow-ups-sub { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--faint); }
+.follow-ups-sub .need-open { margin-left: -4px; }
+.result-line { flex-shrink: 0; font-size: 13.5px; color: var(--accent-text); }
+.result-line:empty { display: none; }
+.result-line.error { color: var(--danger); }
+.result-line .link-button { padding: 2px 4px; }
+.follow-ups-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
+.follow-ups-rows { display: flex; flex-direction: column; border-radius: 12px; background: rgba(240, 236, 230, 0.045); }
+.follow-ups-rows > * + * { border-top: 1px solid var(--line); }
+.follow-ups-rows .picker { margin: 0 14px 12px 45px; }
+.follow-up-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; cursor: pointer; }
+.follow-up-row:hover { background: var(--hover); }
+.follow-up-row .send-box { margin: 0; }
+.follow-up-open { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; text-align: left; color: inherit; background: transparent; }
+.follow-up-title { font-size: 15px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.follow-up-sub { font-size: 12.5px; color: var(--faint); }
+.follow-ups-foot { position: sticky; bottom: 0; flex-shrink: 0; display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 12px 0 4px; background: var(--ink); }
+.follow-ups-foot .primary-button.small { align-self: auto; }
+.owner-button { padding: 0; border: 0; border-radius: 12px; background: transparent; }
+.owner-button:hover:not(:disabled) .owner-chip { background: rgba(240, 236, 230, 0.14); }
+.owner-button:disabled { opacity: 0.5; cursor: default; }
+.card-panel .owner-slot { align-self: flex-start; }
+.stage-pill { padding: 1px 9px; border-radius: 9px; font-size: 11.5px; font-weight: 600; line-height: 18px; color: var(--muted); background: rgba(240, 236, 230, 0.08); }
+.stage-pill.unsent { color: #8fb8e8; }
+.stage-pill.open { color: var(--accent-text); }
+.stage-pill.done { color: #9ed3a2; }
+.link-button.inline { padding: 0; font-size: inherit; }
+.history { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.history li { display: flex; gap: 12px; }
+.history-when { flex-shrink: 0; width: 52px; color: var(--faint); }
+.impact-follow-ups { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.impact-follow-ups b { font-weight: 600; }

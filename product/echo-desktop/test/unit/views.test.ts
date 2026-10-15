@@ -43,7 +43,7 @@ describe('view models copy only what the renderer may see', () => {
       expect(() => answerView(reply(link), { kind: 'global' })).toThrow(ViewError);
     }
   });
-  it('an impact card keeps its rows and turns each citation into a source the card can name or open', () => {
+  it('an impact card keeps only what was decided: nothing it found crosses, which shows as follow-ups', () => {
     const permalink = 'https://example.atlassian.net/browse/ECHO-12';
     const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'restricted-reviewer-person-v2' } as const;
     const ticket = { kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10012', permalink, text_sha256: sha('3') } as const;
@@ -54,15 +54,10 @@ describe('view models copy only what the renderer may see', () => {
       citations: [{ kind: 'decision', label: '', visibility: 'only_me', citation: record }, { kind: 'ticket', label: 'ECHO-12 · Pilot launch', visibility: 'only_me', citation: ticket }],
     } as const;
     const view = impactCardView({ card, checked_at: '2026-10-07T10:05:00.000Z', hidden: 2 } as unknown as Parameters<typeof impactCardView>[0]);
-    expect(view).toEqual({
-      status: 'assessed', decided: card.decided, affected: card.affected, unconfirmed: card.unconfirmed, people: card.people,
-      sources: [{ kind: 'record', label: 'Item 1', record: { record_sha256: sha('2'), policy_id: 'restricted-reviewer-person-v2' } },
-        { kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink }],
-      checked_at: '2026-10-07T10:05:00.000Z', hidden: 2,
-    });
-    expect(JSON.stringify(view)).not.toContain('private-tenant');
+    expect(view).toEqual({ decided: card.decided });
+    for (const withheld of ['private-tenant', 'ECHO-12', 'Mina Patel', 'No contract']) expect(JSON.stringify(view)).not.toContain(withheld);
   });
-  it('an open item turns its live citation into a source it can open, and an item you cannot open stays without one', () => {
+  it('an open item turns its live citation into a source it can open, an item you cannot open stays without one, and who and when cross', () => {
     const permalink = 'https://example.atlassian.net/browse/ECHO-12';
     const citation = { kind: 'ticket', label: 'ECHO-12 · Pilot launch', visibility: 'only_me', citation: {
       kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10012', permalink, text_sha256: sha('3') } } as const;

@@ -29,7 +29,7 @@ async function projectFailure(archived: boolean): Promise<State> {
     ...getState(),
     status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } },
     [archived ? 'archivedProjects' : 'projects']: { items: [], next: null, loading: false, failure: { code: 'unavailable', retryable: true } },
-    home: { seq: 1, loading: false, rows: [], meetings: true, reviews: [], runs: [], open: null, closing: {}, closeFailures: {}, sent: {} },
+    home: { seq: 1, loading: false, rows: [], meetings: true, reviews: [], runs: [], open: null },
   };
 }
 
@@ -51,6 +51,43 @@ describe('project list failures', () => {
     const state = await projectFailure(archived);
     const { Home } = await import('../../src/renderer/screens/home.js');
     expect(Home({ state }).props['data-testid']).not.toBe('home-empty');
+  });
+});
+
+describe('your follow-ups (F9)', () => {
+  /** The store's first state, signed in, with no projects at all, Home read, on `route`. */
+  async function signedIn(route: State['route']): Promise<State> {
+    const { getState } = await import('../../src/renderer/store.js');
+    return {
+      ...getState(), route,
+      status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } },
+      home: { seq: 1, loading: false, rows: [], meetings: true, reviews: [], runs: [], open: null },
+    };
+  }
+
+  it('are in the sidebar under Mine, current on their own page, Home then not', async () => {
+    const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
+    const rows = (state: State) => descendants(Sidebar({ state })).filter(node => typeof node.props['data-testid'] === 'string' && node.props['data-testid'].startsWith('sidebar-'));
+    const shown = rows(await signedIn({ page: 'follow-ups' }));
+    const order = shown.map(node => node.props['data-testid']);
+    expect(order.indexOf('sidebar-follow-ups')).toBe(order.indexOf('sidebar-mine') + 1);
+    expect(shown.find(node => node.props['data-testid'] === 'sidebar-follow-ups')?.props['aria-current']).toBe('page');
+    expect(shown.find(node => node.props['data-testid'] === 'sidebar-home')?.props['aria-current']).toBeUndefined();
+    const home = rows(await signedIn({ page: 'home' }));
+    expect(home.find(node => node.props['data-testid'] === 'sidebar-follow-ups')?.props['aria-current']).toBeUndefined();
+  });
+
+  it('are reachable from an empty Home with no projects', async () => {
+    const state = await signedIn({ page: 'home' });
+    const { Home } = await import('../../src/renderer/screens/home.js');
+    const shown = Home({ state });
+    expect(shown.props['data-testid']).toBe('home-empty');
+    const tree = descendants(shown);
+    expect(tree.some(node => node.props['data-testid'] === 'empty-new-project')).toBe(true);
+    // The footer is a component of its own: it renders the link.
+    const footer = tree.find(node => typeof node.type === 'function' && node.type.name === 'Footer');
+    const link = descendants((footer!.type as (props: unknown) => unknown)(footer!.props)).find(node => node.props['data-testid'] === 'your-follow-ups');
+    expect(text(link)).toBe('Your follow-ups');
   });
 });
 

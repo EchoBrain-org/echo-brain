@@ -1,16 +1,15 @@
 import type { ApprovedRecord, Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
 import { message } from '../messages.js';
-import { impactWords } from '../needs.js';
+import { followUpsWords, openTotal } from '../needs.js';
 import {
-  addToProject, canFile, changeBlocked, checkNow, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, openOpenItems,
-  openSend, projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState,
+  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, openFollowUps,
+  projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState,
   type State,
 } from '../store.js';
 import { RecordDetail, UNTITLED } from './ask.js';
 import { ChangeLine, changeShownInPlace, within } from './change.js';
 import { Chevron, Ellipsis } from './icons.js';
-import { CheckNow } from './open-items.js';
 
 /** Who can read it, when that is not a project's members: the words Capture uses. */
 function readersWord(audience: Visibility | undefined): string | null {
@@ -75,28 +74,25 @@ function Actions({ state, reader }: { state: State; reader: ReaderState }) {
 }
 
 /**
- * An approved meeting's Impact line (canvas 9.6): what its check found and
- * where its items stand. It opens the decision's items; Send when they wait on
- * you, Try again on your own check that failed, and Check now once it found
- * items.
+ * An approved meeting's follow-ups line (canvas 9.6): its follow-ups counted
+ * by status ("Follow-ups · 1 open · 4 not sent"), which opens that meeting's
+ * list; with none, how its check stands, and Try again on your own check that
+ * failed.
  */
 function ImpactLine({ state, reader, title }: { state: State; reader: ReaderState; title: string }) {
   const line = state.impactLine;
   if (reader.ref.kind !== 'meeting' || line?.scope !== 'record' || line.id !== reader.ref.id || !line.summary) return null;
   const { summary, stage } = line;
-  const found = summary.unsent + summary.open + summary.done + summary.not_relevant;
-  const words = <><b>Impact</b> <span class="faint">· {impactWords(summary, stage)}</span></>;
-  const send = stage?.mine && summary.unsent > 0 ? stage.run_id : null;
+  const found = openTotal(summary) + summary.done + summary.not_relevant;
+  const words = <><b>Follow-ups</b> <span class="faint">· {followUpsWords(summary, stage)}</span></>;
   return (
     <div class="items-line" data-testid="impact-line">
       {found > 0
-        ? <button type="button" class="items-line-open" onClick={() => void openOpenItems('record', line.id, title)}>{words}</button>
+        ? <button type="button" class="items-line-open" onClick={() => void openFollowUps('record', line.id, title)}>{words}</button>
         : <span class="items-line-open">{words}</span>}
       {found === 0 && stage?.state === 'failed' && stage.mine && (
         <><span class="faint" aria-hidden="true">·</span><button type="button" class="link-button" disabled={line.busy} onClick={() => void retryLineCheck()}>Try again</button></>
       )}
-      {send && <button type="button" class="link-button" onClick={() => void openSend(send)}>Send</button>}
-      {found > 0 && <CheckNow line={line} onCheck={() => void checkNow('impactLine', title)} />}
     </div>
   );
 }

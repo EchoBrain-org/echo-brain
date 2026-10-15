@@ -404,15 +404,11 @@ export interface ProjectConfluenceMapping {
 export interface ConfluenceSpacesPage { items: readonly ConfluenceSpace[]; next_cursor: string | null }
 
 /**
- * A finished impact check, as an approved meeting's card shows it: the card
- * rebuilt for you when it was opened, its citations as sources by index, when
- * the check ran, and how many cited items you can no longer open.
+ * A finished impact check, as an approved meeting's decision page shows it:
+ * what was decided, from the card rebuilt for you when it was opened. What it
+ * found shows as the meeting's follow-ups.
  */
-export interface ImpactView extends Omit<PersonImpactCardV1, 'citations'> {
-  readonly sources: readonly AnswerSource[];
-  readonly checked_at: string;
-  readonly hidden: number;
-}
+export type ImpactView = Pick<PersonImpactCardV1, 'decided'>;
 /**
  * What an open item says now, read live for you in this request and never
  * stored: its citation as a source "Open in …" can open, and its details.
@@ -555,7 +551,7 @@ export interface MainMethods {
   /** Save original…: where to save it, chosen in main's dialog. The page gets a handle, never the path. */
   'dialog.saveDocument': { params: { name: string }; result: FileHandle | null };
   /** A save's or a project change's outcome is unknown: quitting asks first, naming a note, a file or a change. */
-  'app.setUnresolved': { params: { unresolved: boolean; file?: boolean; change?: boolean; reassignment?: boolean }; result: null };
+  'app.setUnresolved': { params: { unresolved: boolean; file?: boolean; change?: boolean }; result: null };
   /** After the host gave up: start it again. */
   'app.retryHost': { params: Record<string, never>; result: null };
   /** Pops up the Account menu at a point in the window, in CSS pixels. */

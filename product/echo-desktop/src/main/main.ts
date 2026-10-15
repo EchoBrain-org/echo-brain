@@ -74,8 +74,8 @@ if (!smoke && !app.requestSingleInstanceLock()) {
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
-/** A save, a project change or a reassignment whose outcome is unknown: quitting asks first. */
-let unresolved: 'note' | 'file' | 'change' | 'reassignment' | null = null;
+/** A save or a project change whose outcome is unknown: quitting asks first. */
+let unresolved: 'note' | 'file' | 'change' | null = null;
 const shortcutProblems: string[] = [];
 /** The last account status the host reported, for the Account menu. Main reads no session itself. */
 let accountStatus: AppStatus | null = null;
@@ -364,8 +364,8 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       return { ok: true, value: issueHandle(chosen.filePath, 'save') };
     }
     case 'app.setUnresolved': {
-      const { unresolved: open, file, change, reassignment } = params as MainMethods['app.setUnresolved']['params'];
-      unresolved = open === true ? (file === true ? 'file' : change === true ? 'change' : reassignment === true ? 'reassignment' : 'note') : null;
+      const { unresolved: open, file, change } = params as MainMethods['app.setUnresolved']['params'];
+      unresolved = open === true ? (file === true ? 'file' : change === true ? 'change' : 'note') : null;
       return { ok: true, value: null };
     }
     case 'app.retryHost':

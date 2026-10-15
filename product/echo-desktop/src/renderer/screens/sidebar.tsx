@@ -4,10 +4,10 @@ import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
 import {
   goHome, installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openMine, openNewProject, openOrganization, openProject, openTools,
-  settleWords, showAccountMenu, type State,
+  openYourFollowUps, settleWords, showAccountMenu, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Capture, Chevron, FolderPlus, Home as HomeIcon, OnePerson, People, Person, Plug, Up } from './icons.js';
+import { Capture, Chevron, FolderPlus, Home as HomeIcon, OnePerson, People, Person, Plug, Ticks, Up } from './icons.js';
 import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
@@ -62,9 +62,9 @@ export function UpdateRow({ state }: { state: State }) {
 }
 
 /**
- * Always beside the page: Capture, New project, Mine, your projects (one
- * click switches), People & invites for owners, Tools, a new version, and who
- * is signed in. It shares the list Home loads. While another app is in front
+ * Always beside the page: Capture, New project, Mine, Follow-ups (everything
+ * you sent or own), your projects (one click switches), People & invites for
+ * owners, Tools, a new version, and who is signed in. It shares the list Home loads. While another app is in front
  * the page is covered, but the project rows stay, so a dropped file lands.
  * Mine never takes a drop.
  */
@@ -74,7 +74,8 @@ export function Sidebar({ state }: { state: State }) {
   const current = !state.concealed && state.route.page === 'project' ? state.route.project.project_id : null;
   const mine = !state.concealed && state.route.page === 'mine';
   const tools = !state.concealed && state.route.page === 'tools';
-  const home = !state.concealed && (state.route.page === 'home' || state.route.page === 'decision' || state.route.page === 'send');
+  const followUps = !state.concealed && state.route.page === 'follow-ups';
+  const home = !state.concealed && (state.route.page === 'home' || state.route.page === 'decision');
   const needs = needsCount(state);
   const archived = state.archivedProjects;
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -97,6 +98,10 @@ export function Sidebar({ state }: { state: State }) {
           <button type="button" class={`side-row${mine ? ' current' : ''}`} data-testid="sidebar-mine" aria-current={mine ? 'page' : undefined}
             onClick={() => void openMine()} onDragOver={noDrop} onDrop={noDrop}>
             <OnePerson /><span class="label">Mine</span>
+          </button>
+          <button type="button" class={`side-row${followUps ? ' current' : ''}`} data-testid="sidebar-follow-ups" aria-current={followUps ? 'page' : undefined}
+            onClick={() => void openYourFollowUps()} onDragOver={noDrop} onDrop={noDrop}>
+            <Ticks /><span class="label">Follow-ups</span>
           </button>
         </div>
       )}
