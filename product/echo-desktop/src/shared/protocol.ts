@@ -1,5 +1,5 @@
 import type {
-  PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
+  PersonChangesV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
@@ -455,6 +455,8 @@ export interface HostMethods {
   /** The renderer names the invitation only by a handle main issued; main swaps in the path. */
   'signin.invitation': { params: { invitation_handle: string }; result: AppStatus };
   'projects.list': { params: { expect: Expect; status?: 'active' | 'archived'; cursor?: string }; result: ProjectPage };
+  /** What changed in your view: one fingerprint per area, no content (desktop refresh and notifications v1; ADR-0036). */
+  'changes.read': { params: { expect: Expect }; result: PersonChangesV1 };
   /** One page of what you added, or of one project's notes, documents and meetings, newest first. */
   'list.page': { params: { expect: Expect; scope: ListScope; cursor?: string }; result: ListPage };
   /** One item by its ref, under your current access: a document's text or a meeting's record a page at a time. */
@@ -568,7 +570,7 @@ export type MethodName = keyof Methods;
 export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
-  'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'list.page', 'open.ref',
+  'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'changes.read', 'list.page', 'open.ref',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',

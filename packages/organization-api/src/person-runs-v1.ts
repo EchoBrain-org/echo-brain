@@ -68,7 +68,7 @@ export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: PersonDiagnosticCaptureIdV1 }
   | { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }
-  | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
+  | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'involved' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
       readonly read?: PersonOpenItemsReadV1;
       /**
        * Items in these states only (a non-empty subset, each once; never beside `counts`): the page and its cursor go over them
@@ -237,7 +237,8 @@ const RESULT_KEYS: Readonly<Record<keyof PersonRunsResultsV1, readonly string[] 
   item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'], sweep: null,
 });
 const START_STATES: readonly string[] = ['pending', 'running', 'busy', 'done', 'failed'];
-const SCOPES = ['mine', 'run', 'record', 'project'] as const;
+/** `involved` (desktop refresh and notifications v1; ADR-0036): `mine` plus the items you last handed on, that you may read. */
+const SCOPES = ['mine', 'involved', 'run', 'record', 'project'] as const;
 /** A sweep checks the caller's items, a decision's or a project's; a run's items are its decision's. */
 const SWEEP_SCOPES = ['mine', 'record', 'project'] as const;
 const SET_STATES = ['open', 'done', 'not_relevant'] as const;
@@ -368,8 +369,9 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id') });
     case 'items': {
       const scope = oneOf(request.scope, SCOPES, 'Runs request scope');
-      // `mine` names no id; every other scope names its run, record or project.
-      if ((scope === 'mine') === Object.hasOwn(request, 'id')) fail('Runs request scope id is invalid');
+      // `mine` and `involved` name no id; every other scope names its run, record or project.
+      const personal = scope === 'mine' || scope === 'involved';
+      if (personal === Object.hasOwn(request, 'id')) fail('Runs request scope id is invalid');
       const read = readMode(request, ['rows', 'counts'] as const);
       const filtered = Object.hasOwn(request, 'states');
       // Counts cover the whole scope at once and list no items: no next page to ask for, and nothing to filter.
@@ -378,7 +380,7 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       unique(states, 'Runs request states');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, scope,
-        ...(scope === 'mine' ? {} : { id: scopeId(scope, request.id) }),
+        ...(scope === 'mine' || scope === 'involved' ? {} : { id: scopeId(scope, request.id) }),
         ...(Object.hasOwn(request, 'cursor') ? { cursor: matching(request.cursor, CURSOR, 'Runs request cursor') } : {}),
         ...read,
         ...(filtered ? { states: Object.freeze(states) } : {}),

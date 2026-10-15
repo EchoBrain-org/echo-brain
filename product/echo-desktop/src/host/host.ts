@@ -1,4 +1,4 @@
-import { validatePersonMeetingRequestV2, validatePersonMeetingResultV2, validatePersonRunsRequestV1, validatePersonRunsResultV1 } from '@echo-brain/organization-api';
+import { validatePersonChangesV1, validatePersonMeetingRequestV2, validatePersonMeetingResultV2, validatePersonRunsRequestV1, validatePersonRunsResultV1 } from '@echo-brain/organization-api';
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
 // token; what it posts back is a token-free view model or a failure code.
@@ -96,7 +96,7 @@ modules.catch(error => { console.error('person host failed to load the client:',
 
 /** Per-method limits; the client enforces its own shorter network timeouts. */
 const TIMEOUT_MS: Record<HostMethodName, number> = {
-  'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
+  'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000, 'changes.read': 15_000,
   'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
@@ -424,6 +424,13 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       if (status !== undefined && status !== 'active' && status !== 'archived') return code('invalid_request');
       return forAccount(method, expect, ['projects', 'list-v2', '--limit=10', ...(status ? [option('status', status)] : []), ...(cursor ? [option('cursor', cursor)] : [])],
         stdout => projectPageView(lastJson(stdout)));
+    }
+    case 'changes.read': {
+      // The person client prints the change check as its last line; an Authority without the route answers `not_supported`.
+      const { expect } = params as Params<'changes.read'>;
+      return forAccount(method, expect, ['changes'], stdout => {
+        try { return validatePersonChangesV1(lastJson(stdout)); } catch { throw new ViewError(); }
+      });
     }
     case 'list.page': {
       const { expect, scope, cursor } = params as Params<'list.page'>;
