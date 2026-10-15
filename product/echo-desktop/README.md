@@ -24,8 +24,8 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   impact check runs. It has no action and is not counted.
 - **Check failed** (verb **Retry**): "Approved · the check did not finish". It
   opens the decision with the reason and **Try again**; once the check
-  finishes, the page shows what was decided and the meeting's follow-ups
-  ("Follow-ups · 4 not sent"), with **Open follow-ups**.
+  finishes, the page shows the meeting's follow-ups in one line ("Follow-ups ·
+  4 not sent"), the whole line opening their list.
 - **Send**: a meeting you approved has follow-ups not sent yet ("Launch the
   pilot next week — 4 follow-ups to send"). It opens that meeting's
   follow-ups.
@@ -42,38 +42,61 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
 A follow-up is an action the approved meeting decided (a **Meeting action**)
 or an existing document its impact check found the meeting affects. Each has
 one status: **Not sent**, **Open**, **Done** or **Dismissed**, and every count
-is by status ("1 open · 4 not sent · 2 done"; open totals count not sent and
-open alike, whatever ECHO's last check found).
+is by status ("1 open · 4 not sent · 2 done", whatever ECHO's last check
+found). "Open" is one status only: a total of not sent and open together is
+"4 follow-ups".
 
 A **follow-ups list** is a meeting's (from its Send row, its line in the
 reader, its decision page, or a follow-up's page), a project's (from the line
-above its feed), or **Your follow-ups**: everything you sent or own, in every
-status, from the sidebar or Home's footer. Rows are grouped Not sent, Open,
-Done and Dismissed, the meeting's actions first; each shows its title, one
-faint line (what it is, its meeting when the list spans meetings, "matches
-now" when ECHO's last check found it so) and its owner. A Not sent row you
-may send has a tick, and a meeting's list ticks them all when it opens; **Send
-N** sends the ticked rows to their owners and **Dismiss N** dismisses them,
-the rest stay Not sent. The owner chip changes the owner at once, before or
-after sending, from a people picker that offers you first ("Me"); a dashed
-**Pick owner** means ECHO found no one. The list stays where it is, read
-again, with one line saying what happened ("Sent 1 to Mina Patel"). A
-meeting's or a project's list has a faint **Check now**: it re-checks their
-open items, shows "Checking…" until the check ends and reads the list again
-("Nothing open to check" when none is open; "Check failed · Try again" when it
-fails).
+above its feed), or **Follow-ups**: everything you sent or own, in every
+status, from the sidebar or Home's footer. When that list is already open
+under what shows, its links go back to it, ticks and place kept, instead of
+opening it again. Rows are grouped Not sent, Open, Done and Dismissed, each
+group counted over the whole list, the meeting's actions first; each row
+shows its title, one faint line (what it is, its meeting when the list spans
+meetings, "matches now" when ECHO's last check found it so) and its owner.
+Current work (Not sent and Open) is read first, a page at a time with its
+own **More**, so it is never behind closed rows; Done and Dismissed are read
+after it, with a **More** of theirs. A read that fails says so, and **Try
+again** repeats that read. A meeting's list says when it was approved:
+"Approved Oct 6", a faint link to its decision page (over the list, so Back
+returns to it, and its follow-ups line goes back to the list) when you
+approved it. A Not sent row you may send has a tick, and a meeting's list
+ticks them all when it opens; **Send N** sends the ticked rows to their
+owners and **Dismiss N** dismisses them, the rest stay Not sent. The owner
+chip changes the owner at once, before or after sending, from a people picker
+that offers you first ("You"); a dashed **Pick owner** means ECHO found no one
+(faint words when you may not pick). The list stays where it is: the rows a
+change touched are read again in place, and a foot that stays at the bottom
+while anything is ticked or said says what happened ("Sent 1 to Mina", "Owner
+changed to Rafael", "Sent 2 · 1 not sent, try again"), taking the focus when
+the button that had it went; a picker that closes hands the focus back to its
+owner chip. A send whose reply was lost is settled by that read: one that
+went says so, one that did not replays the same send on Send again. A
+meeting's or a project's list has a faint **Check now** while something is
+open: it re-checks their open items, shows "Checking…" until the check ends
+and reads the list again ("Check failed · Try again" when it fails); any
+other read of the list clears what it said.
 
 A row opens the **follow-up's page**: its title and status, what it is and
-the meeting it came from (which opens that meeting's list, or "Sent by Mina"
-when you cannot read the meeting), why it is here ("Decided in the meeting",
-or what the document says now beside what the meeting decided, with **Open in
-Jira** when ECHO opened it for you), its history (found, sent or dismissed,
-its owner set, done or reopened, and by whom), ECHO's last check in one faint
-line, its owner, and one next step: **Send to Mina** (or **Keep it myself**)
-and **Dismiss** while it is not sent, **Mark done** and **Dismiss** while it is
-open, **Reopen** once closed (**Send to Mina** for one dismissed before it was
-sent). The page stays and says what happened ("Done · Undo"); Back returns to
-where it was opened, read again.
+the meeting it came from ("Meeting action · from Pilot planning, Oct 6",
+which opens or goes back to that meeting's list; "Sent by Mina" when you
+cannot read the meeting), for a document why it is here (what it says now,
+with the tool's status, due date and assignee in one faint line, beside what
+the meeting decided, and **Open in Jira** when ECHO opened it for you), its
+history (found; sent to its owner or dismissed at Send; its owner set; done,
+dismissed, reopened, or sent later for one Send dismissed; and by whom),
+ECHO's last check in one faint line, its owner, and one next step: **Send to
+Mina** (or **Keep it myself**) and **Dismiss** while it is not sent, **Mark
+done** and **Dismiss** while it is open, **Reopen** once closed (**Send to
+Mina** for one Send dismissed and nothing reopened since). The page stays and
+says what happened ("Done · Undo"); a change whose reply was lost is settled
+by reading the item again. Giving an item away so you no longer see it says
+so, with Back. A page opened by a notification whose read fails offers **Try
+again**. Back returns to where it was opened, read again when something
+changed, at the same place, with the row it was opened from in focus; Ask
+and another app in front keep that place too. The window's title names the
+list (Follow-ups, the meeting or the project) or the item shown.
 
 While you are signed in, ECHO checks quietly for follow-ups sent to you, on
 any page and with the window hidden: at sign-in, then every five minutes, it
@@ -82,13 +105,15 @@ check only learns what already waits on you. After that, a follow-up that
 newly waits on you, sent, given or reopened to you by someone else, shows a
 system notification ("Mina sent you: Update the pricing page", or "3 new
 follow-ups"), unless its page is open. Clicking it brings ECHO forward on that
-follow-up's page, or on Your follow-ups for several.
+follow-up's page, or on Follow-ups for several.
 
 Under the rows, and on an empty Home (with no projects too), a footer says how
 many items you sent wait on others and when ECHO last checked ("2 waiting on
-others · ECHO checked 2 h ago"), with **Your follow-ups**. An approved meeting
-shows its follow-ups line ("Follow-ups · 1 open · 4 not sent"), and a project
-its open follow-ups ("4 open follow-ups"); each opens that list. Home also
+others · ECHO checked 2 h ago"), with **Follow-ups**. An approved meeting
+and a project each show a follow-ups line counted by status ("Follow-ups · 1
+open · 4 not sent"), which opens that list and keeps what it last said while
+it is read again; a meeting's row in a project's feed says how many of its
+follow-ups are not closed ("4 follow-ups"). Home also
 re-checks your own open items by itself: when the Authority says they are
 due, Home asks for a sweep and starts it after any waiting impact check. A
 sweep makes no Home row and changes no item's status; it only records each

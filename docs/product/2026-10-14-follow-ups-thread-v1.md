@@ -23,7 +23,8 @@ Target: two places.
   happened to it, and the one next action. Every row anywhere opens it.
 
 Home stays the inbox of what waits on you; each of its rows opens one of the
-two. "Your follow-ups" is the same list over everything you sent or own.
+two. "Follow-ups" (in the sidebar) is the same list over everything you sent
+or own.
 
 ## What people see
 
@@ -33,8 +34,10 @@ Four things per follow-up, nothing else by default:
   `open`, `done`, `not_relevant`).
 - **Owner**: a person, or "Pick owner" while ECHO found no one. Changeable
   wherever the viewer may change it, before and after sending.
-- **Why it's here**: for a meeting action, "Decided in the meeting"; for a
-  document, what it says now against what the meeting decided.
+- **Why it's here**: for a meeting action, its line ("Meeting action · from
+  Pilot planning, Oct 6") says it, with nothing repeated under it; for a
+  document, what it says now (with its tool's status, due date and assignee
+  in one faint line) against what the meeting decided.
 - **One next action**: Send, Mark done or Reopen.
 
 Kept underneath: the last check's verdict (one faint line on the item page,
@@ -91,17 +94,20 @@ statuses, the list and the item page.
   reopens it. A Send cannot be undone and a dismissal before sending cannot
   return to Not sent (the V14 triggers forbid both); a dismissed-before-sending
   item offers "Send to <owner>" instead, which reopens it to its owner.
-- F7. **One status vocabulary.** Counts are by status: "1 open · 4 not sent ·
-  2 done". Open means unsent plus open everywhere a total is shown; a check
-  verdict never removes an item from a count. Replaces R35's open count and
-  the Impact line's "handled" and "couldn't read".
+- F7. **One status vocabulary.** Counts are by status: a meeting's line and a
+  project's line both read "Follow-ups · 1 open · 4 not sent · 2 done". "Open"
+  is one status only, never Not sent and Open together: their total, as a
+  project's feed row shows it, is "4 follow-ups". A check verdict never
+  removes an item from a count. Replaces R35's open count and the Impact
+  line's "handled" and "couldn't read".
 - F8. **Notify the owner.** The desktop checks Home quietly
   (`home` with `rows_only: true`, no live reads) every five minutes while
   signed in, and shows a system notification for each follow-up that newly
   waits on you; clicking it opens the item page. The first check after sign-in
   only learns what is there.
-- F9. **Projectless work is reachable.** "Your follow-ups" is in the sidebar,
-  and Home's footer shows even when you have no projects.
+- F9. **Projectless work is reachable.** "Follow-ups" is in the sidebar, and
+  Home's footer (its link says "Follow-ups" too) shows even when you have no
+  projects.
 
 ## API changes (`person-runs-v1`)
 
