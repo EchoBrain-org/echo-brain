@@ -12,7 +12,7 @@ import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../adapters/persist
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
 import type { SqlitePersonAgenticAskAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
-import { matchImpactOwnersV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
+import { matchImpactOwnersV1, type ImpactOwnerCandidateV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
 import {
   PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordProjectsV1,
 } from './person-record-search-route.js';
@@ -79,11 +79,8 @@ function impactRecord(row: TriggerRunRowV1): Sha256Digest {
 function unavailable(error: unknown): boolean {
   return error instanceof AuthorityOperationError && error.code === 'unavailable';
 }
-/** One item a finished impact run makes; the owner name is used only to match a member and is never stored. */
-interface ItemCandidateV1 {
-  readonly item_key: Sha256Digest; readonly pointer: Readonly<Record<string, unknown>>;
-  readonly relation: 'conflicts' | 'needs_updating' | null; readonly expected: string | null; readonly owner_name?: string;
-}
+/** One item a finished impact run makes, before its owner is matched; the owner name is used only to match a member and is never stored. */
+type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_match'> & ImpactOwnerCandidateV1;
 /**
  * The open items a finished run makes (open items and Home v1, section 3;
  * follow-ups thread v1). From the card: one per affected item that conflicts,
@@ -161,17 +158,14 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     const value = storableImpactCardV1(card, outsideLabels);
     const candidates = itemCandidates(record_sha256, card, value, actions);
     const owners = candidates.length === 0 ? [] : await matchImpactOwnersV1({
-      candidates: candidates.map(candidate => ({ pointer: candidate.pointer, ...(candidate.owner_name === undefined ? {} : { owner_name: candidate.owner_name }) })),
+      candidates,
       approver: { organization_id: row.actor.organization_id, membership_id: row.actor.membership_id },
       access_token: token, people: options.people, signal,
       ...(options.owners === undefined ? {} : { owners: options.owners }),
     });
     // A cancelled assignee read matches no one; its fallbacks are never stored as the run's owners.
     signal.throwIfAborted();
-    const drafts: ImpactItemDraftV1[] = candidates.map((candidate, index) => ({
-      item_key: candidate.item_key, pointer: candidate.pointer, relation: candidate.relation, expected: candidate.expected,
-      owner_membership_id: owners[index]!.owner_membership_id, owner_match: owners[index]!.owner_match,
-    }));
+    const drafts: ImpactItemDraftV1[] = candidates.map(({ owner_name: _name, ...candidate }, index) => ({ ...candidate, ...owners[index]! }));
     // The items are written in the transaction that stores the card, so a run is never done without them.
     return { result: value, ...(drafts.length === 0 ? {} : { writes: () => (transaction: Database.Database) => options.items.insertForRun(transaction, row, drafts) }) };
   };
