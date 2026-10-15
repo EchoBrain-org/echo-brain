@@ -103,7 +103,8 @@ const opened = (id: string, extra: Partial<OpenItemView> = {}): OpenItemView => 
 const summary: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
 /** The runs requests sent, but for reads of Home's rows (Home's own, each before its live read, and the quiet check's: notify.test.ts). */
-const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows'));
+const notificationScan = (request: { operation?: string; scope?: string; read?: string; states?: readonly string[] }) => request.operation === 'items' && request.scope === 'mine' && request.read === 'rows' && request.states?.join() === 'open';
+const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows') && !notificationScan(params.request));
 /** Reads of what waits on you: each Home read starts with its rows. */
 const rowsReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'home' && params.request.read === 'rows').length;
 const operations = () => homeCalls().map(([, params]) => params.request.operation);
@@ -226,6 +227,8 @@ beforeEach(() => {
           return holdLive && params.request.read === undefined ? new Promise(resolve => { answerLive.push(() => resolve(answer)); }) : answer;
         }
         if (params.request?.operation === 'items') {
+          // Notification discovery is independent of the foreground list's injected failures.
+          if (notificationScan(params.request)) return itemsAnswer(params.request);
           if (failItems > 0) { failItems -= 1; return unavailable; }
           if (failLiveItems > 0 && params.request.read === undefined) { failLiveItems -= 1; return unavailable; }
           if (params.request.read === 'rows' && holdListRows) {
@@ -1800,7 +1803,20 @@ describe('Rows first, then what each says now', () => {
     await store.openFollowUp('itm_00000001', rowOnly(opened('1')));
     expect(shownPage(store).loading).toBe(false);
     expect(pageItem(store).reach).toBe('unavailable');
+    expect(shownPage(store).failure).toMatchObject({ code: 'unavailable' });
+  });
+
+  it('keeps cached details but exposes a failed row refresh for retry', async () => {
+    readItem = null;
+    const store = await start();
+    await store.openFollowUp('itm_00000001', opened('1'));
+    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
+    expect(shownPage(store).failure).toMatchObject({ code: 'unavailable' });
+    readItem = opened('1');
+    store.retryFollowUp();
+    await flush();
     expect(shownPage(store).failure).toBeUndefined();
+    expect(requests('item').map(request => request.read)).toEqual(['rows', 'rows']);
   });
 
   it('reads live an item opened from a row whose live read failed, and Try again on its page reads it live again', async () => {

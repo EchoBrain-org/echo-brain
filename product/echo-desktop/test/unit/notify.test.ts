@@ -1,4 +1,4 @@
-// Notify the owner (follow-ups thread v1, F8): a quiet check of Home's rows
+// Notify the owner (follow-ups thread v1, F8): a quiet scan of open follow-ups
 // every five minutes while signed in, and one notification for what newly
 // waits on you.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,7 +22,7 @@ const id = (n: number) => `itm_00000000-0000-4000-8000-00000000000${n}`;
 
 /** A meeting's action Mina approved and sent to you ("member"), n minutes past ten: the higher n, the later sent. */
 function followUp(n: number, extra: Partial<OpenItemView> = {}): OpenItemView {
-  const sent = `2026-10-14T10:${String(n).padStart(2, '0')}:00.000Z`;
+  const sent = new Date(Date.UTC(2026, 9, 14, 10, n)).toISOString();
   return {
     item_id: id(n), run_id: 'run_00000000-0000-4000-8000-000000000001', kind: 'action', decision, relation: 'needs_updating', expected: `Action ${n}`,
     approver: MINA, owner: { ...ME, match: 'name' }, waits_on: 'owner', state: 'open', created_at: '2026-10-14T09:05:00.000Z',
@@ -35,13 +35,14 @@ let account: Account | null;
 /** What Home's rows hold now. */
 let items: OpenItemView[];
 let quietFails: boolean;
+let failedCursor: string | null;
 /** While set, the quiet check's next read waits until the test releases it, answering what Home held when it was asked. */
 let holdQuiet: boolean;
 let released: (() => void)[];
 
 const homeOf = (rows: readonly OpenItemView[]): HomeView => ({ send: [], items: rows, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
-/** Reads of Home's rows: the quiet check's, and Home's own, each of which also tells the quiet check what is there. */
-const quietReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'home' && params.request.read === 'rows')
+/** Every page of the quiet scan, independent of Home's own reads. */
+const quietReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'items' && params.request.read === 'rows' && params.request.states?.join() === 'open')
   .map(([, params]) => params);
 const notices = () => rpc.mock.calls.filter(([method]) => method === 'notify.followUps').map(([, params]) => params);
 
@@ -52,6 +53,7 @@ beforeEach(() => {
   account = ACCOUNT;
   items = [];
   quietFails = false;
+  failedCursor = null;
   holdQuiet = false;
   released = [];
   rpc.mockReset();
@@ -59,14 +61,17 @@ beforeEach(() => {
     'app.status': () => ok(account ? { signed_in: true, account } : { signed_in: false, account: null }),
     'notify.followUps': () => ok(null),
     'runs': params => {
-      const request = params.request as { operation: string; read?: 'rows'; item_id?: string };
-      if (request.operation === 'home' && request.read === 'rows') {
-        if (quietFails) return fail('unavailable', { retryable: true });
-        if (!holdQuiet) return ok(homeOf(items));
-        const answer = ok(homeOf(items));
+      const request = params.request as { operation: string; read?: 'rows'; item_id?: string; states?: string[]; cursor?: string };
+      if (request.operation === 'items' && request.read === 'rows' && request.states?.join() === 'open') {
+        if (quietFails || (failedCursor !== null && request.cursor === failedCursor)) return fail('unavailable', { retryable: true });
+        const open = items.filter(item => item.state === 'open');
+        const offset = Number(request.cursor ?? 0);
+        const answer = ok({ items: open.slice(offset, offset + 50), next_cursor: offset + 50 < open.length ? String(offset + 50) : null, stages: [],
+          summary: { unsent: 0, open: open.length, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] } });
+        if (!holdQuiet) return answer;
         return new Promise(resolve => { released.push(() => resolve(answer)); });
       }
-      if (request.operation === 'home') return ok(homeOf(items));
+      if (request.operation === 'home') return ok(homeOf(items.slice(0, 20)));
       if (request.operation === 'list') return ok({ runs: [] });
       if (request.operation === 'item') return ok(items.find(item => item.item_id === request.item_id) ?? followUp(9));
       if (request.operation === 'items') {
@@ -87,11 +92,11 @@ async function nextCheck(): Promise<void> {
 }
 
 describe('the quiet check', () => {
-  it('learns what waits on you at sign-in from Home\'s own read, then tells each new follow-up once', async () => {
+  it('learns all open follow-ups at sign-in, then tells each new follow-up once', async () => {
     items = [followUp(1)];
     await startStore();
-    // One read of Home's rows at sign-in: Home's, which the quiet check learns from.
-    expect(quietReads()).toEqual([{ expect: { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id }, request: { schema_version: 1, operation: 'home', read: 'rows' } }]);
+    // The initial complete scan establishes the baseline independently of Home.
+    expect(quietReads()).toEqual([{ expect: { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id }, request: { schema_version: 1, operation: 'items', scope: 'mine', states: ['open'], read: 'rows' } }]);
     expect(notices()).toEqual([]);
     items = [followUp(1), followUp(2, { expected: 'Update the pricing page' })];
     await vi.advanceTimersByTimeAsync(FIVE_MINUTES - 1);
@@ -111,7 +116,7 @@ describe('the quiet check', () => {
     const twenty = Array.from({ length: 20 }, (_, at) => followUp(at + 1));
     items = twenty;
     await startStore();
-    items = [followUp(21, { expected: 'Book the lab' }), ...twenty.slice(0, 19)];
+    items = [followUp(21, { expected: 'Book the lab' }), ...twenty];
     await nextCheck();
     expect(notices()).toEqual([{ item_ids: [id(21)], from: 'Mina', title: 'Book the lab' }]);
     // The new one closed: the twentieth is back among them, seen before, and not told.
@@ -125,6 +130,49 @@ describe('the quiet check', () => {
     items = [followUp(1), followUp(2), followUp(3)];
     await nextCheck();
     expect(notices()).toEqual([{ item_ids: [id(1), id(2), id(3)] }]);
+  });
+
+  it('discovers assignments beyond Home and the first page, without dropping a large batch', async () => {
+    const existing = Array.from({ length: 20 }, (_, at) => followUp(at + 1));
+    items = existing;
+    await startStore();
+    const fresh = Array.from({ length: 55 }, (_, at) => followUp(at + 21));
+    items = [...existing, ...fresh];
+    await nextCheck();
+    expect(quietReads().at(-1)?.request.cursor).toBe('50');
+    expect(notices().flatMap(notice => notice.item_ids)).toEqual(fresh.map(item => item.item_id));
+    const count = notices().length;
+    await nextCheck();
+    expect(notices()).toHaveLength(count);
+  });
+
+  it('does not acknowledge a partial scan when a later page fails', async () => {
+    await startStore();
+    items = Array.from({ length: 55 }, (_, at) => followUp(at + 1));
+    failedCursor = '50';
+    await nextCheck();
+    expect(notices()).toEqual([]);
+    failedCursor = null;
+    await nextCheck();
+    expect(notices().flatMap(notice => notice.item_ids)).toEqual(items.map(item => item.item_id));
+  });
+
+  it('a Home refresh acknowledges only the rows shown, not older unseen assignments', async () => {
+    const store = await startStore();
+    const newest = Array.from({ length: 20 }, (_, at) => followUp(at + 21));
+    items = [...newest, followUp(1)];
+    await store.loadHome();
+    await nextCheck();
+    expect(notices()).toEqual([{ item_ids: [id(1)], from: 'Mina', title: 'Action 1' }]);
+  });
+
+  it('a Home read underneath an item page does not acknowledge other unseen assignments', async () => {
+    const store = await startStore();
+    await store.openFollowUp(id(9));
+    items = [followUp(1)];
+    await store.loadHome();
+    await nextCheck();
+    expect(notices()).toEqual([{ item_ids: [id(1)], from: 'Mina', title: 'Action 1' }]);
   });
 
   it('names a document follow-up as its row does: what it is and its meeting, or what it is when you cannot read the meeting', async () => {
@@ -203,7 +251,7 @@ describe('the quiet check', () => {
     const before = rpc.mock.calls.length;
     items = [followUp(1)];
     await nextCheck();
-    expect(rpc.mock.calls.slice(before).map(([method, params]) => [method, params.request?.operation])).toEqual([['runs', 'home'], ['notify.followUps', undefined]]);
+    expect(rpc.mock.calls.slice(before).map(([method, params]) => [method, params.request?.operation])).toEqual([['runs', 'items'], ['notify.followUps', undefined]]);
     expect(store.getState().home).toBe(home);
     store.resume();
     await flush();

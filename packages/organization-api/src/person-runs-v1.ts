@@ -44,10 +44,10 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * keeps failing is not asked for on every load; a sweep still waiting after
  * the hour is asked for again, and `sweep` hands back that run to start; an
  * explicit `sweep` request is never limited). `home` read as `rows` never
- * reports a sweep due. `home` lists the items whose last check changed first,
- * then the newest first by when each started waiting on the caller (the
- * latest of `sent_at`, `owner_set_at` and `state_set_at`), so a new one is
- * always among the twenty.
+ * reports a sweep due. `home` lists the newest handoffs first (the latest
+ * of `sent_at`, `owner_set_at` and `state_set_at`), with changed items first
+ * only when those times tie. Notification discovery pages through `items`
+ * separately so Home's twenty-row display limit does not hide assignments.
  */
 export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 
@@ -189,7 +189,7 @@ export interface PersonRunsResultsV1 {
   retry: { readonly state: 'pending' };
   view: { readonly card: PersonImpactCardV1; readonly checked_at: string; readonly hidden: number };
   home: { readonly send: readonly PersonHomeSendV1[];
-          /** At most twenty: those whose last check changed first, then the newest first by when each started waiting on the caller. */
+          /** At most twenty: newest handoffs first; changed items break ties. */
           readonly items: readonly PersonOpenItemV1[];
           readonly landed: number; readonly waiting: number; readonly last_checked_at: string | null;
           /** The caller's open items are due a sweep (section 6): the desktop asks for a `mine` sweep. At most hourly: not within an hour of their last sweep, nor while one of theirs runs. */

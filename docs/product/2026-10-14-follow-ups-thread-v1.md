@@ -100,13 +100,15 @@ statuses, the list and the item page.
   project's feed row shows it, is "4 follow-ups". A check verdict never
   removes an item from a count. Replaces R35's open count and the Impact
   line's "handled" and "couldn't read".
-- F8. **Notify the owner.** The desktop checks Home quietly
-  (`home` with `read: 'rows'`, no live reads) every five minutes while
-  signed in, and shows a system notification for each follow-up that newly
-  waits on you; clicking it opens the item page. Home's own reads of its
-  rows tell the check what you saw there, never as a notification, so what
-  waits at sign-in is only learned: by Home's own read when Home loads then,
-  else by the first check, made at once.
+- F8. **Notify the owner.** Every five minutes while signed in, the desktop
+  pages through `items` in `mine` scope with `states: ['open']` and
+  `read: 'rows'`. It performs no live reads or sweeps. The first complete
+  scan learns existing assignments; later scans notify new handoffs, including
+  reopens. Home acknowledges only the rows it actually showed. Per-item
+  handoff times prevent Home's display limit from hiding notifications.
+  A failed page leaves the previous baseline intact for the next scan.
+  Large batches are split into bounded notifications; a click opens the item
+  page or Follow-ups for a batch.
 - F9. **Projectless work is reachable.** "Follow-ups" is in the sidebar, and
   Home's footer (its link says "Follow-ups" too) shows even when you have no
   projects.
@@ -119,12 +121,11 @@ statuses, the list and the item page.
 - Item view: new kind `action`; new keys `state_set_by`, `owner_set_at`,
   `owner_set_by`, `send_included` (F3; null exactly while unsent).
 - `home`: optional `read: 'rows'` (F8): no live reads, and `sweep_due`
-  is always false, so the quiet check never starts a sweep. It answers the
-  same rows as a full `home`. Home's items come with those whose last check
-  changed first, then the newest first by when each started waiting on the
-  caller (the latest of `sent_at`, `owner_set_at` and `state_set_at`), so a
-  new follow-up is always among the 20 Home answers, however many older ones
-  wait.
+  is always false, so a rows-only read never starts a sweep. It answers the
+  same rows as a full `home`. Home's items come newest first by when each started waiting on the
+  caller (the latest of `sent_at`, `owner_set_at` and `state_set_at`); changed
+  items break ties. Notifications use the paginated items read independently
+  of Home's 20-row display limit.
 - `items`: optional `states`, a non-empty subset of `unsent`, `open`, `done`
   and `not_relevant`, replaces `open_only`. The page and its cursor go over
   those states only; the summary and stages still cover the whole scope.

@@ -118,23 +118,21 @@ says now (never a meeting's action). After a change the page stays and says
 what happened ("Done · Undo"), showing what the Authority answered at once,
 then the item read again from ECHO's own fields only, keeping what it says
 now; a change whose reply was lost is settled by that read. Giving an item away so you no longer see it says so,
-with Back. A page whose read fails offers **Try again**, unless it shows its
-row already and the read failed for an outage: then it says ECHO couldn't
-read it just now. Back returns to where it was opened, read again when something
+with Back. A page whose read fails offers **Try again**, including when its row
+already shows and a temporary outage prevented reading its details. Back returns to where it was opened, read again when something
 changed, at the same place, with the row it was opened from in focus; Ask
 and another app in front keep that place too. The window's title names the
 list (Follow-ups, the meeting or the project) or the item shown.
 
-While you are signed in, ECHO checks quietly for follow-ups sent to you, on
-any page and with the window hidden: it reads Home's rows only (nothing live,
-and never a sweep or a run) five minutes after Home last read them, and at
-sign-in when Home does not. Home's own reads of its rows count as checks, and
-never notify, as the window is in front; the first only learns what already
-waits on you. After that, a follow-up that newly waits on you (sent, given or
-reopened to you by someone else since the newest one seen) shows a system
-notification ("Mina sent you: Update the pricing page", or "3 new
-follow-ups"), unless its page is open. Clicking it brings ECHO forward on that
-follow-up's page, or on Follow-ups for several.
+While you are signed in, ECHO scans all pages of your open follow-ups every
+five minutes, on any page and with the window hidden. It reads rows only,
+never tools, sweeps or runs. The first complete scan learns existing work;
+later scans compare each item's handoff time and notify new assignments,
+reassignments and reopens from someone else. Home acknowledges only the rows
+it showed, independently of its twenty-row limit. A failed page leaves the
+previous scan's baseline intact. Large batches use bounded notifications.
+An item whose page is open does not notify. Clicking a notification opens
+that item's page, or Follow-ups for a batch.
 
 Under the rows, and on an empty Home (with no projects too), a footer says how
 many items you sent wait on others and when ECHO last checked ("2 waiting on

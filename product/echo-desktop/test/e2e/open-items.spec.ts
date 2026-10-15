@@ -27,10 +27,11 @@ async function approveFromHome(run: Launched) {
 
 const runOperations = () => app.calls().filter(call => call.path === '/v1/person/runs').map(call => call.body?.operation);
 /** A list's reads, in order: rows only, or live (" live"), by states, and " more" past the first page; never counts or a check's rows. */
-const listReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && call.body.read !== 'counts' && call.body.scope !== 'run')
+const listReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && !notificationScan(call.body) && call.body.read !== 'counts' && call.body.scope !== 'run')
   .map(call => `${(call.body!.states as string[]).join('+')}${call.body!.cursor === undefined ? '' : ' more'}${call.body!.read === 'rows' ? '' : ' live'}`);
-/** The runs requests the app sent with one operation, as sent. */
-const requests = (operation: string) => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === operation).map(call => call.body!);
+const notificationScan = (body: Record<string, unknown>) => body.operation === 'items' && body.scope === 'mine' && body.read === 'rows' && (body.states as string[] | undefined)?.join() === 'open';
+/** Foreground runs requests; notification discovery is checked independently. */
+const requests = (operation: string) => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === operation && !notificationScan(call.body)).map(call => call.body!);
 /** The sweeps the app asked for, by scope. */
 const sweeps = () => requests('sweep').map(body => ({ scope: body.scope, id: body.id }));
 /** The fixture's Pilot planning record, and the project it was approved into. */
@@ -286,11 +287,11 @@ test('a follow-up sent to you while ECHO runs comes as a notification that opens
   app = await launch('granola-owner-later');
   const { page } = app;
   const notices = () => app.app.evaluate(() => ((globalThis as Notices).echoTestNotices ?? []).map(({ title, body }) => ({ title, body })));
-  // Reads of Home's rows: Home's own, which the quiet check learns from, and the quiet check's.
-  const rowsReads = () => requests('home').filter(body => body.read === 'rows').length;
+  // Complete notification scans, independent of Home's bounded rows.
+  const rowsReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length;
   const homeIdle = () => expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
   await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
-  // Home's rows are read once at sign-in, and the quiet check only learns from them what waits on Ari.
+  // The first complete scan at sign-in only learns what already waits on Ari.
   await homeIdle();
   await expect.poll(rowsReads).toBe(1);
   // The page starts again on a clock the test moves: it learns again.

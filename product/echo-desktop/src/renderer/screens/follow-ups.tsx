@@ -397,7 +397,10 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
             </ol>
           </section>
           {checked && <div class="faint" data-testid="follow-up-check">{checked}</div>}
-          {page.failure && <div class="error">{message(page.failure)}</div>}
+          {(page.failure || item.reach === 'unavailable') && <div class="error" role="status">
+            {page.failure ? message(page.failure) : 'ECHO couldn’t read the details just now.'}
+            <button type="button" class="link-button" disabled={page.loading || page.busy} onClick={retryFollowUp}>Try again</button>
+          </div>}
         </article>
         <aside class="card-rail" aria-label="Owner and next step">
           <section class="card-panel" aria-labelledby="follow-up-owner">

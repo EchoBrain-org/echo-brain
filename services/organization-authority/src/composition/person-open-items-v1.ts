@@ -517,14 +517,13 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       }
       send.sort((left, right) => ascending(right.finished_at, left.finished_at) || ascending(left.run_id, right.run_id));
 
-      // Items: open items that wait on the caller, and those the caller approved whose last check saw them change. The changed
-      // ones first, then the newest first by when each started waiting on the caller, so a new one is always among the twenty
-      // however many older ones wait: Home's quiet check (rows only, F8) answers the same rows, and sees each new one.
+      // Home is a bounded inbox: take the newest handoffs first so older changed items cannot hide a new assignment.
+      // Notifications read all pages of open items separately; this display limit must not limit delivery discovery.
       const rowsOnly = input.request.read === 'rows';
       const visible = context.assessed.filter(entry => entry.row.state === 'open' && entry.access.see_row);
       const changed = (entry: Assessed) => entry.row.check?.verdict === 'changed';
       const shown = visible.filter(entry => entry.access.waits_on_viewer || (approvedBy(entry.row, viewer) && changed(entry)))
-        .sort((left, right) => Number(changed(right)) - Number(changed(left)) || ascending(waitingSince(right.row), waitingSince(left.row)) || oldestFirst(left.row, right.row))
+        .sort((left, right) => ascending(waitingSince(right.row), waitingSince(left.row)) || Number(changed(right)) - Number(changed(left)) || oldestFirst(left.row, right.row))
         .slice(0, PERSON_HOME_ROWS_V1);
 
       // The footer counts open items the caller approved or owns, with no live read.

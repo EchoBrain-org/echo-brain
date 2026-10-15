@@ -773,7 +773,7 @@ describe('open items: Home', () => {
     expect((await f.app.home({ access_token: 'mina' })).items.find(entry => entry.kind === 'ticket')?.reach).toBe('unavailable');
   });
 
-  it('lists what changed, then what newly waits first, so a new follow-up is never past the twenty, quiet check or not (F8)', async () => {
+  it('lists the newest handoffs first, regardless of older check results', async () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
     const run = f.runs.read(f.person, f.runId)!;
     const ticket = (index: number) => ({
@@ -812,10 +812,10 @@ describe('open items: Home', () => {
     f.advance(1_000);
     await setState(f, 'ari', reopened.item_id, 'open');
     expect(ids(await quiet()).slice(0, 3)).toEqual([reopened.item_id, theirs.item_id, fresh.item_id]);
-    // What a check saw change comes before all of them.
+    // A new verdict does not put an old handoff ahead of recent assignments.
     const changed = older[0]!;
     f.check(changed.item_id, 'changed');
-    expect(ids(await quiet()).slice(0, 2)).toEqual([changed.item_id, reopened.item_id]);
+    expect(ids(await quiet()).slice(0, 2)).toEqual([reopened.item_id, theirs.item_id]);
     expect(ids(await full())).toEqual(ids(await quiet()));
   });
 

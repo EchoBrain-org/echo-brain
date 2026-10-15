@@ -5056,7 +5056,8 @@ async function readItem(mine: number): Promise<void> {
     if (!current || !sameAccount(account)) return;
     if ('failure' in read) {
       const outage = current.item !== null && !ACCESS_LOST.includes(read.failure.code) && !ACCOUNT_GONE.includes(read.failure.code);
-      setView(outage ? { ...current, loading: false, live: { [current.item_id]: UNREAD, ...current.live } } : { ...current, loading: false, failure: read.failure });
+      setView({ ...current, loading: false, failure: read.failure,
+        ...(outage ? { live: { [current.item_id]: UNREAD, ...current.live } } : {}) });
       return;
     }
     const next = live ? { ...current, live: { [current.item_id]: livePart(read.item) } } : { ...current, item: read.item, stale: false };
@@ -5425,7 +5426,7 @@ async function followSweep(runId: string, ours: () => boolean): Promise<'done' |
 
 // ---- notifications: follow-ups that newly wait on you (F8) ---------------------------------
 
-/** How often the quiet check reads Home's rows while someone is signed in. */
+/** How often the quiet check pages through open follow-ups while someone is signed in. */
 const QUIET_CHECK_MS = 5 * 60_000;
 /** The notifications main keeps on screen: only one of theirs can be clicked. */
 const TOLD_KEPT = 20;
@@ -5433,12 +5434,13 @@ const TOLD_KEPT = 20;
 let quietTimer: ReturnType<typeof setTimeout> | null = null;
 let quietSeq = 0;
 /**
- * The account checked; when the newest follow-up waiting on it started
- * waiting (`since`: null until a read of Home's rows succeeds); the
- * follow-ups told one at a time, which a notification clicked may open; and
- * the last rows read, so one opens with its row at once.
+ * The last handoff seen for each open follow-up (null until a complete scan
+ * succeeds), plus handoffs shown on Home since that scan. A bounded Home
+ * read cannot advance a global watermark past assignments it did not show.
+ * Completed scans replace the map, so closed work does not accumulate.
  */
-let quiet: { account: Expect; since: string | null; told: readonly string[]; items: ReadonlyMap<string, OpenItemView> } | null = null;
+let quiet: { account: Expect; seen: ReadonlyMap<string, string> | null; homeSeen: ReadonlyMap<string, string>;
+  told: readonly string[]; items: ReadonlyMap<string, OpenItemView> } | null = null;
 
 /**
  * Who last made an item wait on its owner: whoever picked the owner after
@@ -5459,16 +5461,20 @@ function waitingSince(item: OpenItemView): string {
 }
 
 /**
- * What one read of Home's rows found new: open and yours, waiting since
- * after the last one seen (`since`), and handed to you by someone else (one
+ * What a complete scan found new: open and yours, with a handoff newer than
+ * the one seen for that item, and handed to you by someone else (one
  * you made yours yourself, Keep it myself or picking yourself, never is). A
- * reopen, or a hand-back, waits anew. The first read (`since` null) only
- * learns. Answers the newest seen too.
+ * reopen, or a hand-back, waits anew. The first complete scan only learns.
  */
-function newFollowUps(since: string | null, items: readonly OpenItemView[], me: string): { since: string; fresh: OpenItemView[] } {
+function newFollowUps(seen: ReadonlyMap<string, string> | null, homeSeen: ReadonlyMap<string, string>, items: readonly OpenItemView[], me: string)
+  : { seen: ReadonlyMap<string, string>; fresh: OpenItemView[] } {
   const waiting = items.filter(item => item.state === 'open' && item.owner.membership_id === me);
-  const fresh = since === null ? [] : waiting.filter(item => waitingSince(item) > since && handedBy(item).membership_id !== me);
-  return { since: waiting.map(waitingSince).reduce((latest, at) => (at > latest ? at : latest), since ?? ''), fresh };
+  const prior = (id: string) => [seen?.get(id) ?? '', homeSeen.get(id) ?? ''].sort().at(-1)!;
+  const fresh = seen === null ? [] : waiting.filter(item => waitingSince(item) > prior(item.item_id) && handedBy(item).membership_id !== me);
+  const next = new Map(waiting.map(item => [item.item_id, [waitingSince(item), prior(item.item_id)].sort().at(-1)!]));
+  // Home may have shown a newer handoff while the scan was in flight.
+  for (const [id, at] of homeSeen) if (at > (next.get(id) ?? '')) next.set(id, at);
+  return { seen: next, fresh };
 }
 
 /**
@@ -5492,13 +5498,13 @@ function armQuietCheck(): void {
 
 /**
  * Signed in, or as another account: the quiet check starts over for it, then
- * goes every five minutes, whatever the page. Home's own read of its rows,
- * when Home loads now, learns what is there; else the first check does, at once.
+ * goes every five minutes, whatever the page. The first complete scan learns
+ * what is already waiting, including items beyond Home's display limit.
  */
 function startQuietCheck(account: Expect): void {
   stopQuietCheck();
-  quiet = { account, since: null, told: [], items: new Map() };
-  if (homeShown()?.loading) armQuietCheck(); else void quietCheck(quietSeq);
+  quiet = { account, seen: null, homeSeen: new Map(), told: [], items: new Map() };
+  void quietCheck(quietSeq);
 }
 
 /** Signed out, or the account forgotten: no more checks, and what they saw goes. */
@@ -5510,35 +5516,43 @@ function stopQuietCheck(): void {
 }
 
 /**
- * Home read its rows (rows only): what it saw is seen, and never told, as
- * the window was in front; the next quiet check is five minutes on.
+ * Home read its rows: those handoffs are seen. Keep the quiet scan's cadence
+ * and its per-item baseline; Home may show only twenty of many assignments.
  */
 function heard(items: readonly OpenItemView[]): void {
-  if (!quiet || !sameAccount(quiet.account)) return;
-  quiet = { ...quiet, since: newFollowUps(quiet.since, items, quiet.account.membership_id).since, items: new Map(items.map(item => [item.item_id, item])) };
-  armQuietCheck();
+  if (!quiet || !sameAccount(quiet.account) || !homeInSight()) return;
+  const homeSeen = new Map(quiet.homeSeen);
+  for (const item of items) if (item.state === 'open' && item.owner.membership_id === quiet.account.membership_id) {
+    const at = waitingSince(item);
+    if (at > (homeSeen.get(item.item_id) ?? '')) homeSeen.set(item.item_id, at);
+  }
+  quiet = { ...quiet, homeSeen };
 }
 
 /**
- * One quiet check (F8): Home's rows only (no live read, never a sweep due),
- * so it starts no sweep or run, and Home shows nothing of it. What newly
- * waits on you is told in one notification, except an item whose page is open
- * now. A read that fails is tried again on the next turn; a reply for an
- * account no longer signed in is dropped.
+ * One quiet check (F8): every page of open follow-ups, rows only, with no
+ * live reads, sweeps or runs. Only a complete scan advances the baseline;
+ * a failed page is retried next turn without losing unseen assignments.
+ * Notifications are bounded batches, excluding an item whose page is open.
+ * A reply for an account no longer signed in is dropped.
  */
 async function quietCheck(mine: number): Promise<void> {
   const watched = quiet;
   if (mine !== quietSeq || !watched) return;
-  const result = await rpc('runs', { expect: watched.account, request: { schema_version: 1, operation: 'home', read: 'rows' } });
+  const result = await readItems(watched.account, { scope: 'mine', states: ['open'], read: 'rows' }, null, Number.POSITIVE_INFINITY);
   if (mine !== quietSeq || !quiet || !sameAccount(watched.account)) return;
   if (result.ok) {
-    const { items } = result.value as HomeView;
-    const { since, fresh } = newFollowUps(quiet.since, items, watched.account.membership_id);
+    const items = result.pages.flatMap(page => page.items);
+    const { seen, fresh } = newFollowUps(quiet.seen, quiet.homeSeen, items, watched.account.membership_id);
     const open = followUpShown();
-    const notice = followUpsNotice(fresh.filter(item => open?.kind !== 'item' || open.item_id !== item.item_id));
-    quiet = { ...quiet, since, items: new Map(items.map(item => [item.item_id, item])),
-      told: notice?.item_ids.length === 1 ? [...quiet.told, ...notice.item_ids].slice(-TOLD_KEPT) : quiet.told };
-    if (notice) void rpc('notify.followUps', notice);
+    const untold = fresh.filter(item => open?.kind !== 'item' || open.item_id !== item.item_id);
+    quiet = { ...quiet, seen, homeSeen: new Map(), items: new Map(items.map(item => [item.item_id, item])) };
+    for (let offset = 0; offset < untold.length; offset += NOTICE_ITEMS_MAX) {
+      const notice = followUpsNotice(untold.slice(offset, offset + NOTICE_ITEMS_MAX));
+      if (!notice) continue;
+      if (notice.item_ids.length === 1) quiet = { ...quiet, told: [...quiet.told, ...notice.item_ids].slice(-TOLD_KEPT) };
+      void rpc('notify.followUps', notice);
+    }
   }
   armQuietCheck();
 }
