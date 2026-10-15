@@ -75,6 +75,15 @@ open, **Reopen** once closed (**Send to Mina** for one dismissed before it was
 sent). The page stays and says what happened ("Done · Undo"); Back returns to
 where it was opened, read again.
 
+While you are signed in, ECHO checks quietly for follow-ups sent to you, on
+any page and with the window hidden: at sign-in, then every five minutes, it
+reads Home's rows only (nothing live, and never a sweep or a run). The first
+check only learns what already waits on you. After that, a follow-up that
+newly waits on you, sent, given or reopened to you by someone else, shows a
+system notification ("Mina sent you: Update the pricing page", or "3 new
+follow-ups"), unless its page is open. Clicking it brings ECHO forward on that
+follow-up's page, or on Your follow-ups for several.
+
 Under the rows, and on an empty Home (with no projects too), a footer says how
 many items you sent wait on others and when ECHO last checked ("2 waiting on
 others · ECHO checked 2 h ago"), with **Your follow-ups**. An approved meeting
