@@ -335,12 +335,13 @@ button.toast:hover { background: #211f1f; }
 .members-button .face { margin-left: -6px; border: 2px solid var(--ink); box-sizing: content-box; }
 .project-settings { position: relative; }
 .project-settings .menu { top: 30px; }
-.jira-project-field { display: flex; flex-direction: column; gap: 6px; }
-.archived-projects { display: flex; flex-direction: column; margin-top: 16px; }
-.archived-heading { align-self: flex-start; display: flex; align-items: center; gap: 4px; padding: 8px 12px 4px; border: 0; border-radius: 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.8px; color: var(--faint); background: transparent; }
-.archived-heading:hover { color: var(--text); background: var(--hover); }
-.archived-heading svg { transition: transform 120ms ease; }
-.archived-heading[aria-expanded="true"] svg { transform: rotate(90deg); }
+/* A heading that opens and closes what is under it: the sidebar's Archived, a closed group of follow-ups. */
+.disclosure { align-self: flex-start; display: flex; align-items: center; gap: 4px; border: 0; border-radius: 6px; background: transparent; }
+.disclosure:hover { color: var(--text); background: var(--hover); }
+.disclosure svg { transition: transform 120ms ease; }
+.disclosure[aria-expanded="true"] svg { transform: rotate(90deg); }
+.archived-projects { display: flex; flex-direction: column; margin-top: 8px; }
+.archived-heading { padding: 8px 10px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.8px; color: var(--faint); }
 .face.large { width: 28px; height: 28px; border-radius: 14px; font-size: 11px; }
 
 /* A menu of actions: the reader's ⋯, and a member's. */
@@ -531,16 +532,9 @@ button.toast:hover { background: #211f1f; }
 .needs-foot { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 12px 14px 4px; font-size: 13px; color: rgba(240, 236, 230, 0.45); }
 .needs-foot-words { flex-grow: 1; min-width: 0; }
 .side-row .badge { min-width: 18px; height: 18px; padding: 0 6px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--on-accent); background: var(--accent); }
-.sidebar-list .archived-projects { margin-top: 8px; }
-.sidebar-list .archived-heading { padding: 8px 10px 4px; }
 
 /* A decision, from Home: one card, the question on top, the button at its foot. */
 .decision-body { font-size: 15px; line-height: 1.55; }
-.decision-action { display: flex; align-items: center; gap: 10px; font-size: 14px; }
-.decision-action-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.decision-action .field.small { flex: 0 1 190px; min-width: 120px; height: 32px; }
-.decision-foot { display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
-.decision-foot .asking { font-size: 13px; }
 
 /* An owner: a chip, a dashed Pick owner, and the people picker that opens under it. */
 .owner-slot { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
@@ -662,8 +656,8 @@ button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 .card-side { display: flex; flex-direction: column; gap: 10px; padding: 0 4px; }
 .card-side-link { align-self: flex-start; margin-left: -8px; }
 .card-person { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
-/* An item page's why: what it says now beside what the meeting decided. */
 .send-box { flex-shrink: 0; width: 17px; height: 17px; margin: 3px 0 0; accent-color: var(--accent); cursor: pointer; }
+/* An item page's why: what it says now beside what the meeting decided. */
 .card-delta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; font-size: 14.5px; line-height: 1.45; }
 .card-delta-label { display: block; margin-bottom: 3px; font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--faint); }
 .card-delta-label.needs { color: #9ed3a2; }
@@ -693,17 +687,11 @@ button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 .reading-title { color: var(--faint); animation: reading 1.6s infinite ease-in-out; }
 @keyframes reading { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 @media (prefers-reduced-motion: reduce) { .reading-title { animation: none; } }
-/* Yours and a project's closed groups open one at a time ("Done · 12"). */
-.group-toggle { align-self: flex-start; display: flex; align-items: center; gap: 4px; margin-left: -4px; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; }
-.group-toggle:hover { color: var(--text); background: var(--hover); }
-.group-toggle svg { transition: transform 120ms ease; }
-.group-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+/* A closed group opens and closes ("Done · 12"). */
+.follow-ups-group .disclosure { margin-left: -4px; padding: 2px 4px; }
 .follow-ups-foot { position: sticky; bottom: 0; flex-shrink: 0; display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 12px 0 4px; background: var(--ink); }
 .follow-ups-foot .primary-button.small { align-self: auto; }
 .follow-ups-foot .result-line { min-width: 0; }
-.follow-ups-foot .result-line:focus { outline: none; }
-/* No tick and nothing said: the foot takes no room, and its status line stays where a screen reader hears it. */
-.follow-ups-foot.quiet { position: absolute; width: 1px; height: 1px; margin: 0; padding: 0; overflow: hidden; clip-path: inset(50%); }
 .owner-button { padding: 0; border: 0; border-radius: 12px; background: transparent; }
 .owner-button:hover:not(:disabled) .owner-chip { background: rgba(240, 236, 230, 0.14); }
 .owner-button:disabled { opacity: 0.5; cursor: default; }

@@ -236,7 +236,7 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
     const open = list.expanded[status] === true;
     return (
       <section key={status} class="follow-ups-group" aria-label={STAGES[status]}>
-        <button type="button" class="section-label group-toggle" aria-expanded={open}
+        <button type="button" class="section-label disclosure" aria-expanded={open}
           onClick={() => toggleClosedGroup(status)}><Chevron /><span>{STAGES[status]} · {count}</span></button>
         {open && items.length > 0 && (
           <div class="follow-ups-rows">
@@ -267,7 +267,8 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
           <button type="button" class="link-button" disabled={list.loading} onClick={() => void retryFollowUps()}>Try again</button>
         </div>
       )}
-      <div class={`follow-ups-foot${foot ? '' : ' quiet'}`} data-testid="follow-ups-foot">
+      {/* No tick and nothing said: the foot takes no room, and its status line stays where a screen reader hears it. */}
+      <div class={foot ? 'follow-ups-foot' : 'sr-only'} data-testid="follow-ups-foot">
         {ticked > 0 && <>
           <button type="button" class="primary-button small" disabled={list.busy || list.loading} onClick={() => void sendTicked(true)}>Send {ticked}</button>
           <button type="button" class="plain-button small" disabled={list.busy || list.loading} onClick={() => void sendTicked(false)}>Dismiss {ticked}</button>

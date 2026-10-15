@@ -121,7 +121,7 @@ export function Sidebar({ state }: { state: State }) {
         )}
         {account && (archived.items.length > 0 || archived.loading || archived.failure) && (
           <section class="archived-projects" data-testid="archived-projects" aria-label="Archived projects">
-            <button type="button" class="archived-heading" data-testid="archived-projects-toggle" aria-expanded={archivedOpen}
+            <button type="button" class="disclosure archived-heading" data-testid="archived-projects-toggle" aria-expanded={archivedOpen}
               onClick={() => setArchivedOpen(!archivedOpen)}><Chevron /><span>ARCHIVED</span></button>
             {archivedOpen && archived.items.map(project => (
               <button type="button" key={project.project_id} data-testid="archived-project-row" class="side-project" onClick={() => void openProject(project)}>
