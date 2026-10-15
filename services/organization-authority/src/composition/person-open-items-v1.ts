@@ -42,8 +42,9 @@ import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
  * A row's own fields are ECHO's. An item's title, text, assignee, status and
  * due date are read live, as the viewer, on one desk per request, and shown
  * only when the policy says the viewer opened the item. No read is tried for
- * a meeting action (ECHO's own data), for any row of Home's quiet check
- * (`rows_only`), or for a counts-only `items` read; such a row is `not_read`.
+ * a meeting action (ECHO's own data), for any row of a rows-only `home` or
+ * `items` read (`rows_only`), or for a counts-only `items` read; such a row is
+ * `not_read`.
  * Each row says how its read went (`reach`): a refusal by the viewer's own
  * access is `no_access`; anything else that stops a read (an outage, a rate
  * limit, a timeout) is `unavailable` and is reported without content, so an
@@ -427,7 +428,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
 
   /**
    * Rows the policy lets the viewer see, as the API carries them, with live parts from one open each. `live: false` opens nothing
-   * and binds no desk: every row is `not_read` (Home's quiet check, F8).
+   * and binds no desk: every row is `not_read` (a rows-only read: Home's quiet check, F8, and a list's rows before their live read).
    */
   const present = async (viewer: Viewer, context: Context, shown: readonly Assessed[], read: { readonly signal?: AbortSignal | undefined; readonly live?: boolean } = {}): Promise<readonly PersonOpenItemV1[]> => {
     const reads = read.live !== false ? await openLive(viewer, shown.map(entry => entry.row), read.signal) : new Map<Sha256Digest, LiveRead>();
@@ -631,10 +632,11 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         }];
       }).slice(0, SCOPE_DECISIONS_MAX);
 
-      // Counts only (the project and Impact lines): no item is listed, so none is opened and no desk is bound.
+      // Counts only (the project and Impact lines): no item is listed, so none is opened and no desk is bound. Rows only: the same
+      // page with no live read, so a list shows its rows at once and reads live only what it shows (follow-ups thread v1).
       const countsOnly = request.summary_only === true;
       return checked('items', {
-        items: countsOnly ? [] : await present(viewer, context, page, { signal: input.signal }),
+        items: countsOnly ? [] : await present(viewer, context, page, { signal: input.signal, live: request.rows_only !== true }),
         next_cursor: !countsOnly && following.length > page.length ? cursorOf(page.at(-1)!.row) : null,
         summary, stages,
       });

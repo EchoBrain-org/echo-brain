@@ -27,7 +27,9 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * outage is never shown as lost access. `items` with `summary_only` answers
  * the counts and stages alone and opens nothing; with `states` it pages over
  * the items in those states only, so a list reads its current work first and
- * never opens a closed item to throw it away. Each decision's counts say how
+ * never opens a closed item to throw it away; with `rows_only` it answers the
+ * same page with no live read, so a list shows its rows at once and reads
+ * live only the rows it shows. Each decision's counts say how
  * many of its open items last landed or could not be read, and its stage
  * says whether its impact run is the caller's own (`mine`).
  *
@@ -71,7 +73,13 @@ export type PersonRunsRequestV1 =
        * Items in these states only (a non-empty subset, each once): the page and its cursor go over them alone, while the
        * summary and stages still cover the whole scope. A cursor pages the same list: the caller sends the same states with it.
        */
-      readonly states?: readonly PersonOpenItemStateV1[] }
+      readonly states?: readonly PersonOpenItemStateV1[];
+      /**
+       * Rows only: the same page, cursor, summary and stages with no live read, so every item's reach is `not_read` and no
+       * desk is bound (never beside `summary_only`, which lists no items). A list shows its rows from it at once, and reads them
+       * live only where it shows them.
+       */
+      readonly rows_only?: true }
   | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string }
   | { readonly schema_version: 1; readonly operation: 'send'; readonly run_id: string; readonly command_id: string;
       /**
@@ -340,9 +348,9 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const operation = request.operation;
   if (typeof operation !== 'string' || !Object.hasOwn(REQUEST_KEYS, operation)) fail('Runs request operation is invalid');
   const kind = operation as PersonRunsRequestV1['operation'];
-  // `items` may leave out its scope id and its cursor, and may ask for its counts only or for items in some states only; a sweep of
-  // `mine` names no id; `home` may ask for its rows without live reads.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only', 'states'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : kind === 'home' ? ['rows_only'] : [])
+  // `items` may leave out its scope id and its cursor, and may ask for its counts only, for items in some states only, or for its
+  // rows without live reads; a sweep of `mine` names no id; `home` may ask for its rows without live reads.
+  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only', 'states', 'rows_only'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : kind === 'home' ? ['rows_only'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
@@ -373,12 +381,17 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       if (filtered && counts) fail('Runs request states takes no summary_only');
       const states = filtered ? list(request.states, 'Runs request states', ITEM_STATES.length, 1).map(state => oneOf(state, ITEM_STATES, 'Runs request state')) : [];
       unique(states, 'Runs request states');
+      const rowsOnly = Object.hasOwn(request, 'rows_only');
+      if (rowsOnly && request.rows_only !== true) fail('Runs request rows_only is invalid');
+      // A counts-only answer reads nothing live already, and lists no rows.
+      if (rowsOnly && counts) fail('Runs request rows_only takes no summary_only');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, scope,
         ...(scope === 'mine' ? {} : { id: scopeId(scope, request.id) }),
         ...(Object.hasOwn(request, 'cursor') ? { cursor: matching(request.cursor, CURSOR, 'Runs request cursor') } : {}),
         ...(counts ? { summary_only: true as const } : {}),
         ...(filtered ? { states: Object.freeze(states) } : {}),
+        ...(rowsOnly ? { rows_only: true as const } : {}),
       });
     }
     case 'item':

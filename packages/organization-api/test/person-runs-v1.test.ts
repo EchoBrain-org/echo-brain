@@ -273,7 +273,7 @@ describe('runs API open items', () => {
     }
     for (const reach of ['denied', '', null, true]) refused(() => validatePersonRunsResultV1('item', { item: openItem({ reach }) }), `reach ${JSON.stringify(reach)}`);
   });
-  it('accepts rows_only on home only, and only as true (F8)', () => {
+  it('accepts rows_only on home and items only, and only as true (F8)', () => {
     // Home's quiet check: the same rows with no live read.
     const quiet = { schema_version: 1, operation: 'home', rows_only: true };
     expect(validatePersonRunsRequestV1(quiet)).toEqual(quiet);
@@ -281,9 +281,22 @@ describe('runs API open items', () => {
     expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'home' })).not.toHaveProperty('rows_only');
     for (const rows_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...quiet, rows_only }), `rows_only ${JSON.stringify(rows_only)}`);
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'list', rows_only: true }), 'rows_only on list');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', rows_only: true }), 'rows_only on items');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, rows_only: true }), 'rows_only on one item');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'mine', rows_only: true }), 'rows_only on a sweep');
     refused(() => validatePersonRunsRequestV1({ ...quiet, summary_only: true }), 'summary_only beside rows_only');
+  });
+  it('accepts rows_only on items beside states and a cursor, only as true, and never with summary_only', () => {
+    // A list's rows at once, with no live read: the same page, paged over the same states.
+    const rows = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['unsent', 'open'], rows_only: true };
+    expect(validatePersonRunsRequestV1(rows)).toEqual(rows);
+    expect(Object.isFrozen(validatePersonRunsRequestV1(rows))).toBe(true);
+    expect(validatePersonRunsRequestV1({ ...rows, cursor: 'next-page_2' })).toEqual({ ...rows, cursor: 'next-page_2' });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', rows_only: true })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', rows_only: true });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'run', id: RUN, rows_only: true })).toMatchObject({ scope: 'run', id: RUN, rows_only: true });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['open'] })).not.toHaveProperty('rows_only');
+    for (const rows_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...rows, rows_only }), `rows_only ${JSON.stringify(rows_only)}`);
+    // Counts only list no rows, and read nothing live already.
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', summary_only: true, rows_only: true }), 'rows_only beside summary_only');
   });
   it('accepts states as a non-empty subset of the item states, never with summary_only, and with a cursor', () => {
     // A list reads its current work first, then its closed items: each a paged read of its own.

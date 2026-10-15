@@ -246,7 +246,7 @@ Runs a versioned request against approved-record impact runs, the open items the
   list                 your own impact runs and sweeps
   start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
   home                 what waits on you: Send rows and open items; rows_only true reads no item live (every reach not_read) and never says sweep_due
-  items                with scope mine, run, record or project, an id for run, record and project, and an optional cursor; summary_only true answers the counts alone; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor
+  items                with scope mine, run, record or project, an id for run, record and project, and an optional cursor; summary_only true answers the counts alone; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; rows_only true answers the same page with no item read live (every reach not_read), never beside summary_only
   item                 with item_id
   send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}] naming any of the run's unsent items: include true sends one to its owner, false dismisses it, and unlisted items stay unsent; the approver only
   set_state            with item_id and state open, done or not_relevant; the approver or the owner

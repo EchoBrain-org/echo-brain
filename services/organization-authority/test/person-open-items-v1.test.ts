@@ -202,6 +202,48 @@ describe('open items: counts and live reads', () => {
     expect(f.bindDesk.mock.calls.length - binds).toBe(1);
   });
 
+  it('answers the same page, cursor, summary and stages with no live read when asked for rows only', async () => {
+    const f = await openItemsFixture({ meetingActions: [{ signal_id: 'act-1', text: 'Send the vendor the pilot plan', owner: 'Rafael Moreno' }] });
+    await f.finishImpactRun();
+    const run = f.runs.read(f.person, f.runId)!;
+    // Fifty-five more tickets for Mina, sent: a scope of more than one page, and items that are open as well as not sent.
+    f.advance(1_000);
+    f.db.transaction(() => f.items.insertForRun(f.db, run, Array.from({ length: 55 }, (_, index) => ({
+      item_key: canonicalSha256(`rows ${index}`), relation: 'conflicts' as const, expected: 'launch next week', owner_membership_id: f.membership('mina'), owner_match: 'jira_account' as const,
+      pointer: { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: String(50_000 + index), permalink: `https://echo-fixture.atlassian.net/browse/ECHO-${500 + index}`, text_sha256: canonicalSha256(`rows text ${index}`) },
+    }))))();
+    const added = f.items.forRun(f.runId).filter(row => row.pointer.kind === 'ticket' && row.state === 'unsent').slice(-55);
+    f.items.send({ run_id: f.runId, by: f.membership('ari'), command_id: 'some', choices: added.slice(0, 30).map(row => ({ item_id: row.item_id, include: true })) });
+    const withoutLive = (page: Awaited<ReturnType<typeof scope>>) => ({ ...page, items: page.items.map(({ current: _current, reach: _reach, ...rest }) => rest) });
+    for (const [viewer, request] of [
+      ['ari', { scope: 'run', id: f.runId }], ['ari', { scope: 'record', id: f.record, states: ['unsent', 'open'] }], ['ari', { scope: 'mine', states: ['open'] }],
+      ['mina', { scope: 'project', id: f.projectA }], ['mina', { scope: 'mine' }],
+    ] as const) {
+      const base = { schema_version: 1, operation: 'items', ...request } as const;
+      const binds = f.bindDesk.mock.calls.length;
+      const opens = f.opened.length;
+      const rows = await f.app.items({ access_token: viewer, request: { ...base, rows_only: true } });
+      const next = rows.next_cursor === null ? null : await f.app.items({ access_token: viewer, request: { ...base, rows_only: true, cursor: rows.next_cursor } });
+      // No desk bound and nothing opened: every row says no read was tried.
+      expect(f.bindDesk.mock.calls.length).toBe(binds);
+      expect(f.opened.length).toBe(opens);
+      expect(rows.items.length).toBeGreaterThan(0);
+      for (const entry of [...rows.items, ...(next?.items ?? [])]) {
+        expect(entry.reach).toBe('not_read');
+        expect(entry).not.toHaveProperty('current');
+      }
+      // Everything else is what the full read answers: the same rows in the same order, the same cursor, summary and stages.
+      const full = await f.app.items({ access_token: viewer, request: base });
+      expect(full.items.some(entry => entry.reach !== 'not_read')).toBe(true);
+      expect(withoutLive(rows)).toEqual(withoutLive(full));
+      if (next !== null) expect(withoutLive(next)).toEqual(withoutLive(await f.app.items({ access_token: viewer, request: { ...base, cursor: full.next_cursor! } })));
+    }
+    // Paged: the run's 58 items in two pages, read rows only.
+    const page = await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'run', id: f.runId, rows_only: true } });
+    expect(page.items).toHaveLength(50);
+    expect(page.next_cursor).not.toBeNull();
+  });
+
   it('pages the items in some states only past older ones in others, opens only those, and still counts the whole scope (R51)', async () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
     const run = f.runs.read(f.person, f.runId)!;
@@ -710,6 +752,19 @@ describe('open items: Home', () => {
     const quietSend = await unsent.app.home({ access_token: 'ari', request: { schema_version: 1, operation: 'home', rows_only: true } });
     expect(quietSend).toEqual(await unsent.app.home({ access_token: 'ari' }));
     expect(quietSend.send).toHaveLength(1);
+  });
+
+  it('answers the same Home rows with rows only when the full read cannot open some of them', async () => {
+    // Mina's ticket read fails (an outage); Rafael cannot open the ticket at all: their full reads say so, rows only says nothing.
+    const f = await sentFixture({ owner: 'mina', openFails: { ticket: new AuthorityOperationError('rate_limited', 'slow down') } });
+    const rows = (home: Awaited<ReturnType<typeof f.app.home>>) => ({ ...home, sweep_due: undefined, items: home.items.map(({ current: _current, reach: _reach, ...rest }) => rest) });
+    for (const viewer of ['mina', 'ari'] as const) {
+      const full = await f.app.home({ access_token: viewer });
+      const quiet = await f.app.home({ access_token: viewer, request: { schema_version: 1, operation: 'home', rows_only: true } });
+      expect(quiet.items.map(entry => entry.reach).every(reach => reach === 'not_read')).toBe(true);
+      expect(rows(quiet)).toEqual(rows(full));
+    }
+    expect((await f.app.home({ access_token: 'mina' })).items.find(entry => entry.kind === 'ticket')?.reach).toBe('unavailable');
   });
 
   it('lists what changed, then what newly waits first, so a new follow-up is never past the twenty, quiet check or not (F8)', async () => {
