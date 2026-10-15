@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { personSweepResultStatusV1, type PersonRunsResultsV1, type PersonSweepVerdictV1 } from '@echo-brain/organization-api';
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactItemKeyV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import type { SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -396,6 +397,41 @@ describe('what a sweep checks and how', () => {
       expect(await f.sweep('ari', scope)).toEqual(NOTHING);
       expect(await f.sweep('mina', scope)).toEqual(NOTHING);
     }
+  });
+});
+
+describe('meeting actions and sweeps', () => {
+  it('never sweeps a meeting action, which never makes a sweep due: it is closed by hand', async () => {
+    const f = await sweepFixture({ owner: 'mina', meetingActions: [{ signal_id: 'act-1', text: 'Send the vendor the pilot plan', owner: 'Mina Patel' }],
+      verdicts: { ticket: 'still_open', approved_record: 'still_open', meeting_action: 'landed' } });
+    const action = f.items.forRun(f.runId).find(row => row.pointer.kind === 'meeting_action')!;
+    expect(action).toMatchObject({ state: 'open', owner_membership_id: f.membership('mina'), owner_match: 'name', check: null });
+    // The sweep trigger refuses its pointer as a finding's citation.
+    const trigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find(definition => definition.name === 'sweep')!;
+    expect(() => trigger.parseEvent({ findings: [{ finding: 'An open item', expected: 'the approved decision', citations: [action.pointer] }] }))
+      .toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    // The ticket and the other decision's action were checked just now; only the meeting action never was, and it makes no sweep due.
+    f.check(f.ticket.item_id, 'still_open', 'mina');
+    f.advance(1_000);
+    f.check(f.action.item_id, 'still_open', 'mina');
+    expect(await f.sweepDue('ari')).toBe(false);
+    expect(await f.sweepDue('mina')).toBe(false);
+    // A sweep asked for anyway checks the ticket and the other action, never the meeting action.
+    const { run_id } = await f.queueAndStart('mina');
+    await f.settled(run_id);
+    expect(f.findings.at(-1)!.map(finding => (finding.citations[0] as { readonly kind: string }).kind).sort()).toEqual(['approved_record', 'ticket']);
+    expect(f.items.read(action.item_id)!.check).toBeNull();
+    // With only the meeting action open, no sweep is due and nothing is open to check, for its approver or its owner.
+    f.advance(25 * HOUR);
+    for (const item of [f.ticket, f.action]) await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' } });
+    expect(await f.sweepDue('ari')).toBe(false);
+    expect(await f.sweepDue('mina')).toBe(false);
+    for (const scope of [MINE, { scope: 'record', id: f.record }, { scope: 'project', id: f.projectA }] as const) {
+      expect(await f.sweep('ari', scope)).toEqual(NOTHING);
+      expect(await f.sweep('mina', scope)).toEqual(NOTHING);
+    }
+    // Its owner closes it by hand.
+    await expect(f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: action.item_id, state: 'done' } })).resolves.toEqual({ state: 'done' });
   });
 });
 

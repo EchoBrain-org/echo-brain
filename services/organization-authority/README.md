@@ -429,8 +429,13 @@ written in the same transaction as the approval's receipt. The check runs as
 the approver. A stored run keeps pointers and ECHO's own judgments only, and
 every view re-releases the items through a fresh desk
 ([ADR-0032](../../docs/decisions/ADR-0032-stored-trigger-runs.md)). A
-finished check writes one shared open item per affected item in the same
-transaction. One access policy answers every see and act question about open
+finished check writes, in the same transaction, one shared open item per
+affected item (never the meeting's own record) and one per action the approved
+meeting decided (kind `action`, at most 20, the first in the brief; its line is
+the action's text and its owner the one the approver confirmed, matched to the
+one active member with exactly that display name, else the approver). A meeting
+action is ECHO's own data: it is never read live or swept, and is closed by
+hand. One access policy answers every see and act question about open
 items, and each item's outside words are read live as the viewer
 ([ADR-0033](../../docs/decisions/ADR-0033-shared-open-items.md)).
 

@@ -34,7 +34,7 @@ import {
 import type Database from "better-sqlite3";
 import { captureRecordProjectsV1, type CaptureRecordProjectsV1, type RecordProjectAuthorizationV1 } from "./person-record-project-scope-v1.js";
 import { readReadableSearchRecordHeadV1 as recordHead, type ReadableSearchRecordHeadV1 } from "./readable-search-generation-reconciler.js";
-import { boundedTextV1 } from "../application/person-item-text-v1.js";
+import { boundedTextV1, releasableBodyV1 } from "../application/person-item-text-v1.js";
 import {
   RecordMetadataCacheV1,
   approverDisplayNameV1,
@@ -259,6 +259,27 @@ export interface PersonRecordAnchorV1 {
   recordAnchor(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): Extract<PersonAnswerCitationV3, { readonly kind: "approved_record" }>;
 }
 
+/** One action an approved meeting decided, as an impact run makes it into an open item (follow-ups thread v1). ECHO data only. */
+export interface PersonRecordActionV1 {
+  /** The action's signal id in the approved brief. */
+  readonly signal_id: string;
+  /** The action's approved text, as the person open contract releases a body. */
+  readonly text: string;
+  /** The owner the approver confirmed on Approve (ADR-0021), else null; never the brief's own owner field. */
+  readonly owner: string | null;
+}
+
+/** Where an approved record's impact run reads the meeting's own actions (follow-ups thread v1). */
+export interface PersonRecordActionsV1 {
+  /**
+   * The approved record's brief actions in brief order, each with its
+   * confirmed owner. The exact Layer 1 read (`admittedRecord`) as this
+   * reader first: `not_found` when they cannot read the record. A lookup, not
+   * a release: nothing is audited, like `recordAnchor`.
+   */
+  recordActions(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): readonly PersonRecordActionV1[];
+}
+
 /** A decision as an open item names it (open items and Home v1, section 7): ECHO data only. */
 export interface PersonReadableDecisionV1 {
   readonly approval_id: string; readonly record_sha256: Sha256Digest; readonly title: string;
@@ -280,6 +301,7 @@ export type PersonRecordSearchRouteV1 =
     PersonMeetingItemsPortV1 &
     PersonRecordProjectsV1 &
     PersonRecordAnchorV1 &
+    PersonRecordActionsV1 &
     PersonReadableDecisionsV1;
 
 export interface CreatePersonRecordSearchRouteV1Options {
@@ -1337,6 +1359,16 @@ export function createPersonRecordSearchRouteV1(
       const released = options.sessions.authenticateAccess({ access_token: input.access_token });
       if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
       return Object.freeze({ kind: "approved_record" as const, atom_id: first.atom_id, record_sha256: first.record_sha256, policy_id: first.policy_id });
+    },
+    recordActions(input: Parameters<PersonRecordActionsV1["recordActions"]>[0]): ReturnType<PersonRecordActionsV1["recordActions"]> {
+      if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      assertExpectedOrganization(authorization);
+      // The exact Layer 1 read with current grants, as openMeeting admits a record; then the approved record itself, read as open reads it.
+      const admitted = admittedRecord(authorization, captureRecordProjectsV1(options.capture_projects, authorization), input.record_sha256);
+      const record = approvedRecord(admitted.position, admitted.record_sha256);
+      const owners = confirmedOwners(record.reference);
+      return Object.freeze(record.brief.actions.map((action) => Object.freeze({ signal_id: action.id, text: releasableBodyV1(action.text), owner: owners.get(action.id) ?? null })));
     },
     recordProjects(input: Parameters<PersonRecordProjectsV1["recordProjects"]>[0]): readonly ProjectIdV1[] {
       if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();

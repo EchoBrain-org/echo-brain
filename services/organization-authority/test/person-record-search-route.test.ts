@@ -1178,6 +1178,35 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
   });
 });
 
+describe("Person Layer 2 route: an approved meeting's actions (follow-ups thread v1)", () => {
+  it("returns the brief's actions in order with their confirmed owners, after the exact Layer 1 admission, and audits nothing", async () => {
+    const w = await meetingWorld({ extra: [{ name: "r9", approval_id: "apr_r9", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 1, actions: 2 },
+      brief: (brief) => ({ ...brief, actions: brief.actions.map((action, at) => (at === 0 ? { ...action, text: "Send the vendor the pilot plan" } : action)) }),
+      action_owners: [{ signal_id: "action-apr_r9-0", owner: "Ari Employee" }] }] });
+    try {
+      const route = w.route();
+      const before = auditCount(w.authority);
+      const expected = [{ signal_id: "action-apr_r9-0", text: "Send the vendor the pilot plan", owner: "Ari Employee" }, { signal_id: "action-apr_r9-1", text: "Action 1", owner: null }];
+      expect(route.recordActions({ access_token: "emp_a", record_sha256: w.digest("r9") })).toEqual(expected);
+      expect(route.recordActions({ access_token: "owner", record_sha256: w.digest("r9") })).toEqual(expected);
+      expect(Object.isFrozen(route.recordActions({ access_token: "emp_a", record_sha256: w.digest("r9") })[0])).toBe(true);
+      // A meeting that decided no action has none.
+      expect(route.recordActions({ access_token: "emp_a", record_sha256: w.digest("r4") })).toEqual([]);
+      const notFound = expect.objectContaining({ code: "not_found" });
+      // No grant on its project, no such record, a malformed digest and a rejection are the same miss.
+      expect(() => route.recordActions({ access_token: "emp_c", record_sha256: w.digest("r9") })).toThrow(notFound);
+      expect(() => route.recordActions({ access_token: "owner", record_sha256: canonicalSha256("missing") })).toThrow(notFound);
+      expect(() => route.recordActions({ access_token: "owner", record_sha256: "sha256:nope" as Sha256Digest })).toThrow(notFound);
+      expect(() => route.recordActions({ access_token: "owner", record_sha256: w.digest("r5") })).toThrow(notFound);
+      expect(() => route.recordActions({ access_token: "nobody", record_sha256: w.digest("r9") })).toThrow(expect.objectContaining({ code: "unauthorized" }));
+      expect(auditCount(w.authority)).toBe(before);
+      // Current grants decide.
+      w.leave(SHARED, EMP_A);
+      expect(() => route.recordActions({ access_token: "emp_a", record_sha256: w.digest("r9") })).toThrow(notFound);
+    } finally { w.close(); }
+  });
+});
+
 describe("Person Layer 2 route: an approved record's anchor (runs store v1)", () => {
   const trigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find((definition) => definition.name === "approved_record")!;
 

@@ -267,6 +267,16 @@ describe("impact items", () => {
     expect(impactItemKeyV1({ kind: "ticket" })).toBeUndefined();
   });
 
+  it("keys a meeting action by its record and signal id, apart from the record's own atoms", () => {
+    const action = { kind: "meeting_action", record_sha256: RECORD, signal_id: "act-1" };
+    expect(impactItemKeyV1(action)).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(impactItemKeyV1({ ...action })).toBe(impactItemKeyV1(action));
+    expect(impactItemKeyV1({ ...action, signal_id: "act-2" })).not.toBe(impactItemKeyV1(action));
+    expect(impactItemKeyV1({ ...action, record_sha256: H1 })).not.toBe(impactItemKeyV1(action));
+    expect(impactItemKeyV1({ kind: "approved_record", atom_id: "act-1", record_sha256: RECORD })).not.toBe(impactItemKeyV1(action));
+    expect(impactItemKeyV1({ kind: "meeting_action", record_sha256: RECORD })).toBeUndefined();
+  });
+
   it("says what an item says now: its current text on one line, else its title and details", () => {
     const ticket = ticketCitation("THERM-46", "THERM-46: Display precision");
     expect(currentImpactLineV1(fresh(ticket, { text: "Formats one\ndecimal." }))).toBe("Formats one decimal.");

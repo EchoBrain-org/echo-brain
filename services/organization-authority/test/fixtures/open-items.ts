@@ -9,7 +9,7 @@ import { SqliteOpenItemPeopleV1 } from '../../src/adapters/persistence/sqlite/op
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { TicketOwnerAccountsV1 } from '../../src/application/ports/ticket-owner-accounts-v1.js';
 import { createPersonOpenItemsV1, type OpenItemsLiveFailureV1 } from '../../src/composition/person-open-items-v1.js';
-import type { PersonReadableDecisionsV1 } from '../../src/composition/person-record-search-route.js';
+import type { PersonReadableDecisionsV1, PersonRecordActionV1 } from '../../src/composition/person-record-search-route.js';
 import { createPersonTriggerRunsV1 } from '../../src/composition/person-trigger-runs-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../../src/presentation/person-trigger-runs-http-application.js';
 import { approvalCoreFixture } from './approval-core.js';
@@ -53,10 +53,14 @@ export interface OpenItemsFixtureOptionsV1 {
   readonly openFails?: Partial<Record<'ticket' | 'page' | 'approved_record', unknown>>;
   /** Where the open-items service reports a failed live read; otherwise the fixture keeps them in `liveFailures`. */
   readonly on_live_failure?: (event: OpenItemsLiveFailureV1) => void;
+  /** The approved meeting's own actions, with their confirmed owners; none by default. */
+  readonly meetingActions?: readonly PersonRecordActionV1[];
+  /** The card also lists another atom of the approved meeting's own record as affected. */
+  readonly ownRecordAffected?: boolean;
 }
 
 /** One impact card as the renderer returns it, with a copy of the ticket at another text hash when asked. */
-export function fixtureCard(input: { readonly record: unknown; readonly outsideText: string; readonly actionOwner: string; readonly assessed: boolean; readonly duplicateTicket?: boolean; readonly withoutExpected?: boolean }) {
+export function fixtureCard(input: { readonly record: unknown; readonly outsideText: string; readonly actionOwner: string; readonly assessed: boolean; readonly duplicateTicket?: boolean; readonly withoutExpected?: boolean; readonly ownRecordAffected?: boolean }) {
   const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: CLOUD, ticket_id: '10012', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-12', text_sha256: canonicalSha256('ECHO-12 text') };
   const rollout = { kind: 'approved_record' as const, atom_id: canonicalSha256('rollout atom'), record_sha256: canonicalSha256('rollout record'), policy_id: 'project-members-readable-person-v1' as const };
   const page = { kind: 'page' as const, tool_id: 'confluence', external_scope_id: CLOUD, page_id: '200', section_id: 'section-1', version: '3',
@@ -67,6 +71,8 @@ export function fixtureCard(input: { readonly record: unknown; readonly outsideT
     rollout: { citation: rollout, kind: 'action', label: 'Thermostat rollout plan', visibility: 'project' },
     page: { citation: page, kind: 'page', label: `Thermostat PRD ${input.outsideText}`, visibility: 'only_me' },
     later: { citation: { ...ticket, text_sha256: canonicalSha256('ECHO-12 later text') }, kind: 'ticket', label: `ECHO-12 ${input.outsideText}`, visibility: 'only_me' },
+    // Another atom of the approved meeting's own record.
+    own: { citation: { ...(input.record as Record<string, unknown>), atom_id: canonicalSha256('pilot planning action atom') }, kind: 'action', label: 'Pilot planning', visibility: 'project' },
   };
   const pointers = { ticket, rollout, page };
   if (!input.assessed) {
@@ -78,6 +84,8 @@ export function fixtureCard(input: { readonly record: unknown; readonly outsideT
     };
   }
   const duplicate = input.duplicateTicket === true;
+  const own = input.ownRecordAffected === true;
+  const ownAt = duplicate ? 5 : 4;
   const expected = (phrase: string) => (input.withoutExpected === true ? {} : { expected: phrase });
   return {
     status: 'assessed' as const,
@@ -88,10 +96,11 @@ export function fixtureCard(input: { readonly record: unknown; readonly outsideT
       { citation_index: 3, says_now: `${input.outsideText} says the pilot starts next week.`, relation: 'confirms' },
       // The same ticket at a later text hash: one item.
       ...(duplicate ? [{ citation_index: 4, says_now: `${input.outsideText} is due Oct 31.`, relation: 'conflicts', ...expected('launch Monday'), owner: 'Mina Patel' }] : []),
+      ...(own ? [{ citation_index: ownAt, says_now: 'Pilot planning: send the vendor the plan.', relation: 'needs_updating', ...expected('vendor gets the plan'), owner: 'Rafael Moreno' }] : []),
     ],
     unconfirmed: [],
-    people: [{ name: 'Mina Patel', items: [1, ...(duplicate ? [4] : [])] }, { name: input.actionOwner, items: [2] }],
-    citations: [entries.decision, entries.ticket, entries.rollout, entries.page, ...(duplicate ? [entries.later] : [])],
+    people: [{ name: 'Mina Patel', items: [1, ...(duplicate ? [4] : [])] }, { name: input.actionOwner, items: [2] }, ...(own ? [{ name: 'Rafael Moreno', items: [ownAt] }] : [])],
+    citations: [entries.decision, entries.ticket, entries.rollout, entries.page, ...(duplicate ? [entries.later] : []), ...(own ? [entries.own] : [])],
     pointers,
   };
 }
@@ -155,13 +164,17 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     readableDecisions: readable,
     projectRecords: ({ access_token, project_id }) => (project_id === f.projectA && reads(token(access_token)) ? [recordSha256] : []),
     recordAnchor: () => decisionCitation,
+    recordActions: ({ access_token, record_sha256 }) => {
+      if (record_sha256 !== recordSha256 || !reads(token(access_token))) throw new AuthorityOperationError('not_found', 'record evidence is not available');
+      return options.meetingActions ?? [];
+    },
     recordProjects: ({ access_token }) => {
       if (!reads(token(access_token))) throw new AuthorityOperationError('not_found', 'record evidence is not available');
       return [f.projectA as never];
     },
   };
   const card = fixtureCard({ record: decisionCitation, outsideText, actionOwner: options.actionOwner ?? 'Nobody Here', assessed: options.assessed !== false,
-    duplicateTicket: options.duplicateTicket === true, withoutExpected: options.withoutExpected === true });
+    duplicateTicket: options.duplicateTicket === true, withoutExpected: options.withoutExpected === true, ownRecordAffected: options.ownRecordAffected === true });
   const { pointers } = card;
   const receipt = canonicalSha256('receipt');
   const deskItems = {

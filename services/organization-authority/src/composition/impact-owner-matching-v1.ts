@@ -20,12 +20,16 @@ function siteTicketId(pointer: ImpactOwnerCandidateV1['pointer'], owners: Ticket
     typeof pointer.ticket_id === 'string' ? pointer.ticket_id : undefined;
 }
 
+/** Items whose owner is a name ECHO itself holds: an ECHO record's or document's action, and the approved meeting's own action. */
+const NAMED_OWNER_KINDS: readonly unknown[] = ['approved_record', 'source_revision', 'meeting_action'];
+
 /**
  * Exact matches only (open items and Home v1, ruling 1). A ticket on the
  * owner accounts' tool and site: the one active member whose connection is the
- * ticket's assignee account. An ECHO record or document action: the one active member
- * whose display name equals its owner. Anything else, and any failure: the
- * approver. Never throws.
+ * ticket's assignee account. An ECHO record or document action, or the
+ * approved meeting's own action (its approver-confirmed owner; follow-ups
+ * thread v1): the one active member whose display name equals the owner name
+ * (`activeByName`). Anything else, and any failure: the approver. Never throws.
  */
 export async function matchImpactOwnersV1(input: {
   readonly candidates: readonly ImpactOwnerCandidateV1[];
@@ -62,8 +66,7 @@ export async function matchImpactOwnersV1(input: {
           .map(person => person.membership_id), 'jira_account');
       }
       const name = candidate.owner_name?.trim();
-      const echoAction = candidate.pointer.kind === 'approved_record' || candidate.pointer.kind === 'source_revision';
-      return echoAction && name !== undefined && name !== '' ? theOne(people.activeByName(organization, name), 'name') : fallback;
+      return NAMED_OWNER_KINDS.includes(candidate.pointer.kind) && name !== undefined && name !== '' ? theOne(people.activeByName(organization, name), 'name') : fallback;
     } catch { return fallback; }
   }));
 }

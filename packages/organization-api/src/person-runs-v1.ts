@@ -17,7 +17,8 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * the card, its check time and how many cited items the viewer could not open.
  *
  * Open items (open items and Home v1, section 7; ADR-0033) are the items a
- * finished impact run found, one shared row each. `home` lists what waits on
+ * finished impact run found, one shared row each: the approved meeting's own
+ * actions (follow-ups thread v1) and the existing items the meeting affects. `home` lists what waits on
  * the caller, `items` and `item` show the rows the caller can see, and `send`,
  * `set_state` and `assign` change them. A row's own fields are ECHO's: its
  * decision is shown only to a viewer who can read it, and what the item says
@@ -85,7 +86,11 @@ export interface PersonRunV1 {
 
 export type PersonOpenItemStateV1 = 'unsent' | 'open' | 'done' | 'not_relevant';
 export type PersonOpenItemVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unreadable';
-export type PersonOpenItemKindV1 = 'ticket' | 'page' | 'slack_message' | 'record' | 'document';
+/**
+ * What an item is: an action the approved meeting decided (`action`, follow-ups thread v1), or an existing item the impact
+ * check found the meeting affects: a Jira ticket, a page, a Slack message, another ECHO record or an ECHO document.
+ */
+export type PersonOpenItemKindV1 = 'action' | 'ticket' | 'page' | 'slack_message' | 'record' | 'document';
 export type PersonOpenItemOwnerMatchV1 = 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned';
 /**
  * How this request's live read of an item went, for this viewer. `opened`: it
@@ -184,6 +189,13 @@ export const PERSON_RUNS_LIST_LIMIT_V1 = 100;
 export const PERSON_OPEN_ITEMS_PAGE_V1 = 50;
 /** The most Send rows, and the most item rows, one `home` returns. */
 export const PERSON_HOME_ROWS_V1 = 20;
+/**
+ * The most meeting actions one impact run makes into items: the first ones in brief order. An approved meeting with more
+ * actions than this has the rest only in its record.
+ */
+export const PERSON_RUN_MEETING_ACTIONS_MAX_V1 = 20;
+/** The most items one impact run makes: one per affected row of its card, and one per meeting action up to the cap. */
+export const PERSON_RUN_ITEMS_MAX_V1 = PERSON_IMPACT_CARD_LIMITS_V1.affected + PERSON_RUN_MEETING_ACTIONS_MAX_V1;
 
 const RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/;
 const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
@@ -209,7 +221,7 @@ const SWEEP_SCOPES = ['mine', 'record', 'project'] as const;
 const SET_STATES = ['open', 'done', 'not_relevant'] as const;
 const ITEM_STATES = ['unsent', ...SET_STATES] as const;
 const VERDICTS = ['landed', 'still_open', 'changed', 'unreadable'] as const;
-const KINDS = ['ticket', 'page', 'slack_message', 'record', 'document'] as const;
+const KINDS = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'] as const;
 const OWNER_MATCHES = ['jira_account', 'name', 'picked', 'approver', 'reassigned'] as const;
 const RELATIONS = ['conflicts', 'needs_updating'] as const;
 const WAITS_ON = ['owner', 'approver', 'leads'] as const;
@@ -217,8 +229,8 @@ const REACHES = ['opened', 'no_access', 'unavailable', 'not_read'] as const;
 const CURRENT_DETAILS = ['assignee', 'status', 'due_at'] as const;
 /** Names, decided lines and what an item says now are bounded as the impact card bounds them. */
 const LIMITS = PERSON_IMPACT_CARD_LIMITS_V1;
-/** A run makes at most one item per affected row of its card. */
-const RUN_ITEMS_MAX = LIMITS.affected;
+/** A send lists, and a Send row names the owners of, at most a run's items. */
+const RUN_ITEMS_MAX = PERSON_RUN_ITEMS_MAX_V1;
 /** The most decisions one `items` summary, or its stages, cover. */
 const SCOPE_DECISIONS_MAX = 100;
 /** ECHO's phrase of what the decision requires of an item. */

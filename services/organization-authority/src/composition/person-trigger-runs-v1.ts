@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from '@echo-brain/organization-api';
+import { PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUN_MEETING_ACTIONS_MAX_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
-import { impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
+import { impactCardLineV1, impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { SqliteTriggerRunsV1, triggerRunStateAtV1, type ApprovalActorV1, type TriggerRunRowV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
@@ -13,7 +13,9 @@ import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open
 import type { SqlitePersonAgenticAskAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import { matchImpactOwnersV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
-import { PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordAnchorV1, type PersonRecordProjectsV1 } from './person-record-search-route.js';
+import {
+  PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordProjectsV1,
+} from './person-record-search-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1, withoutCoreRuntimeContentV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
@@ -36,7 +38,7 @@ type RunOutput = { readonly result: object; readonly writes?: () => (transaction
 export interface CreatePersonTriggerRunsV1Options {
   readonly runs: SqliteTriggerRunsV1;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
-  readonly records: PersonRecordAnchorV1 & PersonRecordProjectsV1 & PersonReadableDecisionsV1;
+  readonly records: PersonRecordAnchorV1 & PersonRecordActionsV1 & PersonRecordProjectsV1 & PersonReadableDecisionsV1;
   /** The open items: a finished impact run writes the items it found, and a finished sweep its checks, in the run's finishing transaction. */
   readonly items: Pick<SqliteImpactItemsV1, 'insertForRun' | 'involving' | 'forRecords' | 'read' | 'recordCheck'>;
   /** ECHO's member directory: exact owner matches, and the facts the open-items policy weighs for a sweep. */
@@ -77,26 +79,52 @@ function impactRecord(row: TriggerRunRowV1): Sha256Digest {
 function unavailable(error: unknown): boolean {
   return error instanceof AuthorityOperationError && error.code === 'unavailable';
 }
+/** One item a finished impact run makes; the owner name is used only to match a member and is never stored. */
+interface ItemCandidateV1 {
+  readonly item_key: Sha256Digest; readonly pointer: Readonly<Record<string, unknown>>;
+  readonly relation: 'conflicts' | 'needs_updating' | null; readonly expected: string | null; readonly owner_name?: string;
+}
 /**
- * The open items a finished card makes (open items and Home v1, section 3):
- * one per affected item that conflicts, needs updating or was not assessed,
- * never one that confirms, and one per item however often the card cites it.
- * The owner name is the card's, from the item's own details, and is used only
- * to match a member; it is never stored.
+ * The open items a finished run makes (open items and Home v1, section 3;
+ * follow-ups thread v1). From the card: one per affected item that conflicts,
+ * needs updating or was not assessed, never one that confirms, never the
+ * meeting's own record, and one per item however often the card cites it.
+ * The card's owner name comes from the item's own details. Then one per
+ * action the approved meeting decided, in brief order and at most
+ * `PERSON_RUN_MEETING_ACTIONS_MAX_V1` of them (the rest stay in the record
+ * only): it needs doing, its expected line is the action's own text on one
+ * line of at most 120 characters (an action with no printable text makes
+ * none), and its owner name is the one the approver confirmed.
  */
-function itemCandidates(card: PersonImpactCardV1, stored: StoredImpactCardV1) {
+function itemCandidates(record_sha256: Sha256Digest, card: PersonImpactCardV1, stored: StoredImpactCardV1, actions: readonly PersonRecordActionV1[]): readonly ItemCandidateV1[] {
   const seen = new Set<Sha256Digest>();
-  return card.affected.flatMap((row, index) => {
+  const fresh = (pointer: Readonly<Record<string, unknown>>): Sha256Digest | undefined => {
+    const item_key = impactItemKeyV1(pointer);
+    if (item_key === undefined || seen.has(item_key)) return undefined;
+    seen.add(item_key);
+    return item_key;
+  };
+  const affected = card.affected.flatMap((row, index): ItemCandidateV1[] => {
     if (row.relation === 'confirms') return [];
     const pointer = card.citations[row.citation_index]!.citation as unknown as Readonly<Record<string, unknown>>;
-    const item_key = impactItemKeyV1(pointer);
-    if (item_key === undefined || seen.has(item_key)) return [];
-    seen.add(item_key);
+    // The meeting is never a follow-up of itself: its own actions are.
+    if (pointer.kind === 'approved_record' && pointer.record_sha256 === record_sha256) return [];
+    const item_key = fresh(pointer);
+    if (item_key === undefined) return [];
     const relation = row.relation ?? null;
     // The stored phrase: screened against outside titles. Only an assessed item carries one.
     const expected = relation === null ? undefined : stored.affected[index]?.expected;
     return [{ item_key, pointer, relation, expected: expected ?? null, ...(row.owner === undefined ? {} : { owner_name: row.owner }) }];
   });
+  const decided = actions.slice(0, PERSON_RUN_MEETING_ACTIONS_MAX_V1).flatMap((action): ItemCandidateV1[] => {
+    const expected = impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars);
+    if (expected === '') return [];
+    const pointer = Object.freeze({ kind: 'meeting_action', record_sha256, signal_id: action.signal_id });
+    const item_key = fresh(pointer);
+    if (item_key === undefined) return [];
+    return [{ item_key, pointer, relation: 'needs_updating', expected, ...(action.owner === null ? {} : { owner_name: action.owner }) }];
+  });
+  return [...affected, ...decided];
 }
 
 /** The runs themselves; the open items a finished run found are served by `createPersonOpenItemsV1`. */
@@ -117,6 +145,8 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   const checkImpact = async (row: TriggerRunRowV1, token: string, research: (scope: DeskScope) => Promise<RunResearch>, signal: AbortSignal): Promise<RunOutput> => {
     const record_sha256 = impactRecord(row);
     const anchor = options.records.recordAnchor({ access_token: token, record_sha256 });
+    // The meeting's own actions, read as the approver before any model call: a record they cannot read fails the run as no_access.
+    const actions = options.records.recordActions({ access_token: token, record_sha256 });
     const run = await research(scopeFor(options.records, token, record_sha256));
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
     const event = definition.parseEvent({ record: anchor });
@@ -125,7 +155,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     const outsideLabels = output.research.items
       .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
     const value = storableImpactCardV1(card, outsideLabels);
-    const candidates = itemCandidates(card, value);
+    const candidates = itemCandidates(record_sha256, card, value, actions);
     const owners = candidates.length === 0 ? [] : await matchImpactOwnersV1({
       candidates: candidates.map(candidate => ({ pointer: candidate.pointer, ...(candidate.owner_name === undefined ? {} : { owner_name: candidate.owner_name }) })),
       approver: { organization_id: row.actor.organization_id, membership_id: row.actor.membership_id },

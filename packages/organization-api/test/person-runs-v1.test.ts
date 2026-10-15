@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   PERSON_HOME_ROWS_V1,
   PERSON_OPEN_ITEMS_PAGE_V1,
+  PERSON_RUN_ITEMS_MAX_V1,
+  PERSON_RUN_MEETING_ACTIONS_MAX_V1,
   PERSON_RUNS_MAX_RESPONSE_BYTES_V1,
   PERSON_RUNS_PATH_V1,
   validatePersonRunsRequestV1,
@@ -332,7 +334,7 @@ describe('runs API open-item requests', () => {
       { schema_version: 1, operation: 'item', item_id: `itm_${'Z-9'.repeat(20)}` },
       itemsRequest({ scope: 'mine', cursor: 'c'.repeat(256) }),
       send({ command_id: `${'A_b-9'.repeat(25)}xyz` }),
-      send({ items: numbered(20, at => at % 2 === 0) }),
+      send({ items: numbered(40, at => at % 2 === 0) }),
     ]) expect(() => validatePersonRunsRequestV1(request), JSON.stringify(request).slice(0, 80)).not.toThrow();
   });
 
@@ -355,7 +357,7 @@ describe('runs API open-item requests', () => {
     ['an item id that is too long', { schema_version: 1, operation: 'item', item_id: `itm_${'a'.repeat(61)}` }],
     ['an item id with a forbidden character', { schema_version: 1, operation: 'item', item_id: 'itm_abcd_efgh' }],
     ['a send without items', send({ items: [] })],
-    ['a send of 21 items', send({ items: numbered(21, () => true) })],
+    ['a send of 41 items', send({ items: numbered(41, () => true) })],
     ['a send that repeats an item', send({ items: [{ item_id: ITEM, include: true }, { item_id: ITEM, include: false }] })],
     ['a send with an include that is not a boolean', send({ items: [{ item_id: ITEM, include: 'yes' }] })],
     ['a send item without include', send({ items: [{ item_id: ITEM }] })],
@@ -408,6 +410,18 @@ describe('runs API open-item results', () => {
     expect(validatePersonRunsResultV1('item', { item: dismissed }).item.reached_owner).toBe(false);
     const picked = openItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, owner_set_at: LATER, owner_set_by: APPROVER, owner: { ...OWNER, match: 'picked' }, reached_owner: false });
     expect(validatePersonRunsResultV1('item', { item: picked }).item).toEqual(picked);
+  });
+
+  it('carries a meeting action as an item of kind action, and a run\'s items up to its affected rows and actions', () => {
+    const action = openItem({ kind: 'action', relation: 'needs_updating', expected: 'Send the pilot plan to the vendor', state: 'unsent', sent_at: null, state_set_at: null,
+      state_set_by: null, reached_owner: false, check: null, owner: { ...OWNER, match: 'name' } });
+    expect(validatePersonRunsResultV1('item', { item: action }).item.kind).toBe('action');
+    expect(PERSON_RUN_MEETING_ACTIONS_MAX_V1).toBe(20);
+    expect(PERSON_RUN_ITEMS_MAX_V1).toBe(40);
+    const kinds = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'];
+    expect(validatePersonRunsResultV1('home', { send: [sendRow({ kinds, items: 40, owners: Array.from({ length: 40 }, (_, at) => `Owner ${at}`) })], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false })
+      .send[0]!.kinds).toEqual(kinds);
+    refused(() => validatePersonRunsResultV1('home', { send: [sendRow({ owners: Array.from({ length: 41 }, (_, at) => `Owner ${at}`) })], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false }), 'one owner too many');
   });
 
   it('accepts a home and an items page up to their bounds', () => {

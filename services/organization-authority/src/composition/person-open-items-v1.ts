@@ -118,8 +118,8 @@ const DETAIL_CHARS = 128;
 const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const GLOBAL = Object.freeze({ kind: 'global' as const });
-/** Send row kinds in one fixed order. */
-const KIND_ORDER: readonly PersonOpenItemKindV1[] = ['ticket', 'page', 'slack_message', 'record', 'document'];
+/** Send row kinds in one fixed order: the meeting's own actions first. */
+const KIND_ORDER: readonly PersonOpenItemKindV1[] = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'];
 const UNKNOWN_MEMBER = 'Unknown member';
 /** The codes an Authority error can carry: an observation names one of these, else `error`, never a message. */
 const ERROR_CODES: readonly AuthorityErrorCode[] = ['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable'];
@@ -142,14 +142,22 @@ function invalidOutput(): never {
   throw new AuthorityOperationError('invalid_output', 'open items response is invalid');
 }
 
-/** The tool an item lives in, from its stored pointer. */
+/** What an item is, from its stored pointer: the approved meeting's own action, or the tool an affected item lives in. */
 export function openItemKindV1(pointer: Pointer): PersonOpenItemKindV1 {
   switch (pointer.kind) {
+    case 'meeting_action': return 'action';
     case 'ticket': case 'page': case 'slack_message': return pointer.kind;
     case 'approved_record': return 'record';
     case 'source_revision': return 'document';
     default: return invalidOutput();
   }
+}
+/**
+ * The approved meeting's own action: ECHO data only, its line stored on the item, so no desk opens it and no sweep rechecks
+ * it (the sweep trigger refuses its pointer). It is closed by hand.
+ */
+function meetingAction(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
+  return row.pointer.kind === 'meeting_action';
 }
 
 /** Code point order, as SQLite's binary collation and canonical ISO times order. */
@@ -304,8 +312,8 @@ export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' 
 /**
  * A sweep re-reads an item through its pointer, as a finding's citation the
  * sweep trigger takes: a ticket, a page, an ECHO record or document, and no
- * Slack message today. An item on any other pointer is never swept, so it
- * never makes a sweep due either.
+ * Slack message today. An item on any other pointer, a meeting action
+ * included, is never swept, so it never makes a sweep due either.
  */
 function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
   // No Slack message: no desk can read a Slack citation yet, so a swept one would always be recorded unreadable (R62).
@@ -369,7 +377,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
    */
   const openLive = async (viewer: Viewer, rows: readonly ImpactItemRowV1[], signal?: AbortSignal): Promise<ReadonlyMap<Sha256Digest, LiveRead>> => {
     const targets = new Map<Sha256Digest, Pointer>();
-    for (const row of rows) if (targets.size < LIVE_OPENS_MAX && !targets.has(row.item_key)) targets.set(row.item_key, row.pointer);
+    // A meeting action is never read live: it stays not_read.
+    for (const row of rows) if (targets.size < LIVE_OPENS_MAX && !targets.has(row.item_key) && !meetingAction(row)) targets.set(row.item_key, row.pointer);
     if (targets.size === 0) return new Map();
     const withSignal = signal === undefined ? {} : { signal };
     const unavailable = Object.freeze({ reach: 'unavailable' as const });

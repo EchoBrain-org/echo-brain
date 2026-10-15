@@ -547,6 +547,46 @@ describe('open items: send, update, reassign', () => {
   });
 });
 
+describe('open items: meeting actions (follow-ups thread v1)', () => {
+  const ACTIONS = [{ signal_id: 'act-1', text: 'Send the vendor the pilot plan', owner: 'Rafael Moreno' }, { signal_id: 'act-2', text: 'Book the lab', owner: null }] as const;
+
+  it('shows a meeting action as an item of kind action, from ECHO data alone, never read live', async () => {
+    const f = await openItemsFixture({ meetingActions: ACTIONS }); await f.finishImpactRun();
+    const opens = f.opened.length;
+    const { items, summary } = await scope(f, 'mina', 'run');
+    const actions = items.filter(entry => entry.kind === 'action');
+    expect(actions).toHaveLength(2);
+    expect(actions.map(entry => entry.reach)).toEqual(['not_read', 'not_read']);
+    expect(actions.some(entry => Object.hasOwn(entry, 'current'))).toBe(false);
+    expect(actions.find(entry => entry.expected === 'Send the vendor the pilot plan')).toMatchObject({
+      relation: 'needs_updating', state: 'unsent', waits_on: 'approver', reached_owner: false,
+      owner: { membership_id: f.membership('rafael'), name: 'Rafael Moreno', match: 'name' }, decision: { title: 'Pilot planning' },
+    });
+    expect(actions.find(entry => entry.expected === 'Book the lab')).toMatchObject({ owner: { name: 'Ari', match: 'approver' } });
+    // Only the ticket and the other decision's action were opened live.
+    expect(f.opened.slice(opens).map(open => open.kind).sort()).toEqual(['approved_record', 'ticket']);
+    expect(summary).toMatchObject({ unsent: 4, decisions: 1 });
+    // Ari's Send row names the actions first, and their owners.
+    expect((await f.app.home({ access_token: 'ari' })).send).toMatchObject([{ items: 4, kinds: ['action', 'ticket', 'record'], owners: ['Mina Patel', 'Rafael Moreno'] }]);
+  });
+
+  it('sends a meeting action to its owner, who closes it by hand', async () => {
+    const f = await openItemsFixture({ meetingActions: ACTIONS }); await f.finishImpactRun();
+    const unsent = (await scope(f, 'ari', 'run')).items;
+    const action = unsent.find(entry => entry.kind === 'action' && entry.owner.match === 'name')!;
+    // Ari sends only Rafael's action; everything else stays to send later.
+    await expect(f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id: 'c1', items: [{ item_id: action.item_id, include: true }] } }))
+      .resolves.toEqual({ sent: 1, not_relevant: 0 });
+    const opens = f.opened.length;
+    const home = await f.app.home({ access_token: 'rafael' });
+    expect(home.items).toMatchObject([{ item_id: action.item_id, kind: 'action', state: 'open', waits_on: 'owner', reach: 'not_read', reached_owner: true, can: { set_state: true, assign: true } }]);
+    expect(f.opened.length).toBe(opens);
+    await expect(setState(f, 'rafael', action.item_id, 'done')).resolves.toEqual({ state: 'done' });
+    expect((await item(f, 'ari', action.item_id)).item).toMatchObject({ state: 'done', state_set_by: { name: 'Rafael Moreno' } });
+    expect((await f.app.home({ access_token: 'ari' })).send).toMatchObject([{ items: 3 }]);
+  });
+});
+
 describe('open items: Home', () => {
   it('lists Send rows only to the approver and counts what waits on others', async () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
