@@ -691,15 +691,10 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const viewer = viewerOf(input.access_token, input.signal);
       const row = actable(viewer, input.request.item_id, 'assign');
       activeMember(viewer, input.request.owner_membership_id);
-      // Its own owner again changes nothing, so nothing is written: the item keeps how its owner was found. The one exception is
-      // the approver ECHO fell back to for want of a match, taken on: then they are its chosen owner (picked, or reassigned once
-      // sent), and the item no longer asks for one.
-      let owner = row.owner_membership_id;
-      if (owner !== input.request.owner_membership_id || row.owner_match === 'approver') {
-        const updated = options.items.assign(row.item_id, input.request.owner_membership_id, viewer.membership);
-        if (updated === undefined) throw notFound();
-        owner = updated.owner_membership_id;
-      }
+      // Its own owner again writes nothing, except the approver ECHO fell back to taken on (the store decides).
+      const updated = options.items.assign(row.item_id, input.request.owner_membership_id, viewer.membership);
+      if (updated === undefined) throw notFound();
+      const owner = updated.owner_membership_id;
       return checked('assign', { owner: personOf(options.people.people(viewer.organization, [owner]), owner) });
     },
 

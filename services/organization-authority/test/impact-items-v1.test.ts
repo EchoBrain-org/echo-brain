@@ -224,6 +224,9 @@ describe('SQLite open items v1', () => {
     expect(f.items.setState('itm_missing', 'done', ARI)).toBeUndefined();
     expect(f.items.assign(b!.item_id, f.rafael, ARI)).toMatchObject({ owner_membership_id: f.rafael, owner_match: 'reassigned', state: 'open' });
     expect(f.db.prepare('SELECT owner_set_by, owner_set_at FROM authority_impact_items_v1 WHERE item_id=?').get(b!.item_id)).toEqual({ owner_set_by: ARI, owner_set_at: f.clock().toISOString() });
+    // Its owner again changes nothing, so nothing is written.
+    f.advance(60_000);
+    expect(f.items.assign(b!.item_id, f.rafael, f.mina)).toMatchObject({ owner_membership_id: f.rafael, owner_set_by: ARI });
     expect(f.items.assign('itm_missing', f.rafael, ARI)).toBeUndefined();
   });
 

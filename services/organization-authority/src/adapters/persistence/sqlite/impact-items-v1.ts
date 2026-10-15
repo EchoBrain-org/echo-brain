@@ -70,6 +70,13 @@ function publicItem(value: StoredItemV1): ImpactItemRowV1 {
     created_at: value.created_at, updated_at: value.updated_at,
   });
 }
+/**
+ * Picking `owner` changes the item: another owner, or the approver ECHO fell back to for want of a match, taken on as their
+ * choice so the item no longer waits for an owner to be chosen (follow-ups thread v1, F2). Any other pick of its owner is none.
+ */
+function ownerPickChanges(item: Pick<StoredItemV1, 'owner_membership_id' | 'owner_match'>, owner: string): boolean {
+  return owner !== item.owner_membership_id || item.owner_match === 'approver';
+}
 function limitOf(limit: number): number {
   if (!Number.isSafeInteger(limit) || limit < 0) throw new TypeError('Open item limit must be a non-negative integer');
   return limit;
@@ -195,8 +202,7 @@ export class SqliteImpactItemsV1 {
       for (const choice of input.choices) {
         const owner = choice.owner_membership_id;
         const current = unsent.get(choice.item_id)!;
-        // The approver ECHO fell back to, picked, is picked: the item no longer waits for an owner to be chosen.
-        if (choice.include && owner !== undefined && (owner !== current.owner_membership_id || current.owner_match === 'approver')) {
+        if (choice.include && owner !== undefined && ownerPickChanges(current, owner)) {
           pick.run(owner, input.by, timestamp, timestamp, choice.item_id, input.run_id);
         }
         const changes = move.run(choice.include ? 'open' : 'not_relevant', timestamp, input.command_id, choice.include ? 1 : 0, input.by, timestamp, timestamp, choice.item_id, input.run_id).changes;
@@ -219,12 +225,13 @@ export class SqliteImpactItemsV1 {
 
   /**
    * Stores the owner at once, with who set it and when: `owner_match = picked` on an item still unsent (an owner picked before
-   * Send, follow-ups thread v1, F2), `reassigned` once it is sent. It writes even when the owner is the current one: the caller
-   * decides when that changes nothing (the runs service: unless the item fell back to its approver). Undefined when the item is
-   * missing.
+   * Send, follow-ups thread v1, F2), `reassigned` once it is sent. A pick that changes nothing writes nothing: the item keeps how
+   * its owner was found. Undefined when the item is missing.
    */
   assign(itemId: string, ownerMembershipId: string, by: string): ImpactItemRowV1 | undefined {
     return this.immediate(() => {
+      const item = this.read(itemId);
+      if (item === undefined || !ownerPickChanges(item, ownerMembershipId)) return item;
       const timestamp = this.timestamp();
       const changes = this.database.prepare(`UPDATE authority_impact_items_v1 SET owner_membership_id=?,
         owner_match=CASE WHEN state='unsent' THEN 'picked' ELSE 'reassigned' END, owner_set_by=?, owner_set_at=?, updated_at=?
