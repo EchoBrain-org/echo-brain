@@ -1,7 +1,8 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { emit, launch, setUpdateState, updateInstalls, type Launched } from './launch.js';
-import { quitPrompts } from './native.js';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { emit, launch, type Launched } from './launch.js';
 
 let app: Launched;
 test.afterEach(async () => { await app?.close(); });
@@ -25,100 +26,192 @@ async function approveFromHome(run: Launched) {
 }
 
 const runOperations = () => app.calls().filter(call => call.path === '/v1/person/runs').map(call => call.body?.operation);
+/** The runs requests the app sent with one operation, as sent. */
+const requests = (operation: string) => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === operation).map(call => call.body!);
 /** The sweeps the app asked for, by scope. */
-const sweeps = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'sweep')
-  .map(call => ({ scope: call.body?.scope, id: call.body?.id }));
-/** The item pages the app read (not counts only), by scope and whether they asked for open items only. */
-const itemPages = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && call.body?.summary_only !== true)
-  .map(call => ({ scope: call.body?.scope, open_only: call.body?.open_only === true }));
+const sweeps = () => requests('sweep').map(body => ({ scope: body.scope, id: body.id }));
 /** The fixture's Pilot planning record, and the project it was approved into. */
 const PILOT_RECORD = `sha256:${createHash('sha256').update('record:Pilot planning').digest('hex')}`;
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 /** A day as the app writes it ("Oct 7"), in this computer's time zone, as the app's is. */
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+/** What a live open of an item Ari cannot open would read: its key, title, link and assignee. */
+const WITHHELD = ['ECHO-31', 'Trace sign-off', 'browse/ECHO-31', 'S. Okafor', 'ECHO-20', 'Vendor order', 'Rafael Moreno'];
+
+/** A list's group of one status, and its rows. */
+const group = (list: Locator, status: 'Not sent' | 'Open' | 'Done' | 'Dismissed') => list.getByRole('region', { name: status, exact: true });
+const row = (scope: Locator, text: string) => scope.getByTestId('follow-up-row').filter({ hasText: text });
+
+/** Picks a person under an owner chip that is open. */
+async function pickOwner(page: Page, name: string, query?: string) {
+  const picker = page.getByTestId('owner-picker');
+  if (query !== undefined) await picker.getByRole('searchbox', { name: 'Find a person' }).fill(query);
+  await picker.getByRole('option', { name, exact: true }).click();
+}
+
+test('a meeting\'s follow-ups go to their owners from one list, and come back done', async ({}, testInfo) => {
+  app = await launch('granola');
+  const { page } = app;
+  await approveFromHome(app);
+  // The check runs by itself; its Send row opens the meeting's follow-ups.
+  const send = page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' });
+  await expect(send).toContainText('Launch the pilot next week — 4 follow-ups to send', { timeout: 20_000 });
+  await expect(send).toContainText('owners Mina, Rafael');
+  await send.click();
+  const list = page.getByTestId('follow-ups');
+  await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
+  await expect(list).toContainText(`Approved ${day('2026-10-07T10:00:00.000Z')} · 4 follow-ups`);
+  // Not sent: the meeting's actions first, then what its check found; every row ticked, as one click sends them all.
+  const unsent = group(list, 'Not sent');
+  await expect(unsent.getByText('Not sent · 4')).toBeVisible();
+  await expect(unsent.getByTestId('follow-up-row')).toHaveText([/^Send the revised quoteMeeting action/, /^Confirm the traceMeeting action/,
+    /^ECHO-12 · Pilot launchJira ticket/, /^Thermostat PRD · Pilot scopeConfluence page/]);
+  for (const name of ['Send the revised quote', 'Confirm the trace', 'ECHO-12 · Pilot launch', 'Thermostat PRD · Pilot scope']) {
+    await expect(unsent.getByRole('checkbox', { name, exact: true })).toBeChecked();
+  }
+  await expect(row(unsent, 'Send the revised quote')).toContainText('Rafael');
+  await expect(row(unsent, 'Confirm the trace')).toContainText('Mina');
+  // ECHO matched no one for the PRD page: Pick owner.
+  await expect(row(unsent, 'Thermostat PRD').getByRole('button', { name: 'Pick owner: Thermostat PRD · Pilot scope' })).toBeVisible();
+  await expect(list.getByRole('button', { name: 'Send 4', exact: true })).toBeVisible();
+
+  // Untick all but ECHO-12, and send it: it is Open with its owner, the rest still Not sent, and the list stays.
+  for (const name of ['Send the revised quote', 'Confirm the trace', 'Thermostat PRD · Pilot scope']) await unsent.getByRole('checkbox', { name, exact: true }).uncheck();
+  await list.getByRole('button', { name: 'Send 1', exact: true }).click();
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Sent 1 to Mina Patel');
+  await expect(row(group(list, 'Open'), 'ECHO-12')).toContainText('Mina');
+  await expect(unsent.getByTestId('follow-up-row')).toHaveCount(3);
+  await expect(unsent.getByRole('checkbox', { checked: true })).toHaveCount(0);
+  expect(requests('send').map(body => body.items)).toEqual([[{ item_id: 'itm_00000000-0000-4000-8000-000000000031', include: true }]]);
+
+  // An owner changed in place before sending: the PRD page goes to Rafael at once, still Not sent.
+  await row(unsent, 'Thermostat PRD').getByRole('button', { name: 'Pick owner: Thermostat PRD · Pilot scope' }).click();
+  await expect(page.getByTestId('owner-picker').getByRole('option').first()).toHaveAccessibleName('Me');
+  await pickOwner(page, 'Rafael Moreno', 'Raf');
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Owner changed to Rafael Moreno');
+  await expect(row(unsent, 'Thermostat PRD')).toContainText('Rafael');
+  // And after sending: Confirm the trace goes to Mina, then to Rafael.
+  await unsent.getByRole('checkbox', { name: 'Confirm the trace', exact: true }).check();
+  await list.getByRole('button', { name: 'Send 1', exact: true }).click();
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Sent 1 to Mina Patel');
+  const trace = row(group(list, 'Open'), 'Confirm the trace');
+  await trace.getByRole('button', { name: /^Owner: Mina/ }).click();
+  await pickOwner(page, 'Rafael Moreno', 'Raf');
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Owner changed to Rafael Moreno');
+  await expect(trace).toContainText('Rafael');
+  expect(requests('assign').map(body => body.item_id)).toEqual(['itm_00000000-0000-4000-8000-000000000032', 'itm_00000000-0000-4000-8000-000000000039']);
+
+  // Dismiss moves a row to Dismissed; its page offers Send to its owner, which reopens it to them.
+  await unsent.getByRole('checkbox', { name: 'Send the revised quote', exact: true }).check();
+  await list.getByRole('button', { name: 'Dismiss 1', exact: true }).click();
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Dismissed 1');
+  await row(group(list, 'Dismissed'), 'Send the revised quote').click();
+  const item = page.getByTestId('follow-up');
+  await expect(item.getByRole('heading', { name: 'Send the revised quote' })).toBeVisible();
+  await expect(item.getByTestId('follow-up-state')).toHaveText('Dismissed');
+  await expect(item).toContainText('Decided in the meeting');
+  await expect(item.getByTestId('follow-up-history')).toContainText('Dismissed by you');
+  await item.getByRole('button', { name: 'Send to Rafael', exact: true }).click();
+  await expect(item.getByTestId('follow-up-said')).toHaveText('Sent to Rafael Moreno');
+  await expect(item.getByTestId('follow-up-state')).toHaveText('Open');
+  // Back: the list as it is now, where it was.
+  await page.getByTestId('back').click();
+  await expect(row(group(list, 'Open'), 'Send the revised quote')).toBeVisible();
+  await expect(group(list, 'Dismissed')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('follow-ups.png') });
+
+  // The owner (Mina) marks ECHO-12 done. Ari sees it under Done in Your follow-ups, with who did it.
+  writeFileSync(join(app.home, 'mina-done'), '');
+  await page.getByTestId('sidebar-follow-ups').click();
+  await expect(page.getByTestId('sidebar-follow-ups')).toHaveAttribute('aria-current', 'page');
+  const mine = page.getByTestId('follow-ups');
+  await expect(mine.getByRole('heading', { name: 'Your follow-ups' })).toBeVisible();
+  await row(group(mine, 'Done'), 'ECHO-12').click();
+  await expect(item.getByTestId('follow-up-state')).toHaveText('Done');
+  const history = item.getByTestId('follow-up-history');
+  await expect(history).toContainText('Found');
+  await expect(history).toContainText('Sent to Mina Patel by you');
+  await expect(history).toContainText('Done by Mina Patel');
+  await page.screenshot({ path: testInfo.outputPath('follow-up.png') });
+  // Reopen, then Mark done and Undo it: each says what happened, in place.
+  await item.getByRole('button', { name: 'Reopen', exact: true }).click();
+  await expect(item.getByTestId('follow-up-said')).toHaveText('Reopened');
+  await expect(item.getByTestId('follow-up-state')).toHaveText('Open');
+  await item.getByRole('button', { name: 'Mark done', exact: true }).click();
+  await expect(item.getByTestId('follow-up-said')).toHaveText('Done · Undo');
+  await item.getByTestId('follow-up-said').getByRole('button', { name: 'Undo' }).click();
+  await expect(item.getByTestId('follow-up-said')).toHaveText('Reopened');
+  await expect(item.getByTestId('follow-up-state')).toHaveText('Open');
+  expect(requests('set_state').map(body => body.state)).toEqual(['open', 'open', 'done', 'open']);
+  // Back to Your follow-ups, read again: ECHO-12 is open; then Back is Home.
+  await page.getByTestId('back').click();
+  await expect(row(group(mine, 'Open'), 'ECHO-12')).toBeVisible();
+  await page.getByTestId('back').click();
+  await expect(page.getByTestId('needs')).toBeVisible();
+});
+
 /** Pilot planning as Ari approved it in the checked modes, and as Mina approved it in the owner modes. */
 const ARI_PILOT = `Pilot planning meeting, approved ${day('2026-10-07T10:00:00.000Z')}`;
 const MINA_PILOT = `Pilot planning meeting, approved ${day('2026-10-06T18:00:00.000Z')}`;
 
-test('the approver sends the impact to its owners from Home', async () => {
-  app = await launch('granola');
-  await approveFromHome(app);
-  const send = app.page.getByTestId('need-row').filter({ hasText: 'need updating' });
-  await expect(send).toBeVisible({ timeout: 20_000 });
-  await expect(send).toContainText('owners Mina');
-  await send.click();
-  await expect(app.page.getByTestId('send')).toBeVisible();
-  await expect(app.page.getByText('Untick any that’s wrong. Each goes to its owner’s Home.')).toBeVisible();
-  // What an item says now is covered while another app is in front, and the card comes back as it was.
-  await emit(app.app, 'echo-test:conceal');
-  await expect(app.page.getByTestId('concealed')).toBeVisible();
-  await expect(app.page.locator('body')).not.toContainText('ECHO-12');
-  await emit(app.app, 'echo-test:resume');
-  await expect(app.page.getByTestId('send')).toBeVisible();
-  await app.page.getByRole('button', { name: 'Pick a person: Thermostat PRD · Pilot scope' }).click();
-  await app.page.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
-  await app.page.getByRole('option', { name: 'Rafael Moreno' }).click();
-  // Removing the pick names its item too.
-  await expect(app.page.getByRole('button', { name: 'Remove Rafael from Thermostat PRD · Pilot scope', exact: true })).toBeVisible();
-  await app.page.getByRole('button', { name: 'Send to Mina and Rafael' }).click();
-  await expect(app.page.getByTestId('need-row').filter({ hasText: 'need updating' })).toHaveCount(0);
-  const sent = app.calls().find(call => call.path === '/v1/person/runs' && call.body?.operation === 'send')!;
-  expect(sent.body?.items).toEqual(expect.arrayContaining([expect.objectContaining({ include: true, owner_membership_id: expect.any(String) })]));
-  // Both items now wait on someone else.
-  await expect(app.page.getByText('2 waiting on others')).toBeVisible();
-});
-
-test('an owner without Granola closes an item from Home', async () => {
+test('the owner opens a follow-up from Home and marks it done there', async () => {
   app = await launch('granola-owner');
-  const row = app.page.getByTestId('need-row').filter({ hasText: 'ECHO-12' });
-  await expect(row).toContainText('ECHO-12 · Pilot launch doesn\'t match the decision yet');
-  await expect(row).toContainText('Due Oct 30 → decision needs: launch next week');
-  await expect(row).toContainText(`Jira ticket · ${MINA_PILOT}`);
-  // Not changed since it was sent: an Update row that acts in place.
-  await expect(row).toHaveAttribute('data-kind', 'update');
+  const { page } = app;
+  const home = page.getByTestId('need-row').filter({ hasText: 'ECHO-12' });
+  // Three lines: its title, what it says now against what the meeting needs, and what it is and where it came from.
+  await expect(home).toHaveAttribute('data-kind', 'update');
+  await expect(home).toContainText('ECHO-12 · Pilot launch');
+  await expect(home).not.toContainText('doesn\'t match');
+  await expect(home).toContainText('Due Oct 30 → decision needs: launch next week');
+  await expect(home).toContainText(`Jira ticket · ${MINA_PILOT}`);
+  // The row is one button: nothing on Home closes an item.
+  await expect(home.getByRole('button')).toHaveCount(0);
   expect(app.calls().some(call => call.path === '/v1/person/meetings')).toBe(false);
-  await expect(row.getByRole('button', { name: 'Open in Jira: ECHO-12 · Pilot launch' })).toBeVisible();
-  // The fixture's second item has no `current`: Ari cannot open it in Jira.
-  const hidden = app.page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' });
-  await expect(hidden).toContainText('A Jira ticket you can\'t open');
-  await expect(hidden.getByRole('button', { name: /^Open in / })).toHaveCount(0);
-  await row.getByRole('button', { name: 'Mark updated: ECHO-12 · Pilot launch' }).click();
-  await expect(row).toHaveCount(0);
-  // The row leaves at once; the request follows.
-  await expect.poll(() => app.calls().some(call => call.body?.operation === 'set_state' && call.body.state === 'done')).toBe(true);
+  await home.click();
+  const item = page.getByTestId('follow-up');
+  await expect(item.getByRole('heading', { name: 'ECHO-12 · Pilot launch' })).toBeVisible();
+  await expect(item.getByTestId('follow-up-state')).toHaveText('Open');
+  await expect(item).toContainText(`Jira ticket · from Pilot planning, ${day('2026-10-06T18:00:00.000Z')}`);
+  await expect(item.getByTestId('follow-up-history')).toContainText('Sent to you by Mina Patel');
+  await expect(item.getByRole('complementary')).toContainText('You');
+  await item.getByRole('button', { name: 'Mark done', exact: true }).click();
+  await expect(item.getByTestId('follow-up-said')).toHaveText('Done · Undo');
+  await expect(item.getByTestId('follow-up-state')).toHaveText('Done');
+  await expect(item.getByTestId('follow-up-history')).toContainText('Done by you');
+  // Back on Home, read again: it no longer waits on Ari.
+  await page.getByTestId('back').click();
+  await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toHaveCount(0);
+  expect(requests('set_state')).toEqual([expect.objectContaining({ item_id: 'itm_00000000-0000-4000-8000-000000000041', state: 'done' })]);
 });
 
-/** What a live open of an item Ari cannot open would read: its key, title, link and assignee. */
-const WITHHELD = ['ECHO-31', 'Trace sign-off', 'browse/ECHO-31', 'S. Okafor', 'ECHO-20', 'Vendor order', 'Rafael Moreno'];
-
-test('a decision reader who cannot open an item sees what it is, never what it says', async () => {
+test('a reader who cannot open an item sees what it is, never what it says', async () => {
   app = await launch('granola-owner');
+  const { page } = app;
   // Ari reads Pilot planning, but cannot open this ticket in Jira.
-  const row = app.page.getByTestId('need-row').filter({ hasText: 'confirm the trace by Friday' });
-  await expect(row).toContainText('A Jira ticket you can\'t open doesn\'t match the decision yet');
-  await expect(row).toContainText('Decision needs: confirm the trace by Friday');
-  await expect(row).toContainText(`Jira ticket · ${MINA_PILOT}`);
-  await expect(row.getByRole('button', { name: /^Open in / })).toHaveCount(0);
-  // A decision Ari cannot read is never named: who sent the item is.
-  await expect(app.page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toContainText('Jira ticket · sent by Mina');
-  await expect(app.page.getByTestId('needs')).not.toContainText('you own');
-  // Two items Ari can't open would share a name: each Mark updated says what the decision requires of its item.
-  await expect(row.getByRole('button', { name: 'Mark updated: A Jira ticket you can\'t open → confirm the trace by Friday', exact: true })).toBeVisible();
-  await expect(app.page.getByRole('button', { name: 'Mark updated: A Jira ticket you can\'t open → order six weeks ahead', exact: true })).toBeVisible();
-  const home = await app.page.content();
-  for (const withheld of WITHHELD) expect(home).not.toContain(withheld);
-  // The decision's items show it the same way.
-  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
-  await app.page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).click();
-  const impact = app.page.getByTestId('impact-line');
-  await expect(impact).toContainText('Impact · 2 open');
-  await impact.getByRole('button', { name: /Impact/ }).click();
-  const items = app.page.getByTestId('open-item');
-  await expect(items).toHaveCount(2);
-  await expect(items.filter({ hasText: 'confirm the trace by Friday' })).toContainText('A Jira ticket you can\'t open');
-  // No title, permalink or assignee of an item Ari cannot open reaches the page.
-  const page = await app.page.content();
-  for (const withheld of WITHHELD) expect(page).not.toContain(withheld);
+  const home = page.getByTestId('need-row').filter({ hasText: 'confirm the trace by Friday' });
+  await expect(home).toContainText('A Jira ticket you can\'t open');
+  await expect(home).toContainText('Decision needs: confirm the trace by Friday');
+  // A meeting Ari cannot read is never named: who sent the item is.
+  await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toContainText('Jira ticket · sent by Mina');
+  for (const withheld of WITHHELD) expect(await page.content()).not.toContain(withheld);
+  await home.click();
+  const item = page.getByTestId('follow-up');
+  await expect(item.getByRole('heading', { name: 'A Jira ticket you can\'t open' })).toBeVisible();
+  await expect(item).toContainText('You can\'t open it');
+  await expect(item).toContainText('confirm the trace by Friday');
+  await expect(item.getByRole('button', { name: /^Open in / })).toHaveCount(0);
+  for (const withheld of WITHHELD) expect(await page.content()).not.toContain(withheld);
+  // The item's meeting opens that meeting's follow-ups, which show it the same way.
+  await item.getByRole('button', { name: /^from Pilot planning/ }).click();
+  const list = page.getByTestId('follow-ups');
+  await expect(group(list, 'Open').getByTestId('follow-up-row')).toHaveCount(2);
+  await expect(row(list, 'A Jira ticket you can\'t open')).toBeVisible();
+  for (const withheld of WITHHELD) expect(await page.content()).not.toContain(withheld);
+  // Back: the item page, then Home.
+  await page.getByTestId('back').click();
+  await expect(item.getByRole('heading', { name: 'A Jira ticket you can\'t open' })).toBeVisible();
+  await page.getByTestId('back').click();
+  await expect(page.getByTestId('needs')).toBeVisible();
 });
 
 test('a Home read that fails once keeps the rows it had', async () => {
@@ -142,337 +235,229 @@ test('a Home read that fails once keeps the rows it had', async () => {
   await expect(rows.filter({ hasText: 'A Jira ticket you can\'t open' })).toBeVisible();
 });
 
-test('an approved decision shows its Impact line and the project shows its open items', async () => {
+test('an approved meeting counts its follow-ups by status, and its project counts what is open', async () => {
   app = await launch('granola');
+  const { page } = app;
   await approveFromHome(app);
-  await expect(app.page.getByTestId('need-row').filter({ hasText: 'need updating' })).toBeVisible({ timeout: 20_000 });
-  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
-  const line = app.page.getByTestId('project-line');
-  await expect(line).toContainText('2 open items · from 1 decision');
-  const decision = app.page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' });
-  await expect(decision).toContainText('2 open');
+  await expect(page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' })).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
+  const line = page.getByTestId('project-line');
+  // Not sent counts as open (F7): two documents and the meeting's two actions.
+  await expect(line).toHaveText('4 open follow-ups');
+  const meeting = page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' });
+  await expect(meeting.getByTestId('item-open')).toHaveText('4 open');
   // Counting opened nothing: every items read so far asked for the project's counts only.
-  const itemReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items')
-    .map(call => ({ scope: call.body?.scope, counts: call.body?.summary_only === true }));
-  expect(itemReads().length).toBeGreaterThan(0);
+  const itemReads = () => requests('items').map(body => ({ scope: body.scope, counts: body.summary_only === true }));
   expect(itemReads().every(read => read.scope === 'project' && read.counts)).toBe(true);
-  await decision.click();
-  const impact = app.page.getByTestId('impact-line');
-  await expect(impact).toContainText('Impact · 2 not sent');
-  await expect(impact.getByRole('button', { name: 'Send' })).toBeVisible();
-  // Nothing is open to check until the items are sent.
-  await impact.getByRole('button', { name: 'Check now' }).click();
-  await expect(impact).toContainText('Nothing open to check');
+  await meeting.click();
+  const impact = page.getByTestId('impact-line');
+  await expect(impact).toHaveText('Follow-ups · 4 not sent');
+  await expect(impact.getByRole('button')).toHaveCount(1);
+  await impact.getByRole('button', { name: /Follow-ups/ }).click();
+  const list = page.getByTestId('follow-ups');
+  await expect(group(list, 'Not sent').getByTestId('follow-up-row')).toHaveCount(4);
+  expect(itemReads().filter(read => !read.counts)).toEqual([{ scope: 'record', counts: false }]);
+  // Nothing is open to check until something is sent.
+  await list.getByRole('button', { name: 'Check now' }).click();
+  await expect(list).toContainText('Nothing open to check');
   expect(sweeps()).toEqual([{ scope: 'record', id: PILOT_RECORD }]);
-  // The line read the decision's counts only; opening it lists the items.
-  const recordReads = () => itemReads().filter(read => read.scope === 'record').map(read => read.counts);
-  expect(recordReads().length).toBeGreaterThan(0);
-  expect(recordReads().every(counts => counts)).toBe(true);
-  await impact.getByRole('button', { name: /Impact/ }).click();
-  const items = app.page.getByTestId('open-items');
-  await expect(items.getByRole('heading', { name: 'Open items' })).toBeVisible();
-  await expect(items.getByTestId('open-item')).toHaveCount(2);
-  await expect(items.getByRole('region', { name: 'Mina Patel' })).toContainText('ECHO-12 · Pilot launch');
-  await expect(items.getByRole('region', { name: 'Ari' })).toContainText('Thermostat PRD · Pilot scope');
-  expect(recordReads().filter(counts => !counts)).toHaveLength(1);
-  // Back returns to the decision, then to the project, whose line opens its items too.
-  await app.page.getByTestId('back').click();
+  // What a follow-up says now is covered while another app is in front, and the list comes back as it was.
+  await emit(app.app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await expect(page.locator('body')).not.toContainText('ECHO-12');
+  await emit(app.app, 'echo-test:resume');
+  await expect(group(list, 'Not sent').getByTestId('follow-up-row')).toHaveCount(4);
+  // Back: the meeting, then the project, whose line opens the project's follow-ups.
+  await page.getByTestId('back').click();
   await expect(impact).toBeVisible();
-  await app.page.getByTestId('back').click();
-  await line.click();
-  await expect(items.getByTestId('open-item')).toHaveCount(2);
-  expect(itemReads().filter(read => read.scope === 'project' && !read.counts)).toEqual([{ scope: 'project', counts: false }]);
+  await page.getByTestId('back').click();
+  await line.getByRole('button').click();
+  await expect(list.getByRole('heading', { name: 'Follow-ups', exact: true })).toBeVisible();
+  await expect(list).toContainText('Thermostat redesign');
+  // Spanning meetings, each row names its meeting.
+  await expect(row(list, 'ECHO-12')).toContainText('Jira ticket · Pilot planning');
+  expect(itemReads().filter(read => !read.counts)).toEqual([{ scope: 'record', counts: false }, { scope: 'project', counts: false }]);
 });
 
 test('an outage is not shown as lost access', async () => {
   app = await launch('granola-owner-outage');
   // Jira did not answer for this item just now: ECHO says so, and never that Ari lost access to it.
   const outage = app.page.getByTestId('need-row').filter({ hasText: 'A Jira ticket ECHO couldn\'t read just now' });
-  await expect(outage).toBeVisible();
-  await expect(outage).toContainText('A Jira ticket ECHO couldn\'t read just now doesn\'t match the decision yet');
   await expect(outage).toContainText('Decision needs: confirm the trace by Friday');
-  await expect(outage.getByRole('button', { name: /^Open in / })).toHaveCount(0);
-  await expect(outage.getByRole('button', { name: 'Mark updated: A Jira ticket ECHO couldn\'t read just now', exact: true })).toBeVisible();
+  await outage.click();
+  const item = app.page.getByTestId('follow-up');
+  await expect(item).toContainText('ECHO couldn\'t read it just now');
+  await expect(item.getByRole('button', { name: /^Open in / })).toHaveCount(0);
   // An item Ari truly cannot open still says so.
+  await app.page.getByTestId('back').click();
   await expect(app.page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toContainText('A Jira ticket you can\'t open');
-  const home = await app.page.content();
-  for (const withheld of WITHHELD) expect(home).not.toContain(withheld);
+  for (const withheld of WITHHELD) expect(await app.page.content()).not.toContain(withheld);
 });
 
-test('Home sweeps by itself and shows what matches and what changed', async () => {
+test('Home sweeps by itself, and Your follow-ups lists everything you sent or own', async () => {
   app = await launch('granola-sweep');
-  const rows = app.page.getByTestId('need-row');
-  // Before the sweep the PRD page waits on Ari unchecked; after it, ECHO saw it change.
-  await expect(rows.filter({ hasText: 'changed since you got it, still doesn\'t match' })).toBeVisible({ timeout: 20_000 });
-  const foot = app.page.getByTestId('needs-foot');
-  await expect(foot).toContainText('1 matches its decision now · 2 waiting on others · ECHO checked just now');
+  const { page } = app;
+  const foot = page.getByTestId('needs-foot');
+  // The sweep found the PRD page changed: it waits on Ari, who owns it.
+  await expect(foot).toContainText('4 waiting on others · ECHO checked just now', { timeout: 20_000 });
+  await expect(foot).not.toContainText('match');
   // Home asked for one sweep of Ari's own items and started it; a sweep makes no Home row of its own.
   expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
   expect(runOperations().indexOf('start')).toBeGreaterThan(runOperations().indexOf('sweep'));
-  await expect(rows).toHaveCount(1);
-  await foot.getByRole('button', { name: 'View your open items' }).click();
-  const status = app.page.getByTestId('item-status');
-  await expect(status.getByRole('heading', { name: 'Your open items' })).toBeVisible();
-  await expect(status).toContainText('3 open · ECHO checked just now');
-  // It asked for your open items only (R51): closed ones are never opened to be left out.
-  expect(itemPages()).toEqual([{ scope: 'mine', open_only: true }]);
-  // One decision: one list, no header. A status view: no checkboxes, and one match is closed from its line.
-  await expect(status.getByRole('checkbox')).toHaveCount(0);
-  await expect(status.getByRole('button', { name: /^Close all/ })).toHaveCount(0);
-  await status.getByRole('button', { name: 'Close: ECHO-12 · Pilot launch', exact: true }).click();
-  await expect(status.getByTestId('status-item')).toHaveCount(2);
-  await expect(status).toContainText('2 open · ECHO checked just now');
-  const closed = app.calls().filter(call => call.body?.operation === 'set_state').map(call => ({ item: call.body?.item_id, state: call.body?.state }));
-  expect(closed).toEqual([{ item: 'itm_00000000-0000-4000-8000-000000000031', state: 'done' }]);
-  // Back on Home, read again: nothing matches now, and no second sweep was asked for.
-  await app.page.getByTestId('back').click();
-  await expect(foot).toContainText('1 waiting on others · ECHO checked just now');
-  await expect(foot).not.toContainText('match');
-  await expect(rows).toHaveCount(1);
+  await expect(page.getByTestId('need-row')).toHaveCount(1);
+  await foot.getByRole('button', { name: 'Your follow-ups' }).click();
+  const list = page.getByTestId('follow-ups');
+  await expect(list.getByRole('heading', { name: 'Your follow-ups' })).toBeVisible();
+  // Every status, not open items only; the meeting's actions first; a match says so, faintly.
+  expect(requests('items').filter(body => body.summary_only !== true)).toEqual([expect.not.objectContaining({ open_only: true })]);
+  const open = group(list, 'Open');
+  await expect(open.getByTestId('follow-up-row')).toHaveCount(5);
+  await expect(open.getByTestId('follow-up-row').first()).toContainText('Send the revised quote');
+  await expect(row(open, 'ECHO-12')).toContainText('Jira ticket · Pilot planning · matches now');
+  await expect(list.getByRole('checkbox')).toHaveCount(0);
+  // Back is Home, read again; no second sweep was asked for.
+  await page.getByTestId('back').click();
+  await expect(foot).toContainText('4 waiting on others');
   expect(sweeps()).toHaveLength(1);
 });
 
-test('the owner\'s changed item opens before anything is closed', async () => {
-  app = await launch('granola-checked');
-  const row = app.page.getByTestId('need-row').filter({ hasText: 'Thermostat PRD' });
-  // Ari's own page changed since Ari got it: still an Update row (R64), flagged by its third line.
-  await expect(row).toHaveAttribute('data-kind', 'update');
-  await expect(row.getByText('Update', { exact: true })).toBeVisible();
-  await expect(row).toContainText('Thermostat PRD · Pilot scope doesn\'t match the decision yet');
-  await expect(row).toContainText('Says "starts after freeze" → decision needs: pilot starts next week');
-  await expect(row).toContainText(`Confluence page · ${ARI_PILOT} · changed since you got it, still doesn\'t match`);
-  await expect(row).toContainText('Thermostat redesign');
-  // The row is one button: nothing on Home closes the item.
-  await expect(row.getByRole('button')).toHaveCount(0);
-  const foot = app.page.getByTestId('needs-foot');
-  await expect(foot).toContainText('1 matches its decision now · 2 waiting on others · ECHO checked 2 h ago');
-  await expect(foot.getByRole('button', { name: 'View your open items' })).toBeVisible();
-  await expect(app.page.getByTestId('needs')).not.toContainText(/landed|Check\b/);
-  await row.click();
-  const card = app.page.getByTestId('item-card');
-  await expect(card.getByRole('heading', { name: 'Thermostat PRD · Pilot scope doesn’t match the decision yet' })).toBeVisible();
-  await expect(card).toContainText('Confluence page · yours to update');
-  // Its main control has the focus, as on Tell the owners? and Your open items.
-  await expect(card.getByRole('button', { name: 'Mark updated', exact: true })).toBeFocused();
-  const decided = card.getByRole('region', { name: 'The decision', exact: true });
-  await expect(decided).toContainText('Launch the pilot next week.');
-  await expect(decided).toContainText(`Pilot planning meeting · approved ${day('2026-10-07T10:00:00.000Z')}`);
-  await expect(card.getByRole('region', { name: 'It says now', exact: true })).toContainText('Says "starts after freeze"');
-  await expect(card.getByRole('region', { name: 'The decision needs', exact: true })).toContainText('pilot starts next week');
-  // ECHO's check, with no person's name.
-  await expect(card).toContainText('ECHO checked 2 h ago: it changed since it was sent, but still doesn\'t match.');
-  await expect(card).not.toContainText('Mina');
-  await expect(card.getByRole('button', { name: 'Open in Confluence: Thermostat PRD · Pilot scope' })).toBeVisible();
-  expect(app.calls().some(call => call.body?.operation === 'set_state')).toBe(false);
-  await card.getByRole('button', { name: 'No change needed', exact: true }).click();
-  // Closed for everyone: its row leaves Home at once, and the empty Home keeps its footer (canvas 9.5).
-  await expect(app.page.getByTestId('need-row')).toHaveCount(0);
-  await expect(app.page.getByText('Nothing needs you')).toBeVisible();
-  await expect(foot).toContainText('1 matches its decision now · 2 waiting on others · ECHO checked 2 h ago');
-  await expect.poll(() => app.calls().filter(call => call.body?.operation === 'set_state').map(call => call.body?.state)).toEqual(['not_relevant']);
-});
-
-test('the approver reviews an item someone else owns once it changed', async () => {
+test('every Home row opens its follow-up\'s page', async () => {
   app = await launch('granola-review');
-  // ECHO-12 is Mina's, sent by Ari, and changed since: a Review row on Ari's Home (R64).
-  const row = app.page.getByTestId('need-row').filter({ hasText: 'ECHO-12' });
-  await expect(row).toHaveAttribute('data-kind', 'review');
-  await expect(row.getByText('Review', { exact: true })).toBeVisible();
-  await expect(row).toContainText('ECHO-12 · Pilot launch doesn\'t match the decision yet');
-  await expect(row).toContainText('Due Oct 30 → decision needs: launch next week');
-  await expect(row).toContainText(`Jira ticket · ${ARI_PILOT} · Mina's to update · changed since you sent it`);
-  await expect(row.getByRole('button')).toHaveCount(0);
-  // Ari's own changed page beside it stays an Update row.
-  await expect(app.page.getByTestId('need-row').filter({ hasText: 'Thermostat PRD' })).toHaveAttribute('data-kind', 'update');
-  await expect(app.page.getByTestId('needs-foot')).toContainText('2 waiting on others · ECHO checked 2 h ago');
-  await row.click();
-  const card = app.page.getByTestId('item-card');
-  await expect(card.getByRole('heading', { name: 'ECHO-12 · Pilot launch changed, but still doesn’t match' })).toBeVisible();
-  await expect(card).toContainText('Jira ticket · Mina\'s to update');
-  await expect(card.getByRole('complementary', { name: 'Your review' })).toContainText('AssigneeMina Patel');
-  await expect(card.getByRole('region', { name: 'It says now', exact: true })).toContainText('Due Oct 30');
-  await expect(card.getByRole('region', { name: 'The decision needs', exact: true })).toContainText('launch next week');
-  await expect(card).toContainText('ECHO checked 2 h ago: it changed since it was sent, but still doesn\'t match.');
-  await expect(card.getByRole('button', { name: 'Open in Jira: ECHO-12 · Pilot launch' })).toBeVisible();
-  await card.getByRole('button', { name: 'Mark updated', exact: true }).click();
-  await expect(row).toHaveCount(0);
-  await expect.poll(() => app.calls().filter(call => call.body?.operation === 'set_state').map(call => ({ item: call.body?.item_id, state: call.body?.state })))
-    .toEqual([{ item: 'itm_00000000-0000-4000-8000-000000000031', state: 'done' }]);
+  const { page } = app;
+  const rows = page.getByTestId('need-row');
+  // ECHO-12 is Mina's, sent by Ari, and changed since: a Review row (R64). Ari's own changed page stays an Update row.
+  const review = rows.filter({ hasText: 'ECHO-12' });
+  await expect(review).toHaveAttribute('data-kind', 'review');
+  await expect(review).toContainText(`Jira ticket · ${ARI_PILOT} · Mina's to update`);
+  await expect(review).not.toContainText('changed');
+  const update = rows.filter({ hasText: 'Thermostat PRD' });
+  await expect(update).toHaveAttribute('data-kind', 'update');
+  for (const [name, owner] of [['ECHO-12 · Pilot launch', 'Mina'], ['Thermostat PRD · Pilot scope', 'You']] as const) {
+    await rows.filter({ hasText: name }).click();
+    const item = page.getByTestId('follow-up');
+    await expect(item.getByRole('heading', { name })).toBeVisible();
+    await expect(item.getByRole('complementary')).toContainText(owner);
+    // ECHO's last check, in one faint line naming no one.
+    await expect(item.getByTestId('follow-up-check')).toHaveText('Checked 2 h ago · changed, still doesn\'t match');
+    await page.getByTestId('back').click();
+    await expect(page.getByTestId('needs')).toBeVisible();
+  }
+  // The approver closes the item someone else owns from its page; Home, read again, no longer shows it.
+  await review.click();
+  await page.getByTestId('follow-up').getByRole('button', { name: 'Mark done', exact: true }).click();
+  await expect(page.getByTestId('follow-up-said')).toHaveText('Done · Undo');
+  await page.getByTestId('back').click();
+  await expect(review).toHaveCount(0);
+  expect(requests('set_state')).toEqual([expect.objectContaining({ item_id: 'itm_00000000-0000-4000-8000-000000000031', state: 'done' })]);
 });
 
-test('the approver reassigns an item someone else owns from its card', async () => {
-  app = await launch('granola-review');
-  await app.page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
-  const card = app.page.getByTestId('item-card');
-  // Escape closes the picker first, and the caret goes back to Reassign….
-  await card.getByTestId('reassign').click();
-  await expect(card.getByRole('searchbox', { name: 'Find a person' })).toBeFocused();
-  await app.page.keyboard.press('Escape');
-  await expect(card.getByTestId('reassign-picker')).toHaveCount(0);
-  await expect(card.getByTestId('reassign')).toBeFocused();
-  await card.getByTestId('reassign').click();
-  await card.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
-  await card.getByRole('option', { name: 'Rafael Moreno' }).click();
-  await expect(app.page.getByTestId('toast')).toHaveText('Reassigned to Rafael Moreno');
-  await expect(app.page.getByTestId('item-card')).toHaveCount(0);
-  expect(app.calls().find(call => call.body?.operation === 'assign')?.body)
-    .toMatchObject({ item_id: 'itm_00000000-0000-4000-8000-000000000031', owner_membership_id: expect.any(String) });
-});
-
-test('a reassignment whose reply was lost holds its card, Restart and Quit until Check status reads the item', async () => {
+test('an owner change whose reply was lost shows the item as it is now, and holds nothing', async () => {
   app = await launch('granola-review-assign-lost');
   const { page } = app;
   await page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
-  const card = page.getByTestId('item-card');
-  await card.getByTestId('reassign').click();
-  await card.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
-  await card.getByRole('option', { name: 'Rafael Moreno' }).click();
-  // It may have gone: nothing more is sent from the card, and Escape keeps it.
-  const picker = card.getByTestId('reassign-picker');
-  await expect(picker).toContainText('This may not have been sent.');
-  await expect(card.getByTestId('reassign-check')).toBeFocused();
-  await expect(picker.getByRole('option', { name: 'Rafael Moreno' })).toBeDisabled();
-  for (const name of ['Mark updated', 'No change needed']) await expect(card.getByRole('button', { name, exact: true })).toBeDisabled();
+  const item = page.getByTestId('follow-up');
+  await item.getByRole('button', { name: /^Owner: Mina/ }).click();
+  // Escape closes the picker first, then the page.
+  await expect(page.getByTestId('owner-picker').getByRole('searchbox', { name: 'Find a person' })).toBeFocused();
   await page.keyboard.press('Escape');
-  await expect(card.getByTestId('reassign-check')).toBeVisible();
-  // Another page and back: the card comes back over Home.
-  await page.getByTestId('sidebar-tools').click();
-  await expect(page.getByTestId('item-card')).toHaveCount(0);
-  await page.getByTestId('sidebar-home').click();
-  await expect(card.getByTestId('reassign-check')).toBeVisible();
-  await setUpdateState(app, { state: 'available', release: 'clean-v1-release-b' });
-  await page.getByTestId('sidebar-update').click();
-  await expect(page.getByTestId('sidebar-update-note')).toHaveText('A reassignment may not have arrived. Check it on Home first.');
-  expect(await updateInstalls(app)).toEqual([]);
-  expect(await quitPrompts(app)).toEqual(['A reassignment may not have been sent.']);
-  // The item read again is Rafael's: it went, as a pick that went says, and nothing is held.
-  await card.getByTestId('reassign-check').click();
-  await expect(page.getByTestId('toast')).toHaveText('Reassigned to Rafael Moreno');
-  await expect(page.getByTestId('item-card')).toHaveCount(0);
-  await expect(page.getByTestId('sidebar-update-note')).toHaveCount(0);
-  expect(app.calls().filter(call => call.body?.operation === 'assign')).toHaveLength(1);
-  expect(app.calls().filter(call => call.body?.operation === 'item').map(call => call.body?.item_id)).toEqual(['itm_00000000-0000-4000-8000-000000000031']);
+  await expect(page.getByTestId('owner-picker')).toHaveCount(0);
+  await expect(item).toBeVisible();
+  await item.getByRole('button', { name: /^Owner: Mina/ }).click();
+  await pickOwner(page, 'Rafael Moreno', 'Raf');
+  // The reply was lost, but the change was made: the item, read again, says so.
+  await expect(item.getByTestId('follow-up-said')).toHaveText('Owner changed to Rafael Moreno');
+  await expect(item.getByRole('complementary')).toContainText('Rafael');
+  await expect(item.getByTestId('follow-up-history')).toContainText('Owner set to Rafael Moreno by you');
+  expect(requests('assign')).toHaveLength(1);
+  expect(requests('item').map(body => body.item_id).at(-1)).toBe('itm_00000000-0000-4000-8000-000000000031');
 });
 
-test('Your open items closes nothing a held reassignment is for until its card settles it', async () => {
-  app = await launch('granola-review-assign-lost');
+test('Check now on a meeting checks only that meeting, and its list says what matches', async () => {
+  app = await launch('granola-checked');
   const { page } = app;
-  await page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
-  const card = page.getByTestId('item-card');
-  await card.getByTestId('reassign').click();
-  await card.getByRole('searchbox', { name: 'Find a person' }).fill('Raf');
-  await card.getByRole('option', { name: 'Rafael Moreno' }).click();
-  await expect(card.getByTestId('reassign-check')).toBeVisible();
-  // The project's Check now finds ECHO-12 matching, but it may be Rafael's now: its Close waits on Home.
   await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
-  await page.getByTestId('project-line').getByRole('button', { name: 'Check now' }).click();
-  const status = page.getByTestId('item-status');
-  await expect(status.getByRole('heading', { name: 'Open items · Thermostat redesign' })).toBeVisible({ timeout: 20_000 });
-  const line = status.getByTestId('status-item').filter({ hasText: 'ECHO-12' });
-  await expect(line).toContainText('Matches now');
-  await expect(status.getByRole('button', { name: 'Close: ECHO-12 · Pilot launch', exact: true })).toBeDisabled();
-  await expect(status.getByTestId('status-held')).toHaveText('A reassignment may not have arrived. Check it on Home first.');
-  await expect(status.getByRole('button', { name: /^Close all/ })).toHaveCount(0);
-  expect(app.calls().filter(call => call.body?.operation === 'set_state')).toEqual([]);
-  // Home still holds the card, as it was.
-  await page.getByTestId('sidebar-home').click();
-  await expect(card.getByTestId('reassign-check')).toBeVisible();
-});
-
-test('Check now on a decision checks only that decision', async () => {
-  app = await launch('granola-checked');
-  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
-  await app.page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).click();
-  const impact = app.page.getByTestId('impact-line');
-  // One open, one landed (handled), one ECHO could not read (canvas 9.6).
-  await expect(impact).toContainText('Impact · 1 open · 1 handled · 1 couldn\'t read · checked 2 h ago');
-  // The faint link the canvas draws (H6), as Home's Mark done is.
-  await expect(impact.getByRole('button', { name: 'Check now' })).toHaveCSS('color', 'rgba(240, 236, 230, 0.5)');
-  await impact.getByRole('button', { name: 'Check now' }).click();
-  await expect(impact).toContainText('Checking…');
-  const status = app.page.getByTestId('item-status');
-  await expect(status.getByRole('heading', { name: 'Open items', exact: true })).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).click();
+  const impact = page.getByTestId('impact-line');
+  // A check's verdict never takes an item out of a count (F7).
+  await expect(impact).toHaveText('Follow-ups · 5 open');
+  await impact.getByRole('button').click();
+  const list = page.getByTestId('follow-ups');
+  const check = list.getByRole('button', { name: 'Check now' });
+  // The faint link the canvas draws (H6).
+  await expect(check).toHaveCSS('color', 'rgba(240, 236, 230, 0.5)');
+  await check.click();
+  await expect(list).toContainText('Checking…');
+  await expect(list.getByRole('button', { name: 'Check now' })).toBeVisible({ timeout: 20_000 });
   expect(sweeps()).toEqual([{ scope: 'record', id: PILOT_RECORD }]);
-  await expect(status).toContainText('3 open · ECHO checked just now');
-  // The decision's open items only (R51); the Impact line read its counts alone.
-  expect(itemPages()).toEqual([{ scope: 'record', open_only: true }]);
-  await expect(status).toContainText('Launch the pilot next week.');
-  // One list, no checkboxes: each item and what the decision needs, its status, its owner; matches first.
-  const lines = status.getByTestId('status-item');
-  await expect(lines).toHaveCount(3);
-  await expect(lines.nth(0)).toContainText('ECHO-12 · Pilot launch · launch next week');
-  await expect(lines.nth(0)).toContainText('Matches now');
-  await expect(lines.nth(0)).toContainText('Mina');
-  await expect(lines.nth(1)).toContainText('Thermostat PRD · Pilot scope · pilot starts next week');
-  await expect(lines.nth(1)).toContainText('Changed, still doesn\'t match');
-  await expect(lines.nth(2)).toContainText('A page you can\'t open · parts ordered for next week');
-  await expect(lines.nth(2)).toContainText('ECHO couldn\'t read it');
-  await expect(status.getByRole('checkbox')).toHaveCount(0);
-  // Only a match closes from its line; one match, so no Close all.
-  await expect(status.getByRole('button', { name: /^Close/ })).toHaveCount(1);
-  await expect(status.getByRole('button', { name: 'Close: ECHO-12 · Pilot launch', exact: true })).toBeVisible();
-  await expect(status).not.toContainText(/land/i);
+  await expect(row(list, 'ECHO-12')).toContainText('matches now');
+  await expect(row(list, 'Thermostat PRD')).not.toContainText('matches now');
   // The page Ari cannot open is never named.
-  expect(await app.page.content()).not.toContain('Supplier brief');
+  expect(await page.content()).not.toContain('Supplier brief');
 });
 
-test('Check now on a project shows how its items stand', async () => {
+test('Check now on a project checks its follow-ups, and its line counts each meeting\'s', async () => {
   app = await launch('granola-checked');
-  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
-  const line = app.page.getByTestId('project-line');
-  await expect(line).toContainText('4 open items · from 2 decisions · checked 2 h ago');
-  await line.getByRole('button', { name: 'Check now' }).click();
-  await expect(line).toContainText('Checking…');
-  const status = app.page.getByTestId('item-status');
-  await expect(status.getByRole('heading', { name: 'Open items · Thermostat redesign' })).toBeVisible({ timeout: 20_000 });
-  // Pilot planning's three open items and Kickoff review's three.
-  await expect(status).toContainText('6 open · ECHO checked just now');
+  const { page } = app;
+  await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
+  // Pilot planning's five open follow-ups and Kickoff review's three.
+  await expect(page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).getByTestId('item-open')).toHaveText('5 open');
+  await expect(page.getByTestId('feed-row').filter({ hasText: 'Kickoff review' }).getByTestId('item-open')).toHaveText('3 open');
+  const line = page.getByTestId('project-line');
+  await expect(line).toHaveText('8 open follow-ups');
+  await line.getByRole('button').click();
+  const list = page.getByTestId('follow-ups');
+  await list.getByRole('button', { name: 'Check now' }).click();
+  await expect(list.getByRole('button', { name: 'Check now' })).toBeVisible({ timeout: 20_000 });
   expect(sweeps()).toEqual([{ scope: 'project', id: THERMOSTAT }]);
-  expect(itemPages()).toEqual([{ scope: 'project', open_only: true }]);
-  // A project is not one decision: no decided line, and one list with no decision headers.
-  await expect(status).not.toContainText('Launch the pilot next week.');
-  await expect(status.getByTestId('status-group-head')).toHaveCount(0);
-  await expect(status.getByTestId('status-item').first()).toContainText('Matches now');
-  // Back returns to the project, whose line was read again.
-  await app.page.getByTestId('back').click();
-  await expect(line).toContainText('4 open items · from 2 decisions · checked just now');
-  await expect(line.getByRole('button', { name: 'Check now' })).toBeVisible();
+  await expect(row(list, 'ECHO-12')).toContainText('Jira ticket · Pilot planning · matches now');
+  await expect(row(list, 'ECHO-7')).toContainText('Jira ticket · Kickoff review');
+  await page.getByTestId('back').click();
+  await expect(line).toHaveText('8 open follow-ups');
 });
 
-test('a decision\'s row counts what its Impact line calls open, and the project line sums its rows (canvas 9.7)', async () => {
-  app = await launch('granola-checked');
-  await app.page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
-  // Pilot planning's three sent items: one still open, one landed, one ECHO could not read. Kickoff review's three are open.
-  const pilot = app.page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' });
-  await expect(pilot.getByTestId('item-open')).toHaveText('1 open');
-  await expect(app.page.getByTestId('feed-row').filter({ hasText: 'Kickoff review' }).getByTestId('item-open')).toHaveText('3 open');
-  await expect(app.page.getByTestId('project-line')).toContainText('4 open items · from 2 decisions · checked 2 h ago');
-  // The same count as the decision's own Impact line.
-  await pilot.click();
-  await expect(app.page.getByTestId('impact-line')).toContainText('Impact · 1 open · 1 handled · 1 couldn\'t read · checked 2 h ago');
-});
-
-test('Tell the owners? names apart items whose titles nothing tells apart', async () => {
+test('a meeting\'s list names apart follow-ups whose titles nothing tells apart', async () => {
   app = await launch('granola-alike');
-  await app.page.getByTestId('need-row').filter({ hasText: 'need updating' }).click();
-  await expect(app.page.getByTestId('send')).toBeVisible();
-  await expect(app.page.getByRole('checkbox')).toHaveCount(6);
+  await app.page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' }).click();
+  const list = app.page.getByTestId('follow-ups');
+  await expect(list.getByRole('checkbox')).toHaveCount(8);
+  // ECHO matched no one for the four alike items and the PRD page.
+  await expect(list.getByRole('button', { name: /^Pick owner: / })).toHaveCount(5);
   // Two pages Ari cannot open, with the same expected phrase, and two tickets ECHO couldn't read just now, with none.
   for (const name of [
     'A page you can\'t open → parts ordered for next week (1)', 'A page you can\'t open → parts ordered for next week (2)',
     'A Jira ticket ECHO couldn\'t read just now (1)', 'A Jira ticket ECHO couldn\'t read just now (2)',
   ]) {
-    await expect(app.page.getByRole('checkbox', { name, exact: true })).toBeChecked();
-    await expect(app.page.getByRole('button', { name: `Pick a person: ${name}`, exact: true })).toBeVisible();
+    await expect(list.getByRole('checkbox', { name, exact: true })).toBeChecked();
+    await expect(list.getByRole('button', { name: `Pick owner: ${name}`, exact: true })).toBeVisible();
   }
-  const page = await app.page.content();
-  for (const withheld of ['Supplier brief', 'ECHO-41', 'ECHO-42']) expect(page).not.toContain(withheld);
+  for (const withheld of ['Supplier brief', 'ECHO-41', 'ECHO-42']) expect(await app.page.content()).not.toContain(withheld);
+  // Picking yourself claims an item that only fell back to you: Pick owner gives way to you.
+  await list.getByRole('button', { name: 'Pick owner: A Jira ticket ECHO couldn\'t read just now (1)', exact: true }).click();
+  await pickOwner(app.page, 'Me');
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Owner changed to you');
+  await expect(list.getByRole('button', { name: /^Pick owner: / })).toHaveCount(4);
+  await expect(list.getByRole('button', { name: 'Owner: You. Change owner of A Jira ticket ECHO couldn\'t read just now (1)', exact: true })).toBeVisible();
+  expect(requests('assign')).toEqual([expect.objectContaining({ item_id: 'itm_00000000-0000-4000-8000-000000000036', owner_membership_id: 'mem_22222222-2222-4222-8222-222222222222' })]);
 });
 
 test('Home starts its sweep again when an attempt goes back to the queue', async () => {
   app = await launch('granola-sweep-requeued');
-  await expect(app.page.getByTestId('need-row').filter({ hasText: 'changed since you got it, still doesn\'t match' })).toBeVisible({ timeout: 30_000 });
   // One sweep, asked for once and started twice: the attempt that went back to the queue, then the one that finished.
+  await expect.poll(() => runOperations().filter(operation => operation === 'start').length, { timeout: 30_000 }).toBe(2);
+  await expect(app.page.getByTestId('needs-foot')).toContainText('ECHO checked just now', { timeout: 30_000 });
   expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
-  expect(runOperations().filter(operation => operation === 'start')).toHaveLength(2);
+});
+
+test('an empty Home with no projects still leads to Your follow-ups', async () => {
+  app = await launch('no-projects');
+  const { page } = app;
+  const empty = page.getByTestId('home-empty');
+  await expect(empty.getByTestId('empty-new-project')).toBeVisible();
+  await empty.getByTestId('your-follow-ups').click();
+  const list = page.getByTestId('follow-ups');
+  await expect(list.getByRole('heading', { name: 'Your follow-ups' })).toBeVisible();
+  await expect(list).toContainText('No follow-ups');
+  await expect(page.getByTestId('title')).toHaveText('Follow-ups');
+  await page.getByTestId('back').click();
+  await expect(page.getByTestId('home-empty')).toBeVisible();
 });
