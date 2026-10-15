@@ -175,7 +175,7 @@ export function itemKind(item: OpenItemView, tools?: readonly ConnectedTool[] | 
  * 6". Every meeting with follow-ups is one someone approved, named as its
  * Approve row named it.
  */
-export function approvedMeeting(decision: Pick<PersonOpenItemDecisionV1, 'title' | 'approved_at'>): string {
+function approvedMeeting(decision: Pick<PersonOpenItemDecisionV1, 'title' | 'approved_at'>): string {
   const day = monthDay(decision.approved_at);
   return `${decision.title}${meetingSuffix(decision.title)}${day === null ? '' : `, approved ${day}`}`;
 }
@@ -186,7 +186,7 @@ export function meetingSuffix(title: string): string {
 }
 
 /** Where an item came from: its meeting when you can read it, else who sent it ("sent by Mina"). */
-export function whereFrom(item: OpenItemView): string {
+function whereFrom(item: OpenItemView): string {
   return item.decision ? approvedMeeting(item.decision) : `sent by ${firstName(item.approver.name)}`;
 }
 
@@ -203,7 +203,7 @@ export function itemNeeds(item: OpenItemView): string | null {
 }
 
 /** Whose an item is to update: "yours to update", or "Mina's to update" when you are not its owner (you sent it, or it fell back to you). */
-export function itemWhose(item: OpenItemView, me: string | null): string {
+function itemWhose(item: OpenItemView, me: string | null): string {
   return me === null || item.owner.membership_id === me ? 'yours to update' : `${firstName(item.owner.name)}'s to update`;
 }
 
@@ -218,12 +218,19 @@ export function itemWhy(item: OpenItemView, me: string | null, tools?: readonly 
   return joined([itemKind(item, tools), whereFrom(item), owner ? null : itemWhose(item, me)]);
 }
 
-/** What an item says now on its page, as its tool gave it to you just now ('Due Oct 30 · "Planned for the end of the month."'); else why it is not shown. */
+/** What an item says now on its page, as its tool gave it to you just now ('“Planned for the end of the month.”'); else why it is not shown. */
 export function saysNow(item: OpenItemView): string {
   const current = item.current;
   if (!current) return item.reach === 'unavailable' ? 'ECHO couldn\'t read it just now' : item.reach === 'no_access' ? 'You can\'t open it' : 'Not read';
-  const due = current.due_at === undefined ? null : `Due ${monthDay(current.due_at) ?? current.due_at}`;
-  return joined([due, `“${current.says_now}”`]);
+  return `“${current.says_now}”`;
+}
+
+/** The tool's own facts about an item you opened just now, under what it says: "In Progress · Due Oct 30 · Mina Patel", only those it has. */
+export function liveFacts(item: OpenItemView): string | null {
+  const current = item.current;
+  if (!current) return null;
+  const facts = joined([current.status ?? null, current.due_at === undefined ? null : `Due ${monthDay(current.due_at) ?? current.due_at}`, current.assignee ?? null]);
+  return facts === '' ? null : facts;
 }
 
 /** What ECHO's last check found, in a few words. */
@@ -259,9 +266,14 @@ export function itemGroups(items: readonly OpenItemView[]): { state: PersonOpenI
   })).filter(group => group.items.length > 0);
 }
 
-/** Follow-ups not closed, as every total counts them (F7): not sent yet, or open. A check's verdict never takes one out. */
-export function openTotal(counts: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'open'>): number {
+/** Follow-ups not closed, as a total counts them (F7): not sent yet, or open. A check's verdict never takes one out. */
+export function activeTotal(counts: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'open'>): number {
   return counts.unsent + counts.open;
+}
+
+/** A total of follow-ups not closed, as a project's feed row shows it: "4 follow-ups", never "open" (that is one status). */
+export function followUpCount(count: number): string {
+  return count === 1 ? '1 follow-up' : `${count} follow-ups`;
 }
 
 /** Parts of a line that are not empty, joined: "1 open · 4 not sent". */
@@ -291,17 +303,11 @@ export function followUpsWords(summary: PersonOpenItemsSummaryV1, stage: PersonI
   return 'None';
 }
 
-/** A project's line: "4 open follow-ups", from its whole summary; nothing while none is open. */
-export function projectFollowUps(summary: PersonOpenItemsSummaryV1): string | null {
-  const open = openTotal(summary);
-  return open === 0 ? null : open === 1 ? '1 open follow-up' : `${open} open follow-ups`;
-}
-
 /**
  * When ECHO last checked, as the canvas words it: "just now", "5 min ago",
  * "2 h ago", then for six hours or more the day: "today", "yesterday", "Oct 6".
  */
-export function checkedAgo(iso: string, now = Date.now()): string {
+function checkedAgo(iso: string, now = Date.now()): string {
   const time = Date.parse(iso);
   if (Number.isNaN(time)) return '';
   const minutes = Math.max(0, Math.floor((now - time) / 60_000));
@@ -327,47 +333,64 @@ export function homeFooter(open: Pick<HomeView, 'waiting' | 'last_checked_at'>, 
 }
 
 /** One event of a follow-up's history. */
-export interface HistoryEvent { readonly at: string; readonly words: string }
+interface HistoryEvent { readonly at: string; readonly words: string }
 
 /**
  * What happened to a follow-up, from its own fields (F4): the latest event of
- * each kind, oldest first. Found (a meeting's action: from the meeting); sent
- * to its owner (whose name is left out once the owner changed after it was
- * sent), or dismissed before it was sent; its owner set; and a later change of
- * its status. The viewer is "you".
+ * each kind, oldest first. Found (a meeting's action: from the meeting).
+ * Send, by its approver: "Sent to Mina by you" when it included the item,
+ * "Dismissed by you" when it did not. Its owner set. A later change of its
+ * status: an item Send dismissed, opened since, went to its owner then ("Sent
+ * to Mina by Ari"); any other opened again is "Reopened". The owner a send
+ * went to is named only while no one changed the owner since. The viewer is
+ * "you".
  */
 export function itemHistory(item: OpenItemView, me: string | null): HistoryEvent[] {
   const who = (person: { membership_id: string; name: string }) => (person.membership_id === me ? 'you' : person.name);
   const by = (person: { membership_id: string; name: string } | null) => (person === null ? '' : ` by ${who(person)}`);
+  const sent = (at: string, sender: { membership_id: string; name: string } | null) => {
+    const ownerSince = item.owner_set_at !== null && Date.parse(item.owner_set_at) > Date.parse(at);
+    return `Sent${ownerSince ? '' : ` to ${who(item.owner)}`}${by(sender)}`;
+  };
   const events: HistoryEvent[] = [{ at: item.created_at, words: item.kind === 'action' ? 'From the meeting' : 'Found' }];
-  // Send dismissed it: it never reached its owner, and nothing set its status since.
-  const dismissedUnsent = item.state === 'not_relevant' && item.send_included === false && item.state_set_at !== null && item.state_set_at === item.sent_at;
-  if (item.sent_at !== null) {
-    const ownerSince = item.owner_set_at !== null && Date.parse(item.owner_set_at) > Date.parse(item.sent_at);
-    events.push({ at: item.sent_at, words: dismissedUnsent ? `Dismissed${by(item.state_set_by)}` : `Sent${ownerSince ? '' : ` to ${who(item.owner)}`}${by(item.approver)}` });
-  }
+  if (item.sent_at !== null) events.push({ at: item.sent_at, words: item.send_included === false ? `Dismissed${by(item.approver)}` : sent(item.sent_at, item.approver) });
   if (item.owner_set_at !== null) events.push({ at: item.owner_set_at, words: `Owner set to ${who(item.owner)}${by(item.owner_set_by)}` });
   if (item.state_set_at !== null && item.state_set_at !== item.sent_at) {
-    const verb = item.state === 'done' ? 'Done' : item.state === 'not_relevant' ? 'Dismissed' : 'Reopened';
-    events.push({ at: item.state_set_at, words: `${verb}${by(item.state_set_by)}` });
+    const words = item.state === 'done' ? `Done${by(item.state_set_by)}` : item.state === 'not_relevant' ? `Dismissed${by(item.state_set_by)}`
+      : item.send_included === false ? sent(item.state_set_at, item.state_set_by) : `Reopened${by(item.state_set_by)}`;
+    events.push({ at: item.state_set_at, words });
   }
   return events.sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
 }
 
 /**
- * What a list's Send said, in place: "Sent 1 to ECHO 2", "Sent 2 · 1 kept
- * for you", "Kept 1 for you". `owners` are the owners of the items it sent;
- * those that are yours stay with you.
+ * What a list's Send said, in place, by first name as the buttons say: "Sent
+ * 1 to Mina", "Sent 2 · 1 kept for you", "Kept 1 for you". `owners` are the
+ * owners of the items it sent; those that are yours stay with you.
  */
 export function sentWords(owners: readonly { membership_id: string; name: string }[], me: string | null): string {
   const kept = owners.filter(owner => owner.membership_id === me).length;
   const others = owners.filter(owner => owner.membership_id !== me);
-  const names = new Set(others.map(owner => owner.name));
-  const sent = others.length === 0 ? null : `Sent ${others.length}${names.size === 1 && kept === 0 ? ` to ${others[0]!.name}` : ''}`;
+  const people = new Set(others.map(owner => owner.membership_id));
+  const sent = others.length === 0 ? null : `Sent ${others.length}${people.size === 1 && kept === 0 ? ` to ${firstName(others[0]!.name)}` : ''}`;
   return joined([sent, kept === 0 ? null : sent === null ? `Kept ${kept} for you` : `${kept} kept for you`]);
 }
 
 /** The button that sends one follow-up: "Send to Mina", or "Keep it myself" when you are its owner. */
 export function sendLabel(item: OpenItemView, me: string | null): string {
   return item.owner.membership_id === me ? 'Keep it myself' : `Send to ${firstName(item.owner.name)}`;
+}
+
+/**
+ * Opening a closed follow-up again sends it, for the first time: Send
+ * dismissed it and nothing changed its status since. Then its button says
+ * "Send to Mina"; any other reopens it ("Reopen"), as does one you own.
+ */
+export function reopenSends(item: OpenItemView, me: string | null): boolean {
+  return item.state === 'not_relevant' && item.send_included === false && item.state_set_at === item.sent_at && item.owner.membership_id !== me;
+}
+
+/** A closed follow-up's button: "Send to Mina" when opening it sends it, else "Reopen". */
+export function reopenLabel(item: OpenItemView, me: string | null): string {
+  return reopenSends(item, me) ? `Send to ${firstName(item.owner.name)}` : 'Reopen';
 }

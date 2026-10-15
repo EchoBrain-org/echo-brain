@@ -101,6 +101,20 @@ describe('the quiet check', () => {
     expect(notices()).toHaveLength(1);
   });
 
+  it('tells a new follow-up that comes first among twenty, and never again one that left the twenty and came back', async () => {
+    // Home answers twenty, the newest waiting first: the quiet check sees each new one however many older ones wait.
+    const twenty = Array.from({ length: 20 }, (_, at) => followUp(at + 1));
+    items = twenty;
+    await startStore();
+    items = [followUp(21, { expected: 'Book the lab' }), ...twenty.slice(0, 19)];
+    await nextCheck();
+    expect(notices()).toEqual([{ item_ids: [id(21)], from: 'Mina', title: 'Book the lab' }]);
+    // The new one closed: the twentieth is back among them, seen before, and not told.
+    items = twenty;
+    await nextCheck();
+    expect(notices()).toHaveLength(1);
+  });
+
   it('counts several new follow-ups in one notification', async () => {
     await startStore();
     items = [followUp(1), followUp(2), followUp(3)];
@@ -240,7 +254,7 @@ describe('a notification clicked', () => {
     expect(store.followUpsShown()?.views).toHaveLength(1);
   });
 
-  it('opens Your follow-ups for several', async () => {
+  it('opens the Follow-ups page for several', async () => {
     const store = await startStore();
     store.openNotified(undefined);
     await flush();

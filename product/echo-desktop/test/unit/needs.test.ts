@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, approvedMeeting, checkedAgo, checkWords, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemLabels, itemNames, itemNeeds, itemTitle,
-  itemWhose, itemWhy, matchesNow, meetingSuffix, monthDay, openTotal, projectFollowUps, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine,
-  toSend, whereFrom,
+  actionCount, activeTotal, checkWords, followUpCount, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemLabels, itemNames, itemNeeds, itemTitle, itemWhy,
+  liveFacts, matchesNow, meetingSuffix, monthDay, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
@@ -57,8 +56,8 @@ describe('the words Home and the follow-ups use', () => {
     expect(itemKind(item({ kind: 'page' }))).toBe('Page');
     expect(itemKind(item({ kind: 'page', current: { source: { ...ticket, kind: 'page', tool_id: 'confluence' }, says_now: 'x' } }))).toBe('Confluence page');
     // A meeting you cannot read is never named: who sent it is, by first name.
-    expect(whereFrom(item())).toBe('sent by Mina');
-    expect(whereFrom(item({ decision: pilot }))).toBe('Pilot planning meeting, approved Oct 6');
+    expect(itemWhy(item(), person.membership_id)).toBe('Jira ticket · sent by Mina');
+    expect(itemWhy(item({ decision: pilot }), person.membership_id)).toBe('Jira ticket · Pilot planning meeting, approved Oct 6');
   });
 
   it('tells two items that would share a name apart by what the meeting requires of each, then by position', () => {
@@ -87,9 +86,9 @@ describe('the words Home and the follow-ups use', () => {
   });
 
   it('never writes "meeting" after a title that already ends with it (R76)', () => {
-    const at = '2026-10-06T12:00:00.000Z';
-    expect(approvedMeeting({ title: 'Pilot planning', approved_at: at })).toBe('Pilot planning meeting, approved Oct 6');
-    expect(approvedMeeting({ title: 'Approved meeting', approved_at: at })).toBe('Approved meeting, approved Oct 6');
+    const from = (title: string) => itemWhy(item({ decision: { ...pilot, title } }), person.membership_id);
+    expect(from('Pilot planning')).toBe('Jira ticket · Pilot planning meeting, approved Oct 6');
+    expect(from('Approved meeting')).toBe('Jira ticket · Approved meeting, approved Oct 6');
     expect([meetingSuffix('Pilot planning'), meetingSuffix('Approved meeting'), meetingSuffix('Team Meeting')]).toEqual([' meeting', '', '']);
   });
 });
@@ -102,12 +101,11 @@ describe('one status vocabulary (F7)', () => {
     expect(stateCounts({ unsent: 0, open: 0, done: 0, not_relevant: 0 })).toBe('');
   });
 
-  it('counts not sent and open as open, whatever the last check found', () => {
-    expect(openTotal({ unsent: 2, open: 3 })).toBe(5);
-    expect(projectFollowUps({ ...summary, unsent: 1, open: 3, landed: 2, unreadable: 1 })).toBe('4 open follow-ups');
-    expect(projectFollowUps({ ...summary, open: 1 })).toBe('1 open follow-up');
-    // Nothing open: no line.
-    expect(projectFollowUps({ ...summary, done: 3 })).toBeNull();
+  it('totals not sent and open as follow-ups, never as "open", whatever the last check found', () => {
+    expect(activeTotal({ unsent: 2, open: 3 })).toBe(5);
+    expect([followUpCount(activeTotal({ unsent: 1, open: 3 })), followUpCount(1)]).toEqual(['4 follow-ups', '1 follow-up']);
+    // A project's line says its follow-ups as a meeting's does.
+    expect(stateCounts({ ...summary, unsent: 3, open: 1 })).toBe('1 open · 3 not sent');
   });
 
   it('says a meeting\'s follow-ups by status, and with none how its check stands', () => {
@@ -142,6 +140,7 @@ describe('ECHO\'s re-reads, kept underneath', () => {
   const checked = (verdict: NonNullable<OpenItemView['check']>['verdict']) => ({ verdict, checked_at: ago(120), checked_by: 'Mina Patel' });
 
   it('says when a check ran as the canvas does', () => {
+    const checkedAgo = (iso: string, at: number) => homeFooter({ waiting: 0, last_checked_at: iso }, at)!.replace('ECHO checked ', '');
     expect([checkedAgo(ago(0), now), checkedAgo(ago(0.5), now), checkedAgo(new Date(now + 30_000).toISOString(), now)]).toEqual(['just now', 'just now', 'just now']);
     expect([checkedAgo(ago(1), now), checkedAgo(ago(59), now)]).toEqual(['1 min ago', '59 min ago']);
     expect([checkedAgo(ago(60), now), checkedAgo(ago(120), now), checkedAgo(ago(359), now)]).toEqual(['1 h ago', '2 h ago', '5 h ago']);
@@ -193,12 +192,16 @@ describe('Home item rows and the item page', () => {
     expect(itemWhy(theirs, ari.membership_id, null)).toBe('Jira ticket · Pilot planning meeting, approved Oct 6 · Mina\'s to update');
     expect(itemWhy(action({ owner: { ...ari, match: 'name' } }), ari.membership_id, null)).toBe('Meeting action · Pilot planning meeting, approved Oct 6');
     expect(itemWhy(item({ approver: mina, owner: { ...ari, match: 'picked' } }), ari.membership_id, null)).toBe('Jira ticket · sent by Mina');
-    expect(itemWhose(item({ owner: { ...OKAFOR, match: 'name' } }), ari.membership_id)).toBe('S. Okafor\'s to update');
+    expect(itemWhy(item({ owner: { ...OKAFOR, match: 'name' } }), ari.membership_id)).toBe('Jira ticket · sent by Mina · S. Okafor\'s to update');
   });
 
-  it('shows on the item page what an item says now, else why it is not shown', () => {
-    expect(saysNow(theirs)).toBe('Due Oct 30 · “Planned.”');
+  it('shows on the item page what an item says now, else why it is not shown, and its tool\'s facts in one line', () => {
+    expect(saysNow(theirs)).toBe('“Planned.”');
     expect(saysNow(own)).toBe('“starts after freeze”');
+    expect(liveFacts(theirs)).toBe('Due Oct 30 · Mina Patel');
+    expect(liveFacts(item({ current: { source: ticket, says_now: 'x', status: 'In Progress', due_at: '2026-10-30', assignee: 'Mina Patel' } }))).toBe('In Progress · Due Oct 30 · Mina Patel');
+    expect(liveFacts(item({ current: { source: ticket, says_now: 'x', status: 'Blocked' } }))).toBe('Blocked');
+    expect([liveFacts(own), liveFacts(item())]).toEqual([null, null]);
     expect(saysNow(item())).toBe('You can\'t open it');
     expect(saysNow(item({ reach: 'unavailable' }))).toBe('ECHO couldn\'t read it just now');
     expect(saysNow(item({ reach: 'not_read' }))).toBe('Not read');
@@ -211,8 +214,9 @@ describe('Home item rows and the item page', () => {
 
   it('says what a list\'s Send did', () => {
     const rafael = { membership_id: 'mem_00000000-0000-4000-8000-000000000009', name: 'Rafael Moreno' };
-    expect(sentWords([mina], ari.membership_id)).toBe('Sent 1 to Mina Patel');
-    expect(sentWords([mina, mina], ari.membership_id)).toBe('Sent 2 to Mina Patel');
+    // By first name, as the buttons name them.
+    expect(sentWords([mina], ari.membership_id)).toBe('Sent 1 to Mina');
+    expect(sentWords([mina, mina], ari.membership_id)).toBe('Sent 2 to Mina');
     expect(sentWords([mina, rafael, ari], ari.membership_id)).toBe('Sent 2 · 1 kept for you');
     expect(sentWords([mina, ari], ari.membership_id)).toBe('Sent 1 · 1 kept for you');
     expect(sentWords([ari, ari], ari.membership_id)).toBe('Kept 2 for you');
@@ -242,8 +246,36 @@ describe('a follow-up\'s history (F4)', () => {
     expect(words(item(sent), person.membership_id)).toEqual(['10:05 Found', '11:00 Sent to you by Ari']);
   });
 
-  it('says a follow-up dismissed before it was sent was dismissed, not sent', () => {
+  it('says a follow-up dismissed before it was sent was dismissed, not sent, by its approver', () => {
     expect(words(item({ approver: ari, state: 'not_relevant', send_included: false, state_set_by: ari }))).toEqual(['10:05 Found', '11:00 Dismissed by you']);
+    expect(words(item({ approver: person, state: 'not_relevant', send_included: false, state_set_by: person }))).toEqual(['10:05 Found', '11:00 Dismissed by Mina Patel']);
+  });
+
+  it('says one Send dismissed and opened since went to its owner then; any other opened again was reopened', () => {
+    const dismissed = { approver: ari, owner: { ...person, match: 'name' as const }, send_included: false, state_set_at: '2026-10-07T12:00:00.000Z', state_set_by: ari };
+    expect(words(item({ ...dismissed, state: 'open' }))).toEqual(['10:05 Found', '11:00 Dismissed by you', '12:00 Sent to Mina Patel by you']);
+    // Its owner sees it sent to them.
+    expect(words(item({ ...dismissed, state: 'open' }), person.membership_id)).toEqual(['10:05 Found', '11:00 Dismissed by Ari', '12:00 Sent to you by Ari']);
+    // Its owner changed since it went: the owner it went to is not named.
+    expect(words(item({ ...dismissed, state: 'open', owner: { ...rafael, match: 'reassigned' }, owner_set_at: '2026-10-07T13:00:00.000Z', owner_set_by: person })))
+      .toEqual(['10:05 Found', '11:00 Dismissed by you', '12:00 Sent by you', '13:00 Owner set to Rafael Moreno by Mina Patel']);
+    // Closed again since: only the last change of its status shows.
+    expect(words(item({ ...dismissed, state: 'done', state_set_by: person }))).toEqual(['10:05 Found', '11:00 Dismissed by you', '12:00 Done by Mina Patel']);
+    expect(words(item({ ...dismissed, state: 'not_relevant' }))).toEqual(['10:05 Found', '11:00 Dismissed by you', '12:00 Dismissed by you']);
+    // One Send included, dismissed and opened again since, was reopened.
+    expect(words(item({ ...dismissed, send_included: true, state: 'open', state_set_by: person })))
+      .toEqual(['10:05 Found', '11:00 Sent to Mina Patel by you', '12:00 Reopened by Mina Patel']);
+  });
+
+  it('offers to send a closed follow-up only when Send dismissed it and nothing opened it since; any other reopens', () => {
+    const dismissed = item({ approver: ari, owner: { ...person, match: 'name' }, state: 'not_relevant', send_included: false, state_set_by: ari });
+    expect(reopenLabel(dismissed, ari.membership_id)).toBe('Send to Mina');
+    // Yours: it reopens, to you.
+    expect(reopenLabel(dismissed, person.membership_id)).toBe('Reopen');
+    // Opened and dismissed again since, sent and dismissed later, or done: Reopen.
+    expect(reopenLabel(item({ ...dismissed, state_set_at: '2026-10-07T12:00:00.000Z' }), ari.membership_id)).toBe('Reopen');
+    expect(reopenLabel(item({ ...dismissed, send_included: true, state_set_at: '2026-10-07T12:00:00.000Z' }), ari.membership_id)).toBe('Reopen');
+    expect(reopenLabel(item({ ...dismissed, send_included: true, state: 'done', state_set_at: '2026-10-07T12:00:00.000Z' }), ari.membership_id)).toBe('Reopen');
   });
 
   it('names the owner a send went to only while no one changed the owner since', () => {

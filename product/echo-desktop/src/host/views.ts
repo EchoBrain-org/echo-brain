@@ -5,7 +5,7 @@ import type {
   Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, CreatedProject, DocumentSummary,
   Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
-  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, ImpactView, HomeView, OpenItemView, OpenItemsView,
+  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import type { PersonOpenItemV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
@@ -407,15 +407,6 @@ function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = fals
     return { kind, tool_id, label: label || fallback, permalink };
   }
   throw new ViewError();
-}
-
-/**
- * A finished impact check, validated by the client: what was decided, as the
- * Authority rebuilt the card for this viewer. Nothing it found crosses: that
- * is the meeting's follow-ups.
- */
-export function impactCardView(result: PersonRunsResultsV1['view']): ImpactView {
-  return { decided: result.card.decided };
 }
 
 /**

@@ -586,7 +586,7 @@ interface TestNotices { echoTestNotices?: { title: string; body: string; click: 
 
 /**
  * Follow-ups that newly wait on you, as one system notification titled ECHO.
- * A click opens its item's page, or Your follow-ups for several, then the
+ * A click opens its item's page, or the Follow-ups page for several, then the
  * window comes forward. Where the system has none, nothing shows.
  */
 function notifyFollowUps({ body, item_id }: { body: string; item_id: string | null }): void {

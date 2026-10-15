@@ -1,7 +1,7 @@
 import type { ApprovedRecord, Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
 import { message } from '../messages.js';
-import { followUpsWords, openTotal } from '../needs.js';
+import { activeTotal, followUpsWords } from '../needs.js';
 import {
   addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, openFollowUps,
   projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState,
@@ -83,7 +83,7 @@ function ImpactLine({ state, reader, title }: { state: State; reader: ReaderStat
   const line = state.impactLine;
   if (reader.ref.kind !== 'meeting' || line?.scope !== 'record' || line.id !== reader.ref.id || !line.summary) return null;
   const { summary, stage } = line;
-  const found = openTotal(summary) + summary.done + summary.not_relevant;
+  const found = activeTotal(summary) + summary.done + summary.not_relevant;
   const words = <><b>Follow-ups</b> <span class="faint">· {followUpsWords(summary, stage)}</span></>;
   return (
     <div class="items-line" data-testid="impact-line">

@@ -1,6 +1,7 @@
 import { render, type ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { on } from './api.js';
+import { itemTitle } from './needs.js';
 import { ConfirmSignOut } from './screens/account.js';
 import { AskView, Bar, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
@@ -154,7 +155,9 @@ function App() {
   const inProject = state.route.page === 'project' ? state.route.project : null;
   const decision = state.route.page === 'decision' ? state.decision : null;
   const view = followUpShown(state);
-  // Your follow-ups is a page whose list is the first view: only views over it count as over the page.
+  // A decision opened from a meeting's follow-ups shows over them.
+  const listDecision = view?.kind === 'decision' && state.decision?.seq === view.seq ? state.decision : null;
+  // The Follow-ups page (yours) is a page whose list is the first view: only views over it count as over the page.
   const over = (followUpsShown(state)?.views.length ?? 0) - (state.route.page === 'follow-ups' ? 1 : 0);
   const organization = state.route.page === 'organization' ? state.organization : null;
   const mine = state.route.page === 'mine';
@@ -165,7 +168,10 @@ function App() {
   const covered = pageCovered(state);
   const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision ? 'Decision'
     : state.route.page === 'follow-ups' ? 'Follow-ups' : null;
-  const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
+  // A follow-ups view names itself: Follow-ups, the meeting or the project; an item; a decision.
+  const viewName = view?.kind === 'list' ? (view.scope === 'record' ? view.title ?? 'Follow-ups' : view.scope === 'project' ? view.title ?? 'Follow-ups' : 'Follow-ups')
+    : view?.kind === 'item' ? (view.item ? itemTitle(view.item) : 'Follow-up') : view?.kind === 'decision' ? 'Decision' : null;
+  const title = covered ? 'ECHO' : state.ask ? 'Ask' : viewName ?? pageName ?? 'ECHO';
   // Back leaves Ask for the page it was asked from; asked over a reader (or a follow-ups view), Back goes to it.
   // A follow-ups view goes back to the one before it, or to the reader it was opened over.
   const overlay = over > 0;
@@ -189,6 +195,7 @@ function App() {
           : state.ask ? <AskView state={state} />
           : view?.kind === 'item' ? <FollowUp state={state} page={view} />
           : view?.kind === 'list' ? <FollowUps state={state} list={view} />
+          : listDecision ? <Decision state={state} decision={listDecision} />
           : state.reader ? <Reader state={state} reader={state.reader} backTo={pageName ?? 'Home'} />
           : inProject ? <Project state={state} project={inProject} />
           : organization ? <Organization state={state} page={organization} />

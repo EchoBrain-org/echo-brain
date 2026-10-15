@@ -1,18 +1,20 @@
+import type { PersonOpenItemStateV1 } from '@echo-brain/organization-api';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Member, OpenItemView } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { colorFor, initials } from '../format.js';
 import { message } from '../messages.js';
 import {
-  checkWords, firstName, itemGroups, itemHistory, itemKind, itemLabels, itemNames, itemTitle, matchesNow, monthDay, saysNow, sendLabel, STAGES,
+  checkWords, firstName, itemGroups, itemHistory, itemKind, itemLabels, itemNames, itemTitle, liveFacts, matchesNow, monthDay, reopenLabel, saysNow, sendLabel, STAGES,
 } from '../needs.js';
 import {
-  checkNow, closeOwnerPicker, findOwner, moreFollowUps, openFollowUp, openFollowUps, openItemInTool, ownerChoices, pickFollowUpOwner, retryFollowUps, sendable,
-  sendFollowUp, sendTicked, setFollowUpState, tickFollowUp, toggleOwnerPicker, undoFollowUp, type FollowUpList, type FollowUpView, type ItemPage, type Said,
-  type State,
+  checkNow, closeFollowUp, closeOwnerPicker, findOwner, moreFollowUps, openFollowUp, openFollowUps, openItemInTool, openListDecision, ownerChoices, pickFollowUpOwner,
+  retryFollowUp, retryFollowUps, sendable, sendFollowUp, sendTicked, setFollowUpState, tickFollowUp, toggleOwnerPicker, undoFollowUp, type FollowUpList, type ItemPage,
+  type OwnerPicker as Picker, type Said, type State,
 } from '../store.js';
 import { Face } from './card.js';
 import { within } from './change.js';
+import { useKeptPlace } from './items.js';
 
 /** A person, as a chip: their initials in their color, and their first name. */
 export function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
@@ -30,33 +32,61 @@ function meOf(state: State): Member | null {
   return account ? { membership_id: account.membership_id, display_name: account.display_name } : null;
 }
 
+/** Nothing has the focus any more: the control that had it went, or was disabled while a change was on its way. */
+function focusLost(): boolean {
+  return document.activeElement === null || document.activeElement === document.body;
+}
+
 /**
- * An item's owner: a chip ("You" when it is you), or a dashed "Pick owner"
- * while it is not sent and ECHO found no one, so it fell back to its
- * approver. Where you may change the owner, it opens the people picker.
+ * Where the focus goes when an owner picker closes (a pick, Cancel or
+ * Escape): back to the item's owner chip, or, when the item left what you
+ * see, to the line that says what happened.
  */
-function Owner({ state, view, item, name }: { state: State; view: FollowUpView; item: OpenItemView; name: string }) {
+function usePickerFocus(pickerItem: string | undefined, box: { current: HTMLElement | null }, said: { current: HTMLElement | null }) {
+  const last = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const closed = last.current;
+    last.current = pickerItem;
+    if (closed === undefined || pickerItem !== undefined) return;
+    const chip = box.current?.querySelector<HTMLElement>(`[data-owner="${closed}"]`);
+    (chip ?? said.current)?.focus({ preventScroll: true });
+  }, [pickerItem]);
+}
+
+/** After a change, focus left with nowhere to go (Send N went, a button changed) moves to the line that says what happened. */
+function useSaidFocus(shown: Said | null, said: { current: HTMLElement | null }) {
+  useEffect(() => { if (shown && focusLost()) said.current?.focus({ preventScroll: true }); }, [shown]);
+}
+
+/**
+ * An item's owner: a chip ("You" when it is you), or "Pick owner" while it is
+ * not sent and ECHO found no one, so it fell back to its approver: a dashed
+ * button where you may pick, else plain faint words. Where you may change the
+ * owner, it opens the people picker; while a change is on its way it does
+ * nothing, and keeps the focus.
+ */
+function Owner({ state, busy, picking, item, name }: { state: State; busy: boolean; picking: boolean; item: OpenItemView; name: string }) {
   const me = state.status?.account?.membership_id;
   const unmatched = item.owner.match === 'approver' && item.state === 'unsent';
   const label = item.owner.membership_id === me ? 'You' : firstName(item.owner.name);
   if (!item.can.assign) {
-    return <span class="owner-slot">{unmatched ? <span class="pick-button">Pick owner</span> : <Chip person={item.owner} label={label} />}</span>;
+    return <span class="owner-slot">{unmatched ? <span class="faint">Pick owner</span> : <Chip person={item.owner} label={label} />}</span>;
   }
   return (
     <span class="owner-slot">
-      <button type="button" class={unmatched ? 'pick-button' : 'owner-button'} aria-label={unmatched ? `Pick owner: ${name}` : `Owner: ${label}. Change owner of ${name}`}
-        aria-expanded={view.picker?.item_id === item.item_id} disabled={view.busy} onClick={() => toggleOwnerPicker(item.item_id)}>
+      <button type="button" class={unmatched ? 'pick-button' : 'owner-button'} data-owner={item.item_id}
+        aria-label={unmatched ? `Pick owner: ${name}` : `Owner: ${label}. Change owner of ${name}`} aria-expanded={picking} aria-disabled={busy ? 'true' : undefined}
+        onClick={() => toggleOwnerPicker(item.item_id)}>
         {unmatched ? 'Pick owner' : <Chip person={item.owner} label={label} />}
       </button>
     </span>
   );
 }
 
-/** The people picker under an owner chip: you first ("Me"), then the organization's people by name. Picking one changes the owner at once. */
-function OwnerPicker({ state, view, item }: { state: State; view: FollowUpView; item: OpenItemView }) {
+/** The people picker under an owner chip: you first ("You", as a chip says), then the organization's people by name. Picking one changes the owner at once. */
+function OwnerPicker({ state, picker, item }: { state: State; picker: Picker; item: OpenItemView }) {
   const field = useRef<HTMLInputElement>(null);
   useEffect(() => { field.current?.focus(); }, []);
-  const picker = view.picker!;
   const choices = ownerChoices(picker, item, meOf(state));
   return (
     <div class="picker" data-testid="owner-picker">
@@ -66,7 +96,7 @@ function OwnerPicker({ state, view, item }: { state: State; view: FollowUpView; 
         {choices.map(({ person, me }) => (
           <button type="button" role="option" aria-selected={false} class="picker-option" key={person.membership_id} onClick={() => void pickFollowUpOwner(person)}>
             <Face name={person.display_name} keyed={person.membership_id} />
-            <span class="name">{me ? 'Me' : person.display_name}</span>
+            <span class="name">{me ? 'You' : person.display_name}</span>
           </button>
         ))}
       </div>
@@ -77,19 +107,24 @@ function OwnerPicker({ state, view, item }: { state: State; view: FollowUpView; 
   );
 }
 
-/** What the last change did, in place: "Sent to Mina Patel", "Done · Undo", or why it did not go. */
-function SaidLine({ said, testid }: { said: Said | null; testid: string }) {
+/**
+ * What the last change did, in place: "Sent to Mina", "Done · Undo", or why
+ * it did not go. Always there, so a screen reader announces each change; it
+ * takes the focus when the control that had it went.
+ */
+function SaidLine({ said, testid, line }: { said: Said | null; testid: string; line: { current: HTMLDivElement | null } }) {
   return (
-    <div class={`result-line${said?.error ? ' error' : ''}`} data-testid={testid} role="status">
+    <div ref={line} class={`result-line${said?.error ? ' error' : ''}${said ? '' : ' sr-only'}`} data-testid={testid} role="status" tabIndex={-1}>
       {said && <>{said.words}{said.undo && <> · <button type="button" class="link-button" onClick={() => void undoFollowUp()}>Undo</button></>}</>}
     </div>
   );
 }
 
 /**
- * Check now, faint after a meeting's or a project's list head: "Checking…"
- * while its sweep is on its way, "Nothing open to check", or "Check failed ·
- * Try again".
+ * Check now, faint after a meeting's or a project's list head, while
+ * something is open to check: "Checking…" while its sweep is on its way,
+ * "Nothing open to check", or "Check failed · Try again", each until the list
+ * is read again.
  */
 function CheckNow({ list }: { list: FollowUpList }) {
   if (list.check === 'checking') return <span class="items-line-check faint" role="status">Checking…</span>;
@@ -97,6 +132,7 @@ function CheckNow({ list }: { list: FollowUpList }) {
   if (list.check === 'failed') {
     return <span class="items-line-check" role="status"><span class="faint">Check failed · </span><button type="button" class="link-button" onClick={() => void checkNow()}>Try again</button></span>;
   }
+  if (!list.summary || list.summary.open === 0) return null;
   return <button type="button" class="need-open" onClick={() => void checkNow()}>Check now</button>;
 }
 
@@ -109,7 +145,7 @@ function CheckNow({ list }: { list: FollowUpList }) {
 function Row({ state, list, item, label, name }: { state: State; list: FollowUpList; item: OpenItemView; label: string; name: string }) {
   const sub = [itemKind(item, state.tools?.items), list.scope === 'record' ? null : item.decision?.title ?? null, matchesNow(item)].filter(Boolean).join(' · ');
   return <>
-    <div class="follow-up-row" data-testid="follow-up-row" data-state={item.state}
+    <div class="follow-up-row" data-testid="follow-up-row" data-item={item.item_id} data-state={item.state}
       onClick={event => { if (!within(event, '.send-box, .owner-slot')) void openFollowUp(item.item_id, item); }}>
       {sendable(item) && (
         <input type="checkbox" class="send-box" aria-label={name} checked={list.ticks[item.item_id] === true} disabled={list.busy}
@@ -119,63 +155,101 @@ function Row({ state, list, item, label, name }: { state: State; list: FollowUpL
         <span class="follow-up-title">{label}</span>
         <span class="follow-up-sub">{sub}</span>
       </button>
-      <Owner state={state} view={list} item={item} name={name} />
+      <Owner state={state} busy={list.busy} picking={list.picker?.item_id === item.item_id} item={item} name={name} />
     </div>
-    {list.picker?.item_id === item.item_id && <OwnerPicker state={state} view={list} item={item} />}
+    {list.picker?.item_id === item.item_id && <OwnerPicker state={state} picker={list.picker} item={item} />}
   </>;
 }
 
-/**
- * A follow-ups list: a meeting's, a project's, or yours (everything you sent
- * or own), grouped Not sent, Open, Done and Dismissed. Send N and Dismiss N
- * act on the ticked Not sent rows; the list stays, read again, and one line
- * says what happened. Every row opens its page.
- */
-export function FollowUps({ state, list }: { state: State; list: FollowUpList }) {
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { box.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }); }, [list.seq]);
-  const labels = itemLabels(list.items);
-  const names = itemNames(list.items);
+/** The list's head: its name, and under it what it is ("Approved Oct 6 · 4 follow-ups", or the project), with Check now. */
+function Head({ list }: { list: FollowUpList }) {
   const summary = list.summary;
-  const counts: Record<string, number> = summary ? { unsent: summary.unsent, open: summary.open, done: summary.done, not_relevant: summary.not_relevant } : {};
   const total = summary ? summary.unsent + summary.open + summary.done + summary.not_relevant : null;
   const decision = list.items.find(item => item.decision)?.decision;
-  const heading = list.scope === 'mine' ? 'Your follow-ups' : list.scope === 'project' ? 'Follow-ups' : list.title ?? decision?.title ?? 'Follow-ups';
-  const approved = decision ? monthDay(decision.approved_at) : null;
-  const sub = list.scope === 'project' ? list.title
-    : list.scope === 'record' && total !== null ? [approved ? `Approved ${approved}` : null, total === 1 ? '1 follow-up' : `${total} follow-ups`].filter(Boolean).join(' · ') : null;
-  const ticked = list.items.filter(item => sendable(item) && list.ticks[item.item_id]).length;
+  const heading = list.scope === 'record' ? list.title ?? decision?.title ?? 'Follow-ups' : 'Follow-ups';
+  const day = decision ? monthDay(decision.approved_at) : null;
+  // A meeting's approval opens its decision page over the list, when you approved it.
+  const approved = list.scope !== 'record' || !day ? null
+    : list.stage?.mine ? <button type="button" class="link-button inline faint-link" onClick={() => void openListDecision()}>Approved {day}</button> : <span>Approved {day}</span>;
+  const count = list.scope === 'record' && total !== null ? (total === 1 ? '1 follow-up' : `${total} follow-ups`) : null;
   return (
-    <div class="column follow-ups" data-testid="follow-ups" ref={box} aria-busy={list.loading || list.busy}>
-      <header class="follow-ups-head">
-        <h1 tabIndex={-1}>{heading}</h1>
-        {(sub || list.scope !== 'mine') && <div class="follow-ups-sub"><span>{sub}</span>{list.scope !== 'mine' && <CheckNow list={list} />}</div>}
-      </header>
-      <SaidLine said={list.said} testid="follow-ups-said" />
-      {itemGroups(list.items).map(group => (
-        <section key={group.state} class="follow-ups-group" aria-label={STAGES[group.state]}>
-          <div class="section-label">{STAGES[group.state]} · {counts[group.state] ?? group.items.length}</div>
-          <div class="follow-ups-rows">
-            {group.items.map(item => <Row key={item.item_id} state={state} list={list} item={item} label={labels.get(item.item_id)!} name={names.get(item.item_id)!} />)}
-          </div>
-        </section>
-      ))}
+    <header class="follow-ups-head">
+      <h1 tabIndex={-1}>{heading}</h1>
+      {list.scope !== 'mine' && (
+        <div class="follow-ups-sub">
+          <span>{list.scope === 'project' ? list.title : <>{approved}{approved && count ? ' · ' : ''}{count}</>}</span>
+          <CheckNow list={list} />
+        </div>
+      )}
+    </header>
+  );
+}
+
+/** Current work's statuses: read first, with their own More. */
+const ACTIVE: readonly PersonOpenItemStateV1[] = ['unsent', 'open'];
+
+/**
+ * A follow-ups list: a meeting's, a project's, or yours (everything you sent
+ * or own), grouped Not sent, Open, Done and Dismissed, each counted over the
+ * whole list. Current work comes first, with its own More; closed rows after
+ * it, with theirs. Send N and Dismiss N act on the ticked Not sent rows; the
+ * list stays where it was, and its foot says what happened. Every row opens
+ * its page, and Back returns to that row.
+ */
+export function FollowUps({ state, list }: { state: State; list: FollowUpList }) {
+  const { column, returned } = useKeptPlace(`follow-ups:${list.seq}`);
+  const said = useRef<HTMLDivElement>(null);
+  // Opened, the heading takes the focus; come back to, the row it was left from does, and again once a read moved that row.
+  const openedRow = () => (list.opened ? column.current?.querySelector<HTMLElement>(`[data-item="${list.opened}"] .follow-up-open`) ?? null : null);
+  useEffect(() => {
+    const row = returned.current ? openedRow() : null;
+    if (row) row.focus({ preventScroll: true });
+    else if (!returned.current) column.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
+  }, [list.seq]);
+  useEffect(() => { if (!list.loading && returned.current && focusLost()) openedRow()?.focus({ preventScroll: true }); }, [list.loading]);
+  usePickerFocus(list.picker?.item_id, column, said);
+  useSaidFocus(list.said, said);
+  const labels = itemLabels(list.items);
+  const names = itemNames(list.items);
+  const counts = list.summary;
+  const groups = itemGroups(list.items);
+  const ticked = list.items.filter(item => sendable(item) && list.ticks[item.item_id]).length;
+  const group = ({ state: status, items }: (typeof groups)[number]) => (
+    <section key={status} class="follow-ups-group" aria-label={STAGES[status]}>
+      <div class="section-label">{STAGES[status]} · {counts?.[status] ?? items.length}</div>
+      <div class="follow-ups-rows">
+        {items.map(item => <Row key={item.item_id} state={state} list={list} item={item} label={labels.get(item.item_id)!} name={names.get(item.item_id)!} />)}
+      </div>
+    </section>
+  );
+  const foot = ticked > 0 || list.said !== null;
+  return (
+    <div class="column follow-ups" data-testid="follow-ups" ref={column} aria-busy={list.loading || list.busy}>
+      <Head list={list} />
+      {groups.filter(entry => ACTIVE.includes(entry.state)).map(group)}
+      {list.active.next && (
+        <button type="button" class="link-button more" data-testid="follow-ups-more" disabled={list.loading} onClick={() => void moreFollowUps('active')}>More</button>
+      )}
+      {groups.filter(entry => !ACTIVE.includes(entry.state)).map(group)}
+      {list.closed?.next && (
+        <button type="button" class="link-button more" data-testid="follow-ups-more-closed" disabled={list.loading} onClick={() => void moreFollowUps('closed')}>More</button>
+      )}
       {list.loading && list.items.length === 0 && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
       {!list.loading && !list.failure && list.items.length === 0 && <div class="notice">No follow-ups</div>}
-      {list.next && <button type="button" class="link-button more" disabled={list.loading} onClick={() => void moreFollowUps()}>More</button>}
       {list.failure && (
         <div class="error more">
           {message(list.failure)}
           <button type="button" class="link-button" disabled={list.loading} onClick={() => void retryFollowUps()}>Try again</button>
         </div>
       )}
-      {ticked > 0 && (
-        <div class="follow-ups-foot">
+      <div class={`follow-ups-foot${foot ? '' : ' quiet'}`} data-testid="follow-ups-foot">
+        {ticked > 0 && <>
           <button type="button" class="primary-button small" disabled={list.busy || list.loading} onClick={() => void sendTicked(true)}>Send {ticked}</button>
           <button type="button" class="plain-button small" disabled={list.busy || list.loading} onClick={() => void sendTicked(false)}>Dismiss {ticked}</button>
-          {list.busy && <span class="asking"><i /><i /><i /></span>}
-        </div>
-      )}
+        </>}
+        {list.busy && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
+        <SaidLine said={list.said} testid="follow-ups-said" line={said} />
+      </div>
     </div>
   );
 }
@@ -195,17 +269,27 @@ function OpenInTool({ state, item }: { state: State; item: OpenItemView }) {
   </>;
 }
 
-/** Why a follow-up is here: the meeting decided it, or what a document says now beside what the meeting decided. */
+/**
+ * Why a document is a follow-up: what it says now (with its tool's facts in
+ * one faint line) beside what the meeting decided. A meeting's action needs
+ * none: its line above says it came from the meeting.
+ */
 function Why({ state, item }: { state: State; item: OpenItemView }) {
-  if (item.kind === 'action') return <div class="card-text">Decided in the meeting</div>;
-  return <>
-    {item.relation === null && <div class="card-text">May be affected by the meeting</div>}
-    <div class="card-delta">
-      <div><span class="card-delta-label">Says now</span><span class="card-delta-now">{saysNow(item)}</span></div>
-      {item.expected !== null && <div><span class="card-delta-label needs">Meeting decided</span><span>{item.expected}</span></div>}
-    </div>
-    <OpenInTool state={state} item={item} />
-  </>;
+  const facts = liveFacts(item);
+  return (
+    <section class="card-section" aria-labelledby="follow-up-why">
+      <div id="follow-up-why" class="section-label">Why it's here</div>
+      {item.relation === null && <div class="card-text">May be affected by the meeting</div>}
+      <div class="card-delta">
+        <div>
+          <span class="card-delta-label">Says now</span><span class="card-delta-now">{saysNow(item)}</span>
+          {facts && <span class="card-delta-facts faint" data-testid="follow-up-facts">{facts}</span>}
+        </div>
+        {item.expected !== null && <div><span class="card-delta-label needs">Meeting decided</span><span>{item.expected}</span></div>}
+      </div>
+      <OpenInTool state={state} item={item} />
+    </section>
+  );
 }
 
 /** The one next step, by status and your rights: one primary button, one secondary at most. */
@@ -225,25 +309,40 @@ function Actions({ state, page, item }: { state: State; page: ItemPage; item: Op
       <button type="button" class="plain-button" disabled={frozen} onClick={() => void setFollowUpState('not_relevant')}>Dismiss</button>
     </>;
   }
-  // Dismissed before it was sent: reopening it reaches its owner.
-  const reaches = item.state === 'not_relevant' && item.send_included === false && item.owner.membership_id !== me;
-  return <button type="button" class="primary-button" disabled={frozen} onClick={() => void setFollowUpState('open')}>{reaches ? sendLabel(item, me) : 'Reopen'}</button>;
+  return <button type="button" class="primary-button" disabled={frozen} onClick={() => void setFollowUpState('open')}>{reopenLabel(item, me)}</button>;
 }
 
 /**
  * One follow-up's page (F5): its title and status; what it is and the
- * meeting it came from (which opens that meeting's follow-ups); why it is
- * here; what happened to it; and, beside them, its owner and the one next
- * step. After a change the page stays and says what happened.
+ * meeting it came from (which opens that meeting's follow-ups, or goes back
+ * to them); why it is here; what happened to it; and, beside them, its owner
+ * and the one next step. After a change the page stays and says what
+ * happened; one that took it out of what you see says so, with Back.
  */
 export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { box.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }); }, [page.seq, page.item !== null]);
+  const said = useRef<HTMLDivElement>(null);
+  useEffect(() => { box.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }); }, [page.seq, page.item !== null, page.gone === true]);
+  usePickerFocus(page.picker?.item_id, box, said);
+  useSaidFocus(page.said, said);
   const item = page.item;
   if (!item) {
     return (
       <div class="column center" data-testid="follow-up-loading" aria-busy={page.loading}>
-        {page.failure ? <div class="error">{message(page.failure)}</div> : <span class="asking"><i /><i /><i /></span>}
+        {page.failure ? <>
+          <div class="error">{message(page.failure)}</div>
+          <button type="button" class="link-button" disabled={page.loading} onClick={retryFollowUp}>Try again</button>
+        </> : <span class="asking"><i /><i /><i /></span>}
+      </div>
+    );
+  }
+  if (page.gone) {
+    return (
+      <div class="column center" ref={box} data-testid="follow-up-gone">
+        <h1 class="card-title" tabIndex={-1}>{itemTitle(item)}</h1>
+        <SaidLine said={page.said} testid="follow-up-said" line={said} />
+        <div class="notice">You no longer see this follow-up</div>
+        <button type="button" class="link-button" onClick={closeFollowUp}>Back</button>
       </div>
     );
   }
@@ -265,10 +364,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
                 : `Sent by ${item.approver.membership_id === me ? 'you' : item.approver.name}`}
             </div>
           </header>
-          <section class="card-section" aria-labelledby="follow-up-why">
-            <div id="follow-up-why" class="section-label">Why it's here</div>
-            <Why state={state} item={item} />
-          </section>
+          {item.kind !== 'action' && <Why state={state} item={item} />}
           <section class="card-section" aria-labelledby="follow-up-history">
             <div id="follow-up-history" class="section-label">History</div>
             <ol class="history" data-testid="follow-up-history">
@@ -283,10 +379,10 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
         <aside class="card-rail" aria-label="Owner and next step">
           <section class="card-panel" aria-labelledby="follow-up-owner">
             <div id="follow-up-owner" class="section-label">Owner</div>
-            <Owner state={state} view={page} item={item} name={itemTitle(item)} />
-            {page.picker && <OwnerPicker state={state} view={page} item={item} />}
+            <Owner state={state} busy={page.busy} picking={page.picker !== null} item={item} name={itemTitle(item)} />
+            {page.picker && <OwnerPicker state={state} picker={page.picker} item={item} />}
             <div class="card-rule" />
-            <SaidLine said={page.said} testid="follow-up-said" />
+            <SaidLine said={page.said} testid="follow-up-said" line={said} />
             <Actions state={state} page={page} item={item} />
             {page.busy && <span class="asking card-busy"><i /><i /><i /></span>}
           </section>

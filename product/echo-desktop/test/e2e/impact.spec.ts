@@ -43,10 +43,24 @@ test('approving a meeting checks what it changes, and its follow-ups wait on Hom
   const { page } = run;
   await approveFromHome(page);
   // The check runs by itself; what it found, and the meeting's own actions, wait on Home to be sent.
-  await openFollowUps(page);
+  const list = await openFollowUps(page);
+  // The meeting's approval opens its decision over the list; its follow-ups line goes back to the list, as it was.
+  await list.getByRole('button', { name: /^Approved / }).click();
+  const decision = page.getByTestId('decision');
+  await expect(decision.getByRole('heading', { name: 'What did it change?' })).toBeVisible();
+  await expect(page.getByTestId('title')).toHaveText('Decision');
+  const reads = runOperations().filter(operation => operation === 'items').length;
+  const line = decision.getByTestId('impact-follow-ups');
+  await expect(line).toHaveText('Follow-ups · 4 not sent');
+  await line.click();
+  await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
+  await expect(list.getByRole('region', { name: 'Not sent', exact: true }).getByRole('checkbox', { checked: true })).toHaveCount(4);
+  // Counted once for the line; the list was not read again.
+  expect(runOperations().filter(operation => operation === 'items')).toHaveLength(reads);
   await page.getByTestId('back').click();
   await expect(page.getByTestId('need-row')).toHaveAttribute('data-kind', 'send');
   expect(runOperations()).toEqual(expect.arrayContaining(['list', 'start', 'home', 'items']));
+  expect(runOperations()).not.toContain('view');
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(1);
 });
 
@@ -74,16 +88,18 @@ test('a failed check gives its reason, offers Try again, and then its follow-ups
   await expect(impact.getByText('The impact check failed.')).toBeVisible({ timeout: 30_000 });
   await impact.getByRole('button', { name: 'Try again' }).click();
   await expect.poll(runOperations).toContain('retry');
-  // Tried again, the check runs and finishes: what was decided, and its follow-ups in one line.
+  // Tried again, the check runs and finishes: its follow-ups in one line, the whole line a button. What was decided is the
+  // proposal's own section, said once.
   const followUps = impact.getByTestId('impact-follow-ups');
-  await expect(followUps).toContainText('Follow-ups · 4 not sent', { timeout: 30_000 });
-  await expect(impact.getByRole('heading', { name: 'What was decided' })).toBeVisible();
-  await expect(impact).toContainText('Launch the pilot next week.');
+  await expect(followUps).toHaveText('Follow-ups · 4 not sent', { timeout: 30_000 });
+  await expect(page.getByRole('heading', { name: 'What was decided' })).toHaveCount(0);
+  await expect(page.getByTestId('decision')).toContainText('Launch the pilot next week.');
   for (const gone of ['Affected items', 'People to tell', 'Couldn\'t confirm']) await expect(impact).not.toContainText(gone);
   await page.screenshot({ path: testInfo.outputPath('impact-card.png') });
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(2);
-  // Open follow-ups: the meeting's list, over the decision; Back returns to it.
-  await followUps.getByRole('button', { name: 'Open follow-ups' }).click();
+  expect(runOperations()).not.toContain('view');
+  // The line opens the meeting's list, over the decision; Back returns to it.
+  await followUps.click();
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
   // An item opened for you opens in its tool from its page.
@@ -91,6 +107,8 @@ test('a failed check gives its reason, offers Try again, and then its follow-ups
   await page.getByTestId('follow-up').getByRole('button', { name: 'Open in Jira' }).click();
   await expect.poll(opened).toEqual(['https://example.atlassian.net/browse/ECHO-12']);
   await page.getByTestId('back').click();
-  await page.getByTestId('back').click();
+  // Its "Approved" goes back to the decision it was opened from.
+  await list.getByRole('button', { name: /^Approved / }).click();
   await expect(followUps).toBeVisible();
+  await expect(list).toHaveCount(0);
 });

@@ -87,7 +87,7 @@ describe('your follow-ups (F9)', () => {
     // The footer is a component of its own: it renders the link.
     const footer = tree.find(node => typeof node.type === 'function' && node.type.name === 'Footer');
     const link = descendants((footer!.type as (props: unknown) => unknown)(footer!.props)).find(node => node.props['data-testid'] === 'your-follow-ups');
-    expect(text(link)).toBe('Your follow-ups');
+    expect(text(link)).toBe('Follow-ups');
   });
 });
 

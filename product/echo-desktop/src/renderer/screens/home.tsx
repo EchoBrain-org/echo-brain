@@ -104,7 +104,7 @@ function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { 
 
 /**
  * Under the rows, and on an empty Home (F9): what waits on others and when
- * ECHO last checked, and Your follow-ups, always.
+ * ECHO last checked, and Follow-ups (everything you sent or own), always.
  */
 function Footer({ state }: { state: State }) {
   const open = state.home?.open;
@@ -112,7 +112,7 @@ function Footer({ state }: { state: State }) {
   return (
     <div class="needs-foot" data-testid="needs-foot">
       <span class="needs-foot-words">{words}</span>
-      <button type="button" class="need-open" data-testid="your-follow-ups" onClick={() => void openYourFollowUps()}>Your follow-ups</button>
+      <button type="button" class="need-open" data-testid="your-follow-ups" onClick={() => void openYourFollowUps()}>Follow-ups</button>
     </div>
   );
 }

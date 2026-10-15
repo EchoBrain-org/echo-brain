@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
 import { dateTime } from '../format.js';
-import { followUpsWords, openTotal } from '../needs.js';
+import { activeTotal, followUpsWords } from '../needs.js';
 import { proposalRead, readProposal, type Proposal as Read, type ProposalSignal } from '../proposal.js';
 import {
   decide, lineRecord, loadProjects, openFollowUps, retryImpact, setDecisionAudience, setDecisionOwner, setDecisionShare, tickDecisionProject, type DecisionState,
@@ -152,35 +152,39 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   );
 }
 
-/** The approved meeting's follow-ups, counted by its check, and what opens them when there are any. */
+/**
+ * The approved meeting's follow-ups, counted (by its check, or by its record
+ * when opened from its list), and what opens them when there are any: its
+ * list, or Back to it when the decision was opened from it.
+ */
 function followUps(state: State, decision: DecisionState): { words: string; open: (() => void) | null } | null {
   const line = state.impactLine;
-  if (line?.scope !== 'run' || line.id !== decision.run?.run_id || !line.summary) return null;
+  const counted = decision.record === undefined ? line?.scope === 'run' && line.id === decision.run?.run_id : line?.scope === 'record' && line.id === decision.record;
+  if (!line || !counted || !line.summary) return null;
   const { summary } = line;
   const record = lineRecord(line);
   const title = decision.open?.review.title ?? '';
-  const found = openTotal(summary) + summary.done + summary.not_relevant > 0;
+  const found = activeTotal(summary) + summary.done + summary.not_relevant > 0;
   return { words: followUpsWords(summary, line.stage), open: found && record !== null ? () => void openFollowUps('record', record, title) : null };
 }
 
 /**
  * What did it change? Where the approved meeting's check stands (a failed
- * check's Try again), what was decided and its follow-ups, then the
- * proposal's own decisions and actions.
+ * check's Try again) and its follow-ups in one line, then the proposal's own
+ * decisions and actions.
  */
 function Impact({ state, decision }: { state: State; decision: DecisionState }) {
   const open = decision.open!;
   const read = readProposal(open.content);
   const run = decision.run;
-  const done = run?.state === 'done' && decision.impact !== undefined;
-  const ask = run?.state === 'failed' ? 'The check did not finish' : done ? 'What did it change?' : 'Checking what it changes';
+  const ask = run?.state === 'failed' ? 'The check did not finish' : run?.state === 'done' ? 'What did it change?' : 'Checking what it changes';
   const verb = open.review.status === 'rejected' ? 'Rejected' : open.review.status === 'superseded' ? 'Replaced by a newer version' : 'Approved';
   const standing = open.review.decided_on === 'slack' ? `${verb} in Slack` : verb;
   return (
     <div class="card-page" data-testid="decision">
       <article class="card-main" aria-labelledby="decision-ask">
         <CardHead kind="done" verb={standing} where={open.review.title} title={ask} id="decision-ask" />
-        <ImpactSection run={run ?? undefined} view={decision.impact} publishing={open.review.status === 'publishing'} busy={decision.busy}
+        <ImpactSection run={run ?? undefined} publishing={open.review.status === 'publishing'} busy={decision.busy}
           followUps={followUps(state, decision)} onRetry={() => void retryImpact()} />
         {proposalRead(read) ? <>
           <Decided read={read} />

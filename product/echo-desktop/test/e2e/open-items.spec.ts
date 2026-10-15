@@ -78,54 +78,80 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   // Untick all but ECHO-12, and send it: it is Open with its owner, the rest still Not sent, and the list stays.
   for (const name of ['Send the revised quote', 'Confirm the trace', 'Thermostat PRD · Pilot scope']) await unsent.getByRole('checkbox', { name, exact: true }).uncheck();
   await list.getByRole('button', { name: 'Send 1', exact: true }).click();
-  await expect(list.getByTestId('follow-ups-said')).toHaveText('Sent 1 to Mina Patel');
+  // The foot says what happened, and takes the focus from the button that went.
+  const said = list.getByTestId('follow-ups-said');
+  await expect(said).toHaveText('Sent 1 to Mina');
+  await expect(said).toBeFocused();
   await expect(row(group(list, 'Open'), 'ECHO-12')).toContainText('Mina');
   await expect(unsent.getByTestId('follow-up-row')).toHaveCount(3);
   await expect(unsent.getByRole('checkbox', { checked: true })).toHaveCount(0);
   expect(requests('send').map(body => body.items)).toEqual([[{ item_id: 'itm_00000000-0000-4000-8000-000000000031', include: true }]]);
+  // Current work first, then the closed part, once; the send read only its row again, with the counts.
+  expect(requests('items').map(body => (body.summary_only === true ? 'counts' : (body.states as string[]).join('+')))).toEqual(['unsent+open', 'done+not_relevant', 'counts']);
 
   // An owner changed in place before sending: the PRD page goes to Rafael at once, still Not sent.
   await row(unsent, 'Thermostat PRD').getByRole('button', { name: 'Pick owner: Thermostat PRD · Pilot scope' }).click();
-  await expect(page.getByTestId('owner-picker').getByRole('option').first()).toHaveAccessibleName('Me');
+  await expect(page.getByTestId('owner-picker').getByRole('option').first()).toHaveAccessibleName('You');
   await pickOwner(page, 'Rafael Moreno', 'Raf');
-  await expect(list.getByTestId('follow-ups-said')).toHaveText('Owner changed to Rafael Moreno');
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Owner changed to Rafael');
   await expect(row(unsent, 'Thermostat PRD')).toContainText('Rafael');
+  // The picker closed: the focus is back on the row's owner.
+  await expect(row(unsent, 'Thermostat PRD').getByRole('button', { name: /^Owner: Rafael/ })).toBeFocused();
   // And after sending: Confirm the trace goes to Mina, then to Rafael.
   await unsent.getByRole('checkbox', { name: 'Confirm the trace', exact: true }).check();
   await list.getByRole('button', { name: 'Send 1', exact: true }).click();
-  await expect(list.getByTestId('follow-ups-said')).toHaveText('Sent 1 to Mina Patel');
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Sent 1 to Mina');
   const trace = row(group(list, 'Open'), 'Confirm the trace');
   await trace.getByRole('button', { name: /^Owner: Mina/ }).click();
   await pickOwner(page, 'Rafael Moreno', 'Raf');
-  await expect(list.getByTestId('follow-ups-said')).toHaveText('Owner changed to Rafael Moreno');
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Owner changed to Rafael');
   await expect(trace).toContainText('Rafael');
   expect(requests('assign').map(body => body.item_id)).toEqual(['itm_00000000-0000-4000-8000-000000000032', 'itm_00000000-0000-4000-8000-000000000039']);
 
-  // Dismiss moves a row to Dismissed; its page offers Send to its owner, which reopens it to them.
+  // A Not sent row's page, and its meeting: back to this list, as it was, not a list of its own.
   await unsent.getByRole('checkbox', { name: 'Send the revised quote', exact: true }).check();
+  const itemReads = requests('items').length;
+  await row(unsent, 'Thermostat PRD').click();
+  const item = page.getByTestId('follow-up');
+  await expect(item.getByRole('heading', { name: 'Thermostat PRD · Pilot scope' })).toBeVisible();
+  // What the page says now, and the tool's facts under it.
+  await expect(item).toContainText('“starts after freeze”');
+  await item.getByRole('button', { name: /^from Pilot planning/ }).click();
+  await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
+  await expect(row(unsent, 'Thermostat PRD').locator('.follow-up-open')).toBeFocused();
+  await expect(unsent.getByRole('checkbox', { name: 'Send the revised quote', exact: true })).toBeChecked();
+  await expect(unsent.getByRole('checkbox', { name: 'Thermostat PRD · Pilot scope', exact: true })).not.toBeChecked();
+  expect(requests('items')).toHaveLength(itemReads);
+  // Dismiss moves a row to Dismissed; its page offers Send to its owner, which reopens it to them.
   await list.getByRole('button', { name: 'Dismiss 1', exact: true }).click();
   await expect(list.getByTestId('follow-ups-said')).toHaveText('Dismissed 1');
   await row(group(list, 'Dismissed'), 'Send the revised quote').click();
-  const item = page.getByTestId('follow-up');
   await expect(item.getByRole('heading', { name: 'Send the revised quote' })).toBeVisible();
   await expect(item.getByTestId('follow-up-state')).toHaveText('Dismissed');
-  await expect(item).toContainText('Decided in the meeting');
+  // A meeting's action: its line says where it came from; no section repeats it.
+  await expect(item).toContainText('Meeting action · from Pilot planning');
+  await expect(item.getByText('Why it\'s here')).toHaveCount(0);
   await expect(item.getByTestId('follow-up-history')).toContainText('Dismissed by you');
   await item.getByRole('button', { name: 'Send to Rafael', exact: true }).click();
-  await expect(item.getByTestId('follow-up-said')).toHaveText('Sent to Rafael Moreno');
+  await expect(item.getByTestId('follow-up-said')).toHaveText('Sent to Rafael');
   await expect(item.getByTestId('follow-up-state')).toHaveText('Open');
-  // Back: the list as it is now, where it was.
+  await expect(item.getByTestId('follow-up-history')).toContainText('Sent to Rafael Moreno by you');
+  await expect(item.getByRole('button', { name: 'Mark done', exact: true })).toBeVisible();
+  await expect(page.getByTestId('title')).toHaveText('Send the revised quote');
+  // Back: the list as it is now, where it was, its row in focus.
   await page.getByTestId('back').click();
   await expect(row(group(list, 'Open'), 'Send the revised quote')).toBeVisible();
+  await expect(row(group(list, 'Open'), 'Send the revised quote').locator('.follow-up-open')).toBeFocused();
   await expect(group(list, 'Dismissed')).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('Pilot planning');
   await page.screenshot({ path: testInfo.outputPath('follow-ups.png') });
 
-  // The owner (Mina) marks ECHO-12 done. Ari sees it under Done in Your follow-ups, with who did it.
+  // The owner (Mina) marks ECHO-12 done. Ari sees it under Done in the Follow-ups page, with who did it.
   writeFileSync(join(app.home, 'mina-done'), '');
   await page.getByTestId('sidebar-follow-ups').click();
   await expect(page.getByTestId('sidebar-follow-ups')).toHaveAttribute('aria-current', 'page');
   const mine = page.getByTestId('follow-ups');
-  await expect(mine.getByRole('heading', { name: 'Your follow-ups' })).toBeVisible();
+  await expect(mine.getByRole('heading', { name: 'Follow-ups', exact: true })).toBeVisible();
   await row(group(mine, 'Done'), 'ECHO-12').click();
   await expect(item.getByTestId('follow-up-state')).toHaveText('Done');
   const history = item.getByTestId('follow-up-history');
@@ -143,7 +169,7 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await expect(item.getByTestId('follow-up-said')).toHaveText('Reopened');
   await expect(item.getByTestId('follow-up-state')).toHaveText('Open');
   expect(requests('set_state').map(body => body.state)).toEqual(['open', 'open', 'done', 'open']);
-  // Back to Your follow-ups, read again: ECHO-12 is open; then Back is Home.
+  // Back to the Follow-ups page, read again: ECHO-12 is open; then Back is Home.
   await page.getByTestId('back').click();
   await expect(row(group(mine, 'Open'), 'ECHO-12')).toBeVisible();
   await page.getByTestId('back').click();
@@ -174,6 +200,9 @@ test('the owner opens a follow-up from Home and marks it done there', async () =
   await expect(item).toContainText(`Jira ticket · from Pilot planning, ${day('2026-10-06T18:00:00.000Z')}`);
   await expect(item.getByTestId('follow-up-history')).toContainText('Sent to you by Mina Patel');
   await expect(item.getByRole('complementary')).toContainText('You');
+  // What it says now, and its tool's facts in one faint line.
+  await expect(item).toContainText('“The pilot launch is planned for the end of the month.”');
+  await expect(item.getByTestId('follow-up-facts')).toHaveText('In Progress · Due Oct 30 · Ari');
   await item.getByRole('button', { name: 'Mark done', exact: true }).click();
   await expect(item.getByTestId('follow-up-said')).toHaveText('Done · Undo');
   await expect(item.getByTestId('follow-up-state')).toHaveText('Done');
@@ -284,10 +313,10 @@ test('an approved meeting counts its follow-ups by status, and its project count
   await expect(page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' })).toBeVisible({ timeout: 20_000 });
   await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
   const line = page.getByTestId('project-line');
-  // Not sent counts as open (F7): two documents and the meeting's two actions.
-  await expect(line).toHaveText('4 open follow-ups');
+  // Counted by status as a meeting is (F7); never "open" for not sent and open together: two documents and the meeting's two actions.
+  await expect(line).toHaveText('Follow-ups · 4 not sent');
   const meeting = page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' });
-  await expect(meeting.getByTestId('item-open')).toHaveText('4 open');
+  await expect(meeting.getByTestId('item-follow-ups')).toHaveText('4 follow-ups');
   // Counting opened nothing: every items read so far asked for the project's counts only.
   const itemReads = () => requests('items').map(body => ({ scope: body.scope, counts: body.summary_only === true }));
   expect(itemReads().every(read => read.scope === 'project' && read.counts)).toBe(true);
@@ -298,11 +327,11 @@ test('an approved meeting counts its follow-ups by status, and its project count
   await impact.getByRole('button', { name: /Follow-ups/ }).click();
   const list = page.getByTestId('follow-ups');
   await expect(group(list, 'Not sent').getByTestId('follow-up-row')).toHaveCount(4);
-  expect(itemReads().filter(read => !read.counts)).toEqual([{ scope: 'record', counts: false }]);
-  // Nothing is open to check until something is sent.
-  await list.getByRole('button', { name: 'Check now' }).click();
-  await expect(list).toContainText('Nothing open to check');
-  expect(sweeps()).toEqual([{ scope: 'record', id: PILOT_RECORD }]);
+  // Current work, then the closed part.
+  expect(itemReads().filter(read => !read.counts)).toEqual([{ scope: 'record', counts: false }, { scope: 'record', counts: false }]);
+  // Nothing is open to check until something is sent: no Check now.
+  await expect(list.getByRole('button', { name: 'Check now' })).toHaveCount(0);
+  expect(sweeps()).toEqual([]);
   // What a follow-up says now is covered while another app is in front, and the list comes back as it was.
   await emit(app.app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();
@@ -318,7 +347,53 @@ test('an approved meeting counts its follow-ups by status, and its project count
   await expect(list).toContainText('Thermostat redesign');
   // Spanning meetings, each row names its meeting.
   await expect(row(list, 'ECHO-12')).toContainText('Jira ticket · Pilot planning');
-  expect(itemReads().filter(read => !read.counts)).toEqual([{ scope: 'record', counts: false }, { scope: 'project', counts: false }]);
+  expect(itemReads().filter(read => !read.counts)).toEqual([{ scope: 'record', counts: false }, { scope: 'record', counts: false }, { scope: 'project', counts: false },
+    { scope: 'project', counts: false }]);
+});
+
+test('a list reads current work first, past older closed follow-ups, each part with its own More, and keeps its place', async () => {
+  app = await launch('granola-paged');
+  const { page } = app;
+  await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
+  const line = page.getByTestId('project-line');
+  await expect(line).toHaveText('Follow-ups · 5 open · 3 done');
+  await line.getByRole('button').click();
+  const list = page.getByTestId('follow-ups');
+  const open = group(list, 'Open');
+  const done = group(list, 'Done');
+  // Kickoff review's three done follow-ups are the project's oldest, yet the first page (two rows here) is current work.
+  await expect(open.getByTestId('follow-up-row')).toHaveCount(2);
+  await expect(open.getByText('Open · 5', { exact: true })).toBeVisible();
+  await expect(done).toHaveCount(0);
+  await list.getByTestId('follow-ups-more').click();
+  await expect(open.getByTestId('follow-up-row')).toHaveCount(4);
+  await list.getByTestId('follow-ups-more').click();
+  // Current work read to its end: the closed part follows, with a More of its own.
+  await expect(open.getByTestId('follow-up-row')).toHaveCount(5);
+  await expect(done.getByTestId('follow-up-row')).toHaveCount(2);
+  await expect(done.getByText('Done · 3', { exact: true })).toBeVisible();
+  await expect(list.getByTestId('follow-ups-more')).toHaveCount(0);
+  await list.getByTestId('follow-ups-more-closed').click();
+  await expect(done.getByTestId('follow-up-row')).toHaveCount(3);
+  await expect(list.getByTestId('follow-ups-more-closed')).toHaveCount(0);
+  expect(requests('items').filter(body => body.summary_only !== true).map(body => `${(body.states as string[]).join('+')}${body.cursor === undefined ? '' : ' more'}`))
+    .toEqual(['unsent+open', 'unsent+open more', 'unsent+open more', 'done+not_relevant', 'done+not_relevant more']);
+  // Scrolled to its end, a row's page and Back: the same place, and that row in focus. Another app in front changes neither.
+  await app.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(900, 560); });
+  const last = row(done, 'ECHO-9');
+  await expect.poll(() => list.evaluate(column => column.scrollHeight > column.clientHeight)).toBe(true);
+  const top = await list.evaluate(column => { column.scrollTop = column.scrollHeight; return column.scrollTop; });
+  expect(top).toBeGreaterThan(0);
+  await last.click();
+  await expect(page.getByTestId('follow-up').getByRole('heading', { name: 'ECHO-9 · Firmware sign-off' })).toBeVisible();
+  await page.getByTestId('back').click();
+  await expect(last.locator('.follow-up-open')).toBeFocused();
+  expect(await list.evaluate(column => column.scrollTop)).toBe(top);
+  await emit(app.app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await emit(app.app, 'echo-test:resume');
+  await expect(last).toBeVisible();
+  expect(await list.evaluate(column => column.scrollTop)).toBe(top);
 });
 
 test('an outage is not shown as lost access', async () => {
@@ -336,7 +411,7 @@ test('an outage is not shown as lost access', async () => {
   for (const withheld of WITHHELD) expect(await app.page.content()).not.toContain(withheld);
 });
 
-test('Home sweeps by itself, and Your follow-ups lists everything you sent or own', async () => {
+test('Home sweeps by itself, and the Follow-ups page lists everything you sent or own', async () => {
   app = await launch('granola-sweep');
   const { page } = app;
   const foot = page.getByTestId('needs-foot');
@@ -347,11 +422,12 @@ test('Home sweeps by itself, and Your follow-ups lists everything you sent or ow
   expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
   expect(runOperations().indexOf('start')).toBeGreaterThan(runOperations().indexOf('sweep'));
   await expect(page.getByTestId('need-row')).toHaveCount(1);
-  await foot.getByRole('button', { name: 'Your follow-ups' }).click();
+  await foot.getByRole('button', { name: 'Follow-ups' }).click();
   const list = page.getByTestId('follow-ups');
-  await expect(list.getByRole('heading', { name: 'Your follow-ups' })).toBeVisible();
-  // Every status, not open items only; the meeting's actions first; a match says so, faintly.
-  expect(requests('items').filter(body => body.summary_only !== true)).toEqual([expect.not.objectContaining({ states: ['open'] })]);
+  await expect(list.getByRole('heading', { name: 'Follow-ups', exact: true })).toBeVisible();
+  // Every status, current work first; the meeting's actions first; a match says so, faintly.
+  expect(requests('items').filter(body => body.summary_only !== true)).toEqual([expect.objectContaining({ scope: 'mine', states: ['unsent', 'open'] }),
+    expect.objectContaining({ scope: 'mine', states: ['done', 'not_relevant'] })]);
   const open = group(list, 'Open');
   await expect(open.getByTestId('follow-up-row')).toHaveCount(5);
   await expect(open.getByTestId('follow-up-row').first()).toContainText('Send the revised quote');
@@ -399,15 +475,16 @@ test('an owner change whose reply was lost shows the item as it is now, and hold
   await page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
   const item = page.getByTestId('follow-up');
   await item.getByRole('button', { name: /^Owner: Mina/ }).click();
-  // Escape closes the picker first, then the page.
+  // Escape closes the picker first, then the page; the focus goes back to the owner.
   await expect(page.getByTestId('owner-picker').getByRole('searchbox', { name: 'Find a person' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('owner-picker')).toHaveCount(0);
   await expect(item).toBeVisible();
+  await expect(item.getByRole('button', { name: /^Owner: Mina/ })).toBeFocused();
   await item.getByRole('button', { name: /^Owner: Mina/ }).click();
   await pickOwner(page, 'Rafael Moreno', 'Raf');
   // The reply was lost, but the change was made: the item, read again, says so.
-  await expect(item.getByTestId('follow-up-said')).toHaveText('Owner changed to Rafael Moreno');
+  await expect(item.getByTestId('follow-up-said')).toHaveText('Owner changed to Rafael');
   await expect(item.getByRole('complementary')).toContainText('Rafael');
   await expect(item.getByTestId('follow-up-history')).toContainText('Owner set to Rafael Moreno by you');
   expect(requests('assign')).toHaveLength(1);
@@ -442,10 +519,10 @@ test('Check now on a project checks its follow-ups, and its line counts each mee
   const { page } = app;
   await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
   // Pilot planning's five open follow-ups and Kickoff review's three.
-  await expect(page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).getByTestId('item-open')).toHaveText('5 open');
-  await expect(page.getByTestId('feed-row').filter({ hasText: 'Kickoff review' }).getByTestId('item-open')).toHaveText('3 open');
+  await expect(page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).getByTestId('item-follow-ups')).toHaveText('5 follow-ups');
+  await expect(page.getByTestId('feed-row').filter({ hasText: 'Kickoff review' }).getByTestId('item-follow-ups')).toHaveText('3 follow-ups');
   const line = page.getByTestId('project-line');
-  await expect(line).toHaveText('8 open follow-ups');
+  await expect(line).toHaveText('Follow-ups · 8 open');
   await line.getByRole('button').click();
   const list = page.getByTestId('follow-ups');
   await list.getByRole('button', { name: 'Check now' }).click();
@@ -454,7 +531,7 @@ test('Check now on a project checks its follow-ups, and its line counts each mee
   await expect(row(list, 'ECHO-12')).toContainText('Jira ticket · Pilot planning · matches now');
   await expect(row(list, 'ECHO-7')).toContainText('Jira ticket · Kickoff review');
   await page.getByTestId('back').click();
-  await expect(line).toHaveText('8 open follow-ups');
+  await expect(line).toHaveText('Follow-ups · 8 open');
 });
 
 test('a meeting\'s list names apart follow-ups whose titles nothing tells apart', async () => {
@@ -475,7 +552,7 @@ test('a meeting\'s list names apart follow-ups whose titles nothing tells apart'
   for (const withheld of ['Supplier brief', 'ECHO-41', 'ECHO-42']) expect(await app.page.content()).not.toContain(withheld);
   // Picking yourself claims an item that only fell back to you: Pick owner gives way to you.
   await list.getByRole('button', { name: 'Pick owner: A Jira ticket ECHO couldn\'t read just now (1)', exact: true }).click();
-  await pickOwner(app.page, 'Me');
+  await pickOwner(app.page, 'You');
   await expect(list.getByTestId('follow-ups-said')).toHaveText('Owner changed to you');
   await expect(list.getByRole('button', { name: /^Pick owner: / })).toHaveCount(4);
   await expect(list.getByRole('button', { name: 'Owner: You. Change owner of A Jira ticket ECHO couldn\'t read just now (1)', exact: true })).toBeVisible();
@@ -490,14 +567,14 @@ test('Home starts its sweep again when an attempt goes back to the queue', async
   expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
 });
 
-test('an empty Home with no projects still leads to Your follow-ups', async () => {
+test('an empty Home with no projects still leads to the Follow-ups page', async () => {
   app = await launch('no-projects');
   const { page } = app;
   const empty = page.getByTestId('home-empty');
   await expect(empty.getByTestId('empty-new-project')).toBeVisible();
   await empty.getByTestId('your-follow-ups').click();
   const list = page.getByTestId('follow-ups');
-  await expect(list.getByRole('heading', { name: 'Your follow-ups' })).toBeVisible();
+  await expect(list.getByRole('heading', { name: 'Follow-ups', exact: true })).toBeVisible();
   await expect(list).toContainText('No follow-ups');
   await expect(page.getByTestId('title')).toHaveText('Follow-ups');
   await page.getByTestId('back').click();

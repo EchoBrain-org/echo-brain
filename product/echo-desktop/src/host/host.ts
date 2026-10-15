@@ -13,7 +13,7 @@ import {
 import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, impactCardView, invitationView, isRecordRef, listView,
+  abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
   NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
@@ -684,18 +684,19 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
         stdout => validatePersonMeetingResultV2(request.operation, (lastJson(stdout) as { result: unknown }).result), undefined, undefined, isWriteCall(method, params));
     }
     // Impact checks of your own approvals, and the open items they found. Start
-    // and retry change a run, send, set_state and assign change items; view and
-    // the item reads rebuild what an item says now from fresh reads, so nothing
-    // outside ECHO is kept.
+    // and retry change a run, send, set_state and assign change items; the item
+    // reads rebuild what an item says now from fresh reads, so nothing outside
+    // ECHO is kept. What a check found is its meeting's follow-ups: a check's
+    // card (`view`) never crosses to the window.
     case 'runs': {
       const { expect, request: raw } = params as Params<'runs'>;
       let request;
       try { request = validatePersonRunsRequestV1(raw); } catch { return code('invalid_request', true); }
+      if (request.operation === 'view') return code('invalid_request', true);
       return forAccount(method, expect, ['runs', option('request', JSON.stringify(request))], stdout => {
         let result;
         try { result = validatePersonRunsResultV1(request.operation, (lastJson(stdout) as { result: unknown }).result); } catch { throw new ViewError(); }
         switch (request.operation) {
-          case 'view': return impactCardView(result as Parameters<typeof impactCardView>[0]);
           case 'home': return homeView(result as Parameters<typeof homeView>[0]);
           case 'items': return openItemsView(result as Parameters<typeof openItemsView>[0]);
           case 'item': return openItemView((result as { item: Parameters<typeof openItemView>[0] }).item);

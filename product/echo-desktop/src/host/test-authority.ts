@@ -56,7 +56,8 @@ interface Contract {
 
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
-  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true; states?: OpenItem['state'][]; rows_only?: true;
+  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; cursor?: string; summary_only?: true; states?: OpenItem['state'][];
+  rows_only?: true;
   item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
@@ -109,7 +110,7 @@ interface SweepRun {
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
-const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-checked', 'granola-review',
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-checked', 'granola-paged', 'granola-review',
   'granola-review-assign-lost', 'granola-sweep', 'granola-sweep-requeued', 'granola-alike']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
@@ -587,8 +588,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }));
   }
   // granola-checked: Mina approved Kickoff review into Thermostat redesign and sent its three items to herself, Rafael and S.
-  // Okafor; none is checked yet. Ari reads the decision, and none of its items involves Ari (canvas 9.7: "3 open" on its row).
-  if (mode === 'granola-checked') {
+  // Okafor; none is checked yet. Ari reads the decision, and none of its items involves Ari (canvas 9.7: "3 follow-ups" on its
+  // row). granola-paged: the same, except that all three are done since, so the project's oldest follow-ups are closed ones.
+  if (mode === 'granola-checked' || mode === 'granola-paged') {
     const kickoff = { approval_id: 'apr_' + 'e'.repeat(64), record_sha256: sha('record:Kickoff review'), title: 'Kickoff review',
       first_line: 'Freeze the firmware after the pilot.', approved_at: '2026-09-29T15:00:00.000Z', project_ids: [THERMOSTAT] };
     const sent = { run_id: 'run_00000000-0000-4000-8000-000000000045', kind: 'ticket' as const, decision: kickoff, readable: true, opens: true,
@@ -601,6 +603,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       minaSent({ ...sent, item_id: 'itm_00000000-0000-4000-8000-000000000047', owner: { ...OKAFOR, match: 'picked' },
         live: { citation: ticket('ECHO-9', 'Firmware sign-off', '10009'), says_now: 'Sign-off follows the freeze.', assignee: 'S. Okafor', status: 'Blocked' } }),
     );
+    if (mode === 'granola-paged') {
+      for (const item of openItems.filter(entry => entry.run_id === sent.run_id)) Object.assign(item, { state: 'done', state_set_at: '2026-10-01T09:00:00.000Z', state_set_by: MINA });
+    }
   }
   // The meetings Mina approved that Ari can read, each once: in their project's feed, where their follow-ups line shows.
   for (const item of openItems.filter(entry => entry.readable)) {
@@ -660,7 +665,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // check is done and nothing is sent yet; it also found items whose titles nothing tells apart: two
   // supplier pages Ari cannot open, with the same expected phrase, and two tickets Jira did not answer
   // for just now, not assessed (no expected phrase).
-  if (mode === 'granola-checked' || mode.startsWith('granola-review') || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
+  if (mode === 'granola-checked' || mode === 'granola-paged' || mode.startsWith('granola-review') || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
     granolaReview = { action: 'approve', project_ids: [THERMOSTAT], owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, owner: action.owner })) };
     granolaRun = { state: 'done', error_code: null, retried: false };
@@ -914,24 +919,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           if (run?.state !== 'failed' || request.run_id !== runId) return failure('not_found', 404);
           Object.assign(run, { state: 'pending', error_code: null, retried: true });
           return result('retry', { state: 'pending' });
-        case 'view': {
-          if (run?.state !== 'done' || request.run_id !== runId) return failure('not_found', 404);
-          const record = (record_sha256: string, label: string) => ({ kind: 'decision', label, visibility: 'only_me',
-            citation: { kind: 'approved_record', atom_id: sha(`atom:${label}`), record_sha256, policy_id: 'restricted-reviewer-person-v2' } });
-          return result('view', { checked_at: '2026-10-07T10:05:00.000Z', hidden: 1, card: {
-            status: 'assessed',
-            decided: [{ text: 'Launch the pilot next week.', citation_index: 0 }],
-            affected: [
-              { citation_index: 1, says_now: 'The pilot launch is planned for the end of the month.', relation: 'conflicts', expected: 'launch next week', owner: 'Mina Patel',
-                date_at_risk: { date: '2026-10-30', milestone: 'Pilot launch' } },
-              { citation_index: 3, says_now: 'The pilot starts after the freeze.', relation: 'needs_updating', expected: 'pilot starts next week' },
-              { citation_index: 2, says_now: 'The pricing review approved the pilot budget.', relation: 'confirms' },
-            ],
-            unconfirmed: ['No supplier contract for the pilot was found.'],
-            people: [{ name: 'Mina Patel', items: [1] }],
-            citations: [record(PILOT_RECORD, 'Pilot planning'), ticket('ECHO-12', 'Pilot launch', '10012'), record(PRICING_REVIEW, 'Pricing review'), PRD_PAGE],
-          } });
-        }
         // Home: the Send row while Ari's check has items not sent, the open items that wait on
         // Ari, and the open items Ari sent that ECHO saw change; then, of the open items Ari sent
         // or owns, how many landed, how many Ari sent wait on others, and when ECHO last checked
@@ -978,10 +965,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             }),
           ];
           // Counts only (a project's or a meeting's line): the summary and stages, no item. States: the items in those states
-          // alone, with the same summary.
+          // alone, with the same summary, paged (two a page in granola-paged) with a cursor over those states only.
           const { states } = request;
           const listed = states === undefined ? items : items.filter(item => states.includes(item.state));
-          return result('items', { items: request.summary_only === true ? [] : listed.map(item => itemView(item)), next_cursor: null, stages, summary: {
+          const pageKey = `items:${scope}:${id ?? ''}:${states?.join(',') ?? ''}`;
+          const from = pageFrom(pageKey, request.cursor);
+          if (from === null) return failure('invalid_request', 400);
+          const size = mode === 'granola-paged' ? 2 : 50;
+          const paged = request.summary_only === true ? [] : listed.slice(from, from + size);
+          const next = request.summary_only !== true && from + size < listed.length ? pageCursor(pageKey, from + size) : null;
+          return result('items', { items: paged.map(item => itemView(item)), next_cursor: next, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
             landed: verdicts('landed'), changed: verdicts('changed'), unreadable: verdicts('unreadable'), decisions: records.length,
             last_checked_at: items.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null, by_decision: records.map(record => {

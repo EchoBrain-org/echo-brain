@@ -1,5 +1,5 @@
 import type {
-  PersonImpactCardV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
+  PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
@@ -404,12 +404,6 @@ export interface ProjectConfluenceMapping {
 export interface ConfluenceSpacesPage { items: readonly ConfluenceSpace[]; next_cursor: string | null }
 
 /**
- * A finished impact check, as an approved meeting's decision page shows it:
- * what was decided, from the card rebuilt for you when it was opened. What it
- * found shows as the meeting's follow-ups.
- */
-export type ImpactView = Pick<PersonImpactCardV1, 'decided'>;
-/**
  * What an open item says now, read live for you in this request and never
  * stored: its citation as a source "Open in …" can open, and its details.
  */
@@ -434,12 +428,15 @@ export interface HomeView extends Omit<PersonRunsResultsV1['home'], 'items'> {
 export interface OpenItemsView extends Omit<PersonRunsResultsV1['items'], 'items'> {
   readonly items: readonly OpenItemView[];
 }
-/** The impact checks of your own approvals, the open items they found, and the sweeps that recheck them. */
+/**
+ * The impact checks of your own approvals, the open items they found, and the
+ * sweeps that recheck them. What a check found shows as the meeting's
+ * follow-ups, so the desktop never asks for its card (`view`).
+ */
 export interface RunsResults {
   list: PersonRunsResultsV1['list'];
   start: PersonRunsResultsV1['start'];
   retry: PersonRunsResultsV1['retry'];
-  view: ImpactView;
   home: HomeView;
   items: OpenItemsView;
   item: OpenItemView;
@@ -619,7 +616,7 @@ export interface Events {
   'organization.open': Record<string, never>;
   /** What the updater shows now: a check, an install's progress, or a previous run's outcome. */
   'update.changed': UpdateState;
-  /** A follow-ups notification was clicked: the page of its one item, or Your follow-ups for several. */
+  /** A follow-ups notification was clicked: the page of its one item, or the Follow-ups page for several. */
   'follow-ups.open': { item_id?: string };
 }
 export type EventName = keyof Events;
@@ -684,7 +681,7 @@ export const NOTICE_ITEMS_MAX = 50;
 
 /**
  * A follow-ups notification (F8), as main shows it: its body, and the item a
- * click opens (none for several, which open Your follow-ups). One item reads
+ * click opens (none for several, which open the Follow-ups page). One item reads
  * "Mina sent you: Update the pricing page"; several, "3 new follow-ups". Null
  * for anything else: distinct item ids, and for one item exactly two short
  * single lines, never more.
