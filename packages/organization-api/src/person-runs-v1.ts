@@ -67,6 +67,11 @@ export type PersonRunsRequestV1 =
        */
       readonly items: readonly { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }[] }
   | { readonly schema_version: 1; readonly operation: 'set_state'; readonly item_id: string; readonly state: 'open' | 'done' | 'not_relevant' }
+  /**
+   * Changes an item's owner to an active member. Before Send only its approver may (the owner is stored at once, `picked`;
+   * follow-ups thread v1, F2); once sent, its approver, its owner or a lead of one of the decision's active projects
+   * (`reassigned`). Its current owner again writes nothing.
+   */
   | { readonly schema_version: 1; readonly operation: 'assign'; readonly item_id: string; readonly owner_membership_id: string }
   | { readonly schema_version: 1; readonly operation: 'sweep'; readonly scope: 'mine' | 'record' | 'project'; readonly id?: string };
 

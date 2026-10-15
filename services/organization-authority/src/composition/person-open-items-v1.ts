@@ -441,12 +441,12 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     if (row === undefined) throw notFound();
     const entry = assess(viewer, [row]).assessed[0];
     if (entry === undefined || !entry.access.see_row) throw notFound();
-    // An unsent item is its approver's to send first. Whoever could act on it once sent hears that; anyone else gets not_found.
-    if (row.state === 'unsent') {
-      if (openItemAccessV1({ ...entry.facts, state: 'open' })[right]) throw new AuthorityOperationError('invalid_request', 'Send it first');
+    if (!entry.access[right]) {
+      // An unsent item is its approver's to send first; only they may pick its owner before Send (F2). Whoever could act on it once
+      // sent hears that; anyone else gets not_found.
+      if (row.state === 'unsent' && openItemAccessV1({ ...entry.facts, state: 'open' })[right]) throw new AuthorityOperationError('invalid_request', 'Send it first');
       throw notFound();
     }
-    if (!entry.access[right]) throw notFound();
     return row;
   };
   const activeMember = (viewer: Viewer, membershipId: string): void => {

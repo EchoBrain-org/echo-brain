@@ -448,7 +448,7 @@ operations:
 | `item` | One open item, rebuilt for the caller. |
 | `send` | The approver sends any of a run's unsent items to their owners, once per command id: a ticked item opens for its owner, an unticked one is dismissed (not relevant), and an unsent item the request does not list stays unsent. A listed item that is no longer unsent makes the whole send a conflict. |
 | `set_state` | The approver or the owner sets a sent item to open, done or not relevant. |
-| `assign` | The approver, the owner or a lead of one of the decision's active projects changes a sent item's owner to another active member. |
+| `assign` | Changes an item's owner to another active member, stored at once with who set it and when. Before Send only the approver may, while they can send it (`picked`); once sent, the approver, the owner or a lead of one of the decision's active projects (`reassigned`). |
 | `sweep` | Queues a re-check of the open items the caller can see in `mine` (what they sent or own), a record or a project, or answers `nothing_to_check` when there is none a sweep covers. Asked again while that scope's sweep is pending or running, it answers the same run. |
 
 A sweep acts as the person who asked, with their access, and stores only

@@ -21,8 +21,10 @@ const table = [
   ['stranger on an item sent to its owner', { sent_to_owner: true }, { see_row: false, see_outside: false, set_state: false, assign: false, waits_on_viewer: false }],
   ['project lead while the owner is active', { reads_decision: true, leads_decision_project: true }, { waits_on: 'owner', waits_on_viewer: false }],
   ['owner who cannot read the decision, after opening the item', { viewer: 'mem_mina', sent_to_owner: true, opens_item: true }, { see_row: true, see_outside: true }],
-  // The stage (R16): an unsent item waits on its approver to send it and nobody changes it before Send; a closed one waits on no one.
-  ['approver of an unsent item', { viewer: 'mem_ari', reads_decision: true, state: 'unsent' }, { see_row: true, set_state: false, assign: false, waits_on: 'approver', waits_on_viewer: true }],
+  // The stage (R16): an unsent item waits on its approver to send it, and nobody sets its state before Send; a closed one waits on no one.
+  // Before Send its approver alone picks its owner (F2), exactly while they may send it.
+  ['approver of an unsent item', { viewer: 'mem_ari', reads_decision: true, state: 'unsent' }, { see_row: true, set_state: false, assign: true, waits_on: 'approver', waits_on_viewer: true }],
+  ['approver of an unsent item who can no longer read the decision', { viewer: 'mem_ari', state: 'unsent' }, { see_row: false, set_state: false, assign: false }],
   ['owner who reads the decision, on an unsent item', { viewer: 'mem_mina', reads_decision: true, state: 'unsent' }, { see_row: true, set_state: false, assign: false, waits_on: 'approver', waits_on_viewer: false }],
   ['lead on an unsent item after the approver left', { reads_decision: true, leads_decision_project: true, approver_active: false, state: 'unsent' }, { set_state: false, assign: false, waits_on: 'leads', waits_on_viewer: true }],
   ['approver after the owner left, on an unsent item', { viewer: 'mem_ari', reads_decision: true, owner_active: false, state: 'unsent' }, { waits_on: 'approver', waits_on_viewer: true }],

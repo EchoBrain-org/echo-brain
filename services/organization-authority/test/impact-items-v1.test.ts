@@ -154,7 +154,25 @@ describe('SQLite open items v1', () => {
     expect(f.items.read(item.item_id)).toMatchObject({ state: 'done', owner_membership_id: f.mina });
   });
 
-  it('changes the state or owner only of a sent item', async () => {
+  it('picks the owner of an unsent item at once, and keeps it through Send (F2)', async () => {
+    const f = await doneRunWithItems(['46', '47']);
+    const [a, b] = f.items.forRun(f.run.run_id);
+    f.advance(1_000);
+    const picked = f.clock().toISOString();
+    expect(f.items.assign(a!.item_id, f.mina, ARI)).toMatchObject({ state: 'unsent', owner_membership_id: f.mina, owner_match: 'picked', sent_at: null, state_set_by: null });
+    expect(f.db.prepare('SELECT owner_set_by, owner_set_at FROM authority_impact_items_v1 WHERE item_id=?').get(a!.item_id)).toEqual({ owner_set_by: ARI, owner_set_at: picked });
+    // Send with no pick keeps the picked owner; a pick at Send still wins.
+    f.advance(1_000);
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: true, owner_membership_id: f.rafael }] }))
+      .toEqual({ kind: 'sent', sent: 2, not_relevant: 0 });
+    expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.mina, owner_match: 'picked' });
+    expect(f.db.prepare('SELECT owner_set_at FROM authority_impact_items_v1 WHERE item_id=?').pluck().get(a!.item_id)).toBe(picked);
+    expect(f.items.read(b!.item_id)).toMatchObject({ owner_membership_id: f.rafael, owner_match: 'picked' });
+    // Once sent, a change of owner is a reassignment.
+    expect(f.items.assign(a!.item_id, f.rafael, f.mina)).toMatchObject({ owner_membership_id: f.rafael, owner_match: 'reassigned' });
+  });
+
+  it('changes the state only of a sent item, and reassigns a sent item', async () => {
     const f = await doneRunWithItems(['46', '47']);
     const [a, b] = f.items.forRun(f.run.run_id);
     expect(f.items.setState(a!.item_id, 'done', ARI)).toBeUndefined();

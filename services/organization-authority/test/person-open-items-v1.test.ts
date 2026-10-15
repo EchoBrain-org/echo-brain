@@ -439,8 +439,52 @@ describe('open items: send, update, reassign', () => {
     await expect(setState(f, 'mina', ticket!.item_id, 'done')).rejects.toMatchObject({ code: 'invalid_request', message: 'Send it first' });   // its owner, who reads the decision
     await expect(setState(f, 'rafael', ticket!.item_id, 'done')).rejects.toMatchObject({ code: 'not_found' });
     await expect(setState(f, 'okafor', ticket!.item_id, 'done')).rejects.toMatchObject({ code: 'not_found' });
-    await expect(assign(f, 'ari', ticket!.item_id, 'rafael')).rejects.toMatchObject({ code: 'invalid_request', message: 'Send it first' });
+    // Before Send only the approver picks an owner: its owner or a project lead may reassign it once it is sent.
+    await expect(assign(f, 'mina', ticket!.item_id, 'rafael')).rejects.toMatchObject({ code: 'invalid_request', message: 'Send it first' });
+    f.makeLead('rafael');
+    await expect(assign(f, 'rafael', ticket!.item_id, 'rafael')).rejects.toMatchObject({ code: 'invalid_request', message: 'Send it first' });
+    await expect(assign(f, 'okafor', ticket!.item_id, 'okafor')).rejects.toMatchObject({ code: 'not_found' });
     expect(f.items.read(ticket!.item_id)).toMatchObject({ state: 'unsent', owner_match: 'jira_account' });
+  });
+
+  it('lets the approver pick an owner before sending, stored at once, and kept by Send (F2)', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const unsent = (await scope(f, 'ari', 'run')).items;
+    const ticket = unsent.find(entry => entry.kind === 'ticket')!;          // Mina's, matched by her Jira account
+    expect(ticket.can).toEqual({ set_state: false, assign: true });
+    expect(unsent.find(entry => entry.kind === 'record')!.can).toEqual({ set_state: false, assign: true });
+    f.advance(5_000);
+    await expect(assign(f, 'ari', ticket.item_id, 'rafael')).resolves.toEqual({ owner: { membership_id: f.membership('rafael'), name: 'Rafael Moreno', active: true } });
+    expect(f.items.read(ticket.item_id)).toMatchObject({ state: 'unsent', owner_membership_id: f.membership('rafael'), owner_match: 'picked', sent_at: null });
+    expect(f.db.prepare('SELECT owner_set_by, owner_set_at FROM authority_impact_items_v1 WHERE item_id=?').get(ticket.item_id))
+      .toEqual({ owner_set_by: f.membership('ari'), owner_set_at: f.clock().toISOString() });
+    // Its new owner again writes nothing.
+    const before = f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(ticket.item_id);
+    f.advance(5_000);
+    await expect(assign(f, 'ari', ticket.item_id, 'rafael')).resolves.toMatchObject({ owner: { name: 'Rafael Moreno' } });
+    expect(f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(ticket.item_id)).toEqual(before);
+    // The Send row names the picked owner; the item still waits on its approver, and nobody but readers sees it.
+    expect((await f.app.home({ access_token: 'ari' })).send).toMatchObject([{ run_id: f.runId, items: 2, owners: ['Rafael Moreno'] }]);
+    expect((await f.app.home({ access_token: 'rafael' })).items).toEqual([]);
+    expect((await scope(f, 'ari', 'run')).items.find(entry => entry.item_id === ticket.item_id)).toMatchObject({ state: 'unsent', waits_on: 'approver', owner: { name: 'Rafael Moreno', match: 'picked' } });
+    // An owner who is not an active member is refused, and nothing changes.
+    f.revoke('okafor');
+    await expect(assign(f, 'ari', ticket.item_id, 'okafor')).rejects.toMatchObject({ code: 'invalid_request' });
+    // Send with no pick sends it to the picked owner.
+    await expect(sendAll(f, unsent, 'c1', () => ({ include: true }))).resolves.toEqual({ sent: 2, not_relevant: 0 });
+    expect(f.items.read(ticket.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.membership('rafael'), owner_match: 'picked' });
+    expect((await f.app.home({ access_token: 'rafael' })).items.map(entry => entry.item_id)).toEqual([ticket.item_id]);
+    // Once sent, a change of owner is a reassignment, as before.
+    await expect(assign(f, 'ari', ticket.item_id, 'mina')).resolves.toMatchObject({ owner: { name: 'Mina Patel' } });
+    expect(f.items.read(ticket.item_id)).toMatchObject({ owner_membership_id: f.membership('mina'), owner_match: 'reassigned' });
+  });
+
+  it('refuses an owner pick before Send to an approver who can no longer read the decision', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const ticket = (await scope(f, 'ari', 'run')).items.find(entry => entry.kind === 'ticket')!;
+    f.removeProjectMembership(f.projectA);
+    await expect(assign(f, 'ari', ticket.item_id, 'rafael')).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.items.read(ticket.item_id)).toMatchObject({ owner_membership_id: f.membership('mina'), owner_match: 'jira_account' });
   });
 
   it('hides an unticked item from an owner who cannot read the decision until it is reopened, and keeps one sent then closed (R13, R54)', async () => {

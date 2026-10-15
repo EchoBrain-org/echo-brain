@@ -202,11 +202,15 @@ export class SqliteImpactItemsV1 {
     });
   }
 
-  /** `owner_match = reassigned`; undefined when the item is missing. */
+  /**
+   * Stores the owner at once, with who set it and when: `owner_match = picked` on an item still unsent (an owner picked before
+   * Send, follow-ups thread v1, F2), `reassigned` once it is sent. Undefined when the item is missing.
+   */
   assign(itemId: string, ownerMembershipId: string, by: string): ImpactItemRowV1 | undefined {
     return this.immediate(() => {
       const timestamp = this.timestamp();
-      const changes = this.database.prepare(`UPDATE authority_impact_items_v1 SET owner_membership_id=?, owner_match='reassigned', owner_set_by=?, owner_set_at=?, updated_at=?
+      const changes = this.database.prepare(`UPDATE authority_impact_items_v1 SET owner_membership_id=?,
+        owner_match=CASE WHEN state='unsent' THEN 'picked' ELSE 'reassigned' END, owner_set_by=?, owner_set_at=?, updated_at=?
         WHERE item_id=?`).run(ownerMembershipId, by, timestamp, timestamp, itemId).changes;
       return changes === 1 ? this.read(itemId) : undefined;
     });

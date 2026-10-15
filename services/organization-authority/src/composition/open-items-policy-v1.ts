@@ -24,9 +24,10 @@ export interface OpenItemFactsV1 {
   readonly sent_to_owner: boolean;
   /**
    * The item's stage. An unsent item waits on its approver to send it (on the
-   * decision's project leads when the approver has left), and nobody sets its
-   * state or reassigns it before Send: Send picks its owner. A closed item
-   * waits on no one.
+   * decision's project leads when the approver has left). Nobody sets its
+   * state before Send, and only its approver, who may send it, picks its
+   * owner before Send (follow-ups thread v1, F2). A closed item waits on no
+   * one.
    */
   readonly state: 'unsent' | 'open' | 'done' | 'not_relevant';
   /** The viewer passes the exact record check for the item's decision now. */
@@ -60,7 +61,8 @@ export function openItemAccessV1(facts: OpenItemFactsV1): OpenItemAccessV1 {
     see_decision: openItemDecisionAccessV1(facts).see_decision,
     see_outside: see_row && facts.opens_item === true,
     set_state: see_row && !unsent && (approver || owner),
-    assign: see_row && !unsent && (approver || owner || facts.leads_decision_project),
+    // Before Send only the approver picks an owner, while they see the row: exactly when the send policy lets them send it.
+    assign: see_row && (unsent ? approver : approver || owner || facts.leads_decision_project),
     waits_on,
     waits_on_viewer: see_row && !closed && (waits_on === 'owner' ? owner : waits_on === 'approver' ? approver : facts.leads_decision_project),
   });
