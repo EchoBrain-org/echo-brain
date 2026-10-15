@@ -61,6 +61,7 @@ describe('person runs client', () => {
     for (const operation of ['list', 'start', 'retry', 'view', 'home', 'items', 'item', 'send', 'set_state', 'assign', 'sweep']) expect(stdout).toContain(operation);
     expect(stdout).toContain('your own impact runs and sweeps');
     expect(stdout).toContain('re-checks the open items you can see');
+    expect(stdout).toContain('false dismisses it, and unlisted items stay unsent');
     expect(stderr).toBe('');
   });
 });

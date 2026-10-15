@@ -60,6 +60,11 @@ export type PersonRunsRequestV1 =
       readonly open_only?: true }
   | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string }
   | { readonly schema_version: 1; readonly operation: 'send'; readonly run_id: string; readonly command_id: string;
+      /**
+       * Any non-empty subset of the run's unsent items (follow-ups thread v1, F1): `include: true` sends one to its owner
+       * (`open`, with an optional owner pick), `include: false` dismisses it (`not_relevant`), and an unsent item not listed
+       * stays unsent. A listed item that is no longer unsent answers `conflict` and nothing is written.
+       */
       readonly items: readonly { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }[] }
   | { readonly schema_version: 1; readonly operation: 'set_state'; readonly item_id: string; readonly state: 'open' | 'done' | 'not_relevant' }
   | { readonly schema_version: 1; readonly operation: 'assign'; readonly item_id: string; readonly owner_membership_id: string }

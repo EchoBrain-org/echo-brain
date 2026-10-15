@@ -623,12 +623,15 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // A command already sent answers what it did, whatever changed since: a retry never turns a committed send into an error.
       const earlier = options.items.sentBy(run.run_id, request.command_id);
       if (earlier !== undefined) return checked('send', earlier);
-      // Only a new command is checked: the approver, while they can read the decision; picks who are active members; the items as drawn.
+      // Only a new command is checked: the approver, while they can read the decision; picks who are active members; the listed items
+      // still unsent. Sending is selecting (follow-ups thread v1, F1): any of the run's unsent items, ticked to send or unticked to
+      // dismiss; the ones not listed stay unsent.
       const reads_decision = options.records.readableDecisions({ access_token: input.access_token, record_sha256s: [run.record_sha256] }).has(run.record_sha256);
       if (!openItemSendAccessV1({ viewer: viewer.membership, approver: run.actor.membership_id, reads_decision }).send) throw runNotFound();
       for (const choice of request.items) if (choice.owner_membership_id !== undefined) activeMember(viewer, choice.owner_membership_id);
       const result = options.items.send({ run_id: run.run_id, by: viewer.membership, command_id: request.command_id, choices: request.items });
-      // A card drawn before the items changed: open them again. A conflict, not a loss of access (the desktop reads that as signed out).
+      // A listed item sent or dismissed meanwhile, or nothing left to send: open them again. A conflict, not a loss of access (the
+      // desktop reads that as signed out).
       if (result.kind === 'stale') throw new AuthorityOperationError('conflict', 'The items changed. Open them again.');
       return checked('send', { sent: result.sent, not_relevant: result.not_relevant });
     },
@@ -636,7 +639,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     async set_state(input: Parameters<PersonOpenItemsApplicationV1['set_state']>[0]) {
       const viewer = viewerOf(input.access_token, input.signal);
       const row = actable(viewer, input.request.item_id, 'set_state');
-      // A click that changes nothing writes nothing: an item Send left unticked keeps its stamp (R13), and a closed item who closed it.
+      // A click that changes nothing writes nothing: an item Send dismissed keeps its stamp (R13), and a closed item who closed it.
       if (row.state === input.request.state) return checked('set_state', { state: row.state });
       const updated = options.items.setState(row.item_id, input.request.state, viewer.membership);
       if (updated === undefined) throw notFound();

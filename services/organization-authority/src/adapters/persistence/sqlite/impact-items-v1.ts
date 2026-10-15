@@ -154,9 +154,12 @@ export class SqliteImpactItemsV1 {
 
   /**
    * One immediate transaction. Replayed when any item of the run carries `command_id` (`sentBy`).
-   * Stale when the run has no unsent item or `choices` is not exactly its unsent items.
-   * Included → open (with the picked owner, `owner_match = picked`, when one is given and differs);
-   * excluded → not_relevant. Freezes send_included, sets sent_at, send_command_id, state_set_by/at = `by`.
+   * `choices` is any non-empty subset of the run's unsent items (follow-ups thread v1, F1): stale when
+   * the run has no unsent item, or a choice names an item twice or names one that is not an unsent item
+   * of the run. Included → open (with the picked owner, `owner_match = picked`, when one is given and
+   * differs); excluded → not_relevant (dismissed); an unsent item `choices` leaves out stays unsent,
+   * untouched. Freezes send_included, sets sent_at, send_command_id, state_set_by/at = `by` on each
+   * chosen item.
    */
   send(input: { readonly run_id: string; readonly by: string; readonly command_id: string; readonly choices: readonly ImpactSendChoiceV1[] }):
     { readonly kind: 'sent' | 'replayed'; readonly sent: number; readonly not_relevant: number } | { readonly kind: 'stale' } {
@@ -167,7 +170,7 @@ export class SqliteImpactItemsV1 {
         .all(input.run_id) as Pick<StoredItemV1, 'item_id' | 'owner_membership_id' | 'state'>[];
       const unsent = new Map(items.filter(item => item.state === 'unsent').map(item => [item.item_id, item]));
       const chosen = new Set(input.choices.map(choice => choice.item_id));
-      if (unsent.size === 0 || chosen.size !== input.choices.length || chosen.size !== unsent.size || [...chosen].some(id => !unsent.has(id))) {
+      if (unsent.size === 0 || chosen.size === 0 || chosen.size !== input.choices.length || [...chosen].some(id => !unsent.has(id))) {
         return Object.freeze({ kind: 'stale' as const });
       }
       const timestamp = this.timestamp();

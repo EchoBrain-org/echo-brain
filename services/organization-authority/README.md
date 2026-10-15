@@ -446,7 +446,7 @@ operations:
 | `home` | What waits on the caller: Send rows, the open items to update or check, the counts under Home, and `sweep_due`. |
 | `items` | The items the caller can see (unsent, open and closed) for `mine`, a run, a record or a project, oldest first, 50 a page, with a summary of the whole scope (counts by state; counts by last check among open items; and, for each decision the caller can read, up to 100 and most recent first, its unsent, open, landed and unreadable counts) and each decision's stage. A check whose lease has lapsed is a pending stage, as in `list`. `summary_only` answers the summary and stages alone, with no live reads; `open_only` pages over items in state open only, and the summary and stages still cover the whole scope. |
 | `item` | One open item, rebuilt for the caller. |
-| `send` | The approver sends a run's items to their owners, once per command id. |
+| `send` | The approver sends any of a run's unsent items to their owners, once per command id: a ticked item opens for its owner, an unticked one is dismissed (not relevant), and an unsent item the request does not list stays unsent. A listed item that is no longer unsent makes the whole send a conflict. |
 | `set_state` | The approver or the owner sets a sent item to open, done or not relevant. |
 | `assign` | The approver, the owner or a lead of one of the decision's active projects changes a sent item's owner to another active member. |
 | `sweep` | Queues a re-check of the open items the caller can see in `mine` (what they sent or own), a record or a project, or answers `nothing_to_check` when there is none a sweep covers. Asked again while that scope's sweep is pending or running, it answers the same run. |

@@ -15,11 +15,11 @@ export interface OpenItemFactsV1 {
   readonly owner_active: boolean;
   /**
    * The item has reached its owner: it was sent, and Send included it, or it
-   * is `open` or `done` since (an approver who reopens an item Send left
-   * unticked hands it to its owner, who must be able to see what waits on
-   * them). False while the item is `unsent`, and for an item Send left
-   * unticked that stays `not_relevant`. Send closes those but still sets
-   * their `sent_at`, so `sent_at` alone does not answer this.
+   * is `open` or `done` since (an approver who reopens an item Send
+   * dismissed hands it to its owner, who must be able to see what waits on
+   * them). False while the item is `unsent`, and for an item Send dismissed
+   * that stays `not_relevant`. Send closes those but still sets their
+   * `sent_at`, so `sent_at` alone does not answer this.
    */
   readonly sent_to_owner: boolean;
   /**

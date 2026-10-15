@@ -248,7 +248,7 @@ Runs a versioned request against approved-record impact runs, the open items the
   home                 what waits on you: Send rows and open items
   items                with scope mine, run, record or project, an id for run, record and project, and an optional cursor; summary_only true answers the counts alone; open_only true lists open items only
   item                 with item_id
-  send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}]; the approver only
+  send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}] naming any of the run's unsent items: include true sends one to its owner, false dismisses it, and unlisted items stay unsent; the approver only
   set_state            with item_id and state open, done or not_relevant; the approver or the owner
   assign               with item_id and owner_membership_id; the approver, the owner or a lead of the decision's projects
   sweep                with scope mine, record or project, and an id for record and project; re-checks the open items you can see

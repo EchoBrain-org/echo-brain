@@ -324,7 +324,7 @@ describe('open items: send, update, reassign', () => {
       items: unsent.map(item => ({ item_id: item.item_id, include: true, ...(item.owner.match === 'approver' ? { owner_membership_id: f.okaforMembership } : {}) })) };
     await expect(f.app.send({ access_token: 'ari', request: send })).resolves.toEqual({ sent: 2, not_relevant: 0 });
     await expect(f.app.send({ access_token: 'ari', request: send })).resolves.toEqual({ sent: 2, not_relevant: 0 });
-    // A card drawn before the items changed: a conflict to open again, never a sign the account lost access.
+    // A card drawn before its items were sent: a conflict to open again, never a sign the account lost access.
     await expect(f.app.send({ access_token: 'ari', request: { ...send, command_id: 'c2' } })).rejects.toMatchObject({ code: 'conflict', message: 'The items changed. Open them again.' });
     const okaforHome = await f.app.home({ access_token: 'okafor' });
     expect(okaforHome.items).toHaveLength(1);
@@ -334,6 +334,28 @@ describe('open items: send, update, reassign', () => {
     expect((await f.app.home({ access_token: 'okafor' })).items).toEqual([]);
     // Mina, the matched ticket owner, has hers on Home.
     expect((await f.app.home({ access_token: 'mina' })).items.map(entry => entry.kind)).toEqual(['ticket']);
+  });
+
+  it('sends the items it lists, dismisses the ones it unticks, and leaves the rest for a later send (F1)', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const unsent = (await scope(f, 'ari', 'run')).items;
+    const ticket = unsent.find(entry => entry.kind === 'ticket')!;
+    const action = unsent.find(entry => entry.kind === 'record')!;
+    const send = (command_id: string, items: readonly { readonly item_id: string; readonly include: boolean }[]) =>
+      f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id, items } });
+    await expect(send('c1', [{ item_id: ticket.item_id, include: true }])).resolves.toEqual({ sent: 1, not_relevant: 0 });
+    await expect(send('c1', [{ item_id: ticket.item_id, include: true }])).resolves.toEqual({ sent: 1, not_relevant: 0 });
+    expect(f.items.read(action.item_id)).toMatchObject({ state: 'unsent', sent_at: null });
+    // The Send row stays, with what is left to send; the ticket is Mina's now.
+    expect((await f.app.home({ access_token: 'ari' })).send).toMatchObject([{ run_id: f.runId, items: 1, kinds: ['record'], owners: [] }]);
+    expect((await f.app.home({ access_token: 'mina' })).items.map(entry => entry.item_id)).toEqual([ticket.item_id]);
+    // A send that lists the ticket again is stale: it was sent meanwhile. Nothing is written.
+    await expect(send('c2', [{ item_id: ticket.item_id, include: false }, { item_id: action.item_id, include: false }])).rejects.toMatchObject({ code: 'conflict' });
+    expect(f.items.read(action.item_id)).toMatchObject({ state: 'unsent' });
+    await expect(send('c2', [{ item_id: action.item_id, include: false }])).resolves.toEqual({ sent: 0, not_relevant: 1 });
+    expect(f.items.read(action.item_id)).toMatchObject({ state: 'not_relevant', send_included: false, state_set_by: f.membership('ari') });
+    expect((await f.app.home({ access_token: 'ari' })).send).toEqual([]);
+    await expect(send('c3', [{ item_id: action.item_id, include: true }])).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('refuses a send that is not the caller\'s own finished run, or a pick who is not an active member', async () => {

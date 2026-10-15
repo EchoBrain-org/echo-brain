@@ -85,10 +85,9 @@ describe('SQLite open items v1', () => {
     expect(() => f.db.transaction(() => f.items.insertForRun(f.db, f.run, [draft('46')]))()).toThrow('UNIQUE');
   });
 
-  it('sends once per command, refuses a stale list, and marks unticked items not relevant', async () => {
+  it('sends once per command, refuses a stale list, and dismisses an excluded item', async () => {
     const f = await doneRunWithItems(['46', '47']);
     const [a, b] = f.items.forRun(f.run.run_id);
-    expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices: [{ item_id: a!.item_id, include: true }] })).toEqual({ kind: 'stale' });
     const choices = [{ item_id: a!.item_id, include: true, owner_membership_id: f.mina }, { item_id: b!.item_id, include: false }];
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices })).toEqual({ kind: 'sent', sent: 1, not_relevant: 1 });
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices })).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
@@ -98,15 +97,40 @@ describe('SQLite open items v1', () => {
     expect(f.items.sentBy(f.run.run_id, 'cmd-2')).toBeUndefined();
     expect(f.items.sentBy('run_00000000-0000-4000-8000-000000000999', 'cmd-1')).toBeUndefined();
     expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.mina, owner_match: 'picked' });
-    expect(f.items.read(b!.item_id)).toMatchObject({ state: 'not_relevant' });
+    expect(f.items.read(b!.item_id)).toMatchObject({ state: 'not_relevant', send_included: false, state_set_by: ARI });
   });
 
-  it('refuses a send that names an item twice or one of another run, and writes nothing', async () => {
+  it('sends any subset of the unsent items, leaving the ones it does not list unsent and untouched (F1)', async () => {
+    const f = await doneRunWithItems(['46', '47', '48']);
+    const [a, b, c] = f.items.forRun(f.run.run_id);
+    const untouched = f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(c!.item_id);
+    f.advance(1_000);
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: false }] }))
+      .toEqual({ kind: 'sent', sent: 1, not_relevant: 1 });
+    expect(f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(c!.item_id)).toEqual(untouched);
+    expect(f.items.read(c!.item_id)).toMatchObject({ state: 'unsent', sent_at: null, send_command_id: null, send_included: null, state_set_by: null });
+    // A later command sends what is left; one that names an item already sent or dismissed is stale and writes nothing.
+    f.advance(1_000);
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-2', choices: [{ item_id: a!.item_id, include: true }, { item_id: c!.item_id, include: true }] })).toEqual({ kind: 'stale' });
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-2', choices: [{ item_id: b!.item_id, include: true }] })).toEqual({ kind: 'stale' });
+    expect(f.items.read(c!.item_id)).toMatchObject({ state: 'unsent' });
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-2', choices: [{ item_id: c!.item_id, include: true }] })).toEqual({ kind: 'sent', sent: 1, not_relevant: 0 });
+    expect(f.items.read(c!.item_id)).toMatchObject({ state: 'open', send_command_id: 'cmd-2', send_included: true, sent_at: f.clock().toISOString() });
+    // Each command replays its own counts; with nothing left unsent a new command is stale.
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1')).toEqual({ sent: 1, not_relevant: 1 });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-2')).toEqual({ sent: 1, not_relevant: 0 });
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: c!.item_id, include: false }] })).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-3', choices: [{ item_id: c!.item_id, include: false }] })).toEqual({ kind: 'stale' });
+  });
+
+  it('refuses a send that names an item twice, one of another run, or none, and writes nothing', async () => {
     const f = await doneRunWithItems(['46', '47']);
     const [a, b] = f.items.forRun(f.run.run_id);
     const send = (choices: readonly ImpactSendChoiceV1[]) => f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices });
     expect(send([{ item_id: a!.item_id, include: true }, { item_id: a!.item_id, include: false }])).toEqual({ kind: 'stale' });
     expect(send([{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: true }, { item_id: 'itm_elsewhere', include: true }])).toEqual({ kind: 'stale' });
+    expect(send([{ item_id: 'itm_elsewhere', include: true }])).toEqual({ kind: 'stale' });
+    expect(send([])).toEqual({ kind: 'stale' });
     expect(f.items.send({ run_id: 'run_missing', by: f.owner.membership_id, command_id: 'cmd-1', choices: [] })).toEqual({ kind: 'stale' });
     expect(f.items.forRun(f.run.run_id).map(row => row.state)).toEqual(['unsent', 'unsent']);
     f.advance(1_000);
