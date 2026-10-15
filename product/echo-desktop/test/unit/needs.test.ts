@@ -11,7 +11,7 @@ const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name
 const item = (patch: Partial<OpenItemView> = {}): OpenItemView => ({
   item_id: 'itm_00000001', run_id: 'run_00000001', kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: person,
   owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open', created_at: '2026-10-07T10:05:00.000Z', sent_at: '2026-10-07T11:00:00.000Z',
-  state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: person, owner_set_at: null, owner_set_by: null, reached_owner: true, check: null,
+  state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: person, owner_set_at: null, owner_set_by: null, send_included: true, check: null,
   can: { set_state: true, assign: true }, reach: patch.current ? 'opened' : 'no_access', ...patch,
 });
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink: 'https://example.atlassian.net/browse/ECHO-12' };
@@ -223,7 +223,7 @@ describe('a follow-up\'s history (F4)', () => {
   const ari = { membership_id: 'mem_00000000-0000-4000-8000-000000000002', name: 'Ari', active: true };
   const rafael = { membership_id: 'mem_00000000-0000-4000-8000-000000000009', name: 'Rafael Moreno', active: true };
   const words = (entry: OpenItemView, me = ari.membership_id) => itemHistory(entry, me).map(event => `${event.at.slice(11, 16)} ${event.words}`);
-  const unsent = { state: 'unsent' as const, sent_at: null, state_set_at: null, state_set_by: null, reached_owner: false, approver: ari };
+  const unsent = { state: 'unsent' as const, sent_at: null, state_set_at: null, state_set_by: null, send_included: null, approver: ari };
 
   it('is found, then nothing more, while not sent', () => {
     expect(words(item(unsent))).toEqual(['10:05 Found']);
@@ -243,13 +243,13 @@ describe('a follow-up\'s history (F4)', () => {
   });
 
   it('says a follow-up dismissed before it was sent was dismissed, not sent', () => {
-    expect(words(item({ approver: ari, state: 'not_relevant', reached_owner: false, state_set_by: ari }))).toEqual(['10:05 Found', '11:00 Dismissed by you']);
+    expect(words(item({ approver: ari, state: 'not_relevant', send_included: false, state_set_by: ari }))).toEqual(['10:05 Found', '11:00 Dismissed by you']);
   });
 
   it('names the owner a send went to only while no one changed the owner since', () => {
     const picked = { ...unsent, owner: { ...rafael, match: 'picked' as const }, owner_set_at: '2026-10-07T10:30:00.000Z', owner_set_by: ari };
     expect(words(item(picked))).toEqual(['10:05 Found', '10:30 Owner set to Rafael Moreno by you']);
-    expect(words(item({ ...picked, state: 'open', sent_at: '2026-10-07T11:00:00.000Z', state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: ari, reached_owner: true })))
+    expect(words(item({ ...picked, state: 'open', sent_at: '2026-10-07T11:00:00.000Z', state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: ari, send_included: true })))
       .toEqual(['10:05 Found', '10:30 Owner set to Rafael Moreno by you', '11:00 Sent to Rafael Moreno by you']);
     const reassigned = item({ approver: ari, state_set_by: ari, owner: { ...rafael, match: 'reassigned' }, owner_set_at: '2026-10-07T12:00:00.000Z', owner_set_by: person });
     expect(words(reassigned)).toEqual(['10:05 Found', '11:00 Sent by you', '12:00 Owner set to Rafael Moreno by Mina Patel']);

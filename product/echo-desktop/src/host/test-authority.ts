@@ -714,7 +714,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
       waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
       state_set_by: person(item.state_set_by), owner_set_at: item.owner_set_at, owner_set_by: person(item.owner_set_by),
-      reached_owner: item.send_included === true || item.state === 'open' || item.state === 'done',
+      send_included: item.send_included,
       check: item.check, can: { set_state: item.state !== 'unsent' && involved(item), assign: item.state === 'unsent' ? item.approver.membership_id === ARI.membership_id : involved(item) },
       reach,
     };

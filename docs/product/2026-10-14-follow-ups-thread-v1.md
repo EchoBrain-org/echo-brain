@@ -74,9 +74,10 @@ statuses, the list and the item page.
   it no longer shows "Pick owner"; any other pick of the current owner
   changes nothing.
 - F3. **Who and when.** Every item view carries `state_set_by`,
-  `owner_set_at`, `owner_set_by` and `reached_owner` (the policy's
-  `sent_to_owner`). The desktop shows "Done · ECHO 2", and dates a reassigned
-  item from its reassignment, not its first send.
+  `owner_set_at`, `owner_set_by` and `send_included` (the stored column: null
+  while unsent, true when Send included it, false when Send dismissed it).
+  The desktop shows "Done · ECHO 2", and dates a reassigned item from its
+  reassignment, not its first send.
 - F4. **History without a schema change.** The item page lists the latest
   event of each kind (found, sent or dismissed, owner set, state set) from the
   item's own columns. A full event log needs a new table and waits for the
@@ -108,7 +109,7 @@ statuses, the list and the item page.
   meeting actions.
 - `assign`: allowed on unsent items for the approver (F2).
 - Item view: new kind `action`; new keys `state_set_by`, `owner_set_at`,
-  `owner_set_by`, `reached_owner` (F3).
+  `owner_set_by`, `send_included` (F3; null exactly while unsent).
 - `home`: optional `rows_only: true` (F8): no live reads, and `sweep_due`
   is always false, so the quiet check never starts a sweep.
 - `items`: optional `states`, a non-empty subset of `unsent`, `open`, `done`

@@ -60,7 +60,7 @@ const CHECK = { verdict: 'changed', checked_at: LATER, checked_by: 'Mina Patel' 
 /** An item the viewer opened carries what it says now; any other says why it does not. */
 const openItem = (overrides: Record<string, unknown>) => ({
   item_id: ITEM, run_id: RUN, kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: APPROVER, owner: OWNER,
-  waits_on: 'owner', state: 'open', created_at: NOW, sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, owner_set_at: null, owner_set_by: null, reached_owner: true,
+  waits_on: 'owner', state: 'open', created_at: NOW, sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, owner_set_at: null, owner_set_by: null, send_included: true,
   check: CHECK, can: { set_state: true, assign: true },
   reach: Object.hasOwn(overrides, 'current') ? 'opened' : 'no_access',
   ...overrides,
@@ -398,7 +398,7 @@ describe('runs API open-item results', () => {
 
   it('accepts an unsent item that was never assessed or checked and waits on the leads', () => {
     const orphan = openItem({
-      relation: null, expected: null, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, reached_owner: false, check: null, waits_on: 'leads', can: { set_state: false, assign: true },
+      relation: null, expected: null, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: null, check: null, waits_on: 'leads', can: { set_state: false, assign: true },
       approver: { ...APPROVER, active: false }, owner: { ...APPROVER, active: false, match: 'approver' },
     });
     expect(validatePersonRunsResultV1('item', { item: orphan }).item).toEqual(orphan);
@@ -406,22 +406,23 @@ describe('runs API open-item results', () => {
     expect(validatePersonRunsResultV1('item', { item: openItem({ current: plain }) }).item.current).toEqual(plain);
   });
 
-  it('says who set an item\'s state and owner, and when, and whether it reached its owner (F3)', () => {
+  it('says who set an item\'s state and owner, and when, and what Send did with it (F3)', () => {
     const reassigned = openItem({ state: 'done', state_set_at: LATER, state_set_by: { ...OWNER_PERSON, active: false }, owner_set_at: LATER, owner_set_by: APPROVER,
-      owner: { ...OWNER, match: 'reassigned' }, reached_owner: true });
+      owner: { ...OWNER, match: 'reassigned' }, send_included: true });
     const read = validatePersonRunsResultV1('item', { item: reassigned }).item;
     expect(read).toEqual(reassigned);
     for (const part of [read.state_set_by, read.owner_set_by]) expect(Object.isFrozen(part)).toBe(true);
-    // A dismissed item never reached its owner; a picked owner before Send carries who picked it.
-    const dismissed = openItem({ state: 'not_relevant', reached_owner: false });
-    expect(validatePersonRunsResultV1('item', { item: dismissed }).item.reached_owner).toBe(false);
-    const picked = openItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, owner_set_at: LATER, owner_set_by: APPROVER, owner: { ...OWNER, match: 'picked' }, reached_owner: false });
+    // An item Send dismissed says so, and keeps saying so once reopened; a picked owner before Send carries who picked it.
+    const dismissed = openItem({ state: 'not_relevant', send_included: false });
+    expect(validatePersonRunsResultV1('item', { item: dismissed }).item.send_included).toBe(false);
+    expect(validatePersonRunsResultV1('item', { item: { ...dismissed, state: 'open' } }).item.send_included).toBe(false);
+    const picked = openItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, owner_set_at: LATER, owner_set_by: APPROVER, owner: { ...OWNER, match: 'picked' }, send_included: null });
     expect(validatePersonRunsResultV1('item', { item: picked }).item).toEqual(picked);
   });
 
   it('carries a meeting action as an item of kind action, and a run\'s items up to its affected rows and actions', () => {
     const action = openItem({ kind: 'action', relation: 'needs_updating', expected: 'Send the pilot plan to the vendor', state: 'unsent', sent_at: null, state_set_at: null,
-      state_set_by: null, reached_owner: false, check: null, owner: { ...OWNER, match: 'name' } });
+      state_set_by: null, send_included: null, check: null, owner: { ...OWNER, match: 'name' } });
     expect(validatePersonRunsResultV1('item', { item: action }).item.kind).toBe('action');
     expect(PERSON_RUN_MEETING_ACTIONS_MAX_V1).toBe(20);
     expect(PERSON_RUN_ITEMS_MAX_V1).toBe(40);
@@ -499,7 +500,7 @@ describe('runs API open-item results', () => {
     ['without who set its state', { item: without(seen, 'state_set_by') }],
     ['without when its owner was set', { item: without(seen, 'owner_set_at') }],
     ['without who set its owner', { item: without(seen, 'owner_set_by') }],
-    ['without whether it reached its owner', { item: without(seen, 'reached_owner') }],
+    ['without what Send did with it', { item: without(seen, 'send_included') }],
     ['a state setter with an owner match', withItem({ state_set_by: { ...APPROVER, match: 'picked' } })],
     ['a state setter that is a bare membership id', withItem({ state_set_by: ARI })],
     ['a state setter with no state time', withItem({ state_set_at: null })],
@@ -508,8 +509,10 @@ describe('runs API open-item results', () => {
     ['an owner time with no owner setter', withItem({ owner_set_at: LATER })],
     ['an owner time that is not a timestamp', withItem({ owner_set_at: 'yesterday', owner_set_by: APPROVER })],
     ['an owner setter with a membership id that is not canonical', withItem({ owner_set_at: LATER, owner_set_by: { ...APPROVER, membership_id: 'mem_ari' } })],
-    ['a reached_owner that is not a boolean', withItem({ reached_owner: 'yes' })],
-    ['an unsent item that reached its owner', withItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, reached_owner: true })],
+    ['a send_included that is neither a boolean nor null', withItem({ send_included: 'yes' })],
+    ['an unsent item Send included', withItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: true })],
+    ['an unsent item Send dismissed', withItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: false })],
+    ['a sent item without what Send did with it', withItem({ send_included: null })],
     ['an unknown verdict', withItem({ check: { ...CHECK, verdict: 'drifted' } })],
     ['a check that keeps a sentence', withItem({ check: { ...CHECK, line: 'ECHO-12 now says next week.' } })],
     ['a check without who ran it', withItem({ check: without(CHECK, 'checked_by') })],

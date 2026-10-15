@@ -226,7 +226,7 @@ function Actions({ state, page, item }: { state: State; page: ItemPage; item: Op
     </>;
   }
   // Dismissed before it was sent: reopening it reaches its owner.
-  const reaches = !item.reached_owner && item.owner.membership_id !== me;
+  const reaches = item.state === 'not_relevant' && item.send_included === false && item.owner.membership_id !== me;
   return <button type="button" class="primary-button" disabled={frozen} onClick={() => void setFollowUpState('open')}>{reaches ? sendLabel(item, me) : 'Reopen'}</button>;
 }
 

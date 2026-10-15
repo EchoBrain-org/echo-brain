@@ -341,7 +341,7 @@ export function itemHistory(item: OpenItemView, me: string | null): HistoryEvent
   const by = (person: { membership_id: string; name: string } | null) => (person === null ? '' : ` by ${who(person)}`);
   const events: HistoryEvent[] = [{ at: item.created_at, words: item.kind === 'action' ? 'From the meeting' : 'Found' }];
   // Send dismissed it: it never reached its owner, and nothing set its status since.
-  const dismissedUnsent = item.state === 'not_relevant' && !item.reached_owner && item.state_set_at !== null && item.state_set_at === item.sent_at;
+  const dismissedUnsent = item.state === 'not_relevant' && item.send_included === false && item.state_set_at !== null && item.state_set_at === item.sent_at;
   if (item.sent_at !== null) {
     const ownerSince = item.owner_set_at !== null && Date.parse(item.owner_set_at) > Date.parse(item.sent_at);
     events.push({ at: item.sent_at, words: dismissedUnsent ? `Dismissed${by(item.state_set_by)}` : `Sent${ownerSince ? '' : ` to ${who(item.owner)}`}${by(item.approver)}` });

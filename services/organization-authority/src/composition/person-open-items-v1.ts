@@ -448,7 +448,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         // Who and when (follow-ups thread v1, F3): ECHO's own facts, shown to everyone who sees the row.
         state_set_by: row.state_set_by === null ? null : personOf(context.people, row.state_set_by),
         owner_set_at: row.owner_set_at, owner_set_by: row.owner_set_by === null ? null : personOf(context.people, row.owner_set_by),
-        reached_owner: facts.sent_to_owner,
+        send_included: row.send_included,
         check: row.check === null ? null : Object.freeze({ verdict: row.check.verdict, checked_at: row.check.at, checked_by: nameOf(context.people, row.check.by) }),
         can: Object.freeze({ set_state: access.set_state, assign: access.assign }),
         reach,

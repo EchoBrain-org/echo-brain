@@ -140,8 +140,11 @@ export interface PersonOpenItemV1 {
   readonly state_set_by: PersonOpenItemPersonV1 | null;
   /** When and by whom its owner was last picked or reassigned; both null while the owner is the one ECHO matched. */
   readonly owner_set_at: string | null; readonly owner_set_by: PersonOpenItemPersonV1 | null;
-  /** The item reached its owner: Send included it, or it is open or done since. False while it is unsent. */
-  readonly reached_owner: boolean;
+  /**
+   * What Send did with it, as stored and then frozen: null while it is unsent, true when Send included it (it went to its owner),
+   * false when Send dismissed it. A later state change leaves it as Send set it.
+   */
+  readonly send_included: boolean | null;
   readonly check: { readonly verdict: PersonOpenItemVerdictV1; readonly checked_at: string; readonly checked_by: string } | null;
   readonly can: { readonly set_state: boolean; readonly assign: boolean };
   /** `current` comes exactly with `opened`. */
@@ -483,7 +486,7 @@ function openItem(value: unknown): PersonOpenItemV1 {
   // What a viewer may not see is left out, never sent empty.
   const parts = ['decision', 'current'].filter(key => Object.hasOwn(entry, key));
   assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at',
-    'state_set_by', 'owner_set_at', 'owner_set_by', 'reached_owner', 'check', 'can', 'reach', ...parts], 'Open item');
+    'state_set_by', 'owner_set_at', 'owner_set_by', 'send_included', 'check', 'can', 'reach', ...parts], 'Open item');
   assertTimestamp(entry.created_at, 'Open item created_at');
   const reach = oneOf(entry.reach, REACHES, 'Open item reach');
   // What the item says now comes exactly with a read that opened it.
@@ -496,8 +499,9 @@ function openItem(value: unknown): PersonOpenItemV1 {
   // Who and when come together, as the item stores them.
   if ((state_set_by === null) !== (state_set_at === null)) fail('Open item state_set_by does not match state_set_at');
   if ((owner_set_by === null) !== (owner_set_at === null)) fail('Open item owner_set_by does not match owner_set_at');
-  if (typeof entry.reached_owner !== 'boolean') fail('Open item reached_owner is invalid');
-  if (state === 'unsent' && entry.reached_owner) fail('Open item reached its owner before Send');
+  if (entry.send_included !== null && typeof entry.send_included !== 'boolean') fail('Open item send_included is invalid');
+  // Send sets it, exactly as the item leaves unsent; nothing sets it before.
+  if ((state === 'unsent') !== (entry.send_included === null)) fail('Open item send_included does not match its state');
   return Object.freeze({
     item_id: itemId(entry.item_id, 'Open item id'), run_id: runId(entry.run_id, 'Open item run id'), kind: oneOf(entry.kind, KINDS, 'Open item kind'),
     ...(Object.hasOwn(entry, 'decision') ? { decision: decision(entry.decision) } : {}),
@@ -507,7 +511,7 @@ function openItem(value: unknown): PersonOpenItemV1 {
     approver: person(entry.approver, 'Open item approver'), owner: owner(entry.owner),
     waits_on: oneOf(entry.waits_on, WAITS_ON, 'Open item waits_on'), state,
     created_at: entry.created_at as string, sent_at: timestampOrNull(entry.sent_at, 'Open item sent_at'), state_set_at,
-    state_set_by, owner_set_at, owner_set_by, reached_owner: entry.reached_owner,
+    state_set_by, owner_set_at, owner_set_by, send_included: entry.send_included,
     check: check(entry.check), can: can(entry.can), reach,
   });
 }

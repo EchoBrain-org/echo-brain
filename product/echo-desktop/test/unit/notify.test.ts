@@ -25,7 +25,7 @@ function followUp(n: number, extra: Partial<OpenItemView> = {}): OpenItemView {
     item_id: id(n), run_id: 'run_00000000-0000-4000-8000-000000000001', kind: 'action', decision, relation: 'needs_updating', expected: `Action ${n}`,
     approver: MINA, owner: { ...ME, match: 'name' }, waits_on: 'owner', state: 'open', created_at: '2026-10-14T09:05:00.000Z',
     sent_at: '2026-10-14T10:00:00.000Z', state_set_at: '2026-10-14T10:00:00.000Z', state_set_by: MINA, owner_set_at: null, owner_set_by: null,
-    reached_owner: true, check: null, can: { set_state: true, assign: true }, reach: 'not_read', ...extra,
+    send_included: true, check: null, can: { set_state: true, assign: true }, reach: 'not_read', ...extra,
   };
 }
 

@@ -66,7 +66,7 @@ describe('view models copy only what the renderer may see', () => {
     const base = {
       item_id: 'itm_00000001', run_id: 'run_00000001', kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: person,
       owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open', created_at: '2026-10-07T10:05:00.000Z', sent_at: '2026-10-07T11:00:00.000Z',
-      state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: person, owner_set_at: '2026-10-07T12:00:00.000Z', owner_set_by: person, reached_owner: true,
+      state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: person, owner_set_at: '2026-10-07T12:00:00.000Z', owner_set_by: person, send_included: true,
       check: null, can: { set_state: true, assign: true }, reach: 'no_access',
     } as const;
     // A meeting's action is never read live: it crosses as ECHO's own words.

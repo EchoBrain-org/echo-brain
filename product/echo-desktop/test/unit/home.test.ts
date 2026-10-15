@@ -52,14 +52,14 @@ const item = (id: string, verdict: NonNullable<OpenItemView['check']>['verdict']
   item_id: `itm_0000000${id}`, run_id: impactRun('done').run_id, kind: 'ticket', decision, relation: 'conflicts', expected: 'launch next week',
   approver: person('Mina Patel'), owner: { ...person('Fixture'), match: 'jira_account' }, waits_on: 'owner', state: 'open',
   created_at: '2026-10-08T10:05:00.000Z', sent_at: '2026-10-08T11:00:00.000Z', state_set_at: '2026-10-08T11:00:00.000Z', state_set_by: person('Mina Patel'),
-  owner_set_at: null, owner_set_by: null, reached_owner: true,
+  owner_set_at: null, owner_set_by: null, send_included: true,
   check: verdict === null ? null : { verdict, checked_at: '2026-10-08T12:00:00.000Z', checked_by: 'Mina Patel' }, can: { set_state: true, assign: true },
   reach: 'no_access',
 });
 /** An item of Ari's own check not sent yet: Ari ("member") approved it, so Ari may send it and pick its owner. */
 const unsent = (id: string, run_id = impactRun('done').run_id): OpenItemView => ({
   ...item(id), run_id, approver: { membership_id: 'member', name: 'Fixture', active: true }, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null,
-  reached_owner: false, waits_on: 'approver', can: { set_state: false, assign: true },
+  send_included: null, waits_on: 'approver', can: { set_state: false, assign: true },
 });
 const sendRow = (): HomeView['send'][number] => ({ run_id: impactRun('done').run_id, decision, items: 2, kinds: ['ticket'], owners: ['Mina Patel'], finished_at: '2026-10-08T10:05:00.000Z' });
 const emptyHome = (): HomeView => ({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
@@ -855,12 +855,12 @@ describe('Follow-up lists and item pages', () => {
     expect(store.followUpShown()).toMatchObject({ kind: 'item', item_id: 'itm_00000001', item: null, loading: true });
     await opening;
     expect(store.followUpShown()).toMatchObject({ item: { state: 'unsent' } });
-    readItem = { ...unsent('1'), state: 'not_relevant', sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z', can: { set_state: true, assign: true } };
+    readItem = { ...unsent('1'), state: 'not_relevant', sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z', send_included: false, can: { set_state: true, assign: true } };
     await store.sendFollowUp(false);
     expect(requests('send')).toEqual([expect.objectContaining({ run_id: impactRun('done').run_id, items: [{ item_id: 'itm_00000001', include: false }] })]);
     // A dismissal before sending is never undone (F6).
     expect(said(store)).toEqual({ words: 'Dismissed' });
-    readItem = { ...readItem, state: 'open', reached_owner: true };
+    readItem = { ...readItem, state: 'open', send_included: false };
     await store.setFollowUpState('open');
     expect(said(store)).toEqual({ words: 'Sent to Fixture' });
     expect(requests('set_state')).toEqual([expect.objectContaining({ item_id: 'itm_00000001', state: 'open' })]);

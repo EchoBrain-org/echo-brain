@@ -4712,7 +4712,7 @@ export async function setFollowUpState(to: 'open' | 'done' | 'not_relevant'): Pr
   const page = shownView('item');
   const item = page?.item;
   if (!page || !item || page.busy || !item.can.set_state || item.state === 'unsent' || state.concealed) return;
-  const reaches = to === 'open' && !item.reached_owner && item.owner.membership_id !== expect()?.membership_id;
+  const reaches = to === 'open' && item.state === 'not_relevant' && item.send_included === false && item.owner.membership_id !== expect()?.membership_id;
   const said: Said = to === 'done' ? { words: 'Done', undo: true } : to === 'not_relevant' ? { words: 'Dismissed', undo: true }
     : { words: reaches ? `Sent to ${item.owner.name}` : 'Reopened' };
   await changeItem(page, () => runsCommand({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: to }), said);
