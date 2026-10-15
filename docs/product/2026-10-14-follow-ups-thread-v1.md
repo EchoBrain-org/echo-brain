@@ -111,7 +111,12 @@ statuses, the list and the item page.
 - Item view: new kind `action`; new keys `state_set_by`, `owner_set_at`,
   `owner_set_by`, `send_included` (F3; null exactly while unsent).
 - `home`: optional `rows_only: true` (F8): no live reads, and `sweep_due`
-  is always false, so the quiet check never starts a sweep.
+  is always false, so the quiet check never starts a sweep. It answers the
+  same rows as a full `home`. Home's items come with those whose last check
+  changed first, then the newest first by when each started waiting on the
+  caller (the latest of `sent_at`, `owner_set_at` and `state_set_at`), so a
+  new follow-up is always among the 20 Home answers, however many older ones
+  wait.
 - `items`: optional `states`, a non-empty subset of `unsent`, `open`, `done`
   and `not_relevant`, replaces `open_only`. The page and its cursor go over
   those states only; the summary and stages still cover the whole scope. A

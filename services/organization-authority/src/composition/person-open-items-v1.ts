@@ -172,6 +172,14 @@ function oldestFirst(left: Pick<ImpactItemRowV1, 'created_at' | 'item_id'>, righ
   return ascending(left.created_at, right.created_at) || ascending(left.item_id, right.item_id);
 }
 
+/**
+ * When an open item started waiting on whoever it waits on now: the latest of when it was sent, when its owner was last set, and
+ * when its state was last set (a reopen). Canonical ISO times order as strings.
+ */
+function waitingSince(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'state_set_at'>): string {
+  return [row.sent_at, row.owner_set_at, row.state_set_at].reduce<string>((latest, at) => (at !== null && at > latest ? at : latest), row.created_at);
+}
+
 /** A page cursor: base64url of `created_at|item_id` of the page's last row. */
 function cursorOf(row: Pick<ImpactItemRowV1, 'created_at' | 'item_id'>): string {
   return Buffer.from(`${row.created_at}|${row.item_id}`, 'utf8').toString('base64url');
@@ -509,11 +517,14 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       }
       send.sort((left, right) => ascending(right.finished_at, left.finished_at) || ascending(left.run_id, right.run_id));
 
-      // Items: open items that wait on the caller, and those the caller approved whose last check saw them change.
+      // Items: open items that wait on the caller, and those the caller approved whose last check saw them change. The changed
+      // ones first, then the newest first by when each started waiting on the caller, so a new one is always among the twenty
+      // however many older ones wait: Home's quiet check (rows only, F8) answers the same rows, and sees each new one.
+      const rowsOnly = input.request.rows_only === true;
       const visible = context.assessed.filter(entry => entry.row.state === 'open' && entry.access.see_row);
       const changed = (entry: Assessed) => entry.row.check?.verdict === 'changed';
       const shown = visible.filter(entry => entry.access.waits_on_viewer || (approvedBy(entry.row, viewer) && changed(entry)))
-        .sort((left, right) => Number(changed(right)) - Number(changed(left)) || ascending(left.row.sent_at ?? '', right.row.sent_at ?? '') || oldestFirst(left.row, right.row))
+        .sort((left, right) => Number(changed(right)) - Number(changed(left)) || ascending(waitingSince(right.row), waitingSince(left.row)) || oldestFirst(left.row, right.row))
         .slice(0, PERSON_HOME_ROWS_V1);
 
       // The footer counts open items the caller approved or owns, with no live read.
@@ -525,7 +536,6 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // load) or one of theirs is running. A sweep still waiting after the hour lets the desktop ask again, which hands back that run
       // to start (R58). Check now is the caller's own request, and never limited. Rows only never makes one due: the quiet
       // background check (F8) must never start a sweep.
-      const rowsOnly = input.request.rows_only === true;
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
       const stale = !rowsOnly && theirs.some(entry => (entry.row.check === null || entry.row.check.at < dayAgo) && sweepTakesItem(entry.row));

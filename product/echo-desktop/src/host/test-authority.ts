@@ -944,11 +944,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             run_id: runId, decision: unsent[0]!.decision, items: unsent.length, kinds: [...new Set(unsent.map(item => item.kind))],
             owners: [...new Set(unsent.filter(item => !mineAsOwner(item)).map(item => item.owner.name))], finished_at: '2026-10-07T10:05:00.000Z',
           }] : [];
-          const sentAt = (item: OpenItem) => item.sent_at ?? item.created_at;
+          // Changed first, then the newest first by when each started waiting (sent, owner set, or reopened), as the Authority
+          // orders them, rows only or not.
+          const since = (item: OpenItem) => [item.sent_at, item.owner_set_at, item.state_set_at].reduce<string>((latest, at) => (at !== null && at > latest ? at : latest), item.created_at);
+          const changed = (item: OpenItem) => Number(item.check?.verdict === 'changed');
+          const order = (a: OpenItem, b: OpenItem) => changed(b) - changed(a) || since(b).localeCompare(since(a));
           const theirs = shown.filter(item => item.state === 'open' && involved(item));
           const waitsOnAri = (item: OpenItem) => mineAsOwner(item) || item.check?.verdict === 'changed';
           return result('home', {
-            send, items: theirs.filter(waitsOnAri).sort((a, b) => sentAt(a).localeCompare(sentAt(b))).map(item => itemView(item, request.rows_only !== true)),
+            send, items: theirs.filter(waitsOnAri).sort(order).slice(0, 20).map(item => itemView(item, request.rows_only !== true)),
             landed: theirs.filter(item => item.check?.verdict === 'landed').length,
             waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
             last_checked_at: theirs.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null,

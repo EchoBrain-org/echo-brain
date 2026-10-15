@@ -42,7 +42,10 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * keeps failing is not asked for on every load; a sweep still waiting after
  * the hour is asked for again, and `sweep` hands back that run to start; an
  * explicit `sweep` request is never limited). `home` with `rows_only` never
- * reports a sweep due.
+ * reports a sweep due. `home` lists the items whose last check changed first,
+ * then the newest first by when each started waiting on the caller (the
+ * latest of `sent_at`, `owner_set_at` and `state_set_at`), so a new one is
+ * always among the twenty.
  */
 export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 
@@ -181,7 +184,9 @@ export interface PersonRunsResultsV1 {
   start: { readonly state: 'pending' | 'running' | 'busy' | 'done' | 'failed' };
   retry: { readonly state: 'pending' };
   view: { readonly card: PersonImpactCardV1; readonly checked_at: string; readonly hidden: number };
-  home: { readonly send: readonly PersonHomeSendV1[]; readonly items: readonly PersonOpenItemV1[];
+  home: { readonly send: readonly PersonHomeSendV1[];
+          /** At most twenty: those whose last check changed first, then the newest first by when each started waiting on the caller. */
+          readonly items: readonly PersonOpenItemV1[];
           readonly landed: number; readonly waiting: number; readonly last_checked_at: string | null;
           /** The caller's open items are due a sweep (section 6): the desktop asks for a `mine` sweep. At most hourly: not within an hour of their last sweep, nor while one of theirs runs. */
           readonly sweep_due: boolean };

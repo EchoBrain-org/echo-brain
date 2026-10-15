@@ -712,6 +712,52 @@ describe('open items: Home', () => {
     expect(quietSend.send).toHaveLength(1);
   });
 
+  it('lists what changed, then what newly waits first, so a new follow-up is never past the twenty, quiet check or not (F8)', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const run = f.runs.read(f.person, f.runId)!;
+    const ticket = (index: number) => ({
+      item_key: canonicalSha256(`waiting ${index}`), relation: 'conflicts' as const, expected: 'launch next week', owner_membership_id: f.membership('mina'), owner_match: 'jira_account' as const,
+      pointer: { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: String(40_000 + index), permalink: `https://echo-fixture.atlassian.net/browse/ECHO-${400 + index}`, text_sha256: canonicalSha256(`waiting text ${index}`) },
+    });
+    const sendTo = (rows: readonly { readonly item_id: string }[], command_id: string) => {
+      f.advance(1_000);
+      expect(f.items.send({ run_id: f.runId, by: f.membership('ari'), command_id, choices: rows.map(row => ({ item_id: row.item_id, include: true })) })).toMatchObject({ kind: 'sent' });
+    };
+    // Twenty-two tickets for Mina sent long ago, and the check's own two: more than Home answers.
+    f.advance(1_000);
+    f.db.transaction(() => f.items.insertForRun(f.db, run, Array.from({ length: 22 }, (_, index) => ticket(index))))();
+    const older = f.items.forRun(f.runId).filter(row => row.state === 'unsent');
+    sendTo(older, 'older');
+    const quiet = () => f.app.home({ access_token: 'mina', request: { schema_version: 1, operation: 'home', rows_only: true } });
+    const full = () => f.app.home({ access_token: 'mina' });
+    const ids = (home: { readonly items: readonly PersonOpenItemV1[] }) => home.items.map(entry => entry.item_id);
+    expect((await quiet()).items).toHaveLength(20);
+    // A new one is sent: both reads list it first, the same rows in the same order.
+    f.advance(1_000);
+    f.db.transaction(() => f.items.insertForRun(f.db, run, [ticket(99)]))();
+    const fresh = f.items.forRun(f.runId).find(row => row.state === 'unsent')!;
+    sendTo([fresh], 'fresh');
+    expect(ids(await quiet())[0]).toBe(fresh.item_id);
+    expect(ids(await full())).toEqual(ids(await quiet()));
+    // One given to Mina since waits on her from then: first. So does one she closed and Ari reopened.
+    const theirs = older.find(row => row.owner_membership_id === f.membership('ari'))!;
+    f.advance(1_000);
+    await assign(f, 'ari', theirs.item_id, 'mina');
+    expect(ids(await quiet()).slice(0, 2)).toEqual([theirs.item_id, fresh.item_id]);
+    const reopened = older.at(-1)!;
+    f.advance(1_000);
+    await setState(f, 'mina', reopened.item_id, 'done');
+    expect(ids(await quiet())).not.toContain(reopened.item_id);
+    f.advance(1_000);
+    await setState(f, 'ari', reopened.item_id, 'open');
+    expect(ids(await quiet()).slice(0, 3)).toEqual([reopened.item_id, theirs.item_id, fresh.item_id]);
+    // What a check saw change comes before all of them.
+    const changed = older[0]!;
+    f.check(changed.item_id, 'changed');
+    expect(ids(await quiet()).slice(0, 2)).toEqual([changed.item_id, reopened.item_id]);
+    expect(ids(await full())).toEqual(ids(await quiet()));
+  });
+
   it('makes no Send row, and binds no desk, when there is nothing to send', async () => {
     const f = await openItemsFixture();
     expect(await f.app.home({ access_token: 'ari' })).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
