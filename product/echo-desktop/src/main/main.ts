@@ -105,10 +105,10 @@ function sameFolder(a: string, b: string): boolean {
   }
 }
 
-interface BuildInfo { source_sha: string; dirty: boolean }
-function buildInfo(): BuildInfo | null {
-  try { return JSON.parse(readFileSync(join(BUILD, 'build-info.json'), 'utf8')) as BuildInfo; } catch { return null; }
-}
+/** The commit this build was made from, read once: it never changes while the app runs. */
+const BUILD_INFO: { source_sha: string; dirty: boolean } | null = (() => {
+  try { return JSON.parse(readFileSync(join(BUILD, 'build-info.json'), 'utf8')); } catch { return null; }
+})();
 
 // ---- person host -----------------------------------------------------------
 
@@ -565,17 +565,21 @@ function toggle(): void {
   else show();
 }
 
+/** The window comes forward. Tests never put a window on screen or take focus from other apps: the page hears what show() tells it. */
+function bringForward(): void {
+  if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+}
+
 function capture(): void {
   // The page stays loaded while hidden: ask it to open Capture, then bring it forward.
   send('capture.open', {});
-  // Tests never put a window on screen or take focus from other apps: the page hears what show() tells it.
-  if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+  bringForward();
 }
 
 /** Organization ▸ People & invites…: the page opens it, then the window comes forward. */
 function openOrganization(): void {
   send('organization.open', {});
-  if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+  bringForward();
 }
 
 // ---- follow-ups notifications (F8) -------------------------------------------
@@ -593,7 +597,7 @@ interface TestNotices { echoTestNotices?: { title: string; body: string; click: 
 function notifyFollowUps({ body, item_id }: { body: string; item_id: string | null }): void {
   const open = () => {
     send('follow-ups.open', item_id === null ? {} : { item_id });
-    if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+    bringForward();
   };
   // Tests never put a notification on the machine: they read and click what would have shown.
   if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_HIDDEN) {
@@ -641,7 +645,7 @@ function accountItems(fromTray: boolean): MenuItemConstructorOptions[] {
       { label: `Signed in as ${account.display_name} · ${account.role}`, enabled: false },
       { label: `Organization: ${account.authority}`, enabled: false },
       // Releases share a version: the build tells them apart, as the tray's Build line does.
-      { label: versionLine(accountStatus!.client_version, buildInfo()), enabled: false },
+      { label: versionLine(accountStatus!.client_version, BUILD_INFO), enabled: false },
       { type: 'separator' },
       { label: 'Switch account…', click: run('switch') },
       { label: 'Sign out…', click: run('signout') },
@@ -677,7 +681,6 @@ function updateTray(): void {
   if (shown === trayShown) return;
   trayShown = shown;
   tray.setToolTip('ECHO');
-  const info = buildInfo();
   const menu = Menu.buildFromTemplate([
     { label: 'Open ECHO', accelerator: 'CommandOrControl+E', click: show },
     { label: 'Capture', accelerator: 'CommandOrControl+Shift+E', click: capture },
@@ -687,7 +690,7 @@ function updateTray(): void {
     ...(accountStatus?.account?.role === 'owner'
       ? [{ label: 'Organization', submenu: [{ label: 'People & invites…', click: openOrganization }] }] : []),
     { type: 'separator' },
-    ...(info ? [{ label: `Build ${info.source_sha.slice(0, 7)}${info.dirty ? ' (modified)' : ''}`, enabled: false }] : []),
+    ...(BUILD_INFO ? [{ label: `Build ${BUILD_INFO.source_sha.slice(0, 7)}${BUILD_INFO.dirty ? ' (modified)' : ''}`, enabled: false }] : []),
     { label: 'Quit ECHO', accelerator: 'CommandOrControl+Q', click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
@@ -742,7 +745,7 @@ async function startUpdates(): Promise<void> {
 
 app.on('second-instance', show);
 // Opening ECHO again from Spotlight or Finder while it runs: the window comes forward, as Open ECHO brings it.
-app.on('activate', () => { if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show(); });
+app.on('activate', bringForward);
 
 // Tests drive these with echo-test:conceal and echo-test:resume: a hidden test
 // window never follows which app the machine has in front.
@@ -837,7 +840,7 @@ async function runSmoke(): Promise<void> {
   checks.host_started = status.ok || status.failure.code !== 'host_restarted';
   checks.client_identity = status.ok && typeof (status.value as { client_version?: unknown }).client_version === 'string';
   const passed = Object.values(checks).every(Boolean);
-  process.stdout.write(`${JSON.stringify({ smoke: passed ? 'passed' : 'failed', checks, build: buildInfo() })}\n`);
+  process.stdout.write(`${JSON.stringify({ smoke: passed ? 'passed' : 'failed', checks, build: BUILD_INFO })}\n`);
   host?.kill();
   try { rmSync(smokeRoot!, { recursive: true, force: true }); } catch { /* temporary */ }
   app.exit(passed ? 0 : 1);
