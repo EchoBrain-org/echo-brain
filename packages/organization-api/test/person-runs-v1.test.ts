@@ -285,20 +285,27 @@ describe('runs API open items', () => {
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, rows_only: true }), 'rows_only on one item');
     refused(() => validatePersonRunsRequestV1({ ...quiet, summary_only: true }), 'summary_only beside rows_only');
   });
-  it('accepts open_only only as true, never with summary_only, and with a cursor', () => {
-    // Open items only: Did it land? pages past closed items without opening them.
-    const open = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, open_only: true };
-    expect(validatePersonRunsRequestV1(open)).toEqual(open);
-    expect(Object.isFrozen(validatePersonRunsRequestV1(open))).toBe(true);
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', open_only: true })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', open_only: true });
-    // A cursor pages the same filtered list: the caller sends open_only with it again.
-    expect(validatePersonRunsRequestV1({ ...open, cursor: 'next-page_2' })).toEqual({ ...open, cursor: 'next-page_2' });
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'project', id: PROJECT })).not.toHaveProperty('open_only');
-    for (const open_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...open, open_only }), `open_only ${JSON.stringify(open_only)}`);
-    // A counts-only answer lists no items to keep the open ones of.
-    refused(() => validatePersonRunsRequestV1({ ...open, summary_only: true }), 'open_only with summary_only');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', open_only: true }), 'open_only on home');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, open_only: true }), 'open_only on one item');
+  it('accepts states as a non-empty subset of the item states, never with summary_only, and with a cursor', () => {
+    // A list reads its current work first, then its closed items: each a paged read of its own.
+    const active = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['unsent', 'open'] };
+    expect(validatePersonRunsRequestV1(active)).toEqual(active);
+    expect(Object.isFrozen(validatePersonRunsRequestV1(active))).toBe(true);
+    expect(Object.isFrozen((validatePersonRunsRequestV1(active) as { states: readonly string[] }).states)).toBe(true);
+    const closed = { schema_version: 1, operation: 'items', scope: 'mine', states: ['done', 'not_relevant'] };
+    expect(validatePersonRunsRequestV1(closed)).toEqual(closed);
+    for (const states of [['open'], ['not_relevant', 'unsent', 'done', 'open']]) expect(validatePersonRunsRequestV1({ ...active, states })).toEqual({ ...active, states });
+    // A cursor pages the same filtered list: the caller sends the same states with it again.
+    expect(validatePersonRunsRequestV1({ ...active, cursor: 'next-page_2' })).toEqual({ ...active, cursor: 'next-page_2' });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'project', id: PROJECT })).not.toHaveProperty('states');
+    for (const states of [[], ['open', 'open'], ['closed'], ['open', null], 'open', true, null, {}, ['unsent', 'open', 'done', 'not_relevant', 'open']]) {
+      refused(() => validatePersonRunsRequestV1({ ...active, states }), `states ${JSON.stringify(states)}`);
+    }
+    // A counts-only answer lists no items to filter.
+    refused(() => validatePersonRunsRequestV1({ ...active, summary_only: true }), 'states with summary_only');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', states: ['open'] }), 'states on home');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, states: ['open'] }), 'states on one item');
+    // The flag it replaced is gone.
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', open_only: true }), 'open_only');
   });
 });
 
@@ -595,7 +602,7 @@ describe('runs API sweep', () => {
     ['a project scope with a project id that is not canonical', sweep({ scope: 'project', id: 'prj_pilot' })],
     ['a cursor', sweep({ scope: 'mine', cursor: 'next-page_2' })],
     ['summary_only', sweep({ scope: 'record', id: RECORD, summary_only: true })],
-    ['open_only', sweep({ scope: 'mine', open_only: true })],
+    ['states', sweep({ scope: 'mine', states: ['open'] })],
     ['an extra key', sweep({ scope: 'mine', force: true })],
   ])('refuses a sweep with %s', (_label, request) => {
     refused(() => validatePersonRunsRequestV1(request), _label);

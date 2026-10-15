@@ -56,7 +56,7 @@ interface Contract {
 
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
-  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true; open_only?: true; rows_only?: true;
+  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true; states?: OpenItem['state'][]; rows_only?: true;
   item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
@@ -973,9 +973,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
               return { record_sha256: record, run_id: found.run_id, state: 'done', error_code: null, mine: found.approver.membership_id === ARI.membership_id };
             }),
           ];
-          // Counts only (a project's or a meeting's line): the summary and stages, no item. Open only: the open items alone, with
-          // the same summary.
-          const listed = request.open_only === true ? items.filter(item => item.state === 'open') : items;
+          // Counts only (a project's or a meeting's line): the summary and stages, no item. States: the items in those states
+          // alone, with the same summary.
+          const { states } = request;
+          const listed = states === undefined ? items : items.filter(item => states.includes(item.state));
           return result('items', { items: request.summary_only === true ? [] : listed.map(item => itemView(item)), next_cursor: null, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
             landed: verdicts('landed'), changed: verdicts('changed'), unreadable: verdicts('unreadable'), decisions: records.length,

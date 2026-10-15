@@ -64,6 +64,7 @@ describe('person runs client', () => {
     expect(stdout).toContain('false dismisses it, and unlisted items stay unsent');
     expect(stdout).toContain('before send the approver only');
     expect(stdout).toContain('rows_only true reads no item live (every reach not_read) and never says sweep_due');
+    expect(stdout).toContain('states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only');
     expect(stderr).toBe('');
   });
 });

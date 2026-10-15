@@ -351,7 +351,7 @@ test('Home sweeps by itself, and Your follow-ups lists everything you sent or ow
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Your follow-ups' })).toBeVisible();
   // Every status, not open items only; the meeting's actions first; a match says so, faintly.
-  expect(requests('items').filter(body => body.summary_only !== true)).toEqual([expect.not.objectContaining({ open_only: true })]);
+  expect(requests('items').filter(body => body.summary_only !== true)).toEqual([expect.not.objectContaining({ states: ['open'] })]);
   const open = group(list, 'Open');
   await expect(open.getByTestId('follow-up-row')).toHaveCount(5);
   await expect(open.getByTestId('follow-up-row').first()).toContainText('Send the revised quote');

@@ -111,6 +111,11 @@ statuses, the list and the item page.
   `owner_set_by`, `reached_owner` (F3).
 - `home`: optional `rows_only: true` (F8): no live reads, and `sweep_due`
   is always false, so the quiet check never starts a sweep.
+- `items`: optional `states`, a non-empty subset of `unsent`, `open`, `done`
+  and `not_relevant`, replaces `open_only`. The page and its cursor go over
+  those states only; the summary and stages still cover the whole scope. A
+  list reads its current work (`unsent`, `open`) first and its closed items
+  after, each with its own More, so current work is never behind More.
 
 The response validators check exact keys, so a desktop older than this change
 cannot read item views from an Authority that has it. Deploy the Authority and

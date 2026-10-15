@@ -2,7 +2,8 @@
 
 Superseded in part by [follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md)
 (sending selects, owners before sending, every row opens the item page,
-meeting actions are follow-ups); its Rulings section names what changed.
+meeting actions are follow-ups); its Rulings and API changes sections name what
+changed (`items` takes `states` in place of `open_only`).
 
 Status: designed with the founder on 2026-10-08 and approved by the founder the
 same day; rulings 18–23 were added while planning. Implementation plan

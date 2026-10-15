@@ -202,7 +202,7 @@ describe('open items: counts and live reads', () => {
     expect(f.bindDesk.mock.calls.length - binds).toBe(1);
   });
 
-  it('pages open items only past older closed ones, opens only those, and still counts the whole scope (R51)', async () => {
+  it('pages the items in some states only past older ones in others, opens only those, and still counts the whole scope (R51)', async () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
     const run = f.runs.read(f.person, f.runId)!;
     const ticketAt = (name: string, index: number) => ({
@@ -231,7 +231,7 @@ describe('open items: counts and live reads', () => {
 
     const opens = f.opened.length;
     const binds = f.bindDesk.mock.calls.length;
-    const request = { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA, open_only: true } as const;
+    const request = { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA, states: ['unsent', 'open'] } as const;
     const first = await f.app.items({ access_token: 'ari', request });
     expect(ids(first)).toEqual(open.map(row => row.item_id));
     expect(first.next_cursor).toBeNull();
@@ -247,13 +247,24 @@ describe('open items: counts and live reads', () => {
     expect(all.items.some(entry => entry.state === 'open')).toBe(false);
     expect(first.summary).toEqual(all.summary);
     expect(first.stages).toEqual(all.stages);
-    // A cursor pages the same open items.
+    // A cursor pages the same filtered items.
     const after = Buffer.from(`${first.items[0]!.created_at}|${first.items[0]!.item_id}`, 'utf8').toString('base64url');
     expect(ids(await f.app.items({ access_token: 'ari', request: { ...request, cursor: after } }))).toEqual(open.slice(1).map(row => row.item_id));
-    // Every scope keeps its open items only.
+    // Every scope keeps the states asked for only.
     for (const scope of [{ scope: 'mine' }, { scope: 'run', id: f.runId }, { scope: 'record', id: f.record }] as const) {
-      expect(ids(await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', ...scope, open_only: true } }))).toEqual(open.map(row => row.item_id));
+      expect(ids(await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', ...scope, states: ['open'] } }))).toEqual(open.map(row => row.item_id));
     }
+    // The closed part pages on its own, fifty at a time, with its own cursor over the closed items alone.
+    const closedRequest = { schema_version: 1, operation: 'items', scope: 'record', id: f.record, states: ['done', 'not_relevant'] } as const;
+    const closedFirst = await f.app.items({ access_token: 'ari', request: closedRequest });
+    expect(closedFirst.items).toHaveLength(50);
+    expect(closedFirst.items.every(entry => entry.state === 'done' || entry.state === 'not_relevant')).toBe(true);
+    const closedNext = await f.app.items({ access_token: 'ari', request: { ...closedRequest, cursor: closedFirst.next_cursor! } });
+    expect(closedNext.next_cursor).toBeNull();
+    expect(ids(closedFirst).concat(ids(closedNext))).toEqual(closed.map(row => row.item_id));
+    expect(closedNext.summary).toEqual(first.summary);
+    // Done alone is a subset too.
+    expect((await f.app.items({ access_token: 'ari', request: { ...closedRequest, states: ['done'] } })).items.map(entry => entry.state)).toEqual(Array(30).fill('done'));
   });
 
   it('tells an outage from lost access, and reports the outage without content', async () => {
