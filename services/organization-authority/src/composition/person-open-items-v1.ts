@@ -4,6 +4,7 @@ import {
   PERSON_HOME_ROWS_V1,
   PERSON_IMPACT_CARD_LIMITS_V1 as LIMITS,
   PERSON_OPEN_ITEMS_PAGE_V1,
+  PERSON_RUN_ITEMS_MAX_V1,
   PERSON_UPLOAD_PROJECT_SET_MAX,
   validatePersonAnswerCitationV6,
   validatePersonRunsResultV1,
@@ -500,7 +501,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         send.push(Object.freeze({
           run_id: runId, decision: decisionOf(decision, firstLine(run)), items: rows.length,
           kinds: Object.freeze(KIND_ORDER.filter(kind => rows.some(row => openItemKindV1(row.pointer) === kind))),
-          owners: Object.freeze(owners.sort((left, right) => left.localeCompare(right)).slice(0, LIMITS.affected)), finished_at: run.updated_at,
+          // As many owners as a run has items: its affected rows and its meeting actions.
+          owners: Object.freeze(owners.sort((left, right) => left.localeCompare(right)).slice(0, PERSON_RUN_ITEMS_MAX_V1)), finished_at: run.updated_at,
         }));
       }
       send.sort((left, right) => ascending(right.finished_at, left.finished_at) || ascending(left.run_id, right.run_id));

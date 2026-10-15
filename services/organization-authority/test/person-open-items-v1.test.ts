@@ -4,6 +4,7 @@ import type { PersonOpenItemV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonOpenItemsV1 } from '../src/composition/person-open-items-v1.js';
 import { CLOUD, openItemsFixture, sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { addMembership } from './fixtures/project-context-sqlite.js';
 
 const scope = (f: OpenItemsFixtureV1, access_token: FixturePerson, kind: 'mine' | 'run' | 'record' | 'project', cursor?: string) => f.app.items({ access_token, request: {
   schema_version: 1, operation: 'items', scope: kind, ...(kind === 'mine' ? {} : { id: kind === 'run' ? f.runId : kind === 'record' ? f.record : f.projectA }), ...(cursor === undefined ? {} : { cursor }),
@@ -568,6 +569,20 @@ describe('open items: meeting actions (follow-ups thread v1)', () => {
     expect(summary).toMatchObject({ unsent: 4, decisions: 1 });
     // Ari's Send row names the actions first, and their owners.
     expect((await f.app.home({ access_token: 'ari' })).send).toMatchObject([{ items: 4, kinds: ['action', 'ticket', 'record'], owners: ['Mina Patel', 'Rafael Moreno'] }]);
+  });
+
+  it('names every owner of a run on its Send row, past the twenty a card alone could have', async () => {
+    const f = await openItemsFixture({ meetingActions: Array.from({ length: 20 }, (_, at) => ({ signal_id: `act-${at}`, text: `Action ${at}`, owner: null })) });
+    await f.finishImpactRun();
+    // Twenty-two items: the card's two and twenty actions, each action picked to its own person before Send.
+    const actions = f.items.forRun(f.runId).filter(row => row.pointer.kind === 'meeting_action');
+    const people = Array.from({ length: 21 }, (_, at) => ({ principal_id: `prn_00000000-0000-4000-8000-${String(at).padStart(12, '9')}`, membership_id: `mem_00000000-0000-4000-8000-${String(at).padStart(12, '8')}`, name: `Person ${String(at).padStart(2, '0')}` }));
+    for (const person of people) addMembership(f.db, { organization_id: f.person.organization_id, principal_id: person.principal_id, membership_id: person.membership_id, membership_type: 'employee' }, person.name, `${person.membership_id}@example.test`);
+    for (const [at, row] of actions.entries()) f.items.assign(row.item_id, people[at]!.membership_id, f.membership('ari'));
+    const [row] = (await f.app.home({ access_token: 'ari' })).send;
+    expect(row!.items).toBe(22);
+    expect(row!.owners).toHaveLength(21);                                // Mina, and the twenty picked
+    expect(row!.owners).toContain('Mina Patel');
   });
 
   it('sends a meeting action to its owner, who closes it by hand', async () => {
