@@ -56,8 +56,7 @@ interface Contract {
 
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
-  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; cursor?: string; summary_only?: true; states?: OpenItem['state'][];
-  rows_only?: true;
+  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; cursor?: string; read?: 'rows' | 'counts'; states?: OpenItem['state'][];
   item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
@@ -708,10 +707,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const visible = (item: OpenItem) => item.readable || (mineAsOwner(item) && item.state !== 'unsent');
   /**
    * A row rebuilt for Ari: the decision only for a reader, what it says now only when Ari could open it (and `live`: a
-   * quiet Home read opens nothing), and how its live read went: opened, refused to Ari, or not answered just now. A
+   * rows read opens nothing), and how its live read went: opened, refused to Ari, or not answered just now. A
    * meeting's action is never read. Before Send only its approver may change it, by picking its owner.
    */
-  const itemView = (item: OpenItem, live = true) => {
+  const itemView = (item: OpenItem, live: boolean) => {
     const reach = item.kind === 'action' || !live ? 'not_read' : item.outage ? 'unavailable' : item.opens ? 'opened' : 'no_access';
     const person = (named: Named | null) => (named === null ? null : { ...named, active: true });
     return {
@@ -851,9 +850,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return failure('invalid_request', 400);
       }
       // A read that opens items live in their tools waits while the test holds them (the `hold-live` file in its home), as a
-      // slow tool would; a rows-only or counts-only read never does.
-      const live = request.operation === 'item' || (request.operation === 'home' && request.rows_only !== true)
-        || (request.operation === 'items' && request.rows_only !== true && request.summary_only !== true);
+      // slow tool would; a rows or counts read never does.
+      const live = ['home', 'items', 'item'].includes(request.operation) && request.read === undefined;
       for (let waited = 0; live && existsSync(join(home, 'hold-live')) && waited < 30_000; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
       const runId = PILOT_RUN;
       // Real publication is asynchronous: the first post-approval list can have no run yet.
@@ -892,7 +890,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         }
       }
       // Mina sends Ari another item after Home's second read, or once the test asks (the `mina-sends` file).
-      if ((mode === 'granola-home-fails-once' && request.operation === 'home' && request.rows_only !== true && homeReads === 2)
+      if ((mode === 'granola-home-fails-once' && request.operation === 'home' && live && homeReads === 2)
           || (mode === 'granola-owner-later' && existsSync(join(home, 'mina-sends')))) {
         const later = openItems.find(item => item.state === 'unsent' && item.approver.membership_id === MINA.membership_id);
         if (later) Object.assign(later, { state: 'open', sent_at: now(), state_set_at: now(), state_set_by: MINA, send_included: true });
@@ -930,7 +928,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         // one. Rows only: no live read, and never a sweep due. granola-home-fails-once fails Home's
         // second read.
         case 'home': {
-          if (request.rows_only !== true && ++homeReads === 2 && mode === 'granola-home-fails-once') return failure('unavailable', 503);
+          if (live && ++homeReads === 2 && mode === 'granola-home-fails-once') return failure('unavailable', 503);
           const unsent = shown.filter(item => item.run_id === runId && item.state === 'unsent');
           const send = run?.state === 'done' && unsent.length > 0 ? [{
             run_id: runId, decision: unsent[0]!.decision, items: unsent.length, kinds: [...new Set(unsent.map(item => item.kind))],
@@ -944,11 +942,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const theirs = shown.filter(item => item.state === 'open' && involved(item));
           const waitsOnAri = (item: OpenItem) => mineAsOwner(item) || item.check?.verdict === 'changed';
           return result('home', {
-            send, items: theirs.filter(waitsOnAri).sort(order).slice(0, 20).map(item => itemView(item, request.rows_only !== true)),
+            send, items: theirs.filter(waitsOnAri).sort(order).slice(0, 20).map(item => itemView(item, live)),
             landed: theirs.filter(item => item.check?.verdict === 'landed').length,
             waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
             last_checked_at: theirs.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null,
-            sweep_due: request.rows_only !== true && mode.startsWith('granola-sweep') && sweepRuns.length === 0,
+            sweep_due: live && mode.startsWith('granola-sweep') && sweepRuns.length === 0,
           });
         }
         case 'items': {
@@ -978,9 +976,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const from = pageFrom(pageKey, request.cursor);
           if (from === null) return failure('invalid_request', 400);
           const size = mode === 'granola-paged' ? 2 : 50;
-          const paged = request.summary_only === true ? [] : listed.slice(from, from + size);
-          const next = request.summary_only !== true && from + size < listed.length ? pageCursor(pageKey, from + size) : null;
-          return result('items', { items: paged.map(item => itemView(item, request.rows_only !== true)), next_cursor: next, stages, summary: {
+          const counts = request.read === 'counts';
+          const paged = counts ? [] : listed.slice(from, from + size);
+          const next = !counts && from + size < listed.length ? pageCursor(pageKey, from + size) : null;
+          return result('items', { items: paged.map(item => itemView(item, live)), next_cursor: next, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
             landed: verdicts('landed'), changed: verdicts('changed'), unreadable: verdicts('unreadable'), decisions: records.length,
             last_checked_at: items.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null, by_decision: records.map(record => {
@@ -1041,10 +1040,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           if (mode === 'granola-review-assign-lost' && ++assigns === 1) return failure('unavailable', 503);
           return result('assign', { owner: { membership_id: person.membership_id, name: person.display_name, active: true } });
         }
-        // One item, as Ari sees it now.
+        // One item, as Ari sees it now; read as rows, nothing read live.
         case 'item': {
           const item = shown.find(entry => entry.item_id === request.item_id);
-          return item ? result('item', { item: itemView(item) }) : failure('not_found', 404);
+          return item ? result('item', { item: itemView(item, live) }) : failure('not_found', 404);
         }
         // A sweep of the open items Ari can see in a scope (mine: those Ari sent or owns), queued; with
         // none open, nothing to check. Asked for again while that scope's sweep waits, it is that one.

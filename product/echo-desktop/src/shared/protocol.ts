@@ -599,16 +599,16 @@ const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operat
   ['list', 'home', 'start', 'retry', 'view', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
 );
 /**
- * A call as desktop.log names it, content-free: the method, and for runs its operation and whether it read rows only or counts
- * only ("runs.home", "runs.items rows_only"). Never an id, a scope id or a cursor; an operation not known is left out.
+ * A call as desktop.log names it, content-free: the method, and for runs its operation and how much it read ("runs.home",
+ * "runs.items rows"). Never an id, a scope id or a cursor; an operation or a read not known is left out.
  */
 export function rpcLogName(method: string, params: unknown): string {
   if (method !== 'runs') return method;
   const request = (params as { request?: unknown } | null | undefined)?.request;
   if (request === null || typeof request !== 'object') return method;
-  const { operation, rows_only: rowsOnly, summary_only: summaryOnly } = request as Record<string, unknown>;
+  const { operation, read } = request as Record<string, unknown>;
   if (typeof operation !== 'string' || !RUNS_OPERATIONS.has(operation)) return method;
-  return `runs.${operation}${rowsOnly === true ? ' rows_only' : summaryOnly === true ? ' summary_only' : ''}`;
+  return `runs.${operation}${read === 'rows' || read === 'counts' ? ` ${read}` : ''}`;
 }
 /**
  * The Account menu's version line: "ECHO 0.1.0-internal.1 · 038f099". Releases can share a version, so the commit the app was

@@ -252,15 +252,18 @@ describe('runs API open items', () => {
     expect(() => validatePersonRunsResultV1('item', { item: { ...seen, pointer: {} } })).toThrow();      // no extra key ever
     expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), landed: 0, waiting: 0, last_checked_at: null, sweep_due: false })).toThrow();
   });
-  it('accepts summary_only only as true and never with a cursor, and requires reach', () => {
+  it('accepts read counts on items only and never with a cursor, and requires reach', () => {
     // Counts and stages only: a line that shows how many items there are opens none of them.
-    const counts = { schema_version: 1, operation: 'items', scope: 'project', id: PROJECT, summary_only: true };
+    const counts = { schema_version: 1, operation: 'items', scope: 'project', id: PROJECT, read: 'counts' };
     expect(validatePersonRunsRequestV1(counts)).toEqual(counts);
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', summary_only: true })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', summary_only: true });
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'record', id: RECORD })).not.toHaveProperty('summary_only');
-    for (const summary_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...counts, summary_only }), `summary_only ${JSON.stringify(summary_only)}`);
-    refused(() => validatePersonRunsRequestV1({ ...counts, cursor: 'next-page_2' }), 'summary_only with a cursor');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', summary_only: true }), 'summary_only on home');
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', read: 'counts' })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', read: 'counts' });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'record', id: RECORD })).not.toHaveProperty('read');
+    for (const read of ['live', 'Counts', true, 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...counts, read }), `read ${JSON.stringify(read)}`);
+    refused(() => validatePersonRunsRequestV1({ ...counts, cursor: 'next-page_2' }), 'counts with a cursor');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', read: 'counts' }), 'counts on home');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, read: 'counts' }), 'counts on one item');
+    // The flags it replaced are gone.
+    for (const flag of ['summary_only', 'rows_only']) refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', [flag]: true }), flag);
     // Every item says how its live read went, and carries what it says now exactly when it was opened.
     for (const reach of ['no_access', 'unavailable', 'not_read'] as const) {
       expect(validatePersonRunsResultV1('item', { item: openItem({ reach }) }).item.reach).toBe(reach);
@@ -273,32 +276,23 @@ describe('runs API open items', () => {
     }
     for (const reach of ['denied', '', null, true]) refused(() => validatePersonRunsResultV1('item', { item: openItem({ reach }) }), `reach ${JSON.stringify(reach)}`);
   });
-  it('accepts rows_only on home and items only, and only as true (F8)', () => {
-    // Home's quiet check: the same rows with no live read.
-    const quiet = { schema_version: 1, operation: 'home', rows_only: true };
-    expect(validatePersonRunsRequestV1(quiet)).toEqual(quiet);
-    expect(Object.isFrozen(validatePersonRunsRequestV1(quiet))).toBe(true);
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'home' })).not.toHaveProperty('rows_only');
-    for (const rows_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...quiet, rows_only }), `rows_only ${JSON.stringify(rows_only)}`);
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'list', rows_only: true }), 'rows_only on list');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, rows_only: true }), 'rows_only on one item');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'mine', rows_only: true }), 'rows_only on a sweep');
-    refused(() => validatePersonRunsRequestV1({ ...quiet, summary_only: true }), 'summary_only beside rows_only');
-  });
-  it('accepts rows_only on items beside states and a cursor, only as true, and never with summary_only', () => {
+  it('accepts read rows on home, items and one item only (F8)', () => {
+    // Home's quiet check, and an item page's refresh: the same rows with no live read.
+    for (const quiet of [{ schema_version: 1, operation: 'home', read: 'rows' }, { schema_version: 1, operation: 'item', item_id: ITEM, read: 'rows' }]) {
+      expect(validatePersonRunsRequestV1(quiet)).toEqual(quiet);
+      expect(Object.isFrozen(validatePersonRunsRequestV1(quiet))).toBe(true);
+      for (const read of ['live', 'Rows', true, 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...quiet, read }), `read ${JSON.stringify(read)}`);
+    }
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'home' })).not.toHaveProperty('read');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'list', read: 'rows' }), 'read on list');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'mine', read: 'rows' }), 'read on a sweep');
     // A list's rows at once, with no live read: the same page, paged over the same states.
-    const rows = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['unsent', 'open'], rows_only: true };
+    const rows = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['unsent', 'open'], read: 'rows' };
     expect(validatePersonRunsRequestV1(rows)).toEqual(rows);
-    expect(Object.isFrozen(validatePersonRunsRequestV1(rows))).toBe(true);
     expect(validatePersonRunsRequestV1({ ...rows, cursor: 'next-page_2' })).toEqual({ ...rows, cursor: 'next-page_2' });
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', rows_only: true })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', rows_only: true });
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'run', id: RUN, rows_only: true })).toMatchObject({ scope: 'run', id: RUN, rows_only: true });
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['open'] })).not.toHaveProperty('rows_only');
-    for (const rows_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...rows, rows_only }), `rows_only ${JSON.stringify(rows_only)}`);
-    // Counts only list no rows, and read nothing live already.
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', summary_only: true, rows_only: true }), 'rows_only beside summary_only');
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'run', id: RUN, read: 'rows' })).toMatchObject({ scope: 'run', id: RUN, read: 'rows' });
   });
-  it('accepts states as a non-empty subset of the item states, never with summary_only, and with a cursor', () => {
+  it('accepts states as a non-empty subset of the item states, never with counts, and with a cursor', () => {
     // A list reads its current work first, then its closed items: each a paged read of its own.
     const active = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['unsent', 'open'] };
     expect(validatePersonRunsRequestV1(active)).toEqual(active);
@@ -314,7 +308,7 @@ describe('runs API open items', () => {
       refused(() => validatePersonRunsRequestV1({ ...active, states }), `states ${JSON.stringify(states)}`);
     }
     // A counts-only answer lists no items to filter.
-    refused(() => validatePersonRunsRequestV1({ ...active, summary_only: true }), 'states with summary_only');
+    refused(() => validatePersonRunsRequestV1({ ...active, read: 'counts' }), 'states with counts');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', states: ['open'] }), 'states on home');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, states: ['open'] }), 'states on one item');
     // The flag it replaced is gone.
@@ -617,7 +611,7 @@ describe('runs API sweep', () => {
     ['a record scope with a project id', sweep({ scope: 'record', id: PROJECT })],
     ['a project scope with a project id that is not canonical', sweep({ scope: 'project', id: 'prj_pilot' })],
     ['a cursor', sweep({ scope: 'mine', cursor: 'next-page_2' })],
-    ['summary_only', sweep({ scope: 'record', id: RECORD, summary_only: true })],
+    ['a read mode', sweep({ scope: 'record', id: RECORD, read: 'counts' })],
     ['states', sweep({ scope: 'mine', states: ['open'] })],
     ['an extra key', sweep({ scope: 'mine', force: true })],
   ])('refuses a sweep with %s', (_label, request) => {

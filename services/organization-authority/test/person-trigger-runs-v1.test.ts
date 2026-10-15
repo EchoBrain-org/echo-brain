@@ -272,7 +272,7 @@ describe('open items written when an impact check finishes', () => {
     if (f.runs.claim(f.person, f.runId, 60_000).kind !== 'claimed') throw new Error('expected lease');
     const sweep = f.runs.enqueueSweep(mina, { kind: 'mine' });
     if (f.runs.claim(mina, sweep.run_id, 60_000).kind !== 'claimed') throw new Error('expected lease');
-    const stage = async () => (await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, summary_only: true } })).stages;
+    const stage = async () => (await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, read: 'counts' } })).stages;
     expect((await f.app.list({ access_token: 'ari' })).runs.map(run => run.state)).toEqual(['running']);
     expect(await stage()).toMatchObject([{ run_id: f.runId, state: 'running' }]);
     f.advance(60_001);

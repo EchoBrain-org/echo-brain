@@ -412,7 +412,7 @@ ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> 
   const method = typeof named === 'string' && (hostMethods.has(named) || mainMethods.has(named)) ? named : '?';
   if (result.ok && STATUS_METHODS.has(method)) accountChanged(result.value as AppStatus);
   const requestId = (request as { params?: { request_id?: unknown } })?.params?.request_id;
-  // A runs call names its operation ("runs.items rows_only"), so a slow live read can be told from a quick rows-only one.
+  // A runs call names its operation ("runs.items rows"), so a slow live read can be told from a quick rows one.
   log(`${rpcLogName(method, (request as { params?: unknown })?.params)} ${result.ok ? 'ok' : result.failure.code}` +
     `${typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId) ? ` ${requestId}` : ''} ${Date.now() - started}ms`);
   return result;

@@ -109,8 +109,8 @@ describe('open items: who sees what', () => {
 
   it("says whose impact check a stage is: the approver's own, and no other reader's", async () => {
     const f = await openItemsFixture();
-    const stages = async (access_token: FixturePerson, summary_only?: true) => (await f.app.items({ access_token, request: {
-      schema_version: 1, operation: 'items', scope: 'record', id: f.record, ...(summary_only === undefined ? {} : { summary_only }) } })).stages;
+    const stages = async (access_token: FixturePerson, counts?: true) => (await f.app.items({ access_token, request: {
+      schema_version: 1, operation: 'items', scope: 'record', id: f.record, ...(counts === undefined ? {} : { read: 'counts' as const }) } })).stages;
     expect(await stages('ari')).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null, mine: true }]);
     expect(await stages('mina')).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'pending', error_code: null, mine: false }]);
     await f.finishImpactRun();
@@ -181,6 +181,12 @@ describe('open items: who sees what', () => {
     expect((await item(f, 'rafael', ticket!.item_id)).item).not.toHaveProperty('current');
     await expect(item(f, 'okafor', ticket!.item_id)).rejects.toMatchObject({ code: 'not_found' });
     await expect(item(f, 'ari', 'itm_00000000-0000-4000-8000-000000000000')).rejects.toMatchObject({ code: 'not_found' });
+    // Read as rows: the same item with no desk bound, and the same not_found.
+    const binds = f.bindDesk.mock.calls.length;
+    const rows = (access_token: FixturePerson) => f.app.item({ access_token, request: { schema_version: 1, operation: 'item', item_id: ticket!.item_id, read: 'rows' } });
+    await expect(rows('rafael')).resolves.toMatchObject({ item: { item_id: ticket!.item_id, decision: { title: 'Pilot planning' }, reach: 'not_read' } });
+    await expect(rows('okafor')).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.bindDesk.mock.calls.length).toBe(binds);
   });
 });
 
@@ -189,7 +195,7 @@ describe('open items: counts and live reads', () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
     const opens = f.openCitation.mock.calls.length;
     const binds = f.bindDesk.mock.calls.length;
-    const result = await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA, summary_only: true } });
+    const result = await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA, read: 'counts' } });
     expect(result).toMatchObject({ items: [], next_cursor: null, summary: { unsent: 2 } });
     // The same counts and stages a full read answers.
     const full = await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA } });
@@ -197,7 +203,7 @@ describe('open items: counts and live reads', () => {
     expect(result.stages).toEqual(full.stages);
     expect(f.openCitation.mock.calls.length - opens).toBe(2);              // only the full read opened anything
     expect(f.bindDesk.mock.calls.length - binds).toBe(1);
-    await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, summary_only: true } });
+    await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, read: 'counts' } });
     expect(f.openCitation.mock.calls.length - opens).toBe(2);
     expect(f.bindDesk.mock.calls.length - binds).toBe(1);
   });
@@ -222,8 +228,8 @@ describe('open items: counts and live reads', () => {
       const base = { schema_version: 1, operation: 'items', ...request } as const;
       const binds = f.bindDesk.mock.calls.length;
       const opens = f.opened.length;
-      const rows = await f.app.items({ access_token: viewer, request: { ...base, rows_only: true } });
-      const next = rows.next_cursor === null ? null : await f.app.items({ access_token: viewer, request: { ...base, rows_only: true, cursor: rows.next_cursor } });
+      const rows = await f.app.items({ access_token: viewer, request: { ...base, read: 'rows' } });
+      const next = rows.next_cursor === null ? null : await f.app.items({ access_token: viewer, request: { ...base, read: 'rows', cursor: rows.next_cursor } });
       // No desk bound and nothing opened: every row says no read was tried.
       expect(f.bindDesk.mock.calls.length).toBe(binds);
       expect(f.opened.length).toBe(opens);
@@ -239,7 +245,7 @@ describe('open items: counts and live reads', () => {
       if (next !== null) expect(withoutLive(next)).toEqual(withoutLive(await f.app.items({ access_token: viewer, request: { ...base, cursor: full.next_cursor! } })));
     }
     // Paged: the run's 58 items in two pages, read rows only.
-    const page = await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'run', id: f.runId, rows_only: true } });
+    const page = await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'run', id: f.runId, read: 'rows' } });
     expect(page.items).toHaveLength(50);
     expect(page.next_cursor).not.toBeNull();
   });
@@ -732,7 +738,7 @@ describe('open items: Home', () => {
     const binds = f.bindDesk.mock.calls.length;
     const opens = f.opened.length;
     const sweepReads = [vi.spyOn(f.runs, 'newestSweep'), vi.spyOn(f.runs, 'runningSweep')];
-    const quiet = await f.app.home({ access_token: 'mina', request: { schema_version: 1, operation: 'home', rows_only: true } });
+    const quiet = await f.app.home({ access_token: 'mina', request: { schema_version: 1, operation: 'home', read: 'rows' } });
     expect(f.bindDesk.mock.calls.length).toBe(binds);                  // no desk bound, nothing opened
     expect(f.opened.length).toBe(opens);
     expect(quiet.items).toHaveLength(2);
@@ -749,7 +755,7 @@ describe('open items: Home', () => {
     expect(rows(quiet)).toEqual(rows(full));
     // A Send row needs no live read either.
     const unsent = await openItemsFixture(); await unsent.finishImpactRun();
-    const quietSend = await unsent.app.home({ access_token: 'ari', request: { schema_version: 1, operation: 'home', rows_only: true } });
+    const quietSend = await unsent.app.home({ access_token: 'ari', request: { schema_version: 1, operation: 'home', read: 'rows' } });
     expect(quietSend).toEqual(await unsent.app.home({ access_token: 'ari' }));
     expect(quietSend.send).toHaveLength(1);
   });
@@ -760,7 +766,7 @@ describe('open items: Home', () => {
     const rows = (home: Awaited<ReturnType<typeof f.app.home>>) => ({ ...home, sweep_due: undefined, items: home.items.map(({ current: _current, reach: _reach, ...rest }) => rest) });
     for (const viewer of ['mina', 'ari'] as const) {
       const full = await f.app.home({ access_token: viewer });
-      const quiet = await f.app.home({ access_token: viewer, request: { schema_version: 1, operation: 'home', rows_only: true } });
+      const quiet = await f.app.home({ access_token: viewer, request: { schema_version: 1, operation: 'home', read: 'rows' } });
       expect(quiet.items.map(entry => entry.reach).every(reach => reach === 'not_read')).toBe(true);
       expect(rows(quiet)).toEqual(rows(full));
     }
@@ -783,7 +789,7 @@ describe('open items: Home', () => {
     f.db.transaction(() => f.items.insertForRun(f.db, run, Array.from({ length: 22 }, (_, index) => ticket(index))))();
     const older = f.items.forRun(f.runId).filter(row => row.state === 'unsent');
     sendTo(older, 'older');
-    const quiet = () => f.app.home({ access_token: 'mina', request: { schema_version: 1, operation: 'home', rows_only: true } });
+    const quiet = () => f.app.home({ access_token: 'mina', request: { schema_version: 1, operation: 'home', read: 'rows' } });
     const full = () => f.app.home({ access_token: 'mina' });
     const ids = (home: { readonly items: readonly PersonOpenItemV1[] }) => home.items.map(entry => entry.item_id);
     expect((await quiet()).items).toHaveLength(20);

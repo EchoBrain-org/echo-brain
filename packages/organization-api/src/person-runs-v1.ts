@@ -24,12 +24,12 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * own fields are ECHO's: its decision is shown only to a viewer who can read
  * it, and what the item says now only to a viewer who opened it in its tool
  * in this request. Each row says how that live read went (`reach`), so an
- * outage is never shown as lost access. `items` with `summary_only` answers
- * the counts and stages alone and opens nothing; with `states` it pages over
+ * outage is never shown as lost access. `read` says how much to read:
+ * `rows` answers the same rows with no live read, so a list shows them at once
+ * and reads live only the rows it shows; `counts` (`items` only) answers the
+ * counts and stages alone and opens nothing. `items` with `states` pages over
  * the items in those states only, so a list reads its current work first and
- * never opens a closed item to throw it away; with `rows_only` it answers the
- * same page with no live read, so a list shows its rows at once and reads
- * live only the rows it shows. Each decision's counts say how
+ * never opens a closed item to throw it away. Each decision's counts say how
  * many of its open items last landed or could not be read, and its stage
  * says whether its impact run is the caller's own (`mine`).
  *
@@ -43,7 +43,7 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * in the last hour, and none is running (at most hourly, so a sweep that
  * keeps failing is not asked for on every load; a sweep still waiting after
  * the hour is asked for again, and `sweep` hands back that run to start; an
- * explicit `sweep` request is never limited). `home` with `rows_only` never
+ * explicit `sweep` request is never limited). `home` read as `rows` never
  * reports a sweep due. `home` lists the items whose last check changed first,
  * then the newest first by when each started waiting on the caller (the
  * latest of `sent_at`, `owner_set_at` and `state_set_at`), so a new one is
@@ -54,33 +54,29 @@ export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 export type PersonRunStateV1 = 'pending' | 'running' | 'done' | 'failed';
 export type PersonRunErrorCodeV1 = 'no_access' | 'unavailable' | 'timed_out' | 'research_failed';
 
+/**
+ * How much an open-items read reads; absent, it reads each row live. `rows`: the same answer with no live read, so every item's
+ * reach is `not_read` and no desk is bound (`home` then never says a sweep is due, so a quiet background check never starts
+ * one; follow-ups thread v1, F8). `counts` (`items` only): the summary and stages alone, no items and no cursor.
+ */
+export type PersonOpenItemsReadV1 = 'rows' | 'counts';
+
 // `list` and `home` are separate variants so `Extract<…, { operation: 'list' }>` still names one.
 export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'list' }
-  | { readonly schema_version: 1; readonly operation: 'home';
-      /**
-       * Rows only (follow-ups thread v1, F8): the same answer with no live read, so every item's reach is `not_read`, and
-       * `sweep_due` is always false, so a quiet background check never starts a sweep.
-       */
-      readonly rows_only?: true }
+  | { readonly schema_version: 1; readonly operation: 'home'; readonly read?: 'rows' }
   | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: PersonDiagnosticCaptureIdV1 }
   | { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
-      /** Counts and stages only: no items, no live reads. */
-      readonly summary_only?: true;
+      readonly read?: PersonOpenItemsReadV1;
       /**
-       * Items in these states only (a non-empty subset, each once): the page and its cursor go over them alone, while the
-       * summary and stages still cover the whole scope. A cursor pages the same list: the caller sends the same states with it.
+       * Items in these states only (a non-empty subset, each once; never beside `counts`): the page and its cursor go over them
+       * alone, while the summary and stages still cover the whole scope. A cursor pages the same list: the caller sends the same
+       * states with it.
        */
-      readonly states?: readonly PersonOpenItemStateV1[];
-      /**
-       * Rows only: the same page, cursor, summary and stages with no live read, so every item's reach is `not_read` and no
-       * desk is bound (never beside `summary_only`, which lists no items). A list shows its rows from it at once, and reads them
-       * live only where it shows them.
-       */
-      readonly rows_only?: true }
-  | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string }
+      readonly states?: readonly PersonOpenItemStateV1[] }
+  | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string; readonly read?: 'rows' }
   | { readonly schema_version: 1; readonly operation: 'send'; readonly run_id: string; readonly command_id: string;
       /**
        * Any non-empty subset of the run's unsent items (follow-ups thread v1, F1): `include: true` sends one to its owner
@@ -326,6 +322,11 @@ function scopeId(scope: 'run' | 'record' | 'project', value: unknown): string {
   return validateProjectIdV1(value, label);
 }
 
+/** The request's read mode, when it names one of `modes`. */
+function readMode<T extends PersonOpenItemsReadV1>(request: Record<string, unknown>, modes: readonly T[]): { readonly read?: T } {
+  return Object.hasOwn(request, 'read') ? { read: oneOf(request.read, modes, 'Runs request read') } : {};
+}
+
 function sendItems(value: unknown): Extract<PersonRunsRequestV1, { readonly operation: 'send' }>['items'] {
   const items = list(value, 'Runs request send list', RUN_ITEMS_MAX, 1).map(raw => {
     const entry = asEnumerableRecord(raw, 'Runs request send item');
@@ -348,20 +349,17 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const operation = request.operation;
   if (typeof operation !== 'string' || !Object.hasOwn(REQUEST_KEYS, operation)) fail('Runs request operation is invalid');
   const kind = operation as PersonRunsRequestV1['operation'];
-  // `items` may leave out its scope id and its cursor, and may ask for its counts only, for items in some states only, or for its
-  // rows without live reads; a sweep of `mine` names no id; `home` may ask for its rows without live reads.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only', 'states', 'rows_only'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : kind === 'home' ? ['rows_only'] : [])
+  // `items` may leave out its scope id and its cursor, and may ask for items in some states only; `home`, `items` and `item` may
+  // say how much to read; a sweep of `mine` names no id.
+  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states'] : kind === 'home' || kind === 'item' ? ['read'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
   switch (kind) {
     case 'list':
       return Object.freeze({ schema_version: 1 as const, operation: kind });
-    case 'home': {
-      const rowsOnly = Object.hasOwn(request, 'rows_only');
-      if (rowsOnly && request.rows_only !== true) fail('Runs request rows_only is invalid');
-      return Object.freeze({ schema_version: 1 as const, operation: kind, ...(rowsOnly ? { rows_only: true as const } : {}) });
-    }
+    case 'home':
+      return Object.freeze({ schema_version: 1 as const, operation: kind, ...readMode(request, ['rows'] as const) });
     case 'start':
       return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id'),
         ...(Object.hasOwn(request, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(request.capture_id) } : {}) });
@@ -372,30 +370,22 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       const scope = oneOf(request.scope, SCOPES, 'Runs request scope');
       // `mine` names no id; every other scope names its run, record or project.
       if ((scope === 'mine') === Object.hasOwn(request, 'id')) fail('Runs request scope id is invalid');
-      const counts = Object.hasOwn(request, 'summary_only');
-      if (counts && request.summary_only !== true) fail('Runs request summary_only is invalid');
-      // Counts cover the whole scope at once: there is no next page to ask for.
-      if (counts && Object.hasOwn(request, 'cursor')) fail('Runs request summary_only takes no cursor');
+      const read = readMode(request, ['rows', 'counts'] as const);
       const filtered = Object.hasOwn(request, 'states');
-      // A counts-only answer lists no items to filter.
-      if (filtered && counts) fail('Runs request states takes no summary_only');
+      // Counts cover the whole scope at once and list no items: no next page to ask for, and nothing to filter.
+      if (read.read === 'counts' && (Object.hasOwn(request, 'cursor') || filtered)) fail('Runs request counts takes no cursor or states');
       const states = filtered ? list(request.states, 'Runs request states', ITEM_STATES.length, 1).map(state => oneOf(state, ITEM_STATES, 'Runs request state')) : [];
       unique(states, 'Runs request states');
-      const rowsOnly = Object.hasOwn(request, 'rows_only');
-      if (rowsOnly && request.rows_only !== true) fail('Runs request rows_only is invalid');
-      // A counts-only answer reads nothing live already, and lists no rows.
-      if (rowsOnly && counts) fail('Runs request rows_only takes no summary_only');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, scope,
         ...(scope === 'mine' ? {} : { id: scopeId(scope, request.id) }),
         ...(Object.hasOwn(request, 'cursor') ? { cursor: matching(request.cursor, CURSOR, 'Runs request cursor') } : {}),
-        ...(counts ? { summary_only: true as const } : {}),
+        ...read,
         ...(filtered ? { states: Object.freeze(states) } : {}),
-        ...(rowsOnly ? { rows_only: true as const } : {}),
       });
     }
     case 'item':
-      return Object.freeze({ schema_version: 1 as const, operation: kind, item_id: itemId(request.item_id, 'Runs request item id') });
+      return Object.freeze({ schema_version: 1 as const, operation: kind, item_id: itemId(request.item_id, 'Runs request item id'), ...readMode(request, ['rows'] as const) });
     case 'send':
       return Object.freeze({
         schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id'),

@@ -49,15 +49,16 @@ describe('a call no host answered', () => {
 });
 
 describe('desktop.log and the Account menu', () => {
-  it('names a runs call by its operation, and whether it read rows only or counts only, and nothing else', () => {
+  it('names a runs call by its operation, and how much it read, and nothing else', () => {
     expect(rpcLogName('runs', { request: { schema_version: 1, operation: 'home' } })).toBe('runs.home');
-    expect(rpcLogName('runs', { request: { schema_version: 1, operation: 'home', rows_only: true } })).toBe('runs.home rows_only');
+    expect(rpcLogName('runs', { request: { schema_version: 1, operation: 'home', read: 'rows' } })).toBe('runs.home rows');
     const id = 'sha256:' + '1'.repeat(64);
-    expect(rpcLogName('runs', { request: { operation: 'items', scope: 'record', id, states: ['unsent', 'open'], cursor: 'c2', rows_only: true } })).toBe('runs.items rows_only');
-    expect(rpcLogName('runs', { request: { operation: 'items', scope: 'project', id, summary_only: true } })).toBe('runs.items summary_only');
+    expect(rpcLogName('runs', { request: { operation: 'items', scope: 'record', id, states: ['unsent', 'open'], cursor: 'c2', read: 'rows' } })).toBe('runs.items rows');
+    expect(rpcLogName('runs', { request: { operation: 'items', scope: 'project', id, read: 'counts' } })).toBe('runs.items counts');
     expect(rpcLogName('runs', { request: { operation: 'item', item_id: 'itm_00000001' } })).toBe('runs.item');
     // Anything the page made up stays out of the log.
     expect(rpcLogName('runs', { request: { operation: 'ECHO-12 Pilot launch' } })).toBe('runs');
+    expect(rpcLogName('runs', { request: { operation: 'item', item_id: 'itm_00000001', read: 'ECHO-12' } })).toBe('runs.item');
     expect(rpcLogName('runs', { request: null })).toBe('runs');
     expect(rpcLogName('runs', null)).toBe('runs');
     expect(rpcLogName('projects.list', { request: { operation: 'home' } })).toBe('projects.list');

@@ -245,9 +245,9 @@ Reads one item under your current access: a note's full text, a document's extra
 Runs a versioned request against approved-record impact runs, the open items they found, and the sweeps that re-check them. Every request is {"schema_version":1,"operation":<operation>,...}:
   list                 your own impact runs and sweeps
   start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
-  home                 what waits on you: Send rows and open items; rows_only true reads no item live (every reach not_read) and never says sweep_due
-  items                with scope mine, run, record or project, an id for run, record and project, and an optional cursor; summary_only true answers the counts alone; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; rows_only true answers the same page with no item read live (every reach not_read), never beside summary_only
-  item                 with item_id
+  home                 what waits on you: Send rows and open items; read "rows" reads no item live (every reach not_read) and never says sweep_due
+  items                with scope mine, run, record or project, an id for run, record and project, and an optional cursor; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; read "rows" answers the same page with no item read live (every reach not_read), and read "counts" the counts alone, with no cursor or states
+  item                 with item_id; read "rows" reads it with no live read
   send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}] naming any of the run's unsent items: include true sends one to its owner, false dismisses it, and unlisted items stay unsent; the approver only
   set_state            with item_id and state open, done or not_relevant; the approver or the owner
   assign               with item_id and owner_membership_id; before send the approver only, then the approver, the owner or a lead of the decision's projects

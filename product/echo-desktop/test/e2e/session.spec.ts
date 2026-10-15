@@ -15,7 +15,7 @@ const refreshes = () => run.calls().filter(call => call.path === '/v2/session/re
  */
 async function expectOfflineStartup(): Promise<void> {
   const completedLists = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')
-    .match(/(projects\.list|account\.tools|runs\.\w+(?: rows_only)?) transport_failed/g)?.length ?? 0;
+    .match(/(projects\.list|account\.tools|runs\.\w+(?: rows| counts)?) transport_failed/g)?.length ?? 0;
   await expect.poll(completedLists).toBe(7);
   expect(run.calls().map(call => call.path)).toEqual(Array(7).fill('/v2/session/refresh'));
 }

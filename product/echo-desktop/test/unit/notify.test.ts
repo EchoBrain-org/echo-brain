@@ -39,10 +39,10 @@ let released: (() => void)[];
 
 const homeOf = (rows: readonly OpenItemView[]): HomeView => ({ send: [], items: rows, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
 /** A full read of Home: Home sends one right before each of its own rows-only reads, side by side. */
-const fullHome = (call: unknown[] | undefined) => call?.[0] === 'runs' && (call[1] as { request: { operation: string; rows_only?: true } }).request.operation === 'home'
-  && (call[1] as { request: { rows_only?: true } }).request.rows_only !== true;
+const fullHome = (call: unknown[] | undefined) => call?.[0] === 'runs' && (call[1] as { request: { operation: string; read?: 'rows' } }).request.operation === 'home'
+  && (call[1] as { request: { read?: 'rows' } }).request.read !== 'rows';
 /** The quiet check's reads: rows only, and never Home's own (each of which goes with a full read of Home). */
-const quietReads = () => rpc.mock.calls.filter(([method, params], at, calls) => method === 'runs' && params.request.rows_only === true && !fullHome(calls[at - 1]))
+const quietReads = () => rpc.mock.calls.filter(([method, params], at, calls) => method === 'runs' && params.request.read === 'rows' && !fullHome(calls[at - 1]))
   .map(([, params]) => params);
 const notices = () => rpc.mock.calls.filter(([method]) => method === 'notify.followUps').map(([, params]) => params);
 
@@ -60,8 +60,8 @@ beforeEach(() => {
     'app.status': () => ok(account ? { signed_in: true, account } : { signed_in: false, account: null }),
     'notify.followUps': () => ok(null),
     'runs': params => {
-      const request = params.request as { operation: string; rows_only?: true; item_id?: string };
-      if (request.operation === 'home' && request.rows_only) {
+      const request = params.request as { operation: string; read?: 'rows'; item_id?: string };
+      if (request.operation === 'home' && request.read === 'rows') {
         if (quietFails) return fail('unavailable', { retryable: true });
         if (!holdQuiet) return ok(homeOf(items));
         const answer = ok(homeOf(items));
@@ -91,7 +91,7 @@ describe('the quiet check', () => {
   it('learns what waits on you at sign-in, then tells each new follow-up once', async () => {
     items = [followUp(1)];
     await startStore();
-    expect(quietReads()).toEqual([{ expect: { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id }, request: { schema_version: 1, operation: 'home', rows_only: true } }]);
+    expect(quietReads()).toEqual([{ expect: { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id }, request: { schema_version: 1, operation: 'home', read: 'rows' } }]);
     expect(notices()).toEqual([]);
     items = [followUp(1), followUp(2, { expected: 'Update the pricing page' })];
     await vi.advanceTimersByTimeAsync(FIVE_MINUTES - 1);

@@ -42,9 +42,8 @@ import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
  * A row's own fields are ECHO's. An item's title, text, assignee, status and
  * due date are read live, as the viewer, on one desk per request, and shown
  * only when the policy says the viewer opened the item. No read is tried for
- * a meeting action (ECHO's own data), for any row of a rows-only `home` or
- * `items` read (`rows_only`), or for a counts-only `items` read; such a row is
- * `not_read`.
+ * a meeting action (ECHO's own data), nor for any row of a read with `read`
+ * (`rows`, or an `items` read of `counts`); such a row is `not_read`.
  * Each row says how its read went (`reach`): a refusal by the viewer's own
  * access is `no_access`; anything else that stops a read (an outage, a rate
  * limit, a timeout) is `unavailable` and is reported without content, so an
@@ -521,7 +520,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // Items: open items that wait on the caller, and those the caller approved whose last check saw them change. The changed
       // ones first, then the newest first by when each started waiting on the caller, so a new one is always among the twenty
       // however many older ones wait: Home's quiet check (rows only, F8) answers the same rows, and sees each new one.
-      const rowsOnly = input.request.rows_only === true;
+      const rowsOnly = input.request.read === 'rows';
       const visible = context.assessed.filter(entry => entry.row.state === 'open' && entry.access.see_row);
       const changed = (entry: Assessed) => entry.row.check?.verdict === 'changed';
       const shown = visible.filter(entry => entry.access.waits_on_viewer || (approvedBy(entry.row, viewer) && changed(entry)))
@@ -634,9 +633,9 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
 
       // Counts only (the project and Impact lines): no item is listed, so none is opened and no desk is bound. Rows only: the same
       // page with no live read, so a list shows its rows at once and reads live only what it shows (follow-ups thread v1).
-      const countsOnly = request.summary_only === true;
+      const countsOnly = request.read === 'counts';
       return checked('items', {
-        items: countsOnly ? [] : await present(viewer, context, page, { signal: input.signal, live: request.rows_only !== true }),
+        items: countsOnly ? [] : await present(viewer, context, page, { signal: input.signal, live: request.read === undefined }),
         next_cursor: !countsOnly && following.length > page.length ? cursorOf(page.at(-1)!.row) : null,
         summary, stages,
       });
@@ -649,7 +648,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const context = assess(viewer, [row]);
       const entry = context.assessed[0];
       if (entry === undefined || !entry.access.see_row) throw notFound();
-      return checked('item', { item: (await present(viewer, context, [entry], { signal: input.signal }))[0] });
+      return checked('item', { item: (await present(viewer, context, [entry], { signal: input.signal, live: input.request.read !== 'rows' }))[0] });
     },
 
     async send(input: Parameters<PersonOpenItemsApplicationV1['send']>[0]) {

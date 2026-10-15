@@ -4144,7 +4144,7 @@ function readWaiting(mine: number): { rows: Promise<void>; done: Promise<Waiting
     show();
     throw error;
   });
-  const quick = runsCommand({ schema_version: 1, operation: 'home', rows_only: true }).then(value => { rows = value; show(); return value; });
+  const quick = runsCommand({ schema_version: 1, operation: 'home', read: 'rows' }).then(value => { rows = value; show(); return value; });
   const done = Promise.allSettled([quick, slow]).then(([fast, whole]): WaitingRead => ({
     read: fast.status === 'fulfilled' || whole.status === 'fulfilled',
     ...(fast.status === 'rejected' ? { failure: failureOf(fast.reason) } : {}),
@@ -4431,7 +4431,7 @@ async function loadLine(key: LineKey, scope: ItemsLine['scope'], id: string): Pr
   const before = state[key];
   const kept = before?.scope === scope && before.id === id ? { summary: before.summary, stage: before.stage } : { summary: null, stage: null };
   setLine(key, { scope, id, seq: mine, loading: true, ...kept, busy: false });
-  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope, id, summary_only: true } });
+  const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope, id, read: 'counts' } });
   if (state[key]?.seq !== mine) return;
   if (!result.ok) {
     setLine(key, { ...state[key]!, loading: false });
@@ -4738,7 +4738,7 @@ async function readPart(account: Expect, list: FollowUpList, states: readonly Pe
   let next = cursor;
   for (;;) {
     const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: list.scope, ...(list.id === undefined ? {} : { id: list.id }),
-      states, ...(next === null ? {} : { cursor: next }), rows_only: true } });
+      states, ...(next === null ? {} : { cursor: next }), read: 'rows' } });
     if (!result.ok) return { ok: false, failure: result.failure };
     const page = result.value as OpenItemsView;
     items.push(...page.items);
@@ -4935,7 +4935,7 @@ async function runRows(account: Expect, run_id: string): Promise<OpenItemView[] 
   const rows: OpenItemView[] = [];
   let cursor: string | null = null;
   do {
-    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: 'run', id: run_id, ...(cursor === null ? {} : { cursor }), rows_only: true } });
+    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: 'run', id: run_id, ...(cursor === null ? {} : { cursor }), read: 'rows' } });
     if (!result.ok) {
       if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
       return null;
@@ -5556,7 +5556,7 @@ function stopQuietCheck(): void {
 async function quietCheck(mine: number): Promise<void> {
   const watched = quietSeen;
   if (mine !== quietSeq || !watched) return;
-  const result = await rpc('runs', { expect: watched.account, request: { schema_version: 1, operation: 'home', rows_only: true } });
+  const result = await rpc('runs', { expect: watched.account, request: { schema_version: 1, operation: 'home', read: 'rows' } });
   if (mine !== quietSeq || !sameAccount(watched.account)) return;
   if (result.ok) {
     const { items } = result.value as HomeView;

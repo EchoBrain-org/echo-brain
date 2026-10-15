@@ -101,7 +101,7 @@ statuses, the list and the item page.
   removes an item from a count. Replaces R35's open count and the Impact
   line's "handled" and "couldn't read".
 - F8. **Notify the owner.** The desktop checks Home quietly
-  (`home` with `rows_only: true`, no live reads) every five minutes while
+  (`home` with `read: 'rows'`, no live reads) every five minutes while
   signed in, and shows a system notification for each follow-up that newly
   waits on you; clicking it opens the item page. The first check after sign-in
   only learns what is there.
@@ -116,7 +116,7 @@ statuses, the list and the item page.
 - `assign`: allowed on unsent items for the approver (F2).
 - Item view: new kind `action`; new keys `state_set_by`, `owner_set_at`,
   `owner_set_by`, `send_included` (F3; null exactly while unsent).
-- `home`: optional `rows_only: true` (F8): no live reads, and `sweep_due`
+- `home`: optional `read: 'rows'` (F8): no live reads, and `sweep_due`
   is always false, so the quiet check never starts a sweep. It answers the
   same rows as a full `home`. Home's items come with those whose last check
   changed first, then the newest first by when each started waiting on the
@@ -128,11 +128,13 @@ statuses, the list and the item page.
   those states only; the summary and stages still cover the whole scope. A
   list reads its current work (`unsent`, `open`) first and its closed items
   after, each with its own More, so current work is never behind More.
-- `items`: optional `rows_only: true` (never beside `summary_only`): the same
-  page, cursor, summary and stages with no live read, every reach
-  `not_read`. A list shows its rows from it at once and reads live only the
-  rows it shows; after a change it reads its rows again rows only and keeps
-  what it last read live of each.
+- `items`, `home` and `item`: one optional `read` replaces `summary_only`.
+  `read: 'rows'` answers the same page, cursor, summary and stages (or the
+  same item) with no live read, every reach `not_read`; `read: 'counts'`
+  (`items` only, never beside a cursor or `states`) answers the summary and
+  stages alone. A list shows its rows from a rows read at once and reads live
+  only the rows it shows; after a change to one item it reads that item as
+  rows and the counts again, and keeps what it last read live of each row.
 
 The response validators check exact keys, so a desktop older than this change
 cannot read item views from an Authority that has it. Deploy the Authority and

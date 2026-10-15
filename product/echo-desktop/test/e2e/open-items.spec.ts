@@ -27,8 +27,8 @@ async function approveFromHome(run: Launched) {
 
 const runOperations = () => app.calls().filter(call => call.path === '/v1/person/runs').map(call => call.body?.operation);
 /** A list's reads, in order: rows only, or live (" live"), by states, and " more" past the first page; never counts or a check's rows. */
-const listReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && call.body.summary_only !== true && call.body.scope !== 'run')
-  .map(call => `${(call.body!.states as string[]).join('+')}${call.body!.cursor === undefined ? '' : ' more'}${call.body!.rows_only === true ? '' : ' live'}`);
+const listReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && call.body.read !== 'counts' && call.body.scope !== 'run')
+  .map(call => `${(call.body!.states as string[]).join('+')}${call.body!.cursor === undefined ? '' : ' more'}${call.body!.read === 'rows' ? '' : ' live'}`);
 /** The runs requests the app sent with one operation, as sent. */
 const requests = (operation: string) => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === operation).map(call => call.body!);
 /** The sweeps the app asked for, by scope. */
@@ -232,7 +232,7 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
   await expect(pilot.locator('[data-reading]')).toHaveCount(1);
   await expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'true');
   expect(await page.content()).not.toContain('ECHO-12');
-  expect(requests('home').map(body => body.rows_only === true)).toEqual(expect.arrayContaining([true, false]));
+  expect(requests('home').map(body => body.read === 'rows')).toEqual(expect.arrayContaining([true, false]));
   // The live read answers: titles and what each says now fill in, in place.
   release();
   await expect(pilot).toContainText('ECHO-12 · Pilot launch');
@@ -260,7 +260,7 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
   await row(list, 'ECHO-12').click();
   await expect(item).toHaveAttribute('aria-busy', 'false');
   const live = () => app.calls().filter(call => call.path === '/v1/person/runs' && (call.body?.operation === 'item'
-    || (call.body?.operation === 'items' && call.body.rows_only !== true && call.body.summary_only !== true))).length;
+    || (call.body?.operation === 'items' && call.body.read !== 'rows' && call.body.read !== 'counts'))).length;
   const before = live();
   hold();
   await item.getByRole('button', { name: 'Mark done', exact: true }).click();
@@ -271,7 +271,7 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
   await page.getByTestId('back').click();
   await expect(row(group(list, 'Done'), 'ECHO-12 · Pilot launch')).toBeVisible();
   expect(live()).toBe(before);
-  expect(requests('items').at(-3)).toMatchObject({ scope: 'run', rows_only: true });
+  expect(requests('items').at(-3)).toMatchObject({ scope: 'run', read: 'rows' });
   release();
 });
 
@@ -283,7 +283,7 @@ test('a follow-up sent to you while ECHO runs comes as a notification that opens
   const { page } = app;
   const notices = () => app.app.evaluate(() => ((globalThis as Notices).echoTestNotices ?? []).map(({ title, body }) => ({ title, body })));
   // The quiet check's reads: rows only, but for Home's own, each read beside a full read of Home (so counted once Home is idle).
-  const quietReads = () => requests('home').filter(body => body.rows_only === true).length - requests('home').filter(body => body.rows_only !== true).length;
+  const quietReads = () => requests('home').filter(body => body.read === 'rows').length - requests('home').filter(body => body.read !== 'rows').length;
   const homeIdle = () => expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
   await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
   // The quiet check reads Home's rows once at sign-in, and only learns what waits on Ari.
@@ -356,7 +356,7 @@ test('a Home read that fails once keeps the rows it had', async () => {
   app = await launch('granola-home-fails-once');
   const rows = app.page.getByTestId('need-row');
   // Home's own reads: the quiet check's (rows only) are not Home's.
-  const homeReads = () => requests('home').filter(body => body.rows_only !== true).length;
+  const homeReads = () => requests('home').filter(body => body.read !== 'rows').length;
   await expect(rows.filter({ hasText: 'ECHO-12' })).toBeVisible();
   await expect(rows).toHaveCount(1);
   // Home is read again on coming forward once the project list is in.
@@ -386,7 +386,7 @@ test('an approved meeting counts its follow-ups by status, and its project count
   const meeting = page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' });
   await expect(meeting.getByTestId('item-follow-ups')).toHaveText('4 follow-ups');
   // Counting opened nothing: every items read so far asked for the project's counts only.
-  const itemReads = () => requests('items').map(body => ({ scope: body.scope, counts: body.summary_only === true, ...(body.summary_only === true ? {} : { rows: body.rows_only === true }) }));
+  const itemReads = () => requests('items').map(body => ({ scope: body.scope, counts: body.read === 'counts', ...(body.read === 'counts' ? {} : { rows: body.read === 'rows' }) }));
   expect(itemReads().every(read => read.scope === 'project' && read.counts)).toBe(true);
   await meeting.click();
   const impact = page.getByTestId('impact-line');
@@ -514,7 +514,7 @@ test('Home sweeps by itself, and the Follow-ups page lists everything you sent o
   await expect(row(open, 'ECHO-12')).toContainText('Jira ticket · Pilot planning · matches now');
   // Rows only, current work and then closed; then current work read live (yours keeps its closed groups closed).
   expect(listReads()).toEqual(['unsent+open', 'done+not_relevant', 'unsent+open live']);
-  expect(requests('items').filter(body => body.summary_only !== true).every(body => body.scope === 'mine')).toBe(true);
+  expect(requests('items').filter(body => body.read !== 'counts').every(body => body.scope === 'mine')).toBe(true);
   await expect(list.getByRole('checkbox')).toHaveCount(0);
   // Back is Home, read again; no second sweep was asked for.
   await page.getByTestId('back').click();

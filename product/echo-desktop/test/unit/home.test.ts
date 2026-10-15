@@ -108,7 +108,7 @@ const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolv
  * The runs requests sent, but for Home's rows-only reads: the quiet check's (notify.test.ts), and Home's own, each sent beside a
  * full read of Home, which counts it.
  */
-const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.rows_only === true));
+const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows'));
 const operations = () => homeCalls().map(([, params]) => params.request.operation);
 /** The runs requests sent with one operation, as sent. */
 const requests = (operation: string) => homeCalls().filter(([, params]) => params.request.operation === operation).map(([, params]) => params.request);
@@ -156,8 +156,8 @@ beforeEach(() => {
   holdSetState = false;
   answerSetState = [];
   rpc.mockReset();
-  rpc.mockImplementation(async (method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; item_id?: string; state?: string; rows_only?: true;
-    summary_only?: true; states?: readonly string[]; cursor?: string; scope?: string; id?: string } }) => {
+  rpc.mockImplementation(async (method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; item_id?: string; state?: string; read?: 'rows' | 'counts';
+    states?: readonly string[]; cursor?: string; scope?: string; id?: string } }) => {
     const ok = (value: unknown) => ({ ok: true, value });
     const unavailable = { ok: false, failure: { code: 'unavailable', retryable: true } };
     switch (method) {
@@ -190,11 +190,11 @@ beforeEach(() => {
           return ok({ runs: [...(sweep ? [{ ...sweep }] : []), ...(run ? [{ ...run }] : [])] });
         }
         if (params.request?.operation === 'home') {
-          if (params.request.rows_only) {
+          if (params.request.read === 'rows') {
             // Home's own rows-only read comes right after its full read and goes as the test says; the quiet check reads what Home
             // holds, and is never held or failed with Home's reads.
             const before = rpc.mock.calls.at(-2);
-            if (before?.[0] !== 'runs' || before[1].request?.operation !== 'home' || before[1].request.rows_only) return ok(rowsOf(home));
+            if (before?.[0] !== 'runs' || before[1].request?.operation !== 'home' || before[1].request.read === 'rows') return ok(rowsOf(home));
             const paired = pairedRows;
             pairedRows = null;
             if (paired === 'fails') return unavailable;
@@ -244,9 +244,9 @@ beforeEach(() => {
         }
         if (params.request?.operation === 'items') {
           if (failItems > 0) { failItems -= 1; return unavailable; }
-          if (failLiveItems > 0 && !params.request.rows_only && !params.request.summary_only) { failLiveItems -= 1; return unavailable; }
+          if (failLiveItems > 0 && params.request.read === undefined) { failLiveItems -= 1; return unavailable; }
           // A live read held answers what the page held when it was asked.
-          if (!params.request.rows_only && !params.request.summary_only && holdLive) {
+          if (params.request.read === undefined && holdLive) {
             const answer = itemsAnswer(params.request);
             return new Promise(resolve => { answerLive.push(() => resolve(answer)); });
           }
@@ -268,15 +268,15 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals()
  * rows (scope run) are its rows, with the one item read now (`readItem`) in place of its row, and without it once it is gone.
  * Rows only: nothing read live, so no row says what it says now.
  */
-function itemsAnswer(request: { states?: readonly string[]; cursor?: string; summary_only?: true; rows_only?: true; scope?: string; id?: string }) {
+function itemsAnswer(request: { states?: readonly string[]; cursor?: string; read?: 'rows' | 'counts'; scope?: string; id?: string }) {
   const answer: OpenItemsView = page ?? { items: [{ ...item('5'), state: 'unsent', sent_at: null, state_set_at: null, waits_on: 'approver' }], next_cursor: null, stages: [],
     summary: { unsent: 1, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [] } };
-  const { states, cursor, summary_only, rows_only, scope, id } = request;
+  const { states, cursor, read, scope, id } = request;
   const scoped = scope !== 'run' ? answer.items
     : [...answer.items.filter(entry => entry.item_id !== readItem?.item_id), ...(readItem ? [readItem] : [])]
       .filter(entry => entry.run_id === id && !(itemGone && entry.item_id === readItem?.item_id));
-  const listed = (summary_only ? [] : states ? scoped.filter(entry => states.includes(entry.state)) : scoped)
-    .map(entry => (rows_only ? (({ current: _current, ...rest }) => ({ ...rest, reach: 'not_read' as const }))(entry) : entry));
+  const listed = (read === 'counts' ? [] : states ? scoped.filter(entry => states.includes(entry.state)) : scoped)
+    .map(entry => (read === 'rows' ? (({ current: _current, ...rest }) => ({ ...rest, reach: 'not_read' as const }))(entry) : entry));
   const from = cursor === undefined ? 0 : Number(cursor.slice(1));
   const size = pageSize ?? Math.max(listed.length, 1);
   return { ok: true, value: { ...answer, items: listed.slice(from, from + size), next_cursor: from + size < listed.length ? `c${from + size}` : null } };
@@ -489,7 +489,7 @@ describe('Home decisions and impact checks', () => {
     // Its follow-ups, counted by its check for the page's line; its card is never asked for.
     expect(operations()).not.toContain('view');
     expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: run.run_id, loading: false, summary: { unsent: 1 } });
-    expect(requests('items').at(-1)).toEqual({ schema_version: 1, operation: 'items', scope: 'run', id: run.run_id, summary_only: true });
+    expect(requests('items').at(-1)).toEqual({ schema_version: 1, operation: 'items', scope: 'run', id: run.run_id, read: 'counts' });
   });
 
   it('keeps polling, more slowly, after a temporary runs-list failure', async () => {
@@ -863,15 +863,15 @@ describe('Follow-up lists and item pages', () => {
     expect(list(store)).toMatchObject({ kind: 'list', scope: 'record', id: record, title: 'Pilot planning', loading: false });
     expect(list(store).ticks).toEqual({ itm_00000001: true, itm_00000002: true });
     // Current work first, rows only; with no next page, the closed part; then what shows, read live (nothing closed here).
-    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'record', id: record, states: ['unsent', 'open'], rows_only: true },
-      { schema_version: 1, operation: 'items', scope: 'record', id: record, states: ['done', 'not_relevant'], rows_only: true },
+    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'record', id: record, states: ['unsent', 'open'], read: 'rows' },
+      { schema_version: 1, operation: 'items', scope: 'record', id: record, states: ['done', 'not_relevant'], read: 'rows' },
       { schema_version: 1, operation: 'items', scope: 'record', id: record, states: ['unsent', 'open'] }]);
     // The Follow-ups page: yours, every status, nothing ticked.
     await store.openYourFollowUps();
     expect(store.getState().route).toEqual({ page: 'follow-ups' });
     expect(list(store)).toMatchObject({ scope: 'mine', ticks: {} });
-    expect(requests('items').slice(-3)).toEqual([{ schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'], rows_only: true },
-      { schema_version: 1, operation: 'items', scope: 'mine', states: ['done', 'not_relevant'], rows_only: true },
+    expect(requests('items').slice(-3)).toEqual([{ schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'], read: 'rows' },
+      { schema_version: 1, operation: 'items', scope: 'mine', states: ['done', 'not_relevant'], read: 'rows' },
       { schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'] }]);
     // Back from it is Home.
     store.closeFollowUp();
@@ -932,7 +932,7 @@ describe('Follow-up lists and item pages', () => {
     await store.sendTicked(true);
     expect(said(store)).toEqual({ words: 'That changed meanwhile.', error: true });
     // The list read again rows only, both parts as far as they showed: a change reads nothing live.
-    expect(requests('items').slice(reads).map(request => request.rows_only)).toEqual([true, true]);
+    expect(requests('items').slice(reads).map(request => request.read)).toEqual(['rows', 'rows']);
     expect(requests('item')).toEqual([]);
     await flush();
     expect(statusReads()).toBe(before);
@@ -1017,7 +1017,7 @@ describe('Follow-up lists and item pages', () => {
     store.closeFollowUp();
     await flush();
     // The item read again among its check's rows; then, back on the list, both its parts as far as they showed: all rows only.
-    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.rows_only ? 'rows' : 'live'}`)).toEqual(['run rows', 'record rows', 'record rows']);
+    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.read === 'rows' ? 'rows' : 'live'}`)).toEqual(['run rows', 'record rows', 'record rows']);
     expect(store.followUpShown()).toMatchObject({ kind: 'list', said: null, stale: false });
     // Back from a page where nothing changed reads nothing again.
     await store.openFollowUp('itm_00000002', item('2'));
@@ -1042,7 +1042,7 @@ describe('Follow-up lists and item pages', () => {
     expect(said(store)).toEqual({ words: 'Owner changed to Rafael' });
     // The row moved in place as the list was read again, rows only: nothing read live, no item read on its own.
     expect(list(store).items[0]?.owner.name).toBe('Rafael Moreno');
-    expect(requests('items').slice(opened).map(request => request.rows_only === true)).toEqual([true, true]);
+    expect(requests('items').slice(opened).map(request => request.read === 'rows')).toEqual([true, true]);
     expect(requests('item')).toEqual([]);
     // A reply that was lost: the rows read again say whether it went.
     assignFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
@@ -1088,8 +1088,8 @@ describe('Follow-up lists: current work first, results in place', () => {
   const said = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown()?.said;
   const ids = (store: Awaited<ReturnType<typeof start>>) => list(store).items.map(entry => entry.item_id.slice(-1));
   /** The list's reads: rows only, or live (" live"), by states and cursor; never a line's counts or a check's rows. */
-  const reads = () => requests('items').filter(request => request.summary_only !== true && request.scope !== 'run')
-    .map(request => `${(request.states as string[]).join('+')}${request.cursor ? ` ${request.cursor}` : ''}${request.rows_only ? '' : ' live'}`);
+  const reads = () => requests('items').filter(request => request.read !== 'counts' && request.scope !== 'run')
+    .map(request => `${(request.states as string[]).join('+')}${request.cursor ? ` ${request.cursor}` : ''}${request.read === 'rows' ? '' : ' live'}`);
   const done = (id: string): OpenItemView => ({ ...item(id), state: 'done', state_set_at: '2026-10-08T12:00:00.000Z' });
   const other = 'run_00000000-0000-4000-8000-000000000021';
 
@@ -1163,7 +1163,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(list(store).items.find(entry => entry.item_id === 'itm_00000001')?.state).toBe('open');
     // Read again in place: the list's rows, rows only, which settle it; no item read on its own, nothing read live.
     expect(requests('item')).toEqual([]);
-    expect(requests('items').slice(-2).map(request => request.rows_only)).toEqual([true, true]);
+    expect(requests('items').slice(-2).map(request => request.read)).toEqual(['rows', 'rows']);
   });
 
   it('stops sending once the list closes, and says what went and what did not when only some did', async () => {
@@ -1297,7 +1297,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     await store.pickFollowUpOwner(RAFAEL);
     expect(said(store)).toEqual({ words: 'Owner changed to Rafael · You no longer see it' });
     expect(ids(store)).toEqual(['3']);
-    expect(requests('items').at(-1)).toMatchObject({ scope: 'run', id: item('2').run_id, rows_only: true });
+    expect(requests('items').at(-1)).toMatchObject({ scope: 'run', id: item('2').run_id, read: 'rows' });
   });
 
   it('clears what Check now said when the list is read again, and keeps a project\'s line through a failed read', async () => {
@@ -1475,8 +1475,8 @@ describe('Rows first, then what each says now', () => {
     done: items.filter(entry => entry.state === 'done').length, not_relevant: items.filter(entry => entry.state === 'not_relevant').length } });
   const list = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown() as FollowUpList;
   const shownPage = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown() as ItemPage;
-  const reads = () => requests('items').filter(request => request.summary_only !== true && request.scope !== 'run')
-    .map(request => `${(request.states as string[]).join('+')}${request.cursor ? ` ${request.cursor}` : ''}${request.rows_only ? '' : ' live'}`);
+  const reads = () => requests('items').filter(request => request.read !== 'counts' && request.scope !== 'run')
+    .map(request => `${(request.states as string[]).join('+')}${request.cursor ? ` ${request.cursor}` : ''}${request.read === 'rows' ? '' : ' live'}`);
   const closedAs = (state: 'done' | 'not_relevant') => (id: string): OpenItemView => opened(id, { state, state_set_at: '2026-10-08T12:00:00.000Z' });
   const unsentOpened = (id: string): OpenItemView => ({ ...unsent(id), reach: 'opened', current: { source: ticket, says_now: `Says ${id}` } });
 
@@ -1565,7 +1565,7 @@ describe('Rows first, then what each says now', () => {
     expect(requests('start')).toEqual([]);
     const calls = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls.slice(calls).filter(([method, params]) => method === 'runs' && params.request.rows_only !== true)).toEqual([]);
+    expect(rpc.mock.calls.slice(calls).filter(([method, params]) => method === 'runs' && params.request.read !== 'rows')).toEqual([]);
     // Try again: the tools answer, and the queued check starts.
     failTools = false;
     await store.loadHome();
@@ -1676,7 +1676,7 @@ describe('Rows first, then what each says now', () => {
     await store.setFollowUpState('done');
     // One rows-only read of its check's rows: the item is done, and still says what it said.
     expect(requests('item')).toHaveLength(1);
-    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'run', id: item('1').run_id, rows_only: true }]);
+    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'run', id: item('1').run_id, read: 'rows' }]);
     expect(shownPage(store)).toMatchObject({ busy: false, said: { words: 'Done', undo: true },
       item: { state: 'done', state_set_at: '2026-10-09T12:00:00.000Z', reach: 'opened', current: { says_now: 'Says 1' } } });
   });
