@@ -333,16 +333,23 @@ describe('open items written when an impact check finishes', () => {
     expect(actions.get('act-4')).toMatchObject({ expected: 'Order spare fans', owner_membership_id: f.membership('ari'), owner_match: 'approver' });
   });
 
-  it('makes at most twenty meeting actions into follow-ups, the first ones in the brief', async () => {
-    const f = await openItemsFixture({ meetingActions: Array.from({ length: 25 }, (_, at) => ({ signal_id: `act-${String(at).padStart(2, '0')}`, text: `Action ${at}`, owner: null })) });
+  it('makes at most twenty meeting actions into follow-ups, the first ones in the brief that have a line', async () => {
+    // Three actions with no printable text first: they make nothing, and so take none of the twenty.
+    const f = await openItemsFixture({ meetingActions: Array.from({ length: 25 }, (_, at) => ({ signal_id: `act-${String(at).padStart(2, '0')}`, text: at < 3 ? ' \u0007 ' : `Action ${at}`, owner: null })) });
     await f.finishImpactRun();
     const signals = f.items.forRun(f.runId).filter(item => item.pointer.kind === 'meeting_action').map(item => item.pointer.signal_id as string).sort();
-    expect(signals).toEqual(Array.from({ length: 20 }, (_, at) => `act-${String(at).padStart(2, '0')}`));
+    expect(signals).toEqual(Array.from({ length: 20 }, (_, at) => `act-${String(at + 3).padStart(2, '0')}`));
   });
 
   it('never makes the approved meeting\'s own record a follow-up of itself', async () => {
     const f = await openItemsFixture({ ownRecordAffected: true });
     await f.finishImpactRun();
+    // The card the run stored does carry a needs-updating row on another atom of the meeting's own record.
+    const stored = readStoredImpactCardV1(f.runs.read(f.person, f.runId)!.result_json!);
+    const cited = (row: { readonly citation_index: number }) => stored.citations[row.citation_index] as { readonly kind: string; readonly record_sha256?: string; readonly atom_id?: string };
+    const own = stored.affected.filter(row => cited(row).kind === 'approved_record' && cited(row).record_sha256 === f.record);
+    expect(own).toMatchObject([{ relation: 'needs_updating', expected: 'vendor gets the plan' }]);
+    expect(cited(own[0]!).atom_id).not.toBe(f.decisionCitation.atom_id);
     const records = f.items.forRun(f.runId).filter(item => item.pointer.kind === 'approved_record');
     // Only the other decision's action: the card's row on the meeting's own record makes none.
     expect(records.map(item => item.pointer.record_sha256)).toEqual([f.card.pointers.rollout.record_sha256]);

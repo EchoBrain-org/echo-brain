@@ -90,11 +90,12 @@ interface ItemCandidateV1 {
  * needs updating or was not assessed, never one that confirms, never the
  * meeting's own record, and one per item however often the card cites it.
  * The card's owner name comes from the item's own details. Then one per
- * action the approved meeting decided, in brief order and at most
- * `PERSON_RUN_MEETING_ACTIONS_MAX_V1` of them (the rest stay in the record
- * only): it needs doing, its expected line is the action's own text on one
- * line of at most 120 characters (an action with no printable text makes
- * none), and its owner name is the one the approver confirmed.
+ * action the approved meeting decided, in brief order: it needs doing, its
+ * expected line is the action's own text on one line of at most 120
+ * characters, and its owner name is the one the approver confirmed. An
+ * action with no printable text makes none and takes no place under the cap:
+ * at most `PERSON_RUN_MEETING_ACTIONS_MAX_V1` actions with a line, the first
+ * ones (the rest stay in the record only).
  */
 function itemCandidates(record_sha256: Sha256Digest, card: PersonImpactCardV1, stored: StoredImpactCardV1, actions: readonly PersonRecordActionV1[]): readonly ItemCandidateV1[] {
   const seen = new Set<Sha256Digest>();
@@ -116,14 +117,16 @@ function itemCandidates(record_sha256: Sha256Digest, card: PersonImpactCardV1, s
     const expected = relation === null ? undefined : stored.affected[index]?.expected;
     return [{ item_key, pointer, relation, expected: expected ?? null, ...(row.owner === undefined ? {} : { owner_name: row.owner }) }];
   });
-  const decided = actions.slice(0, PERSON_RUN_MEETING_ACTIONS_MAX_V1).flatMap((action): ItemCandidateV1[] => {
-    const expected = impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars);
-    if (expected === '') return [];
-    const pointer = Object.freeze({ kind: 'meeting_action', record_sha256, signal_id: action.signal_id });
-    const item_key = fresh(pointer);
-    if (item_key === undefined) return [];
-    return [{ item_key, pointer, relation: 'needs_updating', expected, ...(action.owner === null ? {} : { owner_name: action.owner }) }];
-  });
+  const decided = actions
+    .map(action => ({ action, expected: impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars) }))
+    .filter(({ expected }) => expected !== '')
+    .slice(0, PERSON_RUN_MEETING_ACTIONS_MAX_V1)
+    .flatMap(({ action, expected }): ItemCandidateV1[] => {
+      const pointer = Object.freeze({ kind: 'meeting_action', record_sha256, signal_id: action.signal_id });
+      const item_key = fresh(pointer);
+      if (item_key === undefined) return [];
+      return [{ item_key, pointer, relation: 'needs_updating', expected, ...(action.owner === null ? {} : { owner_name: action.owner }) }];
+    });
   return [...affected, ...decided];
 }
 
@@ -145,7 +148,8 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   const checkImpact = async (row: TriggerRunRowV1, token: string, research: (scope: DeskScope) => Promise<RunResearch>, signal: AbortSignal): Promise<RunOutput> => {
     const record_sha256 = impactRecord(row);
     const anchor = options.records.recordAnchor({ access_token: token, record_sha256 });
-    // The meeting's own actions, read as the approver before any model call: a record they cannot read fails the run as no_access.
+    // The meeting's own actions, read as the approver before any model call (`recordAnchor` has already refused a record they
+    // cannot read, which fails the run as no_access).
     const actions = options.records.recordActions({ access_token: token, record_sha256 });
     const run = await research(scopeFor(options.records, token, record_sha256));
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;

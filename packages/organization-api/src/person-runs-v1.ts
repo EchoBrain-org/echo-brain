@@ -18,17 +18,18 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  *
  * Open items (open items and Home v1, section 7; ADR-0033) are the items a
  * finished impact run found, one shared row each: the approved meeting's own
- * actions (follow-ups thread v1) and the existing items the meeting affects. `home` lists what waits on
- * the caller, `items` and `item` show the rows the caller can see, and `send`,
- * `set_state` and `assign` change them. A row's own fields are ECHO's: its
- * decision is shown only to a viewer who can read it, and what the item says
- * now only to a viewer who opened it in its tool in this request. Each row
- * says how that live read went (`reach`), so an outage is never shown as lost
- * access. `items` with `summary_only` answers the counts and stages alone and
- * opens nothing; with `open_only` it pages over the open items only, so
- * closed ones are never opened to be thrown away. Each decision's counts say
- * how many of its open items last landed or could not be read, and its stage
- * says whether its impact run is the caller's own (`mine`).
+ * actions (follow-ups thread v1) and the existing items the meeting affects.
+ * `home` lists what waits on the caller, `items` and `item` show the rows the
+ * caller can see, and `send`, `set_state` and `assign` change them. A row's
+ * own fields are ECHO's: its decision is shown only to a viewer who can read
+ * it, and what the item says now only to a viewer who opened it in its tool
+ * in this request. Each row says how that live read went (`reach`), so an
+ * outage is never shown as lost access. `items` with `summary_only` answers
+ * the counts and stages alone and opens nothing; with `open_only` it pages
+ * over the open items only, so closed ones are never opened to be thrown
+ * away. Each decision's counts say how many of its open items last landed or
+ * could not be read, and its stage says whether its impact run is the
+ * caller's own (`mine`).
  *
  * Sweep (open items and Home v1, sections 6 and 7) rechecks open items
  * against what was decided and keeps only a verdict per item. `sweep` asks for
@@ -196,8 +197,8 @@ export const PERSON_OPEN_ITEMS_PAGE_V1 = 50;
 /** The most Send rows, and the most item rows, one `home` returns. */
 export const PERSON_HOME_ROWS_V1 = 20;
 /**
- * The most meeting actions one impact run makes into items: the first ones in brief order. An approved meeting with more
- * actions than this has the rest only in its record.
+ * The most meeting actions one impact run makes into items: the first ones in brief order that have text (an action with
+ * none makes no item and takes no place). An approved meeting with more actions than this has the rest only in its record.
  */
 export const PERSON_RUN_MEETING_ACTIONS_MAX_V1 = 20;
 /** The most items one impact run makes: one per affected row of its card, and one per meeting action up to the cap. */
