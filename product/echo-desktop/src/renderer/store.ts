@@ -7,16 +7,16 @@ import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   Extraction, Failure, FileHandle, HomeView, ImpactView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
-  ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt, ExternalAnswerSource,
-  UpdateState,
+  MainMethods, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
+  ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { isWriteCall, MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
+import { isWriteCall, MAX_CAPTURE_PROJECTS, NOTICE_ITEMS_MAX, NOTICE_TEXT_MAX } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import { message } from './messages.js';
-import { sentWords } from './needs.js';
+import { firstName, sentWords } from './needs.js';
 
 /** Mine: only what you added, to see and to ask about. Follow-ups: Your follow-ups, everything you sent or own. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision' }
@@ -608,6 +608,8 @@ function applyStatus(status: AppStatus): void {
   if (!next) {
     // A sign-out the host lost mid-way did happen: the account goes as it would have.
     if (signOutPending) { signOutPending = null; forgetAccount(); }
+    // No one to notify: signing in again starts over, learning what is there.
+    stopQuietCheck();
     emptyBar();
     // New project with work on its way stays, out of sight behind the sign-in page: its outcome is still owed, and the
     // same person signing back in finds it as it is. Another account's sign-in forgets it.
@@ -631,6 +633,7 @@ function applyStatus(status: AppStatus): void {
   signOutPending = null;
   if (!same || !wasSignedIn) {
     void loadProjects(); void loadArchivedProjects(); void loadHome();
+    startQuietCheck(lastAccount);
     // New project kept through a sign-out goes on with what waited while no one was signed in.
     pumpNewProject();
   }
@@ -646,6 +649,7 @@ function forgetAccount(): void {
   if (state.sheet?.kind === 'tool-connect') cancelWaitingConnection(state.sheet, account);
   if (state.projectSettings?.tools) clearProjectMappings(state.projectSettings, account);
   stopRunPolling();
+  stopQuietCheck();
   runFailures = 0;
   openUnread = false;
   resultOwed = false;
@@ -4506,9 +4510,12 @@ export function openFollowUps(scope: 'record' | 'project', id: string, title: st
   return readList(list.seq, 'first');
 }
 
-/** Your follow-ups, from the sidebar or Home's footer: everything you sent or own, as a page of its own. The bar searches all context. */
-export function openYourFollowUps(): Promise<void> {
-  if (!expect() || state.concealed) return Promise.resolve();
+/**
+ * Your follow-ups, from the sidebar or Home's footer: everything you sent or own, as a page of its own. The bar searches all
+ * context. A notification's (`fromNotice`) comes while another app may still be in front.
+ */
+export function openYourFollowUps(fromNotice = false): Promise<void> {
+  if (!expect() || (state.concealed && !fromNotice)) return Promise.resolve();
   readSeq += 1;
   const route: Route = { page: 'follow-ups' };
   const list = newList('mine', undefined, null);
@@ -4630,11 +4637,12 @@ export async function sendTicked(include: boolean): Promise<void> {
 
 /**
  * A follow-up's page (F5), over the page on screen: from any row, with the
- * row's copy at once, then read again; or by its id alone (a notification).
- * Back returns to where it was opened.
+ * row's copy at once, then read again; or by its id alone (a notification,
+ * `fromNotice`, while another app may still be in front). Back returns to
+ * where it was opened.
  */
-export function openFollowUp(item_id: string, shown: OpenItemView | null = null): Promise<void> {
-  if (!expect() || state.concealed) return Promise.resolve();
+export function openFollowUp(item_id: string, shown: OpenItemView | null = null, fromNotice = false): Promise<void> {
+  if (!expect() || (state.concealed && !fromNotice)) return Promise.resolve();
   const page: ItemPage = { kind: 'item', seq: ++seq, item_id, item: shown, loading: true, send: null, ...UNCHANGED };
   pushView(page);
   return readItem(page.seq).then(() => undefined);
@@ -4931,4 +4939,114 @@ async function followSweep(runId: string, ours: () => boolean): Promise<'done' |
       lastFailure = undefined;
     }
   }
+}
+
+// ---- notifications: follow-ups that newly wait on you (F8) ---------------------------------
+
+/** How often the quiet check reads Home's rows while someone is signed in. */
+const QUIET_CHECK_MS = 5 * 60_000;
+/** The quiet check's next read, and its turn: bumped whenever it stops, so a reply for an earlier turn is dropped. */
+let quietTimer: ReturnType<typeof setTimeout> | null = null;
+let quietSeq = 0;
+/** The account checked, and the follow-ups seen waiting on it: `ids` is null until its first check succeeds. */
+let quietSeen: { account: Expect; ids: ReadonlySet<string> | null } | null = null;
+
+/**
+ * Who last made an item wait on its owner: whoever picked the owner after
+ * its state was last set, else whoever set that state (the approver's Send,
+ * or a Reopen), else its approver.
+ */
+function handedBy(item: OpenItemView): OpenItemView['approver'] {
+  const at = (value: string | null) => (value === null ? null : Date.parse(value));
+  const owned = at(item.owner_set_at);
+  const stated = at(item.state_set_at);
+  if (item.owner_set_by && owned !== null && (stated === null || owned > stated)) return item.owner_set_by;
+  return item.state_set_by ?? item.approver;
+}
+
+/**
+ * What one quiet check found: every follow-up seen waiting on you so far
+ * (open, and yours), and those to tell you of, new since the last check. The
+ * first check after sign-in (`seen` null) only learns what is there. An item
+ * given to you since is new, as its id was not yours before; one you made
+ * yours yourself (Keep it myself, picking yourself) is seen, never told.
+ */
+export function newFollowUps(seen: ReadonlySet<string> | null, items: readonly OpenItemView[], me: string): { seen: Set<string>; fresh: OpenItemView[] } {
+  const waiting = items.filter(item => item.state === 'open' && item.owner.membership_id === me);
+  const fresh = seen === null ? [] : waiting.filter(item => !seen.has(item.item_id) && handedBy(item).membership_id !== me);
+  return { seen: new Set([...(seen ?? []), ...waiting.map(item => item.item_id)]), fresh };
+}
+
+/** One line of a notification, cut to what main takes. */
+function noticeLine(text: string): string {
+  const chars = [...text.replace(/\p{Cc}+/gu, ' ').trim()];
+  return chars.length <= NOTICE_TEXT_MAX ? chars.join('') : `${chars.slice(0, NOTICE_TEXT_MAX - 1).join('')}…`;
+}
+
+/**
+ * The notification for follow-ups new to you, or null for none. One says who
+ * sent it, by first name, and what it is: an action's own words, else its
+ * decision's title when you can read it, else "a follow-up". Several are
+ * counted.
+ */
+export function followUpsNotice(fresh: readonly OpenItemView[]): MainMethods['notify.followUps']['params'] | null {
+  const ids = [...new Set(fresh.map(item => item.item_id))].slice(0, NOTICE_ITEMS_MAX);
+  if (ids.length !== 1) return ids.length === 0 ? null : { item_ids: ids };
+  const item = fresh[0]!;
+  const title = item.kind === 'action' && item.expected ? item.expected : item.decision?.title ?? 'a follow-up';
+  return { item_ids: ids, from: noticeLine(firstName(handedBy(item).name)), title: noticeLine(title) };
+}
+
+/** Signed in, or as another account: the quiet check starts over for it at once, then goes every five minutes, whatever the page. */
+function startQuietCheck(account: Expect): void {
+  stopQuietCheck();
+  quietSeen = { account, ids: null };
+  void quietCheck(quietSeq);
+}
+
+/** Signed out, or the account forgotten: no more checks, and what they saw goes. */
+function stopQuietCheck(): void {
+  quietSeq += 1;
+  if (quietTimer) clearTimeout(quietTimer);
+  quietTimer = null;
+  quietSeen = null;
+}
+
+/**
+ * One quiet check (F8): Home's rows only (no live read, never a sweep due),
+ * so it starts no sweep or run, and Home shows nothing of it. What newly
+ * waits on you is told in one notification, except an item whose page is open
+ * now. A read that fails is tried again on the next turn; a reply for an
+ * account no longer signed in is dropped.
+ */
+async function quietCheck(mine: number): Promise<void> {
+  const watched = quietSeen;
+  if (mine !== quietSeq || !watched) return;
+  const result = await rpc('runs', { expect: watched.account, request: { schema_version: 1, operation: 'home', rows_only: true } });
+  if (mine !== quietSeq || !sameAccount(watched.account)) return;
+  if (result.ok) {
+    const { seen, fresh } = newFollowUps(watched.ids, (result.value as HomeView).items, watched.account.membership_id);
+    quietSeen = { account: watched.account, ids: seen };
+    const open = followUpShown();
+    const notice = followUpsNotice(fresh.filter(item => open?.kind !== 'item' || open.item_id !== item.item_id));
+    if (notice) void rpc('notify.followUps', notice);
+  }
+  quietTimer = setTimeout(() => { quietTimer = null; void quietCheck(mine); }, QUIET_CHECK_MS);
+}
+
+/**
+ * A follow-ups notification was clicked, and the window comes forward: the
+ * item's page over the page on screen, or Your follow-ups for several. Only
+ * an item this account's check saw wait on it opens, so one told before a
+ * sign-out or a switch opens nothing. Capture, a sheet or a dialog that is up
+ * stays, as for the tray.
+ */
+export function openNotified(item_id: string | undefined): void {
+  if (!expect() || (state.compose && !state.compose.hidden) || newProjectInTheWay() || state.sheet || projectSettingsModal()) return;
+  if (item_id === undefined) { void openYourFollowUps(true); return; }
+  const watched = quietSeen;
+  if (!watched?.ids?.has(item_id) || !sameAccount(watched.account)) return;
+  const shown = followUpShown();
+  if (shown?.kind === 'item' && shown.item_id === item_id) void readItem(shown.seq);
+  else void openFollowUp(item_id, null, true);
 }

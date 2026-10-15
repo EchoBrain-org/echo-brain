@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hostGoneFailure, isWriteCall, remoteDebuggingRequested } from '../../src/shared/protocol.js';
+import { followUpsNotification, hostGoneFailure, isWriteCall, MAIN_METHODS, remoteDebuggingRequested } from '../../src/shared/protocol.js';
 
 describe('remote debugging refusal', () => {
   const none = () => false;
@@ -45,5 +45,37 @@ describe('a call no host answered', () => {
     expect(isWriteCall('runs', { request: { operation: 'send' } })).toBe(true);
     expect(isWriteCall('runs', { request: null })).toBe(true);
     expect(isWriteCall('projects.list', {})).toBe(false);
+  });
+});
+
+describe('a follow-ups notification', () => {
+  const id = (n: number) => `itm_00000000-0000-4000-8000-00000000000${n}`;
+
+  it('is a method main answers', () => {
+    expect(MAIN_METHODS).toContain('notify.followUps');
+  });
+
+  it('says who sent one follow-up and what it is, and counts several', () => {
+    expect(followUpsNotification({ item_ids: [id(1)], from: 'Mina', title: 'Update the pricing page' }))
+      .toEqual({ body: 'Mina sent you: Update the pricing page', item_id: id(1) });
+    expect(followUpsNotification({ item_ids: [id(1), id(2), id(3)] })).toEqual({ body: '3 new follow-ups', item_id: null });
+    expect(followUpsNotification({ item_ids: [id(1)], from: 'x'.repeat(200), title: '😀'.repeat(200) })).not.toBeNull();
+  });
+
+  it.each([
+    ['nothing', null],
+    ['no items', { item_ids: [] }],
+    ['an id not an item\'s', { item_ids: ['../etc/passwd'], from: 'Mina', title: 'Hi' }],
+    ['the same item twice', { item_ids: [id(1), id(1)] }],
+    ['more than 50 items', { item_ids: Array.from({ length: 51 }, (_, n) => `itm_0000-${String(n).padStart(4, '0')}`) }],
+    ['one item without who sent it', { item_ids: [id(1)], title: 'Hi' }],
+    ['one item with an empty title', { item_ids: [id(1)], from: 'Mina', title: '  ' }],
+    ['a title over 200 characters', { item_ids: [id(1)], from: 'Mina', title: 'x'.repeat(201) }],
+    ['a line break', { item_ids: [id(1)], from: 'Mina', title: 'Hi\nthere' }],
+    ['several with a title', { item_ids: [id(1), id(2)], title: 'Hi' }],
+    ['a key it does not take', { item_ids: [id(1)], from: 'Mina', title: 'Hi', url: 'https://example.com' }],
+    ['a name that is not text', { item_ids: [id(1)], from: 7, title: 'Hi' }],
+  ])('refuses %s', (_name, params) => {
+    expect(followUpsNotification(params)).toBeNull();
   });
 });

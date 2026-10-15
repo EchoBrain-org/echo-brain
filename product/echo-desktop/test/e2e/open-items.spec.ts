@@ -184,6 +184,47 @@ test('the owner opens a follow-up from Home and marks it done there', async () =
   expect(requests('set_state')).toEqual([expect.objectContaining({ item_id: 'itm_00000000-0000-4000-8000-000000000041', state: 'done' })]);
 });
 
+/** Test builds record the notifications main would show: no test puts one on the machine. */
+interface Notices { echoTestNotices?: { title: string; body: string; click(): void }[] }
+
+test('a follow-up sent to you while ECHO runs comes as a notification that opens its page', async () => {
+  app = await launch('granola-owner-later');
+  const { page } = app;
+  const notices = () => app.app.evaluate(() => ((globalThis as Notices).echoTestNotices ?? []).map(({ title, body }) => ({ title, body })));
+  const quietReads = () => requests('home').filter(body => body.rows_only === true).length;
+  await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
+  // The quiet check reads Home's rows once at sign-in, and only learns what waits on Ari.
+  await expect.poll(quietReads).toBe(1);
+  // The page starts again on a clock the test moves: its first check learns again.
+  await page.clock.install();
+  await page.reload();
+  await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
+  await expect.poll(quietReads).toBe(2);
+  // Mina sends Ari a ticket from a meeting Ari cannot read. Five minutes on, the next check tells of it.
+  writeFileSync(join(app.home, 'mina-sends'), '');
+  await page.clock.fastForward('05:00');
+  await expect.poll(quietReads).toBe(3);
+  await expect.poll(notices).toEqual([{ title: 'ECHO', body: 'Mina sent you: a follow-up' }]);
+  // The quiet check starts no sweep or run.
+  expect(requests('sweep')).toEqual([]);
+  expect(requests('start')).toEqual([]);
+  // Clicked with another app in front: its page opens over Home as ECHO comes forward.
+  await emit(app.app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await app.app.evaluate(() => { (globalThis as Notices).echoTestNotices![0]!.click(); });
+  await emit(app.app, 'echo-test:resume');
+  const item = page.getByTestId('follow-up');
+  await expect(item.getByRole('heading', { name: 'A Jira ticket you can\'t open' })).toBeVisible();
+  await expect(item.getByTestId('follow-up-history')).toContainText('Sent to you by Mina Patel');
+  expect(requests('item')).toEqual([expect.objectContaining({ item_id: 'itm_00000000-0000-4000-8000-000000000042' })]);
+  await page.getByTestId('back').click();
+  await expect(page.getByTestId('needs')).toBeVisible();
+  // Told once: the next check finds nothing new.
+  await page.clock.fastForward('05:00');
+  await expect.poll(quietReads).toBe(4);
+  expect(await notices()).toHaveLength(1);
+});
+
 test('a reader who cannot open an item sees what it is, never what it says', async () => {
   app = await launch('granola-owner');
   const { page } = app;
@@ -217,7 +258,8 @@ test('a reader who cannot open an item sees what it is, never what it says', asy
 test('a Home read that fails once keeps the rows it had', async () => {
   app = await launch('granola-home-fails-once');
   const rows = app.page.getByTestId('need-row');
-  const homeReads = () => runOperations().filter(operation => operation === 'home').length;
+  // Home's own reads: the quiet check's (rows only) are not Home's.
+  const homeReads = () => requests('home').filter(body => body.rows_only !== true).length;
   await expect(rows.filter({ hasText: 'ECHO-12' })).toBeVisible();
   await expect(rows).toHaveCount(1);
   // Home is read again on coming forward once the project list is in.

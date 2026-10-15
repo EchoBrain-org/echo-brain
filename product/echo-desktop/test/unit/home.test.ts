@@ -65,9 +65,11 @@ const sendRow = (): HomeView['send'][number] => ({ run_id: impactRun('done').run
 const emptyHome = (): HomeView => ({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
 const summary: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
-const operations = () => rpc.mock.calls.filter(([method]) => method === 'runs').map(([, params]) => params.request.operation);
+/** Home's own runs requests: the quiet check's (rows only, notify.test.ts) are not Home's. */
+const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.rows_only !== true);
+const operations = () => homeCalls().map(([, params]) => params.request.operation);
 /** The runs requests sent with one operation, as sent. */
-const requests = (operation: string) => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === operation).map(([, params]) => params.request);
+const requests = (operation: string) => homeCalls().filter(([, params]) => params.request.operation === operation).map(([, params]) => params.request);
 const project = { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' as const, created_at: '2026-10-01T00:00:00.000Z', status: 'active' as const };
 
 beforeEach(() => {
@@ -94,7 +96,7 @@ beforeEach(() => {
   holdSetState = false;
   answerSetState = [];
   rpc.mockReset();
-  rpc.mockImplementation(async (method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; state?: string } }) => {
+  rpc.mockImplementation(async (method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; state?: string; rows_only?: true } }) => {
     const ok = (value: unknown) => ({ ok: true, value });
     const unavailable = { ok: false, failure: { code: 'unavailable', retryable: true } };
     switch (method) {
@@ -105,7 +107,7 @@ beforeEach(() => {
       case 'open.ref': return unavailable;
       // A project's tools line: it reads nothing.
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
-      case 'app.setUnresolved': return ok(null);
+      case 'app.setUnresolved': case 'notify.followUps': return ok(null);
       case 'people.directory': return ok({ items: [RAFAEL], next_cursor: null });
       case 'account.tools': return ok({ tools: granola === null ? [] : [{ tool_id: 'granola', status: granola }] });
       case 'tools.meetings':
@@ -123,6 +125,8 @@ beforeEach(() => {
           return ok({ runs: [...(sweep ? [{ ...sweep }] : []), ...(run ? [{ ...run }] : [])] });
         }
         if (params.request?.operation === 'home') {
+          // The quiet check reads what Home holds, and is never held or failed with Home's reads.
+          if (params.request.rows_only) return ok(home);
           if (holdHome > 0) { holdHome -= 1; return new Promise(resolve => { held.push(() => resolve(ok(home))); }); }
           if (failNextHome) { failNextHome = false; return unavailable; }
           return ok(home);

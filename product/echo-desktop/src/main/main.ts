@@ -1,7 +1,7 @@
 // ECHO desktop main process: windows, tray, shortcuts and the IPC broker. It
 // never reads the session or holds a token; the person host does that.
 import {
-  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, protocol, session, shell,
+  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, protocol, session, shell,
   Tray, utilityProcess, type IpcMainInvokeEvent, type MenuItemConstructorOptions, type UtilityProcess,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, STATUS_METHODS,
+  externalUrl, externalSourcePermalink, followUpsNotification, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, STATUS_METHODS,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Result, type UpdateState,
 } from '../shared/protocol.js';
@@ -394,6 +394,12 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       }
       return { ok: true, value: null };
     }
+    case 'notify.followUps': {
+      const notice = followUpsNotification(params);
+      if (!notice) return refused();
+      notifyFollowUps(notice);
+      return { ok: true, value: null };
+    }
   }
   return refused();
 }
@@ -569,6 +575,37 @@ function capture(): void {
 function openOrganization(): void {
   send('organization.open', {});
   if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+}
+
+// ---- follow-ups notifications (F8) -------------------------------------------
+
+/** Notifications on screen, held so a click still reaches its handler; the oldest are let go past 20. */
+const notices = new Set<Notification>();
+/** Test builds: the notifications main would have shown, each clickable. */
+interface TestNotices { echoTestNotices?: { title: string; body: string; click: () => void }[] }
+
+/**
+ * Follow-ups that newly wait on you, as one system notification titled ECHO.
+ * A click opens its item's page, or Your follow-ups for several, then the
+ * window comes forward. Where the system has none, nothing shows.
+ */
+function notifyFollowUps({ body, item_id }: { body: string; item_id: string | null }): void {
+  const open = () => {
+    send('follow-ups.open', item_id === null ? {} : { item_id });
+    if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+  };
+  // Tests never put a notification on the machine: they read and click what would have shown.
+  if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_HIDDEN) {
+    ((globalThis as TestNotices).echoTestNotices ??= []).push({ title: 'ECHO', body, click: open });
+    return;
+  }
+  if (!Notification.isSupported()) return;
+  const notice = new Notification({ title: 'ECHO', body });
+  notice.on('click', () => { notices.delete(notice); open(); });
+  notice.on('close', () => { notices.delete(notice); });
+  notices.add(notice);
+  for (const old of notices) { if (notices.size <= 20) break; notices.delete(old); }
+  notice.show();
 }
 
 function trayImage(): Electron.NativeImage {

@@ -22,7 +22,7 @@ import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
-  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, pageCovered, projectSettingsModal, readUpdate, refreshStatus, resume, retryStart,
+  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, projectSettingsModal, readUpdate, refreshStatus, resume, retryStart,
   sheetShown, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS,
   windowShown, windowTakesDrop, type State,
 } from './store.js';
@@ -126,6 +126,7 @@ function App() {
       on('account.command', payload => accountCommand(payload.command)),
       on('organization.open', () => { if (getState().status?.signed_in) trayOrganization(); }),
       on('update.changed', updateChanged),
+      on('follow-ups.open', payload => openNotified(payload.item_id)),
     ];
     // One Escape handler for the whole window: it steps back exactly one level.
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); escape(); } };

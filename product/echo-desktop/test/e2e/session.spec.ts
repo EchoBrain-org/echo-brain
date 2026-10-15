@@ -9,12 +9,15 @@ test.afterEach(async () => { await run?.close(); });
 
 const refreshes = () => run.calls().filter(call => call.path === '/v2/session/refresh');
 
-/** Both startup lists and Home's tools read fail before sending; a known-not-sent refresh preserves the session for the next call. */
+/**
+ * Both startup lists, Home's tools read and the quiet follow-ups check fail before sending; a known-not-sent refresh
+ * preserves the session for the next call.
+ */
 async function expectOfflineStartup(): Promise<void> {
   const completedLists = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')
-    .match(/(projects\.list|account\.tools) transport_failed/g)?.length ?? 0;
-  await expect.poll(completedLists).toBe(3);
-  expect(run.calls().map(call => call.path)).toEqual(['/v2/session/refresh', '/v2/session/refresh', '/v2/session/refresh']);
+    .match(/(projects\.list|account\.tools|runs) transport_failed/g)?.length ?? 0;
+  await expect.poll(completedLists).toBe(4);
+  expect(run.calls().map(call => call.path)).toEqual(Array(4).fill('/v2/session/refresh'));
 }
 
 /** Sign in with the fixture's browser, which stands in for Google, and land on Home. */
@@ -97,7 +100,7 @@ test('an offline foreground refresh keeps you signed in, and a note is not sent 
   await emit(app, 'echo-test:resume');
   await expect.poll(statuses).toBe(before + 1);
   await expect(page.getByTestId('home-error')).toBeVisible();
-  await expect.poll(() => refreshes().length).toBe(4);
+  await expect.poll(() => refreshes().length).toBe(5);
   await expect(page.getByTestId('sidebar-projects-error').getByRole('button', { name: 'Try again' })).toBeEnabled();
   await expect(page.getByTestId('signed-out')).toHaveCount(0);
 

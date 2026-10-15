@@ -559,6 +559,11 @@ export interface MainMethods {
   'update.status': { params: Record<string, never>; result: UpdateState };
   /** New version · Restart: installs `release` (or, in state restart, relaunches), then quits. Refused while work is unresolved. */
   'update.install': { params: { release: string }; result: null };
+  /**
+   * Follow-ups that newly wait on you (F8): one system notification. One item
+   * says who sent it and what it is; several are counted. See `followUpsNotification`.
+   */
+  'notify.followUps': { params: { item_ids: readonly string[]; from?: string; title?: string }; result: null };
 }
 
 export type Methods = HostMethods & MainMethods;
@@ -574,7 +579,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
-  'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show', 'update.status', 'update.install',
+  'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show', 'update.status', 'update.install', 'notify.followUps',
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
@@ -614,6 +619,8 @@ export interface Events {
   'organization.open': Record<string, never>;
   /** What the updater shows now: a check, an install's progress, or a previous run's outcome. */
   'update.changed': UpdateState;
+  /** A follow-ups notification was clicked: the page of its one item, or Your follow-ups for several. */
+  'follow-ups.open': { item_id?: string };
 }
 export type EventName = keyof Events;
 
@@ -666,6 +673,31 @@ export const ticketPermalink = (raw: unknown): string | null => webPermalink(raw
 
 export function externalSourcePermalink(kind: unknown, raw: unknown): string | null {
   return kind === 'slack' ? slackPermalink(raw) : kind === 'ticket' ? ticketPermalink(raw) : kind === 'page' ? pagePermalink(raw) : null;
+}
+
+/** A follow-up's id, in the API's own grammar. */
+const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
+/** A name or a title a follow-ups notification shows: as long as the API lets either be, in characters. */
+export const NOTICE_TEXT_MAX = 200;
+/** The most follow-ups one notification counts: Home answers at most 20. */
+export const NOTICE_ITEMS_MAX = 50;
+
+/**
+ * A follow-ups notification (F8), as main shows it: its body, and the item a
+ * click opens (none for several, which open Your follow-ups). One item reads
+ * "Mina sent you: Update the pricing page"; several, "3 new follow-ups". Null
+ * for anything else: distinct item ids, and for one item exactly two short
+ * single lines, never more.
+ */
+export function followUpsNotification(params: unknown): { body: string; item_id: string | null } | null {
+  if (params === null || typeof params !== 'object' || Array.isArray(params)) return null;
+  const { item_ids: ids, from, title, ...rest } = params as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !Array.isArray(ids) || ids.length === 0 || ids.length > NOTICE_ITEMS_MAX) return null;
+  if (!ids.every(id => typeof id === 'string' && ITEM_ID.test(id)) || new Set(ids).size !== ids.length) return null;
+  const line = (text: unknown): text is string =>
+    typeof text === 'string' && text.trim() !== '' && [...text].length <= NOTICE_TEXT_MAX && !/\p{Cc}/u.test(text);
+  if (ids.length > 1) return from === undefined && title === undefined ? { body: `${ids.length} new follow-ups`, item_id: null } : null;
+  return line(from) && line(title) ? { body: `${from.trim()} sent you: ${title.trim()}`, item_id: ids[0] as string } : null;
 }
 
 /** Parameters larger than this are refused at the broker. */
