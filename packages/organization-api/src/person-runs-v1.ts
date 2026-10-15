@@ -49,7 +49,9 @@ export type PersonRunErrorCodeV1 = 'no_access' | 'unavailable' | 'timed_out' | '
 // `list` and `home` are separate variants so `Extract<…, { operation: 'list' }>` still names one.
 export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'list' }
-  | { readonly schema_version: 1; readonly operation: 'home' }
+  | { readonly schema_version: 1; readonly operation: 'home';
+      /** Rows only (follow-ups thread v1, F8): the same answer with no live read, so every item's reach is `not_read`. A quiet background check. */
+      readonly rows_only?: true }
   | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: PersonDiagnosticCaptureIdV1 }
   | { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }
@@ -308,15 +310,20 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const operation = request.operation;
   if (typeof operation !== 'string' || !Object.hasOwn(REQUEST_KEYS, operation)) fail('Runs request operation is invalid');
   const kind = operation as PersonRunsRequestV1['operation'];
-  // `items` may leave out its scope id and its cursor, and may ask for its counts only or its open items only; a sweep of `mine` names no id.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only', 'open_only'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
+  // `items` may leave out its scope id and its cursor, and may ask for its counts only or its open items only; a sweep of `mine` names no id;
+  // `home` may ask for its rows without live reads.
+  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only', 'open_only'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : kind === 'home' ? ['rows_only'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
   switch (kind) {
     case 'list':
-    case 'home':
       return Object.freeze({ schema_version: 1 as const, operation: kind });
+    case 'home': {
+      const rowsOnly = Object.hasOwn(request, 'rows_only');
+      if (rowsOnly && request.rows_only !== true) fail('Runs request rows_only is invalid');
+      return Object.freeze({ schema_version: 1 as const, operation: kind, ...(rowsOnly ? { rows_only: true as const } : {}) });
+    }
     case 'start':
       return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id'),
         ...(Object.hasOwn(request, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(request.capture_id) } : {}) });

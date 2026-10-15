@@ -9,7 +9,7 @@ export interface PersonTriggerRunsHttpApplicationV1 {
   start(input: { readonly access_token: string; readonly request: { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: string }; readonly signal?: AbortSignal }): Promise<PersonRunsResultsV1['start']>;
   retry(input: { readonly access_token: string; readonly request: { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }; readonly signal?: AbortSignal }): Promise<PersonRunsResultsV1['retry']>;
   view(input: { readonly access_token: string; readonly request: { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }; readonly signal?: AbortSignal }): Promise<PersonRunsResultsV1['view']>;
-  home(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<PersonRunsResultsV1['home']>;
+  home(input: Input<'home'>): Promise<PersonRunsResultsV1['home']>;
   items(input: Input<'items'>): Promise<PersonRunsResultsV1['items']>;
   item(input: Input<'item'>): Promise<PersonRunsResultsV1['item']>;
   send(input: Input<'send'>): Promise<PersonRunsResultsV1['send']>;

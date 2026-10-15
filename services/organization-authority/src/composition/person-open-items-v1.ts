@@ -405,9 +405,12 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     return reads;
   };
 
-  /** Rows the policy lets the viewer see, as the API carries them, with live parts from one open each. */
-  const present = async (viewer: Viewer, context: Context, shown: readonly Assessed[], signal?: AbortSignal): Promise<readonly PersonOpenItemV1[]> => {
-    const reads = await openLive(viewer, shown.map(entry => entry.row), signal);
+  /**
+   * Rows the policy lets the viewer see, as the API carries them, with live parts from one open each. `live: false` opens nothing
+   * and binds no desk: every row is `not_read` (Home's quiet check, F8).
+   */
+  const present = async (viewer: Viewer, context: Context, shown: readonly Assessed[], signal?: AbortSignal, live = true): Promise<readonly PersonOpenItemV1[]> => {
+    const reads = live ? await openLive(viewer, shown.map(entry => entry.row), signal) : new Map<Sha256Digest, LiveRead>();
     const decisionPart = openItemDecisionPartsV1(options, context);
     const unshowable = () => report('open', 'invalid_output');
     return Object.freeze(shown.map(entry => {
@@ -514,7 +517,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const newest = stale ? options.runs.newestSweep(actor) : undefined;
       const sweep_due = stale && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString()) && options.runs.runningSweep(actor) === undefined;
       return checked('home', {
-        send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, input.signal),
+        // Rows only: the same rows with no live read, so a background check costs no Jira or Confluence call.
+        send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, input.signal, input.request.rows_only !== true),
         landed: theirs.filter(entry => entry.row.check?.verdict === 'landed').length,
         waiting: theirs.filter(entry => approvedBy(entry.row, viewer) && !entry.access.waits_on_viewer).length,
         last_checked_at: checks.at(-1) ?? null,

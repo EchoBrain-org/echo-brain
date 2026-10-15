@@ -271,6 +271,18 @@ describe('runs API open items', () => {
     }
     for (const reach of ['denied', '', null, true]) refused(() => validatePersonRunsResultV1('item', { item: openItem({ reach }) }), `reach ${JSON.stringify(reach)}`);
   });
+  it('accepts rows_only on home only, and only as true (F8)', () => {
+    // Home's quiet check: the same rows with no live read.
+    const quiet = { schema_version: 1, operation: 'home', rows_only: true };
+    expect(validatePersonRunsRequestV1(quiet)).toEqual(quiet);
+    expect(Object.isFrozen(validatePersonRunsRequestV1(quiet))).toBe(true);
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'home' })).not.toHaveProperty('rows_only');
+    for (const rows_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...quiet, rows_only }), `rows_only ${JSON.stringify(rows_only)}`);
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'list', rows_only: true }), 'rows_only on list');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', rows_only: true }), 'rows_only on items');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, rows_only: true }), 'rows_only on one item');
+    refused(() => validatePersonRunsRequestV1({ ...quiet, summary_only: true }), 'summary_only beside rows_only');
+  });
   it('accepts open_only only as true, never with summary_only, and with a cursor', () => {
     // Open items only: Did it land? pages past closed items without opening them.
     const open = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, open_only: true };

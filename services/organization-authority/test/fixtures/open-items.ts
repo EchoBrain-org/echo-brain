@@ -232,7 +232,9 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     start: (input: Parameters<typeof runsApp.start>[0]) => runsApp.start(input).then(value => validatePersonRunsResultV1('start', value)),
     retry: (input: Parameters<typeof runsApp.retry>[0]) => runsApp.retry(input).then(value => validatePersonRunsResultV1('retry', value)),
     view: (input: Parameters<typeof runsApp.view>[0]) => runsApp.view(input).then(value => validatePersonRunsResultV1('view', value)),
-    home: checked('home', openItemsApp.home) as (input: { readonly access_token: string }) => Promise<PersonRunsResultsV1['home']>,
+    // Home's request is optional here: a plain Home read unless a test asks for rows only.
+    home: (input: { readonly access_token: string; readonly request?: Request<'home'>['request'] }) =>
+      checked('home', openItemsApp.home)({ request: { schema_version: 1, operation: 'home' }, ...input }),
     items: checked('items', openItemsApp.items) as (input: Request<'items'>) => Promise<PersonRunsResultsV1['items']>,
     item: checked('item', openItemsApp.item) as (input: Request<'item'>) => Promise<PersonRunsResultsV1['item']>,
     send: checked('send', openItemsApp.send) as (input: Request<'send'>) => Promise<PersonRunsResultsV1['send']>,

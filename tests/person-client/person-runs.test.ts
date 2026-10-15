@@ -63,6 +63,7 @@ describe('person runs client', () => {
     expect(stdout).toContain('re-checks the open items you can see');
     expect(stdout).toContain('false dismisses it, and unlisted items stay unsent');
     expect(stdout).toContain('before send the approver only');
+    expect(stdout).toContain('rows_only true reads no item live');
     expect(stderr).toBe('');
   });
 });
