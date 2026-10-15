@@ -638,12 +638,17 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const viewer = viewerOf(input.access_token, input.signal);
       const { request } = input;
       const runNotFound = () => new AuthorityOperationError('not_found', 'run is not available');
+      // A listed item sent or dismissed meanwhile, nothing left to send, or a sent command id reused for other items: open them
+      // again. A conflict, not a loss of access (the desktop reads that as signed out).
+      const changed = () => new AuthorityOperationError('conflict', 'The items changed. Open them again.');
       // Sends come from the caller's own finished impact run.
       const run = options.runs.read({ organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership }, request.run_id);
       if (run === undefined || run.trigger !== 'approved_record' || run.state !== 'done' || run.record_sha256 === null) throw runNotFound();
       // A command already sent answers what it did, whatever changed since: a retry never turns a committed send into an error.
-      const earlier = options.items.sentBy(run.run_id, request.command_id);
-      if (earlier !== undefined) return checked('send', earlier);
+      // The same command id listing other items is a conflict, never the old answer for items it did not send.
+      const earlier = options.items.sentBy(run.run_id, request.command_id, request.items.map(choice => choice.item_id));
+      if (earlier?.kind === 'stale') throw changed();
+      if (earlier !== undefined) return checked('send', { sent: earlier.sent, not_relevant: earlier.not_relevant });
       // Only a new command is checked: the approver, while they can read the decision; picks who are active members; the listed items
       // still unsent. Sending is selecting (follow-ups thread v1, F1): any of the run's unsent items, ticked to send or unticked to
       // dismiss; the ones not listed stay unsent.
@@ -651,9 +656,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       if (!openItemSendAccessV1({ viewer: viewer.membership, approver: run.actor.membership_id, reads_decision }).send) throw runNotFound();
       for (const choice of request.items) if (choice.owner_membership_id !== undefined) activeMember(viewer, choice.owner_membership_id);
       const result = options.items.send({ run_id: run.run_id, by: viewer.membership, command_id: request.command_id, choices: request.items });
-      // A listed item sent or dismissed meanwhile, or nothing left to send: open them again. A conflict, not a loss of access (the
-      // desktop reads that as signed out).
-      if (result.kind === 'stale') throw new AuthorityOperationError('conflict', 'The items changed. Open them again.');
+      if (result.kind === 'stale') throw changed();
       return checked('send', { sent: result.sent, not_relevant: result.not_relevant });
     },
 

@@ -33,6 +33,8 @@ export interface ImpactItemRowV1 {
   readonly created_at: string; readonly updated_at: string;
 }
 export interface ImpactSendChoiceV1 { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }
+/** What a committed send command answers when it is asked again: its own counts, or `stale` when it is asked for other items. */
+export type ImpactSendReplayV1 = { readonly kind: 'replayed'; readonly sent: number; readonly not_relevant: number } | { readonly kind: 'stale' };
 
 interface StoredItemV1 {
   readonly item_id: string; readonly run_id: string; readonly item_key: Sha256Digest; readonly pointer_json: string;
@@ -145,18 +147,25 @@ export class SqliteImpactItemsV1 {
 
   /**
    * What a send of the run under `command_id` did, from its immutable choices;
-   * undefined when no item of the run carries it. Later state changes do not
+   * undefined when no item of the run carries it. A retry lists the same items
+   * (in any order; what it says to include or whom it picks is ignored: the
+   * first answer stands). A command id listed with any other items is `stale`,
+   * so an old answer never leaves new items unsent. Later state changes do not
    * change a committed command's answer.
    */
-  sentBy(runId: string, commandId: string): { readonly sent: number; readonly not_relevant: number } | undefined {
-    const choices = this.database.prepare('SELECT send_included FROM authority_impact_items_v1 WHERE run_id=? AND send_command_id=?').pluck().all(runId, commandId) as (0 | 1)[];
+  sentBy(runId: string, commandId: string, itemIds: readonly string[]): ImpactSendReplayV1 | undefined {
+    const choices = this.database.prepare('SELECT item_id, send_included FROM authority_impact_items_v1 WHERE run_id=? AND send_command_id=?')
+      .all(runId, commandId) as Pick<StoredItemV1, 'item_id' | 'send_included'>[];
     if (choices.length === 0) return undefined;
-    const sent = choices.filter(include => include === 1).length;
-    return Object.freeze({ sent, not_relevant: choices.length - sent });
+    const listed = new Set(itemIds);
+    if (listed.size !== itemIds.length || listed.size !== choices.length || choices.some(choice => !listed.has(choice.item_id))) return Object.freeze({ kind: 'stale' as const });
+    const sent = choices.filter(choice => choice.send_included === 1).length;
+    return Object.freeze({ kind: 'replayed' as const, sent, not_relevant: choices.length - sent });
   }
 
   /**
-   * One immediate transaction. Replayed when any item of the run carries `command_id` (`sentBy`).
+   * One immediate transaction. Replayed when any item of the run carries `command_id` and `choices` lists exactly those items;
+   * stale when it lists any others (`sentBy`).
    * `choices` is any non-empty subset of the run's unsent items (follow-ups thread v1, F1): stale when
    * the run has no unsent item, or a choice names an item twice or names one that is not an unsent item
    * of the run. Included → open (with the picked owner, `owner_match = picked`, when one is given and
@@ -167,8 +176,8 @@ export class SqliteImpactItemsV1 {
   send(input: { readonly run_id: string; readonly by: string; readonly command_id: string; readonly choices: readonly ImpactSendChoiceV1[] }):
     { readonly kind: 'sent' | 'replayed'; readonly sent: number; readonly not_relevant: number } | { readonly kind: 'stale' } {
     return this.immediate(() => {
-      const earlier = this.sentBy(input.run_id, input.command_id);
-      if (earlier !== undefined) return Object.freeze({ kind: 'replayed' as const, ...earlier });
+      const earlier = this.sentBy(input.run_id, input.command_id, input.choices.map(choice => choice.item_id));
+      if (earlier !== undefined) return earlier;
       const items = this.database.prepare('SELECT item_id, owner_membership_id, state FROM authority_impact_items_v1 WHERE run_id=?')
         .all(input.run_id) as Pick<StoredItemV1, 'item_id' | 'owner_membership_id' | 'state'>[];
       const unsent = new Map(items.filter(item => item.state === 'unsent').map(item => [item.item_id, item]));

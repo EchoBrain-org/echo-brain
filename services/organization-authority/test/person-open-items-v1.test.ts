@@ -360,6 +360,25 @@ describe('open items: send, update, reassign', () => {
     await expect(send('c3', [{ item_id: action.item_id, include: true }])).rejects.toMatchObject({ code: 'conflict' });
   });
 
+  it('refuses a sent command id reused for other items as a conflict, and replays an exact retry', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const unsent = (await scope(f, 'ari', 'run')).items;
+    const ticket = unsent.find(entry => entry.kind === 'ticket')!;
+    const action = unsent.find(entry => entry.kind === 'record')!;
+    const send = (items: readonly { readonly item_id: string; readonly include: boolean }[]) =>
+      f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id: 'c1', items } });
+    await expect(send([{ item_id: ticket.item_id, include: true }])).resolves.toEqual({ sent: 1, not_relevant: 0 });
+    // The same command id for the action, or for both: the old answer would leave the action unsent while saying it was handled.
+    await expect(send([{ item_id: action.item_id, include: true }])).rejects.toMatchObject({ code: 'conflict', message: 'The items changed. Open them again.' });
+    await expect(send([{ item_id: ticket.item_id, include: true }, { item_id: action.item_id, include: true }])).rejects.toMatchObject({ code: 'conflict' });
+    expect(f.items.read(action.item_id)).toMatchObject({ state: 'unsent', send_command_id: null });
+    // An exact retry still answers what it did, even once the approver can no longer read the decision; another list never does.
+    f.removeProjectMembership(f.projectA);
+    await expect(send([{ item_id: ticket.item_id, include: false }])).resolves.toEqual({ sent: 1, not_relevant: 0 });
+    await expect(send([{ item_id: action.item_id, include: false }])).rejects.toMatchObject({ code: 'conflict' });
+    expect(f.items.read(action.item_id)).toMatchObject({ state: 'unsent' });
+  });
+
   it('refuses a send that is not the caller\'s own finished run, or a pick who is not an active member', async () => {
     const f = await openItemsFixture();
     const pending = { schema_version: 1 as const, operation: 'send' as const, run_id: f.runId, command_id: 'c1', items: [{ item_id: 'itm_00000000-0000-4000-8000-000000000000', include: true }] };

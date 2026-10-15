@@ -93,9 +93,10 @@ describe('SQLite open items v1', () => {
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices })).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-2', choices })).toEqual({ kind: 'stale' });
     // What a command did, without sending: only that command, only on that run.
-    expect(f.items.sentBy(f.run.run_id, 'cmd-1')).toEqual({ sent: 1, not_relevant: 1 });
-    expect(f.items.sentBy(f.run.run_id, 'cmd-2')).toBeUndefined();
-    expect(f.items.sentBy('run_00000000-0000-4000-8000-000000000999', 'cmd-1')).toBeUndefined();
+    const listed = [a!.item_id, b!.item_id];
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1', listed)).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-2', listed)).toBeUndefined();
+    expect(f.items.sentBy('run_00000000-0000-4000-8000-000000000999', 'cmd-1', listed)).toBeUndefined();
     expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.mina, owner_match: 'picked' });
     expect(f.items.read(b!.item_id)).toMatchObject({ state: 'not_relevant', send_included: false, state_set_by: ARI });
   });
@@ -116,11 +117,35 @@ describe('SQLite open items v1', () => {
     expect(f.items.read(c!.item_id)).toMatchObject({ state: 'unsent' });
     expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-2', choices: [{ item_id: c!.item_id, include: true }] })).toEqual({ kind: 'sent', sent: 1, not_relevant: 0 });
     expect(f.items.read(c!.item_id)).toMatchObject({ state: 'open', send_command_id: 'cmd-2', send_included: true, sent_at: f.clock().toISOString() });
-    // Each command replays its own counts; with nothing left unsent a new command is stale.
-    expect(f.items.sentBy(f.run.run_id, 'cmd-1')).toEqual({ sent: 1, not_relevant: 1 });
-    expect(f.items.sentBy(f.run.run_id, 'cmd-2')).toEqual({ sent: 1, not_relevant: 0 });
-    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: c!.item_id, include: false }] })).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
+    // Each command replays its own counts for its own items; with nothing left unsent a new command is stale.
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1', [b!.item_id, a!.item_id])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-2', [c!.item_id])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 0 });
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: a!.item_id, include: false }, { item_id: b!.item_id, include: true }] }))
+      .toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
     expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-3', choices: [{ item_id: c!.item_id, include: false }] })).toEqual({ kind: 'stale' });
+  });
+
+  it('refuses a sent command id reused for other items as stale, so none is left unsent behind its old answer', async () => {
+    const f = await doneRunWithItems(['46', '47', '48']);
+    const [a, b, c] = f.items.forRun(f.run.run_id);
+    const send = (command_id: string, choices: readonly ImpactSendChoiceV1[]) => f.items.send({ run_id: f.run.run_id, by: ARI, command_id, choices });
+    expect(send('cmd-1', [{ item_id: a!.item_id, include: true }])).toEqual({ kind: 'sent', sent: 1, not_relevant: 0 });
+    // The same id listing other items, more items, fewer, or one twice: stale, and nothing is written.
+    const before = f.db.prepare('SELECT * FROM authority_impact_items_v1 ORDER BY item_id').all();
+    for (const choices of [
+      [{ item_id: b!.item_id, include: true }],
+      [{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: true }],
+      [{ item_id: a!.item_id, include: true }, { item_id: a!.item_id, include: true }],
+      [],
+    ]) expect(send('cmd-1', choices)).toEqual({ kind: 'stale' });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1', [b!.item_id, c!.item_id])).toEqual({ kind: 'stale' });
+    expect(f.db.prepare('SELECT * FROM authority_impact_items_v1 ORDER BY item_id').all()).toEqual(before);
+    // An exact retry replays, whatever it now says to include or whom it picks.
+    expect(send('cmd-1', [{ item_id: a!.item_id, include: false, owner_membership_id: f.mina }])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 0 });
+    expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: ARI, send_included: true });
+    // A new id sends the rest.
+    expect(send('cmd-2', [{ item_id: c!.item_id, include: false }, { item_id: b!.item_id, include: true }])).toEqual({ kind: 'sent', sent: 1, not_relevant: 1 });
+    expect(send('cmd-2', [{ item_id: b!.item_id, include: true }, { item_id: c!.item_id, include: false }])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
   });
 
   it('refuses a send that names an item twice, one of another run, or none, and writes nothing', async () => {
@@ -146,7 +171,7 @@ describe('SQLite open items v1', () => {
     expect(f.items.send(command)).toEqual({ kind: 'sent', ...counts });
     // Even changes in the same clock tick cannot change the command's answer.
     f.items.setState(item.item_id, include ? 'not_relevant' : 'open', ARI);
-    expect(f.items.sentBy(f.run.run_id, command.command_id)).toEqual(counts);
+    expect(f.items.sentBy(f.run.run_id, command.command_id, [item.item_id])).toEqual({ kind: 'replayed', ...counts });
     f.advance(1_000);
     f.items.setState(item.item_id, 'done', ARI);
     f.items.assign(item.item_id, f.mina, ARI);
@@ -208,7 +233,7 @@ describe('SQLite open items v1', () => {
     f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: item.item_id, include: true }] });
     expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET send_included=0 WHERE item_id=?').run(item.item_id)).toThrow('state move is not allowed');
     expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET send_included=NULL WHERE item_id=?').run(item.item_id)).toThrow('state move is not allowed');
-    expect(f.items.sentBy(f.run.run_id, 'cmd-1')).toEqual({ sent: 1, not_relevant: 0 });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1', [item.item_id])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 0 });
   });
 
   it('never moves an item back to unsent, keeps identity frozen, and keeps only a newer check', async () => {
