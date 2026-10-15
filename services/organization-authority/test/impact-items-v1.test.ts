@@ -75,7 +75,7 @@ describe('SQLite open items v1', () => {
     expect(rows.find(row => row.pointer.ticket_id === '46')).toMatchObject({
       run_id: f.run.run_id, item_key: draft('46').item_key, pointer: draft('46').pointer, record_sha256: f.recordSha256, organization_id: f.owner.organization_id,
       approver: { principal_id: f.owner.principal_id, membership_id: ARI }, relation: 'needs_updating', expected: 'launch next week',
-      owner_membership_id: f.mina, owner_match: 'jira_account', state: 'unsent', state_set_by: null, state_set_at: null, sent_at: null, send_command_id: null, check: null,
+      owner_membership_id: f.mina, owner_match: 'jira_account', owner_set_by: null, owner_set_at: null, state: 'unsent', state_set_by: null, state_set_at: null, sent_at: null, send_command_id: null, check: null,
       created_at: f.clock().toISOString(), updated_at: f.clock().toISOString(),
     });
     expect(rows.find(row => row.pointer.ticket_id === '47')).toMatchObject({ relation: 'conflicts', expected: null });
@@ -159,8 +159,7 @@ describe('SQLite open items v1', () => {
     const [a, b] = f.items.forRun(f.run.run_id);
     f.advance(1_000);
     const picked = f.clock().toISOString();
-    expect(f.items.assign(a!.item_id, f.mina, ARI)).toMatchObject({ state: 'unsent', owner_membership_id: f.mina, owner_match: 'picked', sent_at: null, state_set_by: null });
-    expect(f.db.prepare('SELECT owner_set_by, owner_set_at FROM authority_impact_items_v1 WHERE item_id=?').get(a!.item_id)).toEqual({ owner_set_by: ARI, owner_set_at: picked });
+    expect(f.items.assign(a!.item_id, f.mina, ARI)).toMatchObject({ state: 'unsent', owner_membership_id: f.mina, owner_match: 'picked', owner_set_by: ARI, owner_set_at: picked, sent_at: null, state_set_by: null });
     // Send with no pick keeps the picked owner; a pick at Send still wins.
     f.advance(1_000);
     expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: true, owner_membership_id: f.rafael }] }))

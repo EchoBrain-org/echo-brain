@@ -119,6 +119,12 @@ export interface PersonOpenItemV1 {
   readonly waits_on: 'owner' | 'approver' | 'leads';
   readonly state: PersonOpenItemStateV1;
   readonly created_at: string; readonly sent_at: string | null; readonly state_set_at: string | null;
+  /** Who last set its state (Send included), with `state_set_at`; null exactly when `state_set_at` is (follow-ups thread v1, F3). */
+  readonly state_set_by: PersonOpenItemPersonV1 | null;
+  /** When and by whom its owner was last picked or reassigned; both null while the owner is the one ECHO matched. */
+  readonly owner_set_at: string | null; readonly owner_set_by: PersonOpenItemPersonV1 | null;
+  /** The item reached its owner: Send included it, or it is open or done since. False while it is unsent. */
+  readonly reached_owner: boolean;
   readonly check: { readonly verdict: PersonOpenItemVerdictV1; readonly checked_at: string; readonly checked_by: string } | null;
   readonly can: { readonly set_state: boolean; readonly assign: boolean };
   /** `current` comes exactly with `opened`. */
@@ -446,11 +452,22 @@ function openItem(value: unknown): PersonOpenItemV1 {
   const entry = asEnumerableRecord(value, 'Open item');
   // What a viewer may not see is left out, never sent empty.
   const parts = ['decision', 'current'].filter(key => Object.hasOwn(entry, key));
-  assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at', 'check', 'can', 'reach', ...parts], 'Open item');
+  assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at',
+    'state_set_by', 'owner_set_at', 'owner_set_by', 'reached_owner', 'check', 'can', 'reach', ...parts], 'Open item');
   assertTimestamp(entry.created_at, 'Open item created_at');
   const reach = oneOf(entry.reach, REACHES, 'Open item reach');
   // What the item says now comes exactly with a read that opened it.
   if ((reach === 'opened') !== Object.hasOwn(entry, 'current')) fail('Open item reach does not match its current part');
+  const state = oneOf(entry.state, ITEM_STATES, 'Open item state');
+  const state_set_at = timestampOrNull(entry.state_set_at, 'Open item state_set_at');
+  const owner_set_at = timestampOrNull(entry.owner_set_at, 'Open item owner_set_at');
+  const state_set_by = entry.state_set_by === null ? null : person(entry.state_set_by, 'Open item state_set_by');
+  const owner_set_by = entry.owner_set_by === null ? null : person(entry.owner_set_by, 'Open item owner_set_by');
+  // Who and when come together, as the item stores them.
+  if ((state_set_by === null) !== (state_set_at === null)) fail('Open item state_set_by does not match state_set_at');
+  if ((owner_set_by === null) !== (owner_set_at === null)) fail('Open item owner_set_by does not match owner_set_at');
+  if (typeof entry.reached_owner !== 'boolean') fail('Open item reached_owner is invalid');
+  if (state === 'unsent' && entry.reached_owner) fail('Open item reached its owner before Send');
   return Object.freeze({
     item_id: itemId(entry.item_id, 'Open item id'), run_id: runId(entry.run_id, 'Open item run id'), kind: oneOf(entry.kind, KINDS, 'Open item kind'),
     ...(Object.hasOwn(entry, 'decision') ? { decision: decision(entry.decision) } : {}),
@@ -458,8 +475,9 @@ function openItem(value: unknown): PersonOpenItemV1 {
     relation: entry.relation === null ? null : oneOf(entry.relation, RELATIONS, 'Open item relation'),
     expected: entry.expected === null ? null : line(entry.expected, 'Open item expected', EXPECTED_CHARS),
     approver: person(entry.approver, 'Open item approver'), owner: owner(entry.owner),
-    waits_on: oneOf(entry.waits_on, WAITS_ON, 'Open item waits_on'), state: oneOf(entry.state, ITEM_STATES, 'Open item state'),
-    created_at: entry.created_at as string, sent_at: timestampOrNull(entry.sent_at, 'Open item sent_at'), state_set_at: timestampOrNull(entry.state_set_at, 'Open item state_set_at'),
+    waits_on: oneOf(entry.waits_on, WAITS_ON, 'Open item waits_on'), state,
+    created_at: entry.created_at as string, sent_at: timestampOrNull(entry.sent_at, 'Open item sent_at'), state_set_at,
+    state_set_by, owner_set_at, owner_set_by, reached_owner: entry.reached_owner,
     check: check(entry.check), can: can(entry.can), reach,
   });
 }

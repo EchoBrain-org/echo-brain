@@ -38,6 +38,7 @@ describe('open items: who sees what', () => {
     const ticket = items.find(entry => entry.kind === 'ticket')!;
     expect(ticket).toMatchObject({
       run_id: f.runId, relation: 'needs_updating', expected: 'launch next week', state: 'unsent', waits_on: 'approver', sent_at: null, state_set_at: null, check: null,
+      state_set_by: null, owner_set_at: null, owner_set_by: null, reached_owner: false,
       approver: { membership_id: f.membership('ari'), name: 'Ari', active: true },
       owner: { membership_id: f.membership('mina'), name: 'Mina Patel', active: true, match: 'jira_account' },
       decision: { approval_id: f.approvalId, record_sha256: f.record, title: 'Pilot planning', first_line: 'The pilot starts next week.', project_ids: [f.projectA] },
@@ -388,6 +389,39 @@ describe('open items: send, update, reassign', () => {
     await expect(f.app.send({ access_token: 'mina', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id: 'c1', items: unsent.map(entry => ({ item_id: entry.item_id, include: true })) } }))
       .rejects.toMatchObject({ code: 'not_found' });
     await expect(sendAll(f, unsent, 'c2', () => ({ include: true }))).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('says who set each item\'s state and owner, and when, and whether it reached its owner (F3)', async () => {
+    const f = await openItemsFixture(); await f.finishImpactRun();
+    const unsent = (await scope(f, 'ari', 'run')).items;
+    const ticket = unsent.find(entry => entry.kind === 'ticket')!;
+    const action = unsent.find(entry => entry.kind === 'record')!;
+    f.advance(1_000);
+    await assign(f, 'ari', action.item_id, 'rafael');
+    const pickedAt = f.clock().toISOString();
+    f.advance(1_000);
+    await sendAll(f, unsent, 'c1', entry => ({ include: entry.kind === 'ticket' }));
+    const sentAt = f.clock().toISOString();
+    const ari = { membership_id: f.membership('ari'), name: 'Ari', active: true };
+    const read = async (access_token: FixturePerson, itemId: string) => (await item(f, access_token, itemId)).item;
+    expect(await read('ari', ticket.item_id)).toMatchObject({ state: 'open', state_set_at: sentAt, state_set_by: ari, owner_set_at: null, owner_set_by: null, reached_owner: true });
+    // Dismissed at Send: it never reached Rafael, who was picked before Send.
+    expect(await read('ari', action.item_id)).toMatchObject({ state: 'not_relevant', state_set_by: ari, owner_set_at: pickedAt, owner_set_by: ari, reached_owner: false,
+      owner: { name: 'Rafael Moreno', match: 'picked' } });
+    // Mina closes her ticket, then Ari reassigns it to Rafael: each says who and when, and the owner sees it too.
+    f.advance(1_000);
+    await setState(f, 'mina', ticket.item_id, 'done');
+    const doneAt = f.clock().toISOString();
+    f.advance(1_000);
+    await assign(f, 'ari', ticket.item_id, 'rafael');
+    const reassignedAt = f.clock().toISOString();
+    expect(await read('rafael', ticket.item_id)).toMatchObject({ state: 'done', state_set_at: doneAt, state_set_by: { membership_id: f.membership('mina'), name: 'Mina Patel', active: true },
+      owner_set_at: reassignedAt, owner_set_by: ari, owner: { name: 'Rafael Moreno', match: 'reassigned' }, reached_owner: true });
+    // Who acted stays named after they leave; reopening the dismissed item hands it to its owner.
+    f.revoke('mina');
+    expect((await read('ari', ticket.item_id)).state_set_by).toEqual({ membership_id: f.membership('mina'), name: 'Mina Patel', active: false });
+    await setState(f, 'ari', action.item_id, 'open');
+    expect(await read('ari', action.item_id)).toMatchObject({ state: 'open', reached_owner: true, state_set_by: ari });
   });
 
   it('writes nothing when an item is assigned to its current owner', async () => {

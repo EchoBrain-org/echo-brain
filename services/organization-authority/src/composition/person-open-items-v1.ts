@@ -242,7 +242,9 @@ export function assessOpenItemsV1(sources: Pick<OpenItemSourcesV1, 'records' | '
   const rows = found.filter(row => row.organization_id === viewer.organization);
   const records = [...new Set([...rows.map(row => row.record_sha256), ...scopeRecords])];
   const decisions = records.length === 0 ? new Map<Sha256Digest, PersonReadableDecisionV1>() : sources.records.readableDecisions({ access_token: viewer.token, record_sha256s: records });
-  const people = sources.people.people(viewer.organization, [...new Set(rows.flatMap(row => [row.approver.membership_id, row.owner_membership_id, ...(row.check === null ? [] : [row.check.by])]))]);
+  // Everyone a row names: its approver and owner, who set its state and its owner last, and who checked it last.
+  const people = sources.people.people(viewer.organization, [...new Set(rows.flatMap(row => [row.approver.membership_id, row.owner_membership_id,
+    ...[row.state_set_by, row.owner_set_by, row.check?.by].filter((id): id is string => typeof id === 'string')]))]);
   const leads = new Map<Sha256Digest, boolean>();
   const leadsDecision = (record: Sha256Digest): boolean => {
     if (!leads.has(record)) {
@@ -428,6 +430,10 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         owner: Object.freeze({ ...personOf(context.people, row.owner_membership_id), match: row.owner_match }),
         waits_on: access.waits_on, state: row.state,
         created_at: row.created_at, sent_at: row.sent_at, state_set_at: row.state_set_at,
+        // Who and when (follow-ups thread v1, F3): ECHO's own facts, shown to everyone who sees the row.
+        state_set_by: row.state_set_by === null ? null : personOf(context.people, row.state_set_by),
+        owner_set_at: row.owner_set_at, owner_set_by: row.owner_set_by === null ? null : personOf(context.people, row.owner_set_by),
+        reached_owner: facts.sent_to_owner,
         check: row.check === null ? null : Object.freeze({ verdict: row.check.verdict, checked_at: row.check.at, checked_by: nameOf(context.people, row.check.by) }),
         can: Object.freeze({ set_state: access.set_state, assign: access.assign }),
         reach,

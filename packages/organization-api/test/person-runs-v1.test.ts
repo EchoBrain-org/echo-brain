@@ -53,11 +53,13 @@ const DECISION = { approval_id: `apr_${'a'.repeat(64)}`, record_sha256: RECORD, 
 const CURRENT = { citation: echo12, says_now: 'ECHO-12 · Pilot launch: planned for the end of the month.', assignee: 'Mina Patel', status: 'In Progress', due_at: '2026-10-30' };
 const APPROVER = { membership_id: ARI, name: 'Ari', active: true };
 const OWNER = { membership_id: MINA, name: 'Mina Patel', active: true, match: 'jira_account' };
+const OWNER_PERSON = { membership_id: MINA, name: 'Mina Patel', active: true };
 const CHECK = { verdict: 'changed', checked_at: LATER, checked_by: 'Mina Patel' };
 /** An item the viewer opened carries what it says now; any other says why it does not. */
 const openItem = (overrides: Record<string, unknown>) => ({
   item_id: ITEM, run_id: RUN, kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: APPROVER, owner: OWNER,
-  waits_on: 'owner', state: 'open', created_at: NOW, sent_at: LATER, state_set_at: null, check: CHECK, can: { set_state: true, assign: true },
+  waits_on: 'owner', state: 'open', created_at: NOW, sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, owner_set_at: null, owner_set_by: null, reached_owner: true,
+  check: CHECK, can: { set_state: true, assign: true },
   reach: Object.hasOwn(overrides, 'current') ? 'opened' : 'no_access',
   ...overrides,
 });
@@ -375,12 +377,25 @@ describe('runs API open-item results', () => {
 
   it('accepts an unsent item that was never assessed or checked and waits on the leads', () => {
     const orphan = openItem({
-      relation: null, expected: null, state: 'unsent', sent_at: null, check: null, waits_on: 'leads', can: { set_state: false, assign: true },
+      relation: null, expected: null, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, reached_owner: false, check: null, waits_on: 'leads', can: { set_state: false, assign: true },
       approver: { ...APPROVER, active: false }, owner: { ...APPROVER, active: false, match: 'approver' },
     });
     expect(validatePersonRunsResultV1('item', { item: orphan }).item).toEqual(orphan);
     const plain = { citation: echo12, says_now: 'ECHO-12 · Pilot launch' };
     expect(validatePersonRunsResultV1('item', { item: openItem({ current: plain }) }).item.current).toEqual(plain);
+  });
+
+  it('says who set an item\'s state and owner, and when, and whether it reached its owner (F3)', () => {
+    const reassigned = openItem({ state: 'done', state_set_at: LATER, state_set_by: { ...OWNER_PERSON, active: false }, owner_set_at: LATER, owner_set_by: APPROVER,
+      owner: { ...OWNER, match: 'reassigned' }, reached_owner: true });
+    const read = validatePersonRunsResultV1('item', { item: reassigned }).item;
+    expect(read).toEqual(reassigned);
+    for (const part of [read.state_set_by, read.owner_set_by]) expect(Object.isFrozen(part)).toBe(true);
+    // A dismissed item never reached its owner; a picked owner before Send carries who picked it.
+    const dismissed = openItem({ state: 'not_relevant', reached_owner: false });
+    expect(validatePersonRunsResultV1('item', { item: dismissed }).item.reached_owner).toBe(false);
+    const picked = openItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, owner_set_at: LATER, owner_set_by: APPROVER, owner: { ...OWNER, match: 'picked' }, reached_owner: false });
+    expect(validatePersonRunsResultV1('item', { item: picked }).item).toEqual(picked);
   });
 
   it('accepts a home and an items page up to their bounds', () => {
@@ -448,6 +463,20 @@ describe('runs API open-item results', () => {
     ['a created_at that is not a timestamp', withItem({ created_at: '2026-10-07' })],
     ['a sent_at that is neither a timestamp nor null', withItem({ sent_at: '' })],
     ['a state_set_at that is not a real instant', withItem({ state_set_at: '2026-02-30T10:00:00.000Z' })],
+    ['without who set its state', { item: without(seen, 'state_set_by') }],
+    ['without when its owner was set', { item: without(seen, 'owner_set_at') }],
+    ['without who set its owner', { item: without(seen, 'owner_set_by') }],
+    ['without whether it reached its owner', { item: without(seen, 'reached_owner') }],
+    ['a state setter with an owner match', withItem({ state_set_by: { ...APPROVER, match: 'picked' } })],
+    ['a state setter that is a bare membership id', withItem({ state_set_by: ARI })],
+    ['a state setter with no state time', withItem({ state_set_at: null })],
+    ['a state time with no state setter', withItem({ state_set_by: null })],
+    ['an owner setter with no owner time', withItem({ owner_set_by: APPROVER })],
+    ['an owner time with no owner setter', withItem({ owner_set_at: LATER })],
+    ['an owner time that is not a timestamp', withItem({ owner_set_at: 'yesterday', owner_set_by: APPROVER })],
+    ['an owner setter with a membership id that is not canonical', withItem({ owner_set_at: LATER, owner_set_by: { ...APPROVER, membership_id: 'mem_ari' } })],
+    ['a reached_owner that is not a boolean', withItem({ reached_owner: 'yes' })],
+    ['an unsent item that reached its owner', withItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, reached_owner: true })],
     ['an unknown verdict', withItem({ check: { ...CHECK, verdict: 'drifted' } })],
     ['a check that keeps a sentence', withItem({ check: { ...CHECK, line: 'ECHO-12 now says next week.' } })],
     ['a check without who ran it', withItem({ check: without(CHECK, 'checked_by') })],
