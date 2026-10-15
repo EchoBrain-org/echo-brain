@@ -24,6 +24,9 @@ let holdLive = false;
 let answerLive: (() => void)[] = [];
 let holdRows = false;
 let answerRows: (() => void)[] = [];
+/** A list's rows reads (items, rows only) wait while set, until the test answers them, each with what the page held when asked. */
+let holdListRows = false;
+let answerListRows: (() => void)[] = [];
 /** Live items reads to fail next (not rows only, not counts only). */
 let failLiveItems = 0;
 /** The tools read waits while set, until the test answers it; or fails, while `failTools`. */
@@ -125,6 +128,8 @@ beforeEach(() => {
   answerLive = [];
   holdRows = false;
   answerRows = [];
+  holdListRows = false;
+  answerListRows = [];
   holdTools = false;
   failTools = false;
   answerTools = [];
@@ -223,6 +228,10 @@ beforeEach(() => {
         if (params.request?.operation === 'items') {
           if (failItems > 0) { failItems -= 1; return unavailable; }
           if (failLiveItems > 0 && params.request.read === undefined) { failLiveItems -= 1; return unavailable; }
+          if (params.request.read === 'rows' && holdListRows) {
+            const answer = itemsAnswer(params.request);
+            return new Promise(resolve => { answerListRows.push(() => resolve(answer)); });
+          }
           // A live read held answers what the page held when it was asked.
           if (params.request.read === undefined && holdLive) {
             const answer = itemsAnswer(params.request);
@@ -1312,6 +1321,78 @@ describe('Follow-up lists: current work first, results in place', () => {
     await flush();
     expect(store.getState().projectLine).toMatchObject({ loading: false, summary: { open: 1 } });
   });
+
+  it('counts a meeting\'s follow-ups by its record again once its decision, opened from its list over the meeting, closes', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    page = listPage([unsent('1')]);
+    const store = await start();
+    await store.openProject(project);
+    await store.openListItem({ ref: { kind: 'meeting', id: record }, title: 'Pilot planning', added_at: '2026-10-08T10:00:00.000Z', visibility: 'project', projects: [] });
+    await flush();
+    await store.openFollowUps('record', record, 'Pilot planning');
+    await store.openListDecision();
+    expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: impactRun('done').run_id });
+    // Back to the list, then to the meeting: its line is the meeting's again, by its record, with its check.
+    store.closeFollowUp();
+    await flush();
+    store.closeFollowUp();
+    await flush();
+    expect(store.followUpShown()).toBeNull();
+    expect(store.getState().reader?.ref).toEqual({ kind: 'meeting', id: record });
+    expect(store.getState().impactLine).toMatchObject({ scope: 'record', id: record, loading: false, summary: { unsent: 1 }, stage: { mine: true } });
+  });
+
+  it('settles a Dismiss whose outcome was unknown on a list whose Dismissed group is closed, reading on its own each row it no longer shows', async () => {
+    page = listPage([unsent('1'), unsent('2')]);
+    const store = await start();
+    await store.openFollowUps('project', project.project_id, project.name);
+    store.tickFollowUp('itm_00000001');
+    sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    // It went: the row left current work for Dismissed, closed and never read.
+    page = listPage([{ ...unsent('1'), state: 'not_relevant', send_included: false, sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z' },
+      unsent('2')]);
+    await store.sendTicked(false);
+    expect(said(store)).toEqual({ words: 'Dismissed' });
+    expect(list(store).sends).toEqual({});
+    expect(ids(store)).toEqual(['2']);
+    expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: 'itm_00000001', read: 'rows' }]);
+  });
+
+  it('drops a row from your list once you gave away an item you only owned, saying who has it now; a meeting\'s list keeps it', async () => {
+    const rafael = { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true };
+    const yours = (id: string): OpenItemView => ({ ...item(id), owner: { membership_id: 'member', name: 'Fixture', active: true, match: 'jira_account' } });
+    const given = { ...yours('1'), owner: { ...rafael, match: 'reassigned' as const } };
+    page = listPage([yours('1'), yours('2')]);
+    const store = await start();
+    await store.openYourFollowUps();
+    for (const scope of ['mine', 'record'] as const) {
+      if (scope === 'record') {
+        page = listPage([yours('1'), yours('2')]);
+        await store.openFollowUps('record', record, 'Pilot planning');
+      }
+      store.toggleOwnerPicker('itm_00000001');
+      await flush();
+      page = listPage([given, yours('2')]);
+      await store.pickFollowUpOwner(RAFAEL);
+      expect(said(store)).toEqual({ words: 'Owner changed to Rafael' });
+      expect(ids(store)).toEqual(scope === 'mine' ? ['2'] : ['1', '2']);
+    }
+  });
+
+  it('keeps the check of a decision opened from its list when a runs list read since does not hold it', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    page = listPage([unsent('1')]);
+    const store = await start();
+    await store.openFollowUps('record', record, 'Pilot planning');
+    await store.openListDecision();
+    expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
+    // Home is read again under them: its runs list holds only the newest checks, not this one.
+    const lists = requests('list').length;
+    await store.windowShown();
+    await flush();
+    expect(requests('list').length).toBeGreaterThan(lists);
+    expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
+  });
 });
 
 describe('Check now', () => {
@@ -1720,5 +1801,102 @@ describe('Rows first, then what each says now', () => {
     expect(shownPage(store).loading).toBe(false);
     expect(pageItem(store).reach).toBe('unavailable');
     expect(shownPage(store).failure).toBeUndefined();
+  });
+
+  it('reads live an item opened from a row whose live read failed, and Try again on its page reads it live again', async () => {
+    page = listPage([opened('1')]);
+    readItem = opened('1');
+    const store = await start();
+    failLiveItems = 1;
+    await store.openYourFollowUps();
+    expect(shown(store)[0]?.reach).toBe('unavailable');
+    await store.openFollowUp('itm_00000001', shown(store)[0]!);
+    expect(requests('item').map(request => request.read)).toEqual(['rows', undefined]);
+    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
+    // A page whose read failed for an outage: Try again reads it, rows only and then live.
+    failItems = 1;
+    await store.openFollowUp('itm_00000002', rowOnly(opened('2')));
+    expect(pageItem(store).reach).toBe('unavailable');
+    readItem = opened('2');
+    const before = requests('item').length;
+    store.retryFollowUp();
+    await flush();
+    expect(requests('item').slice(before).map(request => request.read)).toEqual(['rows', undefined]);
+    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 2' } });
+  });
+
+  it('reads a closed group opened while another\'s first read is on its way, once that read answers', async () => {
+    page = listPage([opened('1'), closedAs('done')('2'), closedAs('not_relevant')('3')]);
+    const store = await start();
+    await store.openYourFollowUps();
+    store.toggleClosedGroup('done');
+    store.toggleClosedGroup('not_relevant');
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    expect(list(store).expanded).toEqual({ done: true, not_relevant: true });
+    expect(list(store).items.map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002', 'itm_00000003']);
+    expect(reads().slice(2)).toEqual(['done', 'not_relevant', 'done live', 'not_relevant live']);
+    expect(shown(store).map(entry => entry.reach)).toEqual(['opened', 'opened', 'opened']);
+  });
+
+  it('stops saying Home is read live once a later load has nothing to read live', async () => {
+    const action: OpenItemView = { ...item('1'), kind: 'action', expected: 'Book the lab', reach: 'not_read' };
+    home = { ...emptyHome(), items: [action] };
+    holdLive = true;
+    const store = await start();
+    expect(store.getState().home).toMatchObject({ reading: true });
+    // A change on its page, then Back: Home is read again, and nothing in it waits for a live read.
+    readItem = action;
+    await store.openFollowUp(action.item_id, action);
+    readItem = { ...action, state: 'done' };
+    await store.setFollowUpState('done');
+    home = emptyHome();
+    store.closeFollowUp();
+    await flush();
+    expect(store.getState().home).toMatchObject({ loading: false, reading: false });
+    // The first load's live read answers late: it is no longer Home's, and changes nothing.
+    answerLive.shift()!();
+    await flush();
+    expect(store.getState().home).toMatchObject({ reading: false });
+  });
+
+  it('goes on reading a list live once it shows again, after another app in front stopped it under an item page', async () => {
+    page = listPage([opened('1')]);
+    readItem = opened('1');
+    const store = await start();
+    holdListRows = true;
+    const opening = store.openYourFollowUps();
+    await flush();
+    // A row's page opens over the list while its rows read is on its way; then another app comes in front.
+    await store.openFollowUp('itm_00000001', opened('1'));
+    store.conceal();
+    holdListRows = false;
+    answerListRows.shift()!();
+    await opening;
+    expect(reads()).toEqual(['unsent+open']);
+    store.resume();
+    await flush();
+    expect(reads()).toEqual(['unsent+open']);
+    // Back on the list: the rows it shows are read live now.
+    store.closeFollowUp();
+    await flush();
+    expect(reads()).toEqual(['unsent+open', 'unsent+open live']);
+    expect(shown(store).map(entry => entry.reach)).toEqual(['opened']);
+  });
+
+  it('says what a Send did at once, while rows new to the list are still read live', async () => {
+    page = listPage([unsentOpened('1')]);
+    const store = await start();
+    await store.openFollowUps('record', record, 'Pilot planning');
+    page = listPage([{ ...opened('1'), approver: unsent('1').approver }, opened('2')]);
+    holdLive = true;
+    const sending = store.sendTicked(true);
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    expect(list(store)).toMatchObject({ busy: false, reading: true, said: { words: 'Sent to Fixture' } });
+    expect(shown(store).map(entry => [entry.state, entry.reach])).toEqual([['open', 'opened'], ['open', 'not_read']]);
+    answerLive.shift()!();
+    await sending;
+    await flush();
+    expect(list(store).reading).toBe(false);
+    expect(shown(store).map(entry => entry.reach)).toEqual(['opened', 'opened']);
   });
 });

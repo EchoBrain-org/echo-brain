@@ -254,7 +254,7 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
       {more('active')}
       {CLOSED_STATES.map(closedGroup)}
       {list.loading && list.items.length === 0 && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
-      {!list.loading && !list.failed && list.items.length === 0 && <div class="notice">No follow-ups</div>}
+      {!list.loading && !list.failed && list.summary !== null && summaryTotal(list.summary) === 0 && <div class="notice">No follow-ups</div>}
       {list.failed && (
         <div class="error more">
           {message(list.failed.failure)}
