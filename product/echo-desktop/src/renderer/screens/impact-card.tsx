@@ -1,4 +1,6 @@
 import type { PersonRunErrorCodeV1, PersonRunV1 } from '@echo-brain/organization-api';
+import { followUpsWords, summaryTotal } from '../needs.js';
+import { lineRecord, openFollowUps, type ItemsLine } from '../store.js';
 
 const REASONS: Readonly<Record<PersonRunErrorCodeV1, string>> = {
   no_access: 'You no longer have access to what this check needs.',
@@ -6,6 +8,22 @@ const REASONS: Readonly<Record<PersonRunErrorCodeV1, string>> = {
   timed_out: 'The impact check took too long.',
   research_failed: 'The impact check failed.',
 };
+
+/** What a follow-ups line says, and what opens its follow-ups when there are any. */
+interface Counted { words: string; open: (() => void) | null }
+
+/** A meeting's follow-ups line, once counted: by status, or how its check stands; it opens the meeting's list when it has any. */
+export function meetingFollowUps(line: ItemsLine, title: string): Counted | null {
+  if (!line.summary) return null;
+  const record = lineRecord(line);
+  return { words: followUpsWords(line.summary, line.stage), open: summaryTotal(line.summary) > 0 && record !== null ? () => void openFollowUps('record', record, title) : null };
+}
+
+/** "Follow-ups · 1 open · 4 not sent": one button that opens them, or the words alone. */
+export function FollowUpsLabel({ words, open, class: name, testid }: Counted & { class: string; testid?: string }) {
+  const label = <><b>Follow-ups</b> <span class="faint">· {words}</span></>;
+  return open ? <button type="button" class={name} data-testid={testid} onClick={open}>{label}</button> : <span class={name} data-testid={testid}>{label}</span>;
+}
 
 /**
  * Where an approved meeting's check stands (runs store and impact card v1,
@@ -19,11 +37,10 @@ export function ImpactSection({ run, publishing, busy, followUps, onRetry }: {
   publishing: boolean;
   busy: boolean;
   /** The meeting's follow-ups counted, once read, and what opens them when there are any. */
-  followUps: { words: string; open: (() => void) | null } | null;
+  followUps: Counted | null;
   onRetry(): void;
 }) {
   if (run === undefined && !publishing) return null;
-  const words = followUps && <><b>Follow-ups</b> <span class="faint">· {followUps.words}</span></>;
   return <section class="impact" aria-label="Impact">
     <div class="impact-head">
       <h4 class="section-label">Impact</h4>
@@ -34,8 +51,6 @@ export function ImpactSection({ run, publishing, busy, followUps, onRetry }: {
       <span class="error">{REASONS[run.error_code ?? 'research_failed']}</span>
       <button type="button" class="link-button" disabled={busy} onClick={onRetry}>Try again</button>
     </div>}
-    {run?.state === 'done' && followUps && (followUps.open
-      ? <button type="button" class="impact-follow-ups" data-testid="impact-follow-ups" onClick={followUps.open}>{words}</button>
-      : <div class="impact-follow-ups" data-testid="impact-follow-ups">{words}</div>)}
+    {run?.state === 'done' && followUps && <FollowUpsLabel {...followUps} class="impact-follow-ups" testid="impact-follow-ups" />}
   </section>;
 }

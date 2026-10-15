@@ -4,6 +4,7 @@ import { message } from '../messages.js';
 import { activeTotal, followUpCount, stateCounts } from '../needs.js';
 import { moreList, openCompose, openFollowUps, openListItem, openPeople, openProject, openProjectTools, readsWords, retryList, type State } from '../store.js';
 import { People, Plug, Plus } from './icons.js';
+import { FollowUpsLabel } from './impact-card.js';
 import { ItemRow, useKeptPlace } from './items.js';
 
 /**
@@ -84,9 +85,7 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
       <ToolsLine state={state} project={project} />
       {words && (
         <div class="items-line project-line" data-testid="project-line">
-          <button type="button" class="items-line-open" onClick={() => void openFollowUps('project', project.project_id, project.name)}>
-            <b>Follow-ups</b> <span class="faint">· {words}</span>
-          </button>
+          <FollowUpsLabel words={words} open={() => void openFollowUps('project', project.project_id, project.name)} class="items-line-open" />
         </div>
       )}
       {items.map(item => (

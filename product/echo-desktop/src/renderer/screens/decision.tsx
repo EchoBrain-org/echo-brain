@@ -1,15 +1,14 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
 import { dateTime } from '../format.js';
-import { activeTotal, followUpsWords } from '../needs.js';
+import { dueWords } from '../needs.js';
 import { proposalRead, readProposal, type Proposal as Read, type ProposalSignal } from '../proposal.js';
 import {
-  decide, lineRecord, loadProjects, openFollowUps, retryImpact, setDecisionAudience, setDecisionOwner, setDecisionShare, tickDecisionProject, type DecisionState,
-  type State,
+  decide, loadProjects, retryImpact, setDecisionAudience, setDecisionOwner, setDecisionShare, tickDecisionProject, type DecisionState, type State,
 } from '../store.js';
 import { Passage } from './ask.js';
-import { CardHead, dueWords, Face, Reasons, SignalRow } from './card.js';
-import { ImpactSection } from './impact-card.js';
+import { CardHead, Face, Reasons, SignalRow } from './card.js';
+import { ImpactSection, meetingFollowUps } from './impact-card.js';
 import { ProjectPicker } from './project-picker.js';
 
 /** The projects to pick from: yours, plus any the proposal suggests that you are not listed in. */
@@ -152,20 +151,11 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   );
 }
 
-/**
- * The approved meeting's follow-ups, counted (by its check, or by its record
- * when opened from its list), and what opens them when there are any: its
- * list, or Back to it when the decision was opened from it.
- */
-function followUps(state: State, decision: DecisionState): { words: string; open: (() => void) | null } | null {
+/** The approved meeting's follow-ups, counted by its check (by its record when opened from its list), and what opens them when there are any. */
+function followUps(state: State, decision: DecisionState) {
   const line = state.impactLine;
   const counted = decision.record === undefined ? line?.scope === 'run' && line.id === decision.run?.run_id : line?.scope === 'record' && line.id === decision.record;
-  if (!line || !counted || !line.summary) return null;
-  const { summary } = line;
-  const record = lineRecord(line);
-  const title = decision.open?.review.title ?? '';
-  const found = activeTotal(summary) + summary.done + summary.not_relevant > 0;
-  return { words: followUpsWords(summary, line.stage), open: found && record !== null ? () => void openFollowUps('record', record, title) : null };
+  return line && counted ? meetingFollowUps(line, decision.open?.review.title ?? '') : null;
 }
 
 /**

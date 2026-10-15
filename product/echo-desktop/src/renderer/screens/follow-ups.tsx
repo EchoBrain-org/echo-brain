@@ -1,16 +1,15 @@
-import type { PersonOpenItemStateV1 } from '@echo-brain/organization-api';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Member, OpenItemView } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
-import { colorFor, initials } from '../format.js';
 import { message } from '../messages.js';
 import {
-  checkWords, firstName, itemGroups, itemHistory, itemKind, itemLabels, itemNames, itemTitle, liveFacts, matchesNow, monthDay, reopenLabel, saysNow, sendLabel, STAGES,
+  checkWords, CLOSED_STATES, firstName, followUpCount, itemGroups, itemHistory, itemKind, itemNames, itemTitle, joined, liveFacts, matchesNow, monthDay,
+  reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
 } from '../needs.js';
 import {
-  awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, moreFollowUps, openFollowUp, openFollowUps, openItemInTool, openListDecision, ownerChoices,
-  pickFollowUpOwner, retryFollowUp, retryFollowUps, rowReading, sendable, sendFollowUp, sendTicked, setFollowUpState, tickFollowUp, toggleClosedGroup, toggleOwnerPicker,
-  undoFollowUp, type FollowUpList, type ItemPage, type OwnerPicker as Picker, type Said, type State,
+  awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, listDecision, moreFollowUps, openFollowUp, openFollowUps, openImpactSource, openListDecision,
+  ownerChoices, pickFollowUpOwner, retryFollowUp, retryFollowUps, rowReading, sendable, sendFollowUp, sendTicked, setFollowUpState, tickFollowUp, toggleClosedGroup,
+  toggleOwnerPicker, undoFollowUp, type FollowUpList, type ItemPage, type OwnerPicker as Picker, type Said, type State,
 } from '../store.js';
 import { Face } from './card.js';
 import { within } from './change.js';
@@ -18,13 +17,8 @@ import { Chevron } from './icons.js';
 import { useKeptPlace } from './items.js';
 
 /** A person, as a chip: their initials in their color, and their first name. */
-export function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
-  return (
-    <span class="owner-chip">
-      <span class="face" style={{ background: colorFor(person.membership_id) }} aria-hidden="true">{initials(person.name)}</span>
-      <span class="owner-chip-name">{label}</span>
-    </span>
-  );
+function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
+  return <span class="owner-chip"><Face name={person.name} keyed={person.membership_id} /><span class="owner-chip-name">{label}</span></span>;
 }
 
 /** You, as an owner picker offers you. */
@@ -144,7 +138,7 @@ function CheckNow({ list }: { list: FollowUpList }) {
  * else opens its page.
  */
 function Row({ state, list, item, label, name }: { state: State; list: FollowUpList; item: OpenItemView; label: string; name: string }) {
-  const sub = [itemKind(item, state.tools?.items), list.scope === 'record' ? null : item.decision?.title ?? null, matchesNow(item)].filter(Boolean).join(' · ');
+  const sub = joined([itemKind(item, state.tools?.items), list.scope === 'record' ? null : item.decision?.title ?? null, matchesNow(item)]);
   // Read rows only first: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
   const reading = rowReading(list, item);
   return <>
@@ -166,15 +160,14 @@ function Row({ state, list, item, label, name }: { state: State; list: FollowUpL
 
 /** The list's head: its name, and under it what it is ("Approved Oct 6 · 4 follow-ups", or the project), with Check now. */
 function Head({ list }: { list: FollowUpList }) {
-  const summary = list.summary;
-  const total = summary ? summary.unsent + summary.open + summary.done + summary.not_relevant : null;
-  const decision = list.items.find(item => item.decision)?.decision;
+  const total = list.summary && summaryTotal(list.summary);
+  const decision = listDecision(list);
   const heading = list.scope === 'record' ? list.title ?? decision?.title ?? 'Follow-ups' : 'Follow-ups';
   const day = decision ? monthDay(decision.approved_at) : null;
   // A meeting's approval opens its decision page over the list, when you approved it.
   const approved = list.scope !== 'record' || !day ? null
     : list.stage?.mine ? <button type="button" class="link-button inline faint-link" onClick={() => void openListDecision()}>Approved {day}</button> : <span>Approved {day}</span>;
-  const count = list.scope === 'record' && total !== null ? (total === 1 ? '1 follow-up' : `${total} follow-ups`) : null;
+  const count = list.scope === 'record' && total !== null ? followUpCount(total) : null;
   return (
     <header class="follow-ups-head">
       <h1 tabIndex={-1}>{heading}</h1>
@@ -187,11 +180,6 @@ function Head({ list }: { list: FollowUpList }) {
     </header>
   );
 }
-
-/** Current work's statuses: read first, with their own More. */
-const ACTIVE: readonly PersonOpenItemStateV1[] = ['unsent', 'open'];
-/** Closed statuses: a meeting's show their rows; yours and a project's open a group at a time. */
-const CLOSED = ['done', 'not_relevant'] as const;
 
 /**
  * A follow-ups list: a meeting's, a project's, or yours (everything you sent
@@ -214,22 +202,25 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
   useEffect(() => { if (!list.loading && returned.current && focusLost()) openedRow()?.focus({ preventScroll: true }); }, [list.loading]);
   usePickerFocus(list.picker?.item_id, column, said);
   useSaidFocus(list.said, said);
-  const labels = itemLabels(list.items);
-  const names = itemNames(list.items);
+  // Each row's names, worked out once each time the rows change.
+  const names = useMemo(() => itemNames(list.items), [list.items]);
   const counts = list.summary;
   const groups = itemGroups(list.items);
   const ticked = list.items.filter(item => sendable(item) && list.ticks[item.item_id]).length;
+  const rows = (items: readonly OpenItemView[]) => (
+    <div class="follow-ups-rows">
+      {items.map(item => <Row key={item.item_id} state={state} list={list} item={item} label={names.get(item.item_id)!.label} name={names.get(item.item_id)!.name} />)}
+    </div>
+  );
   const group = ({ state: status, items }: (typeof groups)[number]) => (
     <section key={status} class="follow-ups-group" aria-label={STAGES[status]}>
       <div class="section-label">{STAGES[status]} · {counts?.[status] ?? items.length}</div>
-      <div class="follow-ups-rows">
-        {items.map(item => <Row key={item.item_id} state={state} list={list} item={item} label={labels.get(item.item_id)!} name={names.get(item.item_id)!} />)}
-      </div>
+      {rows(items)}
     </section>
   );
   // Yours and a project's closed groups start closed ("Done · 12"), each counted over the whole list: opened, its rows show and are
   // read live. Shown once current work is read, as a meeting's are.
-  const closedGroup = (status: (typeof CLOSED)[number]) => {
+  const closedGroup = (status: (typeof CLOSED_STATES)[number]) => {
     const items = groups.find(entry => entry.state === status)?.items ?? [];
     const count = counts?.[status] ?? items.length;
     if (count === 0 && items.length === 0) return null;
@@ -238,24 +229,20 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
       <section key={status} class="follow-ups-group" aria-label={STAGES[status]}>
         <button type="button" class="section-label disclosure" aria-expanded={open}
           onClick={() => toggleClosedGroup(status)}><Chevron /><span>{STAGES[status]} · {count}</span></button>
-        {open && items.length > 0 && (
-          <div class="follow-ups-rows">
-            {items.map(item => <Row key={item.item_id} state={state} list={list} item={item} label={labels.get(item.item_id)!} name={names.get(item.item_id)!} />)}
-          </div>
-        )}
+        {open && items.length > 0 && rows(items)}
       </section>
     );
   };
-  const closedShown = list.scope === 'record' || CLOSED.some(status => list.expanded[status]);
+  const closedShown = list.scope === 'record' || CLOSED_STATES.some(status => list.expanded[status]);
   const foot = ticked > 0 || list.said !== null;
   return (
     <div class="column follow-ups" data-testid="follow-ups" ref={column} aria-busy={list.loading || list.busy}>
       <Head list={list} />
-      {groups.filter(entry => ACTIVE.includes(entry.state)).map(group)}
+      {groups.filter(entry => entry.state === 'unsent' || entry.state === 'open').map(group)}
       {list.active.next && (
         <button type="button" class="link-button more" data-testid="follow-ups-more" disabled={list.loading} onClick={() => void moreFollowUps('active')}>More</button>
       )}
-      {list.scope === 'record' ? groups.filter(entry => !ACTIVE.includes(entry.state)).map(group) : list.closed && CLOSED.map(closedGroup)}
+      {list.scope === 'record' ? groups.filter(entry => entry.state === 'done' || entry.state === 'not_relevant').map(group) : list.closed && CLOSED_STATES.map(closedGroup)}
       {list.closed?.next && closedShown && (
         <button type="button" class="link-button more" data-testid="follow-ups-more-closed" disabled={list.loading} onClick={() => void moreFollowUps('closed')}>More</button>
       )}
@@ -290,7 +277,7 @@ function OpenInTool({ state, item }: { state: State; item: OpenItemView }) {
   if (!source || !('permalink' in source)) return null;
   return <>
     <button type="button" class="link-button card-side-link" title={source.permalink}
-      onClick={async () => { setFailed(false); setFailed(!(await openItemInTool(item))); }}>Open in {externalSourceProvider(source, state.tools?.items)}</button>
+      onClick={async () => { setFailed(false); setFailed(!(await openImpactSource(source))); }}>Open in {externalSourceProvider(source, state.tools?.items)}</button>
     {failed && <span class="error">The item could not be opened. Try again.</span>}
   </>;
 }
@@ -376,7 +363,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
   const me = state.status?.account?.membership_id ?? null;
   const { decision } = item;
   const day = decision ? monthDay(decision.approved_at) : null;
-  const checked = item.kind === 'action' ? null : checkWords(item.check);
+  const checked = checkWords(item.check);
   // Its row shows at once; while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
   const reading = page.loading && awaitingLive(item);
   return (

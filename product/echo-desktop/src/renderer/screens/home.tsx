@@ -1,7 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { colorFor, initial, when } from '../format.js';
 import { message } from '../messages.js';
-import { actionCount, homeFooter, itemLabels, itemNeeds, itemTitle, itemWhy, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
+import { actionCount, homeFooter, itemNames, itemNeeds, itemWhy, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
 import { awaitingLive, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openYourFollowUps, type NeedRow, type State } from '../store.js';
 import { Plus, Saved } from './icons.js';
 
@@ -160,12 +160,12 @@ export function Home({ state }: { state: State }) {
     );
   }
   const waiting = rows.filter(row => row.kind !== 'checking').length;
-  const labels = itemLabels(rows.flatMap(row => ('item' in row ? [row.item] : [])));
+  const names = itemNames(rows.flatMap(row => ('item' in row ? [row.item] : [])));
   return (
     <div class="column needs" data-testid="needs" aria-busy={home ? home.loading || home.reading : true}>
       <div class="section-label needs-head">Needs you{waiting > 0 ? ` · ${waiting}` : ''}</div>
       {rows.map(row => ('item' in row
-        ? <ItemRow key={row.item.item_id} state={state} row={row} label={labels.get(row.item.item_id) ?? itemTitle(row.item)} />
+        ? <ItemRow key={row.item.item_id} state={state} row={row} label={names.get(row.item.item_id)!.label} />
         : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />))}
       {home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>}
       <Footer state={state} />

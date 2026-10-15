@@ -898,7 +898,7 @@ describe('Follow-up lists and item pages', () => {
     store.tickFollowUp('itm_00000002');
     await store.sendTicked(false);
     expect(requests('send').at(-1)?.items).toEqual([{ item_id: 'itm_00000002', include: false }]);
-    expect(said(store)).toEqual({ words: 'Dismissed 1' });
+    expect(said(store)).toEqual({ words: 'Dismissed' });
   });
 
   it('replays a send whose outcome is unknown with the same command, and gives any other choice a new one', async () => {
@@ -1009,7 +1009,7 @@ describe('Follow-up lists and item pages', () => {
     const store = await start();
     await store.openFollowUps('record', record, 'Pilot planning');
     await store.sendTicked(false);
-    expect(said(store)).toEqual({ words: 'Dismissed 1' });
+    expect(said(store)).toEqual({ words: 'Dismissed' });
     readItem = item('2');
     await store.openFollowUp('itm_00000002', item('2'));
     const reads = requests('items').length;
@@ -1158,7 +1158,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     // It went: the row, read again in place, is open.
     page = listPage([item('1'), unsent('2')]);
     await store.sendTicked(true);
-    expect(said(store)).toEqual({ words: 'Sent 1 to Fixture' });
+    expect(said(store)).toEqual({ words: 'Sent to Fixture' });
     expect(list(store).sends).toEqual({});
     expect(list(store).items.find(entry => entry.item_id === 'itm_00000001')?.state).toBe('open');
     // Read again in place: the list's rows, rows only, which settle it; no item read on its own, nothing read live.
@@ -1175,7 +1175,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     sendFailsFor = other;
     page = listPage([item('1'), unsent('2', other)]);
     await store.sendTicked(true);
-    expect(said(store)).toEqual({ words: 'Sent 1 to Fixture · 1 not sent, try again', error: true });
+    expect(said(store)).toEqual({ words: 'Sent to Fixture · 1 not sent, try again', error: true });
     expect(list(store).ticks).toEqual({ itm_00000002: true });
     // Closed while its first send is on its way: nothing more is sent.
     sendFailure = null;

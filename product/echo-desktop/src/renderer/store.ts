@@ -16,7 +16,8 @@ import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import { message } from './messages.js';
-import { firstName, reopenSends, sentWords } from './needs.js';
+import { clip } from './format.js';
+import { firstName, itemTitle, reopenSends, sentWords } from './needs.js';
 
 /** Mine: only what you added, to see and to ask about. Follow-ups: everything you sent or own. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision' }
@@ -4284,12 +4285,6 @@ function updateDecisionRun(runs: readonly PersonRunV1[]): void {
   }
 }
 
-/** Open in Jira (or the item's own tool), from an item ECHO opened for you: the tool checks your access when it opens. */
-export async function openItemInTool(item: OpenItemView): Promise<boolean> {
-  const source = item.reach === 'opened' ? item.current?.source : undefined;
-  return source !== undefined && 'permalink' in source ? openImpactSource(source) : false;
-}
-
 /** The decision, while it is the page, or opened over a meeting's follow-ups (`record`) and showing. */
 function decisionShown(mine: number): DecisionState | null {
   const decision = state.decision;
@@ -4439,8 +4434,7 @@ async function loadLine(key: LineKey, scope: ItemsLine['scope'], id: string): Pr
     return;
   }
   const page = result.value as OpenItemsView;
-  const stage = scope === 'project' ? null : page.stages.find(entry => (scope === 'record' ? entry.record_sha256 : entry.run_id) === id) ?? null;
-  setLine(key, { ...state[key]!, loading: false, summary: page.summary, stage });
+  setLine(key, { ...state[key]!, loading: false, summary: page.summary, stage: stageFor(page, scope, id) });
 }
 
 /** The meeting a meeting's line counts: the record it names, or the one its check found. */
@@ -4672,6 +4666,11 @@ export function sendable(item: OpenItemView): boolean {
   return item.state === 'unsent' && item.can.assign;
 }
 
+/** The decision a meeting's list counts the follow-ups of, from any of its rows whose decision you read. */
+export function listDecision(list: FollowUpList): OpenItemView['decision'] {
+  return list.items.find(item => item.decision)?.decision;
+}
+
 /** A list's two parts: current work, read first, and closed rows. */
 const ACTIVE_STATES: readonly PersonOpenItemStateV1[] = ['unsent', 'open'];
 const CLOSED_STATES: readonly PersonOpenItemStateV1[] = ['done', 'not_relevant'];
@@ -4804,7 +4803,7 @@ async function readList(mine: number, how: ListRead): Promise<void> {
   items = keepLive(current.items, items);
   const ticked = how === 'first' && current.scope === 'record' ? items.filter(sendable) : items.filter(item => sendable(item) && current.ticks[item.item_id]);
   setView({
-    ...current, loading: false, items, active, closed, ...(last ? { summary: last.summary, stage: stageOf(current, last) } : {}),
+    ...current, loading: false, items, active, closed, ...(last ? { summary: last.summary, stage: stageFor(last, current.scope, current.id) } : {}),
     ticks: Object.fromEntries(ticked.map(item => [item.item_id, true])), ...(fresh && !failure ? { stale: false } : {}),
     ...(failure ? { failure: failure.failure, failed: failure.read } : {}),
   });
@@ -4904,9 +4903,9 @@ export function toggleClosedGroup(group: 'done' | 'not_relevant'): void {
   else void fillLive(list.seq);
 }
 
-/** A meeting's own check, from a read of its list: the list's own word for a project or yours. */
-function stageOf(list: FollowUpList, read: Pick<OpenItemsView, 'stages'>): PersonImpactStageV1 | null {
-  return list.scope === 'record' ? read.stages.find(stage => stage.record_sha256 === list.id) ?? null : null;
+/** A meeting's own check, by its record or its check (run), from a read's stages; none for a project or yours. */
+function stageFor(read: Pick<OpenItemsView, 'stages'>, scope: FollowUpList['scope'] | ItemsLine['scope'], id: string | undefined): PersonImpactStageV1 | null {
+  return scope === 'record' || scope === 'run' ? read.stages.find(stage => (scope === 'record' ? stage.record_sha256 : stage.run_id) === id) ?? null : null;
 }
 
 /** More: the next page of the list's current work, or of its closed part. */
@@ -5050,7 +5049,7 @@ export async function sendTicked(include: boolean): Promise<void> {
   for (const run_id of Object.keys(sends)) if (went.some(item => item.run_id === run_id)) delete sends[run_id];
   if (went.length > 0 || Object.keys(sends).some(run_id => tried.some(entry => entry.run_id === run_id))) changedFrom(list.seq);
   const failure = tried.find(entry => entry.failure)?.failure;
-  const done = went.length === 0 ? null : include ? sentWords(went.map(item => (fresh.get(item.item_id) ?? item).owner), account.membership_id) : `Dismissed ${went.length}`;
+  const done = went.length === 0 ? null : sentWords(went.map(item => (fresh.get(item.item_id) ?? item).owner), account.membership_id, include);
   const left = ticked.length - went.length;
   // A send whose outcome was unknown, its rows read again still Not sent, did not go.
   const missed = failure !== undefined && outcomeUnknown(failure, false) && triedRows.every(item => went.includes(item) || fresh.get(item.item_id)?.state === 'unsent');
@@ -5175,12 +5174,11 @@ export async function sendFollowUp(include: boolean): Promise<void> {
   if (!page || !item || page.busy || !sendable(item) || state.concealed) return;
   const items = [{ item_id: item.item_id, include }];
   let kept: SendCommand | null = null;
-  const mine = item.owner.membership_id === expect()?.membership_id;
   await changeItem(page, async () => {
     const sent = await sendRun(item.run_id, items, page.send);
     kept = sent.unknown;
     return { ...(sent.failure ? { failure: sent.failure } : {}), unknown: sent.unknown !== null };
-  }, { words: !include ? 'Dismissed' : mine ? 'Kept for you' : `Sent to ${firstName(item.owner.name)}` }, fresh => fresh.state !== 'unsent',
+  }, { words: sentWords([item.owner], expect()?.membership_id ?? null, include) }, fresh => fresh.state !== 'unsent',
   shown => ({ ...shown, state: include ? 'open' : 'not_relevant', send_included: include }),
   { words: include ? 'Not sent. Try again.' : 'Not dismissed. Try again.', error: true }, keep => ({ send: keep ? kept : null }));
 }
@@ -5207,7 +5205,7 @@ export async function setFollowUpState(to: 'open' | 'done' | 'not_relevant'): Pr
   if (!page || !item || page.busy || !item.can.set_state || item.state === 'unsent' || state.concealed) return;
   const reaches = to === 'open' && reopenSends(item, expect()?.membership_id ?? null);
   const said: Said = to === 'done' ? { words: 'Done', undo: true } : to === 'not_relevant' ? { words: 'Dismissed', undo: true }
-    : { words: reaches ? `Sent to ${firstName(item.owner.name)}` : 'Reopened' };
+    : { words: reaches ? sentWords([item.owner], null) : 'Reopened' };
   await changeItem(page, () => stateWrite(item.item_id, to), said, fresh => fresh.state === to, shown => ({ ...shown, state: to }));
 }
 
@@ -5375,7 +5373,7 @@ function refreshUnder(): void {
  */
 export async function openListDecision(): Promise<void> {
   const list = shownView('list');
-  const decided = list?.items.find(item => item.decision)?.decision;
+  const decided = list && listDecision(list);
   if (!list || list.scope !== 'record' || !decided || !list.stage?.mine || state.concealed || !expect()) return;
   const { approval_id } = decided;
   if (state.route.page === 'decision' && state.decision?.approval_id === approval_id && state.decision.record === undefined) { backTo(-1); return; }
@@ -5511,24 +5509,16 @@ export function newFollowUps(seen: ReadonlySet<string> | null, items: readonly O
   return { seen: new Set([...(seen ?? []), ...waiting.map(item => item.item_id)]), fresh };
 }
 
-/** One line of a notification, cut to what main takes. */
-function noticeLine(text: string): string {
-  const chars = [...text.replace(/\p{Cc}+/gu, ' ').trim()];
-  return chars.length <= NOTICE_TEXT_MAX ? chars.join('') : `${chars.slice(0, NOTICE_TEXT_MAX - 1).join('')}…`;
-}
-
 /**
  * The notification for follow-ups new to you, or null for none. One says who
- * sent it, by first name, and what it is: an action's own words, else its
- * decision's title when you can read it, else "a follow-up". Several are
+ * sent it, by first name, and what it is, as its row names it. Several are
  * counted.
  */
 export function followUpsNotice(fresh: readonly OpenItemView[]): MainMethods['notify.followUps']['params'] | null {
   const ids = [...new Set(fresh.map(item => item.item_id))].slice(0, NOTICE_ITEMS_MAX);
   if (ids.length !== 1) return ids.length === 0 ? null : { item_ids: ids };
-  const item = fresh[0]!;
-  const title = item.kind === 'action' && item.expected ? item.expected : item.decision?.title ?? 'a follow-up';
-  return { item_ids: ids, from: noticeLine(firstName(handedBy(item).name)), title: noticeLine(title) };
+  const line = (text: string) => clip(text.replace(/\p{Cc}+/gu, ' ').trim(), NOTICE_TEXT_MAX);
+  return { item_ids: ids, from: line(firstName(handedBy(fresh[0]!).name)), title: line(itemTitle(fresh[0]!)) };
 }
 
 /** Signed in, or as another account: the quiet check starts over for it at once, then goes every five minutes, whatever the page. */

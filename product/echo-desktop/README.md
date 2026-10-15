@@ -85,7 +85,7 @@ that offers you first ("You"); a dashed **Pick owner** means ECHO found no one
 change its rows are read again in place from ECHO's own fields only, each
 keeping what it last said, so a change opens nothing in its tool, and a foot
 that stays at the bottom
-while anything is ticked or said says what happened ("Sent 1 to Mina", "Owner
+while anything is ticked or said says what happened ("Sent to Mina", "Owner
 changed to Rafael", "Sent 2 · 1 not sent, try again"), taking the focus when
 the button that had it went; a picker that closes hands the focus back to its
 owner chip. A send whose reply was lost is settled by that read: one that

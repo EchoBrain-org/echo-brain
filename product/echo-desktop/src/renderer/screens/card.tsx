@@ -1,7 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { colorFor, initials } from '../format.js';
-import { monthDay } from '../needs.js';
 import { saidLines, type ProposalSignal } from '../proposal.js';
 import { Chevron } from './icons.js';
 
@@ -69,11 +68,6 @@ export function SignalRow({ signal, number, children }: { signal: ProposalSignal
       )}
     </div>
   );
-}
-
-/** An action's due date, as the meeting set it. */
-export function dueWords(due: string | null): string | null {
-  return due === null ? null : `Due ${monthDay(due) ?? due}`;
 }
 
 /** The reasons given in the meeting, behind one line. */

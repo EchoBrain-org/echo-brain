@@ -7,6 +7,12 @@ export function colorFor(key: string): string {
   return COLORS[hash % COLORS.length]!;
 }
 
+/** Text cut to `max` characters, ending "…" when it was longer. */
+export function clip(text: string, max: number): string {
+  const chars = [...text];
+  return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`;
+}
+
 export function initial(name: string): string {
   return [...name.trim()][0]?.toUpperCase() ?? '?';
 }

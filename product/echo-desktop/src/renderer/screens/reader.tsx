@@ -1,15 +1,14 @@
 import type { ApprovedRecord, Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
 import { message } from '../messages.js';
-import { activeTotal, followUpsWords } from '../needs.js';
 import {
-  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, openFollowUps,
-  projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState,
+  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState,
   type State,
 } from '../store.js';
 import { RecordDetail, UNTITLED } from './ask.js';
 import { ChangeLine, changeShownInPlace, within } from './change.js';
 import { Chevron, Ellipsis } from './icons.js';
+import { FollowUpsLabel, meetingFollowUps } from './impact-card.js';
 
 /** Who can read it, when that is not a project's members: the words Capture uses. */
 function readersWord(audience: Visibility | undefined): string | null {
@@ -81,16 +80,12 @@ function Actions({ state, reader }: { state: State; reader: ReaderState }) {
  */
 function ImpactLine({ state, reader, title }: { state: State; reader: ReaderState; title: string }) {
   const line = state.impactLine;
-  if (reader.ref.kind !== 'meeting' || line?.scope !== 'record' || line.id !== reader.ref.id || !line.summary) return null;
-  const { summary, stage } = line;
-  const found = activeTotal(summary) + summary.done + summary.not_relevant;
-  const words = <><b>Follow-ups</b> <span class="faint">· {followUpsWords(summary, stage)}</span></>;
+  const counted = reader.ref.kind === 'meeting' && line?.scope === 'record' && line.id === reader.ref.id ? meetingFollowUps(line, title) : null;
+  if (!line || !counted) return null;
   return (
     <div class="items-line" data-testid="impact-line">
-      {found > 0
-        ? <button type="button" class="items-line-open" onClick={() => void openFollowUps('record', line.id, title)}>{words}</button>
-        : <span class="items-line-open">{words}</span>}
-      {found === 0 && stage?.state === 'failed' && stage.mine && (
+      <FollowUpsLabel {...counted} class="items-line-open" />
+      {!counted.open && line.stage?.state === 'failed' && line.stage.mine && (
         <><span class="faint" aria-hidden="true">·</span><button type="button" class="link-button" disabled={line.busy} onClick={() => void retryLineCheck()}>Try again</button></>
       )}
     </div>

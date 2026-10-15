@@ -3,6 +3,7 @@ import type {
 } from '@echo-brain/organization-api';
 import type { ConnectedTool, HomeView, OpenItemView } from '../shared/protocol.js';
 import { externalSourceProvider } from './answer.js';
+import { clip } from './format.js';
 
 // The words Home, the follow-ups lists and the item page use for what an
 // approved meeting set going (open items and Home v1, section 8; follow-ups
@@ -29,7 +30,7 @@ export function actionCount(count: number): string | null {
 
 /** A Send row's count: "1 follow-up to send", "3 follow-ups to send". */
 export function toSend(count: number): string {
-  return count === 1 ? '1 follow-up to send' : `${count} follow-ups to send`;
+  return `${followUpCount(count)} to send`;
 }
 
 /**
@@ -81,66 +82,51 @@ export function itemTitle(item: OpenItemView): string {
   }
 }
 
+/** Items by the name they share. */
+function alike(items: readonly OpenItemView[], names: ReadonlyMap<string, string>): Map<string, OpenItemView[]> {
+  const groups = new Map<string, OpenItemView[]>();
+  for (const item of items) {
+    const name = names.get(item.item_id)!;
+    const group = groups.get(name);
+    if (group) group.push(item); else groups.set(name, [item]);
+  }
+  return groups;
+}
+
 /**
- * Each item's name, and where it is among items alike when nothing else
- * tells them apart: its title; where two items would share one (two items you
- * can't open), what the decision requires of each; where they still would,
- * its decision when you can read it and that tells them apart ("· from Pilot
- * planning"); and then where it is among those alike.
+ * Each item's name and label, apart from every other item's (R37). Its name,
+ * for its tick and its owner ("Owner of …"): its title; where two items would
+ * share one (two items you can't open), what the decision requires of each;
+ * where they still would, its decision when you can read it and that tells
+ * them apart ("· from Pilot planning"); and then where it is among those
+ * alike ("(2)"). Its label, as a row shows its title beside what it needs and
+ * where it came from (Home, the follow-ups lists): its title, and that "(2)".
  */
-function namesApart(items: readonly OpenItemView[]): ReadonlyMap<string, { name: string; position: number | null }> {
-  let names = new Map(items.map(item => [item.item_id, itemTitle(item)]));
-  /** The items that share each name. */
-  const alike = () => {
-    const groups = new Map<string, OpenItemView[]>();
-    for (const item of items) groups.set(names.get(item.item_id)!, [...(groups.get(names.get(item.item_id)!) ?? []), item]);
-    return (item: OpenItemView) => groups.get(names.get(item.item_id)!)!;
-  };
-  const decided = (item: OpenItemView) => item.decision?.title ?? null;
+export function itemNames(items: readonly OpenItemView[]): ReadonlyMap<string, { name: string; label: string }> {
+  const titles = new Map(items.map(item => [item.item_id, itemTitle(item)]));
+  const names = new Map(titles);
   const tellApart = [
     // An action's title is already what the decision requires of it.
     (item: OpenItemView) => (item.kind !== 'action' && item.expected ? ` → ${item.expected}` : ''),
     // Only where the decisions differ: one meeting's items gain nothing by it.
-    (item: OpenItemView, others: readonly OpenItemView[]) => (item.decision && others.some(other => decided(other) !== item.decision!.title) ? ` · from ${item.decision.title}` : ''),
+    (item: OpenItemView, decisions: number) => (item.decision && decisions > 1 ? ` · from ${item.decision.title}` : ''),
   ];
   for (const words of tellApart) {
-    const sharing = alike();
-    names = new Map(items.map(item => {
-      const name = names.get(item.item_id)!;
-      const others = sharing(item);
-      return [item.item_id, others.length > 1 ? `${name}${words(item, others)}` : name];
-    }));
+    for (const group of alike(items, names).values()) {
+      if (group.length < 2) continue;
+      const decisions = new Set(group.map(item => item.decision?.title ?? null)).size;
+      for (const item of group) names.set(item.item_id, `${names.get(item.item_id)!}${words(item, decisions)}`);
+    }
   }
-  const sharing = alike();
+  const sharing = alike(items, names);
   const seen = new Map<string, number>();
-  return new Map(items.map((item): [string, { name: string; position: number | null }] => {
+  return new Map(items.map(item => {
     const name = names.get(item.item_id)!;
-    if (sharing(item).length < 2) return [item.item_id, { name, position: null }];
+    const title = titles.get(item.item_id)!;
+    if (sharing.get(name)!.length < 2) return [item.item_id, { name, label: title }];
     const position = (seen.get(name) ?? 0) + 1;
     seen.set(name, position);
-    return [item.item_id, { name, position }];
-  }));
-}
-
-/**
- * Each item's name for its tick and its owner ("Owner of …"), apart from
- * every other item's (R37): its title, then what tells it apart from items
- * alike ("→ order six weeks ahead", "· from Pilot planning", "(2)").
- */
-export function itemNames(items: readonly OpenItemView[]): ReadonlyMap<string, string> {
-  return new Map([...namesApart(items)].map(([id, { name, position }]) => [id, position === null ? name : `${name} (${position})`]));
-}
-
-/**
- * Each item's title as a row shows it beside what it needs and where it came
- * from (Home, the follow-ups lists): its title, and where it is among items
- * alike ("(2)") only when nothing else on the row tells them apart.
- */
-export function itemLabels(items: readonly OpenItemView[]): ReadonlyMap<string, string> {
-  const apart = namesApart(items);
-  return new Map(items.map(item => {
-    const position = apart.get(item.item_id)!.position;
-    return [item.item_id, position === null ? itemTitle(item) : `${itemTitle(item)} (${position})`];
+    return [item.item_id, { name: `${name} (${position})`, label: `${title} (${position})` }];
   }));
 }
 
@@ -152,9 +138,7 @@ function liveDetails(item: OpenItemView): string | null {
   const current = item.current;
   if (!current) return null;
   if (current.due_at !== undefined) return `due ${monthDay(current.due_at) ?? current.due_at}`;
-  if (current.status !== undefined) return current.status;
-  const says = [...current.says_now];
-  return `says "${says.length > QUOTE_CHARS ? `${says.slice(0, QUOTE_CHARS - 1).join('')}…` : current.says_now}"`;
+  return current.status ?? `says "${clip(current.says_now, QUOTE_CHARS)}"`;
 }
 
 /** What kind of thing an item is, named by its tool once you can open it: "Jira ticket", "Confluence page", "Meeting action". */
@@ -203,11 +187,6 @@ export function itemNeeds(item: OpenItemView): string | null {
   return parts.length === 0 ? null : capitalized(parts.join(' → '));
 }
 
-/** Whose an item is to update: "yours to update", or "Mina's to update" when you are not its owner (you sent it, or it fell back to you). */
-function itemWhose(item: OpenItemView, me: string | null): string {
-  return me === null || item.owner.membership_id === me ? 'yours to update' : `${firstName(item.owner.name)}'s to update`;
-}
-
 /**
  * A Home row's muted line: what the item is, where it came from, and whose it
  * is when it is not yours. "Confluence page · Pilot planning meeting,
@@ -216,7 +195,7 @@ function itemWhose(item: OpenItemView, me: string | null): string {
  */
 export function itemWhy(item: OpenItemView, me: string | null, tools?: readonly ConnectedTool[] | null): string {
   const owner = me === null || item.owner.membership_id === me;
-  return joined([itemKind(item, tools), whereFrom(item), owner ? null : itemWhose(item, me)]);
+  return joined([itemKind(item, tools), whereFrom(item), owner ? null : `${firstName(item.owner.name)}'s to update`]);
 }
 
 /** What an item says now on its page, as its tool gave it to you just now ('“Planned for the end of the month.”'); else why it is not shown. */
@@ -226,11 +205,16 @@ export function saysNow(item: OpenItemView): string {
   return `“${current.says_now}”`;
 }
 
+/** A due date as its row or its action shows it: "Due Oct 30". */
+export function dueWords(due: string | null): string | null {
+  return due === null ? null : `Due ${monthDay(due) ?? due}`;
+}
+
 /** The tool's own facts about an item you opened just now, under what it says: "In Progress · Due Oct 30 · Mina Patel", only those it has. */
 export function liveFacts(item: OpenItemView): string | null {
   const current = item.current;
   if (!current) return null;
-  const facts = joined([current.status ?? null, current.due_at === undefined ? null : `Due ${monthDay(current.due_at) ?? current.due_at}`, current.assignee ?? null]);
+  const facts = joined([current.status ?? null, dueWords(current.due_at ?? null), current.assignee ?? null]);
   return facts === '' ? null : facts;
 }
 
@@ -252,8 +236,12 @@ export function matchesNow(item: OpenItemView): string | null {
 /** A follow-up's status (F7). */
 export const STAGES: Readonly<Record<PersonOpenItemStateV1, string>> = { unsent: 'Not sent', open: 'Open', done: 'Done', not_relevant: 'Dismissed' };
 
+/** A follow-ups list's current work, read and shown first: not sent yet, or open. */
+export const ACTIVE_STATES = ['unsent', 'open'] as const;
+/** Closed follow-ups: each status a group of its own, its rows read once it opens. */
+export const CLOSED_STATES = ['done', 'not_relevant'] as const;
 /** The order of a follow-ups list's groups. */
-const GROUPS: readonly PersonOpenItemStateV1[] = ['unsent', 'open', 'done', 'not_relevant'];
+const GROUPS: readonly PersonOpenItemStateV1[] = [...ACTIVE_STATES, ...CLOSED_STATES];
 
 /**
  * A follow-ups list's groups, in order (Not sent, Open, Done, Dismissed), the
@@ -272,13 +260,18 @@ export function activeTotal(counts: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'o
   return counts.unsent + counts.open;
 }
 
+/** Every follow-up counted, whatever its status. */
+export function summaryTotal(counts: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'open' | 'done' | 'not_relevant'>): number {
+  return activeTotal(counts) + counts.done + counts.not_relevant;
+}
+
 /** A total of follow-ups not closed, as a project's feed row shows it: "4 follow-ups", never "open" (that is one status). */
 export function followUpCount(count: number): string {
   return count === 1 ? '1 follow-up' : `${count} follow-ups`;
 }
 
 /** Parts of a line that are not empty, joined: "1 open · 4 not sent". */
-function joined(parts: readonly (string | null)[]): string {
+export function joined(parts: readonly (string | null)[]): string {
   return parts.filter((part): part is string => part !== null).join(' · ');
 }
 
@@ -365,16 +358,20 @@ export function itemHistory(item: OpenItemView, me: string | null): HistoryEvent
 }
 
 /**
- * What a list's Send said, in place, by first name as the buttons say: "Sent
- * 1 to Mina", "Sent 2 · 1 kept for you", "Kept 1 for you". `owners` are the
- * owners of the items it sent; those that are yours stay with you.
+ * What a Send said, in place, on a list or an item page, by first name as the
+ * buttons say, and counted only past one: "Sent to Mina", "Sent 2 to Mina",
+ * "Sent 2 · 1 kept for you", "Kept for you"; and, dismissed (`include`
+ * false), "Dismissed", "Dismissed 2". `owners` are the owners of the items it
+ * sent; those that are yours stay with you.
  */
-export function sentWords(owners: readonly { membership_id: string; name: string }[], me: string | null): string {
+export function sentWords(owners: readonly { membership_id: string; name: string }[], me: string | null, include = true): string {
+  const counted = (words: string, count: number) => (count === 1 ? words : `${words} ${count}`);
+  if (!include) return counted('Dismissed', owners.length);
   const kept = owners.filter(owner => owner.membership_id === me).length;
   const others = owners.filter(owner => owner.membership_id !== me);
-  const people = new Set(others.map(owner => owner.membership_id));
-  const sent = others.length === 0 ? null : `Sent ${others.length}${people.size === 1 && kept === 0 ? ` to ${firstName(others[0]!.name)}` : ''}`;
-  return joined([sent, kept === 0 ? null : sent === null ? `Kept ${kept} for you` : `${kept} kept for you`]);
+  const to = new Set(others.map(owner => owner.membership_id)).size === 1 ? ` to ${firstName(others[0]!.name)}` : '';
+  const sent = others.length === 0 ? null : `${counted('Sent', others.length)}${to}`;
+  return joined([sent, kept === 0 ? null : sent === null ? `${counted('Kept', kept)} for you` : `${kept} kept for you`]);
 }
 
 /** The button that sends one follow-up: "Send to Mina", or "Keep it myself" when you are its owner. */
@@ -393,5 +390,5 @@ export function reopenSends(item: OpenItemView, me: string | null): boolean {
 
 /** A closed follow-up's button: "Send to Mina" when opening it sends it, else "Reopen". */
 export function reopenLabel(item: OpenItemView, me: string | null): string {
-  return reopenSends(item, me) ? `Send to ${firstName(item.owner.name)}` : 'Reopen';
+  return reopenSends(item, me) ? sendLabel(item, me) : 'Reopen';
 }

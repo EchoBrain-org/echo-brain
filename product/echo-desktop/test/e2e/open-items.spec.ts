@@ -83,7 +83,7 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await list.getByRole('button', { name: 'Send 1', exact: true }).click();
   // The foot says what happened, and takes the focus from the button that went.
   const said = list.getByTestId('follow-ups-said');
-  await expect(said).toHaveText('Sent 1 to Mina');
+  await expect(said).toHaveText('Sent to Mina');
   await expect(said).toBeFocused();
   await expect(row(group(list, 'Open'), 'ECHO-12')).toContainText('Mina');
   await expect(unsent.getByTestId('follow-up-row')).toHaveCount(3);
@@ -104,7 +104,7 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   // And after sending: Confirm the trace goes to Mina, then to Rafael.
   await unsent.getByRole('checkbox', { name: 'Confirm the trace', exact: true }).check();
   await list.getByRole('button', { name: 'Send 1', exact: true }).click();
-  await expect(list.getByTestId('follow-ups-said')).toHaveText('Sent 1 to Mina');
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Sent to Mina');
   const trace = row(group(list, 'Open'), 'Confirm the trace');
   await trace.getByRole('button', { name: /^Owner: Mina/ }).click();
   await pickOwner(page, 'Rafael Moreno', 'Raf');
@@ -128,7 +128,7 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   expect(requests('items')).toHaveLength(itemReads);
   // Dismiss moves a row to Dismissed; its page offers Send to its owner, which reopens it to them.
   await list.getByRole('button', { name: 'Dismiss 1', exact: true }).click();
-  await expect(list.getByTestId('follow-ups-said')).toHaveText('Dismissed 1');
+  await expect(list.getByTestId('follow-ups-said')).toHaveText('Dismissed');
   await row(group(list, 'Dismissed'), 'Send the revised quote').click();
   await expect(item.getByRole('heading', { name: 'Send the revised quote' })).toBeVisible();
   await expect(item.getByTestId('follow-up-state')).toHaveText('Dismissed');
@@ -299,7 +299,7 @@ test('a follow-up sent to you while ECHO runs comes as a notification that opens
   writeFileSync(join(app.home, 'mina-sends'), '');
   await page.clock.fastForward('05:00');
   await expect.poll(quietReads).toBe(3);
-  await expect.poll(notices).toEqual([{ title: 'ECHO', body: 'Mina sent you: a follow-up' }]);
+  await expect.poll(notices).toEqual([{ title: 'ECHO', body: 'Mina sent you: Jira ticket' }]);
   // The quiet check starts no sweep or run.
   expect(requests('sweep')).toEqual([]);
   expect(requests('start')).toEqual([]);

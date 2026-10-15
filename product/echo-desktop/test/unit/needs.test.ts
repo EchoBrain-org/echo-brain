@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, activeTotal, checkWords, followUpCount, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemLabels, itemNames, itemNeeds, itemTitle, itemWhy,
+  actionCount, activeTotal, checkWords, followUpCount, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemNames, itemNeeds, itemTitle, itemWhy,
   liveFacts, matchesNow, meetingSuffix, monthDay, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
 
@@ -69,23 +69,25 @@ describe('the words Home and the follow-ups use', () => {
       item({ item_id: 'itm_00000003', reach: 'unavailable' }), item({ item_id: 'itm_00000004', current: { source: ticket, says_now: 'Planned.' } }),
       action({ item_id: 'itm_00000005' }), action({ item_id: 'itm_00000006' }),
     ]);
-    expect(Object.fromEntries(names)).toEqual({
+    expect(Object.fromEntries([...names].map(([id, { name }]) => [id, name]))).toEqual({
       itm_00000001: 'A Jira ticket you can\'t open → confirm the trace by Friday', itm_00000002: 'A Jira ticket you can\'t open → order six weeks ahead',
       itm_00000003: 'A Jira ticket ECHO couldn\'t read just now', itm_00000004: 'ECHO-12 · Pilot launch',
       // An action's title is already what the meeting requires: never said twice.
       itm_00000005: 'Send the revised quote (1)', itm_00000006: 'Send the revised quote (2)',
     });
-    expect(itemNames([item()]).get('itm_00000001')).toBe('A Jira ticket you can\'t open');
+    expect(itemNames([item()]).get('itm_00000001')).toEqual({ name: 'A Jira ticket you can\'t open', label: 'A Jira ticket you can\'t open' });
     // A row's title gains only its position, where nothing else on the row tells it apart.
-    expect(Object.fromEntries(itemLabels([item({ item_id: 'itm_00000001', expected: 'x', decision: pilot }), item({ item_id: 'itm_00000002', expected: 'x', decision: pilot })])))
-      .toEqual({ itm_00000001: 'A Jira ticket you can\'t open (1)', itm_00000002: 'A Jira ticket you can\'t open (2)' });
+    expect(Object.fromEntries([...itemNames([item({ item_id: 'itm_00000001', expected: 'x', decision: pilot }), item({ item_id: 'itm_00000002', expected: 'x', decision: pilot })])]
+      .map(([id, { label }]) => [id, label]))).toEqual({ itm_00000001: 'A Jira ticket you can\'t open (1)', itm_00000002: 'A Jira ticket you can\'t open (2)' });
+    // Where the title tells it apart, the label is the title alone.
+    expect(names.get('itm_00000001')?.label).toBe('A Jira ticket you can\'t open');
   });
 
   it('keeps names apart by their meeting when what the meeting requires does not', () => {
     const decision = (title: string) => ({ ...pilot, title });
-    expect(Object.fromEntries(itemNames([
+    expect(Object.fromEntries([...itemNames([
       item({ item_id: 'itm_00000001', expected: null, decision: decision('Pilot planning') }), item({ item_id: 'itm_00000002', expected: null, decision: decision('Kickoff review') }),
-    ]))).toEqual({ itm_00000001: 'A Jira ticket you can\'t open · from Pilot planning', itm_00000002: 'A Jira ticket you can\'t open · from Kickoff review' });
+    ])].map(([id, { name }]) => [id, name]))).toEqual({ itm_00000001: 'A Jira ticket you can\'t open · from Pilot planning', itm_00000002: 'A Jira ticket you can\'t open · from Kickoff review' });
   });
 
   it('never writes "meeting" after a title that already ends with it (R76)', () => {
@@ -215,14 +217,16 @@ describe('Home item rows and the item page', () => {
     expect(sendLabel(own, ari.membership_id)).toBe('Keep it myself');
   });
 
-  it('says what a list\'s Send did', () => {
+  it('says what a Send did, on a list or a page, counting only past one', () => {
     const rafael = { membership_id: 'mem_00000000-0000-4000-8000-000000000009', name: 'Rafael Moreno' };
     // By first name, as the buttons name them.
-    expect(sentWords([mina], ari.membership_id)).toBe('Sent 1 to Mina');
+    expect(sentWords([mina], ari.membership_id)).toBe('Sent to Mina');
     expect(sentWords([mina, mina], ari.membership_id)).toBe('Sent 2 to Mina');
     expect(sentWords([mina, rafael, ari], ari.membership_id)).toBe('Sent 2 · 1 kept for you');
-    expect(sentWords([mina, ari], ari.membership_id)).toBe('Sent 1 · 1 kept for you');
+    expect(sentWords([mina, ari], ari.membership_id)).toBe('Sent to Mina · 1 kept for you');
+    expect(sentWords([ari], ari.membership_id)).toBe('Kept for you');
     expect(sentWords([ari, ari], ari.membership_id)).toBe('Kept 2 for you');
+    expect([sentWords([mina], ari.membership_id, false), sentWords([mina, ari], ari.membership_id, false)]).toEqual(['Dismissed', 'Dismissed 2']);
   });
 });
 

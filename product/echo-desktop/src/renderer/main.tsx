@@ -169,7 +169,7 @@ function App() {
   const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision ? 'Decision'
     : state.route.page === 'follow-ups' ? 'Follow-ups' : null;
   // A follow-ups view names itself: Follow-ups, the meeting or the project; an item; a decision.
-  const viewName = view?.kind === 'list' ? (view.scope === 'record' ? view.title ?? 'Follow-ups' : view.scope === 'project' ? view.title ?? 'Follow-ups' : 'Follow-ups')
+  const viewName = view?.kind === 'list' ? view.title ?? 'Follow-ups'
     : view?.kind === 'item' ? (view.item ? itemTitle(view.item) : 'Follow-up') : view?.kind === 'decision' ? 'Decision' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : viewName ?? pageName ?? 'ECHO';
   // Back leaves Ask for the page it was asked from; asked over a reader (or a follow-ups view), Back goes to it.

@@ -127,13 +127,13 @@ describe('the quiet check', () => {
     expect(notices()).toEqual([{ item_ids: [id(1), id(2), id(3)] }]);
   });
 
-  it('names a document follow-up by its decision, or as a follow-up when you cannot read the decision', async () => {
+  it('names a document follow-up as its row does: what it is and its meeting, or what it is when you cannot read the meeting', async () => {
     await startStore();
     items = [followUp(1, { kind: 'ticket', expected: 'launch next week' })];
     await nextCheck();
     items = [...items, followUp(2, { kind: 'ticket', decision: undefined })];
     await nextCheck();
-    expect(notices()).toEqual([{ item_ids: [id(1)], from: 'Mina', title: 'Pilot planning' }, { item_ids: [id(2)], from: 'Mina', title: 'a follow-up' }]);
+    expect(notices()).toEqual([{ item_ids: [id(1)], from: 'Mina', title: 'Jira ticket · Pilot planning' }, { item_ids: [id(2)], from: 'Mina', title: 'Jira ticket' }]);
   });
 
   it('tells of one given to you since, by who gave it, but not one you made yours yourself, nor one not open or not yours', async () => {
