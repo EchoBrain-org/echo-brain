@@ -441,7 +441,8 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
       ...(current.due_at === undefined ? {} : { due_at: current.due_at }),
     } }),
     relation: item.relation, expected: item.expected, approver: item.approver, owner: item.owner, waits_on: item.waits_on, state: item.state,
-    created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, check: item.check, can: item.can, reach: item.reach,
+    created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, state_set_by: item.state_set_by, owner_set_at: item.owner_set_at,
+    owner_set_by: item.owner_set_by, reached_owner: item.reached_owner, check: item.check, can: item.can, reach: item.reach,
   };
 }
 

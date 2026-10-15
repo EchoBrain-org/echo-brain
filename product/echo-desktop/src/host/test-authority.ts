@@ -56,7 +56,7 @@ interface Contract {
 
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
-  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true; open_only?: true;
+  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; summary_only?: true; open_only?: true; rows_only?: true;
   item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
@@ -64,14 +64,18 @@ interface RunsRequest {
 /** An open item's last check: the verdict alone, who ran it and when (a check keeps no sentence). */
 interface Check { verdict: 'landed' | 'still_open' | 'changed' | 'unreadable'; checked_at: string; checked_by: string }
 
+/** Someone an item names: who set its state or its owner. */
+interface Named { membership_id: string; name: string }
+
 /**
- * One open item (open items and Home v1): an item a decision's impact check
- * found, one shared row, as the Authority keeps it. Rows hold pointers and
- * ECHO's own words; what an item says now is read live, and reaches a viewer
- * (as `current`) only when that viewer could open it.
+ * One open item (open items and Home v1; follow-ups thread v1): an action the
+ * approved meeting decided, or an item its impact check found, one shared row,
+ * as the Authority keeps it. Rows hold pointers and ECHO's own words; what an
+ * item says now is read live, and reaches a viewer (as `current`) only when
+ * that viewer could open it. A meeting's action is never read live.
  */
 interface OpenItem {
-  item_id: string; run_id: string; kind: 'ticket' | 'page';
+  item_id: string; run_id: string; kind: 'action' | 'ticket' | 'page';
   decision: { approval_id: string; record_sha256: string; title: string; first_line: string | null; approved_at: string; project_ids: string[] };
   /** Ari can read its decision. */
   readable: boolean;
@@ -86,7 +90,11 @@ interface OpenItem {
   approver: { membership_id: string; name: string };
   owner: { membership_id: string; name: string; match: 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned' };
   state: 'unsent' | 'open' | 'done' | 'not_relevant';
-  created_at: string; sent_at: string | null; state_set_at: string | null;
+  created_at: string; sent_at: string | null; state_set_at: string | null; state_set_by: Named | null;
+  /** When and by whom its owner was last picked or reassigned; null while the owner is the one ECHO matched. */
+  owner_set_at: string | null; owner_set_by: Named | null;
+  /** Whether Send included it: null before Send. */
+  send_included: boolean | null;
   check: Check | null;
 }
 
@@ -126,6 +134,10 @@ const PRICING_REVIEW = `sha256:${'7'.repeat(64)}`;
 const BEACON_KICKOFF = `sha256:${'8'.repeat(64)}`;
 const PRICING_MEMO = `doc_${'9'.repeat(64)}`;
 const LAUNCH_CHECKLIST = `ctx_${'b'.repeat(64)}`;
+/** Pilot planning's actions, as its proposal names them and their owners. */
+const MEETING_ACTIONS = [
+  { signal_id: 'act-1', text: 'Send the revised quote', owner: 'Rafael Moreno' }, { signal_id: 'act-2', text: 'Confirm the trace', owner: 'Mina Patel' },
+] as const;
 /** One action long enough to come in three parts, across the first page's end. */
 const LONG_ACTION = `Draft the renewal terms.${' Clause.'.repeat(872)}`;
 
@@ -526,8 +538,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     kind: 'page', tool_id: 'confluence', external_scope_id: CONFLUENCE_CLOUD, page_id: '23456', section_id: 'lead-time', version: '3',
     permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=23456', text_sha256: sha('Supplier brief: Lead time') } };
   const openItems: OpenItem[] = [];
-  const minaSent = (item: Omit<OpenItem, 'approver' | 'state' | 'sent_at' | 'state_set_at' | 'check'> & { sent_at: string | null }): OpenItem =>
-    ({ ...item, approver: MINA, state: item.sent_at === null ? 'unsent' : 'open', state_set_at: item.sent_at, check: null });
+  /** An item Mina sent, or has not sent yet; an owner she picked she picked as she sent it. */
+  const minaSent = (item: Omit<OpenItem, 'approver' | 'state' | 'sent_at' | 'state_set_at' | 'state_set_by' | 'owner_set_at' | 'owner_set_by' | 'send_included' | 'check'>
+    & { sent_at: string | null }): OpenItem => {
+    const picked = item.owner.match === 'picked' && item.sent_at !== null;
+    return { ...item, approver: MINA, state: item.sent_at === null ? 'unsent' : 'open', state_set_at: item.sent_at, state_set_by: item.sent_at === null ? null : MINA,
+      owner_set_at: picked ? item.sent_at : null, owner_set_by: picked ? MINA : null, send_included: item.sent_at === null ? null : true, check: null };
+  };
   // Owner modes receive someone else's items without Granola being available.
   // granola-owner-outage is granola-owner while Jira does not answer for its second item.
   const sentToAri = mode === 'granola-owner' || mode === 'granola-owner-outage';
@@ -583,7 +600,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         live: { citation: ticket('ECHO-9', 'Firmware sign-off', '10009'), says_now: 'Sign-off follows the freeze.', assignee: 'S. Okafor', status: 'Blocked' } }),
     );
   }
-  // The meetings Mina approved that Ari can read, each once: in their project's feed, where their Impact line shows.
+  // The meetings Mina approved that Ari can read, each once: in their project's feed, where their follow-ups line shows.
   for (const item of openItems.filter(entry => entry.readable)) {
     if (meetings.some(meeting => meeting.record_sha256 === item.decision.record_sha256)) continue;
     meetings.push({
@@ -592,19 +609,30 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       participants: ['Mina Patel', 'Ari'], approved_by: 'Mina Patel', atoms: [{ kind: 'decision', text: item.decision.first_line ?? item.decision.title }],
     });
   }
-  /** What Ari's check of Pilot planning found, written once when it is done: unsent, with exact owners or Ari. */
+  /**
+   * What Ari's check of Pilot planning found, written once when it is done: unsent, with exact owners or Ari. The
+   * affected items first (ECHO-12, Mina's in Jira; the PRD page, no one's, so Ari's: Pick owner), then the meeting's own
+   * actions, each the person Ari confirmed on Approve when exactly one member has that name, else Ari.
+   */
   const writeFound = () => {
     if (granolaRun?.state !== 'done' || openItems.some(item => item.run_id === PILOT_RUN)) return;
     const decision = { approval_id: 'apr_' + 'a'.repeat(64), record_sha256: PILOT_RECORD, title: 'Pilot planning', first_line: 'Launch the pilot next week.',
       approved_at: '2026-10-07T10:00:00.000Z', project_ids: Array.isArray(granolaReview?.project_ids) ? [...granolaReview.project_ids as string[]] : [] };
     const unsent = { run_id: PILOT_RUN, decision, readable: true, approver: ARI, state: 'unsent' as const, created_at: '2026-10-07T10:05:00.000Z', sent_at: null, state_set_at: null,
-      check: null };
+      state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null, check: null };
+    const confirmed = Array.isArray(granolaReview?.owners) ? granolaReview.owners as { signal_id: string; owner: string }[] : [];
+    const ownerOf = (signalId: string): OpenItem['owner'] => {
+      const named = desktop.people.filter(person => person.display_name === confirmed.find(entry => entry.signal_id === signalId)?.owner);
+      return named.length === 1 ? { membership_id: named[0]!.membership_id, name: named[0]!.display_name, match: 'name' } : { ...ARI, match: 'approver' };
+    };
     openItems.push(
       { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000031', kind: 'ticket', relation: 'conflicts', expected: 'launch next week',
         opens: true, live: { citation: ticket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
           assignee: 'Mina Patel', status: 'In Progress', due_at: '2026-10-30' }, owner: { ...MINA, match: 'jira_account' } },
       { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000032', kind: 'page', relation: 'needs_updating', expected: 'pilot starts next week',
         opens: true, live: { citation: PRD_PAGE, says_now: 'starts after freeze' }, owner: { ...ARI, match: 'approver' } },
+      ...MEETING_ACTIONS.map((action, index): OpenItem => ({ ...unsent, item_id: `itm_00000000-0000-4000-8000-00000000003${8 + index}`, kind: 'action',
+        relation: 'needs_updating', expected: action.text, opens: false, live: {}, owner: ownerOf(action.signal_id) })),
     );
   };
   /** Pilot planning, approved by Ari: in the projects it was approved into, where its record opens. */
@@ -632,7 +660,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // for just now, not assessed (no expected phrase).
   if (mode === 'granola-checked' || mode.startsWith('granola-review') || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
-    granolaReview = { action: 'approve', project_ids: [THERMOSTAT] };
+    granolaReview = { action: 'approve', project_ids: [THERMOSTAT], owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, owner: action.owner })) };
     granolaRun = { state: 'done', error_code: null, retried: false };
     meetings.push(pilotMeeting([THERMOSTAT]));
     writeFound();
@@ -653,14 +681,17 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           live: { citation: ticket('ECHO-42', 'Pilot freight', '10042'), says_now: 'Freight is booked for November.' } },
       );
     } else {
-      openItems.push({ ...found, item_id: 'itm_00000000-0000-4000-8000-000000000033', kind: 'page', relation: 'conflicts', expected: 'parts ordered for next week',
-        opens: false, live: { citation: SUPPLIER_BRIEF, says_now: 'Parts are ordered with six weeks of lead time.' }, owner: { ...RAFAEL, match: 'picked' } });
       const sentAt = '2026-10-07T11:00:00.000Z';
+      openItems.push({ ...found, item_id: 'itm_00000000-0000-4000-8000-000000000033', kind: 'page', relation: 'conflicts', expected: 'parts ordered for next week',
+        opens: false, live: { citation: SUPPLIER_BRIEF, says_now: 'Parts are ordered with six weeks of lead time.' }, owner: { ...RAFAEL, match: 'picked' },
+        owner_set_at: sentAt, owner_set_by: ARI });
       const checkedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
       const checked: Readonly<Record<string, Check['verdict']>> = mode.startsWith('granola-review') ? { ...SWEPT, 'itm_00000000-0000-4000-8000-000000000031': 'changed' } : SWEPT;
+      // Everything was sent; the meeting's actions are never checked.
       for (const item of openItems.filter(entry => entry.run_id === PILOT_RUN)) {
-        Object.assign(item, { state: 'open', sent_at: sentAt, state_set_at: sentAt,
-          check: mode === 'granola-checked' || mode.startsWith('granola-review') ? { verdict: checked[item.item_id]!, checked_at: checkedAt, checked_by: 'Mina Patel' } : null });
+        Object.assign(item, { state: 'open', sent_at: sentAt, state_set_at: sentAt, state_set_by: ARI, send_included: true,
+          check: item.kind !== 'action' && (mode === 'granola-checked' || mode.startsWith('granola-review'))
+            ? { verdict: checked[item.item_id]!, checked_at: checkedAt, checked_by: 'Mina Patel' } : null });
       }
     }
   }
@@ -669,20 +700,27 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   /** Ari sees a row whose decision Ari can read, and an item sent to Ari as its owner. */
   const visible = (item: OpenItem) => item.readable || (mineAsOwner(item) && item.state !== 'unsent');
   /**
-   * A row rebuilt for Ari: the decision only for a reader, what it says now only when Ari could open it,
-   * and how its live read went: opened, refused to Ari, or not answered just now.
+   * A row rebuilt for Ari: the decision only for a reader, what it says now only when Ari could open it (and `live`: a
+   * quiet Home read opens nothing), and how its live read went: opened, refused to Ari, or not answered just now. A
+   * meeting's action is never read. Before Send only its approver may change it, by picking its owner.
    */
-  const itemView = (item: OpenItem) => {
-    const reach = item.outage ? 'unavailable' : item.opens ? 'opened' : 'no_access';
+  const itemView = (item: OpenItem, live = true) => {
+    const reach = item.kind === 'action' || !live ? 'not_read' : item.outage ? 'unavailable' : item.opens ? 'opened' : 'no_access';
+    const person = (named: Named | null) => (named === null ? null : { ...named, active: true });
     return {
       item_id: item.item_id, run_id: item.run_id, kind: item.kind, ...(item.readable ? { decision: item.decision } : {}), ...(reach === 'opened' ? { current: item.live } : {}),
       relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
       waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
-      check: item.check, can: { set_state: item.state !== 'unsent' && involved(item), assign: involved(item) }, reach,
+      state_set_by: person(item.state_set_by), owner_set_at: item.owner_set_at, owner_set_by: person(item.owner_set_by),
+      reached_owner: item.send_included === true || item.state === 'open' || item.state === 'done',
+      check: item.check, can: { set_state: item.state !== 'unsent' && involved(item), assign: item.state === 'unsent' ? item.approver.membership_id === ARI.membership_id : involved(item) },
+      reach,
     };
   };
-  /** Send commands applied, by command id: a resend gets the same answer. */
-  const sends = new Map<string, { sent: number; not_relevant: number }>();
+  /** Send commands applied, by command id, with the exact items each listed: a resend gets the same answer, other items under it conflict. */
+  const sends = new Map<string, { items: string; result: { sent: number; not_relevant: number } }>();
+  /** Mina has marked done what Ari sent her (the `mina-done` file in the test's home). */
+  let minaDone = false;
   /** Ari's sweeps, newest first. */
   const sweepRuns: SweepRun[] = [];
   let homeReads = 0;
@@ -775,7 +813,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         case 'import': granolaImported = true; return json({ status: 'queued' });
         case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added' ? [review] : [] });
         case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: PILOT_PROPOSAL,
-          owners: [{ signal_id: 'act-1', action: 'Send the revised quote', proposed: 'Rafael Moreno' }, { signal_id: 'act-2', action: 'Confirm the trace', proposed: 'Mina Patel' }],
+          owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, action: action.text, proposed: action.owner })),
           suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
         case 'review':
           granolaReview = body; granolaApproved = true;
@@ -831,10 +869,19 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         sweep.state = 'done';
       }
       writeFound();
+      // Mina marks done the open items Ari sent her, once the test asks for it.
+      if (!minaDone && existsSync(join(home, 'mina-done'))) {
+        minaDone = true;
+        for (const item of openItems) {
+          if (item.state === 'open' && item.owner.membership_id === MINA.membership_id && item.approver.membership_id === ARI.membership_id) {
+            Object.assign(item, { state: 'done', state_set_at: now(), state_set_by: MINA });
+          }
+        }
+      }
       // Mina sends Ari another item after Home's second read.
       if (mode === 'granola-home-fails-once' && request.operation === 'home' && homeReads === 2) {
         const later = openItems.find(item => item.state === 'unsent' && item.approver.membership_id === MINA.membership_id);
-        if (later) Object.assign(later, { state: 'open', sent_at: now(), state_set_at: now() });
+        if (later) Object.assign(later, { state: 'open', sent_at: now(), state_set_at: now(), state_set_by: MINA, send_included: true });
       }
       const shown = openItems.filter(visible).sort((a, b) => a.created_at.localeCompare(b.created_at));
       /** An item in a scope: one Ari sent or owns, a run's, or, read by Ari, a decision's or a project's. */
@@ -884,7 +931,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         // Home: the Send row while Ari's check has items not sent, the open items that wait on
         // Ari, and the open items Ari sent that ECHO saw change; then, of the open items Ari sent
         // or owns, how many landed, how many Ari sent wait on others, and when ECHO last checked
-        // one. granola-home-fails-once fails the second read.
+        // one. Rows only: no live read, and never a sweep due. granola-home-fails-once fails the
+        // second read.
         case 'home': {
           homeReads += 1;
           if (mode === 'granola-home-fails-once' && homeReads === 2) return failure('unavailable', 503);
@@ -897,11 +945,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const theirs = shown.filter(item => item.state === 'open' && involved(item));
           const waitsOnAri = (item: OpenItem) => mineAsOwner(item) || item.check?.verdict === 'changed';
           return result('home', {
-            send, items: theirs.filter(waitsOnAri).sort((a, b) => sentAt(a).localeCompare(sentAt(b))).map(itemView),
+            send, items: theirs.filter(waitsOnAri).sort((a, b) => sentAt(a).localeCompare(sentAt(b))).map(item => itemView(item, request.rows_only !== true)),
             landed: theirs.filter(item => item.check?.verdict === 'landed').length,
             waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
             last_checked_at: theirs.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null,
-            sweep_due: mode.startsWith('granola-sweep') && sweepRuns.length === 0,
+            sweep_due: request.rows_only !== true && mode.startsWith('granola-sweep') && sweepRuns.length === 0,
           });
         }
         case 'items': {
@@ -922,10 +970,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
               return { record_sha256: record, run_id: found.run_id, state: 'done', error_code: null, mine: found.approver.membership_id === ARI.membership_id };
             }),
           ];
-          // Counts only (a project's or a decision's line): the summary and stages, no item. Open only (Your open items): the open
-          // items alone, with the same summary.
+          // Counts only (a project's or a meeting's line): the summary and stages, no item. Open only: the open items alone, with
+          // the same summary.
           const listed = request.open_only === true ? items.filter(item => item.state === 'open') : items;
-          return result('items', { items: request.summary_only === true ? [] : listed.map(itemView), next_cursor: null, stages, summary: {
+          return result('items', { items: request.summary_only === true ? [] : listed.map(item => itemView(item)), next_cursor: null, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
             landed: verdicts('landed'), changed: verdicts('changed'), unreadable: verdicts('unreadable'), decisions: records.length,
             last_checked_at: items.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null, by_decision: records.map(record => {
@@ -935,42 +983,53 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             }),
           } });
         }
-        // Send: once per command; a card drawn before the items changed is refused, and nothing is written.
+        // Send (follow-ups thread v1, F1): any of the run's unsent items, to their owners (`include`) or dismissed; the ones
+        // not listed stay unsent. Once per command: the same items again replay it, other items under it conflict. A listed
+        // item no longer unsent is a conflict too, and nothing is written.
         case 'send': {
           if (run?.state !== 'done' || request.run_id !== runId) return failure('not_found', 404);
-          const earlier = sends.get(request.command_id!);
-          if (earlier) return result('send', earlier);
-          const unsent = openItems.filter(item => item.run_id === runId && item.state === 'unsent');
           const asked = request.items ?? [];
-          if (asked.length !== unsent.length || !unsent.every(item => asked.some(entry => entry.item_id === item.item_id))) return failure('conflict', 409);
+          const listed = JSON.stringify(asked);
+          const earlier = sends.get(request.command_id!);
+          if (earlier) return earlier.items === listed ? result('send', earlier.result) : failure('conflict', 409);
+          const unsent = openItems.filter(item => item.run_id === runId && item.state === 'unsent');
+          if (!asked.every(entry => unsent.some(item => item.item_id === entry.item_id))) return failure('conflict', 409);
           if (asked.some(entry => entry.owner_membership_id !== undefined && !desktop.people.some(person => person.membership_id === entry.owner_membership_id))) {
             return failure('invalid_request', 400);
           }
           const at = now();
           for (const entry of asked) {
             const item = unsent.find(candidate => candidate.item_id === entry.item_id)!;
-            if (entry.owner_membership_id !== undefined) item.owner = { membership_id: entry.owner_membership_id, name: nameOf(entry.owner_membership_id), match: 'picked' };
-            Object.assign(item, { state: entry.include ? 'open' : 'not_relevant', sent_at: at, state_set_at: at });
+            const pick = entry.owner_membership_id;
+            if (pick !== undefined && (pick !== item.owner.membership_id || item.owner.match === 'approver')) {
+              Object.assign(item, { owner: { membership_id: pick, name: nameOf(pick), match: 'picked' }, owner_set_at: at, owner_set_by: ARI });
+            }
+            Object.assign(item, { state: entry.include ? 'open' : 'not_relevant', sent_at: at, state_set_at: at, state_set_by: ARI, send_included: entry.include });
           }
           const sent = { sent: asked.filter(entry => entry.include).length, not_relevant: asked.filter(entry => !entry.include).length };
-          sends.set(request.command_id!, sent);
+          sends.set(request.command_id!, { items: listed, result: sent });
           return result('send', sent);
         }
-        // Done or Not relevant: only the approver or the owner, and only once it was sent.
+        // Done, Dismissed or open again: only the approver or the owner, and only once it was sent. The same state writes nothing.
         case 'set_state': {
           const item = shown.find(entry => entry.item_id === request.item_id && involved(entry));
           if (!item) return failure('not_found', 404);
           if (item.state === 'unsent') return failure('invalid_request', 400);
-          Object.assign(item, { state: request.state, state_set_at: now() });
+          if (item.state !== request.state) Object.assign(item, { state: request.state, state_set_at: now(), state_set_by: ARI });
           return result('set_state', { state: request.state });
         }
-        // Reassign…, from an item's card: the item is the person's to update now.
+        // An owner picked (F2): before Send by its approver only (`picked`), after it by its approver or owner (`reassigned`).
+        // Its owner again writes nothing, unless the item only fell back to its approver: then the pick claims it.
         case 'assign': {
           const item = shown.find(entry => entry.item_id === request.item_id && involved(entry));
           const person = desktop.people.find(entry => entry.membership_id === request.owner_membership_id);
           if (!item) return failure('not_found', 404);
+          if (item.state === 'unsent' && item.approver.membership_id !== ARI.membership_id) return failure('invalid_request', 400);
           if (!person) return failure('invalid_request', 400);
-          item.owner = { membership_id: person.membership_id, name: person.display_name, match: 'reassigned' };
+          if (person.membership_id !== item.owner.membership_id || item.owner.match === 'approver') {
+            Object.assign(item, { owner: { membership_id: person.membership_id, name: person.display_name, match: item.state === 'unsent' ? 'picked' : 'reassigned' },
+              owner_set_at: now(), owner_set_by: ARI });
+          }
           // Made, but the first reply is lost on its way back.
           if (mode === 'granola-review-assign-lost' && ++assigns === 1) return failure('unavailable', 503);
           return result('assign', { owner: { membership_id: person.membership_id, name: person.display_name, active: true } });
@@ -984,7 +1043,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         // none open, nothing to check. Asked for again while that scope's sweep waits, it is that one.
         case 'sweep': {
           const { scope, id } = request;
-          const open = shown.filter(item => item.state === 'open' && inScope(item, scope, id));
+          // A meeting's action is never rechecked.
+          const open = shown.filter(item => item.state === 'open' && item.kind !== 'action' && inScope(item, scope, id));
           if (open.length === 0) return result('sweep', { state: 'nothing_to_check' });
           const key = `${scope}:${id ?? ''}`;
           const queued = sweepRuns.find(entry => entry.scope === key && entry.state === 'pending');
