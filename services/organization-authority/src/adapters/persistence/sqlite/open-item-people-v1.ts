@@ -31,16 +31,24 @@ export class SqliteOpenItemPeopleV1 {
     return found;
   }
 
-  /** Active memberships whose display name equals `name` ignoring case and runs of whitespace (NFC). */
-  activeByName(organizationId: string, name: string): readonly string[] {
-    const wanted = comparableName(name);
-    if (wanted === '') return [];
+  /**
+   * The organization's active roster, read once: a lookup of the active memberships whose display name equals a name ignoring
+   * case and runs of whitespace (NFC).
+   */
+  activeByName(organizationId: string): (name: string) => readonly string[] {
     const rows = this.database.prepare(`SELECT membership.membership_id, principal.display_name
       FROM authority_memberships AS membership
       JOIN authority_principals AS principal ON principal.principal_id = membership.principal_id AND principal.organization_id = membership.organization_id
       WHERE membership.organization_id = ? AND membership.status = 'active'
       ORDER BY membership.membership_id`).all(organizationId) as { readonly membership_id: string; readonly display_name: string }[];
-    return rows.filter(row => comparableName(row.display_name) === wanted).map(row => row.membership_id);
+    const byName = new Map<string, string[]>();
+    for (const row of rows) {
+      const name = comparableName(row.display_name);
+      if (name === '') continue;
+      const holders = byName.get(name);
+      if (holders === undefined) byName.set(name, [row.membership_id]); else holders.push(row.membership_id);
+    }
+    return name => byName.get(comparableName(name)) ?? [];
   }
 
   isActiveMember(organizationId: string, membershipId: string): boolean {

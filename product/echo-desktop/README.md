@@ -23,61 +23,129 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
 - **Checking**: a meeting you approved, while its record publishes and its
   impact check runs. It has no action and is not counted.
 - **Check failed** (verb **Retry**): "Approved · the check did not finish". It
-  opens the decision with the reason and **Try again**.
-- **Send**: your impact check found items the decision changes. Its card
-  lists each item, ticked, with what it says now beside what the decision
-  needs, and who it goes to (or **Pick a person**); the panel beside it says
-  who gets how many and sends them (**Send to …**). Untick any item that is
-  wrong: Send marks it not relevant. The button reads **Keep on my Home**
-  when every ticked item stays yours, and **None of these need changing**
-  when nothing is ticked. **Not now** goes back to Home and keeps the row.
-  **Open the decision** shows its impact card.
-- **Update**: an item that waits on you as its owner: sent to you, or left to
-  you because the people ahead of you have left. Each item row has three
-  lines: "ECHO-12 · Pilot launch doesn't match the decision yet", what it says
-  now and what the decision needs ("Due Oct 30 → decision needs: launch next
-  week"), and, muted, what it is and where it came from ("Jira ticket · Pilot
-  planning meeting, approved Oct 6"). **Open in Jira** (or the item's tool)
-  when you can open it, and **Mark updated** when you may close it, act on the
-  row itself.
-- **Update**, once ECHO's last check saw the item change and it still doesn't
-  match ("· changed since you got it, still doesn't match"), and **Review**
-  for an item someone else owns that changed since you sent it ("Mina's to
-  update · changed since you sent it"): the row opens the item's card first:
-  whose it is to update, what the item says now beside what **The decision
-  needs**, what ECHO saw when it last checked and the decision; beside them its
-  status, due date and assignee when its tool gave them, **Mark updated** and
-  **No change needed** when you may close it, **Open in Jira** (or its tool)
-  when you can open it, and **Reassign…** when you may give it to someone
-  else. Nothing on the row itself closes the item. Only these rows open an
-  item's card, so reassign any other item with `echo-brain person runs`
-  (operation `assign`).
+  opens the decision with the reason and **Try again**; once the check
+  finishes, the page shows the meeting's follow-ups in one line ("Follow-ups ·
+  4 not sent"), the whole line opening their list.
+- **Send**: a meeting you approved has follow-ups not sent yet ("Launch the
+  pilot next week — 4 follow-ups to send"). It opens that meeting's
+  follow-ups.
+- **Update**: a follow-up that waits on you as its owner: sent to you, or left
+  to you because the people ahead of you have left. **Review**: one someone
+  else owns that ECHO saw change since you sent it, and that still doesn't
+  match. Each row has up to three lines: the title ("ECHO-12 · Pilot launch";
+  a meeting's action is its own words), for a document what it says now and
+  what the meeting needs ("Due Oct 30 → decision needs: launch next week"),
+  and, muted, what it is, its meeting and whose it is ("Jira ticket · Pilot
+  planning meeting, approved Oct 6 · Mina's to update"). The whole row opens
+  the follow-up's page; nothing on Home closes an item.
 
-Under the rows, and on an empty Home, a footer says how many of your items
-match their decision now, how many items you sent wait on others, and when
-ECHO last checked ("1 matches its decision now · 2 waiting on others · ECHO
-checked 2 h ago"). **View** opens **Your open items**: a status view of your
-open items, each with what the decision needs, its status (Matches now, Not
-updated yet, Changed, still doesn't match, ECHO couldn't read it, Not checked
-yet) and its owner. A match you may close has **Close**, and **Close all N
-that match** appears when two or more can be closed.
+Home shows each part as soon as it is read, so quick rows never wait for slow
+ones: the tools are read beside everything else (only the meeting reviews wait
+on them), and what waits on you is read first from ECHO's own fields alone,
+which shows its rows at once, and then, only while Home itself shows (not
+under a follow-ups list or page), with each document opened live in its tool;
+back on Home after a change, only the rows new to it are read live. Until a
+row's live read answers, a document's title says what it is and its meeting,
+faintly ("Jira ticket · Pilot planning"); then its title and what it says now
+fill in. A live read that fails shows no error: those rows say "A Jira ticket
+ECHO couldn't read just now".
 
-An approved decision shows its Impact line ("Impact · 1 open · 1 handled ·
-1 couldn't read · checked just now"), and a project the items still open
-across its decisions ("4 open items · from 2 decisions · checked today",
-counted from the project's whole summary). An item that matched its decision,
-or that ECHO couldn't read, is not counted as open; the project line stays
-while any item is unsent or open. Both lines offer **Check now** when they
-have items: it re-checks that decision's or project's open items, shows
-"Checking…" until the check ends, then opens their open items as **Open
-items** ("Nothing open to check" when none is left; "Check failed · Try
-again" when it fails). Home also re-checks your own open items by itself:
-when the Authority says they are due, Home asks for a sweep and starts it
-after any waiting impact check. A sweep makes no Home row and changes no
-item's state; it only records each item's latest verdict. Items on a Slack
-message are not re-checked: ECHO cannot read a Slack message yet, so they
-stay "not checked yet". Projects and archived projects live in the
-sidebar.
+A follow-up is an action the approved meeting decided (a **Meeting action**)
+or an existing document its impact check found the meeting affects. Each has
+one status: **Not sent**, **Open**, **Done** or **Dismissed**, and every count
+is by status ("1 open · 4 not sent · 2 done", whatever ECHO's last check
+found). "Open" is one status only: a total of not sent and open together is
+"4 follow-ups".
+
+A **follow-ups list** is a meeting's (from its Send row, its line in the
+reader, its decision page, or a follow-up's page), a project's (from the line
+above its feed), or **Follow-ups**: everything you sent or own, in every
+status, from the sidebar or Home's footer. When that list is already open
+under what shows, its links go back to it, ticks and place kept, instead of
+opening it again. Rows are grouped Not sent, Open, Done and Dismissed, each
+group counted over the whole list, the meeting's actions first; each row
+shows its title, one faint line (what it is, its meeting when the list spans
+meetings, "matches now" when ECHO's last check found it so) and its owner.
+Current work (Not sent and Open) shows first, a page at a time with its own
+**More**, so it is never behind closed rows; Done and Dismissed show once it
+is read to its end, each with a **More** of its own. A meeting's list opens
+with every group open and reads them all together; Follow-ups and a project's
+list start Done and Dismissed closed ("Done · 12"), and a group's rows are
+read only once it opens. Each page shows at once from ECHO's own fields, and
+then that page is read live, its documents faintly named ("Jira ticket ·
+Pilot planning") until the read answers; live reads wait while another app is
+in front. A read of rows that fails says so, and **Try again** repeats that
+read; a live read that fails only leaves its rows saying ECHO couldn't read
+them just now. A meeting's list says when it was approved:
+"Approved Oct 6", a faint link to its decision page (over the list, so Back
+returns to it, and its follow-ups line goes back to the list) when you
+approved it. A Not sent row you may send has a tick, and a meeting's list
+ticks them all when it opens; **Send N** sends the ticked rows to their
+owners and **Dismiss N** dismisses them, the rest stay Not sent. The owner
+chip changes the owner at once, before or after sending, from a people picker
+that offers you first ("You"); a dashed **Pick owner** means ECHO found no one
+(faint words when you may not pick). The list stays where it is: after a
+change to one row, that row and the list's counts are read again from ECHO's
+own fields only, and the row moves to its group in place; after **Send N** or
+**Dismiss N**, the list's rows are. Each row keeps what it last said, so a
+change opens nothing in its tool, and a foot that stays at the bottom while
+anything is ticked or said says what happened ("Sent to Mina", "Owner
+changed to Rafael", "Sent 2 · 1 not sent, try again"), taking the focus when
+the button that had it went; a picker that closes hands the focus back to its
+owner chip. A send whose reply was lost is settled by that read: one that
+went says so, one that did not replays the same send on Send again. A
+meeting's or a project's list has a faint **Check now** while something is
+open: it re-checks their open items, shows "Checking…" until the check ends
+and reads the list again ("Check failed · Try again" when it fails); any
+other read of the list clears what it said.
+
+A row opens the **follow-up's page**: its title and status, what it is and
+the meeting it came from ("Meeting action · from Pilot planning, Oct 6",
+which opens or goes back to that meeting's list; "Sent by Mina" when you
+cannot read the meeting), for a document why it is here (what it says now,
+with the tool's status, due date and assignee in one faint line, beside what
+the meeting decided, and **Open in Jira** when ECHO opened it for you), its
+history (found; sent to its owner or dismissed at Send; its owner set; done,
+dismissed, reopened, or sent later for one Send dismissed; and by whom),
+ECHO's last check in one faint line, its owner, and one next step: **Send to
+Mina** (or **Keep it myself**) and **Dismiss** while it is not sent, **Mark
+done** and **Dismiss** while it is open, **Reopen** once closed (**Send to
+Mina** for one Send dismissed and nothing reopened since). The page shows
+its row at once (the row it was opened from, with what that list or Home read
+live of it, or the row the quiet check read for a notification), then reads it
+again from ECHO's own fields, and live only while nothing says yet what it
+says now (never a meeting's action). After a change the page stays and says
+what happened ("Done · Undo"), showing what the Authority answered at once,
+then the item read again from ECHO's own fields only, keeping what it says
+now; a change whose reply was lost is settled by that read. Giving an item away so you no longer see it says so,
+with Back. A page whose read fails offers **Try again**, including when its row
+already shows and a temporary outage prevented reading its details. Back returns to where it was opened, read again when something
+changed, at the same place, with the row it was opened from in focus; Ask
+and another app in front keep that place too. The window's title names the
+list (Follow-ups, the meeting or the project) or the item shown.
+
+While you are signed in, ECHO scans all pages of your open follow-ups every
+five minutes, on any page and with the window hidden. It reads rows only,
+never tools, sweeps or runs. The first complete scan learns existing work;
+later scans compare each item's handoff time and notify new assignments,
+reassignments and reopens from someone else. Home acknowledges only the rows
+it showed, independently of its twenty-row limit. A failed page leaves the
+previous scan's baseline intact. Large batches use bounded notifications.
+An item whose page is open does not notify. Clicking a notification opens
+that item's page, or Follow-ups for a batch.
+
+Under the rows, and on an empty Home (with no projects too), a footer says how
+many items you sent wait on others and when ECHO last checked ("2 waiting on
+others · ECHO checked 2 h ago"), with **Follow-ups**. An approved meeting
+and a project each show a follow-ups line counted by status ("Follow-ups · 1
+open · 4 not sent"), which opens that list and keeps what it last said while
+it is read again; a meeting's row in a project's feed says how many of its
+follow-ups are not closed ("4 follow-ups"). Home also
+re-checks your own open items by itself: when the Authority says they are
+due, Home asks for a sweep and starts it after any waiting impact check. A
+sweep makes no Home row and changes no item's status; it only records each
+item's latest verdict. A meeting's actions and items on a Slack message are
+never re-checked. Projects and archived projects live in the sidebar.
 
 Tools → Granola manages folder watching and individual meeting imports. Home and
 decision content is covered while another app is in front, and unfinished checks
@@ -171,7 +239,10 @@ the same file name and version. When a seat already has ECHO installed, apt can
 report "already the newest version" and leave the old app, including its
 embedded Person client, in place. Once installed, a release package updates
 itself (see [Updates](#updates)). When you install by hand over an existing
-ECHO, the first time or after a failed update, use `--reinstall`:
+ECHO, the first time or after a failed update, first quit ECHO from its tray
+(Quit ECHO) in every seat signed in on the machine, then use `--reinstall`.
+The deb installs ECHO for the whole machine, so one reinstall covers every
+seat on it:
 
 ```sh
 sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb
@@ -179,7 +250,8 @@ sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb
 
 Then prove the installed build rather than its version string: run
 `npm run smoke -- /opt/ECHO/echo-desktop` (described below) from the release's
-clean build checkout, or check that the tray menu's `Build <sha7>` matches the
+clean build checkout, or check that the tray menu's `Build <sha7>` (also on the
+Account menu's version line, `ECHO 0.1.0-internal.1 · 038f099`) matches the
 release's source SHA.
 
 The application appears as **ECHO** in the desktop launcher. The executable is

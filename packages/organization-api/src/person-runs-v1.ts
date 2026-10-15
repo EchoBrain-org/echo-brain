@@ -17,16 +17,20 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * the card, its check time and how many cited items the viewer could not open.
  *
  * Open items (open items and Home v1, section 7; ADR-0033) are the items a
- * finished impact run found, one shared row each. `home` lists what waits on
- * the caller, `items` and `item` show the rows the caller can see, and `send`,
- * `set_state` and `assign` change them. A row's own fields are ECHO's: its
- * decision is shown only to a viewer who can read it, and what the item says
- * now only to a viewer who opened it in its tool in this request. Each row
- * says how that live read went (`reach`), so an outage is never shown as lost
- * access. `items` with `summary_only` answers the counts and stages alone and
- * opens nothing; with `open_only` it pages over the open items only, so
- * closed ones are never opened to be thrown away. Each decision's counts say
- * how many of its open items last landed or could not be read, and its stage
+ * finished impact run found, one shared row each: the approved meeting's own
+ * actions (follow-ups thread v1) and the existing items the meeting affects.
+ * `home` lists what waits on the caller, `items` and `item` show the rows the
+ * caller can see, and `send`, `set_state` and `assign` change them. A row's
+ * own fields are ECHO's: its decision is shown only to a viewer who can read
+ * it, and what the item says now only to a viewer who opened it in its tool
+ * in this request. Each row says how that live read went (`reach`), so an
+ * outage is never shown as lost access. `read` says how much to read:
+ * `rows` answers the same rows with no live read, so a list shows them at once
+ * and reads live only the rows it shows; `counts` (`items` only) answers the
+ * counts and stages alone and opens nothing. `items` with `states` pages over
+ * the items in those states only, so a list reads its current work first and
+ * never opens a closed item to throw it away. Each decision's counts say how
+ * many of its open items last landed or could not be read, and its stage
  * says whether its impact run is the caller's own (`mine`).
  *
  * Sweep (open items and Home v1, sections 6 and 7) rechecks open items
@@ -39,29 +43,55 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * in the last hour, and none is running (at most hourly, so a sweep that
  * keeps failing is not asked for on every load; a sweep still waiting after
  * the hour is asked for again, and `sweep` hands back that run to start; an
- * explicit `sweep` request is never limited).
+ * explicit `sweep` request is never limited). `home` read as `rows` never
+ * reports a sweep due. `home` lists the newest handoffs first (the latest
+ * of `sent_at`, `owner_set_at` and `state_set_at`), with changed items first
+ * only when those times tie. Notification discovery pages through `items`
+ * separately so Home's twenty-row display limit does not hide assignments.
  */
 export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 
 export type PersonRunStateV1 = 'pending' | 'running' | 'done' | 'failed';
 export type PersonRunErrorCodeV1 = 'no_access' | 'unavailable' | 'timed_out' | 'research_failed';
 
+/**
+ * How much an open-items read reads; absent, it reads each row live. `rows`: the same answer with no live read, so every item's
+ * reach is `not_read` and no desk is bound (`home` then never says a sweep is due, so a quiet background check never starts
+ * one; follow-ups thread v1, F8). `counts` (`items` only): the summary and stages alone, no items and no cursor.
+ */
+export type PersonOpenItemsReadV1 = 'rows' | 'counts';
+
 // `list` and `home` are separate variants so `Extract<…, { operation: 'list' }>` still names one.
 export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'list' }
-  | { readonly schema_version: 1; readonly operation: 'home' }
+  | { readonly schema_version: 1; readonly operation: 'home'; readonly read?: 'rows' }
   | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: PersonDiagnosticCaptureIdV1 }
   | { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
-      /** Counts and stages only: no items, no live reads. */
-      readonly summary_only?: true;
-      /** Items in state `open` only; the summary and stages still cover the whole scope. A cursor pages the same list. */
-      readonly open_only?: true }
-  | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string }
+      readonly read?: PersonOpenItemsReadV1;
+      /**
+       * Items in these states only (a non-empty subset, each once; never beside `counts`): the page and its cursor go over them
+       * alone, while the summary and stages still cover the whole scope. A cursor pages the same list: the caller sends the same
+       * states with it.
+       */
+      readonly states?: readonly PersonOpenItemStateV1[] }
+  | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string; readonly read?: 'rows' }
   | { readonly schema_version: 1; readonly operation: 'send'; readonly run_id: string; readonly command_id: string;
+      /**
+       * Any non-empty subset of the run's unsent items (follow-ups thread v1, F1): `include: true` sends one to its owner
+       * (`open`, with an optional owner pick), `include: false` dismisses it (`not_relevant`), and an unsent item not listed
+       * stays unsent. A listed item that is no longer unsent answers `conflict` and nothing is written. A `command_id` already
+       * sent answers its first counts again when it lists the same items, and `conflict` when it lists any others.
+       */
       readonly items: readonly { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }[] }
   | { readonly schema_version: 1; readonly operation: 'set_state'; readonly item_id: string; readonly state: 'open' | 'done' | 'not_relevant' }
+  /**
+   * Changes an item's owner to an active member. Before Send only its approver may (the owner is stored at once, `picked`;
+   * follow-ups thread v1, F2); once sent, its approver, its owner or a lead of one of the decision's active projects
+   * (`reassigned`). Its current owner again writes nothing, except the approver taking on an item ECHO gave them for want of
+   * a match (`approver`): that is stored as their choice (`picked`, or `reassigned` once sent).
+   */
   | { readonly schema_version: 1; readonly operation: 'assign'; readonly item_id: string; readonly owner_membership_id: string }
   | { readonly schema_version: 1; readonly operation: 'sweep'; readonly scope: 'mine' | 'record' | 'project'; readonly id?: string };
 
@@ -73,7 +103,11 @@ export interface PersonRunV1 {
 
 export type PersonOpenItemStateV1 = 'unsent' | 'open' | 'done' | 'not_relevant';
 export type PersonOpenItemVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unreadable';
-export type PersonOpenItemKindV1 = 'ticket' | 'page' | 'slack_message' | 'record' | 'document';
+/**
+ * What an item is: an action the approved meeting decided (`action`, follow-ups thread v1), or an existing item the impact
+ * check found the meeting affects: a Jira ticket, a page, a Slack message, another ECHO record or an ECHO document.
+ */
+export type PersonOpenItemKindV1 = 'action' | 'ticket' | 'page' | 'slack_message' | 'record' | 'document';
 export type PersonOpenItemOwnerMatchV1 = 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned';
 /**
  * How this request's live read of an item went, for this viewer. `opened`: it
@@ -109,6 +143,15 @@ export interface PersonOpenItemV1 {
   readonly waits_on: 'owner' | 'approver' | 'leads';
   readonly state: PersonOpenItemStateV1;
   readonly created_at: string; readonly sent_at: string | null; readonly state_set_at: string | null;
+  /** Who last set its state (Send included), with `state_set_at`; null exactly when `state_set_at` is (follow-ups thread v1, F3). */
+  readonly state_set_by: PersonOpenItemPersonV1 | null;
+  /** When and by whom its owner was last picked or reassigned; both null while the owner is the one ECHO matched. */
+  readonly owner_set_at: string | null; readonly owner_set_by: PersonOpenItemPersonV1 | null;
+  /**
+   * What Send did with it, as stored and then frozen: null while it is unsent, true when Send included it (it went to its owner),
+   * false when Send dismissed it. A later state change leaves it as Send set it.
+   */
+  readonly send_included: boolean | null;
   readonly check: { readonly verdict: PersonOpenItemVerdictV1; readonly checked_at: string; readonly checked_by: string } | null;
   readonly can: { readonly set_state: boolean; readonly assign: boolean };
   /** `current` comes exactly with `opened`. */
@@ -145,7 +188,9 @@ export interface PersonRunsResultsV1 {
   start: { readonly state: 'pending' | 'running' | 'busy' | 'done' | 'failed' };
   retry: { readonly state: 'pending' };
   view: { readonly card: PersonImpactCardV1; readonly checked_at: string; readonly hidden: number };
-  home: { readonly send: readonly PersonHomeSendV1[]; readonly items: readonly PersonOpenItemV1[];
+  home: { readonly send: readonly PersonHomeSendV1[];
+          /** At most twenty: newest handoffs first; changed items break ties. */
+          readonly items: readonly PersonOpenItemV1[];
           readonly landed: number; readonly waiting: number; readonly last_checked_at: string | null;
           /** The caller's open items are due a sweep (section 6): the desktop asks for a `mine` sweep. At most hourly: not within an hour of their last sweep, nor while one of theirs runs. */
           readonly sweep_due: boolean };
@@ -166,6 +211,13 @@ export const PERSON_RUNS_LIST_LIMIT_V1 = 100;
 export const PERSON_OPEN_ITEMS_PAGE_V1 = 50;
 /** The most Send rows, and the most item rows, one `home` returns. */
 export const PERSON_HOME_ROWS_V1 = 20;
+/**
+ * The most meeting actions one impact run makes into items: the first ones in brief order that have text (an action with
+ * none makes no item and takes no place). An approved meeting with more actions than this has the rest only in its record.
+ */
+export const PERSON_RUN_MEETING_ACTIONS_MAX_V1 = 20;
+/** The most items one impact run makes: one per affected row of its card, and one per meeting action up to the cap. */
+export const PERSON_RUN_ITEMS_MAX_V1 = PERSON_IMPACT_CARD_LIMITS_V1.affected + PERSON_RUN_MEETING_ACTIONS_MAX_V1;
 
 const RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/;
 const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
@@ -191,7 +243,7 @@ const SWEEP_SCOPES = ['mine', 'record', 'project'] as const;
 const SET_STATES = ['open', 'done', 'not_relevant'] as const;
 const ITEM_STATES = ['unsent', ...SET_STATES] as const;
 const VERDICTS = ['landed', 'still_open', 'changed', 'unreadable'] as const;
-const KINDS = ['ticket', 'page', 'slack_message', 'record', 'document'] as const;
+const KINDS = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'] as const;
 const OWNER_MATCHES = ['jira_account', 'name', 'picked', 'approver', 'reassigned'] as const;
 const RELATIONS = ['conflicts', 'needs_updating'] as const;
 const WAITS_ON = ['owner', 'approver', 'leads'] as const;
@@ -199,8 +251,8 @@ const REACHES = ['opened', 'no_access', 'unavailable', 'not_read'] as const;
 const CURRENT_DETAILS = ['assignee', 'status', 'due_at'] as const;
 /** Names, decided lines and what an item says now are bounded as the impact card bounds them. */
 const LIMITS = PERSON_IMPACT_CARD_LIMITS_V1;
-/** A run makes at most one item per affected row of its card. */
-const RUN_ITEMS_MAX = LIMITS.affected;
+/** A send lists, and a Send row names the owners of, at most a run's items. */
+const RUN_ITEMS_MAX = PERSON_RUN_ITEMS_MAX_V1;
 /** The most decisions one `items` summary, or its stages, cover. */
 const SCOPE_DECISIONS_MAX = 100;
 /** ECHO's phrase of what the decision requires of an item. */
@@ -270,6 +322,11 @@ function scopeId(scope: 'run' | 'record' | 'project', value: unknown): string {
   return validateProjectIdV1(value, label);
 }
 
+/** The request's read mode, when it names one of `modes`. */
+function readMode<T extends PersonOpenItemsReadV1>(request: Record<string, unknown>, modes: readonly T[]): { readonly read?: T } {
+  return Object.hasOwn(request, 'read') ? { read: oneOf(request.read, modes, 'Runs request read') } : {};
+}
+
 function sendItems(value: unknown): Extract<PersonRunsRequestV1, { readonly operation: 'send' }>['items'] {
   const items = list(value, 'Runs request send list', RUN_ITEMS_MAX, 1).map(raw => {
     const entry = asEnumerableRecord(raw, 'Runs request send item');
@@ -292,15 +349,17 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const operation = request.operation;
   if (typeof operation !== 'string' || !Object.hasOwn(REQUEST_KEYS, operation)) fail('Runs request operation is invalid');
   const kind = operation as PersonRunsRequestV1['operation'];
-  // `items` may leave out its scope id and its cursor, and may ask for its counts only or its open items only; a sweep of `mine` names no id.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'summary_only', 'open_only'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
+  // `items` may leave out its scope id and its cursor, and may ask for items in some states only; `home`, `items` and `item` may
+  // say how much to read; a sweep of `mine` names no id.
+  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states'] : kind === 'home' || kind === 'item' ? ['read'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
   switch (kind) {
     case 'list':
-    case 'home':
       return Object.freeze({ schema_version: 1 as const, operation: kind });
+    case 'home':
+      return Object.freeze({ schema_version: 1 as const, operation: kind, ...readMode(request, ['rows'] as const) });
     case 'start':
       return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id'),
         ...(Object.hasOwn(request, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(request.capture_id) } : {}) });
@@ -311,24 +370,22 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       const scope = oneOf(request.scope, SCOPES, 'Runs request scope');
       // `mine` names no id; every other scope names its run, record or project.
       if ((scope === 'mine') === Object.hasOwn(request, 'id')) fail('Runs request scope id is invalid');
-      const counts = Object.hasOwn(request, 'summary_only');
-      if (counts && request.summary_only !== true) fail('Runs request summary_only is invalid');
-      // Counts cover the whole scope at once: there is no next page to ask for.
-      if (counts && Object.hasOwn(request, 'cursor')) fail('Runs request summary_only takes no cursor');
-      const openOnly = Object.hasOwn(request, 'open_only');
-      if (openOnly && request.open_only !== true) fail('Runs request open_only is invalid');
-      // A counts-only answer lists no items to keep the open ones of.
-      if (openOnly && counts) fail('Runs request open_only takes no summary_only');
+      const read = readMode(request, ['rows', 'counts'] as const);
+      const filtered = Object.hasOwn(request, 'states');
+      // Counts cover the whole scope at once and list no items: no next page to ask for, and nothing to filter.
+      if (read.read === 'counts' && (Object.hasOwn(request, 'cursor') || filtered)) fail('Runs request counts takes no cursor or states');
+      const states = filtered ? list(request.states, 'Runs request states', ITEM_STATES.length, 1).map(state => oneOf(state, ITEM_STATES, 'Runs request state')) : [];
+      unique(states, 'Runs request states');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, scope,
         ...(scope === 'mine' ? {} : { id: scopeId(scope, request.id) }),
         ...(Object.hasOwn(request, 'cursor') ? { cursor: matching(request.cursor, CURSOR, 'Runs request cursor') } : {}),
-        ...(counts ? { summary_only: true as const } : {}),
-        ...(openOnly ? { open_only: true as const } : {}),
+        ...read,
+        ...(filtered ? { states: Object.freeze(states) } : {}),
       });
     }
     case 'item':
-      return Object.freeze({ schema_version: 1 as const, operation: kind, item_id: itemId(request.item_id, 'Runs request item id') });
+      return Object.freeze({ schema_version: 1 as const, operation: kind, item_id: itemId(request.item_id, 'Runs request item id'), ...readMode(request, ['rows'] as const) });
     case 'send':
       return Object.freeze({
         schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id'),
@@ -436,11 +493,23 @@ function openItem(value: unknown): PersonOpenItemV1 {
   const entry = asEnumerableRecord(value, 'Open item');
   // What a viewer may not see is left out, never sent empty.
   const parts = ['decision', 'current'].filter(key => Object.hasOwn(entry, key));
-  assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at', 'check', 'can', 'reach', ...parts], 'Open item');
+  assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at',
+    'state_set_by', 'owner_set_at', 'owner_set_by', 'send_included', 'check', 'can', 'reach', ...parts], 'Open item');
   assertTimestamp(entry.created_at, 'Open item created_at');
   const reach = oneOf(entry.reach, REACHES, 'Open item reach');
   // What the item says now comes exactly with a read that opened it.
   if ((reach === 'opened') !== Object.hasOwn(entry, 'current')) fail('Open item reach does not match its current part');
+  const state = oneOf(entry.state, ITEM_STATES, 'Open item state');
+  const state_set_at = timestampOrNull(entry.state_set_at, 'Open item state_set_at');
+  const owner_set_at = timestampOrNull(entry.owner_set_at, 'Open item owner_set_at');
+  const state_set_by = entry.state_set_by === null ? null : person(entry.state_set_by, 'Open item state_set_by');
+  const owner_set_by = entry.owner_set_by === null ? null : person(entry.owner_set_by, 'Open item owner_set_by');
+  // Who and when come together, as the item stores them.
+  if ((state_set_by === null) !== (state_set_at === null)) fail('Open item state_set_by does not match state_set_at');
+  if ((owner_set_by === null) !== (owner_set_at === null)) fail('Open item owner_set_by does not match owner_set_at');
+  if (entry.send_included !== null && typeof entry.send_included !== 'boolean') fail('Open item send_included is invalid');
+  // Send sets it, exactly as the item leaves unsent; nothing sets it before.
+  if ((state === 'unsent') !== (entry.send_included === null)) fail('Open item send_included does not match its state');
   return Object.freeze({
     item_id: itemId(entry.item_id, 'Open item id'), run_id: runId(entry.run_id, 'Open item run id'), kind: oneOf(entry.kind, KINDS, 'Open item kind'),
     ...(Object.hasOwn(entry, 'decision') ? { decision: decision(entry.decision) } : {}),
@@ -448,8 +517,9 @@ function openItem(value: unknown): PersonOpenItemV1 {
     relation: entry.relation === null ? null : oneOf(entry.relation, RELATIONS, 'Open item relation'),
     expected: entry.expected === null ? null : line(entry.expected, 'Open item expected', EXPECTED_CHARS),
     approver: person(entry.approver, 'Open item approver'), owner: owner(entry.owner),
-    waits_on: oneOf(entry.waits_on, WAITS_ON, 'Open item waits_on'), state: oneOf(entry.state, ITEM_STATES, 'Open item state'),
-    created_at: entry.created_at as string, sent_at: timestampOrNull(entry.sent_at, 'Open item sent_at'), state_set_at: timestampOrNull(entry.state_set_at, 'Open item state_set_at'),
+    waits_on: oneOf(entry.waits_on, WAITS_ON, 'Open item waits_on'), state,
+    created_at: entry.created_at as string, sent_at: timestampOrNull(entry.sent_at, 'Open item sent_at'), state_set_at,
+    state_set_by, owner_set_at, owner_set_by, send_included: entry.send_included,
     check: check(entry.check), can: can(entry.can), reach,
   });
 }

@@ -19,6 +19,7 @@ const document = () => ({ kind: 'source_revision', source_id: 'source:fixture', 
 const page = () => ({ kind: 'page', tool_id: 'confluence', external_scope_id: CLOUD, page_id: '200', section_id: 'section-1', version: '3',
   permalink: 'https://echo-fixture.atlassian.net/wiki/spaces/ECHO/pages/200', text_sha256: digest('7') });
 const slack = () => ({ kind: 'slack_message', team_id: 'T0FIXTURE', channel_id: 'C0FIXTURE', message_ts: '1760000000.000100' });
+const meetingAction = () => ({ kind: 'meeting_action', record_sha256: digest('3'), signal_id: 'act-1' });
 
 function fakeJira(options: { readonly assignees: ReadonlyMap<string, string> | Error; readonly people: Readonly<Record<string, readonly Person[]>> }) {
   return {
@@ -34,7 +35,7 @@ function fakeJira(options: { readonly assignees: ReadonlyMap<string, string> | E
 /** ECHO's directory: active members by exact display name; `inactive` memberships have left. */
 function people(byName: Readonly<Record<string, readonly string[]>>, inactive: readonly string[] = []): ImpactOwnerPeopleV1 {
   return {
-    activeByName: (organizationId, name) => (organizationId === ARI.organization_id ? byName[name] ?? [] : []),
+    activeByName: organizationId => name => (organizationId === ARI.organization_id ? byName[name] ?? [] : []),
     isActiveMember: (organizationId, membershipId) => organizationId === ARI.organization_id && !inactive.includes(membershipId),
   };
 }
@@ -89,6 +90,24 @@ describe('impact owner matching', () => {
     expect(await matchImpactOwnersV1({ candidates: [{ pointer: ticket('10046') }, { pointer: record(), owner_name: 'Rafael Moreno' }],
       approver: ARI, access_token: 'tok', people: brokenDirectory, owners: fakeJira({ assignees: new Map([['10046', 'acct-mina']]), people: { 'acct-mina': [MINA] } }) }))
       .toEqual([APPROVER, APPROVER]);
+  });
+
+  it('matches a meeting action\'s confirmed owner by a name exactly one active member holds, else gives it to the approver', async () => {
+    const directory = people({ 'Rafael Moreno': ['mem_rafael'], 'Mina Patel': ['mem_mina', 'mem_mina_2'] });
+    const roster = vi.spyOn(directory, 'activeByName');
+    expect(await matchImpactOwnersV1({ candidates: [
+      { pointer: meetingAction(), owner_name: 'Rafael Moreno' },
+      { pointer: meetingAction(), owner_name: ' Rafael Moreno ' },
+      { pointer: meetingAction(), owner_name: 'Mina Patel' },          // two members hold the name: no one
+      { pointer: meetingAction(), owner_name: 'Rafael' },              // a first name alone is not the display name
+      { pointer: meetingAction() },
+      { pointer: meetingAction(), owner_name: ' ' },
+    ], approver: ARI, access_token: 'tok', people: directory })).toEqual([
+      { owner_membership_id: 'mem_rafael', owner_match: 'name' }, { owner_membership_id: 'mem_rafael', owner_match: 'name' },
+      APPROVER, APPROVER, APPROVER, APPROVER,
+    ]);
+    // The roster is read once for every named owner of the call.
+    expect(roster).toHaveBeenCalledTimes(1);
   });
 
   it('matches an ECHO document action by name and leaves every other item with the approver', async () => {

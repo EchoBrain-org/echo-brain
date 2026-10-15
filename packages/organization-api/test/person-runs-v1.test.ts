@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   PERSON_HOME_ROWS_V1,
   PERSON_OPEN_ITEMS_PAGE_V1,
+  PERSON_RUN_ITEMS_MAX_V1,
+  PERSON_RUN_MEETING_ACTIONS_MAX_V1,
   PERSON_RUNS_MAX_RESPONSE_BYTES_V1,
   PERSON_RUNS_PATH_V1,
   validatePersonRunsRequestV1,
@@ -53,11 +55,13 @@ const DECISION = { approval_id: `apr_${'a'.repeat(64)}`, record_sha256: RECORD, 
 const CURRENT = { citation: echo12, says_now: 'ECHO-12 · Pilot launch: planned for the end of the month.', assignee: 'Mina Patel', status: 'In Progress', due_at: '2026-10-30' };
 const APPROVER = { membership_id: ARI, name: 'Ari', active: true };
 const OWNER = { membership_id: MINA, name: 'Mina Patel', active: true, match: 'jira_account' };
+const OWNER_PERSON = { membership_id: MINA, name: 'Mina Patel', active: true };
 const CHECK = { verdict: 'changed', checked_at: LATER, checked_by: 'Mina Patel' };
 /** An item the viewer opened carries what it says now; any other says why it does not. */
 const openItem = (overrides: Record<string, unknown>) => ({
   item_id: ITEM, run_id: RUN, kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: APPROVER, owner: OWNER,
-  waits_on: 'owner', state: 'open', created_at: NOW, sent_at: LATER, state_set_at: null, check: CHECK, can: { set_state: true, assign: true },
+  waits_on: 'owner', state: 'open', created_at: NOW, sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, owner_set_at: null, owner_set_by: null, send_included: true,
+  check: CHECK, can: { set_state: true, assign: true },
   reach: Object.hasOwn(overrides, 'current') ? 'opened' : 'no_access',
   ...overrides,
 });
@@ -248,15 +252,18 @@ describe('runs API open items', () => {
     expect(() => validatePersonRunsResultV1('item', { item: { ...seen, pointer: {} } })).toThrow();      // no extra key ever
     expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), landed: 0, waiting: 0, last_checked_at: null, sweep_due: false })).toThrow();
   });
-  it('accepts summary_only only as true and never with a cursor, and requires reach', () => {
+  it('accepts read counts on items only and never with a cursor, and requires reach', () => {
     // Counts and stages only: a line that shows how many items there are opens none of them.
-    const counts = { schema_version: 1, operation: 'items', scope: 'project', id: PROJECT, summary_only: true };
+    const counts = { schema_version: 1, operation: 'items', scope: 'project', id: PROJECT, read: 'counts' };
     expect(validatePersonRunsRequestV1(counts)).toEqual(counts);
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', summary_only: true })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', summary_only: true });
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'record', id: RECORD })).not.toHaveProperty('summary_only');
-    for (const summary_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...counts, summary_only }), `summary_only ${JSON.stringify(summary_only)}`);
-    refused(() => validatePersonRunsRequestV1({ ...counts, cursor: 'next-page_2' }), 'summary_only with a cursor');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', summary_only: true }), 'summary_only on home');
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', read: 'counts' })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', read: 'counts' });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'record', id: RECORD })).not.toHaveProperty('read');
+    for (const read of ['live', 'Counts', true, 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...counts, read }), `read ${JSON.stringify(read)}`);
+    refused(() => validatePersonRunsRequestV1({ ...counts, cursor: 'next-page_2' }), 'counts with a cursor');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', read: 'counts' }), 'counts on home');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, read: 'counts' }), 'counts on one item');
+    // The flags it replaced are gone.
+    for (const flag of ['summary_only', 'rows_only']) refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', [flag]: true }), flag);
     // Every item says how its live read went, and carries what it says now exactly when it was opened.
     for (const reach of ['no_access', 'unavailable', 'not_read'] as const) {
       expect(validatePersonRunsResultV1('item', { item: openItem({ reach }) }).item.reach).toBe(reach);
@@ -269,20 +276,43 @@ describe('runs API open items', () => {
     }
     for (const reach of ['denied', '', null, true]) refused(() => validatePersonRunsResultV1('item', { item: openItem({ reach }) }), `reach ${JSON.stringify(reach)}`);
   });
-  it('accepts open_only only as true, never with summary_only, and with a cursor', () => {
-    // Open items only: Did it land? pages past closed items without opening them.
-    const open = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, open_only: true };
-    expect(validatePersonRunsRequestV1(open)).toEqual(open);
-    expect(Object.isFrozen(validatePersonRunsRequestV1(open))).toBe(true);
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', open_only: true })).toEqual({ schema_version: 1, operation: 'items', scope: 'mine', open_only: true });
-    // A cursor pages the same filtered list: the caller sends open_only with it again.
-    expect(validatePersonRunsRequestV1({ ...open, cursor: 'next-page_2' })).toEqual({ ...open, cursor: 'next-page_2' });
-    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'project', id: PROJECT })).not.toHaveProperty('open_only');
-    for (const open_only of [false, 'true', 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...open, open_only }), `open_only ${JSON.stringify(open_only)}`);
-    // A counts-only answer lists no items to keep the open ones of.
-    refused(() => validatePersonRunsRequestV1({ ...open, summary_only: true }), 'open_only with summary_only');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', open_only: true }), 'open_only on home');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, open_only: true }), 'open_only on one item');
+  it('accepts read rows on home, items and one item only (F8)', () => {
+    // Home's quiet check, and an item page's refresh: the same rows with no live read.
+    for (const quiet of [{ schema_version: 1, operation: 'home', read: 'rows' }, { schema_version: 1, operation: 'item', item_id: ITEM, read: 'rows' }]) {
+      expect(validatePersonRunsRequestV1(quiet)).toEqual(quiet);
+      expect(Object.isFrozen(validatePersonRunsRequestV1(quiet))).toBe(true);
+      for (const read of ['live', 'Rows', true, 1, null, {}]) refused(() => validatePersonRunsRequestV1({ ...quiet, read }), `read ${JSON.stringify(read)}`);
+    }
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'home' })).not.toHaveProperty('read');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'list', read: 'rows' }), 'read on list');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'mine', read: 'rows' }), 'read on a sweep');
+    // A list's rows at once, with no live read: the same page, paged over the same states.
+    const rows = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['unsent', 'open'], read: 'rows' };
+    expect(validatePersonRunsRequestV1(rows)).toEqual(rows);
+    expect(validatePersonRunsRequestV1({ ...rows, cursor: 'next-page_2' })).toEqual({ ...rows, cursor: 'next-page_2' });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'run', id: RUN, read: 'rows' })).toMatchObject({ scope: 'run', id: RUN, read: 'rows' });
+  });
+  it('accepts states as a non-empty subset of the item states, never with counts, and with a cursor', () => {
+    // A list reads its current work first, then its closed items: each a paged read of its own.
+    const active = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['unsent', 'open'] };
+    expect(validatePersonRunsRequestV1(active)).toEqual(active);
+    expect(Object.isFrozen(validatePersonRunsRequestV1(active))).toBe(true);
+    expect(Object.isFrozen((validatePersonRunsRequestV1(active) as { states: readonly string[] }).states)).toBe(true);
+    const closed = { schema_version: 1, operation: 'items', scope: 'mine', states: ['done', 'not_relevant'] };
+    expect(validatePersonRunsRequestV1(closed)).toEqual(closed);
+    for (const states of [['open'], ['not_relevant', 'unsent', 'done', 'open']]) expect(validatePersonRunsRequestV1({ ...active, states })).toEqual({ ...active, states });
+    // A cursor pages the same filtered list: the caller sends the same states with it again.
+    expect(validatePersonRunsRequestV1({ ...active, cursor: 'next-page_2' })).toEqual({ ...active, cursor: 'next-page_2' });
+    expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'project', id: PROJECT })).not.toHaveProperty('states');
+    for (const states of [[], ['open', 'open'], ['closed'], ['open', null], 'open', true, null, {}, ['unsent', 'open', 'done', 'not_relevant', 'open']]) {
+      refused(() => validatePersonRunsRequestV1({ ...active, states }), `states ${JSON.stringify(states)}`);
+    }
+    // A counts-only answer lists no items to filter.
+    refused(() => validatePersonRunsRequestV1({ ...active, read: 'counts' }), 'states with counts');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', states: ['open'] }), 'states on home');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, states: ['open'] }), 'states on one item');
+    // The flag it replaced is gone.
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', open_only: true }), 'open_only');
   });
 });
 
@@ -318,7 +348,7 @@ describe('runs API open-item requests', () => {
       { schema_version: 1, operation: 'item', item_id: `itm_${'Z-9'.repeat(20)}` },
       itemsRequest({ scope: 'mine', cursor: 'c'.repeat(256) }),
       send({ command_id: `${'A_b-9'.repeat(25)}xyz` }),
-      send({ items: numbered(20, at => at % 2 === 0) }),
+      send({ items: numbered(40, at => at % 2 === 0) }),
     ]) expect(() => validatePersonRunsRequestV1(request), JSON.stringify(request).slice(0, 80)).not.toThrow();
   });
 
@@ -341,7 +371,7 @@ describe('runs API open-item requests', () => {
     ['an item id that is too long', { schema_version: 1, operation: 'item', item_id: `itm_${'a'.repeat(61)}` }],
     ['an item id with a forbidden character', { schema_version: 1, operation: 'item', item_id: 'itm_abcd_efgh' }],
     ['a send without items', send({ items: [] })],
-    ['a send of 21 items', send({ items: numbered(21, () => true) })],
+    ['a send of 41 items', send({ items: numbered(41, () => true) })],
     ['a send that repeats an item', send({ items: [{ item_id: ITEM, include: true }, { item_id: ITEM, include: false }] })],
     ['a send with an include that is not a boolean', send({ items: [{ item_id: ITEM, include: 'yes' }] })],
     ['a send item without include', send({ items: [{ item_id: ITEM }] })],
@@ -375,12 +405,38 @@ describe('runs API open-item results', () => {
 
   it('accepts an unsent item that was never assessed or checked and waits on the leads', () => {
     const orphan = openItem({
-      relation: null, expected: null, state: 'unsent', sent_at: null, check: null, waits_on: 'leads', can: { set_state: false, assign: true },
+      relation: null, expected: null, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: null, check: null, waits_on: 'leads', can: { set_state: false, assign: true },
       approver: { ...APPROVER, active: false }, owner: { ...APPROVER, active: false, match: 'approver' },
     });
     expect(validatePersonRunsResultV1('item', { item: orphan }).item).toEqual(orphan);
     const plain = { citation: echo12, says_now: 'ECHO-12 · Pilot launch' };
     expect(validatePersonRunsResultV1('item', { item: openItem({ current: plain }) }).item.current).toEqual(plain);
+  });
+
+  it('says who set an item\'s state and owner, and when, and what Send did with it (F3)', () => {
+    const reassigned = openItem({ state: 'done', state_set_at: LATER, state_set_by: { ...OWNER_PERSON, active: false }, owner_set_at: LATER, owner_set_by: APPROVER,
+      owner: { ...OWNER, match: 'reassigned' }, send_included: true });
+    const read = validatePersonRunsResultV1('item', { item: reassigned }).item;
+    expect(read).toEqual(reassigned);
+    for (const part of [read.state_set_by, read.owner_set_by]) expect(Object.isFrozen(part)).toBe(true);
+    // An item Send dismissed says so, and keeps saying so once reopened; a picked owner before Send carries who picked it.
+    const dismissed = openItem({ state: 'not_relevant', send_included: false });
+    expect(validatePersonRunsResultV1('item', { item: dismissed }).item.send_included).toBe(false);
+    expect(validatePersonRunsResultV1('item', { item: { ...dismissed, state: 'open' } }).item.send_included).toBe(false);
+    const picked = openItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, owner_set_at: LATER, owner_set_by: APPROVER, owner: { ...OWNER, match: 'picked' }, send_included: null });
+    expect(validatePersonRunsResultV1('item', { item: picked }).item).toEqual(picked);
+  });
+
+  it('carries a meeting action as an item of kind action, and a run\'s items up to its affected rows and actions', () => {
+    const action = openItem({ kind: 'action', relation: 'needs_updating', expected: 'Send the pilot plan to the vendor', state: 'unsent', sent_at: null, state_set_at: null,
+      state_set_by: null, send_included: null, check: null, owner: { ...OWNER, match: 'name' } });
+    expect(validatePersonRunsResultV1('item', { item: action }).item.kind).toBe('action');
+    expect(PERSON_RUN_MEETING_ACTIONS_MAX_V1).toBe(20);
+    expect(PERSON_RUN_ITEMS_MAX_V1).toBe(40);
+    const kinds = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'];
+    expect(validatePersonRunsResultV1('home', { send: [sendRow({ kinds, items: 40, owners: Array.from({ length: 40 }, (_, at) => `Owner ${at}`) })], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false })
+      .send[0]!.kinds).toEqual(kinds);
+    refused(() => validatePersonRunsResultV1('home', { send: [sendRow({ owners: Array.from({ length: 41 }, (_, at) => `Owner ${at}`) })], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false }), 'one owner too many');
   });
 
   it('accepts a home and an items page up to their bounds', () => {
@@ -448,6 +504,22 @@ describe('runs API open-item results', () => {
     ['a created_at that is not a timestamp', withItem({ created_at: '2026-10-07' })],
     ['a sent_at that is neither a timestamp nor null', withItem({ sent_at: '' })],
     ['a state_set_at that is not a real instant', withItem({ state_set_at: '2026-02-30T10:00:00.000Z' })],
+    ['without who set its state', { item: without(seen, 'state_set_by') }],
+    ['without when its owner was set', { item: without(seen, 'owner_set_at') }],
+    ['without who set its owner', { item: without(seen, 'owner_set_by') }],
+    ['without what Send did with it', { item: without(seen, 'send_included') }],
+    ['a state setter with an owner match', withItem({ state_set_by: { ...APPROVER, match: 'picked' } })],
+    ['a state setter that is a bare membership id', withItem({ state_set_by: ARI })],
+    ['a state setter with no state time', withItem({ state_set_at: null })],
+    ['a state time with no state setter', withItem({ state_set_by: null })],
+    ['an owner setter with no owner time', withItem({ owner_set_by: APPROVER })],
+    ['an owner time with no owner setter', withItem({ owner_set_at: LATER })],
+    ['an owner time that is not a timestamp', withItem({ owner_set_at: 'yesterday', owner_set_by: APPROVER })],
+    ['an owner setter with a membership id that is not canonical', withItem({ owner_set_at: LATER, owner_set_by: { ...APPROVER, membership_id: 'mem_ari' } })],
+    ['a send_included that is neither a boolean nor null', withItem({ send_included: 'yes' })],
+    ['an unsent item Send included', withItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: true })],
+    ['an unsent item Send dismissed', withItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: false })],
+    ['a sent item without what Send did with it', withItem({ send_included: null })],
     ['an unknown verdict', withItem({ check: { ...CHECK, verdict: 'drifted' } })],
     ['a check that keeps a sentence', withItem({ check: { ...CHECK, line: 'ECHO-12 now says next week.' } })],
     ['a check without who ran it', withItem({ check: without(CHECK, 'checked_by') })],
@@ -539,8 +611,8 @@ describe('runs API sweep', () => {
     ['a record scope with a project id', sweep({ scope: 'record', id: PROJECT })],
     ['a project scope with a project id that is not canonical', sweep({ scope: 'project', id: 'prj_pilot' })],
     ['a cursor', sweep({ scope: 'mine', cursor: 'next-page_2' })],
-    ['summary_only', sweep({ scope: 'record', id: RECORD, summary_only: true })],
-    ['open_only', sweep({ scope: 'mine', open_only: true })],
+    ['a read mode', sweep({ scope: 'record', id: RECORD, read: 'counts' })],
+    ['states', sweep({ scope: 'mine', states: ['open'] })],
     ['an extra key', sweep({ scope: 'mine', force: true })],
   ])('refuses a sweep with %s', (_label, request) => {
     refused(() => validatePersonRunsRequestV1(request), _label);

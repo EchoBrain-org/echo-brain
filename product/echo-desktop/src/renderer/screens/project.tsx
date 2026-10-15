@@ -1,11 +1,11 @@
-import type { ProjectSummary } from '../../shared/protocol.js';
+import type { ListItem, ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initials } from '../format.js';
 import { message } from '../messages.js';
-import { openCount, projectWords } from '../needs.js';
-import { checkNow, moreList, openCompose, openListItem, openOpenItems, openPeople, openProject, openProjectTools, readsWords, retryList, type State } from '../store.js';
+import { activeTotal, followUpCount, stateCounts } from '../needs.js';
+import { moreList, openCompose, openFollowUps, openListItem, openPeople, openProject, openProjectTools, readsWords, retryList, type State } from '../store.js';
 import { People, Plug, Plus } from './icons.js';
+import { FollowUpsLabel } from './impact-card.js';
 import { ItemRow, useKeptPlace } from './items.js';
-import { CheckNow } from './open-items.js';
 
 /**
  * What the project reads from its tools, above its feed: Set up tools for a
@@ -39,18 +39,23 @@ function ToolsLine({ state, project }: { state: State; project: ProjectSummary }
 /**
  * A project's one list: its notes, documents and approved meetings, newest
  * first, one line each, and one More for older ones. Choosing a row reads it
- * in place. Above it, what the project's decisions have open (canvas 9.7):
- * the line opens those items and checks them now, and each decision's row
- * says how many.
+ * in place. Above it, the project's follow-ups counted by status as a
+ * meeting's are ("Follow-ups · 1 open · 3 not sent", canvas 9.7): the line
+ * opens the project's follow-ups, and each meeting's row says how many of its
+ * follow-ups are not closed ("4 follow-ups").
  */
 export function Project({ state, project }: { state: State; project: ProjectSummary }) {
   const list = state.list?.scope.kind === 'project' && state.list.scope.project_id === project.project_id ? state.list : null;
-  const column = useKeptPlace(list?.opened);
+  const { column } = useKeptPlace(list ? `project:${list.opened}` : undefined);
   const items = list?.items ?? [];
   const more = Boolean(list?.next);
   const line = state.projectLine?.scope === 'project' && state.projectLine.id === project.project_id ? state.projectLine : null;
-  const words = line?.summary ? projectWords(line.summary) : null;
-  const open = new Map(line?.summary?.by_decision.map(decision => [decision.record_sha256, openCount(decision)]) ?? []);
+  const words = line?.summary ? stateCounts(line.summary) : '';
+  const active = new Map(line?.summary?.by_decision.map(decision => [decision.record_sha256, activeTotal(decision)]) ?? []);
+  const badge = (item: ListItem) => {
+    const count = item.ref.kind === 'meeting' ? active.get(item.ref.id) ?? 0 : 0;
+    return count > 0 ? followUpCount(count) : null;
+  };
   if (list?.failure && items.length === 0 && !more) {
     return (
       <div class="column center" data-testid="feed-error">
@@ -78,17 +83,13 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
   return (
     <div class="column" data-testid="feed" aria-busy={list?.loading ?? true} ref={column}>
       <ToolsLine state={state} project={project} />
-      {words && line && (
+      {words && (
         <div class="items-line project-line" data-testid="project-line">
-          <button type="button" class="items-line-open" onClick={() => void openOpenItems('project', project.project_id, project.name)}>
-            <b>{words.count}</b>{words.from && <span class="faint"> · {words.from}</span>}{words.checked && <span class="faint"> · {words.checked}</span>}
-          </button>
-          <CheckNow line={line} onCheck={() => void checkNow('projectLine', project.name)} />
+          <FollowUpsLabel words={words} open={() => void openFollowUps('project', project.project_id, project.name)} class="items-line-open" />
         </div>
       )}
       {items.map(item => (
-        <ItemRow key={`${item.ref.kind}:${item.ref.id}`} item={item} testid="feed-row" projects={false} onOpen={() => void openListItem(item)}
-          open={item.ref.kind === 'meeting' ? open.get(item.ref.id) : undefined} />
+        <ItemRow key={`${item.ref.kind}:${item.ref.id}`} item={item} testid="feed-row" projects={false} onOpen={() => void openListItem(item)} badge={badge(item)} />
       ))}
       {more && (
         <button type="button" class="link-button more" data-testid="feed-more" disabled={list?.loading} onClick={() => void moreList()}>More</button>

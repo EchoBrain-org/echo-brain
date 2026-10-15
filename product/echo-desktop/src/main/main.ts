@@ -1,7 +1,7 @@
 // ECHO desktop main process: windows, tray, shortcuts and the IPC broker. It
 // never reads the session or holds a token; the person host does that.
 import {
-  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, protocol, session, shell,
+  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, protocol, session, shell,
   Tray, utilityProcess, type IpcMainInvokeEvent, type MenuItemConstructorOptions, type UtilityProcess,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, STATUS_METHODS,
+  externalUrl, externalSourcePermalink, followUpsNotification, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Result, type UpdateState,
 } from '../shared/protocol.js';
@@ -74,8 +74,8 @@ if (!smoke && !app.requestSingleInstanceLock()) {
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
-/** A save, a project change or a reassignment whose outcome is unknown: quitting asks first. */
-let unresolved: 'note' | 'file' | 'change' | 'reassignment' | null = null;
+/** A save or a project change whose outcome is unknown: quitting asks first. */
+let unresolved: 'note' | 'file' | 'change' | null = null;
 const shortcutProblems: string[] = [];
 /** The last account status the host reported, for the Account menu. Main reads no session itself. */
 let accountStatus: AppStatus | null = null;
@@ -105,10 +105,10 @@ function sameFolder(a: string, b: string): boolean {
   }
 }
 
-interface BuildInfo { source_sha: string; dirty: boolean }
-function buildInfo(): BuildInfo | null {
-  try { return JSON.parse(readFileSync(join(BUILD, 'build-info.json'), 'utf8')) as BuildInfo; } catch { return null; }
-}
+/** The commit this build was made from, read once: it never changes while the app runs. */
+const BUILD_INFO: { source_sha: string; dirty: boolean } | null = (() => {
+  try { return JSON.parse(readFileSync(join(BUILD, 'build-info.json'), 'utf8')); } catch { return null; }
+})();
 
 // ---- person host -----------------------------------------------------------
 
@@ -364,8 +364,8 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       return { ok: true, value: issueHandle(chosen.filePath, 'save') };
     }
     case 'app.setUnresolved': {
-      const { unresolved: open, file, change, reassignment } = params as MainMethods['app.setUnresolved']['params'];
-      unresolved = open === true ? (file === true ? 'file' : change === true ? 'change' : reassignment === true ? 'reassignment' : 'note') : null;
+      const { unresolved: open, file, change } = params as MainMethods['app.setUnresolved']['params'];
+      unresolved = open === true ? (file === true ? 'file' : change === true ? 'change' : 'note') : null;
       return { ok: true, value: null };
     }
     case 'app.retryHost':
@@ -394,6 +394,12 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       }
       return { ok: true, value: null };
     }
+    case 'notify.followUps': {
+      const notice = followUpsNotification(params);
+      if (!notice) return refused();
+      notifyFollowUps(notice);
+      return { ok: true, value: null };
+    }
   }
   return refused();
 }
@@ -406,7 +412,8 @@ ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> 
   const method = typeof named === 'string' && (hostMethods.has(named) || mainMethods.has(named)) ? named : '?';
   if (result.ok && STATUS_METHODS.has(method)) accountChanged(result.value as AppStatus);
   const requestId = (request as { params?: { request_id?: unknown } })?.params?.request_id;
-  log(`${method} ${result.ok ? 'ok' : result.failure.code}` +
+  // A runs call names its operation ("runs.items rows"), so a slow live read can be told from a quick rows one.
+  log(`${rpcLogName(method, (request as { params?: unknown })?.params)} ${result.ok ? 'ok' : result.failure.code}` +
     `${typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId) ? ` ${requestId}` : ''} ${Date.now() - started}ms`);
   return result;
 });
@@ -558,17 +565,52 @@ function toggle(): void {
   else show();
 }
 
+/** The window comes forward. Tests never put a window on screen or take focus from other apps: the page hears what show() tells it. */
+function bringForward(): void {
+  if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+}
+
 function capture(): void {
   // The page stays loaded while hidden: ask it to open Capture, then bring it forward.
   send('capture.open', {});
-  // Tests never put a window on screen or take focus from other apps: the page hears what show() tells it.
-  if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+  bringForward();
 }
 
 /** Organization ▸ People & invites…: the page opens it, then the window comes forward. */
 function openOrganization(): void {
   send('organization.open', {});
-  if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+  bringForward();
+}
+
+// ---- follow-ups notifications (F8) -------------------------------------------
+
+/** Notifications on screen, held so a click still reaches its handler; the oldest are let go past 20. */
+const notices = new Set<Notification>();
+/** Test builds: the notifications main would have shown, each clickable. */
+interface TestNotices { echoTestNotices?: { title: string; body: string; click: () => void }[] }
+
+/**
+ * Follow-ups that newly wait on you, as one system notification titled ECHO.
+ * A click opens its item's page, or the Follow-ups page for several, then the
+ * window comes forward. Where the system has none, nothing shows.
+ */
+function notifyFollowUps({ body, item_id }: { body: string; item_id: string | null }): void {
+  const open = () => {
+    send('follow-ups.open', item_id === null ? {} : { item_id });
+    bringForward();
+  };
+  // Tests never put a notification on the machine: they read and click what would have shown.
+  if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_HIDDEN) {
+    ((globalThis as TestNotices).echoTestNotices ??= []).push({ title: 'ECHO', body, click: open });
+    return;
+  }
+  if (!Notification.isSupported()) return;
+  const notice = new Notification({ title: 'ECHO', body });
+  notice.on('click', () => { notices.delete(notice); open(); });
+  notice.on('close', () => { notices.delete(notice); });
+  notices.add(notice);
+  for (const old of notices) { if (notices.size <= 20) break; notices.delete(old); }
+  notice.show();
 }
 
 function trayImage(): Electron.NativeImage {
@@ -602,7 +644,8 @@ function accountItems(fromTray: boolean): MenuItemConstructorOptions[] {
     return [
       { label: `Signed in as ${account.display_name} · ${account.role}`, enabled: false },
       { label: `Organization: ${account.authority}`, enabled: false },
-      { label: `ECHO ${accountStatus!.client_version}`, enabled: false },
+      // Releases share a version: the build tells them apart, as the tray's Build line does.
+      { label: versionLine(accountStatus!.client_version, BUILD_INFO), enabled: false },
       { type: 'separator' },
       { label: 'Switch account…', click: run('switch') },
       { label: 'Sign out…', click: run('signout') },
@@ -638,7 +681,6 @@ function updateTray(): void {
   if (shown === trayShown) return;
   trayShown = shown;
   tray.setToolTip('ECHO');
-  const info = buildInfo();
   const menu = Menu.buildFromTemplate([
     { label: 'Open ECHO', accelerator: 'CommandOrControl+E', click: show },
     { label: 'Capture', accelerator: 'CommandOrControl+Shift+E', click: capture },
@@ -648,7 +690,7 @@ function updateTray(): void {
     ...(accountStatus?.account?.role === 'owner'
       ? [{ label: 'Organization', submenu: [{ label: 'People & invites…', click: openOrganization }] }] : []),
     { type: 'separator' },
-    ...(info ? [{ label: `Build ${info.source_sha.slice(0, 7)}${info.dirty ? ' (modified)' : ''}`, enabled: false }] : []),
+    ...(BUILD_INFO ? [{ label: `Build ${BUILD_INFO.source_sha.slice(0, 7)}${BUILD_INFO.dirty ? ' (modified)' : ''}`, enabled: false }] : []),
     { label: 'Quit ECHO', accelerator: 'CommandOrControl+Q', click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
@@ -703,7 +745,7 @@ async function startUpdates(): Promise<void> {
 
 app.on('second-instance', show);
 // Opening ECHO again from Spotlight or Finder while it runs: the window comes forward, as Open ECHO brings it.
-app.on('activate', () => { if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show(); });
+app.on('activate', bringForward);
 
 // Tests drive these with echo-test:conceal and echo-test:resume: a hidden test
 // window never follows which app the machine has in front.
@@ -798,7 +840,7 @@ async function runSmoke(): Promise<void> {
   checks.host_started = status.ok || status.failure.code !== 'host_restarted';
   checks.client_identity = status.ok && typeof (status.value as { client_version?: unknown }).client_version === 'string';
   const passed = Object.values(checks).every(Boolean);
-  process.stdout.write(`${JSON.stringify({ smoke: passed ? 'passed' : 'failed', checks, build: buildInfo() })}\n`);
+  process.stdout.write(`${JSON.stringify({ smoke: passed ? 'passed' : 'failed', checks, build: BUILD_INFO })}\n`);
   host?.kill();
   try { rmSync(smokeRoot!, { recursive: true, force: true }); } catch { /* temporary */ }
   app.exit(passed ? 0 : 1);

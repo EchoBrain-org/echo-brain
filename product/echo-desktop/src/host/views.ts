@@ -5,7 +5,7 @@ import type {
   Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, CreatedProject, DocumentSummary,
   Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
-  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, ImpactView, HomeView, OpenItemView, OpenItemsView,
+  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import type { PersonOpenItemV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
@@ -410,20 +410,6 @@ function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = fals
 }
 
 /**
- * A finished impact check, validated by the client: the card as the Authority
- * rebuilt it for this viewer, each citation a source the meeting card can name
- * or open (a source without a label is "Item n").
- */
-export function impactCardView(result: PersonRunsResultsV1['view']): ImpactView {
-  const { card } = result;
-  return {
-    status: card.status, decided: card.decided, affected: card.affected, unconfirmed: card.unconfirmed, people: card.people,
-    sources: card.citations.map((entry, index) => v4Source(entry, `Item ${index + 1}`, true, true)),
-    checked_at: result.checked_at, hidden: result.hidden,
-  };
-}
-
-/**
  * One open item, validated by the client. What it says now crosses only
  * when the Authority opened it for this viewer (`reach: 'opened'`), its
  * citation as a source "Open in …" can open; the tool's own coordinates stay
@@ -441,7 +427,8 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
       ...(current.due_at === undefined ? {} : { due_at: current.due_at }),
     } }),
     relation: item.relation, expected: item.expected, approver: item.approver, owner: item.owner, waits_on: item.waits_on, state: item.state,
-    created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, check: item.check, can: item.can, reach: item.reach,
+    created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, state_set_by: item.state_set_by, owner_set_at: item.owner_set_at,
+    owner_set_by: item.owner_set_by, send_included: item.send_included, check: item.check, can: item.can, reach: item.reach,
   };
 }
 

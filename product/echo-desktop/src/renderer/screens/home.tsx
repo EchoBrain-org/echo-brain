@@ -1,11 +1,9 @@
 import type { ComponentChildren } from 'preact';
-import type { OpenItemView } from '../../shared/protocol.js';
 import { colorFor, initial, when } from '../format.js';
 import { message } from '../messages.js';
-import { actionCount, homeFooter, itemHeadline, itemLabels, itemNames, itemNeeds, itemTitle, itemWhy, meetingSuffix, monthDay, needUpdating, shortNames, titleLine } from '../needs.js';
-import { closeItem, loadHome, openDecision, openItemCard, openItemStatus, openNewProject, openSend, type NeedRow, type State } from '../store.js';
+import { actionCount, homeFooter, itemNames, itemNeeds, itemWhy, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
+import { awaitingLive, homeRows, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openYourFollowUps, type NeedRow, type State } from '../store.js';
 import { Plus, Saved } from './icons.js';
-import { OpenInTool } from './open-items.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
 const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', review: 'Review', failed: 'Retry', checking: 'Checking' };
@@ -47,17 +45,18 @@ export function ReviewLine({ row }: { row: Extract<NeedRow, { review: unknown }>
   return <>Decision{actions ? ` · ${actions}` : ''} · <b>{review.title}</b>{meetingSuffix(review.title)}{day ? `, ${day}` : ''}</>;
 }
 
-/** Approve, Send, Retry and Checking: the whole row is one button. */
+/** Approve, Send, Retry and Checking: the whole row is one button. A Send row opens its meeting's follow-ups. */
 function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unknown }> }) {
   if (row.kind === 'send') {
     const send = row.send;
     const owners = shortNames(send.owners);
     return (
-      <button type="button" class="need-row send" data-testid="need-row" data-kind="send" onClick={() => void openSend(send.run_id)}>
+      <button type="button" class="need-row send" data-testid="need-row" data-kind="send"
+        onClick={() => void openFollowUps('record', send.decision.record_sha256, send.decision.title)}>
         <span class="need-kind">{KIND.send}</span>
         <span class="need-text">
-          <span class="need-title">{titleLine(send.decision.first_line ?? send.decision.title)} — {needUpdating(send.items, send.kinds)}</span>
-          <span class="need-detail">Impact of <b>{send.decision.title}</b>{owners.length > 0 ? ` · owners ${owners.join(', ')}` : ''}</span>
+          <span class="need-title">{titleLine(send.decision.first_line ?? send.decision.title)} — {toSend(send.items)}</span>
+          <span class="need-detail">From <b>{send.decision.title}</b>{owners.length > 0 ? ` · owners ${owners.join(', ')}` : ''}</span>
         </span>
         <Side state={state} at={send.finished_at} projects={send.decision.project_ids} />
       </button>
@@ -81,90 +80,54 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
 }
 
 /**
- * An item row's three lines (R66): "<item> doesn't match the decision yet";
- * what it says now → what the decision needs; and, muted, what it is, where
- * it came from and why it is back. `label` titles the item apart from any
- * other on Home.
+ * Update, for a follow-up that waits on you, and Review, for one someone else
+ * owns that changed since you sent it (R64): the whole row opens its page
+ * (F5). Its three lines: its title (`label`, apart from any other on Home);
+ * for a document, what it says now and what the meeting needs; and, muted,
+ * what it is, its meeting and whose it is.
  */
-function ItemLines({ state, item, label }: { state: State; item: OpenItemView; label: string }) {
-  const failure = state.home?.closeFailures[item.item_id];
-  const needs = itemNeeds(item);
-  return (
-    <span class="need-text">
-      <span class="need-title">{itemHeadline(item, label)}</span>
-      {needs && <span class="need-change">{needs}</span>}
-      <span class="need-detail">{itemWhy(item, state.status?.account?.membership_id ?? null, state.tools?.items)}</span>
-      {failure && <span class="error need-error" role="status">{failure}</span>}
-    </span>
-  );
-}
-
-/**
- * Update, for an item not changed since it was sent: closed in place (ruling
- * 20). "Open in Jira" only when you can open it; Mark updated when you may
- * close it. `name` names the item on its buttons, apart from any other's.
- */
-function UpdateRow({ state, item, name, label }: { state: State; item: OpenItemView; name: string; label: string }) {
-  return (
-    <div class="need-row update" data-testid="need-row" data-kind="update">
-      <span class="need-kind">{KIND.update}</span>
-      <ItemLines state={state} item={item} label={label} />
-      <Side state={state} projects={item.decision?.project_ids ?? []}>
-        <span class="need-actions">
-          <OpenInTool state={state} item={item} name={name} />
-          {item.can.set_state && (
-            <button type="button" class="need-act" aria-label={`Mark updated: ${name}`} onClick={() => void closeItem(item, 'done')}>Mark updated</button>
-          )}
-        </span>
-      </Side>
-    </div>
-  );
-}
-
-/**
- * A changed item: Update for its owner, Review for an approver looking at
- * someone else's (R64). ECHO saw it change since it was sent, and it still
- * does not match: the whole row opens the item first (ruling 3); nothing on
- * it closes the item.
- */
-function ChangedRow({ state, row, label }: { state: State; row: Extract<NeedRow, { item: unknown }>; label: string }) {
+function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { item: unknown }>; label: string }) {
   const { item } = row;
+  const needs = itemNeeds(item);
+  // Shown from ECHO's own fields at once: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
+  const reading = state.home?.reading === true && awaitingLive(item);
   return (
-    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} onClick={() => openItemCard(item)}>
+    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} aria-busy={reading || undefined}
+      onClick={() => void openFollowUp(item.item_id, item)}>
       <span class="need-kind">{KIND[row.kind]}</span>
-      <ItemLines state={state} item={item} label={label} />
-      <Side state={state} at={item.check?.checked_at} projects={item.decision?.project_ids ?? []} />
+      <span class="need-text">
+        <span class={`need-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
+        {needs && <span class="need-change">{needs}</span>}
+        <span class="need-detail">{itemWhy(item, state.status?.account?.membership_id ?? null, state.tools?.items)}</span>
+      </span>
+      <Side state={state} projects={item.decision?.project_ids ?? []} />
     </button>
   );
 }
 
 /**
- * Under the rows, and under "Nothing needs you" (canvas 9.1, 9.5; R69): what
- * matches its decision now, what waits on others, and when ECHO last checked;
- * View opens Your open items whenever anything matches or waits on others.
+ * Under the rows, and on an empty Home (F9): what waits on others and when
+ * ECHO last checked, and Follow-ups (everything you sent or own), always.
  */
 function Footer({ state }: { state: State }) {
   const open = state.home?.open;
   const words = open ? homeFooter(open) : null;
-  if (!open || words === null) return null;
   return (
     <div class="needs-foot" data-testid="needs-foot">
       <span class="needs-foot-words">{words}</span>
-      {(open.landed > 0 || open.waiting > 0) && (
-        <button type="button" class="need-open" aria-label="View your open items" onClick={() => void openItemStatus('mine', undefined, null)}>View</button>
-      )}
+      <button type="button" class="need-open" data-testid="your-follow-ups" onClick={() => void openYourFollowUps()}>Follow-ups</button>
     </div>
   );
 }
 
 /**
- * Home: only what waits on you. Decisions from meetings to approve, what a
- * decision you approved changes (to send to its owners), items that wait on
- * you, and checks still on their way. Projects live in the sidebar.
+ * Home: only what waits on you. Decisions from meetings to approve, meetings
+ * you approved with follow-ups to send, follow-ups that wait on you, and
+ * checks still on their way. Projects live in the sidebar.
  */
 export function Home({ state }: { state: State }) {
   const home = state.home;
-  const rows = home?.rows ?? [];
+  const rows = homeRows(state);
   const noProjects = !state.projects.loading && !state.projects.failure && state.projects.items.length === 0 &&
     !state.archivedProjects.loading && !state.archivedProjects.failure && state.archivedProjects.items.length === 0;
   if (home?.failure && rows.length === 0) {
@@ -178,11 +141,14 @@ export function Home({ state }: { state: State }) {
   if (rows.length === 0) {
     if (noProjects && !home?.loading) {
       return (
-        <div class="column center" data-testid="home-empty">
-          <button type="button" class="empty-capture" data-testid="empty-new-project" onClick={openNewProject}>
-            <span class="ring" aria-hidden="true"><Plus /></span>
-            <span>New project</span>
-          </button>
+        <div class="column needs empty" data-testid="home-empty">
+          <div class="home-clear">
+            <button type="button" class="empty-capture" data-testid="empty-new-project" onClick={openNewProject}>
+              <span class="ring" aria-hidden="true"><Plus /></span>
+              <span>New project</span>
+            </button>
+          </div>
+          <Footer state={state} />
         </div>
       );
     }
@@ -194,19 +160,13 @@ export function Home({ state }: { state: State }) {
     );
   }
   const waiting = rows.filter(row => row.kind !== 'checking').length;
-  const items = rows.flatMap(row => ('item' in row ? [row.item] : []));
-  const names = itemNames(items);
-  const labels = itemLabels(items);
+  const names = itemNames(rows.flatMap(row => ('item' in row ? [row.item] : [])));
   return (
-    <div class="column needs" data-testid="needs" aria-busy={home?.loading ?? true}>
+    <div class="column needs" data-testid="needs" aria-busy={home ? home.loading || home.reading : true}>
       <div class="section-label needs-head">Needs you{waiting > 0 ? ` · ${waiting}` : ''}</div>
-      {rows.map(row => {
-        if (!('item' in row)) return <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />;
-        const label = labels.get(row.item.item_id) ?? itemTitle(row.item);
-        return row.kind === 'review' || row.changed
-          ? <ChangedRow key={row.item.item_id} state={state} row={row} label={label} />
-          : <UpdateRow key={row.item.item_id} state={state} item={row.item} name={names.get(row.item.item_id) ?? itemTitle(row.item)} label={label} />;
-      })}
+      {rows.map(row => ('item' in row
+        ? <ItemRow key={row.item.item_id} state={state} row={row} label={names.get(row.item.item_id)!.label} />
+        : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />))}
       {home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>}
       <Footer state={state} />
     </div>

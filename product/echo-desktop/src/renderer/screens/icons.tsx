@@ -62,6 +62,10 @@ export const Warning = () => (
 export const OnePerson = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.5" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" fill="none" /><path d="M5 19.5c.9-3.4 3.6-5.2 7-5.2s6.1 1.8 7 5.2" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" fill="none" /></svg>
 );
+/** Follow-ups: a short list, each line ticked. */
+export const Ticks = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5l1.6 1.6L8.6 5M4 12.5l1.6 1.6L8.6 11M4 18.5l1.6 1.6L8.6 17M12 7h8M12 13h8M12 19h8" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
+);
 /** An approved meeting's row. */
 export const Calendar = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3" stroke="rgba(240,236,230,0.8)" stroke-width="2.2" fill="none" /><path d="M3.5 10.5h17M8.5 2.8v4.2M15.5 2.8v4.2" stroke="rgba(240,236,230,0.8)" stroke-width="2.2" stroke-linecap="round" fill="none" /></svg>

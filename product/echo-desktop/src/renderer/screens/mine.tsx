@@ -10,7 +10,7 @@ import { ItemRow, useKeptPlace } from './items.js';
  */
 export function Mine({ state }: { state: State }) {
   const list = state.list?.scope.kind === 'mine' ? state.list : null;
-  const column = useKeptPlace(list?.opened);
+  const { column } = useKeptPlace(list ? `mine:${list.opened}` : undefined);
   if (list?.failure && list.items.length === 0 && !list.next) {
     return (
       <div class="column center" data-testid="mine-error">

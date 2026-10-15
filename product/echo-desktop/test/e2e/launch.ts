@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import type { UpdateState } from '../../src/shared/protocol.js';
@@ -17,10 +17,14 @@ export interface Launched {
   close(): Promise<void>;
 }
 
-/** The real app with a private temporary home: never the founder's session. */
-export async function launch(mode = ''): Promise<Launched> {
+/**
+ * The real app with a private temporary home: never the founder's session. `files` are written into that home before the
+ * app starts, such as the fixture Authority's switches (`hold-live` holds every live read until the test removes it).
+ */
+export async function launch(mode = '', files: Readonly<Record<string, string>> = {}): Promise<Launched> {
   // The session store requires a canonical private folder (macOS /var is a link).
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-desktop-home-')));
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(home, name), text);
   const userData = mkdtempSync(join(tmpdir(), 'echo-desktop-data-'));
   const app = await electron.launch({
     args: [

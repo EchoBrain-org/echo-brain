@@ -75,7 +75,7 @@ describe('SQLite open items v1', () => {
     expect(rows.find(row => row.pointer.ticket_id === '46')).toMatchObject({
       run_id: f.run.run_id, item_key: draft('46').item_key, pointer: draft('46').pointer, record_sha256: f.recordSha256, organization_id: f.owner.organization_id,
       approver: { principal_id: f.owner.principal_id, membership_id: ARI }, relation: 'needs_updating', expected: 'launch next week',
-      owner_membership_id: f.mina, owner_match: 'jira_account', state: 'unsent', state_set_by: null, state_set_at: null, sent_at: null, send_command_id: null, check: null,
+      owner_membership_id: f.mina, owner_match: 'jira_account', owner_set_by: null, owner_set_at: null, state: 'unsent', state_set_by: null, state_set_at: null, sent_at: null, send_command_id: null, check: null,
       created_at: f.clock().toISOString(), updated_at: f.clock().toISOString(),
     });
     expect(rows.find(row => row.pointer.ticket_id === '47')).toMatchObject({ relation: 'conflicts', expected: null });
@@ -85,33 +85,98 @@ describe('SQLite open items v1', () => {
     expect(() => f.db.transaction(() => f.items.insertForRun(f.db, f.run, [draft('46')]))()).toThrow('UNIQUE');
   });
 
-  it('sends once per command, refuses a stale list, and marks unticked items not relevant', async () => {
+  it('sends once per command, refuses a stale list, and dismisses an excluded item', async () => {
     const f = await doneRunWithItems(['46', '47']);
     const [a, b] = f.items.forRun(f.run.run_id);
-    expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices: [{ item_id: a!.item_id, include: true }] })).toEqual({ kind: 'stale' });
     const choices = [{ item_id: a!.item_id, include: true, owner_membership_id: f.mina }, { item_id: b!.item_id, include: false }];
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices })).toEqual({ kind: 'sent', sent: 1, not_relevant: 1 });
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices })).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
     expect(f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-2', choices })).toEqual({ kind: 'stale' });
     // What a command did, without sending: only that command, only on that run.
-    expect(f.items.sentBy(f.run.run_id, 'cmd-1')).toEqual({ sent: 1, not_relevant: 1 });
-    expect(f.items.sentBy(f.run.run_id, 'cmd-2')).toBeUndefined();
-    expect(f.items.sentBy('run_00000000-0000-4000-8000-000000000999', 'cmd-1')).toBeUndefined();
+    const listed = [a!.item_id, b!.item_id];
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1', listed)).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-2', listed)).toBeUndefined();
+    expect(f.items.sentBy('run_00000000-0000-4000-8000-000000000999', 'cmd-1', listed)).toBeUndefined();
     expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.mina, owner_match: 'picked' });
-    expect(f.items.read(b!.item_id)).toMatchObject({ state: 'not_relevant' });
+    expect(f.items.read(b!.item_id)).toMatchObject({ state: 'not_relevant', send_included: false, state_set_by: ARI });
   });
 
-  it('refuses a send that names an item twice or one of another run, and writes nothing', async () => {
+  it('sends any subset of the unsent items, leaving the ones it does not list unsent and untouched (F1)', async () => {
+    const f = await doneRunWithItems(['46', '47', '48']);
+    const [a, b, c] = f.items.forRun(f.run.run_id);
+    const untouched = f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(c!.item_id);
+    f.advance(1_000);
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: false }] }))
+      .toEqual({ kind: 'sent', sent: 1, not_relevant: 1 });
+    expect(f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(c!.item_id)).toEqual(untouched);
+    expect(f.items.read(c!.item_id)).toMatchObject({ state: 'unsent', sent_at: null, send_command_id: null, send_included: null, state_set_by: null });
+    // A later command sends what is left; one that names an item already sent or dismissed is stale and writes nothing.
+    f.advance(1_000);
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-2', choices: [{ item_id: a!.item_id, include: true }, { item_id: c!.item_id, include: true }] })).toEqual({ kind: 'stale' });
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-2', choices: [{ item_id: b!.item_id, include: true }] })).toEqual({ kind: 'stale' });
+    expect(f.items.read(c!.item_id)).toMatchObject({ state: 'unsent' });
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-2', choices: [{ item_id: c!.item_id, include: true }] })).toEqual({ kind: 'sent', sent: 1, not_relevant: 0 });
+    expect(f.items.read(c!.item_id)).toMatchObject({ state: 'open', send_command_id: 'cmd-2', send_included: true, sent_at: f.clock().toISOString() });
+    // Each command replays its own counts for its own items; with nothing left unsent a new command is stale.
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1', [b!.item_id, a!.item_id])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-2', [c!.item_id])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 0 });
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: a!.item_id, include: false }, { item_id: b!.item_id, include: true }] }))
+      .toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-3', choices: [{ item_id: c!.item_id, include: false }] })).toEqual({ kind: 'stale' });
+  });
+
+  it('refuses a sent command id reused for other items as stale, so none is left unsent behind its old answer', async () => {
+    const f = await doneRunWithItems(['46', '47', '48']);
+    const [a, b, c] = f.items.forRun(f.run.run_id);
+    const send = (command_id: string, choices: readonly ImpactSendChoiceV1[]) => f.items.send({ run_id: f.run.run_id, by: ARI, command_id, choices });
+    expect(send('cmd-1', [{ item_id: a!.item_id, include: true }])).toEqual({ kind: 'sent', sent: 1, not_relevant: 0 });
+    // The same id listing other items, more items, fewer, or one twice: stale, and nothing is written.
+    const before = f.db.prepare('SELECT * FROM authority_impact_items_v1 ORDER BY item_id').all();
+    for (const choices of [
+      [{ item_id: b!.item_id, include: true }],
+      [{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: true }],
+      [{ item_id: a!.item_id, include: true }, { item_id: a!.item_id, include: true }],
+      [],
+    ]) expect(send('cmd-1', choices)).toEqual({ kind: 'stale' });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1', [b!.item_id, c!.item_id])).toEqual({ kind: 'stale' });
+    expect(f.db.prepare('SELECT * FROM authority_impact_items_v1 ORDER BY item_id').all()).toEqual(before);
+    // An exact retry replays, whatever it now says to include or whom it picks.
+    expect(send('cmd-1', [{ item_id: a!.item_id, include: false, owner_membership_id: f.mina }])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 0 });
+    expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: ARI, send_included: true });
+    // A new id sends the rest.
+    expect(send('cmd-2', [{ item_id: c!.item_id, include: false }, { item_id: b!.item_id, include: true }])).toEqual({ kind: 'sent', sent: 1, not_relevant: 1 });
+    expect(send('cmd-2', [{ item_id: b!.item_id, include: true }, { item_id: c!.item_id, include: false }])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 1 });
+  });
+
+  it('refuses a send that names an item twice, one of another run, or none, and writes nothing', async () => {
     const f = await doneRunWithItems(['46', '47']);
     const [a, b] = f.items.forRun(f.run.run_id);
     const send = (choices: readonly ImpactSendChoiceV1[]) => f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-1', choices });
     expect(send([{ item_id: a!.item_id, include: true }, { item_id: a!.item_id, include: false }])).toEqual({ kind: 'stale' });
     expect(send([{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: true }, { item_id: 'itm_elsewhere', include: true }])).toEqual({ kind: 'stale' });
+    expect(send([{ item_id: 'itm_elsewhere', include: true }])).toEqual({ kind: 'stale' });
+    expect(send([])).toEqual({ kind: 'stale' });
     expect(f.items.send({ run_id: 'run_missing', by: f.owner.membership_id, command_id: 'cmd-1', choices: [] })).toEqual({ kind: 'stale' });
     expect(f.items.forRun(f.run.run_id).map(row => row.state)).toEqual(['unsent', 'unsent']);
     f.advance(1_000);
-    expect(send([{ item_id: a!.item_id, include: true, owner_membership_id: ARI }, { item_id: b!.item_id, include: true }])).toEqual({ kind: 'sent', sent: 2, not_relevant: 0 });
+    expect(send([{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: true }])).toEqual({ kind: 'sent', sent: 2, not_relevant: 0 });
     expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: ARI, owner_match: 'approver', sent_at: f.clock().toISOString(), send_command_id: 'cmd-1', state_set_by: ARI, state_set_at: f.clock().toISOString() });
+  });
+
+  it('stores the approver picked at Send over the fallback to them, and writes nothing for a matched owner picked again (F2)', async () => {
+    const f = await doneRunFixture();
+    f.db.transaction(() => f.items.insertForRun(f.db, f.run, [draft('46'), draft('47', { owner_membership_id: f.mina, owner_match: 'jira_account' })]))();
+    const rows = f.items.forRun(f.run.run_id);
+    const fallback = rows.find(row => row.pointer.ticket_id === '46')!;
+    const matched = rows.find(row => row.pointer.ticket_id === '47')!;
+    expect(fallback).toMatchObject({ owner_membership_id: ARI, owner_match: 'approver' });
+    f.advance(1_000);
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [
+      { item_id: fallback.item_id, include: true, owner_membership_id: ARI }, { item_id: matched.item_id, include: true, owner_membership_id: f.mina },
+    ] })).toEqual({ kind: 'sent', sent: 2, not_relevant: 0 });
+    // The approver confirmed: no longer an owner ECHO fell back to for want of a match.
+    expect(f.items.read(fallback.item_id)).toMatchObject({ state: 'open', owner_membership_id: ARI, owner_match: 'picked', owner_set_by: ARI, owner_set_at: f.clock().toISOString() });
+    expect(f.items.read(matched.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.mina, owner_match: 'jira_account', owner_set_by: null, owner_set_at: null });
   });
 
   it.each([true, false])('replays the original include=%s counts after state and owner changes', async include => {
@@ -122,7 +187,7 @@ describe('SQLite open items v1', () => {
     expect(f.items.send(command)).toEqual({ kind: 'sent', ...counts });
     // Even changes in the same clock tick cannot change the command's answer.
     f.items.setState(item.item_id, include ? 'not_relevant' : 'open', ARI);
-    expect(f.items.sentBy(f.run.run_id, command.command_id)).toEqual(counts);
+    expect(f.items.sentBy(f.run.run_id, command.command_id, [item.item_id])).toEqual({ kind: 'replayed', ...counts });
     f.advance(1_000);
     f.items.setState(item.item_id, 'done', ARI);
     f.items.assign(item.item_id, f.mina, ARI);
@@ -130,7 +195,24 @@ describe('SQLite open items v1', () => {
     expect(f.items.read(item.item_id)).toMatchObject({ state: 'done', owner_membership_id: f.mina });
   });
 
-  it('changes the state or owner only of a sent item', async () => {
+  it('picks the owner of an unsent item at once, and keeps it through Send (F2)', async () => {
+    const f = await doneRunWithItems(['46', '47']);
+    const [a, b] = f.items.forRun(f.run.run_id);
+    f.advance(1_000);
+    const picked = f.clock().toISOString();
+    expect(f.items.assign(a!.item_id, f.mina, ARI)).toMatchObject({ state: 'unsent', owner_membership_id: f.mina, owner_match: 'picked', owner_set_by: ARI, owner_set_at: picked, sent_at: null, state_set_by: null });
+    // Send with no pick keeps the picked owner; a pick at Send still wins.
+    f.advance(1_000);
+    expect(f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: a!.item_id, include: true }, { item_id: b!.item_id, include: true, owner_membership_id: f.rafael }] }))
+      .toEqual({ kind: 'sent', sent: 2, not_relevant: 0 });
+    expect(f.items.read(a!.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.mina, owner_match: 'picked' });
+    expect(f.db.prepare('SELECT owner_set_at FROM authority_impact_items_v1 WHERE item_id=?').pluck().get(a!.item_id)).toBe(picked);
+    expect(f.items.read(b!.item_id)).toMatchObject({ owner_membership_id: f.rafael, owner_match: 'picked' });
+    // Once sent, a change of owner is a reassignment.
+    expect(f.items.assign(a!.item_id, f.rafael, f.mina)).toMatchObject({ owner_membership_id: f.rafael, owner_match: 'reassigned' });
+  });
+
+  it('changes the state only of a sent item, and reassigns a sent item', async () => {
     const f = await doneRunWithItems(['46', '47']);
     const [a, b] = f.items.forRun(f.run.run_id);
     expect(f.items.setState(a!.item_id, 'done', ARI)).toBeUndefined();
@@ -142,6 +224,9 @@ describe('SQLite open items v1', () => {
     expect(f.items.setState('itm_missing', 'done', ARI)).toBeUndefined();
     expect(f.items.assign(b!.item_id, f.rafael, ARI)).toMatchObject({ owner_membership_id: f.rafael, owner_match: 'reassigned', state: 'open' });
     expect(f.db.prepare('SELECT owner_set_by, owner_set_at FROM authority_impact_items_v1 WHERE item_id=?').get(b!.item_id)).toEqual({ owner_set_by: ARI, owner_set_at: f.clock().toISOString() });
+    // Its owner again changes nothing, so nothing is written.
+    f.advance(60_000);
+    expect(f.items.assign(b!.item_id, f.rafael, f.mina)).toMatchObject({ owner_membership_id: f.rafael, owner_set_by: ARI });
     expect(f.items.assign('itm_missing', f.rafael, ARI)).toBeUndefined();
   });
 
@@ -167,7 +252,7 @@ describe('SQLite open items v1', () => {
     f.items.send({ run_id: f.run.run_id, by: ARI, command_id: 'cmd-1', choices: [{ item_id: item.item_id, include: true }] });
     expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET send_included=0 WHERE item_id=?').run(item.item_id)).toThrow('state move is not allowed');
     expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET send_included=NULL WHERE item_id=?').run(item.item_id)).toThrow('state move is not allowed');
-    expect(f.items.sentBy(f.run.run_id, 'cmd-1')).toEqual({ sent: 1, not_relevant: 0 });
+    expect(f.items.sentBy(f.run.run_id, 'cmd-1', [item.item_id])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 0 });
   });
 
   it('never moves an item back to unsent, keeps identity frozen, and keeps only a newer check', async () => {

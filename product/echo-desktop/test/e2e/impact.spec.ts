@@ -27,46 +27,40 @@ async function approveFromHome(page: Page) {
   return page.getByTestId('need-row');
 }
 
-/** The finished check's card: its Send row opens Tell the owners?, whose Details are the decision's page. */
-async function openImpactCard(page: Page) {
+/** The finished check's Send row: it opens the meeting's follow-ups. */
+async function openFollowUps(page: Page) {
   const row = page.getByTestId('need-row');
   await expect(row).toHaveAttribute('data-kind', 'send', { timeout: 30_000 });
+  await expect(row).toContainText('4 follow-ups to send');
   await row.click();
-  await expect(page.getByTestId('send')).toBeVisible();
-  await page.getByTestId('send-details').click();
-  return page.getByTestId('decision');
+  const list = page.getByTestId('follow-ups');
+  await expect(list.getByRole('region', { name: 'Not sent', exact: true }).getByTestId('follow-up-row')).toHaveCount(4);
+  return list;
 }
 
-test('approving a meeting shows its impact card once the check finishes', async ({}, testInfo) => {
+test('approving a meeting checks what it changes, and its follow-ups wait on Home', async () => {
   run = await launch('granola');
-  const { page, app } = run;
-  const permalink = 'https://example.atlassian.net/browse/ECHO-12';
-  const opened = await captureOpenExternal(app);
+  const { page } = run;
   await approveFromHome(page);
-  // The check runs by itself; what it found waits on Home, to send to the owners.
-  const meetings = await openImpactCard(page);
-  const impact = meetings.getByRole('region', { name: 'Impact' });
-  await expect(impact.getByRole('heading', { name: 'Affected items' })).toBeVisible({ timeout: 30_000 });
-  await expect(impact.getByRole('heading', { name: 'What was decided' })).toBeVisible();
-  await expect(impact).toContainText('Launch the pilot next week.');
-  await expect(impact.getByText('Conflicts')).toBeVisible();
-  await expect(impact.getByText('Confirms')).toBeVisible();
-  await expect(impact).toContainText('Date at risk: Pilot launch, 2026-10-30');
-  await expect(impact.getByRole('heading', { name: "Couldn't confirm" })).toBeVisible();
-  await expect(impact.getByRole('heading', { name: 'People to tell' })).toBeVisible();
-  await expect(impact).toContainText('Mina Patel · ECHO-12 · Pilot launch');
-  await expect(impact.getByText('1 item you can no longer open is hidden.')).toBeVisible();
-  // Only outside items open in their tool; ECHO's own records do not.
-  await expect(impact.getByRole('button', { name: /^Open in / })).toHaveCount(2);
-  await impact.getByRole('button', { name: 'Open in Jira' }).click();
-  await expect.poll(opened).toEqual([permalink]);
-  await impact.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath('impact-card.png') });
-  // The card is a page of its own: no Got it. Back returns to Tell the owners?, as it was.
-  await expect(page.getByRole('button', { name: 'Got it' })).toHaveCount(0);
+  // The check runs by itself; what it found, and the meeting's own actions, wait on Home to be sent.
+  const list = await openFollowUps(page);
+  // The meeting's approval opens its decision over the list; its follow-ups line goes back to the list, as it was.
+  await list.getByRole('button', { name: /^Approved / }).click();
+  const decision = page.getByTestId('decision');
+  await expect(decision.getByRole('heading', { name: 'What did it change?' })).toBeVisible();
+  await expect(page.getByTestId('title')).toHaveText('Decision');
+  const reads = runOperations().filter(operation => operation === 'items').length;
+  const line = decision.getByTestId('impact-follow-ups');
+  await expect(line).toHaveText('Follow-ups · 4 not sent');
+  await line.click();
+  await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
+  await expect(list.getByRole('region', { name: 'Not sent', exact: true }).getByRole('checkbox', { checked: true })).toHaveCount(4);
+  // Counted once for the line; the list was not read again.
+  expect(runOperations().filter(operation => operation === 'items')).toHaveLength(reads);
   await page.getByTestId('back').click();
-  await expect(page.getByTestId('send')).toBeVisible();
-  expect(runOperations()).toEqual(expect.arrayContaining(['list', 'start', 'home', 'items', 'view']));
+  await expect(page.getByTestId('need-row')).toHaveAttribute('data-kind', 'send');
+  expect(runOperations()).toEqual(expect.arrayContaining(['list', 'start', 'home', 'items']));
+  expect(runOperations()).not.toContain('view');
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(1);
 });
 
@@ -76,24 +70,45 @@ test('a publishing approval stays on Home until its impact run arrives and finis
   await expect(row).toContainText('publishing to ECHO');
   await expect(row).toHaveAttribute('data-kind', 'checking');
   await expect(run.page.getByTestId('home-clear')).toHaveCount(0);
-  await openImpactCard(run.page);
-  await expect(run.page.getByRole('heading', { name: 'Affected items' })).toBeVisible();
+  await openFollowUps(run.page);
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(1);
 });
 
-test('a failed check gives its reason and offers Try again', async () => {
+test('a failed check gives its reason, offers Try again, and then its follow-ups', async ({}, testInfo) => {
   run = await launch('granola-run-failed');
-  const row = await approveFromHome(run.page);
+  const { page, app } = run;
+  const opened = await captureOpenExternal(app);
+  const row = await approveFromHome(page);
   // A check that did not finish waits on you: its row opens the reason.
   await expect(row).toHaveAttribute('data-kind', 'failed', { timeout: 30_000 });
   await expect(row).toContainText('Approved · the check did not finish');
-  await expect(run.page.getByTestId('sidebar-badge')).toHaveText('1');
+  await expect(page.getByTestId('sidebar-badge')).toHaveText('1');
   await row.click();
-  const impact = run.page.getByTestId('decision').getByRole('region', { name: 'Impact' });
+  const impact = page.getByTestId('decision').getByRole('region', { name: 'Impact' });
   await expect(impact.getByText('The impact check failed.')).toBeVisible({ timeout: 30_000 });
   await impact.getByRole('button', { name: 'Try again' }).click();
   await expect.poll(runOperations).toContain('retry');
-  // Tried again, the check runs and finishes.
-  await expect(impact.getByRole('heading', { name: 'Affected items' })).toBeVisible({ timeout: 30_000 });
+  // Tried again, the check runs and finishes: its follow-ups in one line, the whole line a button. What was decided is the
+  // proposal's own section, said once.
+  const followUps = impact.getByTestId('impact-follow-ups');
+  await expect(followUps).toHaveText('Follow-ups · 4 not sent', { timeout: 30_000 });
+  await expect(page.getByRole('heading', { name: 'What was decided' })).toHaveCount(0);
+  await expect(page.getByTestId('decision')).toContainText('Launch the pilot next week.');
+  for (const gone of ['Affected items', 'People to tell', 'Couldn\'t confirm']) await expect(impact).not.toContainText(gone);
+  await page.screenshot({ path: testInfo.outputPath('impact-card.png') });
   expect(runOperations().filter(operation => operation === 'start')).toHaveLength(2);
+  expect(runOperations()).not.toContain('view');
+  // The line opens the meeting's list, over the decision; Back returns to it.
+  await followUps.click();
+  const list = page.getByTestId('follow-ups');
+  await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
+  // An item opened for you opens in its tool from its page.
+  await list.getByTestId('follow-up-row').filter({ hasText: 'ECHO-12' }).click();
+  await page.getByTestId('follow-up').getByRole('button', { name: 'Open in Jira' }).click();
+  await expect.poll(opened).toEqual(['https://example.atlassian.net/browse/ECHO-12']);
+  await page.getByTestId('back').click();
+  // Its "Approved" goes back to the decision it was opened from.
+  await list.getByRole('button', { name: /^Approved / }).click();
+  await expect(followUps).toBeVisible();
+  await expect(list).toHaveCount(0);
 });

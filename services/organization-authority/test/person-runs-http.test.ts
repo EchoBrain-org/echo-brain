@@ -52,10 +52,13 @@ describe('person runs HTTP transport', () => {
       const response = await post(base, request);
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(result);
-      expect(methods[operation]).toHaveBeenCalledWith(operation === 'home'
-        ? { access_token: 'fixture', signal: expect.any(AbortSignal) }
-        : { access_token: 'fixture', request, signal: expect.any(AbortSignal) });
+      expect(methods[operation]).toHaveBeenCalledWith({ access_token: 'fixture', request, signal: expect.any(AbortSignal) });
     }
+    // Home's quiet check reaches the same method, read as rows.
+    const quiet = { schema_version: 1, operation: 'home', read: 'rows' };
+    expect((await post(base, quiet)).status).toBe(200);
+    expect(methods.home).toHaveBeenLastCalledWith({ access_token: 'fixture', request: quiet, signal: expect.any(AbortSignal) });
+    expect((await post(base, { ...quiet, read: 'counts' })).status).toBe(400);
     // A request the API refuses never reaches a method.
     expect((await post(base, { schema_version: 1, operation: 'set_state', item_id: ITEM, state: 'unsent' })).status).toBe(400);
     expect(methods.set_state).toHaveBeenCalledTimes(1);

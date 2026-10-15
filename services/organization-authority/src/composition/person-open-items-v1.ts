@@ -4,6 +4,7 @@ import {
   PERSON_HOME_ROWS_V1,
   PERSON_IMPACT_CARD_LIMITS_V1 as LIMITS,
   PERSON_OPEN_ITEMS_PAGE_V1,
+  PERSON_RUN_ITEMS_MAX_V1,
   PERSON_UPLOAD_PROJECT_SET_MAX,
   validatePersonAnswerCitationV6,
   validatePersonRunsResultV1,
@@ -39,8 +40,10 @@ import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
  * question goes to the open-items policy (`openItemAccessV1`, and
  * `openItemSendAccessV1` for Send); this module only gathers its facts.
  * A row's own fields are ECHO's. An item's title, text, assignee, status and
- * due date are read live on every call, as the viewer, on one desk per
- * request, and shown only when the policy says the viewer opened the item.
+ * due date are read live, as the viewer, on one desk per request, and shown
+ * only when the policy says the viewer opened the item. No read is tried for
+ * a meeting action (ECHO's own data), nor for any row of a read with `read`
+ * (`rows`, or an `items` read of `counts`); such a row is `not_read`.
  * Each row says how its read went (`reach`): a refusal by the viewer's own
  * access is `no_access`; anything else that stops a read (an outage, a rate
  * limit, a timeout) is `unavailable` and is reported without content, so an
@@ -118,8 +121,8 @@ const DETAIL_CHARS = 128;
 const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const GLOBAL = Object.freeze({ kind: 'global' as const });
-/** Send row kinds in one fixed order. */
-const KIND_ORDER: readonly PersonOpenItemKindV1[] = ['ticket', 'page', 'slack_message', 'record', 'document'];
+/** Send row kinds in one fixed order: the meeting's own actions first. */
+const KIND_ORDER: readonly PersonOpenItemKindV1[] = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'];
 const UNKNOWN_MEMBER = 'Unknown member';
 /** The codes an Authority error can carry: an observation names one of these, else `error`, never a message. */
 const ERROR_CODES: readonly AuthorityErrorCode[] = ['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable'];
@@ -142,14 +145,22 @@ function invalidOutput(): never {
   throw new AuthorityOperationError('invalid_output', 'open items response is invalid');
 }
 
-/** The tool an item lives in, from its stored pointer. */
+/** What an item is, from its stored pointer: the approved meeting's own action, or the tool an affected item lives in. */
 export function openItemKindV1(pointer: Pointer): PersonOpenItemKindV1 {
   switch (pointer.kind) {
+    case 'meeting_action': return 'action';
     case 'ticket': case 'page': case 'slack_message': return pointer.kind;
     case 'approved_record': return 'record';
     case 'source_revision': return 'document';
     default: return invalidOutput();
   }
+}
+/**
+ * The approved meeting's own action: ECHO data only, its line stored on the item, so no desk opens it and no sweep rechecks
+ * it (the sweep trigger refuses its pointer). It is closed by hand.
+ */
+function meetingAction(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
+  return row.pointer.kind === 'meeting_action';
 }
 
 /** Code point order, as SQLite's binary collation and canonical ISO times order. */
@@ -159,6 +170,14 @@ function ascending(left: string, right: string): number {
 /** Oldest first: created_at, then item_id, as the items store orders rows. */
 function oldestFirst(left: Pick<ImpactItemRowV1, 'created_at' | 'item_id'>, right: Pick<ImpactItemRowV1, 'created_at' | 'item_id'>): number {
   return ascending(left.created_at, right.created_at) || ascending(left.item_id, right.item_id);
+}
+
+/**
+ * When an open item started waiting on whoever it waits on now: the latest of when it was sent, when its owner was last set, and
+ * when its state was last set (a reopen). Canonical ISO times order as strings.
+ */
+function waitingSince(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'state_set_at'>): string {
+  return [row.sent_at, row.owner_set_at, row.state_set_at].reduce<string>((latest, at) => (at !== null && at > latest ? at : latest), row.created_at);
 }
 
 /** A page cursor: base64url of `created_at|item_id` of the page's last row. */
@@ -242,7 +261,9 @@ export function assessOpenItemsV1(sources: Pick<OpenItemSourcesV1, 'records' | '
   const rows = found.filter(row => row.organization_id === viewer.organization);
   const records = [...new Set([...rows.map(row => row.record_sha256), ...scopeRecords])];
   const decisions = records.length === 0 ? new Map<Sha256Digest, PersonReadableDecisionV1>() : sources.records.readableDecisions({ access_token: viewer.token, record_sha256s: records });
-  const people = sources.people.people(viewer.organization, [...new Set(rows.flatMap(row => [row.approver.membership_id, row.owner_membership_id, ...(row.check === null ? [] : [row.check.by])]))]);
+  // Everyone a row names: its approver and owner, who set its state and its owner last, and who checked it last.
+  const people = sources.people.people(viewer.organization, [...new Set(rows.flatMap(row => [row.approver.membership_id, row.owner_membership_id,
+    ...[row.state_set_by, row.owner_set_by, row.check?.by].filter((id): id is string => typeof id === 'string')]))]);
   const leads = new Map<Sha256Digest, boolean>();
   const leadsDecision = (record: Sha256Digest): boolean => {
     if (!leads.has(record)) {
@@ -302,8 +323,8 @@ export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' 
 /**
  * A sweep re-reads an item through its pointer, as a finding's citation the
  * sweep trigger takes: a ticket, a page, an ECHO record or document, and no
- * Slack message today. An item on any other pointer is never swept, so it
- * never makes a sweep due either.
+ * Slack message today. An item on any other pointer, a meeting action
+ * included, is never swept, so it never makes a sweep due either.
  */
 function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
   // No Slack message: no desk can read a Slack citation yet, so a swept one would always be recorded unreadable (R62).
@@ -367,7 +388,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
    */
   const openLive = async (viewer: Viewer, rows: readonly ImpactItemRowV1[], signal?: AbortSignal): Promise<ReadonlyMap<Sha256Digest, LiveRead>> => {
     const targets = new Map<Sha256Digest, Pointer>();
-    for (const row of rows) if (targets.size < LIVE_OPENS_MAX && !targets.has(row.item_key)) targets.set(row.item_key, row.pointer);
+    // A meeting action is never read live: it stays not_read.
+    for (const row of rows) if (targets.size < LIVE_OPENS_MAX && !targets.has(row.item_key) && !meetingAction(row)) targets.set(row.item_key, row.pointer);
     if (targets.size === 0) return new Map();
     const withSignal = signal === undefined ? {} : { signal };
     const unavailable = Object.freeze({ reach: 'unavailable' as const });
@@ -403,9 +425,12 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     return reads;
   };
 
-  /** Rows the policy lets the viewer see, as the API carries them, with live parts from one open each. */
-  const present = async (viewer: Viewer, context: Context, shown: readonly Assessed[], signal?: AbortSignal): Promise<readonly PersonOpenItemV1[]> => {
-    const reads = await openLive(viewer, shown.map(entry => entry.row), signal);
+  /**
+   * Rows the policy lets the viewer see, as the API carries them, with live parts from one open each. `live: false` opens nothing
+   * and binds no desk: every row is `not_read` (a rows-only read: Home's quiet check, F8, and a list's rows before their live read).
+   */
+  const present = async (viewer: Viewer, context: Context, shown: readonly Assessed[], read: { readonly signal?: AbortSignal | undefined; readonly live?: boolean } = {}): Promise<readonly PersonOpenItemV1[]> => {
+    const reads = read.live !== false ? await openLive(viewer, shown.map(entry => entry.row), read.signal) : new Map<Sha256Digest, LiveRead>();
     const decisionPart = openItemDecisionPartsV1(options, context);
     const unshowable = () => report('open', 'invalid_output');
     return Object.freeze(shown.map(entry => {
@@ -428,6 +453,10 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         owner: Object.freeze({ ...personOf(context.people, row.owner_membership_id), match: row.owner_match }),
         waits_on: access.waits_on, state: row.state,
         created_at: row.created_at, sent_at: row.sent_at, state_set_at: row.state_set_at,
+        // Who and when (follow-ups thread v1, F3): ECHO's own facts, shown to everyone who sees the row.
+        state_set_by: row.state_set_by === null ? null : personOf(context.people, row.state_set_by),
+        owner_set_at: row.owner_set_at, owner_set_by: row.owner_set_by === null ? null : personOf(context.people, row.owner_set_by),
+        send_included: row.send_included,
         check: row.check === null ? null : Object.freeze({ verdict: row.check.verdict, checked_at: row.check.at, checked_by: nameOf(context.people, row.check.by) }),
         can: Object.freeze({ set_state: access.set_state, assign: access.assign }),
         reach,
@@ -441,12 +470,12 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     if (row === undefined) throw notFound();
     const entry = assess(viewer, [row]).assessed[0];
     if (entry === undefined || !entry.access.see_row) throw notFound();
-    // An unsent item is its approver's to send first. Whoever could act on it once sent hears that; anyone else gets not_found.
-    if (row.state === 'unsent') {
-      if (openItemAccessV1({ ...entry.facts, state: 'open' })[right]) throw new AuthorityOperationError('invalid_request', 'Send it first');
+    if (!entry.access[right]) {
+      // An unsent item is its approver's to send first; only they may pick its owner before Send (F2). Whoever could act on it once
+      // sent hears that; anyone else gets not_found.
+      if (row.state === 'unsent' && openItemAccessV1({ ...entry.facts, state: 'open' })[right]) throw new AuthorityOperationError('invalid_request', 'Send it first');
       throw notFound();
     }
-    if (!entry.access[right]) throw notFound();
     return row;
   };
   const activeMember = (viewer: Viewer, membershipId: string): void => {
@@ -482,16 +511,19 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         send.push(Object.freeze({
           run_id: runId, decision: decisionOf(decision, firstLine(run)), items: rows.length,
           kinds: Object.freeze(KIND_ORDER.filter(kind => rows.some(row => openItemKindV1(row.pointer) === kind))),
-          owners: Object.freeze(owners.sort((left, right) => left.localeCompare(right)).slice(0, LIMITS.affected)), finished_at: run.updated_at,
+          // As many owners as a run has items: its affected rows and its meeting actions.
+          owners: Object.freeze(owners.sort((left, right) => left.localeCompare(right)).slice(0, PERSON_RUN_ITEMS_MAX_V1)), finished_at: run.updated_at,
         }));
       }
       send.sort((left, right) => ascending(right.finished_at, left.finished_at) || ascending(left.run_id, right.run_id));
 
-      // Items: open items that wait on the caller, and those the caller approved whose last check saw them change.
+      // Home is a bounded inbox: take the newest handoffs first so older changed items cannot hide a new assignment.
+      // Notifications read all pages of open items separately; this display limit must not limit delivery discovery.
+      const rowsOnly = input.request.read === 'rows';
       const visible = context.assessed.filter(entry => entry.row.state === 'open' && entry.access.see_row);
       const changed = (entry: Assessed) => entry.row.check?.verdict === 'changed';
       const shown = visible.filter(entry => entry.access.waits_on_viewer || (approvedBy(entry.row, viewer) && changed(entry)))
-        .sort((left, right) => Number(changed(right)) - Number(changed(left)) || ascending(left.row.sent_at ?? '', right.row.sent_at ?? '') || oldestFirst(left.row, right.row))
+        .sort((left, right) => ascending(waitingSince(right.row), waitingSince(left.row)) || Number(changed(right)) - Number(changed(left)) || oldestFirst(left.row, right.row))
         .slice(0, PERSON_HOME_ROWS_V1);
 
       // The footer counts open items the caller approved or owns, with no live read.
@@ -501,14 +533,16 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // A sweep is due (section 6) for one of those items that a sweep would check and nobody checked in the last day, unless the
       // caller asked for a sweep in the last hour (R32: one that keeps failing, or leaves items unassessed, is not asked for on every
       // load) or one of theirs is running. A sweep still waiting after the hour lets the desktop ask again, which hands back that run
-      // to start (R58). Check now is the caller's own request, and never limited.
+      // to start (R58). Check now is the caller's own request, and never limited. Rows only never makes one due: the quiet
+      // background check (F8) must never start a sweep.
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
-      const stale = theirs.some(entry => (entry.row.check === null || entry.row.check.at < dayAgo) && sweepTakesItem(entry.row));
+      const stale = !rowsOnly && theirs.some(entry => (entry.row.check === null || entry.row.check.at < dayAgo) && sweepTakesItem(entry.row));
       const newest = stale ? options.runs.newestSweep(actor) : undefined;
       const sweep_due = stale && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString()) && options.runs.runningSweep(actor) === undefined;
       return checked('home', {
-        send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, input.signal),
+        // Rows only: the same rows with no live read, so a background check costs no Jira or Confluence call.
+        send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, { signal: input.signal, live: !rowsOnly }),
         landed: theirs.filter(entry => entry.row.check?.verdict === 'landed').length,
         waiting: theirs.filter(entry => approvedBy(entry.row, viewer) && !entry.access.waits_on_viewer).length,
         last_checked_at: checks.at(-1) ?? null,
@@ -546,15 +580,17 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const context = assess(viewer, rows, scopeRecords);
       const visible = context.assessed.filter(entry => entry.access.see_row).sort((left, right) => oldestFirst(left.row, right.row));
       const open = visible.filter(entry => entry.row.state === 'open');
-      // Open items only (Your open items): pages over them alone, so a closed item is never opened only to be left out (R51).
-      const pageable = request.open_only === true ? open : visible;
+      // Items in some states only (a list's current work, then its closed items): pages over them alone, so current work is never
+      // behind closed items and a closed item is never opened only to be left out (R51).
+      const { states } = request;
+      const pageable = states === undefined ? visible : visible.filter(entry => states.includes(entry.row.state));
       const following = after === undefined ? pageable : pageable.filter(entry => oldestFirst(entry.row, after) > 0);
       const page = following.slice(0, PERSON_OPEN_ITEMS_PAGE_V1);
 
       // The whole visible scope, counted with no live read. Last checks count on open items only: a check reads open items.
       const verdicts = (verdict: string) => open.filter(entry => entry.row.check?.verdict === verdict).length;
       // A decision is named, with its counts, only to those the policy shows its decision part. Of its open items, those whose
-      // last check landed or could not read them, so a decision's open count reads as its Impact line does (R35).
+      // last check landed or could not read them.
       const byDecision = new Map<Sha256Digest, { unsent: number; open: number; landed: number; unreadable: number; latest: string }>();
       for (const { row, access } of visible) {
         if (!access.see_decision) continue;
@@ -594,10 +630,11 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         }];
       }).slice(0, SCOPE_DECISIONS_MAX);
 
-      // Counts only (the project and Impact lines): no item is listed, so none is opened and no desk is bound.
-      const countsOnly = request.summary_only === true;
+      // Counts (a meeting's and a project's Follow-ups line): no item is listed, so none is opened and no desk is bound. Rows: the
+      // same page with no live read, so a list shows its rows at once and reads live only what it shows (follow-ups thread v1).
+      const countsOnly = request.read === 'counts';
       return checked('items', {
-        items: countsOnly ? [] : await present(viewer, context, page, input.signal),
+        items: countsOnly ? [] : await present(viewer, context, page, { signal: input.signal, live: request.read === undefined }),
         next_cursor: !countsOnly && following.length > page.length ? cursorOf(page.at(-1)!.row) : null,
         summary, stages,
       });
@@ -610,33 +647,39 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const context = assess(viewer, [row]);
       const entry = context.assessed[0];
       if (entry === undefined || !entry.access.see_row) throw notFound();
-      return checked('item', { item: (await present(viewer, context, [entry], input.signal))[0] });
+      return checked('item', { item: (await present(viewer, context, [entry], { signal: input.signal, live: input.request.read !== 'rows' }))[0] });
     },
 
     async send(input: Parameters<PersonOpenItemsApplicationV1['send']>[0]) {
       const viewer = viewerOf(input.access_token, input.signal);
       const { request } = input;
       const runNotFound = () => new AuthorityOperationError('not_found', 'run is not available');
+      // A listed item sent or dismissed meanwhile, nothing left to send, or a sent command id reused for other items: open them
+      // again. A conflict, not a loss of access (the desktop reads that as signed out).
+      const changed = () => new AuthorityOperationError('conflict', 'The items changed. Open them again.');
       // Sends come from the caller's own finished impact run.
       const run = options.runs.read({ organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership }, request.run_id);
       if (run === undefined || run.trigger !== 'approved_record' || run.state !== 'done' || run.record_sha256 === null) throw runNotFound();
       // A command already sent answers what it did, whatever changed since: a retry never turns a committed send into an error.
-      const earlier = options.items.sentBy(run.run_id, request.command_id);
-      if (earlier !== undefined) return checked('send', earlier);
-      // Only a new command is checked: the approver, while they can read the decision; picks who are active members; the items as drawn.
+      // The same command id listing other items is a conflict, never the old answer for items it did not send.
+      const earlier = options.items.sentBy(run.run_id, request.command_id, request.items.map(choice => choice.item_id));
+      if (earlier?.kind === 'stale') throw changed();
+      if (earlier !== undefined) return checked('send', { sent: earlier.sent, not_relevant: earlier.not_relevant });
+      // Only a new command is checked: the approver, while they can read the decision; picks who are active members; the listed items
+      // still unsent. Sending is selecting (follow-ups thread v1, F1): any of the run's unsent items, ticked to send or unticked to
+      // dismiss; the ones not listed stay unsent.
       const reads_decision = options.records.readableDecisions({ access_token: input.access_token, record_sha256s: [run.record_sha256] }).has(run.record_sha256);
       if (!openItemSendAccessV1({ viewer: viewer.membership, approver: run.actor.membership_id, reads_decision }).send) throw runNotFound();
       for (const choice of request.items) if (choice.owner_membership_id !== undefined) activeMember(viewer, choice.owner_membership_id);
       const result = options.items.send({ run_id: run.run_id, by: viewer.membership, command_id: request.command_id, choices: request.items });
-      // A card drawn before the items changed: open them again. A conflict, not a loss of access (the desktop reads that as signed out).
-      if (result.kind === 'stale') throw new AuthorityOperationError('conflict', 'The items changed. Open them again.');
+      if (result.kind === 'stale') throw changed();
       return checked('send', { sent: result.sent, not_relevant: result.not_relevant });
     },
 
     async set_state(input: Parameters<PersonOpenItemsApplicationV1['set_state']>[0]) {
       const viewer = viewerOf(input.access_token, input.signal);
       const row = actable(viewer, input.request.item_id, 'set_state');
-      // A click that changes nothing writes nothing: an item Send left unticked keeps its stamp (R13), and a closed item who closed it.
+      // A click that changes nothing writes nothing: an item Send dismissed keeps its stamp (R13), and a closed item who closed it.
       if (row.state === input.request.state) return checked('set_state', { state: row.state });
       const updated = options.items.setState(row.item_id, input.request.state, viewer.membership);
       if (updated === undefined) throw notFound();
@@ -647,13 +690,10 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const viewer = viewerOf(input.access_token, input.signal);
       const row = actable(viewer, input.request.item_id, 'assign');
       activeMember(viewer, input.request.owner_membership_id);
-      // Its own owner again changes nothing, so nothing is written: the item keeps how its owner was found.
-      let owner = row.owner_membership_id;
-      if (owner !== input.request.owner_membership_id) {
-        const updated = options.items.assign(row.item_id, input.request.owner_membership_id, viewer.membership);
-        if (updated === undefined) throw notFound();
-        owner = updated.owner_membership_id;
-      }
+      // Its own owner again writes nothing, except the approver ECHO fell back to taken on (the store decides).
+      const updated = options.items.assign(row.item_id, input.request.owner_membership_id, viewer.membership);
+      if (updated === undefined) throw notFound();
+      const owner = updated.owner_membership_id;
       return checked('assign', { owner: personOf(options.people.people(viewer.organization, [owner]), owner) });
     },
 

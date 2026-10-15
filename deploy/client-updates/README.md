@@ -327,23 +327,28 @@ Person session and verify authenticated reads after enrollment.
 
 ## Enroll a desktop
 
-Desktop installs from before ADR-0035 have no updater. Each seat needs one
-manual reinstall of a
-[desktop release package](../release/README.md#desktop-release-packages).
+Desktop installs from before ADR-0035 have no updater. Each needs one manual
+reinstall of a
+[desktop release package](../release/README.md#desktop-release-packages):
+every seat on macOS, and once per machine on Linux.
 There is no configure command: on first run the app pins the bootstrap
 embedded in its identity.
 
 - macOS: quit ECHO and replace `~/Applications/ECHO.app` with the release's
   `ECHO.app`, in a folder the user can write
   ([install on macOS](../../product/echo-desktop/README.md#install-on-macos)).
-- Linux: `sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb`. Enroll
-  with the deb, not the `.tar.gz`. Without `/usr/bin/pkexec` the updater stays
-  off, and this manual reinstall remains the way to update.
+- Linux: first quit ECHO from its tray (Quit ECHO) in every seat signed in on
+  the machine, then `sudo apt install --reinstall ./ECHO-0.1.0-linux-amd64.deb`.
+  The deb installs ECHO for the whole machine, so one reinstall covers every
+  seat on it. Enroll with the deb, not the `.tar.gz`. Without
+  `/usr/bin/pkexec` the updater stays off, and this manual reinstall remains
+  the way to update.
 
 Use the exact artifacts from the published release, transferred through the
 authenticated operator channel. Enrolling the app does not enroll the CLI, and
 the reverse. The Person session is unchanged. Check the tray's `Build <sha7>`
-and an authenticated read after enrollment.
+(also on the Account menu's version line, `ECHO <version> · <sha7>`, since
+releases share a version) and an authenticated read after enrollment.
 
 ## Verify Mac and Linux client activation
 

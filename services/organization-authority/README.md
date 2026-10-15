@@ -429,9 +429,16 @@ written in the same transaction as the approval's receipt. The check runs as
 the approver. A stored run keeps pointers and ECHO's own judgments only, and
 every view re-releases the items through a fresh desk
 ([ADR-0032](../../docs/decisions/ADR-0032-stored-trigger-runs.md)). A
-finished check writes one shared open item per affected item in the same
-transaction. One access policy answers every see and act question about open
-items, and each item's outside words are read live as the viewer
+finished check writes, in the same transaction, one shared open item per
+affected item (never the meeting's own record) and one per action the approved
+meeting decided (kind `action`, at most 20, the first in the brief that have
+text; its line is the action's text and its owner the one the approver
+confirmed, matched to the one active member with the same display name,
+ignoring case and spacing, else the approver). A meeting action is ECHO's own
+data: it is never read live or swept, and is closed by hand. A failed or
+timed-out check writes none of these until Try again succeeds. One access
+policy answers every see and act question about open items, and each item's
+outside words are read live as the viewer
 ([ADR-0033](../../docs/decisions/ADR-0033-shared-open-items.md)).
 
 `POST /v1/person/runs` (`echo-brain person runs --request <json>`) serves these
@@ -443,12 +450,12 @@ operations:
 | `start` | Claims a pending run (or one whose lease expired) and runs it as its actor. A person has one live run, and a sweep waits while one of their impact runs is pending or running; a start that must wait answers `busy`, as does any start while four runs are already running in this Authority process. A run that hits `unauthorized` while its actor's membership is still active (for example, after a token rotation) goes back to pending without counting an attempt; once the membership is revoked it fails as `no_access`. |
 | `retry` | Puts the caller's failed impact run back to pending. A failed sweep stays failed; the next sweep replaces it. |
 | `view` | A finished impact run's card, for its approver and anyone who can read its decision, rebuilt with the viewer's access. A sweep has no card (`not_found`). |
-| `home` | What waits on the caller: Send rows, the open items to update or check, the counts under Home, and `sweep_due`. |
-| `items` | The items the caller can see (unsent, open and closed) for `mine`, a run, a record or a project, oldest first, 50 a page, with a summary of the whole scope (counts by state; counts by last check among open items; and, for each decision the caller can read, up to 100 and most recent first, its unsent, open, landed and unreadable counts) and each decision's stage. A check whose lease has lapsed is a pending stage, as in `list`. `summary_only` answers the summary and stages alone, with no live reads; `open_only` pages over items in state open only, and the summary and stages still cover the whole scope. |
-| `item` | One open item, rebuilt for the caller. |
-| `send` | The approver sends a run's items to their owners, once per command id. |
+| `home` | What waits on the caller: Send rows, the open items to update or check, the counts under Home, and `sweep_due`. With `read: "rows"`, the same answer with no live read (every item `not_read`) and `sweep_due` always false, without starting a sweep. Its items (at most 20) come newest first by handoff time (the latest of when it was sent, its owner set, or its state set by a reopen), with changed items breaking ties. Desktop notification discovery pages through open `items` separately so the display limit does not hide assignments. |
+| `items` | The items the caller can see (unsent, open and closed) for `mine`, a run, a record or a project, oldest first, 50 a page, with a summary of the whole scope (counts by state; counts by last check among open items; and, for each decision the caller can read, up to 100 and most recent first, its unsent, open, landed and unreadable counts) and each decision's stage. A check whose lease has lapsed is a pending stage, as in `list`. `states` (a non-empty subset of `unsent`, `open`, `done` and `not_relevant`) pages over the items in those states only, its cursor included, while the summary and stages still cover the whole scope. `read` says how much to read: `rows` answers the same page, cursor, summary and stages with no live read and no desk bound, every item `not_read`; `counts` (never beside a cursor or `states`) answers the summary and stages alone. The desktop reads a list's current work (`unsent`, `open`) before its closed items, so current work is never behind a More; it shows each page from a rows read at once and reads live only the rows it shows, and after a change to one item reads that item as rows and the counts again. |
+| `item` | One open item, rebuilt for the caller; with `read: "rows"`, with no live read. |
+| `send` | The approver sends any of a run's unsent items to their owners, once per command id: a ticked item opens for its owner, an unticked one is dismissed (not relevant), and an unsent item the request does not list stays unsent. A listed item that is no longer unsent makes the whole send a conflict, as does a command id already sent that now lists other items; a retry listing the same items answers what it did. |
 | `set_state` | The approver or the owner sets a sent item to open, done or not relevant. |
-| `assign` | The approver, the owner or a lead of one of the decision's active projects changes a sent item's owner to another active member. |
+| `assign` | Changes an item's owner to another active member, stored at once with who set it and when. Before Send only the approver may, while they can send it (`picked`); once sent, the approver, the owner or a lead of one of the decision's active projects (`reassigned`). Its current owner again writes nothing, except the approver taking on an item ECHO gave them for want of a match, which is stored as chosen. A pick at `send` does the same. |
 | `sweep` | Queues a re-check of the open items the caller can see in `mine` (what they sent or own), a record or a project, or answers `nothing_to_check` when there is none a sweep covers. Asked again while that scope's sweep is pending or running, it answers the same run. |
 
 A sweep acts as the person who asked, with their access, and stores only

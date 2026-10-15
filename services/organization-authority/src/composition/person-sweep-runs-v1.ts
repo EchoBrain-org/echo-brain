@@ -50,7 +50,8 @@ const GLOBAL = Object.freeze({ kind: 'global' as const });
 /** How a finding names its item: what the impact check found it to be, and what it is. */
 const RELATION_WORDS = Object.freeze({ conflicts: 'Conflicting', needs_updating: 'Outdated', not_assessed: 'Affected' });
 const KIND_WORDS: Readonly<Record<PersonOpenItemKindV1, string>> = Object.freeze({
-  ticket: 'Jira ticket', page: 'page', slack_message: 'Slack message', record: 'ECHO record', document: 'ECHO document',
+  // A meeting action is never swept (the sweep trigger refuses its pointer); its word only completes the map.
+  action: 'meeting action', ticket: 'Jira ticket', page: 'page', slack_message: 'Slack message', record: 'ECHO record', document: 'ECHO document',
 });
 /** What a finding expects of an item with no phrase of its own, for a caller not shown the decision's first line. */
 const APPROVED_DECISION = 'the approved decision';

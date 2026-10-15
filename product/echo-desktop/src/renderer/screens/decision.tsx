@@ -1,13 +1,14 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
 import { dateTime } from '../format.js';
+import { dueWords } from '../needs.js';
 import { proposalRead, readProposal, type Proposal as Read, type ProposalSignal } from '../proposal.js';
 import {
   decide, loadProjects, retryImpact, setDecisionAudience, setDecisionOwner, setDecisionShare, tickDecisionProject, type DecisionState, type State,
 } from '../store.js';
 import { Passage } from './ask.js';
-import { CardHead, dueWords, Face, Reasons, SignalRow } from './card.js';
-import { ImpactSection } from './impact-card.js';
+import { CardHead, Face, Reasons, SignalRow } from './card.js';
+import { ImpactSection, meetingFollowUps } from './impact-card.js';
 import { ProjectPicker } from './project-picker.js';
 
 /** The projects to pick from: yours, plus any the proposal suggests that you are not listed in. */
@@ -150,25 +151,30 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   );
 }
 
+/** The approved meeting's follow-ups, counted by its check, and what opens them when there are any. */
+function followUps(state: State, decision: DecisionState) {
+  const line = state.impactLine;
+  return line?.scope === 'run' && line.id === decision.run?.run_id ? meetingFollowUps(line, decision.open?.review.title ?? '') : null;
+}
+
 /**
- * What did it change? The approved decision's impact card, or where the
- * check stands (Tell the owners?' Details, and a failed check's Try again),
- * then what was decided.
+ * What did it change? Where the approved meeting's check stands (a failed
+ * check's Try again) and its follow-ups in one line, then the proposal's own
+ * decisions and actions.
  */
 function Impact({ state, decision }: { state: State; decision: DecisionState }) {
   const open = decision.open!;
   const read = readProposal(open.content);
   const run = decision.run;
-  const done = run?.state === 'done' && decision.impact !== undefined;
-  const ask = run?.state === 'failed' ? 'The check did not finish' : done ? 'What did it change?' : 'Checking what it changes';
+  const ask = run?.state === 'failed' ? 'The check did not finish' : run?.state === 'done' ? 'What did it change?' : 'Checking what it changes';
   const verb = open.review.status === 'rejected' ? 'Rejected' : open.review.status === 'superseded' ? 'Replaced by a newer version' : 'Approved';
   const standing = open.review.decided_on === 'slack' ? `${verb} in Slack` : verb;
   return (
     <div class="card-page" data-testid="decision">
       <article class="card-main" aria-labelledby="decision-ask">
         <CardHead kind="done" verb={standing} where={open.review.title} title={ask} id="decision-ask" />
-        <ImpactSection run={run ?? undefined} view={decision.impact} publishing={open.review.status === 'publishing'} busy={decision.busy}
-          tools={state.tools?.items ?? undefined} onRetry={() => void retryImpact()} />
+        <ImpactSection run={run ?? undefined} publishing={open.review.status === 'publishing'} busy={decision.busy}
+          followUps={followUps(state, decision)} onRetry={() => void retryImpact()} />
         {proposalRead(read) ? <>
           <Decided read={read} />
           {read.actions.length > 0 && (
@@ -189,7 +195,7 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
 /** The decision page, from a Home row: the proposal to approve, or what an approved one changed. */
 export function Decision({ state, decision }: { state: State; decision: DecisionState }) {
   const box = useRef<HTMLDivElement>(null);
-  // The heading takes the focus, as on Your open items: Enter or Space must not change a choice or open a source.
+  // The heading takes the focus, as on a follow-ups list: Enter or Space must not change a choice or open a source.
   useEffect(() => { box.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }); }, [decision.loading]);
   if (decision.loading) return <div class="column center" aria-busy="true" data-testid="decision-loading"><span class="asking"><i /><i /><i /></span></div>;
   if (!decision.open) {

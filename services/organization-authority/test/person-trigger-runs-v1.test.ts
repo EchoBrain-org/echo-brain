@@ -12,7 +12,8 @@ import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from '../../../tests/support/telemetr
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { readStoredImpactCardV1 } from '../src/composition/person-stored-impact-card-v1.js';
 import { createPersonTriggerRunsV1 } from '../src/composition/person-trigger-runs-v1.js';
-import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
+import { PersonRecordSearchIndexLagV1, type PersonRecordActionV1 } from '../src/composition/person-record-search-route.js';
+import { impactItemKeyV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
 import { openItemsFixture } from './fixtures/open-items.js';
 
@@ -24,7 +25,7 @@ const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'c
 const card = { decided: [{ text: 'Approved display decision.', citation_index: 0 }], affected: [{ citation_index: 1, says_now: 'ignored', relation: 'conflicts' as const }], unconfirmed: [], people: [], status: 'assessed' as const,
   citations: [{ citation: record, kind: 'decision' as const, label: 'Approved display', visibility: 'team' as const }, { citation: ticket, kind: 'ticket' as const, label: 'Kestrel cooling fan drift 0xC0FFEE', visibility: 'only_me' as const }] };
 
-async function fixture(options: { readonly anchor?: () => typeof record; readonly render?: (input: { readonly signal?: AbortSignal }) => Promise<unknown>; readonly rotated?: () => boolean } = {}) {
+async function fixture(options: { readonly anchor?: () => typeof record; readonly actions?: () => readonly PersonRecordActionV1[]; readonly render?: (input: { readonly signal?: AbortSignal }) => Promise<unknown>; readonly rotated?: () => boolean } = {}) {
   let now = new Date('2026-10-07T10:00:00.000Z');
   const f = await approvalCoreFixture(); const runs = new SqliteTriggerRunsV1(f.db, () => now);
   f.core.decide('desktop', f.approve(), () => f.session);
@@ -45,7 +46,7 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
     record_sha256s.map(sha => [sha, { approval_id: f.approvalId, record_sha256: sha, title: 'Approved display', approved_at: now.toISOString(), project_ids: [] }] as const));
   const diagnostics = createPersonDiagnosticsV1({ sessions: { authenticateAccess: ({ access_token }) => auth(access_token) } });
   captures.push(diagnostics);
-  const create = (serviceRuns: SqliteTriggerRunsV1 = runs, max_running?: number) => createPersonTriggerRunsV1({ ...(max_running === undefined ? {} : { max_running }), runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
+  const create = (serviceRuns: SqliteTriggerRunsV1 = runs, max_running?: number) => createPersonTriggerRunsV1({ ...(max_running === undefined ? {} : { max_running }), runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordActions: () => (options.actions ?? (() => []))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
     items: new SqliteImpactItemsV1(f.db, () => now), people: new SqliteOpenItemPeopleV1(f.db) });
   const app = create();
   const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'));
@@ -179,6 +180,14 @@ describe('durable approved-record trigger runs', () => {
     expect(lost.runs.read(lost.person, lost.row.run_id)).toMatchObject({ state: 'failed', error_code: 'no_access' });
   });
 
+  it('reads the meeting\'s actions as the approver before research, and fails as no_access when they cannot read them', async () => {
+    const f = await fixture({ actions: () => { throw new AuthorityOperationError('not_found', 'record evidence is not available'); } });
+    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } });
+    await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'failed', error_code: 'no_access' });
+    expect(f.research).not.toHaveBeenCalled();
+  });
+
   it('freshens a completed card, hiding an empty open and retaining no outside stored text', async () => {
     const f = await fixture(); await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
     f.openCitation.mockResolvedValueOnce({ items: [{ citation: record, kind: 'decision', label: 'Approved display', visibility: 'team', text: 'local', receipt_sha256: canonicalSha256('local') }], truncated: false, receipt_digests: [] }).mockResolvedValueOnce({ items: [], truncated: false, receipt_digests: [] });
@@ -263,7 +272,7 @@ describe('open items written when an impact check finishes', () => {
     if (f.runs.claim(f.person, f.runId, 60_000).kind !== 'claimed') throw new Error('expected lease');
     const sweep = f.runs.enqueueSweep(mina, { kind: 'mine' });
     if (f.runs.claim(mina, sweep.run_id, 60_000).kind !== 'claimed') throw new Error('expected lease');
-    const stage = async () => (await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, summary_only: true } })).stages;
+    const stage = async () => (await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, read: 'counts' } })).stages;
     expect((await f.app.list({ access_token: 'ari' })).runs.map(run => run.state)).toEqual(['running']);
     expect(await stage()).toMatchObject([{ run_id: f.runId, state: 'running' }]);
     f.advance(60_001);
@@ -296,6 +305,55 @@ describe('open items written when an impact check finishes', () => {
     const items = f.items.forRun(f.runId);
     expect(items.filter(item => item.pointer.kind === 'ticket')).toHaveLength(1);
     expect(items.find(item => item.pointer.kind === 'ticket')).toMatchObject({ relation: 'needs_updating', expected: 'launch next week', owner_membership_id: f.membership('ari'), owner_match: 'approver' });
+  });
+
+  it('makes one follow-up per meeting action, with its own line and its confirmed owner matched exactly', async () => {
+    const f = await openItemsFixture({ meetingActions: [
+      { signal_id: 'act-1', text: 'Send the pilot plan\nto the vendor', owner: 'rafael  MORENO' },
+      { signal_id: 'act-2', text: `Book the lab ${'for the pilot '.repeat(12)}`, owner: 'Nobody Here' },
+      { signal_id: 'act-3', text: ' \u0007 ', owner: 'Mina Patel' },
+      { signal_id: 'act-4', text: 'Order spare fans', owner: null },
+    ] });
+    await f.finishImpactRun();
+    const items = f.items.forRun(f.runId);
+    // The card's two items and three actions: an action with no printable text makes none.
+    expect(items).toHaveLength(5);
+    const actions = new Map(items.filter(item => item.pointer.kind === 'meeting_action').map(item => [item.pointer.signal_id, item]));
+    expect([...actions.keys()].sort()).toEqual(['act-1', 'act-2', 'act-4']);
+    const first = actions.get('act-1')!;
+    expect(first).toMatchObject({ pointer: { kind: 'meeting_action', record_sha256: f.record, signal_id: 'act-1' }, relation: 'needs_updating', expected: 'Send the pilot plan to the vendor',
+      owner_membership_id: f.membership('rafael'), owner_match: 'name', state: 'unsent', record_sha256: f.record });
+    expect(Object.keys(first.pointer).sort()).toEqual(['kind', 'record_sha256', 'signal_id']);
+    expect(first.item_key).toBe(impactItemKeyV1(first.pointer));
+    // A long action is one line of at most 120 characters; no unique member, or no confirmed owner: the approver.
+    expect([...actions.get('act-2')!.expected!].length).toBeGreaterThan(110);
+    expect([...actions.get('act-2')!.expected!].length).toBeLessThanOrEqual(120);
+    expect(actions.get('act-2')!.expected!.endsWith('…')).toBe(true);
+    expect(actions.get('act-2')).toMatchObject({ owner_membership_id: f.membership('ari'), owner_match: 'approver' });
+    expect(actions.get('act-4')).toMatchObject({ expected: 'Order spare fans', owner_membership_id: f.membership('ari'), owner_match: 'approver' });
+  });
+
+  it('makes at most twenty meeting actions into follow-ups, the first ones in the brief that have a line', async () => {
+    // Three actions with no printable text first: they make nothing, and so take none of the twenty.
+    const f = await openItemsFixture({ meetingActions: Array.from({ length: 25 }, (_, at) => ({ signal_id: `act-${String(at).padStart(2, '0')}`, text: at < 3 ? ' \u0007 ' : `Action ${at}`, owner: null })) });
+    await f.finishImpactRun();
+    const signals = f.items.forRun(f.runId).filter(item => item.pointer.kind === 'meeting_action').map(item => item.pointer.signal_id as string).sort();
+    expect(signals).toEqual(Array.from({ length: 20 }, (_, at) => `act-${String(at + 3).padStart(2, '0')}`));
+  });
+
+  it('never makes the approved meeting\'s own record a follow-up of itself', async () => {
+    const f = await openItemsFixture({ ownRecordAffected: true });
+    await f.finishImpactRun();
+    // The card the run stored does carry a needs-updating row on another atom of the meeting's own record.
+    const stored = readStoredImpactCardV1(f.runs.read(f.person, f.runId)!.result_json!);
+    const cited = (row: { readonly citation_index: number }) => stored.citations[row.citation_index] as { readonly kind: string; readonly record_sha256?: string; readonly atom_id?: string };
+    const own = stored.affected.filter(row => cited(row).kind === 'approved_record' && cited(row).record_sha256 === f.record);
+    expect(own).toMatchObject([{ relation: 'needs_updating', expected: 'vendor gets the plan' }]);
+    expect(cited(own[0]!).atom_id).not.toBe(f.decisionCitation.atom_id);
+    const records = f.items.forRun(f.runId).filter(item => item.pointer.kind === 'approved_record');
+    // Only the other decision's action: the card's row on the meeting's own record makes none.
+    expect(records.map(item => item.pointer.record_sha256)).toEqual([f.card.pointers.rollout.record_sha256]);
+    expect(records[0]!.pointer.record_sha256).not.toBe(f.record);
   });
 
   it('opens a finished card to any decision reader and to nobody else', async () => {

@@ -1,3 +1,4 @@
+import type { RefObject } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { ListItem, Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
@@ -16,9 +17,9 @@ const ICONS = { imported_meeting: Calendar, note: Note, document: Page, meeting:
  * One row: what kind it is, its title (a document's kind and size under it),
  * the names of your projects it is filed in, who can read it, and when it was
  * added. A project's own page leaves the projects out, and says on a
- * decision's row how many of its items are open.
+ * meeting's row how many of its follow-ups are not closed ("4 follow-ups").
  */
-export function ItemRow({ item, testid, projects, open, onOpen }: { item: ListItem; testid: string; projects: boolean; open?: number | undefined; onOpen: () => void }) {
+export function ItemRow({ item, testid, projects, badge, onOpen }: { item: ListItem; testid: string; projects: boolean; badge?: string | null | undefined; onOpen: () => void }) {
   const Icon = ICONS[item.ref.kind];
   return (
     <button type="button" class="row item-row" data-testid={testid} data-kind={item.ref.kind} onClick={onOpen}>
@@ -30,27 +31,37 @@ export function ItemRow({ item, testid, projects, open, onOpen }: { item: ListIt
         </span>
       ) : <span class="name">{item.title}</span>}
       {projects && item.projects.length > 0 && <span class="projects" data-testid="item-projects">{item.projects.join(', ')}</span>}
-      {open !== undefined && open > 0 && <span class="open-count" data-testid="item-open">{open} open</span>}
+      {badge && <span class="open-count" data-testid="item-follow-ups">{badge}</span>}
       <Mark visibility={item.visibility} />
       <span class="meta">{when(item.added_at)}</span>
     </button>
   );
 }
 
-/**
- * Where a list was scrolled on this visit to its page. Back from an item or
- * an answer, or ECHO coming back, returns there; opening the page again
- * starts at the top.
- */
-let keptPlace: { opened: number; top: number } | null = null;
+/** Where each list was scrolled when it last left the screen, by its key (a few at most). */
+const keptPlaces = new Map<string, number>();
+const KEPT_PLACES_MAX = 20;
 
-export function useKeptPlace(opened: number | undefined) {
+/**
+ * Where a list was scrolled on this visit to it (`key`: one per visit). Back
+ * from an item or an answer, or ECHO coming back, returns there; opening it
+ * again starts at the top. `returned` says, from the first layout on, whether
+ * this showing came back to a kept place.
+ */
+export function useKeptPlace(key: string | undefined): { column: RefObject<HTMLDivElement>; returned: RefObject<boolean> } {
   const column = useRef<HTMLDivElement>(null);
+  const returned = useRef(false);
   useLayoutEffect(() => {
     const element = column.current;
-    if (!element || opened === undefined) return;
-    element.scrollTop = keptPlace?.opened === opened ? keptPlace.top : 0;
-    return () => { keptPlace = { opened, top: element.scrollTop }; };
-  }, [column.current, opened]);
-  return column;
+    if (!element || key === undefined) return;
+    const top = keptPlaces.get(key);
+    returned.current = top !== undefined;
+    element.scrollTop = top ?? 0;
+    return () => {
+      keptPlaces.delete(key);
+      keptPlaces.set(key, element.scrollTop);
+      for (const old of keptPlaces.keys()) { if (keptPlaces.size <= KEPT_PLACES_MAX) break; keptPlaces.delete(old); }
+    };
+  }, [column.current, key]);
+  return { column, returned };
 }

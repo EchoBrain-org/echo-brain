@@ -133,13 +133,18 @@ export interface FreshImpactItemV1 {
   readonly attributes?: { readonly owner?: string; readonly due_at?: string; readonly status?: string };
 }
 
-/** The fields that name the item a pointer opens, per kind. A section or a version may move on; the item may not. */
+/**
+ * The fields that name the item a pointer opens, per kind. A section or a version may move on; the item may not.
+ * `meeting_action` is an open item's own pointer to one action of an approved meeting's brief (follow-ups thread v1):
+ * never a citation, so no card or sweep carries one.
+ */
 const PRIMARY_ID: Readonly<Record<string, readonly string[]>> = Object.freeze({
   ticket: ["tool_id", "external_scope_id", "ticket_id"],
   page: ["tool_id", "external_scope_id", "page_id"],
   slack_message: ["team_id", "channel_id", "message_ts"],
   approved_record: ["atom_id", "record_sha256"],
   source_revision: ["source_id", "revision_id"],
+  meeting_action: ["record_sha256", "signal_id"],
 });
 
 /** The item a citation names: its kind and primary id, or undefined for a pointer that names none. */

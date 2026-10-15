@@ -1,5 +1,5 @@
 import type {
-  PersonImpactCardV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
+  PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
@@ -404,16 +404,6 @@ export interface ProjectConfluenceMapping {
 export interface ConfluenceSpacesPage { items: readonly ConfluenceSpace[]; next_cursor: string | null }
 
 /**
- * A finished impact check, as an approved meeting's card shows it: the card
- * rebuilt for you when it was opened, its citations as sources by index, when
- * the check ran, and how many cited items you can no longer open.
- */
-export interface ImpactView extends Omit<PersonImpactCardV1, 'citations'> {
-  readonly sources: readonly AnswerSource[];
-  readonly checked_at: string;
-  readonly hidden: number;
-}
-/**
  * What an open item says now, read live for you in this request and never
  * stored: its citation as a source "Open in …" can open, and its details.
  */
@@ -438,12 +428,15 @@ export interface HomeView extends Omit<PersonRunsResultsV1['home'], 'items'> {
 export interface OpenItemsView extends Omit<PersonRunsResultsV1['items'], 'items'> {
   readonly items: readonly OpenItemView[];
 }
-/** The impact checks of your own approvals, the open items they found, and the sweeps that recheck them. */
+/**
+ * The impact checks of your own approvals, the open items they found, and the
+ * sweeps that recheck them. What a check found shows as the meeting's
+ * follow-ups, so the desktop never asks for its card (`view`).
+ */
 export interface RunsResults {
   list: PersonRunsResultsV1['list'];
   start: PersonRunsResultsV1['start'];
   retry: PersonRunsResultsV1['retry'];
-  view: ImpactView;
   home: HomeView;
   items: OpenItemsView;
   item: OpenItemView;
@@ -555,7 +548,7 @@ export interface MainMethods {
   /** Save original…: where to save it, chosen in main's dialog. The page gets a handle, never the path. */
   'dialog.saveDocument': { params: { name: string }; result: FileHandle | null };
   /** A save's or a project change's outcome is unknown: quitting asks first, naming a note, a file or a change. */
-  'app.setUnresolved': { params: { unresolved: boolean; file?: boolean; change?: boolean; reassignment?: boolean }; result: null };
+  'app.setUnresolved': { params: { unresolved: boolean; file?: boolean; change?: boolean }; result: null };
   /** After the host gave up: start it again. */
   'app.retryHost': { params: Record<string, never>; result: null };
   /** Pops up the Account menu at a point in the window, in CSS pixels. */
@@ -563,6 +556,11 @@ export interface MainMethods {
   'update.status': { params: Record<string, never>; result: UpdateState };
   /** New version · Restart: installs `release` (or, in state restart, relaunches), then quits. Refused while work is unresolved. */
   'update.install': { params: { release: string }; result: null };
+  /**
+   * Follow-ups that newly wait on you (F8): one system notification. One item
+   * says who sent it and what it is; several are counted. See `followUpsNotification`.
+   */
+  'notify.followUps': { params: { item_ids: readonly string[]; from?: string; title?: string }; result: null };
 }
 
 export type Methods = HostMethods & MainMethods;
@@ -578,7 +576,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
-  'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show', 'update.status', 'update.install',
+  'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show', 'update.status', 'update.install', 'notify.followUps',
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
@@ -595,6 +593,29 @@ export function isWriteCall(method: string, params: unknown): boolean {
   if (!WRITE_METHODS.has(method)) return false;
   const operation = (params as { request?: { operation?: unknown } | null } | null | undefined)?.request?.operation;
   return !(typeof operation === 'string' && READ_OPERATIONS[method]?.has(operation) === true);
+}
+/** Every runs operation: only these reach the log by name. */
+const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
+  ['list', 'home', 'start', 'retry', 'view', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
+);
+/**
+ * A call as desktop.log names it, content-free: the method, and for runs its operation and how much it read ("runs.home",
+ * "runs.items rows"). Never an id, a scope id or a cursor; an operation or a read not known is left out.
+ */
+export function rpcLogName(method: string, params: unknown): string {
+  if (method !== 'runs') return method;
+  const request = (params as { request?: unknown } | null | undefined)?.request;
+  if (request === null || typeof request !== 'object') return method;
+  const { operation, read } = request as Record<string, unknown>;
+  if (typeof operation !== 'string' || !RUNS_OPERATIONS.has(operation)) return method;
+  return `runs.${operation}${read === 'rows' || read === 'counts' ? ` ${read}` : ''}`;
+}
+/**
+ * The Account menu's version line: "ECHO 0.1.0-internal.1 · 038f099". Releases can share a version, so the commit the app was
+ * built from tells them apart, as the tray's Build line does; "(modified)" when it was built with changes beside that commit.
+ */
+export function versionLine(version: string, build: { readonly source_sha: string; readonly dirty: boolean } | null): string {
+  return build === null ? `ECHO ${version}` : `ECHO ${version} · ${build.source_sha.slice(0, 7)}${build.dirty ? ' (modified)' : ''}`;
 }
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);
@@ -618,6 +639,8 @@ export interface Events {
   'organization.open': Record<string, never>;
   /** What the updater shows now: a check, an install's progress, or a previous run's outcome. */
   'update.changed': UpdateState;
+  /** A follow-ups notification was clicked: the page of its one item, or the Follow-ups page for several. */
+  'follow-ups.open': { item_id?: string };
 }
 export type EventName = keyof Events;
 
@@ -670,6 +693,31 @@ export const ticketPermalink = (raw: unknown): string | null => webPermalink(raw
 
 export function externalSourcePermalink(kind: unknown, raw: unknown): string | null {
   return kind === 'slack' ? slackPermalink(raw) : kind === 'ticket' ? ticketPermalink(raw) : kind === 'page' ? pagePermalink(raw) : null;
+}
+
+/** A follow-up's id, in the API's own grammar. */
+const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
+/** A name or a title a follow-ups notification shows: as long as the API lets either be, in characters. */
+export const NOTICE_TEXT_MAX = 200;
+/** The most follow-ups one notification counts: Home answers at most 20. */
+export const NOTICE_ITEMS_MAX = 50;
+
+/**
+ * A follow-ups notification (F8), as main shows it: its body, and the item a
+ * click opens (none for several, which open the Follow-ups page). One item reads
+ * "Mina sent you: Update the pricing page"; several, "3 new follow-ups". Null
+ * for anything else: distinct item ids, and for one item exactly two short
+ * single lines, never more.
+ */
+export function followUpsNotification(params: unknown): { body: string; item_id: string | null } | null {
+  if (params === null || typeof params !== 'object' || Array.isArray(params)) return null;
+  const { item_ids: ids, from, title, ...rest } = params as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !Array.isArray(ids) || ids.length === 0 || ids.length > NOTICE_ITEMS_MAX) return null;
+  if (!ids.every(id => typeof id === 'string' && ITEM_ID.test(id)) || new Set(ids).size !== ids.length) return null;
+  const line = (text: unknown): text is string =>
+    typeof text === 'string' && text.trim() !== '' && [...text].length <= NOTICE_TEXT_MAX && !/\p{Cc}/u.test(text);
+  if (ids.length > 1) return from === undefined && title === undefined ? { body: `${ids.length} new follow-ups`, item_id: null } : null;
+  return line(from) && line(title) ? { body: `${from.trim()} sent you: ${title.trim()}`, item_id: ids[0] as string } : null;
 }
 
 /** Parameters larger than this are refused at the broker. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, changeView, createdView, directoryView, employeesView, failureView, homeView, impactCardView, invitationView, listView, membersView, noteMatchesView,
+  abandonView, answerView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, listView, membersView, noteMatchesView,
   noteTitle, openItemsView, openItemView, openView, revokedView, NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
@@ -43,26 +43,7 @@ describe('view models copy only what the renderer may see', () => {
       expect(() => answerView(reply(link), { kind: 'global' })).toThrow(ViewError);
     }
   });
-  it('an impact card keeps its rows and turns each citation into a source the card can name or open', () => {
-    const permalink = 'https://example.atlassian.net/browse/ECHO-12';
-    const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'restricted-reviewer-person-v2' } as const;
-    const ticket = { kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10012', permalink, text_sha256: sha('3') } as const;
-    const card = {
-      status: 'assessed', decided: [{ text: 'Launch next week.', citation_index: 0 }],
-      affected: [{ citation_index: 1, says_now: 'Planned for the end of the month.', relation: 'conflicts', owner: 'Mina Patel' }],
-      unconfirmed: ['No contract was found.'], people: [{ name: 'Mina Patel', items: [1] }],
-      citations: [{ kind: 'decision', label: '', visibility: 'only_me', citation: record }, { kind: 'ticket', label: 'ECHO-12 · Pilot launch', visibility: 'only_me', citation: ticket }],
-    } as const;
-    const view = impactCardView({ card, checked_at: '2026-10-07T10:05:00.000Z', hidden: 2 } as unknown as Parameters<typeof impactCardView>[0]);
-    expect(view).toEqual({
-      status: 'assessed', decided: card.decided, affected: card.affected, unconfirmed: card.unconfirmed, people: card.people,
-      sources: [{ kind: 'record', label: 'Item 1', record: { record_sha256: sha('2'), policy_id: 'restricted-reviewer-person-v2' } },
-        { kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink }],
-      checked_at: '2026-10-07T10:05:00.000Z', hidden: 2,
-    });
-    expect(JSON.stringify(view)).not.toContain('private-tenant');
-  });
-  it('an open item turns its live citation into a source it can open, and an item you cannot open stays without one', () => {
+  it('an open item turns its live citation into a source it can open, an item you cannot open stays without one, and who and when cross', () => {
     const permalink = 'https://example.atlassian.net/browse/ECHO-12';
     const citation = { kind: 'ticket', label: 'ECHO-12 · Pilot launch', visibility: 'only_me', citation: {
       kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10012', permalink, text_sha256: sha('3') } } as const;
@@ -71,8 +52,12 @@ describe('view models copy only what the renderer may see', () => {
     const base = {
       item_id: 'itm_00000001', run_id: 'run_00000001', kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: person,
       owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open', created_at: '2026-10-07T10:05:00.000Z', sent_at: '2026-10-07T11:00:00.000Z',
-      state_set_at: '2026-10-07T11:00:00.000Z', check: null, can: { set_state: true, assign: true }, reach: 'no_access',
+      state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: person, owner_set_at: '2026-10-07T12:00:00.000Z', owner_set_by: person, send_included: true,
+      check: null, can: { set_state: true, assign: true }, reach: 'no_access',
     } as const;
+    // A meeting's action is never read live: it crosses as ECHO's own words.
+    const action = { ...base, item_id: 'itm_00000002', kind: 'action', relation: 'needs_updating', expected: 'Send the revised quote', decision, reach: 'not_read' } as const;
+    expect(openItemView(action as unknown as Parameters<typeof openItemView>[0])).toStrictEqual(action);
     const opened = { ...base, decision, reach: 'opened', current: { citation, says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } };
     const home = homeView({ send: [], items: [opened, base], landed: 0, waiting: 1, last_checked_at: null, sweep_due: true } as unknown as Parameters<typeof homeView>[0]);
     expect(home.items[0]).toEqual({ ...base, decision, reach: 'opened', current: { source: { kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink },
