@@ -574,8 +574,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }));
     }
     // A ticket Ari cannot open, from a decision Ari cannot read: only Send told Ari of it. In
-    // granola-home-fails-once Mina sends it after Home's second read; in granola-owner-later, when
-    // the test asks.
+    // granola-home-fails-once Mina sends it after Home's read of its rows that failed; in
+    // granola-owner-later, when the test asks.
     openItems.push(minaSent({
       item_id: 'itm_00000000-0000-4000-8000-000000000042', run_id: 'run_00000000-0000-4000-8000-000000000042', kind: 'ticket',
       decision: { approval_id: 'apr_' + 'd'.repeat(64), record_sha256: sha('record:Vendor review'), title: 'Vendor review',
@@ -729,7 +729,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let minaDone = false;
   /** Ari's sweeps, newest first. */
   const sweepRuns: SweepRun[] = [];
-  /** Home's own reads: the quiet check's (rows only) are not counted. */
+  /** Home's reads of its rows (the quiet check's too), and its live reads. */
+  let homeRowsReads = 0;
   let homeReads = 0;
   let assigns = 0;
 
@@ -889,8 +890,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           }
         }
       }
-      // Mina sends Ari another item after Home's second live read, or once the test asks (the `mina-sends` file).
-      if ((mode === 'granola-home-fails-once' && request.operation === 'home' && homeReads === 2)
+      // Mina sends Ari another item after Home's read of its rows that failed, or once the test asks (the `mina-sends` file).
+      if ((mode === 'granola-home-fails-once' && request.operation === 'home' && homeRowsReads === 2)
           || (mode === 'granola-owner-later' && existsSync(join(home, 'mina-sends')))) {
         const later = openItems.find(item => item.state === 'unsent' && item.approver.membership_id === MINA.membership_id);
         if (later) Object.assign(later, { state: 'open', sent_at: now(), state_set_at: now(), state_set_by: MINA, send_included: true });
@@ -926,9 +927,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         // Ari, and the open items Ari sent that ECHO saw change; then, of the open items Ari sent
         // or owns, how many landed, how many Ari sent wait on others, and when ECHO last checked
         // one. Rows only: no live read, and never a sweep due. granola-home-fails-once fails Home's
-        // second read.
+        // second read of its rows (so nothing of it is read live), and its second live read.
         case 'home': {
-          if (live && ++homeReads === 2 && mode === 'granola-home-fails-once') return failure('unavailable', 503);
+          if ((live ? ++homeReads : ++homeRowsReads) === 2 && mode === 'granola-home-fails-once') return failure('unavailable', 503);
           const unsent = shown.filter(item => item.run_id === runId && item.state === 'unsent');
           const send = run?.state === 'done' && unsent.length > 0 ? [{
             run_id: runId, decision: unsent[0]!.decision, items: unsent.length, kinds: [...new Set(unsent.map(item => item.kind))],

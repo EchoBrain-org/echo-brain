@@ -103,8 +103,10 @@ statuses, the list and the item page.
 - F8. **Notify the owner.** The desktop checks Home quietly
   (`home` with `read: 'rows'`, no live reads) every five minutes while
   signed in, and shows a system notification for each follow-up that newly
-  waits on you; clicking it opens the item page. The first check after sign-in
-  only learns what is there.
+  waits on you; clicking it opens the item page. Home's own reads of its
+  rows tell the check what you saw there, never as a notification, so what
+  waits at sign-in is only learned: by Home's own read when Home loads then,
+  else by the first check, made at once.
 - F9. **Projectless work is reachable.** "Follow-ups" is in the sidebar, and
   Home's footer (its link says "Follow-ups" too) shows even when you have no
   projects.
@@ -125,9 +127,13 @@ statuses, the list and the item page.
   wait.
 - `items`: optional `states`, a non-empty subset of `unsent`, `open`, `done`
   and `not_relevant`, replaces `open_only`. The page and its cursor go over
-  those states only; the summary and stages still cover the whole scope. A
-  list reads its current work (`unsent`, `open`) first and its closed items
-  after, each with its own More, so current work is never behind More.
+  those states only; the summary and stages still cover the whole scope.
+  Yours and a project's list read current work (`unsent`, `open`) first, and
+  each closed status only once its group opens, each with its own More, so
+  current work is never behind closed items. A meeting's list reads every
+  status in one read: its one check makes at most 40 items
+  (`RUN_ITEMS_MAX`), and a page holds 50, so they all come in its first
+  page.
 - `items`, `home` and `item`: one optional `read` replaces `summary_only`.
   `read: 'rows'` answers the same page, cursor, summary and stages (or the
   same item) with no live read, every reach `not_read`; `read: 'counts'`

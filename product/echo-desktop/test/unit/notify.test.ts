@@ -304,6 +304,22 @@ describe('a notification clicked', () => {
     expect(store.followUpShown()).toMatchObject({ kind: 'list', scope: 'mine' });
   });
 
+  it('opens nothing for a follow-up seen waiting but never told', async () => {
+    // Learned at sign-in, so never told: a notification for it (one from before, or for another turn) opens nothing.
+    items = [followUp(1)];
+    const store = await startStore();
+    store.openNotified(id(1));
+    await flush();
+    expect(store.followUpShown()).toBeNull();
+    // Told among several, one notification for them all: it opens the Follow-ups page, never one of them by its id.
+    items = [followUp(1), followUp(2), followUp(3)];
+    await nextCheck();
+    expect(notices()).toEqual([{ item_ids: [id(2), id(3)] }]);
+    store.openNotified(id(2));
+    await flush();
+    expect(store.followUpShown()).toBeNull();
+  });
+
   it('opens nothing this account never saw wait on it, and leaves Capture up', async () => {
     items = [followUp(1)];
     const store = await startStore();

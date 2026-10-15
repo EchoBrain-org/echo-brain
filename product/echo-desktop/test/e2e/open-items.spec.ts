@@ -360,26 +360,37 @@ test('a reader who cannot open an item sees what it is, never what it says', asy
   await expect(page.getByTestId('needs')).toBeVisible();
 });
 
-test('a Home read that fails once keeps the rows it had', async () => {
+test('a Home read that fails once keeps the rows it had, and a live read that fails keeps what each row said', async () => {
   app = await launch('granola-home-fails-once');
   const rows = app.page.getByTestId('need-row');
-  // Home's own reads: the quiet check's (rows only) are not Home's.
-  const homeReads = () => requests('home').filter(body => body.read !== 'rows').length;
-  await expect(rows.filter({ hasText: 'ECHO-12' })).toBeVisible();
+  // Home's reads of its rows (no quiet check reads them within five minutes of sign-in), and its live reads.
+  const rowsReads = () => requests('home').filter(body => body.read === 'rows').length;
+  const liveReads = () => requests('home').filter(body => body.read !== 'rows').length;
+  await expect(rows.filter({ hasText: 'ECHO-12 · Pilot launch' })).toBeVisible();
   await expect(rows).toHaveCount(1);
   // Home is read again on coming forward once the project list is in.
   await expect(app.page.getByTestId('sidebar-project')).toHaveCount(2);
-  // The window comes forward: Home is read again, and that read fails.
+  // The window comes forward: Home's rows are read again, and that read fails, so nothing of it is read live.
   await emit(app.app, 'echo-test:shown');
-  await expect.poll(homeReads).toBe(2);
+  await expect.poll(rowsReads).toBe(2);
   await expect(app.page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
-  await expect(rows.filter({ hasText: 'ECHO-12' })).toBeVisible();
+  await expect(rows.filter({ hasText: 'ECHO-12 · Pilot launch' })).toBeVisible();
   await expect(rows).toHaveCount(1);
   await expect(app.page.getByTestId('home-error')).toHaveCount(0);
-  // The next read brings what changed meanwhile.
+  expect(liveReads()).toBe(1);
+  // The next read brings what changed meanwhile, and its live read fails: ECHO-12 keeps what it said, and the new row says ECHO
+  // couldn't read it just now.
   await emit(app.app, 'echo-test:shown');
   await expect(rows).toHaveCount(2);
+  await expect.poll(liveReads).toBe(2);
+  await expect(rows.filter({ hasText: 'A Jira ticket ECHO couldn\'t read just now' })).toBeVisible();
+  await expect(rows.filter({ hasText: 'ECHO-12 · Pilot launch' })).toBeVisible();
+  await expect(app.page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
+  await expect(app.page.getByTestId('home-error')).toHaveCount(0);
+  // Read again, live: the ticket Ari cannot open says so.
+  await emit(app.app, 'echo-test:shown');
   await expect(rows.filter({ hasText: 'A Jira ticket you can\'t open' })).toBeVisible();
+  await expect(rows).toHaveCount(2);
 });
 
 test('an approved meeting counts its follow-ups by status, and its project counts what is open', async () => {
@@ -415,9 +426,15 @@ test('an approved meeting counts its follow-ups by status, and its project count
   await expect(page.locator('body')).not.toContainText('ECHO-12');
   await emit(app.app, 'echo-test:resume');
   await expect(group(list, 'Not sent').getByTestId('follow-up-row')).toHaveCount(4);
-  // Back: the meeting, then the project, whose line opens the project's follow-ups.
+  // Its approval opens the decision over the list, which counts them by its check; Back is the list again.
+  await list.getByRole('button', { name: /^Approved / }).click();
+  await expect(page.getByTestId('decision').getByTestId('impact-follow-ups')).toHaveText('Follow-ups · 4 not sent');
   await page.getByTestId('back').click();
-  await expect(impact).toBeVisible();
+  await expect(group(list, 'Not sent').getByTestId('follow-up-row')).toHaveCount(4);
+  // Back: the meeting, its line counting by its record again, then the project, whose line opens the project's follow-ups.
+  await page.getByTestId('back').click();
+  await expect(impact).toHaveText('Follow-ups · 4 not sent');
+  await expect(impact.getByRole('button', { name: /Follow-ups/ })).toBeVisible();
   await page.getByTestId('back').click();
   await line.getByRole('button').click();
   await expect(list.getByRole('heading', { name: 'Follow-ups', exact: true })).toBeVisible();
