@@ -850,6 +850,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       } catch {
         return failure('invalid_request', 400);
       }
+      // A read that opens items live in their tools waits while the test holds them (the `hold-live` file in its home), as a
+      // slow tool would; a rows-only or counts-only read never does.
+      const live = request.operation === 'item' || (request.operation === 'home' && request.rows_only !== true)
+        || (request.operation === 'items' && request.rows_only !== true && request.summary_only !== true);
+      for (let waited = 0; live && existsSync(join(home, 'hold-live')) && waited < 30_000; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
       const runId = PILOT_RUN;
       // Real publication is asynchronous: the first post-approval list can have no run yet.
       if (mode === 'granola-publishing' && granolaApproved && granolaRun === null && request.operation === 'list' && ++granolaPublicationReads >= 2) {
@@ -965,7 +970,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             }),
           ];
           // Counts only (a project's or a meeting's line): the summary and stages, no item. States: the items in those states
-          // alone, with the same summary, paged (two a page in granola-paged) with a cursor over those states only.
+          // alone, with the same summary, paged (two a page in granola-paged) with a cursor over those states only. Rows only:
+          // the same page, nothing read live.
           const { states } = request;
           const listed = states === undefined ? items : items.filter(item => states.includes(item.state));
           const pageKey = `items:${scope}:${id ?? ''}:${states?.join(',') ?? ''}`;
@@ -974,7 +980,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const size = mode === 'granola-paged' ? 2 : 50;
           const paged = request.summary_only === true ? [] : listed.slice(from, from + size);
           const next = request.summary_only !== true && from + size < listed.length ? pageCursor(pageKey, from + size) : null;
-          return result('items', { items: paged.map(item => itemView(item)), next_cursor: next, stages, summary: {
+          return result('items', { items: paged.map(item => itemView(item, request.rows_only !== true)), next_cursor: next, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
             landed: verdicts('landed'), changed: verdicts('changed'), unreadable: verdicts('unreadable'), decisions: records.length,
             last_checked_at: items.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null, by_decision: records.map(record => {

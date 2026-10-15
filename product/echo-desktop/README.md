@@ -39,6 +39,15 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   planning meeting, approved Oct 6 · Mina's to update"). The whole row opens
   the follow-up's page; nothing on Home closes an item.
 
+Home shows each part as soon as it is read, so quick rows never wait for slow
+ones: the tools are read beside everything else (only the meeting reviews wait
+on them), and what waits on you is read twice side by side, once from ECHO's
+own fields alone, which shows its rows at once, and once with each document
+opened live in its tool. Until that live read answers, a document's title
+says what it is and its meeting, faintly ("Jira ticket · Pilot planning");
+then its title and what it says now fill in. A live read that fails shows no
+error: those rows say "A Jira ticket ECHO couldn't read just now".
+
 A follow-up is an action the approved meeting decided (a **Meeting action**)
 or an existing document its impact check found the meeting affects. Each has
 one status: **Not sent**, **Open**, **Done** or **Dismissed**, and every count
@@ -57,8 +66,14 @@ shows its title, one faint line (what it is, its meeting when the list spans
 meetings, "matches now" when ECHO's last check found it so) and its owner.
 Current work (Not sent and Open) is read first, a page at a time with its
 own **More**, so it is never behind closed rows; Done and Dismissed are read
-after it, with a **More** of theirs. A read that fails says so, and **Try
-again** repeats that read. A meeting's list says when it was approved:
+after it, with a **More** of theirs. Each page shows at once from ECHO's own
+fields, and then only the rows that show are read live, a page at a time,
+each faintly named ("Jira ticket · Pilot planning") until its read answers. A
+meeting's list shows its Done and Dismissed rows; Follow-ups and a project's
+list start them closed ("Done · 12"), and opening a group shows its rows and
+reads them live. A read of rows that fails says so, and **Try again** repeats
+that read; a live read that fails only leaves its rows saying ECHO couldn't
+read them just now. A meeting's list says when it was approved:
 "Approved Oct 6", a faint link to its decision page (over the list, so Back
 returns to it, and its follow-ups line goes back to the list) when you
 approved it. A Not sent row you may send has a tick, and a meeting's list
@@ -66,8 +81,10 @@ ticks them all when it opens; **Send N** sends the ticked rows to their
 owners and **Dismiss N** dismisses them, the rest stay Not sent. The owner
 chip changes the owner at once, before or after sending, from a people picker
 that offers you first ("You"); a dashed **Pick owner** means ECHO found no one
-(faint words when you may not pick). The list stays where it is: the rows a
-change touched are read again in place, and a foot that stays at the bottom
+(faint words when you may not pick). The list stays where it is: after a
+change its rows are read again in place from ECHO's own fields only, each
+keeping what it last said, so a change opens nothing in its tool, and a foot
+that stays at the bottom
 while anything is ticked or said says what happened ("Sent 1 to Mina", "Owner
 changed to Rafael", "Sent 2 · 1 not sent, try again"), taking the focus when
 the button that had it went; a picker that closes hands the focus back to its
@@ -89,11 +106,16 @@ dismissed, reopened, or sent later for one Send dismissed; and by whom),
 ECHO's last check in one faint line, its owner, and one next step: **Send to
 Mina** (or **Keep it myself**) and **Dismiss** while it is not sent, **Mark
 done** and **Dismiss** while it is open, **Reopen** once closed (**Send to
-Mina** for one Send dismissed and nothing reopened since). The page stays and
-says what happened ("Done · Undo"); a change whose reply was lost is settled
-by reading the item again. Giving an item away so you no longer see it says
-so, with Back. A page opened by a notification whose read fails offers **Try
-again**. Back returns to where it was opened, read again when something
+Mina** for one Send dismissed and nothing reopened since). The page shows
+its row at once (from the row it was opened from, or the row the quiet check
+read for a notification) while ECHO reads it live again. After a change the
+page stays and says what happened ("Done · Undo"), showing what the Authority
+answered at once, then the item as its check's rows hold it, read from ECHO's
+own fields only, keeping what it says now; a change whose reply was lost is
+settled by that read. Giving an item away so you no longer see it says so,
+with Back. A page whose read fails offers **Try again**, unless it shows its
+row already and the read failed for an outage: then it says ECHO couldn't
+read it just now. Back returns to where it was opened, read again when something
 changed, at the same place, with the row it was opened from in focus; Ask
 and another app in front keep that place too. The window's title names the
 list (Follow-ups, the meeting or the project) or the item shown.

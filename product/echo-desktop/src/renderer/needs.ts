@@ -67,15 +67,16 @@ const WHAT: Readonly<Record<PersonOpenItemKindV1, string>> = {
  * other item is its title as you opened it now, else what it is and why its
  * title is not shown: "A Jira ticket you can't open" when your access refused
  * it, "A Jira ticket ECHO couldn't read just now" when the read failed
- * otherwise (an outage is not lost access), and "A Jira ticket" when it was
- * not read.
+ * otherwise (an outage is not lost access). Not read (yet): what it is and
+ * its meeting, from ECHO's own fields, "Jira ticket · Pilot planning", which
+ * its live read fills in.
  */
 export function itemTitle(item: OpenItemView): string {
   if (item.kind === 'action') return item.expected ?? WHAT.action;
   if (item.current) return item.current.source.label;
   switch (item.reach) {
     case 'unavailable': return `${WHAT[item.kind]} ECHO couldn't read just now`;
-    case 'not_read': return WHAT[item.kind];
+    case 'not_read': return item.decision ? `${itemKind(item)} · ${item.decision.title}` : itemKind(item);
     default: return `${WHAT[item.kind]} you can't open`;
   }
 }

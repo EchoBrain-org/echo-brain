@@ -45,7 +45,10 @@ describe('the words Home and the follow-ups use', () => {
     expect(itemTitle(item({ reach: 'no_access' }))).toBe('A Jira ticket you can\'t open');
     // An outage or a rate limit is not lost access.
     expect(itemTitle(item({ reach: 'unavailable' }))).toBe('A Jira ticket ECHO couldn\'t read just now');
-    expect(itemTitle(item({ reach: 'not_read' }))).toBe('A Jira ticket');
+    // Not read yet (a rows-only read, before the live read fills it): what it is and its meeting, from ECHO's own fields.
+    expect(itemTitle(item({ reach: 'not_read', decision: pilot }))).toBe('Jira ticket · Pilot planning');
+    expect(itemTitle(item({ kind: 'page', reach: 'not_read', decision: pilot }))).toBe('Page · Pilot planning');
+    expect(itemTitle(item({ reach: 'not_read' }))).toBe('Jira ticket');
     expect([itemTitle(item({ kind: 'page' })), itemTitle(item({ kind: 'slack_message', reach: 'unavailable' }))])
       .toEqual(['A page you can\'t open', 'A Slack message ECHO couldn\'t read just now']);
   });

@@ -29,7 +29,7 @@ async function projectFailure(archived: boolean): Promise<State> {
     ...getState(),
     status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } },
     [archived ? 'archivedProjects' : 'projects']: { items: [], next: null, loading: false, failure: { code: 'unavailable', retryable: true } },
-    home: { seq: 1, loading: false, rows: [], meetings: true, reviews: [], runs: [], open: null },
+    home: { seq: 1, loading: false, rows: [], meetings: true, reviews: [], runs: [], open: null, reading: false },
   };
 }
 
@@ -61,7 +61,7 @@ describe('your follow-ups (F9)', () => {
     return {
       ...getState(), route,
       status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } },
-      home: { seq: 1, loading: false, rows: [], meetings: true, reviews: [], runs: [], open: null },
+      home: { seq: 1, loading: false, rows: [], meetings: true, reviews: [], runs: [], open: null, reading: false },
     };
   }
 

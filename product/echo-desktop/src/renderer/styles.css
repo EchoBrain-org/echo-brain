@@ -689,6 +689,15 @@ button.items-line:hover { background: rgba(240, 236, 230, 0.08); }
 .follow-up-open { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; text-align: left; color: inherit; background: transparent; }
 .follow-up-title { font-size: 15px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
 .follow-up-sub { font-size: 12.5px; color: var(--faint); }
+/* A row's title while ECHO reads it in its tool: what it is and its meeting, faint, gently pulsing until the read fills it. */
+.reading-title { color: var(--faint); animation: reading 1.6s infinite ease-in-out; }
+@keyframes reading { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+@media (prefers-reduced-motion: reduce) { .reading-title { animation: none; } }
+/* Yours and a project's closed groups open one at a time ("Done · 12"). */
+.group-toggle { align-self: flex-start; display: flex; align-items: center; gap: 4px; margin-left: -4px; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; }
+.group-toggle:hover { color: var(--text); background: var(--hover); }
+.group-toggle svg { transition: transform 120ms ease; }
+.group-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
 .follow-ups-foot { position: sticky; bottom: 0; flex-shrink: 0; display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 12px 0 4px; background: var(--ink); }
 .follow-ups-foot .primary-button.small { align-self: auto; }
 .follow-ups-foot .result-line { min-width: 0; }

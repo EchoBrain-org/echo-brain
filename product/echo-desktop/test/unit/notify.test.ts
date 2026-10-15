@@ -38,7 +38,12 @@ let holdQuiet: boolean;
 let released: (() => void)[];
 
 const homeOf = (rows: readonly OpenItemView[]): HomeView => ({ send: [], items: rows, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
-const quietReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.rows_only === true).map(([, params]) => params);
+/** A full read of Home: Home sends one right before each of its own rows-only reads, side by side. */
+const fullHome = (call: unknown[] | undefined) => call?.[0] === 'runs' && (call[1] as { request: { operation: string; rows_only?: true } }).request.operation === 'home'
+  && (call[1] as { request: { rows_only?: true } }).request.rows_only !== true;
+/** The quiet check's reads: rows only, and never Home's own (each of which goes with a full read of Home). */
+const quietReads = () => rpc.mock.calls.filter(([method, params], at, calls) => method === 'runs' && params.request.rows_only === true && !fullHome(calls[at - 1]))
+  .map(([, params]) => params);
 const notices = () => rpc.mock.calls.filter(([method]) => method === 'notify.followUps').map(([, params]) => params);
 
 beforeEach(() => {
@@ -252,6 +257,22 @@ describe('a notification clicked', () => {
     store.openNotified(id(1));
     await flush();
     expect(store.followUpsShown()?.views).toHaveLength(1);
+  });
+
+  it('shows the row its check read at once, while the page reads it live', async () => {
+    items = [followUp(1, { kind: 'ticket', expected: 'launch next week' })];
+    const store = await startStore();
+    // The live read of the item waits: the row the quiet check read shows meanwhile.
+    let answer: (() => void) | undefined;
+    const runs = rpc.getMockImplementation()!;
+    rpc.mockImplementation((method: string, params: { request?: { operation?: string } }) => (method === 'runs' && params.request?.operation === 'item'
+      ? new Promise(resolve => { answer = () => resolve(ok({ ...items[0]!, reach: 'no_access' })); }) : runs(method, params)));
+    store.openNotified(id(1));
+    await flush();
+    expect(store.followUpShown()).toMatchObject({ kind: 'item', item_id: id(1), loading: true, item: { item_id: id(1), reach: 'not_read', expected: 'launch next week' } });
+    answer!();
+    await flush();
+    expect(store.followUpShown()).toMatchObject({ kind: 'item', loading: false, item: { reach: 'no_access' } });
   });
 
   it('opens the Follow-ups page for several', async () => {

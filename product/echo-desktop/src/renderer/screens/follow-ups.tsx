@@ -8,12 +8,13 @@ import {
   checkWords, firstName, itemGroups, itemHistory, itemKind, itemLabels, itemNames, itemTitle, liveFacts, matchesNow, monthDay, reopenLabel, saysNow, sendLabel, STAGES,
 } from '../needs.js';
 import {
-  checkNow, closeFollowUp, closeOwnerPicker, findOwner, moreFollowUps, openFollowUp, openFollowUps, openItemInTool, openListDecision, ownerChoices, pickFollowUpOwner,
-  retryFollowUp, retryFollowUps, sendable, sendFollowUp, sendTicked, setFollowUpState, tickFollowUp, toggleOwnerPicker, undoFollowUp, type FollowUpList, type ItemPage,
-  type OwnerPicker as Picker, type Said, type State,
+  awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, moreFollowUps, openFollowUp, openFollowUps, openItemInTool, openListDecision, ownerChoices,
+  pickFollowUpOwner, retryFollowUp, retryFollowUps, rowReading, sendable, sendFollowUp, sendTicked, setFollowUpState, tickFollowUp, toggleClosedGroup, toggleOwnerPicker,
+  undoFollowUp, type FollowUpList, type ItemPage, type OwnerPicker as Picker, type Said, type State,
 } from '../store.js';
 import { Face } from './card.js';
 import { within } from './change.js';
+import { Chevron } from './icons.js';
 import { useKeptPlace } from './items.js';
 
 /** A person, as a chip: their initials in their color, and their first name. */
@@ -144,6 +145,8 @@ function CheckNow({ list }: { list: FollowUpList }) {
  */
 function Row({ state, list, item, label, name }: { state: State; list: FollowUpList; item: OpenItemView; label: string; name: string }) {
   const sub = [itemKind(item, state.tools?.items), list.scope === 'record' ? null : item.decision?.title ?? null, matchesNow(item)].filter(Boolean).join(' · ');
+  // Read rows only first: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
+  const reading = rowReading(list, item);
   return <>
     <div class="follow-up-row" data-testid="follow-up-row" data-item={item.item_id} data-state={item.state}
       onClick={event => { if (!within(event, '.send-box, .owner-slot')) void openFollowUp(item.item_id, item); }}>
@@ -151,8 +154,8 @@ function Row({ state, list, item, label, name }: { state: State; list: FollowUpL
         <input type="checkbox" class="send-box" aria-label={name} checked={list.ticks[item.item_id] === true} disabled={list.busy}
           onChange={() => tickFollowUp(item.item_id)} />
       )}
-      <button type="button" class="follow-up-open">
-        <span class="follow-up-title">{label}</span>
+      <button type="button" class="follow-up-open" aria-busy={reading || undefined}>
+        <span class={`follow-up-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
         <span class="follow-up-sub">{sub}</span>
       </button>
       <Owner state={state} busy={list.busy} picking={list.picker?.item_id === item.item_id} item={item} name={name} />
@@ -187,6 +190,8 @@ function Head({ list }: { list: FollowUpList }) {
 
 /** Current work's statuses: read first, with their own More. */
 const ACTIVE: readonly PersonOpenItemStateV1[] = ['unsent', 'open'];
+/** Closed statuses: a meeting's show their rows; yours and a project's open a group at a time. */
+const CLOSED = ['done', 'not_relevant'] as const;
 
 /**
  * A follow-ups list: a meeting's, a project's, or yours (everything you sent
@@ -222,6 +227,26 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
       </div>
     </section>
   );
+  // Yours and a project's closed groups start closed ("Done · 12"), each counted over the whole list: opened, its rows show and are
+  // read live. Shown once current work is read, as a meeting's are.
+  const closedGroup = (status: (typeof CLOSED)[number]) => {
+    const items = groups.find(entry => entry.state === status)?.items ?? [];
+    const count = counts?.[status] ?? items.length;
+    if (count === 0 && items.length === 0) return null;
+    const open = list.expanded[status] === true;
+    return (
+      <section key={status} class="follow-ups-group" aria-label={STAGES[status]}>
+        <button type="button" class="section-label group-toggle" aria-expanded={open}
+          onClick={() => toggleClosedGroup(status)}><Chevron /><span>{STAGES[status]} · {count}</span></button>
+        {open && items.length > 0 && (
+          <div class="follow-ups-rows">
+            {items.map(item => <Row key={item.item_id} state={state} list={list} item={item} label={labels.get(item.item_id)!} name={names.get(item.item_id)!} />)}
+          </div>
+        )}
+      </section>
+    );
+  };
+  const closedShown = list.scope === 'record' || CLOSED.some(status => list.expanded[status]);
   const foot = ticked > 0 || list.said !== null;
   return (
     <div class="column follow-ups" data-testid="follow-ups" ref={column} aria-busy={list.loading || list.busy}>
@@ -230,8 +255,8 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
       {list.active.next && (
         <button type="button" class="link-button more" data-testid="follow-ups-more" disabled={list.loading} onClick={() => void moreFollowUps('active')}>More</button>
       )}
-      {groups.filter(entry => !ACTIVE.includes(entry.state)).map(group)}
-      {list.closed?.next && (
+      {list.scope === 'record' ? groups.filter(entry => !ACTIVE.includes(entry.state)).map(group) : list.closed && CLOSED.map(closedGroup)}
+      {list.closed?.next && closedShown && (
         <button type="button" class="link-button more" data-testid="follow-ups-more-closed" disabled={list.loading} onClick={() => void moreFollowUps('closed')}>More</button>
       )}
       {list.loading && list.items.length === 0 && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
@@ -274,7 +299,7 @@ function OpenInTool({ state, item }: { state: State; item: OpenItemView }) {
  * one faint line) beside what the meeting decided. A meeting's action needs
  * none: its line above says it came from the meeting.
  */
-function Why({ state, item }: { state: State; item: OpenItemView }) {
+function Why({ state, item, reading }: { state: State; item: OpenItemView; reading: boolean }) {
   const facts = liveFacts(item);
   return (
     <section class="card-section" aria-labelledby="follow-up-why">
@@ -282,7 +307,8 @@ function Why({ state, item }: { state: State; item: OpenItemView }) {
       {item.relation === null && <div class="card-text">May be affected by the meeting</div>}
       <div class="card-delta">
         <div>
-          <span class="card-delta-label">Says now</span><span class="card-delta-now">{saysNow(item)}</span>
+          <span class="card-delta-label">Says now</span>
+          <span class={`card-delta-now${reading ? ' reading-title' : ''}`}>{reading ? 'Reading…' : saysNow(item)}</span>
           {facts && <span class="card-delta-facts faint" data-testid="follow-up-facts">{facts}</span>}
         </div>
         {item.expected !== null && <div><span class="card-delta-label needs">Meeting decided</span><span>{item.expected}</span></div>}
@@ -350,13 +376,15 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
   const { decision } = item;
   const day = decision ? monthDay(decision.approved_at) : null;
   const checked = item.kind === 'action' ? null : checkWords(item.check);
+  // Its row shows at once; while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
+  const reading = page.loading && awaitingLive(item);
   return (
     <div class="column card" ref={box}>
       <div class="card-page" data-testid="follow-up" aria-busy={page.loading || page.busy}>
         <article class="card-main" aria-labelledby="follow-up-title">
           <header class="card-head">
             <div class="card-top"><span class={`stage-pill ${item.state}`} data-testid="follow-up-state">{STAGES[item.state]}</span></div>
-            <h1 id="follow-up-title" class="card-title" tabIndex={-1}>{itemTitle(item)}</h1>
+            <h1 id="follow-up-title" class={`card-title${reading ? ' reading-title' : ''}`} tabIndex={-1} data-reading={reading || undefined}>{itemTitle(item)}</h1>
             <div class="card-meta">
               {itemKind(item, state.tools?.items)} · {decision
                 ? <button type="button" class="link-button inline" onClick={() => void openFollowUps('record', decision.record_sha256, decision.title)}>
@@ -364,7 +392,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
                 : `Sent by ${item.approver.membership_id === me ? 'you' : item.approver.name}`}
             </div>
           </header>
-          {item.kind !== 'action' && <Why state={state} item={item} />}
+          {item.kind !== 'action' && <Why state={state} item={item} reading={reading} />}
           <section class="card-section" aria-labelledby="follow-up-history">
             <div id="follow-up-history" class="section-label">History</div>
             <ol class="history" data-testid="follow-up-history">

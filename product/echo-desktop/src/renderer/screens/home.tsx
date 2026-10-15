@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { colorFor, initial, when } from '../format.js';
 import { message } from '../messages.js';
 import { actionCount, homeFooter, itemLabels, itemNeeds, itemTitle, itemWhy, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
-import { loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openYourFollowUps, type NeedRow, type State } from '../store.js';
+import { awaitingLive, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openYourFollowUps, type NeedRow, type State } from '../store.js';
 import { Plus, Saved } from './icons.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
@@ -89,11 +89,14 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
 function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { item: unknown }>; label: string }) {
   const { item } = row;
   const needs = itemNeeds(item);
+  // Shown from ECHO's own fields at once: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
+  const reading = state.home?.reading === true && awaitingLive(item);
   return (
-    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} onClick={() => void openFollowUp(item.item_id, item)}>
+    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} aria-busy={reading || undefined}
+      onClick={() => void openFollowUp(item.item_id, item)}>
       <span class="need-kind">{KIND[row.kind]}</span>
       <span class="need-text">
-        <span class="need-title">{label}</span>
+        <span class={`need-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
         {needs && <span class="need-change">{needs}</span>}
         <span class="need-detail">{itemWhy(item, state.status?.account?.membership_id ?? null, state.tools?.items)}</span>
       </span>
@@ -159,7 +162,7 @@ export function Home({ state }: { state: State }) {
   const waiting = rows.filter(row => row.kind !== 'checking').length;
   const labels = itemLabels(rows.flatMap(row => ('item' in row ? [row.item] : [])));
   return (
-    <div class="column needs" data-testid="needs" aria-busy={home?.loading ?? true}>
+    <div class="column needs" data-testid="needs" aria-busy={home ? home.loading || home.reading : true}>
       <div class="section-label needs-head">Needs you{waiting > 0 ? ` · ${waiting}` : ''}</div>
       {rows.map(row => ('item' in row
         ? <ItemRow key={row.item.item_id} state={state} row={row} label={labels.get(row.item.item_id) ?? itemTitle(row.item)} />
