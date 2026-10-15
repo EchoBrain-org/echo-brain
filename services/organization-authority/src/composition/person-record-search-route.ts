@@ -888,6 +888,18 @@ export function createPersonRecordSearchRouteV1(
   }
 
   /**
+   * One record lookup's admission: a well-formed digest, the caller signed in to this organization, then the exact Layer 1
+   * read with current grants. A record this reader cannot read is not_found, indexed or not.
+   */
+  function admit(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }) {
+    if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
+    const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+    assertExpectedOrganization(authorization);
+    const projects = captureRecordProjectsV1(options.capture_projects, authorization);
+    return { authorization, projects, admitted: admittedRecord(authorization, projects, input.record_sha256) };
+  }
+
+  /**
    * Whether a record this reader can read in this scope was appended after the
    * published head. An approval the reader cannot see, or under mine one the
    * reader did not approve, never changes what the reader sees. The probe
@@ -1324,19 +1336,11 @@ export function createPersonRecordSearchRouteV1(
       return Object.freeze({ row, ...(meeting === undefined ? {} : { meeting, transcript_shared }), atoms: Object.freeze(atoms), next, release });
     },
     admitMeeting(input: Parameters<PersonMeetingItemsPortV1["admitMeeting"]>[0]): void {
-      if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      admittedRecord(authorization, captureRecordProjectsV1(options.capture_projects, authorization), input.record_sha256);
+      admit(input);
     },
     recordAnchor(input: Parameters<PersonRecordAnchorV1["recordAnchor"]>[0]): ReturnType<PersonRecordAnchorV1["recordAnchor"]> {
-      if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      const projects = captureRecordProjectsV1(options.capture_projects, authorization);
-      // The exact Layer 1 read first: a record this reader cannot read is not_found, indexed or not,
-      // so index lag never tells a reader that a record exists.
-      admittedRecord(authorization, projects, input.record_sha256);
+      // The exact Layer 1 read first, so index lag never tells a reader that a record exists.
+      const { authorization, projects } = admit(input);
       // The anchor is read at the log's head, as the desk opens it: a generation behind the log is index lag.
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
@@ -1364,21 +1368,14 @@ export function createPersonRecordSearchRouteV1(
       return Object.freeze({ kind: "approved_record" as const, atom_id: first.atom_id, record_sha256: first.record_sha256, policy_id: first.policy_id });
     },
     recordActions(input: Parameters<PersonRecordActionsV1["recordActions"]>[0]): ReturnType<PersonRecordActionsV1["recordActions"]> {
-      if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      // The exact Layer 1 read with current grants, as openMeeting admits a record; then the approved record itself, read as open reads it.
-      const admitted = admittedRecord(authorization, captureRecordProjectsV1(options.capture_projects, authorization), input.record_sha256);
+      // Admitted as openMeeting admits a record; then the approved record itself, read as open reads it.
+      const { admitted } = admit(input);
       const record = approvedRecord(admitted.position, admitted.record_sha256);
       const owners = confirmedOwners(record.reference);
       return Object.freeze(record.brief.actions.map((action) => Object.freeze({ signal_id: action.id, text: releasableBodyV1(action.text), owner: owners.get(action.id) ?? null })));
     },
     recordProjects(input: Parameters<PersonRecordProjectsV1["recordProjects"]>[0]): readonly ProjectIdV1[] {
-      if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      const projects = captureRecordProjectsV1(options.capture_projects, authorization);
-      const admitted = admittedRecord(authorization, projects, input.record_sha256);
+      const { projects, admitted } = admit(input);
       return recordAssociations([{ record_position: admitted.position, record_sha256: admitted.record_sha256 }], projects.project_ids).get(admitted.record_sha256) ?? Object.freeze([]);
     },
     readableDecisions(input: Parameters<PersonReadableDecisionsV1["readableDecisions"]>[0]): ReturnType<PersonReadableDecisionsV1["readableDecisions"]> {
