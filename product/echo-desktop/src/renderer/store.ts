@@ -7,17 +7,17 @@ import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
-  MainMethods, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
+  NoticeTarget, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
   ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { isWriteCall, MAX_CAPTURE_PROJECTS, NOTICE_ITEMS_MAX, NOTICE_TEXT_MAX } from '../shared/protocol.js';
+import { isWriteCall, MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
+import * as freshness from './freshness.js';
 import { message } from './messages.js';
-import { clip } from './format.js';
-import { ACTIVE_STATES, CLOSED_STATES, firstName, itemTitle, reopenSends, sentWords } from './needs.js';
+import { ACTIVE_STATES, CLOSED_STATES, firstName, reopenSends, sentWords } from './needs.js';
 
 /** Mine: only what you added, to see and to ask about. Follow-ups: everything you sent or own. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision' }
@@ -609,8 +609,8 @@ function applyStatus(status: AppStatus): void {
   if (!next) {
     // A sign-out the host lost mid-way did happen: the account goes as it would have.
     if (signOutPending) { signOutPending = null; forgetAccount(); }
-    // No one to notify: signing in again starts over, learning what is there.
-    stopQuietCheck();
+    // No one to check for: signing in again starts over, learning what is there.
+    freshness.stop();
     emptyBar();
     // New project with work on its way stays, out of sight behind the sign-in page: its outcome is still owed, and the
     // same person signing back in finds it as it is. Another account's sign-in forgets it.
@@ -634,7 +634,8 @@ function applyStatus(status: AppStatus): void {
   signOutPending = null;
   if (!same || !wasSignedIn) {
     void loadProjects(); void loadArchivedProjects(); void loadHome();
-    startQuietCheck(lastAccount);
+    // The change check starts over for this account: its first check learns.
+    freshness.start(lastAccount);
     // New project kept through a sign-out goes on with what waited while no one was signed in.
     pumpNewProject();
   }
@@ -650,7 +651,7 @@ function forgetAccount(): void {
   if (state.sheet?.kind === 'tool-connect') cancelWaitingConnection(state.sheet, account);
   if (state.projectSettings?.tools) clearProjectMappings(state.projectSettings, account);
   stopRunPolling();
-  stopQuietCheck();
+  freshness.stop();
   runFailures = 0;
   openUnread = false;
   resultOwed = false;
@@ -760,6 +761,7 @@ export function openTools(fromTray = false): void {
   set({ route: { page: 'tools' }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null, barScope: { kind: 'global' },
     organization: null, tools: { seq: ++seq, loading: false, items: null } });
   syncSearch();
+  freshness.navigated();
   void loadToolList();
 }
 
@@ -768,17 +770,21 @@ function toolsPage(mine?: number): ToolsPage | null {
   return page && state.route.page === 'tools' && (mine === undefined || page.seq === mine) ? page : null;
 }
 
-/** The list, read (again): on opening, Try again, and after a connection changes. */
-export async function loadToolList(): Promise<void> {
+/**
+ * The list, read (again): on opening, Try again, and after a connection changes; and `quiet`ly when ECHO comes back, keeping
+ * what shows when that read fails.
+ */
+export async function loadToolList(quiet = false): Promise<void> {
   const account = expect();
   const page = toolsPage();
   if (!account || !page) return;
   const mine = page.seq;
-  set({ tools: { ...page, loading: true, failure: undefined } });
+  if (!quiet) set({ tools: { ...page, loading: true, failure: undefined } });
   const result = await rpc('account.tools', { expect: account });
   const current = toolsPage(mine);
   if (!current) return;
   if (!result.ok) {
+    if (quiet && current.items !== null) { if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure); return; }
     set({ tools: { ...current, loading: false, failure: result.failure } });
     accountLost(result.failure);
     return;
@@ -1095,7 +1101,7 @@ function sameAccount(account: Expect): boolean {
 }
 
 function refreshIfOwed(status: ListStatus): void {
-  if (refreshOwed.delete(status)) void (status === 'active' ? refreshProjects() : refreshProjectList('archived'));
+  if (refreshOwed.delete(status)) void (status === 'active' ? refreshSidebar() : refreshProjectList('archived'));
 }
 
 /** A project you were lead of is now one you are a member of, or the other way: a change of access. */
@@ -1110,12 +1116,77 @@ export function goHome(): void {
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
     organization: null, decision: null });
   syncSearch();
+  freshness.navigated();
   void loadHome();
 }
 
-/** The window came forward: the sidebar's lists read again, on every page; the archived one once the active one could be. */
-async function refreshProjects(): Promise<void> {
-  if (await refreshProjectList('active')) void refreshProjectList('archived');
+/** The sidebar read on its way, and whether another is owed once it ends. */
+let sidebarRead: Promise<boolean> | null = null;
+let sidebarAgain = false;
+
+/**
+ * The sidebar's lists read again, quietly: the active one, then the archived
+ * one once the active one could be; then the open project's header follows its
+ * row. One asked for while another is on its way joins it, and one more runs
+ * after it. True once both lists were read.
+ */
+function refreshSidebar(): Promise<boolean> {
+  if (sidebarRead) { sidebarAgain = true; return sidebarRead; }
+  sidebarRead = (async () => {
+    let done = false;
+    try {
+      do {
+        sidebarAgain = false;
+        done = await refreshProjectList('active') && await refreshProjectList('archived');
+        if (done) await followOpenProject();
+      } while (sidebarAgain && expect());
+    } finally {
+      sidebarRead = null;
+    }
+    return done;
+  })();
+  return sidebarRead;
+}
+
+/**
+ * The project on screen, after the sidebar was read again: its header (name,
+ * role, status) from its row. Not in the lists read, it is read on its own,
+ * unless they were read to their end; a project you can no longer open sends
+ * you Home, saying so (R3).
+ */
+async function followOpenProject(): Promise<void> {
+  const account = expect();
+  const route = state.route;
+  if (!account || route.page !== 'project') return;
+  const { project_id } = route.project;
+  const row = [...state.projects.items, ...state.archivedProjects.items].find(project => project.project_id === project_id);
+  if (row) { projectRowRead(row); return; }
+  if (state.projects.next !== null || state.archivedProjects.next !== null) {
+    const result = await rpc('projects.read', { expect: account, project_id });
+    const now = state.route;
+    if (!sameAccount(account) || now.page !== 'project' || now.project.project_id !== project_id) return;
+    if (result.ok) { projectRowRead(result.value); return; }
+    if (!['not_found', 'unauthorized', 'forbidden'].includes(result.failure.code)) return;
+  }
+  const shown = state.route;
+  if (shown.page === 'project') lostProject(shown.project);
+}
+
+/** The open project as its fresh row has it. A new role for you in it is a change of access: the bar's text goes. */
+function projectRowRead(row: ProjectSummary): void {
+  if (state.route.page !== 'project' || state.route.project.project_id !== row.project_id) return;
+  const shown = state.route.project;
+  if (shown.name === row.name && shown.role === row.role && shown.status === row.status) return;
+  if (shown.role !== row.role) emptyBar();
+  set(sameProjectRoute({ ...shown, name: row.name, role: row.role, status: row.status }));
+}
+
+/** The open project is one you can no longer open: Home, with a toast that says so. */
+function lostProject(project: ProjectSummary): void {
+  // Its settings go with it, unless a change to it waits on the Authority's answer.
+  if (state.projectSettings?.project.project_id === project.project_id && !projectSettingsBlocked()) set({ projectSettings: null });
+  forgetLeftProject(project.project_id);
+  set({ toast: `You no longer have access to ${project.name}` });
 }
 
 /**
@@ -1172,6 +1243,7 @@ export async function openProject(project: ProjectSummary): Promise<void> {
     list: { scope: { kind: 'project', project_id: project.project_id }, opened: ++seq, items: [], next: null, loading: true },
   });
   syncSearch();
+  freshness.navigated();
   void loadRoster(project.project_id);
   void loadLine('projectLine', 'project', project.project_id);
   void loadProjectReads(project.project_id);
@@ -1224,6 +1296,7 @@ export async function openMine(): Promise<void> {
     list: { scope: { kind: 'mine' }, opened: ++seq, items: [], next: null, loading: true },
   });
   syncSearch();
+  freshness.navigated();
   await loadList('first');
 }
 
@@ -2470,6 +2543,8 @@ export async function createProject(): Promise<void> {
     accountLost(result.failure);
     return;
   }
+  // Made here: being in it is never news.
+  freshness.createdHere(result.value.project_id);
   setNewProject({ create: { ...current.create, status: 'created' }, createdId: result.value.project_id }, mine);
   await openCreated();
 }
@@ -2911,6 +2986,7 @@ export function openOrganization(fromTray = false): void {
     },
   });
   syncSearch();
+  freshness.navigated();
   void loadEmployees();
 }
 
@@ -3822,6 +3898,7 @@ export function toggleSidebar(): void {
  */
 export function conceal(): void {
   stopRunPolling();
+  freshness.concealed();
   // The source pane closes and forgets what it read; the records are read again on return.
   const reading = state.sources !== null;
   // People closes, as the sidebar's rows must take a drop; unless a change in it is on its way.
@@ -3835,34 +3912,95 @@ export function conceal(): void {
   });
   syncSearch();
 }
-export function resume(): void {
-  if (!state.concealed) return;
-  set({ concealed: false });
-  void refreshStatus().then(() => {
-    searchAgain();
-    if (!state.concealed) void refreshProjects();
-    // The answer's records are read again. A chip chosen meanwhile keeps its pane open.
-    if (state.sources && !state.concealed) void readRecords(state.sources.gen);
-    // People & invites is read again for whoever is signed in now.
-    if (state.route.page === 'organization' && !state.concealed) void loadEmployees();
-    // Resume healthy or interrupted Home reads, including an open decision.
-    // A failed initial Home retains its explicit retry; an ongoing check or open
-    // decision resumes its interrupted retry when the window returns.
-    if (state.home && (!state.home.failure || homeNeedsPolling()) && !state.concealed) void loadHome();
-    // A list's live reads stopped while ECHO was behind another app: they go on.
-    const view = followUpShown();
-    if (view?.kind === 'list' && !state.concealed) void fillLive(view.seq);
-  });
+/**
+ * ECHO is back in front: the page uncovers, and coming back reads what it
+ * shows again (R4): on both platforms, with or without a departure recorded.
+ */
+export function resume(): Promise<void> {
+  if (state.concealed) set({ concealed: false });
+  return freshness.cameBack();
 }
 
-/** The window came forward (⌘E, the tray): refresh the account, sidebar and visible Home. */
-export async function windowShown(): Promise<void> {
-  if (state.concealed) return;
-  await refreshStatus();
-  searchAgain();
-  await refreshProjects();
-  if (state.route.page === 'home' && !state.concealed) void loadHome();
+/** The window came forward (⌘E, the tray, a notification): the same as coming back (R4). The cover, if up, stays. */
+export function windowShown(): Promise<void> { return freshness.cameBack(); }
+
+/** The window was hidden or minimized: checks and notifications go on; what shows is read again once it shows (R6). */
+export function windowHidden(): void { freshness.windowHidden(); }
+
+/** The machine woke from sleep: a check, so what changed meanwhile shows and notifies. */
+export function systemWoke(): void { void freshness.woke(); }
+
+/**
+ * What shows, read again quietly, keeping what it shows meanwhile: the page on
+ * screen when ECHO comes back (`page`, R4), and what an area that moved feeds
+ * (R3). Follow-ups moved: Home's rows, the follow-ups list or item page on
+ * screen (the views under it, and the page under them, once they show), a
+ * project's follow-ups line, a meeting's line. Reviews moved: Home and the
+ * decision page.
+ */
+function rereadShown({ page, areas }: { readonly page: boolean; readonly areas: readonly freshness.ScreenArea[] }): void {
+  if (!expect() || state.concealed) return;
+  const followUps = page || areas.includes('follow_ups');
+  const reviews = areas.includes('reviews');
+  const route = state.route;
+  if (page) {
+    searchAgain();
+    // The answer's records are read again: another app in front forgot them.
+    if (state.sources) void readRecords(state.sources.gen);
+  }
+  if ((route.page === 'home' || route.page === 'decision') && state.home && (page || followUps || reviews)) {
+    // Coming back, Home reads every row live again; after a change, only the rows that newly lack what they say now.
+    void loadHome(page);
+  }
+  if (route.page === 'decision' && (page || reviews)) void rereadDecision();
+  if (followUps) rereadViews();
+  if (route.page === 'project') {
+    const { project_id } = route.project;
+    if (followUps) void loadLine('projectLine', 'project', project_id);
+    if (page) {
+      void loadList('quiet');
+      if (state.roster?.projectId === project_id) void loadRoster(project_id);
+    }
+  }
+  const line = state.impactLine;
+  if (followUps && line && (route.page === 'decision' || (state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id))) {
+    void loadLine('impactLine', line.scope, line.id);
+  }
+  if (!page) return;
+  if (route.page === 'mine') void loadList('quiet');
+  if (route.page === 'tools') void loadToolList(true);
+  if (route.page === 'organization') void loadEmployees();
 }
+
+/**
+ * The follow-ups view on screen read again, rows only (a list as far as it
+ * showed, then live what it newly lacks); those under it, and the page under
+ * them all, are read again when they show. A view with a change on its way
+ * reads again after it by itself.
+ */
+function rereadViews(): void {
+  const stack = followUpsShown();
+  const top = stack?.views.at(-1);
+  if (!stack || !top) return;
+  const last = stack.views.length - 1;
+  set({ followUps: { ...stack, changed: true, views: stack.views.map((view, index) => (index < last ? { ...view, stale: true } : view)) } });
+  if (top.kind === 'list' && !top.busy && !top.loading) void readList(top.seq, top.reads.length === 0 ? 'first' : 'again');
+  else if (top.kind === 'item' && !top.busy && !top.loading && !top.gone) void readItem(top.seq);
+}
+
+freshness.configure({
+  account: expect,
+  covered: () => state.concealed,
+  status: refreshStatus,
+  lists: () => ({ active: state.projects, archived: state.archivedProjects }),
+  refreshSidebar,
+  reread: rereadShown,
+  itemShown: () => {
+    const view = followUpShown();
+    return view?.kind === 'item' ? view.item_id : null;
+  },
+  accountLost,
+});
 
 // ---- Home: what needs you ---------------------------------------------------------
 
@@ -4007,10 +4145,6 @@ function homeShown(mine?: number): HomeState | null {
 /** Home itself shows, with nothing over it: only then is what waits on you read live, each row opened in its tool. */
 function homeInSight(): boolean {
   return homeShown() !== null && state.route.page === 'home' && followUpsShown() === null;
-}
-
-function homeNeedsPolling(): boolean {
-  return resultOwed || sweepOwed !== null || state.route.page === 'decision' || homeRows().some(row => row.kind === 'checking');
 }
 
 /** The Home load on its way, if any; one more is owed after it when `homeAgain`. */
@@ -4159,14 +4293,13 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
 }
 
 /**
- * What waits on you: its rows at once, rows only from ECHO's own fields
- * (which also tell the quiet check what you saw, F8); then, only while Home
- * itself shows, read live (`readHomeLive`). `rows` settles with the rows
- * read, and its failure; `sweepDue` once the live read did.
+ * What waits on you: its rows at once, rows only from ECHO's own fields;
+ * then, only while Home itself shows, read live (`readHomeLive`). `rows`
+ * settles with the rows read, and its failure; `sweepDue` once the live read
+ * did.
  */
 function readWaiting(mine: number, fresh: boolean): { rows: Promise<Failure | undefined>; sweepDue: Promise<boolean> } {
   const rows = runsCommand({ schema_version: 1, operation: 'home', read: 'rows' }).then(value => {
-    heard(value.items);
     const home = homeShown(mine);
     if (home) set({ home: { ...home, open: value } });
     return undefined;
@@ -4360,6 +4493,7 @@ export async function openDecision(approval_id: string, run: PersonRunV1 | null 
     decision: newDecision(approval_id, mine, run),
   });
   syncSearch();
+  freshness.navigated();
   if (run?.state === 'done') void loadLine('impactLine', 'run', run.run_id);
   await readDecision(mine, approval_id);
 }
@@ -4381,6 +4515,29 @@ async function readDecision(mine: number, approval_id: string): Promise<void> {
     const decision = decisionShown(mine);
     if (decision) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
   }
+}
+
+/**
+ * The decision page read again quietly, while nothing on it is on its way:
+ * the same proposal keeps the choices made on it; a new one comes with its
+ * own, under a new command. A read that fails keeps what shows.
+ */
+async function rereadDecision(): Promise<void> {
+  const decision = state.decision;
+  if (!decision || decision.loading || decision.busy || decision.unknown || !decisionShown(decision.seq)) return;
+  const mine = decision.seq;
+  let open: ReviewOpen;
+  try {
+    open = await meetingCommand({ operation: 'review_open', approval_id: decision.approval_id });
+  } catch {
+    return;
+  }
+  const current = decisionShown(mine);
+  if (!current || current.busy || current.unknown) return;
+  if (current.open?.snapshot_sha256 === open.snapshot_sha256) { set({ decision: { ...current, open } }); return; }
+  set({ decision: { ...current, open, command: crypto.randomUUID(), audience: open.suggested_projects.length > 0 ? 'projects' : 'only-me',
+    project_ids: open.suggested_projects.map(project => project.project_id),
+    owners: open.owners.map(owner => ({ signal_id: owner.signal_id, action: owner.action, owner: owner.proposed })) } });
 }
 
 function editDecision(patch: Partial<DecisionState>): void {
@@ -4680,6 +4837,7 @@ export function openFollowUps(scope: 'record' | 'project', id: string, title: st
   if (at >= 0) { backTo(at); return Promise.resolve(); }
   const list = newList(scope, id, title);
   pushView(list);
+  freshness.navigated();
   return readList(list.seq, 'first');
 }
 
@@ -4695,6 +4853,7 @@ export function openYourFollowUps(fromNotice = false): Promise<void> {
   set({ route, followUps: { route, views: [list], changed: false }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null,
     barScope: { kind: 'global' }, organization: null, decision: null });
   syncSearch();
+  freshness.navigated();
   return readList(list.seq, 'first');
 }
 
@@ -5033,6 +5192,7 @@ export function openFollowUp(item_id: string, shown: OpenItemView | null = null,
   const live = shown && (shown.reach === 'opened' || shown.reach === 'no_access') ? { [item_id]: livePart(shown) } : {};
   const page: ItemPage = { kind: 'item', seq: ++seq, item_id, item: shown, live, loading: true, send: null, ...UNCHANGED };
   pushView(page);
+  freshness.navigated();
   return readItem(page.seq);
 }
 
@@ -5424,152 +5584,31 @@ async function followSweep(runId: string, ours: () => boolean): Promise<'done' |
   }
 }
 
-// ---- notifications: follow-ups that newly wait on you (F8) ---------------------------------
-
-/** How often the quiet check pages through open follow-ups while someone is signed in. */
-const QUIET_CHECK_MS = 5 * 60_000;
-/** The notifications main keeps on screen: only one of theirs can be clicked. */
-const TOLD_KEPT = 20;
-/** The quiet check's next read, and its turn: bumped whenever it stops, so a reply for an earlier turn is dropped. */
-let quietTimer: ReturnType<typeof setTimeout> | null = null;
-let quietSeq = 0;
-/**
- * The last handoff seen for each open follow-up (null until a complete scan
- * succeeds), plus handoffs shown on Home since that scan. A bounded Home
- * read cannot advance a global watermark past assignments it did not show.
- * Completed scans replace the map, so closed work does not accumulate.
- */
-let quiet: { account: Expect; seen: ReadonlyMap<string, string> | null; homeSeen: ReadonlyMap<string, string>;
-  told: readonly string[]; items: ReadonlyMap<string, OpenItemView> } | null = null;
+// ---- notifications (desktop refresh and notifications v1, N6) ---------------------------------
 
 /**
- * Who last made an item wait on its owner: whoever picked the owner after
- * its state was last set, else whoever set that state (the approver's Send,
- * or a Reopen), else its approver.
+ * A notification was clicked, and the window comes forward: the follow-up's
+ * page over the page on screen (its row from the check at once), the
+ * Follow-ups page, or the project. Only a target this account was told of
+ * opens, so one told before a sign-out or a switch opens nothing. Capture, a
+ * sheet or a dialog that is up stays, as for the tray.
  */
-function handedBy(item: OpenItemView): OpenItemView['approver'] {
-  const at = (value: string | null) => (value === null ? null : Date.parse(value));
-  const owned = at(item.owner_set_at);
-  const stated = at(item.state_set_at);
-  if (item.owner_set_by && owned !== null && (stated === null || owned > stated)) return item.owner_set_by;
-  return item.state_set_by ?? item.approver;
-}
-
-/** When an item started waiting on whoever it waits on now, as the Authority orders Home: the latest of its made, sent, owner set and state set times. */
-function waitingSince(item: OpenItemView): string {
-  return [item.sent_at, item.owner_set_at, item.state_set_at].reduce<string>((latest, at) => (at !== null && at > latest ? at : latest), item.created_at);
-}
-
-/**
- * What a complete scan found new: open and yours, with a handoff newer than
- * the one seen for that item, and handed to you by someone else (one
- * you made yours yourself, Keep it myself or picking yourself, never is). A
- * reopen, or a hand-back, waits anew. The first complete scan only learns.
- */
-function newFollowUps(seen: ReadonlyMap<string, string> | null, homeSeen: ReadonlyMap<string, string>, items: readonly OpenItemView[], me: string)
-  : { seen: ReadonlyMap<string, string>; fresh: OpenItemView[] } {
-  const waiting = items.filter(item => item.state === 'open' && item.owner.membership_id === me);
-  const prior = (id: string) => [seen?.get(id) ?? '', homeSeen.get(id) ?? ''].sort().at(-1)!;
-  const fresh = seen === null ? [] : waiting.filter(item => waitingSince(item) > prior(item.item_id) && handedBy(item).membership_id !== me);
-  const next = new Map(waiting.map(item => [item.item_id, [waitingSince(item), prior(item.item_id)].sort().at(-1)!]));
-  // Home may have shown a newer handoff while the scan was in flight.
-  for (const [id, at] of homeSeen) if (at > (next.get(id) ?? '')) next.set(id, at);
-  return { seen: next, fresh };
-}
-
-/**
- * The notification for follow-ups new to you, or null for none. One says who
- * sent it, by first name, and what it is, as its row names it. Several are
- * counted.
- */
-export function followUpsNotice(fresh: readonly OpenItemView[]): MainMethods['notify.followUps']['params'] | null {
-  const ids = [...new Set(fresh.map(item => item.item_id))].slice(0, NOTICE_ITEMS_MAX);
-  if (ids.length !== 1) return ids.length === 0 ? null : { item_ids: ids };
-  const line = (text: string) => clip(text.replace(/\p{Cc}+/gu, ' ').trim(), NOTICE_TEXT_MAX);
-  return { item_ids: ids, from: line(firstName(handedBy(fresh[0]!).name)), title: line(itemTitle(fresh[0]!)) };
-}
-
-/** The next quiet check, five minutes on. */
-function armQuietCheck(): void {
-  if (quietTimer) clearTimeout(quietTimer);
-  const mine = quietSeq;
-  quietTimer = setTimeout(() => { quietTimer = null; void quietCheck(mine); }, QUIET_CHECK_MS);
-}
-
-/**
- * Signed in, or as another account: the quiet check starts over for it, then
- * goes every five minutes, whatever the page. The first complete scan learns
- * what is already waiting, including items beyond Home's display limit.
- */
-function startQuietCheck(account: Expect): void {
-  stopQuietCheck();
-  quiet = { account, seen: null, homeSeen: new Map(), told: [], items: new Map() };
-  void quietCheck(quietSeq);
-}
-
-/** Signed out, or the account forgotten: no more checks, and what they saw goes. */
-function stopQuietCheck(): void {
-  quietSeq += 1;
-  if (quietTimer) clearTimeout(quietTimer);
-  quietTimer = null;
-  quiet = null;
-}
-
-/**
- * Home read its rows: those handoffs are seen. Keep the quiet scan's cadence
- * and its per-item baseline; Home may show only twenty of many assignments.
- */
-function heard(items: readonly OpenItemView[]): void {
-  if (!quiet || !sameAccount(quiet.account) || !homeInSight()) return;
-  const homeSeen = new Map(quiet.homeSeen);
-  for (const item of items) if (item.state === 'open' && item.owner.membership_id === quiet.account.membership_id) {
-    const at = waitingSince(item);
-    if (at > (homeSeen.get(item.item_id) ?? '')) homeSeen.set(item.item_id, at);
-  }
-  quiet = { ...quiet, homeSeen };
-}
-
-/**
- * One quiet check (F8): every page of open follow-ups, rows only, with no
- * live reads, sweeps or runs. Only a complete scan advances the baseline;
- * a failed page is retried next turn without losing unseen assignments.
- * Notifications are bounded batches, excluding an item whose page is open.
- * A reply for an account no longer signed in is dropped.
- */
-async function quietCheck(mine: number): Promise<void> {
-  const watched = quiet;
-  if (mine !== quietSeq || !watched) return;
-  const result = await readItems(watched.account, { scope: 'mine', states: ['open'], read: 'rows' }, null, Number.POSITIVE_INFINITY);
-  if (mine !== quietSeq || !quiet || !sameAccount(watched.account)) return;
-  if (result.ok) {
-    const items = result.pages.flatMap(page => page.items);
-    const { seen, fresh } = newFollowUps(quiet.seen, quiet.homeSeen, items, watched.account.membership_id);
-    const open = followUpShown();
-    const untold = fresh.filter(item => open?.kind !== 'item' || open.item_id !== item.item_id);
-    quiet = { ...quiet, seen, homeSeen: new Map(), items: new Map(items.map(item => [item.item_id, item])) };
-    for (let offset = 0; offset < untold.length; offset += NOTICE_ITEMS_MAX) {
-      const notice = followUpsNotice(untold.slice(offset, offset + NOTICE_ITEMS_MAX));
-      if (!notice) continue;
-      if (notice.item_ids.length === 1) quiet = { ...quiet, told: [...quiet.told, ...notice.item_ids].slice(-TOLD_KEPT) };
-      void rpc('notify.followUps', notice);
+export function openNotified(target: NoticeTarget): void {
+  if (!expect() || (state.compose && !state.compose.hidden) || newProjectInTheWay() || state.sheet || projectSettingsModal()) return;
+  if (!freshness.wasTold(target)) return;
+  switch (target.kind) {
+    case 'follow-ups':
+      void openYourFollowUps(true);
+      return;
+    case 'project': {
+      const project = [...state.projects.items, ...state.archivedProjects.items].find(entry => entry.project_id === target.project_id);
+      if (project) void openProject(project);
+      return;
+    }
+    case 'item': {
+      const shown = followUpShown();
+      if (shown?.kind === 'item' && shown.item_id === target.item_id) void readItem(shown.seq);
+      else void openFollowUp(target.item_id, freshness.toldRow(target.item_id), true);
     }
   }
-  armQuietCheck();
-}
-
-/**
- * A follow-ups notification was clicked, and the window comes forward: the
- * item's page over the page on screen, or the Follow-ups page for several. Only
- * an item this account was told of opens, so one told before a sign-out or a
- * switch opens nothing. Capture, a sheet or a dialog that is up stays, as for
- * the tray.
- */
-export function openNotified(item_id: string | undefined): void {
-  if (!expect() || (state.compose && !state.compose.hidden) || newProjectInTheWay() || state.sheet || projectSettingsModal()) return;
-  if (item_id === undefined) { void openYourFollowUps(true); return; }
-  if (!quiet?.told.includes(item_id) || !sameAccount(quiet.account)) return;
-  const shown = followUpShown();
-  if (shown?.kind === 'item' && shown.item_id === item_id) void readItem(shown.seq);
-  // Its row from the check shows at once, then the page reads it again.
-  else void openFollowUp(item_id, quiet.items.get(item_id) ?? null, true);
 }

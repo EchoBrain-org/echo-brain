@@ -102,8 +102,14 @@ const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pi
 const opened = (id: string, extra: Partial<OpenItemView> = {}): OpenItemView => ({ ...item(id), reach: 'opened', current: { source: ticket, says_now: `Says ${id}` }, ...extra });
 const summary: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
-/** The runs requests sent, but for reads of Home's rows (Home's own, each before its live read, and the quiet check's: notify.test.ts). */
-const notificationScan = (request: { operation?: string; scope?: string; read?: string; states?: readonly string[] }) => request.operation === 'items' && request.scope === 'mine' && request.read === 'rows' && request.states?.join() === 'open';
+/**
+ * The runs requests sent, but for reads of Home's rows (Home's own, each before its live read) and the change check's reads
+ * of the open follow-ups you are involved in (freshness.test.ts).
+ */
+const notificationScan = (request: { operation?: string; scope?: string; read?: string; states?: readonly string[] }) => request.operation === 'items'
+  && (request.scope === 'mine' || request.scope === 'involved') && request.read === 'rows' && request.states?.join() === 'open';
+/** Every request but the change check's, which goes on at the server's pace whatever Home does (desktop refresh v1). */
+const polls = () => rpc.mock.calls.filter(([method]) => method !== 'changes.read');
 const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows') && !notificationScan(params.request));
 /** Reads of what waits on you: each Home read starts with its rows. */
 const rowsReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'home' && params.request.read === 'rows').length;
@@ -165,7 +171,10 @@ beforeEach(() => {
       case 'open.ref': return unavailable;
       // A project's tools line: it reads nothing.
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
-      case 'app.setUnresolved': case 'notify.followUps': return ok(null);
+      case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
+      // The change check: nothing moves unless a test says.
+      case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60,
+        areas: { projects: `sha256:${'0'.repeat(64)}`, follow_ups: `sha256:${'1'.repeat(64)}`, reviews: `sha256:${'2'.repeat(64)}` } });
       case 'people.directory': return ok({ items: [RAFAEL], next_cursor: null });
       case 'account.tools': {
         if (failTools) return { ok: false, failure: { code: 'transport_failed', retryable: true } };
@@ -537,9 +546,9 @@ describe('Home decisions and impact checks', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(homeReads()).toBe(3);
     expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
-    const requests = rpc.mock.calls.length;
+    const requests = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(requests);
+    expect(polls()).toHaveLength(requests);
   });
 
   it('reads what waits on you again on the next poll after that read failed', async () => {
@@ -558,9 +567,9 @@ describe('Home decisions and impact checks', () => {
     failLists = true;
     const store = await start();
     expect(store.getState().home?.failure).toBeUndefined();
-    const requests = rpc.mock.calls.length;
+    const requests = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(requests);
+    expect(polls()).toHaveLength(requests);
   });
 
   it('keeps the rows a failed home read had, and shows no error for it', async () => {
@@ -729,9 +738,9 @@ describe('Sweeps from Home', () => {
     expect(store.homeRows().map(row => row.kind)).toEqual(['review']);
     expect(store.getState().home?.open).toMatchObject({ landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' });
     // Then Home stops looking.
-    const calls = rpc.mock.calls.length;
+    const calls = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(calls);
+    expect(polls()).toHaveLength(calls);
   });
 
   it('starts a sweep that went back to the queue again, waiting longer after each start that starts nothing', async () => {
@@ -813,9 +822,9 @@ describe('Sweeps from Home', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     // Read as ended: what waits on you is read again, and then Home stops looking.
     expect(requests('home')).toHaveLength(homeReads + 1);
-    const calls = rpc.mock.calls.length;
+    const calls = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(calls);
+    expect(polls()).toHaveLength(calls);
     expect(requests('sweep')).toHaveLength(1);
   });
 
@@ -830,9 +839,9 @@ describe('Sweeps from Home', () => {
     expect(store.homeRows()).toEqual([]);
     // A sweep that failed at once is seen ended on the next look at most; then nothing more is read.
     await vi.advanceTimersByTimeAsync(5_000);
-    const calls = rpc.mock.calls.length;
+    const calls = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(calls);
+    expect(polls()).toHaveLength(calls);
     expect(store.homeRows()).toEqual([]);
   });
 });
@@ -1892,10 +1901,10 @@ describe('Rows first, then what each says now', () => {
     store.resume();
     await flush();
     expect(reads()).toEqual(['unsent+open']);
-    // Back on the list: the rows it shows are read live now.
+    // Back on the list: ECHO came back meanwhile, so its rows are read again, then what they show is read live.
     store.closeFollowUp();
     await flush();
-    expect(reads()).toEqual(['unsent+open', 'unsent+open live']);
+    expect(reads()).toEqual(['unsent+open', 'unsent+open', 'unsent+open live']);
     expect(shown(store).map(entry => entry.reach)).toEqual(['opened']);
   });
 

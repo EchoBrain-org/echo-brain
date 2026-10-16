@@ -24,8 +24,8 @@ import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
   hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, projectSettingsModal, readUpdate, refreshStatus, resume, retryStart,
-  sheetShown, shownItem, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS,
-  windowShown, windowTakesDrop, type State,
+  sheetShown, shownItem, signinPhase, systemWoke, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore,
+  WARNINGS, windowHidden, windowShown, windowTakesDrop, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -115,19 +115,21 @@ function App() {
     const stops = [
       on('capture.open', () => { if (getState().status?.signed_in) openCapture(); }),
       on('lifecycle.conceal', conceal),
-      on('lifecycle.resume', resume),
+      // Coming back and the window coming forward read what shows again, covered or not; only the caret waits for the cover to go.
+      on('lifecycle.resume', () => { void resume(); }),
       on('window.shown', () => {
-        if (getState().concealed) return;
         void windowShown();
-        focusBar();
+        if (!getState().concealed) focusBar();
       }),
+      on('window.hidden', windowHidden),
+      on('system.woke', systemWoke),
       on('signin.phase', payload => signinPhase(payload.browser_opened)),
       on('host.restarted', () => { void refreshStatus(); }),
       on('host.failed', hostFailed),
       on('account.command', payload => accountCommand(payload.command)),
       on('organization.open', () => { if (getState().status?.signed_in) trayOrganization(); }),
       on('update.changed', updateChanged),
-      on('follow-ups.open', payload => openNotified(payload.item_id)),
+      on('notice.open', payload => openNotified(payload.target)),
     ];
     // One Escape handler for the whole window: it steps back exactly one level.
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); escape(); } };

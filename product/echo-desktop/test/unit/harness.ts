@@ -59,10 +59,33 @@ export class Held {
 type Handler = (params: Record<string, unknown>) => unknown;
 
 /**
+ * Moves of the change check's areas a test makes by hand: each bump moves
+ * that area's fingerprint. The projects fingerprint also follows the lists,
+ * so a project list changed elsewhere moves it by itself.
+ */
+export const moved = { projects: 0, follow_ups: 0, reviews: 0 };
+
+/** A fingerprint as the Authority writes one: `sha256:` and 64 hex digits, here made from any text. */
+export function digest(text: string): string {
+  let hash = 0;
+  for (const character of text) hash = (Math.imul(hash, 31) + character.charCodeAt(0)) >>> 0;
+  return `sha256:${hash.toString(16).padStart(8, '0').repeat(8)}`;
+}
+
+/** The change check, as `changes.read` answers it, for these lists and the moves made so far. */
+export function changesFor(lists: { active: ProjectSummary[]; archived: ProjectSummary[] }, seconds = 60) {
+  return ok({
+    kind: 'echo-person-changes-v1', check_again_after_seconds: seconds,
+    areas: { projects: digest(JSON.stringify([lists, moved.projects])), follow_ups: digest(`f${moved.follow_ups}`), reviews: digest(`r${moved.reviews}`) },
+  });
+}
+
+/**
  * An rpc for the store: held replies first, then the test's own handlers,
  * then what every page needs to open quietly. Anything else is a test error.
  */
 export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () => { active: ProjectSummary[]; archived: ProjectSummary[] }) {
+  Object.assign(moved, { projects: 0, follow_ups: 0, reviews: 0 });
   return async (method: string, params: Record<string, unknown>) => {
     const pending = held.take(method);
     if (pending) return pending;
@@ -77,7 +100,8 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
       case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
       case 'search.run': return ok({ items: [] });
-      case 'ask.cancel': return ok(null);
+      case 'ask.cancel': case 'notice.show': case 'log.changes': return ok(null);
+      case 'changes.read': return changesFor(lists());
       case 'runs': return fail('unavailable', { retryable: true });
     }
     throw new Error(`Unexpected request: ${method}`);
