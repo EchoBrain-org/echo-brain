@@ -19,12 +19,13 @@ test('Back keeps the pages Home had loaded, and showing the window re-reads them
   await page.getByTestId('sidebar-project').nth(12).click();
   await page.getByTestId('back').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
-  expect(lists()).toBe(2);
+  // The sidebar's two pages, and the first check's full read of both, which learns every project Ari is in.
+  await expect.poll(lists).toBe(4);
   // Renamed elsewhere: the change check says your projects moved, and both pages shown are read again, so what shows is what
-  // the Authority has now; More stays gone.
+  // the Authority has now; More stays gone. Every page is read again too, to tell a project Ari was added to.
   writeFileSync(join(run.home, 'renamed'), '');
   await emit(app, 'echo-test:shown');
-  await expect.poll(lists).toBe(4);
+  await expect.poll(lists).toBe(8);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
   await expect(page.getByTestId('sidebar-project').first()).toContainText('Project 1, renamed');
   await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
@@ -65,7 +66,8 @@ for (const event of ['shown', 'resume'] as const) {
     } else await emit(app, 'echo-test:shown');
     await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
     await expect(page.getByTestId('sidebar-project')).toContainText('Thermostat redesign');
-    expect(lists()).toBe(before + 1);
+    // The sidebar's page, and the full read that tells which projects Ari was added to.
+    await expect.poll(lists).toBe(before + 2);
     await expect(card.getByLabel('Owner for: Send the revised quote')).toHaveValue('Rafael M.');
     await expect(card.getByRole('radio', { name: 'Only me' })).toHaveAttribute('aria-checked', 'true');
     await expect(card.getByLabel('Share the transcript with them too')).toBeChecked();

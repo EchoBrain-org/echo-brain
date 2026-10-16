@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ItemPage } from '../../src/renderer/store.js';
 import type { Account, OpenItemView } from '../../src/shared/protocol.js';
 import { ME, MINA, RAFAEL, authority, followUp, id, nextCheck, owned, sent, stated, changesHandlers } from './changes-fixture.js';
-import { ACCOUNT, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, flush, Held, keysetPage, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -148,6 +148,25 @@ describe('what notifies (N2)', () => {
     expect(notices()).toEqual([{ text: 'You were added to Comet', target: { kind: 'project', project_id: comet.project_id } }]);
   });
 
+  it('a project you were added to that sorts past the sidebar\'s pages, once, opening it though no sidebar row has it', async () => {
+    authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
+    const store = await signedIn();
+    expect(store.getState().projects.items).toHaveLength(10);
+    // The oldest project there is: past every page the sidebar shows.
+    const oldest = project(40, 1, { name: 'Oldest', role: 'member' });
+    authority.active = [...authority.active, oldest];
+    await nextCheck();
+    expect(notices()).toEqual([{ text: 'You were added to Oldest', target: { kind: 'project', project_id: oldest.project_id } }]);
+    expect(store.getState().projects.items.map(row => row.name)).not.toContain('Oldest');
+    // Another move tells nothing new.
+    authority.active = authority.active.map(row => (row.name === 'Project 2' ? { ...row, name: 'Project 2, renamed' } : row));
+    await nextCheck();
+    expect(notices()).toHaveLength(1);
+    store.openNotified({ kind: 'project', project_id: oldest.project_id });
+    await flush();
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { name: 'Oldest' } });
+  });
+
   it('a project you lead that was made before the last check: someone else made you its lead', async () => {
     await signedIn();
     authority.active = [project(1, 10, { name: 'Old', role: 'lead' })];
@@ -221,6 +240,39 @@ describe('what never notifies (N3)', () => {
     await nextCheck();
     expect(notices()).toEqual([]);
     expect(store.getState().projects.items.map(row => row.name)).toEqual(['Made elsewhere', 'Made here', 'Project 1']);
+  });
+
+  it('the first check learns every page of your projects, active and archived, without a word', async () => {
+    authority.active = Array.from({ length: 25 }, (_, index) => project(index + 2, 28 - index));
+    authority.archived = [project(50, 2, { status: 'archived' })];
+    await signedIn();
+    const reads = rpc.mock.calls.filter(([method]) => method === 'projects.list').map(([, params]) => `${params.status}${params.cursor ? ' more' : ''}`);
+    // The sidebar's first page of each, then all three active pages and the archived one.
+    expect(reads.sort()).toEqual(['active', 'active', 'active more', 'active more', 'archived', 'archived']);
+    await nextCheck();
+    expect(notices()).toEqual([]);
+  });
+
+  it('a full read of your projects that fails part-way tells nothing, and the next move tells it', async () => {
+    authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
+    let refuseMore = false;
+    const fixture = changesHandlers();
+    rpc.mockImplementation(rpcFor(new Held(), {
+      ...fixture,
+      'app.status': () => ok({ signed_in: true, account: ACCOUNT }),
+      'projects.list': params => (refuseMore && params.cursor ? { ok: false, failure: { code: 'unavailable', retryable: true } }
+        : ok(keysetPage(params.status === 'archived' ? authority.archived : authority.active, params.cursor))),
+    }, () => ({ active: authority.active, archived: authority.archived })));
+    await startStore();
+    const oldest = project(40, 1, { name: 'Oldest', role: 'member' });
+    authority.active = [...authority.active, oldest];
+    refuseMore = true;
+    await nextCheck();
+    expect(notices()).toEqual([]);
+    refuseMore = false;
+    authority.active = [project(41, 29, { name: 'Newest', role: 'member' }), ...authority.active];
+    await nextCheck();
+    expect(notices()).toEqual([{ text: 'Added to 2 projects', target: { kind: 'project', project_id: project(41, 29).project_id } }]);
   });
 
   it('a project that was behind More all along, now in the pages shown', async () => {

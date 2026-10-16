@@ -133,7 +133,9 @@ apart after failures), whenever you come back or the window comes forward
 (a second return within 2 s is the same one), when you open a page (at most
 once in 10 s), and when the machine wakes. Projects moved: the sidebar is
 read again, the open project's header follows its row, and a project you can
-no longer open goes Home, saying so. Follow-ups moved: every page of the open
+no longer open goes Home, saying so; every page of your projects is read too,
+as at the first check, so a project you were added to is told however far
+past the sidebar's pages it sorts. Follow-ups moved: every page of the open
 follow-ups you sent, own or last handed on is read again, rows only, and each
 compared with the last read; one that left them is read by its id. Then
 whatever shows of them (Home, Follow-ups, an item page, a project's or a

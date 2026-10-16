@@ -10,7 +10,7 @@ import type { PersonChangesAreaV1, PersonChangesV1 } from '@echo-brain/organizat
 // you are involved in, and being added to a project, come as one system
 // notification per check. The store keeps its loaders; this module only says
 // when they run.
-import type { Expect, Failure, Notice, NoticeTarget, OpenItemsView, OpenItemView, ProjectSummary, Result } from '../shared/protocol.js';
+import type { Expect, Failure, Notice, NoticeTarget, OpenItemsView, OpenItemView, ProjectPage, ProjectSummary, Result } from '../shared/protocol.js';
 import { NOTICE_TEXT_MAX } from '../shared/protocol.js';
 import { rpc } from './api.js';
 import { clip } from './format.js';
@@ -38,12 +38,6 @@ const TOLD_KEPT = 20;
 /** Failures that say the account is gone, not the check. */
 const ACCOUNT_GONE = ['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'];
 
-/** The sidebar's two lists as they show: their rows, and whether More has more. */
-export interface Lists {
-  readonly active: { readonly items: readonly ProjectSummary[]; readonly next: string | null };
-  readonly archived: { readonly items: readonly ProjectSummary[]; readonly next: string | null };
-}
-
 /** What the store gives this module: who is signed in, the sidebar, and its quiet re-reads of what shows. */
 export interface Surfaces {
   account(): Expect | null;
@@ -51,7 +45,6 @@ export interface Surfaces {
   covered(): boolean;
   /** The account read again. */
   status(): Promise<void>;
-  lists(): Lists;
   /** The quiet multi-page sidebar read, the open project then following its row; false when it did not finish. */
   refreshSidebar(): Promise<boolean>;
   /** What shows read again quietly: the page on screen (`page`, R4), and what moved areas feed (R3). */
@@ -73,7 +66,12 @@ interface Loop {
   mode: 'changes' | 'fallback';
   /** Each area's fingerprint as last acted on; null until a check learns them. */
   areas: Record<Area, string> | null;
-  /** When the projects as the sidebar shows them were last checked, on this computer's clock. */
+  /**
+   * Every project you belong to, active and archived, as the last full read of your projects had them: null until a full
+   * read learns them. Only the first check and a move of `projects` read them all.
+   */
+  memberships: Map<string, ProjectSummary> | null;
+  /** When `memberships` was read, on this computer's clock: the last check, for a project you lead made since. */
   projectsAt: number;
   /** The open follow-ups you are involved in, as last read: null until a read learns them. */
   followed: Map<string, OpenItemView> | null;
@@ -99,7 +97,7 @@ let returning: Promise<void> | null = null;
 /** Projects made on this desktop: being in one you made is never news. */
 const created = new Set<string>();
 /** What this account was notified of, as keys a click may open, and the rows those notifications were about. */
-let told: { account: Expect; keys: string[]; rows: Map<string, OpenItemView> } | null = null;
+let told: { account: Expect; keys: string[]; rows: Map<string, OpenItemView>; projects: Map<string, ProjectSummary> } | null = null;
 /** `changes unsupported` is logged once a run of the app. */
 let unsupportedLogged = false;
 
@@ -126,9 +124,9 @@ function visible(): boolean { return !hidden && surfaces?.covered() === false; }
 /** Signed in, or switched to another account: a new loop, whose first check learns and never notifies (R2, N4). */
 export function start(account: Expect): void {
   stop();
-  loop = { account, mode: 'changes', areas: null, projectsAt: Date.now(), followed: null, scope: 'involved', pace: PACE_SECONDS.default * 1000,
+  loop = { account, mode: 'changes', areas: null, memberships: null, projectsAt: Date.now(), followed: null, scope: 'involved', pace: PACE_SECONDS.default * 1000,
     failures: 0, timer: null, running: null, began: Number.NEGATIVE_INFINITY };
-  told = { account, keys: [], rows: new Map() };
+  told = { account, keys: [], rows: new Map(), projects: new Map() };
   void check('start');
 }
 
@@ -192,30 +190,30 @@ async function once(run: Loop): Promise<Outcome> {
   run.pace = Math.min(PACE_SECONDS.max, Math.max(PACE_SECONDS.min, Number.isFinite(seconds) ? seconds : PACE_SECONDS.default)) * 1000;
   const fresh = result.value.areas;
   if (run.areas === null) {
-    // The first check learns where things are: the fingerprints, and the follow-ups you are involved in.
+    // The first check learns where things are: the fingerprints, every project you belong to, and the follow-ups you are
+    // involved in.
     run.areas = { ...fresh };
-    run.projectsAt = run.began;
-    await followUpsMoved(run);
+    await Promise.all([learnMemberships(run), followUpsMoved(run)]);
     return 'ok';
   }
   const known = run.areas;
   const moved = AREAS.filter(area => fresh[area] !== known[area]);
   if (moved.length === 0) return 'ok';
   void ask(() => rpc('log.changes', { moved }));
-  const [adds, events] = await Promise.all([
-    moved.includes('projects') ? projectsMoved(run) : Promise.resolve([]),
+  const [projects, events] = await Promise.all([
+    moved.includes('projects') ? projectsMoved(run) : Promise.resolve(null),
     moved.includes('follow_ups') ? followUpsMoved(run) : Promise.resolve([]),
   ]);
   if (loop !== run) return 'ok';
+  const adds = projects?.adds ?? [];
   // An area whose read did not finish keeps its old fingerprint, so the next check reads it again.
   run.areas = {
-    projects: moved.includes('projects') && adds !== null ? fresh.projects : known.projects,
+    projects: projects !== null && projects.sidebar ? fresh.projects : known.projects,
     follow_ups: moved.includes('follow_ups') && events !== null ? fresh.follow_ups : known.follow_ups,
     reviews: fresh.reviews,
   };
-  if (moved.includes('projects') && adds !== null) run.projectsAt = run.began;
   reread(moved.filter((area): area is ScreenArea => area !== 'projects'));
-  tell(run, events ?? [], adds ?? []);
+  tell(run, events ?? [], adds);
   return 'ok';
 }
 
@@ -295,40 +293,65 @@ export function createdHere(projectId: string): void { created.add(projectId); }
 
 // ---- projects ------------------------------------------------------------------------
 
-/** One project before another in the Authority's order: newest first, then by id. */
-function sortsBefore(a: ProjectSummary, b: ProjectSummary): boolean {
-  return a.created_at > b.created_at || (a.created_at === b.created_at && a.project_id < b.project_id);
+/** Every page of your active and archived projects, or null when a page could not be read. Each page is audited: only the first check and a move of `projects` read them. */
+async function readMemberships(run: Loop): Promise<Map<string, ProjectSummary> | null> {
+  const all = new Map<string, ProjectSummary>();
+  for (const status of ['active', 'archived'] as const) {
+    let cursor: string | null = null;
+    do {
+      const page: Result<ProjectPage> = await ask<ProjectPage>(() => rpc('projects.list', { expect: run.account, status, ...(cursor === null ? {} : { cursor }) }));
+      if (loop !== run) return null;
+      if (!page.ok) {
+        if (ACCOUNT_GONE.includes(page.failure.code)) surfaces?.accountLost(page.failure);
+        return null;
+      }
+      for (const project of page.value.items) all.set(project.project_id, project);
+      cursor = page.value.next_cursor;
+    } while (cursor !== null);
+  }
+  return all;
+}
+
+/** The first check: every project you belong to, learned without a word. */
+async function learnMemberships(run: Loop): Promise<void> {
+  const read = await readMemberships(run);
+  if (loop !== run || read === null) return;
+  run.memberships = read;
+  run.projectsAt = run.began;
 }
 
 /**
- * The projects you were added to, from the sidebar before and after it was
- * read again: an id new to it, unless it was made on this desktop, or you lead
- * it and it was made after the last check (your own, made elsewhere). One past
- * the last row a list showed before may have been behind its More all along:
- * it is not counted.
+ * The projects you were added to: those in the full read (`now`) that were not
+ * among every project you belonged to at the last one (`known`), however far
+ * past the sidebar's pages they sort. Not one made on this desktop, nor one
+ * you lead that was made after the last check (`since`): yours, made
+ * elsewhere.
  */
-export function projectAdds(before: Lists, after: Lists, made: ReadonlySet<string>, since: number): ProjectSummary[] {
-  const known = new Set([...before.active.items, ...before.archived.items].map(project => project.project_id));
-  const adds: ProjectSummary[] = [];
-  for (const list of ['active', 'archived'] as const) {
-    const last = before[list].next === null ? undefined : before[list].items.at(-1);
-    for (const project of after[list].items) {
-      if (known.has(project.project_id) || made.has(project.project_id)) continue;
-      if (last !== undefined && !sortsBefore(project, last)) continue;
-      if (project.role === 'lead' && Date.parse(project.created_at) > since) continue;
-      adds.push(project);
-    }
-  }
-  return adds;
+export function projectAdds(known: ReadonlyMap<string, ProjectSummary>, now: ReadonlyMap<string, ProjectSummary>, made: ReadonlySet<string>, since: number): ProjectSummary[] {
+  return [...now.values()].filter(project => !known.has(project.project_id) && !made.has(project.project_id)
+    && !(project.role === 'lead' && Date.parse(project.created_at) > since));
 }
 
-/** Projects moved: the sidebar is read again, whatever the window shows, and what it newly has is told. Null when that read did not finish. */
-async function projectsMoved(run: Loop): Promise<ProjectSummary[] | null> {
-  if (!surfaces) return null;
-  const before = surfaces.lists();
-  const done = await surfaces.refreshSidebar();
-  if (loop !== run || !done) return null;
-  return projectAdds(before, surfaces.lists(), created, run.projectsAt);
+/**
+ * Projects moved: the sidebar reads again the pages it shows, whatever the
+ * window shows, and every project you belong to is read in full, to tell the
+ * ones you were added to. A full read that did not finish tells nothing and
+ * keeps what the last one learned, so the next move tells them. `sidebar` is
+ * whether the sidebar's read finished.
+ */
+async function projectsMoved(run: Loop): Promise<{ sidebar: boolean; adds: ProjectSummary[] }> {
+  const [sidebar, read] = await Promise.all([surfaces?.refreshSidebar() ?? Promise.resolve(false), readMemberships(run)]);
+  if (loop !== run || read === null) return { sidebar, adds: [] };
+  const known = run.memberships;
+  run.memberships = read;
+  const since = run.projectsAt;
+  run.projectsAt = run.began;
+  return { sidebar, adds: known === null ? [] : projectAdds(known, read, created, since) };
+}
+
+/** A project a notification was about, as the full read had it: it opens even when the sidebar has not loaded its row. */
+export function toldProject(projectId: string): ProjectSummary | null {
+  return told?.projects.get(projectId) ?? null;
 }
 
 // ---- follow-ups -------------------------------------------------------------------
@@ -485,6 +508,8 @@ function tell(run: Loop, events: readonly FollowUpEvent[], adds: readonly Projec
   told.keys = [...told.keys.filter(key => key !== keyOf(notice.target)), keyOf(notice.target)].slice(-TOLD_KEPT);
   for (const event of untold) told.rows.set(event.item.item_id, event.item);
   while (told.rows.size > TOLD_KEPT) told.rows.delete(told.rows.keys().next().value!);
+  for (const project of adds) told.projects.set(project.project_id, project);
+  while (told.projects.size > TOLD_KEPT) told.projects.delete(told.projects.keys().next().value!);
   void ask(() => rpc('notice.show', notice));
 }
 

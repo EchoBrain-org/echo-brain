@@ -164,7 +164,8 @@ describe('project lists on foreground refresh', () => {
     if (event === 'shown') await store.windowShown();
     else { store.conceal(); store.resume(); await flush(); }
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(9))]);
-    expect(activeLists().length - before).toBe(1);
+    // The sidebar's one page, and the change check's full read of every page (14 rows: two), which tells what you were added to.
+    expect(activeLists().length - before).toBe(1 + 2);
     expect(store.getState().route.page).toBe('project');
     await store.loadProjects(true);
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(13))]);
@@ -194,7 +195,8 @@ describe('project lists on foreground refresh', () => {
     active = [created('New'), ...active];
     await store.windowShown();
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(19))]);
-    expect(activeLists().length - before).toBe(2);
+    // The sidebar's two pages, and the full read of every page (23 rows: three).
+    expect(activeLists().length - before).toBe(2 + 3);
     expect(store.getState().route.page).toBe('project');
     await store.loadProjects(true);
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(22))]);

@@ -159,6 +159,10 @@ from rows the caller may read under the same policy as the matching read:
       fresh sidebar row.
     - If the open project is gone, ECHO goes Home and shows a toast that you
       no longer have access to it.
+    - Every page of your projects, active and archived, is also read, to find
+      the ones you were added to (N2), however far past the sidebar's pages
+      they sort. The first check reads them all too, to learn them. These full
+      reads happen only then, since each page is audited.
   - *`follow_ups`:* every page of the open `involved` rows is read
     rows-only. `involved` pages oldest first by creation (section 1.5), so a
     change can be on any page and there is no early stop. Each row is
@@ -215,10 +219,12 @@ from rows the caller may read under the same policy as the matching read:
     are involved in.
   - *Handed on:* the owner changed to someone other than you on an item you
     sent or last handed on.
-  - *Added to a project:* a project id is new in your list. It is not notified
-    when it was created on this desktop, or when you lead it and it was
-    created after the last check, which is taken to be your own creation from
-    elsewhere.
+  - *Added to a project:* a project id is new among every project you belong
+    to, active and archived, read in full (R3). It is not notified when it was
+    created on this desktop, or when you lead it and it was created after the
+    last check, which is taken to be your own creation from elsewhere. A full
+    read that fails part-way notifies nothing and keeps what the last one
+    learned, so the next move notifies it.
 - **N3. What never notifies:**
   - checks;
   - your own actions, from any device;

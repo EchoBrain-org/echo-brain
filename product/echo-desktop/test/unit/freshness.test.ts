@@ -166,7 +166,8 @@ describe('what a moved area reads again (R3)', () => {
     const before = [lists('active'), lists('archived')];
     authority.active = [{ ...apollo, name: 'Apollo, renamed', role: 'member' }];
     await nextCheck();
-    expect([lists('active') - before[0]!, lists('archived') - before[1]!]).toEqual([1, 1]);
+    // Each list: the sidebar's page, and the full read that tells which projects you were added to.
+    expect([lists('active') - before[0]!, lists('archived') - before[1]!]).toEqual([2, 2]);
     expect(store.getState().route).toMatchObject({ page: 'project', project: { name: 'Apollo, renamed', role: 'member', status: 'active' } });
     expect(calls('log.changes').map(([, params]) => params)).toEqual([{ moved: ['projects'] }]);
     // Archived elsewhere: it moves to Archived, and the page says so.

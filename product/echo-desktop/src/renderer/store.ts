@@ -3992,7 +3992,6 @@ freshness.configure({
   account: expect,
   covered: () => state.concealed,
   status: refreshStatus,
-  lists: () => ({ active: state.projects, archived: state.archivedProjects }),
   refreshSidebar,
   reread: rereadShown,
   itemShown: () => {
@@ -5601,7 +5600,9 @@ export function openNotified(target: NoticeTarget): void {
       void openYourFollowUps(true);
       return;
     case 'project': {
-      const project = [...state.projects.items, ...state.archivedProjects.items].find(entry => entry.project_id === target.project_id);
+      // Its row, or, for one past the sidebar's pages, the project as the change check's full read had it.
+      const project = [...state.projects.items, ...state.archivedProjects.items].find(entry => entry.project_id === target.project_id)
+        ?? freshness.toldProject(target.project_id);
       if (project) void openProject(project);
       return;
     }
