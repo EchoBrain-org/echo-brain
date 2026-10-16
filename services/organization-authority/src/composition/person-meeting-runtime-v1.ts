@@ -23,7 +23,7 @@ import { FileOrganizationAuthoritySigner } from '../adapters/security/file-organ
 import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
-import { approvalProposalSummaryV1, approvalProposalTextV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1 } from './approval-core-v1.js';
+import { approvalProposalSummaryV1, approvalProposalTextV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationAuthorityProcessingCycleV1 } from './organization-authority-service-lifecycle.js';
@@ -48,6 +48,8 @@ export interface PersonMeetingProviderV1 {
   }>;
   source(setting: MeetingIntakeSettingV1, current: () => void): MeetingSourceAdapter & { requireCurrent(): void };
 }
+/** The meetings waiting for one person's review, by approval id and status only (the change check, ADR-0036). */
+export type PersonReviewStatusesV1 = (person: MeetingIntakePersonV1) => readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[];
 export function meetingIntakePersonV1(value: MeetingIntakePersonV1): MeetingIntakePersonV1 {
   return { organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id };
 }
@@ -454,7 +456,20 @@ export function createPersonMeetingRuntimeV1(options: {
   }
   return { applications: [...providers.map(p => p.connection_http), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,
     attachDiagnostics(value: PersonDiagnosticsV1) { diagnostics = value; },
-    tools: async (token: string) => providers.map(p => p.tool(token)), approvals, close() {} };
+    tools: async (token: string) => providers.map(p => p.tool(token)), approvals,
+    /**
+     * The change check's `reviews` area (desktop refresh and notifications v1, ADR-0036): each meeting `reviews` lists for a
+     * person, by approval id and status only, behind the same membership check. The approval core is ready once this resolves,
+     * so the read it returns is synchronous and runs inside the check's read transaction.
+     */
+    async reviewStatuses(): Promise<PersonReviewStatusesV1> {
+      const core = await approvals();
+      return person => {
+        const reviewer = meetingIntakePersonV1(person);
+        return allowed(() => intake.currentPerson(reviewer)) ? core.proposalStatuses(reviewer) : [];
+      };
+    },
+    close() {} };
 }
 /**
  * Opens the shared runtime over the Authority's state directory: the extraction-attempt ledger, the Authority

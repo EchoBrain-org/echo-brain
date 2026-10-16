@@ -29,9 +29,12 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * and reads live only the rows it shows; `counts` (`items` only) answers the
  * counts and stages alone and opens nothing. `items` with `states` pages over
  * the items in those states only, so a list reads its current work first and
- * never opens a closed item to throw it away. Each decision's counts say how
- * many of its open items last landed or could not be read, and its stage
- * says whether its impact run is the caller's own (`mine`).
+ * never opens a closed item to throw it away; `mine` and `involved` with
+ * `changed_since` page over the items sent, handed on or set since then, so a
+ * change check's reader pages only what moved, not every closed item. Each
+ * decision's counts say how many of its open items last landed or could not
+ * be read, and its stage says whether its impact run is the caller's own
+ * (`mine`).
  *
  * Sweep (open items and Home v1, sections 6 and 7) rechecks open items
  * against what was decided and keeps only a verdict per item. `sweep` asks for
@@ -68,14 +71,21 @@ export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: PersonDiagnosticCaptureIdV1 }
   | { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }
-  | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
+  | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'involved' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
       readonly read?: PersonOpenItemsReadV1;
       /**
        * Items in these states only (a non-empty subset, each once; never beside `counts`): the page and its cursor go over them
        * alone, while the summary and stages still cover the whole scope. A cursor pages the same list: the caller sends the same
        * states with it.
        */
-      readonly states?: readonly PersonOpenItemStateV1[] }
+      readonly states?: readonly PersonOpenItemStateV1[];
+      /**
+       * `mine` and `involved` only, never beside `counts` (desktop refresh and notifications v1; ADR-0036): items whose latest
+       * of when they were sent, their owner set and their state set is at or after this UTC millisecond time. Like `states`, it
+       * narrows the page and its cursor alone (the caller sends it again with a cursor); the summary and stages still cover the
+       * whole scope.
+       */
+      readonly changed_since?: string }
   | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string; readonly read?: 'rows' }
   | { readonly schema_version: 1; readonly operation: 'send'; readonly run_id: string; readonly command_id: string;
       /**
@@ -237,7 +247,8 @@ const RESULT_KEYS: Readonly<Record<keyof PersonRunsResultsV1, readonly string[] 
   item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'], sweep: null,
 });
 const START_STATES: readonly string[] = ['pending', 'running', 'busy', 'done', 'failed'];
-const SCOPES = ['mine', 'run', 'record', 'project'] as const;
+/** `involved` (desktop refresh and notifications v1; ADR-0036): `mine` plus the items you last handed on, that you may read. */
+const SCOPES = ['mine', 'involved', 'run', 'record', 'project'] as const;
 /** A sweep checks the caller's items, a decision's or a project's; a run's items are its decision's. */
 const SWEEP_SCOPES = ['mine', 'record', 'project'] as const;
 const SET_STATES = ['open', 'done', 'not_relevant'] as const;
@@ -351,7 +362,7 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const kind = operation as PersonRunsRequestV1['operation'];
   // `items` may leave out its scope id and its cursor, and may ask for items in some states only; `home`, `items` and `item` may
   // say how much to read; a sweep of `mine` names no id.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states'] : kind === 'home' || kind === 'item' ? ['read'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
+  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states', 'changed_since'] : kind === 'home' || kind === 'item' ? ['read'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
@@ -368,20 +379,26 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id') });
     case 'items': {
       const scope = oneOf(request.scope, SCOPES, 'Runs request scope');
-      // `mine` names no id; every other scope names its run, record or project.
-      if ((scope === 'mine') === Object.hasOwn(request, 'id')) fail('Runs request scope id is invalid');
+      // `mine` and `involved` name no id; every other scope names its run, record or project.
+      const personal = scope === 'mine' || scope === 'involved';
+      if (personal === Object.hasOwn(request, 'id')) fail('Runs request scope id is invalid');
       const read = readMode(request, ['rows', 'counts'] as const);
       const filtered = Object.hasOwn(request, 'states');
       // Counts cover the whole scope at once and list no items: no next page to ask for, and nothing to filter.
       if (read.read === 'counts' && (Object.hasOwn(request, 'cursor') || filtered)) fail('Runs request counts takes no cursor or states');
       const states = filtered ? list(request.states, 'Runs request states', ITEM_STATES.length, 1).map(state => oneOf(state, ITEM_STATES, 'Runs request state')) : [];
       unique(states, 'Runs request states');
+      // What changed since a time: one person's own items only, and a list to page, never the counts of a whole scope.
+      const since = Object.hasOwn(request, 'changed_since');
+      if (since && (!personal || read.read === 'counts')) fail('Runs request changed_since is for a mine or involved list');
+      if (since) assertTimestamp(request.changed_since, 'Runs request changed_since');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, scope,
-        ...(scope === 'mine' ? {} : { id: scopeId(scope, request.id) }),
+        ...(scope === 'mine' || scope === 'involved' ? {} : { id: scopeId(scope, request.id) }),
         ...(Object.hasOwn(request, 'cursor') ? { cursor: matching(request.cursor, CURSOR, 'Runs request cursor') } : {}),
         ...read,
         ...(filtered ? { states: Object.freeze(states) } : {}),
+        ...(since ? { changed_since: request.changed_since as string } : {}),
       });
     }
     case 'item':

@@ -1,7 +1,7 @@
 // ECHO desktop main process: windows, tray, shortcuts and the IPC broker. It
 // never reads the session or holds a token; the person host does that.
 import {
-  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, protocol, session, shell,
+  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, powerMonitor, protocol, session, shell,
   Tray, utilityProcess, type IpcMainInvokeEvent, type MenuItemConstructorOptions, type UtilityProcess,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
@@ -13,9 +13,10 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, externalSourcePermalink, followUpsNotification, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, plainJsonBytes, remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
+  changesLogLine, externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, noticeOf, plainJsonBytes,
+  remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
-  type Result, type UpdateState,
+  type Notice, type Result, type UpdateState,
 } from '../shared/protocol.js';
 import { installRefusal, startUpdater, updateCode, updaterSetup, type ClientUpdateModule, type Updater } from './update.js';
 
@@ -394,10 +395,17 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       }
       return { ok: true, value: null };
     }
-    case 'notify.followUps': {
-      const notice = followUpsNotification(params);
+    case 'notice.show': {
+      const notice = noticeOf(params);
       if (!notice) return refused();
-      notifyFollowUps(notice);
+      showNotice(notice);
+      return { ok: true, value: null };
+    }
+    case 'log.changes': {
+      // Codes only: area names from the contract, never a digest or an id.
+      const line = changesLogLine(params);
+      if (!line) return refused();
+      log(line);
       return { ok: true, value: null };
     }
   }
@@ -412,6 +420,8 @@ ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> 
   const method = typeof named === 'string' && (hostMethods.has(named) || mainMethods.has(named)) ? named : '?';
   if (result.ok && STATUS_METHODS.has(method)) accountChanged(result.value as AppStatus);
   const requestId = (request as { params?: { request_id?: unknown } })?.params?.request_id;
+  // A log line the page asked for is its own record: the call that wrote it adds nothing.
+  if (method === 'log.changes') return result;
   // A runs call names its operation ("runs.items rows"), so a slow live read can be told from a quick rows one.
   log(`${rpcLogName(method, (request as { params?: unknown })?.params)} ${result.ok ? 'ok' : result.failure.code}` +
     `${typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId) ? ` ${requestId}` : ''} ${Date.now() - started}ms`);
@@ -507,19 +517,61 @@ function send<N extends EventName>(name: N, payload: Events[N]): void {
   window?.webContents.send('event', { name, payload });
 }
 
-/** Another app in front, or ECHO back in front: the page covers, then uncovers, what it shows. */
-const concealApp = () => send('lifecycle.conceal', {});
-const resumeApp = () => send('lifecycle.resume', {});
+/**
+ * Where the window stands: on screen (shown, not minimized, and on macOS not
+ * covered by other windows or on another Space, which macOS reports as hidden
+ * and shown), and in front (ECHO the active app on macOS; elsewhere, one of its
+ * windows focused). The page covers what it shows while ECHO is not in front,
+ * holds its screen reads while the window cannot be seen, and reads again when
+ * it comes back: on screen and in front again. Main works it out on every
+ * native event and tells the page only when it changes; desktop.log records
+ * each change as a code. Test builds never follow the machine: their window is
+ * on screen and in front until a test hook says otherwise.
+ */
+/** Test builds: where the test says the window stands. */
+let testState: Events['window.state'] = { onScreen: true, front: true };
+/** What the page was last told. It starts as the page assumes: a test window on screen and in front, a real one not yet shown. */
+let windowState: Events['window.state'] = test.ECHO_DESKTOP_HIDDEN ? testState : { onScreen: false, front: true };
+/** The window's own show and hide events, which on macOS also follow it being covered and uncovered. */
+let shownOnScreen = false;
+/** ECHO is the active app (macOS). */
+let active = true;
 
-// Linux has no app-level focus events: the window's own stand in for them.
-// Hidden tests drive lifecycle explicitly; native focus must not override their state.
-function concealAfterBlur(): void {
-  if (process.platform === 'darwin' || test.ECHO_DESKTOP_HIDDEN) return;
-  setTimeout(() => { if (!BrowserWindow.getFocusedWindow()) concealApp(); }, 150);
+function nativeState(): Events['window.state'] {
+  const onScreen = window !== null && !window.isDestroyed() && shownOnScreen && window.isVisible() && !window.isMinimized();
+  const front = process.platform === 'darwin' ? active : BrowserWindow.getFocusedWindow() !== null;
+  return { onScreen, front };
 }
 
-function resumeOnFocus(): void {
-  if (process.platform !== 'darwin' && !test.ECHO_DESKTOP_HIDDEN) resumeApp();
+function updateWindowState(next: Events['window.state'] = test.ECHO_DESKTOP_HIDDEN ? testState : nativeState()): void {
+  const was = windowState;
+  if (next.onScreen === was.onScreen && next.front === was.front) return;
+  windowState = next;
+  if (next.front !== was.front) log(next.front ? 'lifecycle resume' : 'lifecycle conceal');
+  if (next.onScreen && !was.onScreen) log('lifecycle shown');
+  send('window.state', next);
+}
+
+/** Native events the state follows. Linux reports a blur before focus moves between windows: it is looked at a moment later. */
+function windowShown(): void { shownOnScreen = true; updateWindowState(); }
+function windowHidden(): void { shownOnScreen = false; updateWindowState(); }
+function windowMoved(): void { updateWindowState(); }
+function windowBlurred(): void { setTimeout(() => updateWindowState(), 150); }
+function appActive(): void { active = true; updateWindowState(); }
+function appInactive(): void { active = false; updateWindowState(); }
+function wokeApp(): void { log('lifecycle wake'); updateWindowState(); send('system.woke', {}); }
+
+/**
+ * Test builds: the window as a hook puts it. Shown, it comes back as from the tray: off screen, then on screen; another app
+ * still in front keeps it covered until echo-test:resume.
+ */
+function testWindow(next: Partial<Events['window.state']>): void {
+  testState = { ...testState, ...next };
+  updateWindowState();
+}
+function testShown(): void {
+  testWindow({ onScreen: false });
+  testWindow({ onScreen: true });
 }
 
 // ---- window, tray, shortcuts -----------------------------------------------
@@ -546,8 +598,15 @@ function createWindow(): BrowserWindow {
   });
   // Quitting closes the window before macOS stops reporting app events.
   created.on('closed', () => { if (window === created) window = null; });
-  created.on('blur', concealAfterBlur);
-  created.on('focus', resumeOnFocus);
+  // Hidden tests drive the window's state with hooks: a hidden test window never follows the machine.
+  if (!test.ECHO_DESKTOP_HIDDEN) {
+    created.on('show', windowShown);
+    created.on('hide', windowHidden);
+    created.on('minimize', windowMoved);
+    created.on('restore', windowMoved);
+    created.on('focus', windowMoved);
+    created.on('blur', windowBlurred);
+  }
   void created.loadURL(`${ORIGIN}/index.html`);
   return created;
 }
@@ -557,7 +616,6 @@ function show(): void {
   window.show();
   window.focus();
   if (process.platform === 'darwin') app.focus({ steal: true });
-  send('window.shown', {});
 }
 
 function toggle(): void {
@@ -567,7 +625,7 @@ function toggle(): void {
 
 /** The window comes forward. Tests never put a window on screen or take focus from other apps: the page hears what show() tells it. */
 function bringForward(): void {
-  if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+  if (test.ECHO_DESKTOP_HIDDEN) testShown(); else show();
 }
 
 function capture(): void {
@@ -582,30 +640,30 @@ function openOrganization(): void {
   bringForward();
 }
 
-// ---- follow-ups notifications (F8) -------------------------------------------
+// ---- notifications (desktop refresh and notifications v1, N6) -------------------
 
 /** Notifications on screen, held so a click still reaches its handler; the oldest are let go past 20. */
 const notices = new Set<Notification>();
 /** Test builds: the notifications main would have shown, each clickable. */
-interface TestNotices { echoTestNotices?: { title: string; body: string; click: () => void }[] }
+interface TestNotices { echoTestNotices?: { title: string; body: string; target: Notice['target']; click: () => void }[] }
 
 /**
- * Follow-ups that newly wait on you, as one system notification titled ECHO.
- * A click opens its item's page, or the Follow-ups page for several, then the
- * window comes forward. Where the system has none, nothing shows.
+ * One system notification titled ECHO. A click brings the window forward and
+ * the page opens its target: a follow-up's page, Follow-ups, or a project.
+ * Where the system has none, nothing shows.
  */
-function notifyFollowUps({ body, item_id }: { body: string; item_id: string | null }): void {
+function showNotice({ text, target }: Notice): void {
   const open = () => {
-    send('follow-ups.open', item_id === null ? {} : { item_id });
+    send('notice.open', { target });
     bringForward();
   };
   // Tests never put a notification on the machine: they read and click what would have shown.
   if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_HIDDEN) {
-    ((globalThis as TestNotices).echoTestNotices ??= []).push({ title: 'ECHO', body, click: open });
+    ((globalThis as TestNotices).echoTestNotices ??= []).push({ title: 'ECHO', body: text, target, click: open });
     return;
   }
   if (!Notification.isSupported()) return;
-  const notice = new Notification({ title: 'ECHO', body });
+  const notice = new Notification({ title: 'ECHO', body: text });
   notice.on('click', () => { notices.delete(notice); open(); });
   notice.on('close', () => { notices.delete(notice); });
   notices.add(notice);
@@ -750,8 +808,8 @@ app.on('activate', bringForward);
 // Tests drive these with echo-test:conceal and echo-test:resume: a hidden test
 // window never follows which app the machine has in front.
 if (!test.ECHO_DESKTOP_HIDDEN) {
-  app.on('did-resign-active', concealApp);
-  app.on('did-become-active', resumeApp);
+  app.on('did-resign-active', appInactive);
+  app.on('did-become-active', appActive);
 }
 /** The wait for a refresh to finish, while it runs: another Quit joins it. */
 let draining: Promise<void> | null = null;
@@ -803,11 +861,13 @@ app.on('window-all-closed', () => { /* stays in the tray */ });
 if (__ECHO_TEST_HOOK__) {
   // Playwright cannot press a global shortcut; it emits these instead.
   (app as unknown as NodeJS.EventEmitter).on('echo-test:capture', capture);
-  (app as unknown as NodeJS.EventEmitter).on('echo-test:conceal', concealApp);
-  (app as unknown as NodeJS.EventEmitter).on('echo-test:resume', resumeApp);
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:conceal', () => testWindow({ front: false }));
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:resume', () => testWindow({ front: true }));
   (app as unknown as NodeJS.EventEmitter).on('echo-test:kill-host', () => { host?.kill(); });
-  // What show() tells the page, without putting a window on the test machine's screen.
-  (app as unknown as NodeJS.EventEmitter).on('echo-test:shown', () => send('window.shown', {}));
+  // What show() tells the page, without putting a window on the test machine's screen; and what hiding it and waking say.
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:shown', testShown);
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:hidden', () => testWindow({ onScreen: false }));
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:wake', wokeApp);
   // The updater never runs in test builds: tests set the row it would show.
   (app as unknown as NodeJS.EventEmitter).on('echo-test:update', (state: UpdateState) => setUpdate(state));
 }
@@ -829,10 +889,14 @@ async function runSmoke(): Promise<void> {
   checks.renderer_has_no_node = !inside.node;
   checks.bridge_present = inside.bridge;
   checks.test_hook_absent = !__ECHO_TEST_HOOK__;
-  // ECHO's own handlers, not a count: Electron adds window focus listeners of its own.
-  checks.lifecycle_wired = process.platform === 'darwin'
-    ? app.listeners('did-resign-active').includes(concealApp) && app.listeners('did-become-active').includes(resumeApp)
-    : probe.listeners('blur').includes(concealAfterBlur) && probe.listeners('focus').includes(resumeOnFocus);
+  // ECHO's own handlers, not a count: Electron adds window focus listeners of its own. Coming back (app focus on macOS, the
+  // window's focus elsewhere), the window hidden and restored, and the machine waking each reach the page.
+  checks.lifecycle_wired = (process.platform !== 'darwin'
+    || (app.listeners('did-resign-active').includes(appInactive) && app.listeners('did-become-active').includes(appActive))) &&
+    probe.listeners('show').includes(windowShown) && probe.listeners('hide').includes(windowHidden) &&
+    probe.listeners('minimize').includes(windowMoved) && probe.listeners('restore').includes(windowMoved) &&
+    probe.listeners('focus').includes(windowMoved) && probe.listeners('blur').includes(windowBlurred) &&
+    powerMonitor.listeners('resume').includes(wokeApp);
   quitting = true;
   probe.destroy();
   startHost();
@@ -863,6 +927,8 @@ void app.whenReady().then(() => {
     return new Response(file.body, { status: file.status, headers });
   });
   applicationMenu();
+  // The machine woke: the page checks what changed while it slept. powerMonitor is ready only now.
+  powerMonitor.on('resume', wokeApp);
   if (smoke) return void runSmoke();
   startHost();
   window = createWindow();

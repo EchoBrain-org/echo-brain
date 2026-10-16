@@ -59,8 +59,9 @@ found). "Open" is one status only: a total of not sent and open together is
 
 A **follow-ups list** is a meeting's (from its Send row, its line in the
 reader, its decision page, or a follow-up's page), a project's (from the line
-above its feed), or **Follow-ups**: everything you sent or own, in every
-status, from the sidebar or Home's footer. When that list is already open
+above its feed), or **Follow-ups**: everything you sent, own or last handed
+on, in every status, from the sidebar or Home's footer (on an Authority
+without that list, what you sent or own). When that list is already open
 under what shows, its links go back to it, ticks and place kept, instead of
 opening it again. Rows are grouped Not sent, Open, Done and Dismissed, each
 group counted over the whole list, the meeting's actions first; each row
@@ -112,7 +113,7 @@ Mina** (or **Keep it myself**) and **Dismiss** while it is not sent, **Mark
 done** and **Dismiss** while it is open, **Reopen** once closed (**Send to
 Mina** for one Send dismissed and nothing reopened since). The page shows
 its row at once (the row it was opened from, with what that list or Home read
-live of it, or the row the quiet check read for a notification), then reads it
+live of it, or the row the change check read for a notification), then reads it
 again from ECHO's own fields, and live only while nothing says yet what it
 says now (never a meeting's action). After a change the page stays and says
 what happened ("Done · Undo"), showing what the Authority answered at once,
@@ -124,15 +125,48 @@ changed, at the same place, with the row it was opened from in focus; Ask
 and another app in front keep that place too. The window's title names the
 list (Follow-ups, the meeting or the project) or the item shown.
 
-While you are signed in, ECHO scans all pages of your open follow-ups every
-five minutes, on any page and with the window hidden. It reads rows only,
-never tools, sweeps or runs. The first complete scan learns existing work;
-later scans compare each item's handoff time and notify new assignments,
-reassignments and reopens from someone else. Home acknowledges only the rows
-it showed, independently of its twenty-row limit. A failed page leaves the
-previous scan's baseline intact. Large batches use bounded notifications.
-An item whose page is open does not notify. Clicking a notification opens
-that item's page, or Follow-ups for a batch.
+While you are signed in, ECHO asks the Authority what moved in your own
+view (the change check, ADR-0036): one fingerprint each for your projects,
+the follow-ups you are involved in, and the meetings waiting for your review,
+never any content. It checks at sign-in (which only learns), at the pace the
+Authority sets (a minute today, 15 s to an hour, up to five minutes apart
+after failures), whenever you come back (the window on screen and in front
+again: from another app, the tray or the shortcut, minimized, or covered by
+other windows), when you open a page (at most once in 10 s), and when the
+machine wakes. At sign-in every page of your projects is read, which fills
+the sidebar and is what the first check learns from. Projects moved: every
+page is read again, so a project you were added to is told however far past
+the sidebar's pages it sorts; the sidebar shows as many pages of that read as
+it showed, the open project's header follows its row, and a project you can
+no longer open goes Home, saying so. Follow-ups moved: every page of the open
+follow-ups you sent, own or last handed on, and of those closed since the
+newest change seen, is read again side by side, rows only; each open one is
+compared with the last read, one that left them is settled by the closed
+read or else read by its id, and one sent and closed between two checks is
+told. Then whatever shows of them (Home, Follow-ups, an item page, a
+project's or a meeting's line) is read again quietly. Reviews moved: Home
+and the decision page. Coming back reads the page on screen again once, with
+what its check found moved (and the sidebar, when its last read failed or
+the check could not say whether projects moved), keeping what it shows. While the window is hidden, minimized or covered, or
+another app is in front, checks go on, and what shows is read once it can be
+seen. An Authority without the change check: ECHO scans what you sent or own,
+rows only, every five minutes and on wake, and notifies what someone else did
+among them; the sidebar is read again on each return, and Follow-ups lists
+what you sent or own.
+
+What someone else did to a follow-up you are involved in (handed to you, done,
+not relevant, reopened, or handed on, for one you sent or last handed on) and
+being added to a project come as one system notification per check ("Mina
+handed you Pricing page", "3 follow-ups changed", "You were added to
+Comet"). Your own changes from any device, checks, meetings and reviews,
+removals and role changes never notify, and neither does an item whose page
+is open while you look at it (its page is read again instead). Clicking a
+notification brings the window forward and opens that item's page, a list of
+exactly the follow-ups a summary counted (at most 100, each read again by its
+id, one you can no longer read left out), or the project; only what this
+account was told of opens, and a sheet or Capture that is up stays.
+desktop.log records `lifecycle conceal|resume|shown|wake`, `changes moved
+<areas>` (by area name only) and `changes unsupported`.
 
 Under the rows, and on an empty Home (with no projects too), a footer says how
 many items you sent wait on others and when ECHO last checked ("2 waiting on
@@ -148,8 +182,8 @@ item's latest verdict. A meeting's actions and items on a Slack message are
 never re-checked. Projects and archived projects live in the sidebar.
 
 Tools → Granola manages folder watching and individual meeting imports. Home and
-decision content is covered while another app is in front, and unfinished checks
-refresh when ECHO returns.
+decision content is covered while another app is in front, and is read again,
+unfinished checks included, when ECHO returns.
 
 ## Develop
 

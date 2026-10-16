@@ -7,19 +7,19 @@ import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
-  MainMethods, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
+  NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
   ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { isWriteCall, MAX_CAPTURE_PROJECTS, NOTICE_ITEMS_MAX, NOTICE_TEXT_MAX } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, sameExpect } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
+import * as freshness from './freshness.js';
 import { message } from './messages.js';
-import { clip } from './format.js';
-import { ACTIVE_STATES, CLOSED_STATES, firstName, itemTitle, reopenSends, sentWords } from './needs.js';
+import { ACTIVE_STATES, CLOSED_STATES, firstName, reopenSends, sentWords } from './needs.js';
 
-/** Mine: only what you added, to see and to ask about. Follow-ups: everything you sent or own. */
+/** Mine: only what you added, to see and to ask about. Follow-ups: everything you sent, own or last handed on. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision' }
   | { page: 'follow-ups' };
 
@@ -546,6 +546,8 @@ function set(patch: Partial<State>): void {
   // A held update click says what to settle only while it is unsettled, here or in main.
   if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
   listeners.forEach(listener => listener());
+  // A read owed to what shows may have been waiting on this change: a read of its own that landed, the window seen.
+  settleOwed();
 }
 
 export function useStore(): State {
@@ -609,8 +611,8 @@ function applyStatus(status: AppStatus): void {
   if (!next) {
     // A sign-out the host lost mid-way did happen: the account goes as it would have.
     if (signOutPending) { signOutPending = null; forgetAccount(); }
-    // No one to notify: signing in again starts over, learning what is there.
-    stopQuietCheck();
+    // No one to check for: signing in again starts over, learning what is there.
+    freshness.stop();
     emptyBar();
     // New project with work on its way stays, out of sight behind the sign-in page: its outcome is still owed, and the
     // same person signing back in finds it as it is. Another account's sign-in forgets it.
@@ -633,8 +635,10 @@ function applyStatus(status: AppStatus): void {
   lastAccount = { authority: next.authority, membership_id: next.membership_id };
   signOutPending = null;
   if (!same || !wasSignedIn) {
-    void loadProjects(); void loadArchivedProjects(); void loadHome();
-    startQuietCheck(lastAccount);
+    void loadHome();
+    // The change check starts over for this account: it reads every project you belong to (filling the sidebar), and its
+    // first check learns.
+    freshness.start(lastAccount);
     // New project kept through a sign-out goes on with what waited while no one was signed in.
     pumpNewProject();
   }
@@ -650,7 +654,7 @@ function forgetAccount(): void {
   if (state.sheet?.kind === 'tool-connect') cancelWaitingConnection(state.sheet, account);
   if (state.projectSettings?.tools) clearProjectMappings(state.projectSettings, account);
   stopRunPolling();
-  stopQuietCheck();
+  freshness.stop();
   runFailures = 0;
   openUnread = false;
   resultOwed = false;
@@ -760,6 +764,7 @@ export function openTools(fromTray = false): void {
   set({ route: { page: 'tools' }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null, barScope: { kind: 'global' },
     organization: null, tools: { seq: ++seq, loading: false, items: null } });
   syncSearch();
+  freshness.navigated();
   void loadToolList();
 }
 
@@ -768,17 +773,21 @@ function toolsPage(mine?: number): ToolsPage | null {
   return page && state.route.page === 'tools' && (mine === undefined || page.seq === mine) ? page : null;
 }
 
-/** The list, read (again): on opening, Try again, and after a connection changes. */
-export async function loadToolList(): Promise<void> {
+/**
+ * The list, read (again): on opening, Try again, and after a connection changes; and `quiet`ly when ECHO comes back, keeping
+ * what shows when that read fails.
+ */
+export async function loadToolList(quiet = false): Promise<void> {
   const account = expect();
   const page = toolsPage();
   if (!account || !page) return;
   const mine = page.seq;
-  set({ tools: { ...page, loading: true, failure: undefined } });
+  if (!quiet) set({ tools: { ...page, loading: true, failure: undefined } });
   const result = await rpc('account.tools', { expect: account });
   const current = toolsPage(mine);
   if (!current) return;
   if (!result.ok) {
+    if (quiet && current.items !== null) { if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure); return; }
     set({ tools: { ...current, loading: false, failure: result.failure } });
     accountLost(result.failure);
     return;
@@ -905,7 +914,7 @@ async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknow
   const account = expect();
   if (!account) throw new Error('Sign in to use meetings.');
   const result = await send(account);
-  if (JSON.stringify(expect()) !== JSON.stringify(account)) {
+  if (!sameExpect(expect(), account)) {
     if (!write) throw new Error('Account changed.');
     const unsent = !result.ok && result.failure.mutation_outcome === 'not_submitted';
     throw new CommandFailed({ code: 'account_changed', retryable: false, mutation_outcome: unsent ? 'not_submitted' : 'unknown' });
@@ -1066,36 +1075,99 @@ const refreshing = new Set<ListStatus>();
 
 function listChanged(): void { projectsEdition += 1; }
 
+/** One of the sidebar's lists, shown. */
+function showList(status: ListStatus, list: State['projects']): void { set(status === 'active' ? { projects: list } : { archivedProjects: list }); }
+
 /** Your active or archived projects: the first page again, or the next page appended. */
 async function loadProjectList(status: ListStatus, more: boolean): Promise<void> {
   const key = LIST_KEY[status];
-  const show = (list: State['projects']) => set(key === 'projects' ? { projects: list } : { archivedProjects: list });
   const account = expect();
   if (!account || (more && !state[key].next)) return;
   const cursor = more ? state[key].next ?? undefined : undefined;
-  show({ ...state[key], loading: true, failure: undefined });
+  showList(status, { ...state[key], loading: true, failure: undefined });
   const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
   if (!sameAccount(account)) return;
   if (!result.ok) {
     accountLost(result.failure);
-    show({ ...state[key], loading: false, failure: result.failure });
+    showList(status, { ...state[key], loading: false, failure: result.failure });
     refreshIfOwed(status);
     return;
   }
   if (status === 'active' && rolesChanged(result.value.items)) emptyBar();
   const items = appendPage(more ? state[key].items : [], result.value.items, project => project.project_id);
-  show({ items, next: result.value.next_cursor, loading: false });
+  showList(status, { items, next: result.value.next_cursor, loading: false });
   listChanged();
   refreshIfOwed(status);
 }
 
-function sameAccount(account: Expect): boolean {
-  const now = expect();
-  return now?.authority === account.authority && now.membership_id === account.membership_id;
-}
+function sameAccount(account: Expect): boolean { return sameExpect(expect(), account); }
 
 function refreshIfOwed(status: ListStatus): void {
-  if (refreshOwed.delete(status)) void (status === 'active' ? refreshProjects() : refreshProjectList('archived'));
+  if (refreshOwed.delete(status)) void (status === 'active' ? refreshSidebar() : refreshProjectList('archived'));
+}
+
+/** Pages of your projects of one status, from the first, each with the cursor after it: until they hold `enough` rows, or all. */
+async function readProjectPages(account: Expect, status: ListStatus, enough: number)
+  : Promise<{ ok: true; pages: ProjectPage[] } | { ok: false; failure: Failure } | null> {
+  const pages: ProjectPage[] = [];
+  for (let cursor: string | null = null, rows = 0; ;) {
+    const result: Result<ProjectPage> = await rpc('projects.list', { expect: account, status, ...(cursor === null ? {} : { cursor }) });
+    if (!sameAccount(account)) return null;
+    if (!result.ok) { accountLost(result.failure); return { ok: false, failure: result.failure }; }
+    pages.push(result.value);
+    rows += result.value.items.length;
+    cursor = result.value.next_cursor;
+    if (cursor === null || rows >= enough) return { ok: true, pages };
+  }
+}
+
+/**
+ * A list read again from its first page, shown as far as it showed (`shown` rows, a page at least), More going on from the
+ * last page shown: not over a page on its way (More, Try again), after which it is read again; at sign-in (`first`), over its
+ * loading.
+ */
+function showProjectList(status: ListStatus, pages: readonly ProjectPage[], shown: number, first = false): boolean {
+  if (!first && state[LIST_KEY[status]].loading) { refreshOwed.add(status); return false; }
+  const items: ProjectSummary[] = [];
+  let next: string | null = null;
+  for (const page of pages) {
+    items.push(...page.items.filter(project => !items.some(row => row.project_id === project.project_id)));
+    next = page.next_cursor;
+    if (items.length >= shown) break;
+  }
+  if (status === 'active' && rolesChanged(items)) emptyBar();
+  showList(status, { items, next, loading: false });
+  return true;
+}
+
+/**
+ * Every page of your active and archived projects, side by side: what the
+ * change check tells adds from, which also feeds the sidebar as many pages as
+ * it shows, so the same audited pages are not read twice (at sign-in, `first`,
+ * the sidebar says it is loading, and a list that could not be read says so,
+ * with Try again). A change made here meanwhile has the sidebar read what it
+ * shows again. Read again (not at sign-in), the open project then follows its
+ * row. Null when a page could not be read.
+ */
+async function readProjects(first: boolean): Promise<ReadonlyMap<string, ProjectSummary> | null> {
+  const account = expect();
+  if (!account) return null;
+  const statuses = ['active', 'archived'] as const;
+  if (first) set({ projects: { items: [], next: null, loading: true }, archivedProjects: { items: [], next: null, loading: true } });
+  const edition = projectsEdition;
+  const reads = await Promise.all(statuses.map(status => readProjectPages(account, status, Number.POSITIVE_INFINITY)));
+  if (!sameAccount(account)) return null;
+  statuses.forEach((status, index) => {
+    const read = reads[index];
+    const key = LIST_KEY[status];
+    if (!read?.ok) { if (first && read) showList(status, { ...state[key], loading: false, failure: read.failure }); }
+    else if (edition !== projectsEdition && !first) void refreshProjectList(status);
+    else showProjectList(status, read.pages, first ? 0 : state[key].items.length, first);
+  });
+  if (first) listChanged();
+  if (!reads.every(read => read?.ok)) return null;
+  if (!first) await followOpenProject();
+  return new Map(reads.flatMap(read => (read?.ok ? read.pages.flatMap(page => page.items.map(project => [project.project_id, project] as const)) : [])));
 }
 
 /** A project you were lead of is now one you are a member of, or the other way: a change of access. */
@@ -1110,12 +1182,50 @@ export function goHome(): void {
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
     organization: null, decision: null });
   syncSearch();
+  freshness.navigated();
   void loadHome();
 }
 
-/** The window came forward: the sidebar's lists read again, on every page; the archived one once the active one could be. */
-async function refreshProjects(): Promise<void> {
-  if (await refreshProjectList('active')) void refreshProjectList('archived');
+/**
+ * The sidebar's lists read again, quietly, side by side, over as many pages
+ * as each shows; then the open project's header follows its row: on a return
+ * with no change check to say whether projects moved, and after a page that
+ * waited a refresh.
+ */
+async function refreshSidebar(): Promise<void> {
+  const read = await Promise.all([refreshProjectList('active'), refreshProjectList('archived')]);
+  if (read.every(Boolean)) await followOpenProject();
+}
+
+/**
+ * The project on screen, after the sidebar was read again: its header (name,
+ * role, status) from its row; a new role for you in it is a change of access,
+ * so the bar's text goes. Not in the lists read, it is read on its own, unless
+ * they were read to their end; a project you can no longer open sends you
+ * Home, saying so (R3).
+ */
+async function followOpenProject(): Promise<void> {
+  const account = expect();
+  const opened = state.route.page === 'project' ? state.route.project.project_id : null;
+  if (!account || opened === null) return;
+  let row = [...state.projects.items, ...state.archivedProjects.items].find(project => project.project_id === opened);
+  if (!row && (state.projects.next !== null || state.archivedProjects.next !== null)) {
+    const result = await rpc('projects.read', { expect: account, project_id: opened });
+    if (!sameAccount(account) || (!result.ok && !['not_found', 'unauthorized', 'forbidden'].includes(result.failure.code))) return;
+    row = result.ok ? result.value : undefined;
+  }
+  const now = state.route.page === 'project' && state.route.project.project_id === opened ? state.route.project : null;
+  if (!now) return;
+  if (!row) {
+    // Its settings go with it, unless a change to it waits on the Authority's answer.
+    if (state.projectSettings?.project.project_id === opened && !projectSettingsBlocked()) set({ projectSettings: null });
+    forgetLeftProject(opened);
+    set({ toast: `You no longer have access to ${now.name}` });
+    return;
+  }
+  if (now.name === row.name && now.role === row.role && now.status === row.status) return;
+  if (now.role !== row.role) emptyBar();
+  set(sameProjectRoute({ ...now, name: row.name, role: row.role, status: row.status }));
 }
 
 /**
@@ -1138,23 +1248,10 @@ async function refreshProjectList(status: ListStatus): Promise<boolean> {
       if (state[key].loading) { if (state[key].items.length > 0) refreshOwed.add(status); return false; }
       const edition = projectsEdition;
       const shown = state[key].items.length;
-      const items: ProjectSummary[] = [];
-      let next: string | null = null;
-      let cursor: string | undefined;
-      for (;;) {
-        const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
-        if (!sameAccount(account)) return false;
-        if (!result.ok) { accountLost(result.failure); return false; }
-        items.push(...result.value.items.filter(project => !items.some(row => row.project_id === project.project_id)));
-        next = result.value.next_cursor;
-        cursor = next ?? undefined;
-        if (next === null || items.length >= shown) break;
-      }
+      const read = await readProjectPages(account, status, shown);
+      if (!read?.ok) return false;
       if (edition !== projectsEdition) continue;
-      if (state[key].loading) { refreshOwed.add(status); return false; }
-      if (status === 'active' && rolesChanged(items)) emptyBar();
-      set(key === 'projects' ? { projects: { items, next, loading: false } } : { archivedProjects: { items, next, loading: false } });
-      return true;
+      return showProjectList(status, read.pages, shown);
     }
     return false;
   } finally {
@@ -1172,6 +1269,7 @@ export async function openProject(project: ProjectSummary): Promise<void> {
     list: { scope: { kind: 'project', project_id: project.project_id }, opened: ++seq, items: [], next: null, loading: true },
   });
   syncSearch();
+  freshness.navigated();
   void loadRoster(project.project_id);
   void loadLine('projectLine', 'project', project.project_id);
   void loadProjectReads(project.project_id);
@@ -1193,7 +1291,7 @@ async function loadProjectReads(project_id: string): Promise<void> {
     const current = state.projectReads;
     // Save may already have confirmed this field while the initial read waited.
     if (current?.seq === mine && current[key] === undefined &&
-        expect()?.authority === account.authority && expect()?.membership_id === account.membership_id) {
+        sameAccount(account)) {
       set({ projectReads: { ...current, [key]: value } });
     }
   };
@@ -1224,6 +1322,7 @@ export async function openMine(): Promise<void> {
     list: { scope: { kind: 'mine' }, opened: ++seq, items: [], next: null, loading: true },
   });
   syncSearch();
+  freshness.navigated();
   await loadList('first');
 }
 
@@ -1702,7 +1801,7 @@ const confluenceMapping: MappingAdapter<'confluence'> = {
 function mappingAt<Tool extends MappingTool>(tool: Tool, account: Expect, opening: number) {
   const settings = state.projectSettings;
   const setting = settings?.[tool];
-  return settings && setting?.seq === opening && expect()?.authority === account.authority && expect()?.membership_id === account.membership_id
+  return settings && setting?.seq === opening && sameAccount(account)
     ? { settings, setting: setting as MappingSetting<Tool> } : undefined;
 }
 function setMapping<Tool extends MappingTool>(settings: ProjectSettingsState, tool: Tool, setting: MappingSetting<Tool>): void {
@@ -1715,7 +1814,7 @@ function setProjectTools(settings: ProjectSettingsState, patch: Partial<ProjectT
 /** Every reply belongs to this account and this opening of Tools. */
 function toolsAt(account: Expect, opening: number): ProjectSettingsState | undefined {
   const settings = state.projectSettings;
-  return settings?.tools?.seq === opening && expect()?.authority === account.authority && expect()?.membership_id === account.membership_id
+  return settings?.tools?.seq === opening && sameAccount(account)
     ? settings : undefined;
 }
 
@@ -2470,6 +2569,8 @@ export async function createProject(): Promise<void> {
     accountLost(result.failure);
     return;
   }
+  // Made here: being in it is never news.
+  freshness.createdHere(result.value.project_id);
   setNewProject({ create: { ...current.create, status: 'created' }, createdId: result.value.project_id }, mine);
   await openCreated();
 }
@@ -2911,6 +3012,7 @@ export function openOrganization(fromTray = false): void {
     },
   });
   syncSearch();
+  freshness.navigated();
   void loadEmployees();
 }
 
@@ -3220,9 +3322,6 @@ export function answerSources(current: State = state): readonly AnswerSource[] {
 export function answerGroups(current: State = state): SourceGroup[] {
   return sourceGroups(answerSources(current));
 }
-
-/** Access-level failures: a background read reports only these. */
-const ACCOUNT_GONE = ['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'];
 
 /**
  * An answer came on screen: its sources start unread, the pane closed, and
@@ -3813,14 +3912,39 @@ export function toggleSidebar(): void {
   try { localStorage.setItem(SIDEBAR_OPEN, String(open)); } catch { /* optional convenience */ }
 }
 
-// ---- concealment ---------------------------------------------------------------
+// ---- the window: covered, seen, and back ------------------------------------------
+
+/** The window is on screen (not hidden, minimized or covered by other windows), as main last said. */
+let windowOnScreen = true;
+
+/** The window can be seen: on screen, and not covered by another app in front. */
+function canSee(): boolean { return windowOnScreen && !state.concealed; }
+/** ECHO is coming back: what waited is read with the page, once the return's check says what moved. */
+let comingBack = false;
+
+/**
+ * Where the window stands, as main says when it changes. Not in front: the
+ * page is covered (the privacy cover), and its live reads and polls stop. In
+ * front: it uncovers. On screen and in front again: ECHO came back, and what
+ * shows is read again (R4). Owed reads wait while the window cannot be seen
+ * (R6). Answers the return's reads when it came back, else null.
+ */
+export function windowState(next: { onScreen: boolean; front: boolean }): Promise<void> | null {
+  const back = next.onScreen && next.front && !canSee();
+  if (back) comingBack = true;
+  windowOnScreen = next.onScreen;
+  if (!next.front && !state.concealed) conceal();
+  else if (next.front && state.concealed) set({ concealed: false });
+  settleOwed();
+  return back ? freshness.cameBack() : null;
+}
 
 /**
  * Another app is in front: cover the window until ECHO is back. The bar keeps
  * its text (out of sight over a covered page); its matches go, and are read
  * again for the account on return.
  */
-export function conceal(): void {
+function conceal(): void {
   stopRunPolling();
   // The source pane closes and forgets what it read; the records are read again on return.
   const reading = state.sources !== null;
@@ -3835,34 +3959,105 @@ export function conceal(): void {
   });
   syncSearch();
 }
-export function resume(): void {
-  if (!state.concealed) return;
-  set({ concealed: false });
-  void refreshStatus().then(() => {
-    searchAgain();
-    if (!state.concealed) void refreshProjects();
-    // The answer's records are read again. A chip chosen meanwhile keeps its pane open.
-    if (state.sources && !state.concealed) void readRecords(state.sources.gen);
-    // People & invites is read again for whoever is signed in now.
-    if (state.route.page === 'organization' && !state.concealed) void loadEmployees();
-    // Resume healthy or interrupted Home reads, including an open decision.
-    // A failed initial Home retains its explicit retry; an ongoing check or open
-    // decision resumes its interrupted retry when the window returns.
-    if (state.home && (!state.home.failure || homeNeedsPolling()) && !state.concealed) void loadHome();
-    // A list's live reads stopped while ECHO was behind another app: they go on.
-    const view = followUpShown();
-    if (view?.kind === 'list' && !state.concealed) void fillLive(view.seq);
-  });
+
+/**
+ * A part of what shows that a moved area, or coming back, reads again: the
+ * areas whose move it shows, whether it shows now, whether a read or change of
+ * its own is on its way, and its quiet read (`back`: ECHO came back, so Home
+ * reads every row live again).
+ */
+interface Surface {
+  readonly areas: readonly freshness.ScreenArea[];
+  shows(): boolean;
+  busy?(): boolean;
+  read(back: boolean): Promise<unknown>;
 }
 
-/** The window came forward (⌘E, the tray): refresh the account, sidebar and visible Home. */
-export async function windowShown(): Promise<void> {
-  if (state.concealed) return;
-  await refreshStatus();
-  searchAgain();
-  await refreshProjects();
-  if (state.route.page === 'home' && !state.concealed) void loadHome();
+const topView = () => { const view = followUpShown(); return view?.kind === 'list' || view?.kind === 'item' ? view : null; };
+const projectShown = () => (state.route.page === 'project' ? state.route.project : null);
+
+const SURFACES: readonly Surface[] = [
+  // Home, and the decision page over it: their rows, and the decision's check (only new rows read live, but on a return).
+  { areas: ['follow_ups', 'reviews'], shows: () => (state.route.page === 'home' || state.route.page === 'decision') && state.home !== null, read: back => loadHome(back) },
+  { areas: ['reviews'], shows: () => state.route.page === 'decision' && state.decision !== null,
+    busy: () => Boolean(state.decision?.loading || state.decision?.busy || state.decision?.unknown),
+    read: () => readDecision(state.decision!.seq, state.decision!.approval_id, true) },
+  // The follow-ups view on screen: those under it, and the page under them all, read again when they show.
+  { areas: ['follow_ups'], shows: () => topView() !== null, busy: () => Boolean(topView()?.loading || topView()?.busy), read: () => rereadViews() },
+  { areas: ['follow_ups'], shows: () => projectShown() !== null, read: () => loadLine('projectLine', 'project', projectShown()!.project_id) },
+  { areas: ['follow_ups'], shows: () => impactLineShown() !== null, read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
+  // The page itself, on a return: a project's feed and members, Mine, Tools, People & invites, a sidebar whose read failed,
+  // and the bar's matches.
+  { areas: [], shows: () => projectShown() !== null, read: () => Promise.all([loadList('quiet'),
+    state.roster?.projectId === projectShown()?.project_id ? loadRoster(state.roster!.projectId) : null]) },
+  { areas: [], shows: () => state.route.page === 'mine', read: () => loadList('quiet') },
+  { areas: [], shows: () => state.route.page === 'tools', read: () => loadToolList(true) },
+  { areas: [], shows: () => state.route.page === 'organization', read: () => loadEmployees() },
+  { areas: [], shows: () => Boolean(state.projects.failure || state.archivedProjects.failure), read: () => refreshSidebar() },
+  { areas: [], shows: () => true, read: async () => {
+    searchAgain();
+    // The answer's records are read again: another app in front forgot them.
+    if (state.sources) await readRecords(state.sources.gen);
+  } },
+];
+
+/** The meeting line the reader or the decision page shows. */
+function impactLineShown(): ItemsLine | null {
+  const line = state.impactLine;
+  return line && (state.route.page === 'decision' || (state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id)) ? line : null;
 }
+
+/** Surfaces owed a read, and whether for a return; and those whose read is on its way. */
+const owed = new Map<Surface, boolean>();
+const reading = new Set<Surface>();
+
+/** What shows of the moved areas (and, coming back, all that shows) is owed one quiet read each. */
+function owe({ back, areas }: { readonly back: boolean; readonly areas: readonly freshness.ScreenArea[] }): void {
+  if (back) comingBack = false;
+  if (!expect()) return;
+  for (const surface of SURFACES) {
+    if ((back || surface.areas.some(area => areas.includes(area))) && surface.shows()) owed.set(surface, back || owed.get(surface) === true);
+  }
+  settleOwed();
+}
+
+/**
+ * Owed reads run once the window can be seen (R6) and nothing of their own is
+ * on its way (its reply may predate what moved), one at a time each; owed
+ * again meanwhile, it runs once more after. Coming back, they wait for the
+ * return's own, so each is read once (R4). One that no longer shows is let
+ * go: opening it reads it. Every state change looks again.
+ */
+function settleOwed(): void {
+  if (owed.size === 0 || !canSee() || comingBack) return;
+  for (const [surface, back] of owed) {
+    if (reading.has(surface) || surface.busy?.()) continue;
+    owed.delete(surface);
+    if (!surface.shows()) continue;
+    reading.add(surface);
+    void surface.read(back).finally(() => { reading.delete(surface); settleOwed(); });
+  }
+}
+
+/** The follow-ups view on screen read again, rows only (then live what it newly lacks); those under it once they show. */
+async function rereadViews(): Promise<void> {
+  const stack = followUpsShown();
+  const top = topView();
+  if (!stack || !top) return;
+  const last = stack.views.length - 1;
+  set({ followUps: { ...stack, changed: true, views: stack.views.map((view, index) => (index < last ? { ...view, stale: true } : view)) } });
+  if (top.kind === 'list') await readList(top.seq, top.reads.length === 0 ? 'first' : 'again');
+  else if (!top.gone) await readItem(top.seq);
+}
+
+freshness.configure({
+  account: expect, seen: canSee, status: refreshStatus, readProjects, refreshSidebar, readItem: readOne, owe, accountLost,
+  readRows: async (account, query) => {
+    const read = await readItems(account, { scope: 'involved', read: 'rows', ...query }, null, Number.POSITIVE_INFINITY);
+    return read.ok ? read.pages.flatMap(page => page.items) : null;
+  },
+  itemShown: () => { const view = followUpShown(); return view?.kind === 'item' ? view.item_id : null; },
+});
 
 // ---- Home: what needs you ---------------------------------------------------------
 
@@ -4007,10 +4202,6 @@ function homeShown(mine?: number): HomeState | null {
 /** Home itself shows, with nothing over it: only then is what waits on you read live, each row opened in its tool. */
 function homeInSight(): boolean {
   return homeShown() !== null && state.route.page === 'home' && followUpsShown() === null;
-}
-
-function homeNeedsPolling(): boolean {
-  return resultOwed || sweepOwed !== null || state.route.page === 'decision' || homeRows().some(row => row.kind === 'checking');
 }
 
 /** The Home load on its way, if any; one more is owed after it when `homeAgain`. */
@@ -4159,14 +4350,13 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
 }
 
 /**
- * What waits on you: its rows at once, rows only from ECHO's own fields
- * (which also tell the quiet check what you saw, F8); then, only while Home
- * itself shows, read live (`readHomeLive`). `rows` settles with the rows
- * read, and its failure; `sweepDue` once the live read did.
+ * What waits on you: its rows at once, rows only from ECHO's own fields;
+ * then, only while Home itself shows, read live (`readHomeLive`). `rows`
+ * settles with the rows read, and its failure; `sweepDue` once the live read
+ * did.
  */
 function readWaiting(mine: number, fresh: boolean): { rows: Promise<Failure | undefined>; sweepDue: Promise<boolean> } {
   const rows = runsCommand({ schema_version: 1, operation: 'home', read: 'rows' }).then(value => {
-    heard(value.items);
     const home = homeShown(mine);
     if (home) set({ home: { ...home, open: value } });
     return undefined;
@@ -4360,6 +4550,7 @@ export async function openDecision(approval_id: string, run: PersonRunV1 | null 
     decision: newDecision(approval_id, mine, run),
   });
   syncSearch();
+  freshness.navigated();
   if (run?.state === 'done') void loadLine('impactLine', 'run', run.run_id);
   await readDecision(mine, approval_id);
 }
@@ -4368,19 +4559,31 @@ function newDecision(approval_id: string, mine: number, run: PersonRunV1 | null)
   return { approval_id, seq: mine, loading: true, open: null, command: crypto.randomUUID(), audience: 'only-me', project_ids: [], share: false, owners: [], busy: false, run };
 }
 
-/** What was proposed, and your choices on it. */
-async function readDecision(mine: number, approval_id: string): Promise<void> {
+/** A proposal's own choices: its suggested projects, and each action's proposed owner. */
+function choicesOf(open: ReviewOpen): Pick<DecisionState, 'audience' | 'project_ids' | 'owners'> {
+  return { audience: open.suggested_projects.length > 0 ? 'projects' : 'only-me', project_ids: open.suggested_projects.map(project => project.project_id),
+    owners: open.owners.map(owner => ({ signal_id: owner.signal_id, action: owner.action, owner: owner.proposed })) };
+}
+
+/**
+ * What was proposed, and your choices on it. Read again (`again`, quietly,
+ * while nothing on it is on its way), the same proposal keeps the choices made
+ * on it, a new one comes with its own under a new command, and a read that
+ * fails keeps what shows.
+ */
+async function readDecision(mine: number, approval_id: string, again = false): Promise<void> {
+  let open: ReviewOpen;
   try {
-    const open = await meetingCommand({ operation: 'review_open', approval_id });
-    const decision = decisionShown(mine);
-    if (!decision) return;
-    set({ decision: { ...decision, loading: false, open, audience: open.suggested_projects.length > 0 ? 'projects' : 'only-me',
-      project_ids: open.suggested_projects.map(project => project.project_id),
-      owners: open.owners.map(owner => ({ signal_id: owner.signal_id, action: owner.action, owner: owner.proposed })) } });
+    open = await meetingCommand({ operation: 'review_open', approval_id });
   } catch (error) {
     const decision = decisionShown(mine);
-    if (decision) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
+    if (decision && !again) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
+    return;
   }
+  const decision = decisionShown(mine);
+  if (!decision || (again && (decision.busy || decision.unknown))) return;
+  const same = again && decision.open?.snapshot_sha256 === open.snapshot_sha256;
+  set({ decision: { ...decision, loading: false, open, ...(same ? {} : { ...choicesOf(open), ...(again ? { command: crypto.randomUUID() } : {}) }) } });
 }
 
 function editDecision(patch: Partial<DecisionState>): void {
@@ -4546,19 +4749,23 @@ interface PartsRead { parts: readonly ListPart[]; pages: readonly ListPage[]; ne
 type ListRead = 'first' | 'again' | ListPart;
 
 /**
- * A follow-ups list: a meeting's (by its record), a project's, or yours
- * (everything you sent or own), a page at a time. Current work (Not sent and
- * Open) shows first, so it is never behind More; each closed group (Done,
- * Dismissed) shows its rows once opened: a meeting's start open, yours and a
- * project's closed ("Done · 12"). Not sent rows you may send are ticked to
- * Send or Dismiss them.
+ * Where a list's rows come from: a scope, a meeting's (`id` its record), a project's (`id`), or yours (`involved`: everything you
+ * sent, own or last handed on); or exactly the follow-ups a notification counted (`ids`), each read by its id.
  */
-export interface FollowUpList extends ChangeView {
+type ListSource = { scope: 'involved' | 'record' | 'project'; id?: string; ids?: never } | { scope?: never; id?: never; ids: readonly string[] };
+
+/**
+ * A follow-ups list, a page at a time. Current work (Not sent and Open) shows
+ * first, so it is never behind More; each closed group (Done, Dismissed) shows
+ * its rows once opened: a meeting's and a notification's start open, yours
+ * and a project's closed ("Done · 12"). Not sent rows you may send are ticked
+ * to Send or Dismiss them.
+ */
+export type FollowUpList = ListSource & ListFields;
+
+interface ListFields extends ChangeView {
   kind: 'list';
-  scope: 'mine' | 'record' | 'project';
-  /** The meeting's record or the project; yours name none. */
-  id?: string;
-  /** The meeting's title or the project's name; null for yours. */
+  /** The meeting's title, the project's name, or what a notification's list is; null for yours. */
   title: string | null;
   loading: boolean;
   /** The last read that failed, and why: Try again repeats it. */
@@ -4571,6 +4778,7 @@ export interface FollowUpList extends ChangeView {
   reading: boolean;
   /** Its parts read so far. */
   reads: readonly PartsRead[];
+  /** Its counts over the whole list; none for a notification's, whose groups count the rows it holds. */
   summary: OpenItemsView['summary'] | null;
   /** A meeting's own check, from its list's reads: `mine` when you approved it, so its decision page is yours to open. */
   stage: PersonImpactStageV1 | null;
@@ -4663,9 +4871,9 @@ function pushView(view: FollowUpView): void {
 
 const UNCHANGED = { busy: false, said: null, picker: null, stale: false } as const;
 
-function newList(scope: FollowUpList['scope'], id: string | undefined, title: string | null): FollowUpList {
-  return { kind: 'list', seq: ++seq, scope, ...(id === undefined ? {} : { id }), title, loading: true, items: [], live: {}, reading: false, reads: [], summary: null,
-    stage: null, ticks: {}, sends: {}, check: null, expanded: scope === 'record' ? { done: true, not_relevant: true } : {}, ...UNCHANGED };
+function newList(source: ListSource, title: string | null): FollowUpList {
+  return { kind: 'list', seq: ++seq, ...source, title, loading: true, items: [], live: {}, reading: false, reads: [], summary: null, stage: null, ticks: {},
+    sends: {}, check: null, expanded: source.scope === 'involved' || source.scope === 'project' ? {} : { done: true, not_relevant: true }, ...UNCHANGED };
 }
 
 /**
@@ -4678,23 +4886,42 @@ export function openFollowUps(scope: 'record' | 'project', id: string, title: st
   if (!expect() || state.concealed) return Promise.resolve();
   const at = followUpsShown()?.views.findIndex(view => view.kind === 'list' && view.scope === scope && view.id === id) ?? -1;
   if (at >= 0) { backTo(at); return Promise.resolve(); }
-  const list = newList(scope, id, title);
+  const list = newList({ scope, id }, title);
   pushView(list);
+  freshness.navigated();
   return readList(list.seq, 'first');
 }
 
 /**
- * Follow-ups (yours), from the sidebar or Home's footer: everything you sent or own, as a page of its own. The bar searches all
- * context. A notification's (`fromNotice`) comes while another app may still be in front.
+ * Follow-ups (yours), from the sidebar or Home's footer: everything you sent, own or last handed on (`involved`), as a page
+ * of its own. The bar searches all context.
  */
-export function openYourFollowUps(fromNotice = false): Promise<void> {
-  if (!expect() || (state.concealed && !fromNotice)) return Promise.resolve();
+export function openYourFollowUps(): Promise<void> {
+  if (!expect() || state.concealed) return Promise.resolve();
   readSeq += 1;
   const route: Route = { page: 'follow-ups' };
-  const list = newList('mine', undefined, null);
+  const list = newList({ scope: 'involved' }, null);
   set({ route, followUps: { route, views: [list], changed: false }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null,
     barScope: { kind: 'global' }, organization: null, decision: null });
   syncSearch();
+  freshness.navigated();
+  return readList(list.seq, 'first');
+}
+
+/**
+ * The follow-ups a notification counted, over the page on screen: exactly those, as you may see them now, each read by its
+ * id (its row from the check at once, then rows only, then live what each lacks); one you can no longer see is left out.
+ * Opened from the notification, while another app may still be in front. Already showing, it is read again.
+ */
+function openToldFollowUps(item_ids: readonly string[]): Promise<void> {
+  if (!expect()) return Promise.resolve();
+  const top = followUpShown();
+  if (top?.kind === 'list' && top.ids?.join() === item_ids.join()) return readList(top.seq, 'again');
+  // Read together, to their end: every group shows, with no More.
+  const list: FollowUpList = { ...newList({ ids: [...item_ids] }, 'Changed follow-ups'),
+    items: item_ids.flatMap(id => { const row = freshness.toldRow(id); return row ? [row] : []; }), reads: [{ parts: ['active', ...CLOSED_STATES], pages: [], next: null }] };
+  pushView(list);
+  freshness.navigated();
   return readList(list.seq, 'first');
 }
 
@@ -4717,8 +4944,11 @@ function statesOf(parts: readonly ListPart[]): PersonOpenItemStateV1[] {
   return parts.flatMap(part => (part === 'active' ? ACTIVE_STATES : [part]));
 }
 
-/** What an items read asks for: a scope, and the states and how much to read (none: live). */
-interface ItemsQuery { scope: FollowUpList['scope'] | 'run'; id?: string | undefined; states?: readonly PersonOpenItemStateV1[]; read?: 'rows' | 'counts' }
+/** What an items read asks for: a scope, the states, how much to read (none: live), and changed since when. */
+interface ItemsQuery {
+  scope: NonNullable<FollowUpList['scope']> | 'run'; id?: string | undefined; states?: readonly PersonOpenItemStateV1[]; read?: 'rows' | 'counts';
+  changed_since?: string;
+}
 
 /**
  * An items read's pages from `cursor`, until they hold `atLeast` rows or there is no next page: each with the cursor it was read
@@ -4728,9 +4958,11 @@ async function readItems(account: Expect, query: ItemsQuery, cursor: string | nu
   : Promise<{ ok: true; pages: { cursor: string | null; items: readonly OpenItemView[] }[]; last: OpenItemsView } | { ok: false; failure: Failure }> {
   const pages: { cursor: string | null; items: readonly OpenItemView[] }[] = [];
   for (let next = cursor, rows = 0; ;) {
-    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: query.scope,
+    // On an older Authority (no change check), what you are involved in is what you sent or own.
+    const scope = query.scope === 'involved' && freshness.olderAuthority() ? 'mine' : query.scope;
+    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope,
       ...(query.id === undefined ? {} : { id: query.id }), ...(query.states ? { states: query.states } : {}), ...(next === null ? {} : { cursor: next }),
-      ...(query.read ? { read: query.read } : {}) } });
+      ...(query.read ? { read: query.read } : {}), ...(query.changed_since === undefined ? {} : { changed_since: query.changed_since }) } });
     if (!result.ok) {
       if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
       return { ok: false, failure: result.failure };
@@ -4753,8 +4985,26 @@ async function readOne(account: Expect, item_id: string, live = false): Promise<
   return { failure: result.failure };
 }
 
+/** A read of a list's rows: its pages, each with the cursor it was read from, and the last one's next cursor, counts and stages. */
+type RowsRead = { ok: true; pages: { cursor: string | null; items: readonly OpenItemView[] }[]; last: Pick<OpenItemsView, 'next_cursor' | 'stages'> & { summary: OpenItemsView['summary'] | null } }
+  | { ok: false; failure: Failure };
+
+/**
+ * A list's rows, rows only or live (`live`: one page it read, by its rows). A scope's are its pages from `cursor`, until they
+ * hold `atLeast` rows. A notification's are each follow-up it counted, by its id, as a page of its own with nothing to count:
+ * one you can no longer see is left out.
+ */
+async function listRows(account: Expect, list: FollowUpList, states: readonly PersonOpenItemStateV1[], cursor: string | null, atLeast: number,
+  live?: readonly string[]): Promise<RowsRead> {
+  if (list.scope) return readItems(account, { scope: list.scope, id: list.id, states, ...(live ? {} : { read: 'rows' as const }) }, cursor, atLeast);
+  const reads = await Promise.all((live ?? list.ids).map(id => readOne(account, id, live !== undefined)));
+  const failed = reads.find((read): read is { failure: Failure } => 'failure' in read && !freshness.NO_LONGER_SEEN.includes(read.failure.code));
+  return failed ? { ok: false, failure: failed.failure }
+    : { ok: true, pages: reads.flatMap(read => ('item' in read ? [{ cursor: null, items: [read.item] }] : [])), last: { next_cursor: null, summary: null, stages: [] } };
+}
+
 /** A meeting's own check, by its record or its check (run), from a read's stages; none for a project or yours. */
-function stageFor(read: Pick<OpenItemsView, 'stages'>, scope: ItemsQuery['scope'], id: string | undefined): PersonImpactStageV1 | null {
+function stageFor(read: Pick<OpenItemsView, 'stages'>, scope: FollowUpList['scope'] | 'run', id: string | undefined): PersonImpactStageV1 | null {
   return scope === 'record' || scope === 'run' ? read.stages.find(stage => (scope === 'record' ? stage.record_sha256 : stage.run_id) === id) ?? null : null;
 }
 
@@ -4795,12 +5045,12 @@ async function readList(mine: number, how: ListRead): Promise<void> {
       return parts.length === 0 ? [] : [{ read: { parts, pages: [], next: null }, atLeast: Math.max(rowsOf(read), 1) }];
     })
     : [{ read: paged ?? { parts: [part!], pages: [], next: null }, atLeast: 1 }];
-  let reads = how === 'first' || how === 'again' ? [] : list.reads.filter(read => read !== paged);
+  let reads = part === null ? [] : list.reads.filter(read => read !== paged);
   let rows: OpenItemView[] = [];
-  let last: OpenItemsView | undefined;
+  let last: Extract<RowsRead, { ok: true }>['last'] | undefined;
   let failure: Failure | undefined;
   for (const { read, atLeast } of asked) {
-    const result = await readItems(account, { scope: list.scope, id: list.id, states: statesOf(read.parts), read: 'rows' }, read.pages.length > 0 ? read.next : null, atLeast);
+    const result = await listRows(account, list, statesOf(read.parts), read.pages.length > 0 ? read.next : null, atLeast);
     if (!result.ok) { failure = result.failure; break; }
     rows = [...rows, ...result.pages.flatMap(page => page.items)];
     reads = [...reads, { parts: read.parts, pages: [...read.pages, ...result.pages.map(page => ({ cursor: page.cursor, ids: page.items.map(item => item.item_id) }))],
@@ -4809,9 +5059,9 @@ async function readList(mine: number, how: ListRead): Promise<void> {
   }
   const current = viewOf('list', mine);
   if (!current) return;
-  // A read again that failed part way shows what it showed before.
-  if (failure && how === 'again') { setView({ ...current, loading: false, failed: { read: how, failure } }); return; }
-  const items = mergeRows(how === 'first' || how === 'again' ? [] : current.items, rows);
+  // A first read or a read again that failed shows what it showed before.
+  if (failure && part === null) { setView({ ...current, loading: false, failed: { read: how, failure } }); return; }
+  const items = mergeRows(part === null ? [] : current.items, rows);
   const ticked = how === 'first' && current.scope === 'record' ? items.filter(sendable) : items.filter(item => sendable(item) && current.ticks[item.item_id]);
   setView({
     ...current, loading: false, items, ...(failure ? { failed: { read: how, failure } } : { reads }),
@@ -4856,7 +5106,7 @@ async function fillLive(mine: number): Promise<void> {
         if (!wanted) break;
         tried.add(wanted.page);
         setView({ ...list, reading: true });
-        const result = await readItems(account, { scope: list.scope, id: list.id, states: statesOf(wanted.parts) }, wanted.page.cursor, 1);
+        const result = await listRows(account, list, statesOf(wanted.parts), wanted.page.cursor, 1, wanted.page.ids);
         const current = viewOf('list', mine);
         if (!current || !sameAccount(account)) return;
         // Read, each row's live part is new; failed, the rows it was to read say ECHO couldn't read them just now.
@@ -5033,6 +5283,7 @@ export function openFollowUp(item_id: string, shown: OpenItemView | null = null,
   const live = shown && (shown.reach === 'opened' || shown.reach === 'no_access') ? { [item_id]: livePart(shown) } : {};
   const page: ItemPage = { kind: 'item', seq: ++seq, item_id, item: shown, live, loading: true, send: null, ...UNCHANGED };
   pushView(page);
+  freshness.navigated();
   return readItem(page.seq);
 }
 
@@ -5090,15 +5341,16 @@ async function rereadRow(mine: number, item_id: string): Promise<OneRead | null>
   const account = expect();
   const list = viewOf('list', mine);
   if (!account || !list) return null;
-  const [read, counted] = await Promise.all([readOne(account, item_id), readItems(account, { scope: list.scope, id: list.id, read: 'counts' }, null, 1)]);
+  const [read, counted] = await Promise.all([readOne(account, item_id), list.scope && readItems(account, { scope: list.scope, id: list.id, read: 'counts' }, null, 1)]);
   const current = viewOf('list', mine);
   if (!current || !sameAccount(account)) return null;
-  // Yours lists what you sent or own: one you only owned and gave away leaves it.
-  const left = 'item' in read ? current.scope === 'mine' && read.item.approver.membership_id !== account.membership_id
-    && read.item.owner.membership_id !== account.membership_id : read.failure.code === 'not_found';
+  // Yours lists what you sent, own or last handed on: one you only owned, and someone else then handed on, leaves it.
+  const me = account.membership_id;
+  const left = 'item' in read ? current.scope === 'involved' && read.item.approver.membership_id !== me && read.item.owner.membership_id !== me
+    && read.item.owner_set_by?.membership_id !== me : read.failure.code === 'not_found';
   const items = left ? current.items.filter(item => item.item_id !== item_id)
     : 'item' in read ? current.items.map(item => (item.item_id === item_id ? read.item : item)) : current.items;
-  setView({ ...current, items, ...(counted.ok ? { summary: counted.last.summary, stage: stageFor(counted.last, current.scope, current.id) } : {}) });
+  setView({ ...current, items, ...(counted?.ok ? { summary: counted.last.summary, stage: stageFor(counted.last, current.scope, current.id) } : {}) });
   return read;
 }
 
@@ -5316,8 +5568,8 @@ function refreshUnder(): void {
   const route = state.route;
   if (route.page === 'home') void loadHome(false);
   if (route.page === 'project' && state.projectLine?.id === route.project.project_id) void loadLine('projectLine', 'project', route.project.project_id);
-  const line = state.impactLine;
-  if (line && (route.page === 'decision' || (state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id))) void loadLine('impactLine', line.scope, line.id);
+  const line = impactLineShown();
+  if (line) void loadLine('impactLine', line.scope, line.id);
 }
 
 /**
@@ -5352,7 +5604,7 @@ export async function openListDecision(): Promise<void> {
  */
 export async function checkNow(): Promise<void> {
   const list = shownView('list');
-  if (!list || list.scope === 'mine' || list.id === undefined || list.check === 'checking' || !expect() || state.concealed) return;
+  if (!list || list.id === undefined || list.scope === 'involved' || list.check === 'checking' || !expect() || state.concealed) return;
   const request = { schema_version: 1 as const, operation: 'sweep' as const, scope: list.scope, id: list.id };
   setView({ ...list, check: 'checking' });
   // Still this list's check, while the list is open.
@@ -5424,152 +5676,33 @@ async function followSweep(runId: string, ours: () => boolean): Promise<'done' |
   }
 }
 
-// ---- notifications: follow-ups that newly wait on you (F8) ---------------------------------
-
-/** How often the quiet check pages through open follow-ups while someone is signed in. */
-const QUIET_CHECK_MS = 5 * 60_000;
-/** The notifications main keeps on screen: only one of theirs can be clicked. */
-const TOLD_KEPT = 20;
-/** The quiet check's next read, and its turn: bumped whenever it stops, so a reply for an earlier turn is dropped. */
-let quietTimer: ReturnType<typeof setTimeout> | null = null;
-let quietSeq = 0;
-/**
- * The last handoff seen for each open follow-up (null until a complete scan
- * succeeds), plus handoffs shown on Home since that scan. A bounded Home
- * read cannot advance a global watermark past assignments it did not show.
- * Completed scans replace the map, so closed work does not accumulate.
- */
-let quiet: { account: Expect; seen: ReadonlyMap<string, string> | null; homeSeen: ReadonlyMap<string, string>;
-  told: readonly string[]; items: ReadonlyMap<string, OpenItemView> } | null = null;
+// ---- notifications (desktop refresh and notifications v1, N6) ---------------------------------
 
 /**
- * Who last made an item wait on its owner: whoever picked the owner after
- * its state was last set, else whoever set that state (the approver's Send,
- * or a Reopen), else its approver.
+ * A notification was clicked, and the window comes forward: the follow-up's
+ * page over the page on screen (its row from the check at once), the
+ * Follow-ups page, or the project. Only a target this account was told of
+ * opens, so one told before a sign-out or a switch opens nothing. Capture, a
+ * sheet or a dialog that is up stays, as for the tray.
  */
-function handedBy(item: OpenItemView): OpenItemView['approver'] {
-  const at = (value: string | null) => (value === null ? null : Date.parse(value));
-  const owned = at(item.owner_set_at);
-  const stated = at(item.state_set_at);
-  if (item.owner_set_by && owned !== null && (stated === null || owned > stated)) return item.owner_set_by;
-  return item.state_set_by ?? item.approver;
-}
-
-/** When an item started waiting on whoever it waits on now, as the Authority orders Home: the latest of its made, sent, owner set and state set times. */
-function waitingSince(item: OpenItemView): string {
-  return [item.sent_at, item.owner_set_at, item.state_set_at].reduce<string>((latest, at) => (at !== null && at > latest ? at : latest), item.created_at);
-}
-
-/**
- * What a complete scan found new: open and yours, with a handoff newer than
- * the one seen for that item, and handed to you by someone else (one
- * you made yours yourself, Keep it myself or picking yourself, never is). A
- * reopen, or a hand-back, waits anew. The first complete scan only learns.
- */
-function newFollowUps(seen: ReadonlyMap<string, string> | null, homeSeen: ReadonlyMap<string, string>, items: readonly OpenItemView[], me: string)
-  : { seen: ReadonlyMap<string, string>; fresh: OpenItemView[] } {
-  const waiting = items.filter(item => item.state === 'open' && item.owner.membership_id === me);
-  const prior = (id: string) => [seen?.get(id) ?? '', homeSeen.get(id) ?? ''].sort().at(-1)!;
-  const fresh = seen === null ? [] : waiting.filter(item => waitingSince(item) > prior(item.item_id) && handedBy(item).membership_id !== me);
-  const next = new Map(waiting.map(item => [item.item_id, [waitingSince(item), prior(item.item_id)].sort().at(-1)!]));
-  // Home may have shown a newer handoff while the scan was in flight.
-  for (const [id, at] of homeSeen) if (at > (next.get(id) ?? '')) next.set(id, at);
-  return { seen: next, fresh };
-}
-
-/**
- * The notification for follow-ups new to you, or null for none. One says who
- * sent it, by first name, and what it is, as its row names it. Several are
- * counted.
- */
-export function followUpsNotice(fresh: readonly OpenItemView[]): MainMethods['notify.followUps']['params'] | null {
-  const ids = [...new Set(fresh.map(item => item.item_id))].slice(0, NOTICE_ITEMS_MAX);
-  if (ids.length !== 1) return ids.length === 0 ? null : { item_ids: ids };
-  const line = (text: string) => clip(text.replace(/\p{Cc}+/gu, ' ').trim(), NOTICE_TEXT_MAX);
-  return { item_ids: ids, from: line(firstName(handedBy(fresh[0]!).name)), title: line(itemTitle(fresh[0]!)) };
-}
-
-/** The next quiet check, five minutes on. */
-function armQuietCheck(): void {
-  if (quietTimer) clearTimeout(quietTimer);
-  const mine = quietSeq;
-  quietTimer = setTimeout(() => { quietTimer = null; void quietCheck(mine); }, QUIET_CHECK_MS);
-}
-
-/**
- * Signed in, or as another account: the quiet check starts over for it, then
- * goes every five minutes, whatever the page. The first complete scan learns
- * what is already waiting, including items beyond Home's display limit.
- */
-function startQuietCheck(account: Expect): void {
-  stopQuietCheck();
-  quiet = { account, seen: null, homeSeen: new Map(), told: [], items: new Map() };
-  void quietCheck(quietSeq);
-}
-
-/** Signed out, or the account forgotten: no more checks, and what they saw goes. */
-function stopQuietCheck(): void {
-  quietSeq += 1;
-  if (quietTimer) clearTimeout(quietTimer);
-  quietTimer = null;
-  quiet = null;
-}
-
-/**
- * Home read its rows: those handoffs are seen. Keep the quiet scan's cadence
- * and its per-item baseline; Home may show only twenty of many assignments.
- */
-function heard(items: readonly OpenItemView[]): void {
-  if (!quiet || !sameAccount(quiet.account) || !homeInSight()) return;
-  const homeSeen = new Map(quiet.homeSeen);
-  for (const item of items) if (item.state === 'open' && item.owner.membership_id === quiet.account.membership_id) {
-    const at = waitingSince(item);
-    if (at > (homeSeen.get(item.item_id) ?? '')) homeSeen.set(item.item_id, at);
-  }
-  quiet = { ...quiet, homeSeen };
-}
-
-/**
- * One quiet check (F8): every page of open follow-ups, rows only, with no
- * live reads, sweeps or runs. Only a complete scan advances the baseline;
- * a failed page is retried next turn without losing unseen assignments.
- * Notifications are bounded batches, excluding an item whose page is open.
- * A reply for an account no longer signed in is dropped.
- */
-async function quietCheck(mine: number): Promise<void> {
-  const watched = quiet;
-  if (mine !== quietSeq || !watched) return;
-  const result = await readItems(watched.account, { scope: 'mine', states: ['open'], read: 'rows' }, null, Number.POSITIVE_INFINITY);
-  if (mine !== quietSeq || !quiet || !sameAccount(watched.account)) return;
-  if (result.ok) {
-    const items = result.pages.flatMap(page => page.items);
-    const { seen, fresh } = newFollowUps(quiet.seen, quiet.homeSeen, items, watched.account.membership_id);
-    const open = followUpShown();
-    const untold = fresh.filter(item => open?.kind !== 'item' || open.item_id !== item.item_id);
-    quiet = { ...quiet, seen, homeSeen: new Map(), items: new Map(items.map(item => [item.item_id, item])) };
-    for (let offset = 0; offset < untold.length; offset += NOTICE_ITEMS_MAX) {
-      const notice = followUpsNotice(untold.slice(offset, offset + NOTICE_ITEMS_MAX));
-      if (!notice) continue;
-      if (notice.item_ids.length === 1) quiet = { ...quiet, told: [...quiet.told, ...notice.item_ids].slice(-TOLD_KEPT) };
-      void rpc('notify.followUps', notice);
+export function openNotified(target: NoticeTarget): void {
+  if (!expect() || (state.compose && !state.compose.hidden) || newProjectInTheWay() || state.sheet || projectSettingsModal()) return;
+  if (!freshness.wasTold(target)) return;
+  switch (target.kind) {
+    case 'items':
+      void openToldFollowUps(target.item_ids);
+      return;
+    case 'project': {
+      // Its row, or, for one past the sidebar's pages, the project as the change check's full read had it.
+      const project = [...state.projects.items, ...state.archivedProjects.items].find(entry => entry.project_id === target.project_id)
+        ?? freshness.toldProject(target.project_id);
+      if (project) void openProject(project);
+      return;
+    }
+    case 'item': {
+      const shown = followUpShown();
+      if (shown?.kind === 'item' && shown.item_id === target.item_id) void readItem(shown.seq);
+      else void openFollowUp(target.item_id, freshness.toldRow(target.item_id), true);
     }
   }
-  armQuietCheck();
-}
-
-/**
- * A follow-ups notification was clicked, and the window comes forward: the
- * item's page over the page on screen, or the Follow-ups page for several. Only
- * an item this account was told of opens, so one told before a sign-out or a
- * switch opens nothing. Capture, a sheet or a dialog that is up stays, as for
- * the tray.
- */
-export function openNotified(item_id: string | undefined): void {
-  if (!expect() || (state.compose && !state.compose.hidden) || newProjectInTheWay() || state.sheet || projectSettingsModal()) return;
-  if (item_id === undefined) { void openYourFollowUps(true); return; }
-  if (!quiet?.told.includes(item_id) || !sameAccount(quiet.account)) return;
-  const shown = followUpShown();
-  if (shown?.kind === 'item' && shown.item_id === item_id) void readItem(shown.seq);
-  // Its row from the check shows at once, then the page reads it again.
-  else void openFollowUp(item_id, quiet.items.get(item_id) ?? null, true);
 }

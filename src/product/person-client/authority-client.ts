@@ -1,6 +1,7 @@
 import { PERSON_DIAGNOSTICS_PATH_V1, PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1, validatePersonDiagnosticsRequestV1, validatePersonDiagnosticsResultV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { validatePersonUploadContextId } from '@echo-brain/organization-api';
+import { PERSON_CHANGES_ROUTE_V1, validatePersonChangesV1, type PersonChangesV1 } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
@@ -1301,6 +1302,27 @@ export class PersonAuthorityClient {
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
       signal,
     });
+  }
+
+  /**
+   * The change check (desktop refresh and notifications v1; ADR-0036): one fingerprint per area of this person's own view, and
+   * no content. An Authority without the route answers 404, which is `not_supported` here, never `not_found`.
+   */
+  async changes(accessToken: string, signal?: AbortSignal): Promise<PersonChangesV1> {
+    try {
+      return await this.getJson({
+        path: PERSON_CHANGES_ROUTE_V1,
+        access_token: accessToken,
+        validate_response: validatePersonChangesV1,
+        maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+        signal,
+      });
+    } catch (error) {
+      if (error instanceof PersonAuthorityClientError && error.status === 404) {
+        throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no change check");
+      }
+      throw error;
+    }
   }
 
   /** Agentic Ask; global by default, a supplied project ID is a strict project-only scope, and mine is only what the asker added. */

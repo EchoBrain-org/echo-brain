@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emit, launch, type Launched } from './launch.js';
+import { clickNotice, emit, launch, notices, type Launched } from './launch.js';
 
 let app: Launched;
 test.afterEach(async () => { await app?.close(); });
@@ -29,7 +29,9 @@ const runOperations = () => app.calls().filter(call => call.path === '/v1/person
 /** A list's reads, in order: rows only, or live (" live"), by states, and " more" past the first page; never counts or a check's rows. */
 const listReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && !notificationScan(call.body) && call.body.read !== 'counts' && call.body.scope !== 'run')
   .map(call => `${(call.body!.states as string[]).join('+')}${call.body!.cursor === undefined ? '' : ' more'}${call.body!.read === 'rows' ? '' : ' live'}`);
-const notificationScan = (body: Record<string, unknown>) => body.operation === 'items' && body.scope === 'mine' && body.read === 'rows' && (body.states as string[] | undefined)?.join() === 'open';
+/** The change check's reads of the follow-ups Ari is involved in: open ones, and those closed since (desktop refresh and notifications v1). */
+const notificationScan = (body: Record<string, unknown>) => body.operation === 'items' && (body.scope === 'involved' || body.scope === 'mine') && body.read === 'rows'
+  && ((body.states as string[] | undefined)?.join() === 'open' || body.changed_since !== undefined);
 /** Foreground runs requests; notification discovery is checked independently. */
 const requests = (operation: string) => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === operation && !notificationScan(call.body)).map(call => call.body!);
 /** The sweeps the app asked for, by scope. */
@@ -129,7 +131,11 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await expect(row(unsent, 'Thermostat PRD').locator('.follow-up-open')).toBeFocused();
   await expect(unsent.getByRole('checkbox', { name: 'Send the revised quote', exact: true })).toBeChecked();
   await expect(unsent.getByRole('checkbox', { name: 'Thermostat PRD · Pilot scope', exact: true })).not.toBeChecked();
-  expect(requests('items')).toHaveLength(itemReads);
+  // Back is this list as it was, never a list of its own (no live read). The change check may have seen this list's own Send
+  // and owner changes by now, depending on timing: then the list is read again once, quietly, rows only.
+  const backReads = requests('items').slice(itemReads);
+  expect(backReads.length).toBeLessThanOrEqual(1);
+  expect(backReads.every(body => body.scope === 'record' && body.read === 'rows')).toBe(true);
   // Dismiss moves a row to Dismissed; its page offers Send to its owner, which reopens it to them.
   await list.getByRole('button', { name: 'Dismiss 1', exact: true }).click();
   await expect(list.getByTestId('follow-ups-said')).toHaveText('Dismissed');
@@ -280,55 +286,64 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
   release();
 });
 
-/** Test builds record the notifications main would show: no test puts one on the machine. */
-interface Notices { echoTestNotices?: { title: string; body: string; click(): void }[] }
-
-test('a follow-up sent to you while ECHO runs comes as a notification that opens its page', async () => {
-  app = await launch('granola-owner-later');
+test('a follow-up sent to you while ECHO runs comes as a notification within one check, and opens its page', async () => {
+  // The Authority asks for a check every 15 s, its shortest.
+  app = await launch('granola-owner-later', { 'changes-seconds': '15' });
   const { page } = app;
-  const notices = () => app.app.evaluate(() => ((globalThis as Notices).echoTestNotices ?? []).map(({ title, body }) => ({ title, body })));
-  // Complete notification scans, independent of Home's bounded rows.
-  const rowsReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length;
-  const homeIdle = () => expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
+  const changes = () => app.calls().filter(call => call.path === '/v1/person/changes').length;
+  const scans = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).map(call => call.body!.scope);
   await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
-  // The first complete scan at sign-in only learns what already waits on Ari.
-  await homeIdle();
-  await expect.poll(rowsReads).toBe(1);
-  // The page starts again on a clock the test moves: it learns again.
-  await page.clock.install();
-  await page.reload();
-  await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
-  await homeIdle();
-  await expect.poll(rowsReads).toBe(2);
-  // Mina sends Ari a ticket from a meeting Ari cannot read. Five minutes on, the next check tells of it.
+  // The first check at sign-in only learns what already involves Ari.
+  // Its open follow-ups, and those closed since just before it started.
+  await expect.poll(scans).toEqual(['involved', 'involved']);
+  expect(await notices(app)).toEqual([]);
+  // Mina sends Ari a ticket from a meeting Ari cannot read; the window stays as it is. The next check tells of it.
+  const before = changes();
   writeFileSync(join(app.home, 'mina-sends'), '');
-  await page.clock.fastForward('05:00');
-  await expect.poll(rowsReads).toBe(3);
-  await expect.poll(notices).toEqual([{ title: 'ECHO', body: 'Mina sent you: Jira ticket' }]);
-  // The quiet check starts no sweep or run.
+  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([
+    { title: 'ECHO', body: 'Mina handed you Jira ticket', target: { kind: 'item', item_id: 'itm_00000000-0000-4000-8000-000000000042' } },
+  ]);
+  expect(changes()).toBe(before + 1);
+  // Home showed, so it was read again: the new row is there with no click.
+  await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toBeVisible();
+  // The check starts no sweep or run.
   expect(requests('sweep')).toEqual([]);
   expect(requests('start')).toEqual([]);
   // Clicked with another app in front: its page opens over Home as ECHO comes forward.
   await emit(app.app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();
-  await app.app.evaluate(() => { (globalThis as Notices).echoTestNotices![0]!.click(); });
+  await clickNotice(app, 0);
   await emit(app.app, 'echo-test:resume');
   const item = page.getByTestId('follow-up');
   await expect(item.getByRole('heading', { name: 'A Jira ticket you can\'t open' })).toBeVisible();
   await expect(item.getByTestId('follow-up-history')).toContainText('Sent to you by Mina Patel');
-  // Its row from the check, read again rows only, then live.
-  const read = { item_id: 'itm_00000000-0000-4000-8000-000000000042' };
-  expect(requests('item')).toEqual([expect.objectContaining({ ...read, read: 'rows' }), expect.not.objectContaining({ read: 'rows' })]);
-  expect(requests('item')[1]).toMatchObject(read);
   await page.getByTestId('back').click();
   await expect(page.getByTestId('needs')).toBeVisible();
-  // Told once: the next check finds nothing new.
-  await homeIdle();
-  const rows = rowsReads();
-  await page.clock.fastForward('05:00');
-  await homeIdle();
-  await expect.poll(rowsReads).toBe(rows + 1);
-  expect(await notices()).toHaveLength(1);
+  // Told once: the checks after it find nothing new.
+  const checked = changes();
+  await expect.poll(changes, { timeout: 30_000 }).toBeGreaterThan(checked);
+  expect(await notices(app)).toHaveLength(1);
+});
+
+test('the person who sent a follow-up is told when its owner marks it done', async () => {
+  app = await launch('granola-checked', { 'changes-seconds': '15' });
+  const { page } = app;
+  await expect(page.getByTestId('needs-foot')).toBeVisible();
+  await expect.poll(() => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length).toBe(2);
+  // Mina marks done the two Ari sent her, ECHO-12 and "Confirm the trace": one notification for that check, counting them.
+  writeFileSync(join(app.home, 'mina-done'), '');
+  const counted = ['itm_00000000-0000-4000-8000-000000000031', 'itm_00000000-0000-4000-8000-000000000039'];
+  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'items', item_ids: counted } }]);
+  // Each left the open follow-ups Ari is involved in, and the read of those closed since settled it: none was read by its id.
+  const itemReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'item').map(call => call.body!.item_id);
+  expect(itemReads()).toEqual([]);
+  // Clicked: a list of exactly those two, each read by its id, as Ari may see them now.
+  await clickNotice(app, 0);
+  const list = app.page.getByTestId('follow-ups');
+  await expect(list.getByRole('heading', { name: 'Changed follow-ups' })).toBeVisible();
+  await expect(group(list, 'Done').getByTestId('follow-up-row')).toHaveCount(2);
+  await expect(list.getByTestId('follow-up-row')).toHaveCount(2);
+  expect(new Set(itemReads())).toEqual(new Set(counted));
 });
 
 test('a reader who cannot open an item sees what it is, never what it says', async () => {
@@ -364,7 +379,7 @@ test('a reader who cannot open an item sees what it is, never what it says', asy
 test('a Home read that fails once keeps the rows it had, and a live read that fails keeps what each row said', async () => {
   app = await launch('granola-home-fails-once');
   const rows = app.page.getByTestId('need-row');
-  // Home's reads of its rows (no quiet check reads them within five minutes of sign-in), and its live reads.
+  // Home's reads of its rows, and its live reads.
   const rowsReads = () => requests('home').filter(body => body.read === 'rows').length;
   const liveReads = () => requests('home').filter(body => body.read !== 'rows').length;
   await expect(rows.filter({ hasText: 'ECHO-12 · Pilot launch' })).toBeVisible();
@@ -442,8 +457,13 @@ test('an approved meeting counts its follow-ups by status, and its project count
   await expect(list).toContainText('Thermostat redesign');
   // Spanning meetings, each row names its meeting.
   await expect(row(list, 'ECHO-12')).toContainText('Jira ticket · Pilot planning');
-  expect(itemReads().filter(read => !read.counts).map(read => `${read.scope} ${read.rows ? 'rows' : 'live'}`))
-    .toEqual(['record rows', 'record live', 'project rows', 'project live']);
+  // The meeting's list was read again, rows only, when ECHO came back to it (and again if the change check then said its
+  // follow-ups had moved since sign-in, as approving made them); nothing was read live twice.
+  const reads = itemReads().filter(read => !read.counts).map(read => `${read.scope} ${read.rows ? 'rows' : 'live'}`);
+  expect(reads.slice(0, 2)).toEqual(['record rows', 'record live']);
+  expect(reads.slice(-2)).toEqual(['project rows', 'project live']);
+  expect(reads.slice(2, -2).length).toBeGreaterThanOrEqual(1);
+  expect(new Set(reads.slice(2, -2))).toEqual(new Set(['record rows']));
 });
 
 test('a list reads current work first, past older closed follow-ups, each part with its own More, and keeps its place', async () => {
@@ -539,7 +559,8 @@ test('Home sweeps by itself, and the Follow-ups page lists everything you sent o
   await expect(row(open, 'ECHO-12')).toContainText('Jira ticket · Pilot planning · matches now');
   // Current work rows only, then live: yours keeps its closed groups closed, and unread.
   expect(listReads()).toEqual(['unsent+open', 'unsent+open live']);
-  expect(requests('items').filter(body => body.read !== 'counts').every(body => body.scope === 'mine')).toBe(true);
+  // Yours: what Ari sent, owns or last handed on.
+  expect(requests('items').filter(body => body.read !== 'counts').every(body => body.scope === 'involved')).toBe(true);
   await expect(list.getByRole('checkbox')).toHaveCount(0);
   // Back is Home, read again; no second sweep was asked for.
   await page.getByTestId('back').click();

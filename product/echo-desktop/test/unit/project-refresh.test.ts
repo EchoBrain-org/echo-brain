@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from '../../src/shared/protocol.js';
-import { flush, Held, keysetPage, names, numbered, ok, ordered, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { cover, flush, Held, keysetPage, moved, names, numbered, ok, ordered, project, rpcFor, show, startStore, stubWindow, uncover } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -145,10 +145,11 @@ describe('project tool-read replies', () => {
 });
 
 /**
- * The window came forward: the sidebar reads again as many pages as it
- * shows, so what it shows is what the Authority has now, in its order
- * (creation time, newest first; then project ID), and More goes on from
- * the last row read.
+ * The window came forward, and the change check says your projects moved
+ * (here, a list changed elsewhere moves them by itself, and `moved` moves them
+ * by hand): the sidebar reads again as many pages as it shows, so what it
+ * shows is what the Authority has now, in its order (creation time, newest
+ * first; then project ID), and More goes on from the last row read.
  */
 describe('project lists on foreground refresh', () => {
   /** Made after every numbered project. */
@@ -160,10 +161,11 @@ describe('project lists on foreground refresh', () => {
     await store.openProject(active[2]!);
     const before = activeLists().length;
     active = [created('New'), ...active];
-    if (event === 'shown') await store.windowShown();
-    else { store.conceal(); store.resume(); await flush(); }
+    if (event === 'shown') await show(store);
+    else { cover(store); uncover(store); await flush(); }
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(9))]);
-    expect(activeLists().length - before).toBe(1);
+    // The change check's full read of every page (14 rows: two), which tells what you were added to, fills the sidebar's one page.
+    expect(activeLists().length - before).toBe(2);
     expect(store.getState().route.page).toBe('project');
     await store.loadProjects(true);
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(13))]);
@@ -176,7 +178,7 @@ describe('project lists on foreground refresh', () => {
     const tenth = active[9]!;
     archived = [{ ...tenth, status: 'archived' }];
     active = [created('New'), ...active.filter(row => row !== tenth)];
-    await store.windowShown();
+    await show(store);
     expect(names(store.getState().projects.items)).not.toContain('Project 10');
     expect(names(store.getState().archivedProjects.items)).toEqual(['Project 10']);
     await store.loadProjects(true);
@@ -191,9 +193,10 @@ describe('project lists on foreground refresh', () => {
     await store.openProject(active[12]!);
     const before = activeLists().length;
     active = [created('New'), ...active];
-    await store.windowShown();
+    await show(store);
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(19))]);
-    expect(activeLists().length - before).toBe(2);
+    // The full read of every page (23 rows: three), which fills the sidebar's two.
+    expect(activeLists().length - before).toBe(3);
     expect(store.getState().route.page).toBe('project');
     await store.loadProjects(true);
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(22))]);
@@ -207,7 +210,7 @@ describe('project lists on foreground refresh', () => {
     const gone = active.slice(10, 19);
     archived = gone.map(row => ({ ...row, status: 'archived' }));
     active = active.filter(row => !gone.includes(row));
-    await store.windowShown();
+    await show(store);
     expect(names(store.getState().projects.items)).toEqual(names(ordered(active)));
     expect(store.getState().projects.next).toBeNull();
     expect(store.getState().archivedProjects.items).toHaveLength(9);
@@ -219,7 +222,7 @@ describe('project lists on foreground refresh', () => {
     await store.loadProjects(true);
     const joined = { ...project(500, 16, { name: 'Joined' }), created_at: '2026-09-16T12:00:00.000Z' };
     active = [...active, joined];
-    await store.windowShown();
+    await show(store);
     const shown = names(store.getState().projects.items);
     expect(shown).toHaveLength(20);
     // Made at noon on the 16th: after Project 14 (the 17th), before Project 15 (midnight on the 16th).
@@ -231,7 +234,7 @@ describe('project lists on foreground refresh', () => {
     const store = await startStore();
     await store.loadProjects(true);
     active = active.map(row => row.name === 'Project 12' ? { ...row, name: 'Project 12, renamed' } : row);
-    await store.windowShown();
+    await show(store);
     expect(names(store.getState().projects.items)).toContain('Project 12, renamed');
   });
 
@@ -240,7 +243,7 @@ describe('project lists on foreground refresh', () => {
     const store = await startStore();
     await store.loadProjects(true);
     active = [created('New'), ...active];
-    await store.windowShown();
+    await show(store);
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(13))]);
     expect(store.getState().projects.next).toBeNull();
   });
@@ -250,7 +253,7 @@ describe('project lists on foreground refresh', () => {
     const store = await startStore();
     await store.loadProjects(true);
     active = [{ ...project(0, 1, { name: 'New' }), project_id: 'prj_00000000-0000-4000-8000-000000000000' }, ...active];
-    await store.windowShown();
+    await show(store);
     expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(19))]);
   });
 
@@ -258,7 +261,8 @@ describe('project lists on foreground refresh', () => {
     active = numbered(3);
     const store = await startStore();
     const stale = held.hold('projects.list');
-    const refreshing = store.windowShown();
+    moved.projects += 1;
+    const refreshing = show(store);
     await flush();
     const fresh = created('Fresh');
     rpc.mockImplementation(rpcFor(held, {
@@ -281,7 +285,8 @@ describe('project lists on foreground refresh', () => {
     active = numbered(3);
     const store = await startStore();
     const stale = held.hold('projects.list');
-    const refreshing = store.windowShown();
+    moved.projects += 1;
+    const refreshing = show(store);
     await flush();
     rpc.mockImplementation(rpcFor(held, { 'projects.leave': () => ok({}) }, () => ({ active, archived })));
     store.toggleProjectSettings(active[0]!, 'sidebar');
@@ -304,7 +309,7 @@ describe('project lists on foreground refresh', () => {
     const loading = store.loadProjects(true);
     await flush();
     active = [created('New'), ...active];
-    await store.windowShown();
+    await show(store);
     more(ok(keysetPage(numbered(25), `${numbered(25)[9]!.created_at}|${numbered(25)[9]!.project_id}`)));
     await loading;
     await flush();
@@ -319,7 +324,8 @@ describe('project lists on foreground refresh', () => {
     const store = await startStore();
     await store.loadArchivedProjects(true);
     expect(store.getState().archivedProjects.items).toHaveLength(15);
-    await store.windowShown();
+    moved.projects += 1;
+    await show(store);
     await flush();
     expect(store.getState().archivedProjects.items).toHaveLength(15);
   });
@@ -328,7 +334,8 @@ describe('project lists on foreground refresh', () => {
     active = numbered(3);
     const store = await startStore();
     const stale = held.hold('projects.list');
-    const refreshing = store.windowShown();
+    moved.projects += 1;
+    const refreshing = show(store);
     await flush();
     membership = 'someone-else';
     active = [];
@@ -344,7 +351,8 @@ describe('project lists on foreground refresh', () => {
     active = numbered(3);
     const store = await startStore();
     held.hold('projects.list')({ ok: false, failure: { code: 'transport_failed', retryable: true } });
-    await store.windowShown();
+    moved.projects += 1;
+    await show(store);
     expect(names(store.getState().projects.items)).toEqual(names(numbered(3)));
     expect(store.getState().projects.failure).toBeUndefined();
     rpc.mockImplementation(rpcFor(held, {}, () => ({ active, archived })));

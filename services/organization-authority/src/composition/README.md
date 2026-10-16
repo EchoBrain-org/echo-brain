@@ -51,7 +51,10 @@ import a provider implementation.
   operations on the same route, `sweep` (which queues a sweep) and `home`'s
   `sweep_due` included, asking `open-items-policy-v1.ts` every access
   question. Both services read a run's stored impact card through
-  `person-stored-impact-card-v1.ts`.
+  `person-stored-impact-card-v1.ts`. `person-changes-v1.ts` serves
+  `GET /v1/person/changes` (ADR-0036): fingerprints of the caller's projects,
+  `involved` open items and reviews, read in one Authority read transaction
+  with no audit row, through the same policy as those reads.
 - `organization-authority-state-bootstrap.ts`, `organization-authority-setup-cli.ts`
   and `organization-authority-reset-cli.ts` own stopped-state setup and reset.
 - The `person-*` modules wire Person routes and upload processing, the
@@ -94,6 +97,10 @@ known layering debt:
 - `person-trigger-runs-v1.ts`, `person-sweep-runs-v1.ts` and
   `person-open-items-v1.ts`: runs, sweeps and open items (typed against
   `Sqlite*` adapter classes, with `better-sqlite3` write callbacks);
+- `person-changes-v1.ts`: the change check (ADR-0036), which opens its one
+  read transaction on the `better-sqlite3` handle and reads through
+  `SqliteProjectContextRepositoryV1.personChangeView` and the open-items
+  adapters;
 - `person-record-search-route.ts`: record list, search and open (raw SQL on
   record-log tables), with `person-record-read-route.ts` and
   `person-answer-v3-route.ts` (concrete SQLite audit adapters); and

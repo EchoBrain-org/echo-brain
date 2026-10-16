@@ -24,7 +24,7 @@ async function notices(counts: Partial<OpenItemsView['summary']>): Promise<unkno
   const { getState } = await import('../../src/renderer/store.js');
   const { FollowUps } = await import('../../src/renderer/screens/follow-ups.js');
   const list: FollowUpList = {
-    kind: 'list', seq: 1, scope: 'mine', title: null, loading: false, items: [], live: {}, reading: false, reads: [{ parts: ['active'], pages: [{ cursor: null, ids: [] }], next: null }],
+    kind: 'list', seq: 1, scope: 'involved', title: null, loading: false, items: [], live: {}, reading: false, reads: [{ parts: ['active'], pages: [{ cursor: null, ids: [] }], next: null }],
     summary: { ...counted, ...counts }, stage: null, ticks: {}, sends: {}, check: null, expanded: {}, busy: false, said: null, picker: null, stale: false,
   };
   return descendants(FollowUps({ state: getState(), list })).filter(node => node.props.class === 'notice').map(node => node.props.children);

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
+import { cover, show, uncover } from './harness.js';
 import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -102,8 +103,14 @@ const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pi
 const opened = (id: string, extra: Partial<OpenItemView> = {}): OpenItemView => ({ ...item(id), reach: 'opened', current: { source: ticket, says_now: `Says ${id}` }, ...extra });
 const summary: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
-/** The runs requests sent, but for reads of Home's rows (Home's own, each before its live read, and the quiet check's: notify.test.ts). */
-const notificationScan = (request: { operation?: string; scope?: string; read?: string; states?: readonly string[] }) => request.operation === 'items' && request.scope === 'mine' && request.read === 'rows' && request.states?.join() === 'open';
+/**
+ * The runs requests sent, but for reads of Home's rows (Home's own, each before its live read) and the change check's reads
+ * of the open follow-ups you are involved in (freshness.test.ts).
+ */
+const notificationScan = (request: { operation?: string; scope?: string; read?: string; states?: readonly string[]; changed_since?: string }) => request.operation === 'items'
+  && (request.scope === 'mine' || request.scope === 'involved') && request.read === 'rows' && (request.states?.join() === 'open' || request.changed_since !== undefined);
+/** Every request but the change check's, which goes on at the server's pace whatever Home does (desktop refresh v1). */
+const polls = () => rpc.mock.calls.filter(([method]) => method !== 'changes.read');
 const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows') && !notificationScan(params.request));
 /** Reads of what waits on you: each Home read starts with its rows. */
 const rowsReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'home' && params.request.read === 'rows').length;
@@ -165,7 +172,10 @@ beforeEach(() => {
       case 'open.ref': return unavailable;
       // A project's tools line: it reads nothing.
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
-      case 'app.setUnresolved': case 'notify.followUps': return ok(null);
+      case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
+      // The change check: nothing moves unless a test says.
+      case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60,
+        areas: { projects: `sha256:${'0'.repeat(64)}`, follow_ups: `sha256:${'1'.repeat(64)}`, reviews: `sha256:${'2'.repeat(64)}` } });
       case 'people.directory': return ok({ items: [RAFAEL], next_cursor: null });
       case 'account.tools': {
         if (failTools) return { ok: false, failure: { code: 'transport_failed', retryable: true } };
@@ -187,7 +197,7 @@ beforeEach(() => {
           return ok({ runs: [...(sweep ? [{ ...sweep }] : []), ...(run ? [{ ...run }] : [])] });
         }
         if (params.request?.operation === 'home') {
-          // Its rows (Home's, and the quiet check's), answered with what `home` holds when the test lets them go; and its live read.
+          // Its rows, answered with what `home` holds when the test lets them go; and its live read.
           if (params.request.read === 'rows') {
             if (failNextHome) { failNextHome = false; return unavailable; }
             return holdRows ? new Promise(resolve => { answerRows.push(() => resolve(ok(rowsOf(home)))); }) : ok(rowsOf(home));
@@ -406,12 +416,12 @@ describe('Home rows', () => {
 describe('Home decisions and impact checks', () => {
   it('covers meeting rows and a private decision when another app is in front', async () => {
     const store = await start();
-    store.conceal();
+    cover(store);
     expect(store.pageCovered()).toBe(true);
-    store.resume();
+    uncover(store);
     await flush();
     await store.openDecision(approval);
-    store.conceal();
+    cover(store);
     expect(store.pageCovered()).toBe(true);
   });
 
@@ -457,11 +467,11 @@ describe('Home decisions and impact checks', () => {
     review = { ...review, status: 'approved', decided_on: 'desktop' };
     run = impactRun('running');
     const store = await start();
-    store.conceal();
+    cover(store);
     const requests = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(rpc.mock.calls).toHaveLength(requests);
-    store.resume();
+    uncover(store);
     await flush();
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
@@ -474,10 +484,10 @@ describe('Home decisions and impact checks', () => {
     run = impactRun('running');
     const store = await start();
     await store.openDecision(approval, run);
-    store.conceal();
+    cover(store);
     await vi.advanceTimersByTimeAsync(5_000);
     run = impactRun('done');
-    store.resume();
+    uncover(store);
     await flush();
     expect(store.getState().decision?.run?.state).toBe('done');
     // Its follow-ups, counted by its check for the page's line; its card is never asked for.
@@ -537,9 +547,9 @@ describe('Home decisions and impact checks', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(homeReads()).toBe(3);
     expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
-    const requests = rpc.mock.calls.length;
+    const requests = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(requests);
+    expect(polls()).toHaveLength(requests);
   });
 
   it('reads what waits on you again on the next poll after that read failed', async () => {
@@ -558,9 +568,9 @@ describe('Home decisions and impact checks', () => {
     failLists = true;
     const store = await start();
     expect(store.getState().home?.failure).toBeUndefined();
-    const requests = rpc.mock.calls.length;
+    const requests = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(requests);
+    expect(polls()).toHaveLength(requests);
   });
 
   it('keeps the rows a failed home read had, and shows no error for it', async () => {
@@ -626,11 +636,11 @@ describe('Home decisions and impact checks', () => {
     await store.loadHome();
     expect(store.getState().home?.failure).toMatchObject({ code: 'unavailable' });
     if (owed) expect(store.homeRows()).toHaveLength(0);
-    store.conceal();
+    cover(store);
     await vi.advanceTimersByTimeAsync(60_000);
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
-    store.resume();
+    uncover(store);
     await flush();
     expect(store.getState().home?.failure).toBeUndefined();
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
@@ -641,17 +651,17 @@ describe('Home decisions and impact checks', () => {
     run = impactRun('running');
     const store = await start();
     if (openCard) await store.openDecision(approval, run);
-    store.conceal();
+    cover(store);
     failNextList = true;
-    store.resume();
+    uncover(store);
     await flush();
     expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
     expect(store.getState().home?.failure).toBeUndefined();
     if (openCard) expect(store.getState().decision?.run?.state).toBe('running');
     // A second focus change must not strand the retry after stopping its timer.
-    store.conceal();
+    cover(store);
     failNextList = true;
-    store.resume();
+    uncover(store);
     await flush();
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
@@ -729,9 +739,9 @@ describe('Sweeps from Home', () => {
     expect(store.homeRows().map(row => row.kind)).toEqual(['review']);
     expect(store.getState().home?.open).toMatchObject({ landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' });
     // Then Home stops looking.
-    const calls = rpc.mock.calls.length;
+    const calls = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(calls);
+    expect(polls()).toHaveLength(calls);
   });
 
   it('starts a sweep that went back to the queue again, waiting longer after each start that starts nothing', async () => {
@@ -813,9 +823,9 @@ describe('Sweeps from Home', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     // Read as ended: what waits on you is read again, and then Home stops looking.
     expect(requests('home')).toHaveLength(homeReads + 1);
-    const calls = rpc.mock.calls.length;
+    const calls = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(calls);
+    expect(polls()).toHaveLength(calls);
     expect(requests('sweep')).toHaveLength(1);
   });
 
@@ -830,9 +840,9 @@ describe('Sweeps from Home', () => {
     expect(store.homeRows()).toEqual([]);
     // A sweep that failed at once is seen ended on the next look at most; then nothing more is read.
     await vi.advanceTimersByTimeAsync(5_000);
-    const calls = rpc.mock.calls.length;
+    const calls = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls).toHaveLength(calls);
+    expect(polls()).toHaveLength(calls);
     expect(store.homeRows()).toEqual([]);
   });
 });
@@ -865,9 +875,9 @@ describe('Follow-up lists and item pages', () => {
     // The Follow-ups page: yours, its closed groups closed, nothing ticked.
     await store.openYourFollowUps();
     expect(store.getState().route).toEqual({ page: 'follow-ups' });
-    expect(list(store)).toMatchObject({ scope: 'mine', ticks: {} });
-    expect(requests('items').slice(-2)).toEqual([{ schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'], read: 'rows' },
-      { schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'] }]);
+    expect(list(store)).toMatchObject({ scope: 'involved', ticks: {} });
+    expect(requests('items').slice(-2)).toEqual([{ schema_version: 1, operation: 'items', scope: 'involved', states: ['unsent', 'open'], read: 'rows' },
+      { schema_version: 1, operation: 'items', scope: 'involved', states: ['unsent', 'open'] }]);
     // Back from it is Home.
     store.closeFollowUp();
     expect(store.getState().route).toEqual({ page: 'home' });
@@ -1361,14 +1371,15 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: 'itm_00000001', read: 'rows' }]);
   });
 
-  it('drops a row from your list once you gave away an item you only owned, saying who has it now; a meeting\'s list keeps it', async () => {
+  it('keeps a row on your list once you hand on an item you only owned (you last handed it on), as a meeting\'s list does; drops one someone else handed on meanwhile', async () => {
     const rafael = { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true };
-    const yours = (id: string): OpenItemView => ({ ...item(id), owner: { membership_id: 'member', name: 'Fixture', active: true, match: 'jira_account' } });
-    const given = { ...yours('1'), owner: { ...rafael, match: 'reassigned' as const } };
+    const me = { membership_id: 'member', name: 'Fixture', active: true };
+    const yours = (id: string): OpenItemView => ({ ...item(id), owner: { ...me, match: 'jira_account' } });
+    const given = { ...yours('1'), owner: { ...rafael, match: 'reassigned' as const }, owner_set_at: '2026-10-08T13:00:00.000Z', owner_set_by: me };
     page = listPage([yours('1'), yours('2')]);
     const store = await start();
     await store.openYourFollowUps();
-    for (const scope of ['mine', 'record'] as const) {
+    for (const scope of ['involved', 'record'] as const) {
       if (scope === 'record') {
         page = listPage([yours('1'), yours('2')]);
         await store.openFollowUps('record', record, 'Pilot planning');
@@ -1378,8 +1389,17 @@ describe('Follow-up lists: current work first, results in place', () => {
       page = listPage([given, yours('2')]);
       await store.pickFollowUpOwner(RAFAEL);
       expect(said(store)).toEqual({ words: 'Owner changed to Rafael' });
-      expect(ids(store)).toEqual(scope === 'mine' ? ['2'] : ['1', '2']);
+      expect(ids(store)).toEqual(['1', '2']);
     }
+    // On your list, read again after your change: Mina had handed it on from Rafael meanwhile, so it is no longer yours to see there.
+    store.closeFollowUp();
+    await flush();
+    store.toggleOwnerPicker('itm_00000002');
+    await flush();
+    const mina = { membership_id: 'mem_00000000-0000-4000-8000-000000000077', name: 'Mina Patel', active: true };
+    page = listPage([given, { ...yours('2'), owner: { ...mina, match: 'reassigned' as const }, owner_set_at: '2026-10-08T14:00:00.000Z', owner_set_by: mina }]);
+    await store.pickFollowUpOwner(RAFAEL);
+    expect(ids(store)).toEqual(['1']);
   });
 
   it('keeps the check of a decision opened from its list when a runs list read since does not hold it', async () => {
@@ -1391,7 +1411,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
     // Home is read again under them: its runs list holds only the newest checks, not this one.
     const lists = requests('list').length;
-    await store.windowShown();
+    await show(store);
     await flush();
     expect(requests('list').length).toBeGreaterThan(lists);
     expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
@@ -1618,7 +1638,7 @@ describe('Rows first, then what each says now', () => {
     await store.openFollowUp('itm_00000001', homeItems(store)[0]!);
     home = { ...emptyHome(), items: [opened('1'), opened('2')] };
     const rows = rowsReads();
-    await store.windowShown();
+    await show(store);
     await flush();
     expect(rowsReads()).toBe(rows + 1);
     expect(live()).toBe(before);
@@ -1884,18 +1904,18 @@ describe('Rows first, then what each says now', () => {
     await flush();
     // A row's page opens over the list while its rows read is on its way; then another app comes in front.
     await store.openFollowUp('itm_00000001', opened('1'));
-    store.conceal();
+    cover(store);
     holdListRows = false;
     answerListRows.shift()!();
     await opening;
     expect(reads()).toEqual(['unsent+open']);
-    store.resume();
+    uncover(store);
     await flush();
     expect(reads()).toEqual(['unsent+open']);
-    // Back on the list: the rows it shows are read live now.
+    // Back on the list: ECHO came back meanwhile, so its rows are read again, then what they show is read live.
     store.closeFollowUp();
     await flush();
-    expect(reads()).toEqual(['unsent+open', 'unsent+open live']);
+    expect(reads()).toEqual(['unsent+open', 'unsent+open', 'unsent+open live']);
     expect(shown(store).map(entry => entry.reach)).toEqual(['opened']);
   });
 

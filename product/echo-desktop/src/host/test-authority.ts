@@ -56,7 +56,8 @@ interface Contract {
 
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
-  operation: string; run_id?: string; scope?: 'mine' | 'run' | 'record' | 'project'; id?: string; cursor?: string; read?: 'rows' | 'counts'; states?: OpenItem['state'][];
+  operation: string; run_id?: string; scope?: 'mine' | 'involved' | 'run' | 'record' | 'project'; id?: string; cursor?: string; read?: 'rows' | 'counts'; states?: OpenItem['state'][];
+  changed_since?: string;
   item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
@@ -113,6 +114,8 @@ const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-out
   'granola-review-assign-lost', 'granola-sweep', 'granola-sweep-requeued', 'granola-alike']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
+/** A project made long ago, that Ari is added to when a test says (`added-oldest`). */
+const OLDEST = 'prj_66666666-6666-4666-8666-666666666666';
 /** Who an impact check names, besides Ari: fictional people of the organization. */
 const MINA = { membership_id: 'mem_77777777-7777-4777-8777-777777777777', name: 'Mina Patel' };
 const RAFAEL = { membership_id: 'mem_88888888-8888-4888-8888-888888888888', name: 'Rafael Moreno' };
@@ -246,6 +249,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const projects = mode === 'no-projects' ? [] : structuredClone(desktop.projects);
   const projectStatus = new Map<string, 'active' | 'archived'>(projects.map(project => [project.project_id, 'active']));
   const members = structuredClone(desktop.members);
+  // Ari is a member of the oldest project once added to it (it is listed only then).
+  members[OLDEST] = [{ membership_id: session.membership_id, role: 'member' }];
   // No longer a lead of the first project, though the list said so.
   if (mode === 'demoted') members[desktop.projects[0]!.project_id] = members[desktop.projects[0]!.project_id]!.map(entry => ({ ...entry, role: entry.role === 'lead' ? 'member' : 'lead' }));
   const documents = structuredClone(desktop.documents);
@@ -341,7 +346,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let documentAttempts = 0;
   let evidenceReads = 0;
   let asks = 0;
-  let projectLists = 0;
   let lists = 0;
   let mineLists = 0;
   // Sign-in: the descriptor a new session is checked against, and the client's
@@ -421,10 +425,21 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     return json(receipt, status);
   };
-  /** Your projects, in the list's order, as the mode has them. */
+  /**
+   * A change made elsewhere, once the test says so (a file of that name in its home): the change check sees it, and so does
+   * the next read of what it changed.
+   */
+  const elsewhere = (name: string) => existsSync(join(home, name));
+  /** Your projects, in the list's order, as the mode has them; renamed elsewhere (`renamed`), the first one's name says so. */
   const listed = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
+    const rows = listedNow();
+    const renamed = elsewhere('renamed') && rows[0] ? [{ ...rows[0], name: `${rows[0].name}, renamed` }, ...rows.slice(1)] : rows;
+    // Added to the oldest project there is (`added-oldest`): last in the list, past the pages the sidebar shows.
+    return elsewhere('added-oldest') ? [...renamed, { project_id: OLDEST, name: 'Oldest launch', role: 'member' }] : renamed;
+  };
+  const listedNow = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
     // Created from another client after the desktop loaded an empty sidebar.
-    if (mode === 'granola-project-added') return projectLists === 0 ? [] : [
+    if (mode === 'granola-project-added') return !elsewhere('project-created') ? [] : [
       { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' },
     ];
     if (GRANOLA_PROJECTS.has(mode)) return [
@@ -441,8 +456,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (mode === 'long-project-names') return numbered(20, '2', index => LONG_NAMES[index]!);
     // More than a capture can be filed in: twenty-two, in three pages.
     if (mode === 'over-twenty-projects') return numbered(22, '3', index => `Project ${index + 1}`);
-    // Added to a project made since the first list: the newest, it leads.
-    if (mode === 'project-added' && projectLists > 0) {
+    // Added to a project made since the desktop first looked: the newest, it leads.
+    if (mode === 'project-added' && elsewhere('project-added')) {
       return [{ project_id: 'prj_55555555-5555-4555-8555-555555555555', name: 'Comet', role: 'member' }, ...projects];
     }
     return projects;
@@ -729,7 +744,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let minaDone = false;
   /** Ari's sweeps, newest first. */
   const sweepRuns: SweepRun[] = [];
-  /** Home's reads of its rows (the quiet check's too), and its live reads. */
+  /** Home's reads of its rows, and its live reads. */
   let homeRowsReads = 0;
   let homeReads = 0;
   let assigns = 0;
@@ -754,6 +769,42 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let confluenceLinked = mode === 'ask-confluence' || mode.startsWith('confluence-');
   let jiraAttempt: { attempt: string; expires_at: string; status: string; failure_reason: string | null; reads: number } | null = null;
   let confluenceAttempt: { attempt: string; expires_at: string; status: string; failure_reason: string | null; reads: number } | null = null;
+
+  /** Mina marks done the open items Ari sent her (the `mina-done` file), and sends Ari another (the `mina-sends` file). */
+  const followUpsElsewhere = () => {
+    const at = new Date().toISOString();
+    if (!minaDone && elsewhere('mina-done')) {
+      minaDone = true;
+      for (const item of openItems) {
+        if (item.state === 'open' && item.owner.membership_id === MINA.membership_id && item.approver.membership_id === ARI.membership_id) {
+          Object.assign(item, { state: 'done', state_set_at: at, state_set_by: MINA });
+        }
+      }
+    }
+    if (mode === 'granola-owner-later' && elsewhere('mina-sends')) minaSendsAnother();
+  };
+  const minaSendsAnother = () => {
+    const at = new Date().toISOString();
+    const later = openItems.find(item => item.state === 'unsent' && item.approver.membership_id === MINA.membership_id);
+    if (later) Object.assign(later, { state: 'open', sent_at: at, state_set_at: at, state_set_by: MINA, send_included: true });
+  };
+  /**
+   * The change check (desktop refresh and notifications v1): one fingerprint per area of what Ari may read, as the Authority
+   * builds them, and the pace the test's `changes-seconds` file says.
+   */
+  const changeCheck = () => {
+    followUpsElsewhere();
+    const digest = (rows: unknown) => sha(JSON.stringify(rows));
+    const projectsNow = listed().map((project, index) => [project.project_id, project.name, projectStatus.get(project.project_id) ?? 'active',
+      mode === 'role-changes' && elsewhere('role-changed') && index === 0 ? 'member' : project.role]);
+    const followUps = openItems.filter(item => visible(item) && (involved(item) || item.owner_set_by?.membership_id === ARI.membership_id))
+      .map(item => [item.item_id, item.state, item.owner.membership_id, item.owner_set_at, item.state_set_at, item.sent_at]);
+    const reviews = [granolaImported, granolaApproved, granolaRun?.state ?? null];
+    // An hour unless the test says: a test's own reads never wait on, or race, a check it did not ask for.
+    const seconds = elsewhere('changes-seconds') ? Number(readFileSync(join(home, 'changes-seconds'), 'utf8')) : 3600;
+    return { kind: 'echo-person-changes-v1', areas: { projects: digest(projectsNow), follow_ups: digest(followUps), reviews: digest(reviews) },
+      check_again_after_seconds: seconds };
+  };
 
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input instanceof Request ? input.url : input));
@@ -842,6 +893,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // granola-sweep, until one is asked for. Every answer passes the
     // contract's own result check, as the Authority's does. Runs and shared
     // Home reads exist even when the meeting provider is unavailable.
+    // An Authority from before the change check (`no-changes`) answers it as any unknown path.
+    if (method === 'GET' && path === '/v1/person/changes' && mode !== 'no-changes') return json(changeCheck());
     if (method === 'POST' && path === '/v1/person/runs') {
       const api = await contract();
       let request: RunsRequest;
@@ -881,24 +934,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         sweep.state = 'done';
       }
       writeFound();
-      // Mina marks done the open items Ari sent her, once the test asks for it.
-      if (!minaDone && existsSync(join(home, 'mina-done'))) {
-        minaDone = true;
-        for (const item of openItems) {
-          if (item.state === 'open' && item.owner.membership_id === MINA.membership_id && item.approver.membership_id === ARI.membership_id) {
-            Object.assign(item, { state: 'done', state_set_at: now(), state_set_by: MINA });
-          }
-        }
-      }
-      // Mina sends Ari another item after Home's read of its rows that failed, or once the test asks (the `mina-sends` file).
-      if ((mode === 'granola-home-fails-once' && request.operation === 'home' && homeRowsReads === 2)
-          || (mode === 'granola-owner-later' && existsSync(join(home, 'mina-sends')))) {
-        const later = openItems.find(item => item.state === 'unsent' && item.approver.membership_id === MINA.membership_id);
-        if (later) Object.assign(later, { state: 'open', sent_at: now(), state_set_at: now(), state_set_by: MINA, send_included: true });
-      }
+      followUpsElsewhere();
+      // Mina sends Ari another item after Home's read of its rows that failed.
+      if (mode === 'granola-home-fails-once' && request.operation === 'home' && homeRowsReads === 2) minaSendsAnother();
       const shown = openItems.filter(visible).sort((a, b) => a.created_at.localeCompare(b.created_at));
-      /** An item in a scope: one Ari sent or owns, a run's, or, read by Ari, a decision's or a project's. */
-      const inScope = (item: OpenItem, scope: RunsRequest['scope'], id: string | undefined) => scope === 'mine' ? involved(item) : scope === 'run' ? item.run_id === id
+      /**
+       * An item in a scope: one Ari sent or owns (`involved`: or last handed on), a run's, or, read by Ari, a decision's or a
+       * project's.
+       */
+      const inScope = (item: OpenItem, scope: RunsRequest['scope'], id: string | undefined) => scope === 'mine' ? involved(item)
+        : scope === 'involved' ? involved(item) || item.owner_set_by?.membership_id === ARI.membership_id : scope === 'run' ? item.run_id === id
         : scope === 'record' ? item.readable && item.decision.record_sha256 === id : item.readable && item.decision.project_ids.includes(id!);
       switch (request.operation) {
         case 'list':
@@ -971,9 +1016,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           // Counts only (a project's or a meeting's line): the summary and stages, no item. States: the items in those states
           // alone, with the same summary, paged (two a page in granola-paged) with a cursor over those states only. Rows only:
           // the same page, nothing read live.
-          const { states } = request;
-          const listed = states === undefined ? items : items.filter(item => states.includes(item.state));
-          const pageKey = `items:${scope}:${id ?? ''}:${states?.join(',') ?? ''}`;
+          const { states, changed_since: changedSince } = request;
+          // Changed since a time: sent, handed on or set at or after it.
+          const since = changedSince === undefined ? null : Date.parse(changedSince);
+          const changed = (item: OpenItem) => since === null || [item.sent_at, item.owner_set_at, item.state_set_at].some(at => at !== null && Date.parse(at) >= since);
+          const listed = (states === undefined ? items : items.filter(item => states.includes(item.state))).filter(changed);
+          const pageKey = `items:${scope}:${id ?? ''}:${states?.join(',') ?? ''}:${changedSince ?? ''}`;
           const from = pageFrom(pageKey, request.cursor);
           if (from === null) return failure('invalid_request', 400);
           const size = mode === 'granola-paged' ? 2 : 50;
@@ -1125,10 +1173,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const paged = LIST_PAGES.has(mode);
       const from = !paged ? 0 : url.searchParams.get('cursor') === 'cGFnZTM' ? 20 : url.searchParams.get('cursor') === 'cGFnZTI' ? 10 : 0;
       const page = paged ? all.slice(from, from + 10) : all;
-      // The archived read is independent of the active list. It must not
-      // advance fixtures that model a change in the active membership view.
-      if (status === 'active') projectLists += 1;
-      const demoted = (index: number) => status === 'active' && mode === 'role-changes' && projectLists > 1 && index === 0 ? { role: 'member' } : {};
+      const demoted = (index: number) => status === 'active' && mode === 'role-changes' && elsewhere('role-changed') && index === 0 ? { role: 'member' } : {};
       return json({ schema_version: 2, kind: 'echo-project-list-v2', items: page.map((project, index) => ({
         schema_version: 2, kind: 'echo-project-summary-v2', project_id: project.project_id, name: project.name, created_at: NOW,
         // Lists can be stale; People reads the current role separately.
@@ -1141,7 +1186,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const role = roleOf(projectV2[1]!, session.membership_id);
       if (!known || !role) return failure('not_found', 404);
       // A direct read observes the same role transition as the active list.
-      const currentRole = mode === 'role-changes' && projectLists > 1 && known.project_id === desktop.projects[0]?.project_id ? 'member' : role;
+      const currentRole = mode === 'role-changes' && elsewhere('role-changed') && known.project_id === desktop.projects[0]?.project_id ? 'member' : role;
       return json({ schema_version: 2, kind: 'echo-project-summary-v2', project_id: known.project_id, name: known.name, created_at: NOW,
         role: currentRole, status: projectStatus.get(known.project_id) ?? 'active' });
     }

@@ -312,7 +312,8 @@ test('the list read again while Capture is open moves no project: one new to it 
   const rows = list(page).getByTestId('projects-row');
   await expect(rows).toHaveText(['Apollo', 'Beacon']);
 
-  // The window comes forward with Capture open: Home reads its list again, and Comet, the newest, leads it.
+  // Added to Comet elsewhere; the window comes forward with Capture open: the list is read again, and Comet, the newest, leads it.
+  writeFileSync(join(run.home, 'project-added'), '');
   await emit(app, 'echo-test:shown');
   await expect(page.getByTestId('sidebar-project')).toHaveCount(3);
   await expect(page.getByTestId('sidebar-project').first()).toContainText('Comet');

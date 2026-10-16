@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, cover, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow, uncover } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -39,10 +39,10 @@ describe('a meeting command answered while another app is in front', () => {
     const review = held.hold('tools.meetings');
     const deciding = store.decide('approve');
     await flush();
-    store.conceal();
+    cover(store);
     review(ok({ status: 'approved', decided_on: 'desktop' }));
     await deciding;
-    store.resume();
+    uncover(store);
     await flush();
     expect(store.getState().decision?.failure).toBeUndefined();
     expect(store.getState().route.page).toBe('home');
@@ -54,10 +54,10 @@ describe('a meeting command answered while another app is in front', () => {
     const open = held.hold('tools.meetings');
     const opening = store.openDecision('apr_1');
     await flush();
-    store.conceal();
+    cover(store);
     open(ok(opened));
     await opening;
-    store.resume();
+    uncover(store);
     await flush();
     expect(store.getState().decision?.failure).toBeUndefined();
     expect(store.getState().decision?.open).not.toBeNull();
@@ -101,9 +101,9 @@ describe('a write answered after the account changed', () => {
 describe('the tray with another app in front', () => {
   it('Connected tools… opens Tools once ECHO comes forward', async () => {
     const store = await startStore();
-    store.conceal();
+    cover(store);
     store.accountCommand('tools');
-    store.resume();
+    uncover(store);
     await flush();
     expect(store.getState().route.page).toBe('tools');
   });

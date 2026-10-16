@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { followUpsNotification, hostGoneFailure, isWriteCall, MAIN_METHODS, remoteDebuggingRequested, rpcLogName, versionLine } from '../../src/shared/protocol.js';
+import { changesLogLine, hostGoneFailure, isWriteCall, MAIN_METHODS, noticeOf, remoteDebuggingRequested, rpcLogName, versionLine } from '../../src/shared/protocol.js';
 
 describe('remote debugging refusal', () => {
   const none = () => false;
@@ -71,34 +71,60 @@ describe('desktop.log and the Account menu', () => {
   });
 });
 
-describe('a follow-ups notification', () => {
-  const id = (n: number) => `itm_00000000-0000-4000-8000-00000000000${n}`;
+describe('a notification', () => {
+  const item = 'itm_00000000-0000-4000-8000-000000000001';
+  const project = 'prj_00000001-1111-4111-8111-111111111111';
 
-  it('is a method main answers', () => {
-    expect(MAIN_METHODS).toContain('notify.followUps');
+  it('is a method main answers, beside the change check\'s log line', () => {
+    expect(MAIN_METHODS).toContain('notice.show');
+    expect(MAIN_METHODS).toContain('log.changes');
   });
 
-  it('says who sent one follow-up and what it is, and counts several', () => {
-    expect(followUpsNotification({ item_ids: [id(1)], from: 'Mina', title: 'Update the pricing page' }))
-      .toEqual({ body: 'Mina sent you: Update the pricing page', item_id: id(1) });
-    expect(followUpsNotification({ item_ids: [id(1), id(2), id(3)] })).toEqual({ body: '3 new follow-ups', item_id: null });
-    expect(followUpsNotification({ item_ids: [id(1)], from: 'x'.repeat(200), title: '😀'.repeat(200) })).not.toBeNull();
+  it('carries one line and what a click opens: an item, the follow-ups it counted, or a project', () => {
+    expect(noticeOf({ text: 'Mina handed you Update the pricing page', target: { kind: 'item', item_id: item } }))
+      .toEqual({ text: 'Mina handed you Update the pricing page', target: { kind: 'item', item_id: item } });
+    const several = { kind: 'items', item_ids: [item, item.replace(/1$/, '2'), item.replace(/1$/, '3')] };
+    expect(noticeOf({ text: '3 follow-ups changed', target: several })).toEqual({ text: '3 follow-ups changed', target: several });
+    expect(noticeOf({ text: 'You were added to Comet', target: { kind: 'project', project_id: project } }))
+      .toEqual({ text: 'You were added to Comet', target: { kind: 'project', project_id: project } });
+    // Two titles of 200 characters fit: "Mina handed <title> to <name>".
+    expect(noticeOf({ text: `Mina handed ${'😀'.repeat(200)} to ${'x'.repeat(200)}`, target: { kind: 'item', item_id: item } })).not.toBeNull();
   });
 
   it.each([
     ['nothing', null],
-    ['no items', { item_ids: [] }],
-    ['an id not an item\'s', { item_ids: ['../etc/passwd'], from: 'Mina', title: 'Hi' }],
-    ['the same item twice', { item_ids: [id(1), id(1)] }],
-    ['more than 50 items', { item_ids: Array.from({ length: 51 }, (_, n) => `itm_0000-${String(n).padStart(4, '0')}`) }],
-    ['one item without who sent it', { item_ids: [id(1)], title: 'Hi' }],
-    ['one item with an empty title', { item_ids: [id(1)], from: 'Mina', title: '  ' }],
-    ['a title over 200 characters', { item_ids: [id(1)], from: 'Mina', title: 'x'.repeat(201) }],
-    ['a line break', { item_ids: [id(1)], from: 'Mina', title: 'Hi\nthere' }],
-    ['several with a title', { item_ids: [id(1), id(2)], title: 'Hi' }],
-    ['a key it does not take', { item_ids: [id(1)], from: 'Mina', title: 'Hi', url: 'https://example.com' }],
-    ['a name that is not text', { item_ids: [id(1)], from: 7, title: 'Hi' }],
+    ['no target', { text: 'Hi' }],
+    ['no text', { target: { kind: 'item', item_id: item } }],
+    ['an empty line', { text: '  ', target: { kind: 'item', item_id: item } }],
+    ['a line break', { text: 'Hi\nthere', target: { kind: 'item', item_id: item } }],
+    ['a line over the bound', { text: 'x'.repeat(521), target: { kind: 'item', item_id: item } }],
+    ['text that is not text', { text: 7, target: { kind: 'item', item_id: item } }],
+    ['the old Follow-ups target', { text: 'Hi', target: { kind: 'follow-ups' } }],
+    ['one item as several', { text: 'Hi', target: { kind: 'items', item_ids: [item] } }],
+    ['the same item twice', { text: 'Hi', target: { kind: 'items', item_ids: [item, item] } }],
+    ['more than a hundred items', { text: 'Hi', target: { kind: 'items', item_ids: Array.from({ length: 101 }, (_, n) => `itm_0000-${String(n).padStart(4, '0')}`) } }],
+    ['several with an id not an item\'s', { text: 'Hi', target: { kind: 'items', item_ids: [item, '../etc'] } }],
+    ['an id not an item\'s', { text: 'Hi', target: { kind: 'item', item_id: '../etc/passwd' } }],
+    ['an id not a project\'s', { text: 'Hi', target: { kind: 'project', project_id: 'prj_x' } }],
+    ['a target of another kind', { text: 'Hi', target: { kind: 'url', url: 'https://example.com' } }],
+    ['a key the target does not take', { text: 'Hi', target: { kind: 'item', item_id: item, url: 'https://example.com' } }],
+    ['a key it does not take', { text: 'Hi', target: { kind: 'item', item_id: item }, url: 'https://example.com' }],
   ])('refuses %s', (_name, params) => {
-    expect(followUpsNotification(params)).toBeNull();
+    expect(noticeOf(params)).toBeNull();
+  });
+});
+
+describe('the change check in desktop.log', () => {
+  it('names the areas that moved, in the contract\'s order, or that the Authority has none', () => {
+    expect(changesLogLine({ moved: ['follow_ups', 'projects'] })).toBe('changes moved projects,follow_ups');
+    expect(changesLogLine({ moved: ['reviews'] })).toBe('changes moved reviews');
+    expect(changesLogLine({ unsupported: true })).toBe('changes unsupported');
+  });
+
+  it.each([
+    ['nothing', null], ['no area', { moved: [] }], ['an area not known', { moved: ['sha256:abc'] }], ['an area twice', { moved: ['projects', 'projects'] }],
+    ['a digest beside it', { moved: ['projects'], projects: 'sha256:abc' }], ['unsupported said otherwise', { unsupported: 'yes' }],
+  ])('refuses %s', (_name, params) => {
+    expect(changesLogLine(params)).toBeNull();
   });
 });

@@ -22,11 +22,12 @@ import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
-  closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
-  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, projectSettingsModal, readUpdate, refreshStatus, resume, retryStart,
-  sheetShown, shownItem, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore, WARNINGS,
-  windowShown, windowTakesDrop, type State,
+  closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
+  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, projectSettingsModal, readUpdate, refreshStatus, retryStart,
+  sheetShown, shownItem, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore,
+  WARNINGS, windowState, windowTakesDrop, type State,
 } from './store.js';
+import { woke } from './freshness.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
 
@@ -114,20 +115,16 @@ function App() {
     void readUpdate();
     const stops = [
       on('capture.open', () => { if (getState().status?.signed_in) openCapture(); }),
-      on('lifecycle.conceal', conceal),
-      on('lifecycle.resume', resume),
-      on('window.shown', () => {
-        if (getState().concealed) return;
-        void windowShown();
-        focusBar();
-      }),
+      // Covered while another app is in front; back on screen and in front, what shows is read again, and the caret waits in the bar.
+      on('window.state', next => { if (windowState(next)) focusBar(); }),
+      on('system.woke', woke),
       on('signin.phase', payload => signinPhase(payload.browser_opened)),
       on('host.restarted', () => { void refreshStatus(); }),
       on('host.failed', hostFailed),
       on('account.command', payload => accountCommand(payload.command)),
       on('organization.open', () => { if (getState().status?.signed_in) trayOrganization(); }),
       on('update.changed', updateChanged),
-      on('follow-ups.open', payload => openNotified(payload.item_id)),
+      on('notice.open', payload => openNotified(payload.target)),
     ];
     // One Escape handler for the whole window: it steps back exactly one level.
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); escape(); } };

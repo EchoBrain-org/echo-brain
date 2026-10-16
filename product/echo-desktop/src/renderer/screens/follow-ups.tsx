@@ -163,7 +163,7 @@ function Row({ state, list, item, label, name }: { state: State; list: FollowUpL
 function Head({ list }: { list: FollowUpList }) {
   const total = list.summary && summaryTotal(list.summary);
   const decision = listDecision(list);
-  const heading = list.scope === 'record' ? list.title ?? decision?.title ?? 'Follow-ups' : 'Follow-ups';
+  const heading = list.scope === 'record' ? list.title ?? decision?.title ?? 'Follow-ups' : list.ids ? list.title ?? 'Follow-ups' : 'Follow-ups';
   const day = decision ? monthDay(decision.approved_at) : null;
   // A meeting's approval opens its decision page over the list, when you approved it.
   const approved = list.scope !== 'record' || !day ? null
@@ -172,7 +172,7 @@ function Head({ list }: { list: FollowUpList }) {
   return (
     <header class="follow-ups-head">
       <h1 tabIndex={-1}>{heading}</h1>
-      {list.scope !== 'mine' && (
+      {(list.scope === 'record' || list.scope === 'project') && (
         <div class="follow-ups-sub">
           <span>{list.scope === 'project' ? list.title : <>{approved}{approved && count ? ' · ' : ''}{count}</>}</span>
           <CheckNow list={list} />
@@ -254,7 +254,7 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
       {more('active')}
       {CLOSED_STATES.map(closedGroup)}
       {list.loading && list.items.length === 0 && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
-      {!list.loading && !list.failed && list.summary !== null && summaryTotal(list.summary) === 0 && <div class="notice">No follow-ups</div>}
+      {!list.loading && !list.failed && (list.summary ? summaryTotal(list.summary) : list.items.length) === 0 && <div class="notice">No follow-ups</div>}
       {list.failed && (
         <div class="error more">
           {message(list.failed.failure)}
