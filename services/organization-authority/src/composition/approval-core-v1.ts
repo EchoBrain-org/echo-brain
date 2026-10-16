@@ -123,6 +123,8 @@ export interface ApprovalCoreV1 {
   proposal(approvalId: string): ApprovalProposalViewV1 | undefined;
   /** Caller has authenticated `reviewer`. Undecided staged first, then newest; limit defaults to 100, clamped to 1..100. */
   proposals(reviewer: ApprovalActorV1, limit?: number): readonly ApprovalProposalViewV1[];
+  /** `proposals`' ids and statuses alone, in the same order and bound, with no proposal content read (the change check, ADR-0036). */
+  proposalStatuses(reviewer: ApprovalActorV1, limit?: number): readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[];
   /** From ownerProposalsV1 over the candidate's uncleared brief, in brief order; [] for an unknown approval or when more
    *  than 40 are grounded; proposals whose signal id fails isApprovalSignalIdV1 are left out. */
   ownerProposals(approvalId: string): readonly ApprovalOwnerProposalV1[];
@@ -235,6 +237,10 @@ interface DecisionRow { readonly approval_id: string; readonly command_id: strin
 type DecidedStatusV1 = 'publishing' | 'approved' | 'rejected';
 function classify(row: { readonly action: 'approve' | 'reject'; readonly receipt_json: string | null }): DecidedStatusV1 {
   return row.action === 'reject' ? 'rejected' : row.receipt_json === null ? 'publishing' : 'approved';
+}
+/** A proposal's status: its decision's, else superseded or pending. */
+function statusOf(row: Pick<ProposalRow, 'action' | 'receipt_json' | 'state'>): ApprovalStatusV1 {
+  return row.action !== null ? classify({ action: row.action, receipt_json: row.receipt_json }) : row.state === 'superseded' ? 'superseded' : 'pending';
 }
 
 export async function createApprovalCoreV1(database: Database.Database, context: ApprovalWorkflowContextV1, options: ApprovalCoreOptionsV1): Promise<ApprovalCoreV1> {
@@ -403,7 +409,7 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     if (row.approved_snapshot_json === null || row.approved_snapshot_sha256 === null) return undefined;
     const reviewer = Object.freeze({ organization_id: row.organization_id, principal_id: row.principal_id, membership_id: row.membership_id });
     const body = row.body_json === null ? null : JSON.parse(row.body_json) as ApprovalDecisionBodyV1;
-    const status: ApprovalStatusV1 = row.action !== null ? classify({ action: row.action, receipt_json: row.receipt_json }) : row.state === 'superseded' ? 'superseded' : 'pending';
+    const status = statusOf(row);
     const suggested = row.suggested_projects_json === null ? [] : JSON.parse(row.suggested_projects_json) as string[];
     return Object.freeze({
       approval_id: row.approval_id, reviewer, reviewer_active: row.membership_status === 'active',
@@ -429,15 +435,25 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     const row = proposalRow(approvalId);
     return row === undefined ? undefined : view(row, readableCheck());
   }
-  function proposals(reviewer: ApprovalActorV1, limit = 100): readonly ApprovalProposalViewV1[] {
+  /** The reviewer's frozen proposals, undecided staged first, then newest, at most 100: `columns` of each. */
+  function reviewerProposals<T>(columns: string, reviewer: ApprovalActorV1, limit: number): T[] {
     const bounded = Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.trunc(limit))) : 100;
-    const ids = database.prepare(`SELECT o.approval_id FROM authority_live_approval_outbox_v2 o
+    return database.prepare(`SELECT ${columns} FROM authority_live_approval_outbox_v2 o
       JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
       JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256
       LEFT JOIN authority_approval_decisions_v1 d ON d.approval_id=o.approval_id
       WHERE a.organization_id=? AND a.principal_id=? AND a.membership_id=? AND o.approved_snapshot_json IS NOT NULL
       ORDER BY CASE WHEN d.approval_id IS NULL AND o.state='staged' THEN 0 ELSE 1 END, c.created_at DESC, o.approval_id
-      LIMIT ?`).pluck().all(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id, bounded) as string[];
+      LIMIT ?`).all(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id, bounded) as T[];
+  }
+  function proposalStatuses(reviewer: ApprovalActorV1, limit = 100): readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[] {
+    // As `view` reads a proposal: only a frozen one, with its decision's status.
+    return Object.freeze(reviewerProposals<Pick<ProposalRow, 'approval_id' | 'state' | 'approved_snapshot_sha256' | 'action' | 'receipt_json'>>(
+      'o.approval_id, o.state, o.approved_snapshot_sha256, d.action, d.receipt_json', reviewer, limit)
+      .flatMap(row => (row.approved_snapshot_sha256 === null ? [] : [Object.freeze({ approval_id: row.approval_id, status: statusOf(row) })])));
+  }
+  function proposals(reviewer: ApprovalActorV1, limit = 100): readonly ApprovalProposalViewV1[] {
+    const ids = reviewerProposals<{ readonly approval_id: string }>('o.approval_id', reviewer, limit).map(row => row.approval_id);
     const readable = readableCheck();
     return Object.freeze(ids.flatMap(id => {
       const row = proposalRow(id);
@@ -476,5 +492,5 @@ export async function createApprovalCoreV1(database: Database.Database, context:
         annotateCoreRuntimeV1({ result: result.kind === 'decided' ? 'done' : result.kind === 'replayed' ? 'coalesced' : result.kind === 'stale' ? 'superseded' : 'competing_action' });
         return result;
       });
-    }, proposal, proposals, ownerProposals });
+    }, proposal, proposals, proposalStatuses, ownerProposals });
 }

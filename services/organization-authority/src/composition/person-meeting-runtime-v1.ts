@@ -333,13 +333,6 @@ export function createPersonMeetingRuntimeV1(options: {
     try { check(); return true; }
     catch (error) { if (error instanceof AuthorityOperationError) return false; throw error; }
   }
-  /**
-   * The meetings waiting for a person's review, as `reviews` lists them: none once their membership is gone. The change check
-   * (ADR-0036) fingerprints this same list.
-   */
-  function reviewsOf(core: ApprovalCoreV1, person: MeetingIntakePersonV1): readonly ApprovalProposalViewV1[] {
-    return allowed(() => intake.currentPerson(person)) ? core.proposals(person) : [];
-  }
   function reviewView(view: ApprovalProposalViewV1): PersonMeetingReviewV2 {
     return { approval_id: view.approval_id, title: view.title, project_ids: view.project_ids, status: view.status, decided_on: view.decided_on, ...approvalProposalSummaryV1(view.snapshot_json) };
   }
@@ -360,7 +353,7 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'reviews' || input.operation === 'review_open' || input.operation === 'review') {
           // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
           const reviewer = allowed(() => intake.currentPerson(person)) ? person : null;
-          if (input.operation === 'reviews') return { reviews: reviewsOf(await approvals(), person).map(reviewView) };
+          if (input.operation === 'reviews') return { reviews: reviewer === null ? [] : (await approvals()).proposals(reviewer).map(reviewView) };
           if (!reviewer) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
           const approvalCore = await approvals();
           const view = approvalCore.proposal(input.approval_id);
@@ -466,12 +459,15 @@ export function createPersonMeetingRuntimeV1(options: {
     tools: async (token: string) => providers.map(p => p.tool(token)), approvals,
     /**
      * The change check's `reviews` area (desktop refresh and notifications v1, ADR-0036): each meeting `reviews` lists for a
-     * person, by approval id and status only. The approval core is ready once this resolves, so the read it returns is
-     * synchronous and runs inside the check's read transaction.
+     * person, by approval id and status only, behind the same membership check. The approval core is ready once this resolves,
+     * so the read it returns is synchronous and runs inside the check's read transaction.
      */
     async reviewStatuses(): Promise<PersonReviewStatusesV1> {
       const core = await approvals();
-      return person => Object.freeze(reviewsOf(core, meetingIntakePersonV1(person)).map(view => Object.freeze({ approval_id: view.approval_id, status: view.status })));
+      return person => {
+        const reviewer = meetingIntakePersonV1(person);
+        return allowed(() => intake.currentPerson(reviewer)) ? core.proposalStatuses(reviewer) : [];
+      };
     },
     close() {} };
 }
