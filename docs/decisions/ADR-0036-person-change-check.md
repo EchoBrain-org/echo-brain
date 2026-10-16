@@ -60,7 +60,9 @@ Option 2.
 - **The `involved` scope.** `runs` `items` gains `involved`: the caller's
   `mine` items plus the items they last handed on, that they may read.
 - **Read path.**
-  - The check is database-only, in one read transaction, with no live reads.
+  - The check is database-only, in one Authority read transaction, with no
+    live reads. The record check reads the separate record log through its
+    own connection, as every record read does.
   - It writes **no audit row**, because it returns no content.
   - The content reads it triggers stay audited as today.
 - **Pace.** The server sets it: 60 s by default, within 15..3600 s.

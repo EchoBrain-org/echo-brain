@@ -109,6 +109,8 @@ const STATES: readonly ImpactItemStateV1[] = ['unsent', 'open', 'done', 'not_rel
 const INVOLVING_MAX = 1000;
 /** The most rows one `items` scope reads; its pages and summary are within them. */
 const SCOPE_ROWS_MAX = 5000;
+/** The involved rows the change check reads at a time; it reads every page. */
+const INVOLVED_PAGE = 1000;
 /** The most records a project scope reads (the record lookup's own bound). */
 const PROJECT_RECORDS_MAX = 500;
 /** The most decisions a summary's per-decision counts, or the stages, cover. */
@@ -322,6 +324,33 @@ export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' 
 }
 
 /**
+ * The rows a personal `items` scope weighs, before the policy: `mine` is what the viewer sent or owns; `involved` (desktop
+ * refresh and notifications v1, ADR-0036) adds what they last handed on (`owner_set_by`). Every state, oldest first, within
+ * one scope's bound.
+ */
+export function personalOpenItemRowsV1(items: Pick<SqliteImpactItemsV1, 'involving'>, viewer: Pick<Viewer, 'organization' | 'membership'>, scope: 'mine' | 'involved'): readonly ImpactItemRowV1[] {
+  return items.involving(viewer.organization, viewer.membership, { states: STATES, limit: SCOPE_ROWS_MAX, ...(scope === 'involved' ? { handed_on: true } : {}) });
+}
+
+/**
+ * Every row `involved` shows this viewer, with no bound: what the change check fingerprints (ADR-0036). The involved rows are
+ * read a page at a time by (created_at, item_id), and each page goes through the same policy pass as `items`. No bound applies
+ * before the policy, so a change to a row the viewer cannot see never moves another row into or out of what they see.
+ */
+export function visibleInvolvedOpenItemsV1(sources: { readonly items: Pick<SqliteImpactItemsV1, 'involving'> } & Parameters<typeof assessOpenItemsV1>[0],
+  viewer: Viewer, page: number = INVOLVED_PAGE): readonly AssessedOpenItemV1[] {
+  if (!Number.isSafeInteger(page) || page < 1) throw new TypeError('The involved page must be a positive whole number');
+  const visible: AssessedOpenItemV1[] = [];
+  for (let after: { readonly created_at: string; readonly item_id: string } | undefined; ;) {
+    const rows = sources.items.involving(viewer.organization, viewer.membership, { states: STATES, limit: page, handed_on: true, ...(after === undefined ? {} : { after }) });
+    visible.push(...assessOpenItemsV1(sources, viewer, rows).assessed.filter(entry => entry.access.see_row));
+    const last = rows.at(-1);
+    if (rows.length < page || last === undefined) return visible;
+    after = { created_at: last.created_at, item_id: last.item_id };
+  }
+}
+
+/**
  * A sweep re-reads an item through its pointer, as a finding's citation the
  * sweep trigger takes: a ticket, a page, an ECHO record or document, and no
  * Slack message today. An item on any other pointer, a meeting action
@@ -343,15 +372,6 @@ function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
  * `mine` is what they sent or own; a decision's or a project's are its items
  * the viewer sees, as `items` shows them. `assessed` holds those items only.
  */
-/**
- * The rows a personal `items` scope weighs, before the policy: `mine` is what the viewer sent or owns; `involved` (desktop
- * refresh and notifications v1, ADR-0036) adds what they last handed on (`owner_set_by`). Every state, oldest first, within
- * one scope's bound. The change check fingerprints `involved` from these same rows after the same policy pass.
- */
-export function personalOpenItemRowsV1(items: Pick<SqliteImpactItemsV1, 'involving'>, viewer: Pick<Viewer, 'organization' | 'membership'>, scope: 'mine' | 'involved'): readonly ImpactItemRowV1[] {
-  return items.involving(viewer.organization, viewer.membership, { states: STATES, limit: SCOPE_ROWS_MAX, ...(scope === 'involved' ? { handed_on: true } : {}) });
-}
-
 export function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer, scope: TriggerRunScopeV1): Context {
   let rows: readonly ImpactItemRowV1[];
   switch (scope.kind) {

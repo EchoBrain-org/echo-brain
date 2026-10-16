@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { afterEach, describe, expect, it } from 'vitest';
+import { request as httpRequest } from 'node:http';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_CHANGES_AREAS_V1,
@@ -11,11 +12,12 @@ import {
   type PersonOpenItemV1,
   type ProjectStatusV2,
 } from '@echo-brain/organization-api';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import { createPersonChangesV1, type CreatePersonChangesV1Options } from '../src/composition/person-changes-v1.js';
+import { createPersonChangesV1, type CreatePersonChangesV1Options, type PersonChangesReviewsFailureV1 } from '../src/composition/person-changes-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
-import { openItemsFixture, sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { CLOUD, openItemsFixture, sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 const PEOPLE: readonly FixturePerson[] = ['ari', 'mina', 'rafael', 'okafor'];
 type Areas = Readonly<Record<PersonChangesAreaV1, string>>;
@@ -110,6 +112,29 @@ describe('change check: what it answers', () => {
     await expect(app.read({ access_token: 'stranger' })).rejects.toMatchObject({ code: 'unauthorized' });
     f.revoke('rafael');
     await expect(app.read({ access_token: 'rafael' })).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it('authenticates before it makes the approval core ready', async () => {
+    const f = await sentFixture();
+    const reviews = vi.fn(async () => () => []);
+    const { app, read } = changesOf(f, { reviews });
+    await expect(app.read({ access_token: 'stranger' })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(reviews).not.toHaveBeenCalled();
+    await read('mina');
+    expect(reviews).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers projects and follow-ups when reviews cannot be read, with no reviews, and reports it', async () => {
+    const f = await sentFixture();
+    await f.otherProposal();
+    const reported: PersonChangesReviewsFailureV1[] = [];
+    const whole = await changesOf(f).read('ari');
+    const notReady = await changesOf(f, { reviews: async () => { throw new AuthorityOperationError('unavailable', 'approval core unavailable'); }, on_reviews_failure: event => { reported.push(event); } }).read('ari');
+    expect(notReady).toEqual({ ...whole, areas: { ...whole.areas, reviews: canonicalSha256([]) } });
+    expect(whole.areas.reviews).not.toBe(canonicalSha256([]));
+    const unreadable = await changesOf(f, { reviews: async () => () => { throw new Error('proposal row unreadable'); }, on_reviews_failure: event => { reported.push(event); } }).read('ari');
+    expect(unreadable).toEqual(notReady);
+    expect(reported).toEqual([{ kind: 'person_changes_reviews', reason: 'ready', code: 'unavailable' }, { kind: 'person_changes_reviews', reason: 'read', code: 'error' }]);
   });
 });
 
@@ -268,6 +293,36 @@ describe('change check: privacy (ADR-0012)', () => {
     expect(after.reviews).toBe(rafael.reviews);
     expect(after.projects).not.toBe(rafael.projects);
   });
+
+  it('reads every involved row before any bound, so a change to an unreadable item never moves another row into view', async () => {
+    const f = await sentFixture();
+    // Mina hands the ticket to Okafor, who owns it (it was sent), then he hands it on to Rafael: as its last hand Okafor is
+    // involved, but he cannot read its decision, so he never sees it. It is his oldest involved row.
+    await assign(f, 'mina', f.ticket.item_id, 'okafor');
+    await assign(f, 'okafor', f.ticket.item_id, 'rafael');
+    // Three newer items, sent to Okafor, which he sees as their owner.
+    f.advance(1_000);
+    const run = f.runs.read(f.person, f.runId)!;
+    f.db.transaction(() => f.items.insertForRun(f.db, run, Array.from({ length: 3 }, (_, index) => ({
+      item_key: canonicalSha256(`okafor extra ${index}`), relation: 'conflicts' as const, expected: 'launch next week', owner_membership_id: f.membership('okafor'), owner_match: 'jira_account' as const,
+      pointer: { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: String(30_000 + index), permalink: `https://echo-fixture.atlassian.net/browse/ECHO-${300 + index}`, text_sha256: canonicalSha256(`okafor extra text ${index}`) },
+    }))))();
+    const extra = (await f.runItems()).items.filter(item => item.state === 'unsent');
+    expect(extra).toHaveLength(3);
+    await sendAll(f, extra, 'send-extra');
+    expect(await ids(f, 'okafor', 'involved')).toEqual(extra.map(item => item.item_id).sort());
+    // Two rows a page: the unreadable ticket and the first new item fill the first page.
+    const paged = changesOf(f, { involved_page: 2 });
+    const whole = changesOf(f);
+    const before = (await paged.read('okafor')).areas.follow_ups;
+    expect(before).toBe((await whole.read('okafor')).areas.follow_ups);
+    expect(before).toBe((await changesOf(f, { involved_page: 1 }).read('okafor')).areas.follow_ups);
+    // Rafael hands the ticket on: it leaves Okafor's involvement, which he could never see.
+    f.advance(1_000);
+    await assign(f, 'rafael', f.ticket.item_id, 'mina');
+    expect((await paged.read('okafor')).areas.follow_ups).toBe(before);
+    expect((await whole.read('okafor')).areas.follow_ups).toBe(before);
+  });
 });
 
 describe('change check: cost', () => {
@@ -276,11 +331,19 @@ describe('change check: cost', () => {
     const inTransaction: boolean[] = [];
     const seen = <T extends (...args: never[]) => unknown>(call: T): T => ((...args: Parameters<T>) => { inTransaction.push(f.db.inTransaction); return call(...args); }) as T;
     const repository = new SqliteProjectContextRepositoryV1(f.db);
+    const reviewer = (person: Parameters<typeof f.core.proposals>[0]) => f.core.proposals(person).map(view => ({ approval_id: view.approval_id, status: view.status }));
+    const inTransactionBy = new Map<string, boolean[]>();
+    const traced = <T extends (...args: never[]) => unknown>(name: string, call: T): T => seen(((...args: Parameters<T>) => {
+      inTransactionBy.set(name, [...(inTransactionBy.get(name) ?? []), f.db.inTransaction]);
+      return call(...args);
+    }) as T);
     const { app } = changesOf(f, {
-      sessions: { authenticateAccess: seen(f.openItemsOptions.sessions.authenticateAccess) },
-      projects: { personChangeView: seen(repository.personChangeView.bind(repository)) },
-      items: { involving: seen(f.items.involving.bind(f.items)) },
-      records: { readableDecisions: seen(f.records.readableDecisions) },
+      sessions: { authenticateAccess: f.openItemsOptions.sessions.authenticateAccess },
+      projects: { personChangeView: traced('projects', repository.personChangeView.bind(repository)) },
+      items: { involving: traced('items', f.items.involving.bind(f.items)) },
+      people: { people: traced('people', f.directory.people.bind(f.directory)), leadsAny: traced('leads', f.directory.leadsAny.bind(f.directory)) },
+      records: { readableDecisions: traced('records', f.records.readableDecisions) },
+      reviews: async () => traced('reviews', reviewer),
     });
     const audits = () => Object.fromEntries((f.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%audit%' ORDER BY name").pluck().all() as string[])
       .map(table => [table, f.db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()]));
@@ -288,7 +351,10 @@ describe('change check: cost', () => {
     const before = { audits: audits(), changes: changes(), binds: f.bindDesk.mock.calls.length, opens: f.openCitation.mock.calls.length };
     for (const who of PEOPLE) await app.read({ access_token: who });
     expect({ audits: audits(), changes: changes(), binds: f.bindDesk.mock.calls.length, opens: f.openCitation.mock.calls.length }).toEqual(before);
-    expect(inTransaction.length).toBeGreaterThan(PEOPLE.length * 3);
+    // Every database read after the session check runs inside the one read transaction: projects, items, people, records, reviews.
+    expect([...inTransactionBy.keys()].sort()).toEqual(['items', 'leads', 'people', 'projects', 'records', 'reviews']);
+    expect(inTransactionBy.get('reviews')).toHaveLength(PEOPLE.length);
+    expect(inTransaction.length).toBeGreaterThan(PEOPLE.length * 4);
     expect(inTransaction.every(Boolean)).toBe(true);
     expect(f.db.inTransaction).toBe(false);
     // Another connection holds the write lock: the check still answers, where a read that takes the write lock cannot.
@@ -306,18 +372,18 @@ describe('change check: cost', () => {
 describe('change check HTTP route', () => {
   const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
   afterEach(async () => { for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; } });
-  async function origin(person_changes?: ReturnType<typeof createPersonChangesV1>) {
-    const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
+  async function origin(person_changes?: ReturnType<typeof createPersonChangesV1>, sessions: unknown = {}) {
+    const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: sessions as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
       ...(person_changes === undefined ? {} : { person_changes }) });
     servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
     const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
     return `http://127.0.0.1:${address.port}`;
   }
 
-  it('authenticates like every Person read, answers the exact shape, and takes no query', async () => {
+  it('authenticates like every Person read, answers the exact shape, and takes no query or body', async () => {
     const f = await sentFixture();
     const { app, read } = changesOf(f);
-    const base = await origin(app);
+    const base = await origin(app, f.openItemsOptions.sessions);
     const get = (authorization: string | null, path: string = PERSON_CHANGES_ROUTE_V1) => fetch(`${base}${path}`, { headers: authorization === null ? {} : { authorization } });
     expect((await get(null)).status).toBe(401);
     const stranger = await get('Bearer stranger');
@@ -330,6 +396,17 @@ describe('change check HTTP route', () => {
     expect(validatePersonChangesV1(body)).toEqual(body);
     expect(body).toEqual(await read('mina'));
     expect((await get('Bearer mina', `${PERSON_CHANGES_ROUTE_V1}?since=1`)).status).toBe(400);
+    // The session is checked before the request's shape, as capabilities checks it.
+    expect((await get('Bearer stranger', `${PERSON_CHANGES_ROUTE_V1}?since=1`)).status).toBe(401);
+    const withBody = (authorization: string) => new Promise<number>((resolve, reject) => {
+      const url = new URL(`${base}${PERSON_CHANGES_ROUTE_V1}`);
+      const sent = httpRequest({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'GET', headers: { authorization, 'content-type': 'application/json', 'content-length': '2' } },
+        response => { response.resume(); resolve(response.statusCode ?? 0); });
+      sent.on('error', reject);
+      sent.end('{}');
+    });
+    expect(await withBody('Bearer mina')).toBe(400);
+    expect(await withBody('Bearer stranger')).toBe(401);
     // Only GET is served; another method finds no route.
     expect((await fetch(`${base}${PERSON_CHANGES_ROUTE_V1}`, { method: 'POST', headers: { authorization: 'Bearer mina', 'content-type': 'application/json' }, body: '{}' })).status).toBe(404);
   });

@@ -844,8 +844,16 @@ describe("Organization Authority API runtime", () => {
       authority_url: "https://authority.example", oidc: OIDC,
       client_authentication: { method: "none" as const }, pkce_sealing_key: pkce,
     };
+    // A personal HTTP runtime that only lists reviews, so the change check's reviews wiring is exercised (ADR-0036).
+    const REVIEW = `apr_${"a".repeat(64)}`;
+    const reviewed: string[] = [];
     const apiDependencies = {
       oidc_provider: new MockOidcProvider(),
+      person_http_runtime_factory: () => ({ applications: [], close() {},
+        reviewStatuses: async () => (person: { readonly membership_id: string }) => {
+          reviewed.push(person.membership_id);
+          return person.membership_id === initialized.owner_membership_id ? [{ approval_id: REVIEW, status: "pending" as const }] : [];
+        } }),
     };
     let runtime = await startOrganizationAuthorityApiRuntime(apiConfig, apiDependencies);
     try {
@@ -1069,6 +1077,24 @@ describe("Organization Authority API runtime", () => {
         } finally { inspection.exec("DROP TRIGGER fixture_project_audit_failure"); }
         expect(inspection.prepare("SELECT count(*) AS n FROM authority_live_source_candidates_v2").get()).toEqual({ n: 0 });
         expect(inspection.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 1 });
+
+        // The composed change check (ADR-0036): the owner's project and review, no follow-up yet, and no audit row. (An open item
+        // needs a published approval; the record check's grants inside the transaction are covered by the record route's tests.)
+        const auditRows = () => inspection.prepare("SELECT (SELECT count(*) FROM authority_project_read_audit_v1) + (SELECT count(*) FROM authority_person_read_decision_audit_v2) AS n").get();
+        const audited = auditRows();
+        expect((await fetch(`${origin}/v1/person/changes`)).status).toBe(401);
+        const changes = await get("/v1/person/changes");
+        expect(changes).toEqual({
+          kind: "echo-person-changes-v1",
+          areas: {
+            projects: canonicalSha256([[project_id, create.name, "active", "lead"]]),
+            follow_ups: canonicalSha256([]),
+            reviews: canonicalSha256([[REVIEW, "pending"]]),
+          },
+          check_again_after_seconds: 60,
+        });
+        expect(reviewed).toEqual([initialized.owner_membership_id]);
+        expect(auditRows()).toEqual(audited);
       } finally { inspection.close(); }
       await runtime.close();
       runtime = await startOrganizationAuthorityApiRuntime({ ...apiConfig, port: await availablePort() }, apiDependencies);

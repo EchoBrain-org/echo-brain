@@ -467,10 +467,13 @@ and the state were last set, and when it was sent; never a check) and `reviews`
 (the meetings `reviews` lists for the caller, by id and status), plus
 `check_again_after_seconds` (60 by default, within 15..3600). Each fingerprint
 is a SHA-256 over rows the caller may read under the same policy as that read,
-so it never moves with activity they cannot see (ADR-0012). The check reads only
-the database in one read transaction: no `BEGIN IMMEDIATE`, no live tool read and
-no audit row. The `owner_set_by` part has no index and scans the organization's
-items.
+so it never moves with activity they cannot see (ADR-0012). It authenticates
+first, then reads in one Authority read transaction (the record check reads the
+record log on its own connection): no `BEGIN IMMEDIATE`, no live tool read and
+no audit row. `follow_ups` reads every involved row, a page at a time, with no
+bound before the policy pass. The `owner_set_by` part has no index and scans
+the organization's items. Reviews that cannot be read just now count as none,
+and the other areas still answer.
 
 A sweep acts as the person who asked, with their access, and stores only
 verdicts. It covers items on a Jira ticket, a page, or an ECHO record or

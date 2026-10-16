@@ -103,8 +103,10 @@ from rows the caller may read under the same policy as the matching read:
 
 ### 1.4 Cost, audit and pace
 
-- **Database only, no live reads.** Each check runs in one read transaction
-  with no `BEGIN IMMEDIATE`, and makes no Jira, Confluence or Granola call.
+- **Database only, no live reads.** Each check runs in one Authority read
+  transaction with no `BEGIN IMMEDIATE`, and makes no Jira, Confluence or
+  Granola call. The record check reads the record log on its own connection,
+  as every record read does.
 - **No audit row.** The check returns no content. The project list read it
   triggers, which runs only when `projects` moved, is still audited as today.
 - **The server sets the pace.** `check_again_after_seconds` defaults to 60 and

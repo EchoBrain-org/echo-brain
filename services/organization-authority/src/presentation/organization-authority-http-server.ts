@@ -1093,8 +1093,9 @@ export function createOrganizationAuthorityHttpServer(
           fail(response, 503, "unavailable");
           return;
         }
-        // A bearer first, as every Person read; the check takes no query and no body.
+        // Authenticated first, as capabilities is; the check takes no query and no body.
         const access_token = accessToken(request.headers.authorization);
+        options.sessions.authenticateAccess({ access_token });
         if (url.search !== "" || (await rawBody(request)).byteLength !== 0) {
           throw new AuthorityOperationError("invalid_request", "request is invalid");
         }
