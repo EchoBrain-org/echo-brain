@@ -613,7 +613,7 @@ describe('a notification clicked (N6)', () => {
     store.openNotified({ kind: 'items', item_ids: [id(1), id(2)] });
     await flush();
     expect(store.getState().route).toEqual({ page: 'home' });
-    expect(store.followUpShown()).toMatchObject({ kind: 'list', scope: 'told', title: 'Changed follow-ups', loading: false });
+    expect(store.followUpShown()).toMatchObject({ kind: 'list', ids: [id(1), id(2)], title: 'Changed follow-ups', loading: false, summary: null });
     expect((store.followUpShown() as FollowUpList).items.map(item => item.item_id)).toEqual([id(1)]);
     // Read by their ids, rows only: never a scope's list.
     expect(rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'item').map(([, params]) => params.request.item_id))
