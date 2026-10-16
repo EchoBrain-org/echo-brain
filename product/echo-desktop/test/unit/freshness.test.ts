@@ -248,6 +248,19 @@ describe('what a moved area reads again (R3)', () => {
     expect(calls('list.page')).toHaveLength(1);
   });
 
+  it('follow-ups: a meeting\'s line on its decision page', async () => {
+    const store = await startStore();
+    const run = { run_id: 'run_00000000-0000-4000-8000-000000000020', trigger: 'approved_record' as const, event_ref: 'apr_1', state: 'done' as const,
+      error_code: null, created_at: '2026-10-14T09:00:00.000Z', updated_at: '2026-10-14T09:05:00.000Z' };
+    await store.openDecision('apr_1', run);
+    await flush();
+    const lines = () => runs('items', request => request.scope === 'run' && request.read === 'counts');
+    const before = lines();
+    authority.items = [sent(1, MINA)];
+    await nextCheck();
+    expect(lines()).toBe(before + 1);
+  });
+
   it('reviews: Home, and the decision page, keeping the choices made on it', async () => {
     const store = await startStore();
     const reviews = meetings('reviews');
@@ -337,6 +350,20 @@ describe('a hidden window (R6) and the cover (R7)', () => {
     await nextCheck();
     expect(noticeTexts()).toEqual(['Mina handed you Action 1', 'Mina handed you Action 2']);
     expect(homeReads()).toBe(before);
+    await store.windowShown();
+    await flush();
+    expect(homeReads()).toBe(before + 1);
+  });
+
+  it('stays hidden when ECHO comes back in front with its window still in the tray', async () => {
+    const store = await startStore();
+    store.windowHidden();
+    const before = homeReads();
+    await store.resume();
+    await flush();
+    expect(checks()).toBe(2);
+    expect(homeReads()).toBe(before);
+    await later();
     await store.windowShown();
     await flush();
     expect(homeReads()).toBe(before + 1);

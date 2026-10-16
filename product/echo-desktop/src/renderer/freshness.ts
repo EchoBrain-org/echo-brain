@@ -244,14 +244,16 @@ function flush(): void {
 // ---- triggers ---------------------------------------------------------------------
 
 /**
- * Coming back to ECHO, or the window coming forward, on either platform and
- * with no departure recorded: the account is read again, a check runs, and the
- * page on screen is read again quietly, once it shows. A return within two
- * seconds of the last is the same return. Without a change check to say
- * whether projects moved, the sidebar is read again too (R4, R8).
+ * Coming back to ECHO, or the window coming forward (`shown`), on either
+ * platform and with no departure recorded: the account is read again, a check
+ * runs, and the page on screen is read again quietly, once it shows. A return
+ * within two seconds of the last is the same return. Without a change check to
+ * say whether projects moved, the sidebar is read again too (R4, R8). Only the
+ * window coming forward ends a hidden window: ECHO can come back in front with
+ * its window still in the tray.
  */
-export function cameBack(): Promise<void> {
-  hidden = false;
+export function cameBack(shown: boolean): Promise<void> {
+  if (shown) hidden = false;
   const now = Date.now();
   if (now - returnedAt < ABSORB_MS) {
     flush();

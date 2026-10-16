@@ -3918,11 +3918,11 @@ export function conceal(): void {
  */
 export function resume(): Promise<void> {
   if (state.concealed) set({ concealed: false });
-  return freshness.cameBack();
+  return freshness.cameBack(false);
 }
 
 /** The window came forward (⌘E, the tray, a notification): the same as coming back (R4). The cover, if up, stays. */
-export function windowShown(): Promise<void> { return freshness.cameBack(); }
+export function windowShown(): Promise<void> { return freshness.cameBack(true); }
 
 /** The window was hidden or minimized: checks and notifications go on; what shows is read again once it shows (R6). */
 export function windowHidden(): void { freshness.windowHidden(); }
