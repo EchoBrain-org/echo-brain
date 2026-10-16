@@ -9,6 +9,8 @@ import { startPersonDocumentProcessingV1 } from './person-document-processing-v1
 import { createPersonResearchEvalV1 } from './person-research-eval-v1.js';
 import { createPersonTriggerRunsV1 } from './person-trigger-runs-v1.js';
 import { createPersonOpenItemsV1 } from './person-open-items-v1.js';
+import { createPersonChangesV1 } from './person-changes-v1.js';
+import type { PersonReviewStatusesV1 } from './person-meeting-runtime-v1.js';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
@@ -112,6 +114,8 @@ export interface PersonHttpRuntimeV1 {
   readonly applications: readonly ProviderHttpApplicationV1[];
   readonly processing?: import('./organization-authority-service-lifecycle.js').OrganizationAuthorityProcessingCycleV1;
   tools?(token: string): Promise<readonly import('@echo-brain/organization-api').OrganizationPersonToolV4[]>;
+  /** The meetings waiting for each person's review, for the change check (ADR-0036); absent with no personal meeting runtime. */
+  reviewStatuses?(): Promise<PersonReviewStatusesV1>;
   attachDiagnostics?(diagnostics: PersonDiagnosticsV1): void;
   close(): void;
 }
@@ -361,10 +365,16 @@ export async function startOrganizationAuthorityApiRuntime(
     const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
       ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources })
       : undefined;
+    const items = new SqliteImpactItemsV1(database);
+    const people = new SqliteOpenItemPeopleV1(database);
+    // The change check (ADR-0036) needs no answer model: it reads only the database, in one read transaction.
+    const reviewStatuses = personHttp?.reviewStatuses?.bind(personHttp);
+    const personChanges = createPersonChangesV1({
+      database, sessions, projects: projectRepository, items, people, records: recordSearch,
+      ...(reviewStatuses === undefined ? {} : { reviews: reviewStatuses }),
+    });
     const triggerRuns: PersonTriggerRunsHttpApplicationV1 = answerOptions === undefined ? unavailablePersonTriggerRunsV1(sessions) : (() => {
       const runs = new SqliteTriggerRunsV1(database);
-      const items = new SqliteImpactItemsV1(database);
-      const people = new SqliteOpenItemPeopleV1(database);
       // Ticket assignees match impact owners only when a live connector that reads them is configured.
       const owners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
       return Object.freeze({
@@ -424,6 +434,7 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
       ...(diagnostics === undefined ? {} : { person_diagnostics: diagnostics }),
       person_trigger_runs: triggerRuns,
+      person_changes: personChanges,
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
         repository: documents,

@@ -51,7 +51,10 @@ import a provider implementation.
   operations on the same route, `sweep` (which queues a sweep) and `home`'s
   `sweep_due` included, asking `open-items-policy-v1.ts` every access
   question. Both services read a run's stored impact card through
-  `person-stored-impact-card-v1.ts`.
+  `person-stored-impact-card-v1.ts`. `person-changes-v1.ts` serves
+  `GET /v1/person/changes` (ADR-0036): fingerprints of the caller's projects,
+  `involved` open items and reviews, read in one read transaction with no audit
+  row, through the same policy as those reads.
 - `organization-authority-state-bootstrap.ts`, `organization-authority-setup-cli.ts`
   and `organization-authority-reset-cli.ts` own stopped-state setup and reset.
 - The `person-*` modules wire Person routes and upload processing, the

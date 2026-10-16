@@ -37,7 +37,7 @@ import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { createPersonRecordSearchRouteV1, PersonRecordSearchIndexLagV1, type CreatePersonRecordSearchRouteV1Options } from "../src/composition/person-record-search-route.js";
-import { createRecordProjectAuthorizationV1 } from "../src/composition/person-record-project-scope-v1.js";
+import { createRecordProjectAuthorizationV1, recordProjectAuthorizationOfGrantsV1 } from "../src/composition/person-record-project-scope-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { addMembership } from "./fixtures/project-context-sqlite.js";
@@ -1151,6 +1151,46 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
       // Current grants decide: after leaving SHARED, r4 is no longer readable.
       w.leave(SHARED, EMP_A);
       expect(route.readableDecisions({ access_token: "emp_a", record_sha256s: [w.digest("r4")] }).size).toBe(0);
+    } finally { w.close(); }
+  });
+
+  it("reads the grants the change check already read inside its own read transaction, with the same answer (ADR-0036)", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      const repository = new SqliteProjectContextRepositoryV1(w.authority);
+      const records = [w.digest("r4"), w.digest("r1"), w.digest("r3"), w.digest("r6"), w.digest("r2")];
+      for (const token of ["owner", "emp_a", "emp_c"] as const) {
+        const outside = route.readableDecisions({ access_token: token, record_sha256s: records });
+        const captured = createRecordProjectAuthorizationV1(repository)(w.sessions.authenticateAccess({ access_token: token }));
+        const before = auditCount(w.authority);
+        // Outside a transaction of its own the change view refuses to read.
+        expect(() => repository.personChangeView(w.sessions.authenticateAccess({ access_token: token }))).toThrow("inside its own read transaction");
+        const inside = w.authority.transaction(() => {
+          const view = repository.personChangeView(w.sessions.authenticateAccess({ access_token: token }));
+          const projects = recordProjectAuthorizationOfGrantsV1(view.grants);
+          expect(projects).toEqual(captured);
+          // Capturing the grants again would nest a second transaction.
+          expect(() => route.readableDecisions({ access_token: token, record_sha256s: records })).toThrow("not reentrant");
+          return route.readableDecisions({ access_token: token, record_sha256s: records, projects });
+        }).deferred();
+        expect([...inside.entries()]).toEqual([...outside.entries()]);
+        expect(auditCount(w.authority)).toBe(before);
+      }
+      // The change view lists every project the V2 list pages through, active and archived, with no audit row.
+      const projects = createProjectContextApplicationV1({ authenticate: (access_token) => w.sessions.authenticateAccess({ access_token }), repository });
+      projects.archiveProject("owner", { schema_version: 1, kind: "echo-project-archive-v1", request_id: randomUUID(), project_id: SHARED, archived: true });
+      const listed = (["active", "archived"] as const).flatMap((status) => projects.listProjectsV2("owner", { limit: 10, status }).items
+        .map(({ project_id, name, status: listedStatus, role }) => ({ project_id, name, status: listedStatus, role })));
+      const audits = () => [auditCount(w.authority), w.authority.prepare("SELECT count(*) FROM authority_project_read_audit_v1").pluck().get()];
+      const before = audits();
+      const view = w.authority.transaction(() => repository.personChangeView(w.sessions.authenticateAccess({ access_token: "owner" }))).deferred();
+      expect(view.projects).toEqual(listed);
+      expect(view.projects).toEqual([{ project_id: SHARED, name: "Shared launch", status: "archived", role: "lead" }]);
+      expect(audits()).toEqual(before);
+      // The list itself is audited, as ever.
+      projects.listProjectsV2("owner", { limit: 10, status: "archived" });
+      expect(audits()[1]).toBe((before[1] as number) + 1);
     } finally { w.close(); }
   });
 

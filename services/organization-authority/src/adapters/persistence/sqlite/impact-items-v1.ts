@@ -132,13 +132,18 @@ export class SqliteImpactItemsV1 {
       ...(after === undefined ? [] : [after.created_at, after.created_at, after.item_id]), limit) as StoredItemV1[]).map(publicItem);
   }
 
-  /** Items this member approved or owns. */
-  involving(organizationId: string, membershipId: string, options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number }): readonly ImpactItemRowV1[] {
+  /**
+   * Items this member approved or owns; with `handed_on`, also the items they last handed on (`owner_set_by`; desktop refresh
+   * and notifications v1, ADR-0036). No index covers `owner_set_by` yet, so that part scans the organization's items.
+   */
+  involving(organizationId: string, membershipId: string, options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly handed_on?: boolean }): readonly ImpactItemRowV1[] {
     const limit = limitOf(options.limit);
     if (options.states.length === 0 || limit === 0) return [];
+    const handedOn = options.handed_on === true;
     return (this.database.prepare(`${selectItems}
-      WHERE item.organization_id=? AND (item.approver_membership_id=? OR item.owner_membership_id=?) AND item.state IN (SELECT value FROM json_each(?))
-      ${ORDER} LIMIT ?`).all(organizationId, membershipId, membershipId, JSON.stringify([...new Set(options.states)]), limit) as StoredItemV1[]).map(publicItem);
+      WHERE item.organization_id=? AND (item.approver_membership_id=? OR item.owner_membership_id=?${handedOn ? ' OR item.owner_set_by=?' : ''})
+        AND item.state IN (SELECT value FROM json_each(?))
+      ${ORDER} LIMIT ?`).all(organizationId, membershipId, membershipId, ...(handedOn ? [membershipId] : []), JSON.stringify([...new Set(options.states)]), limit) as StoredItemV1[]).map(publicItem);
   }
 
   /** Unsent or open items whose approver and owner memberships are both inactive. */

@@ -257,7 +257,8 @@ function approvedBy(row: ImpactItemRowV1, viewer: Viewer): boolean {
  * decisions the viewer reads now, who is still an active member, whether the
  * viewer leads one of a decision's projects, and whether the item reached its owner.
  */
-export function assessOpenItemsV1(sources: Pick<OpenItemSourcesV1, 'records' | 'people'>, viewer: Viewer, found: readonly ImpactItemRowV1[], scopeRecords: readonly Sha256Digest[] = []): Context {
+export function assessOpenItemsV1(sources: { readonly records: Pick<PersonReadableDecisionsV1, 'readableDecisions'>; readonly people: OpenItemSourcesV1['people'] },
+  viewer: Viewer, found: readonly ImpactItemRowV1[], scopeRecords: readonly Sha256Digest[] = []): Context {
   const rows = found.filter(row => row.organization_id === viewer.organization);
   const records = [...new Set([...rows.map(row => row.record_sha256), ...scopeRecords])];
   const decisions = records.length === 0 ? new Map<Sha256Digest, PersonReadableDecisionV1>() : sources.records.readableDecisions({ access_token: viewer.token, record_sha256s: records });
@@ -342,6 +343,15 @@ function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
  * `mine` is what they sent or own; a decision's or a project's are its items
  * the viewer sees, as `items` shows them. `assessed` holds those items only.
  */
+/**
+ * The rows a personal `items` scope weighs, before the policy: `mine` is what the viewer sent or owns; `involved` (desktop
+ * refresh and notifications v1, ADR-0036) adds what they last handed on (`owner_set_by`). Every state, oldest first, within
+ * one scope's bound. The change check fingerprints `involved` from these same rows after the same policy pass.
+ */
+export function personalOpenItemRowsV1(items: Pick<SqliteImpactItemsV1, 'involving'>, viewer: Pick<Viewer, 'organization' | 'membership'>, scope: 'mine' | 'involved'): readonly ImpactItemRowV1[] {
+  return items.involving(viewer.organization, viewer.membership, { states: STATES, limit: SCOPE_ROWS_MAX, ...(scope === 'involved' ? { handed_on: true } : {}) });
+}
+
 export function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer, scope: TriggerRunScopeV1): Context {
   let rows: readonly ImpactItemRowV1[];
   switch (scope.kind) {
@@ -560,7 +570,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       let projectRecords: readonly Sha256Digest[] | undefined;
       switch (request.scope) {
         case 'mine':
-          rows = options.items.involving(viewer.organization, viewer.membership, { states: STATES, limit: SCOPE_ROWS_MAX });
+        case 'involved':
+          rows = personalOpenItemRowsV1(options.items, viewer, request.scope);
           break;
         case 'run': {
           rows = options.items.forRun(request.id!);

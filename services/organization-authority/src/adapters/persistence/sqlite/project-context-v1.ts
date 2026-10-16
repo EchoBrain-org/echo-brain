@@ -128,6 +128,23 @@ function ranked(rows: readonly SourceRow[], terms: readonly string[]): { row: So
 }
 function excerpt(row: SourceRow): string { return [...row.text.trim()].slice(0, 300).join(''); }
 function binary(a: string, b: string): number { return Buffer.compare(Buffer.from(a), Buffer.from(b)); }
+/** The projects a person is an active member of in these statuses, newest first: what the V2 project list pages through. */
+function memberProjects(database: Database.Database, person: AuthorityPersonMembershipBinding, statuses: readonly ProjectStatusV2[]): ProjectRow[] {
+  return database.prepare(`SELECT project.project_id, project.organization_id, project.name, project.created_at, project.status, grant.role
+    FROM authority_projects_v1 AS project JOIN authority_project_memberships_v1 AS grant
+    ON grant.project_id = project.project_id AND grant.organization_id = project.organization_id
+    JOIN authority_memberships AS membership ON membership.membership_id = grant.membership_id AND membership.status = 'active'
+    WHERE project.organization_id = ? AND grant.membership_id = ? AND grant.status = 'active' AND project.status IN (SELECT value FROM json_each(?))
+    ORDER BY project.created_at DESC, project.project_id ASC`).all(person.organization_id, person.membership_id, JSON.stringify(statuses)) as ProjectRow[];
+}
+
+/** The change check's read of one person's projects (desktop refresh and notifications v1, ADR-0036). */
+export interface ProjectChangeViewV1 {
+  /** Exactly the grants `captureAuthorization` gives this person. */
+  readonly grants: readonly ProjectMembershipGrantV1[];
+  /** Every project the V2 list pages through for this person, active and archived, newest first. */
+  readonly projects: readonly { readonly project_id: ProjectIdV1; readonly name: string; readonly status: ProjectStatusV2; readonly role: ProjectRoleV1 }[];
+}
 
 export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositoryV1 {
   private readonly issued = new WeakMap<ProjectAuthorizationSnapshotV1, Issued>();
@@ -142,6 +159,19 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
   }
   withWriteTransaction<T>(operation: (transaction: ProjectContextWriteTransactionV1) => T): T {
     return this.transaction(true, operation as (transaction: ProjectContextReadTransactionV1 | ProjectContextWriteTransactionV1) => T);
+  }
+  /**
+   * The change check's read of a person's projects (desktop refresh and notifications v1, ADR-0036). It runs only inside the
+   * check's own read transaction, which it never opens, ends or upgrades, and it writes no audit row: the check returns no
+   * content, and the project list read it may trigger is audited as ever. An inactive membership is refused as
+   * `captureAuthorization` refuses it.
+   */
+  personChangeView(actor: PersonAccessAuthorization): ProjectChangeViewV1 {
+    if (!this.database.inTransaction || transactionActive) throw new Error('The change check reads projects inside its own read transaction');
+    const { grants } = this.projectState(actor);
+    const projects = memberProjects(this.database, actor, ['active', 'archived'])
+      .map(row => Object.freeze({ project_id: row.project_id, name: row.name, status: row.status, role: row.role }));
+    return Object.freeze({ grants, projects: Object.freeze(projects) });
   }
   private transaction<T>(write: boolean, operation: (transaction: ProjectContextReadTransactionV1 | ProjectContextWriteTransactionV1) => T): T {
     if (this.database.inTransaction || transactionActive) throw new Error('project context transaction is not reentrant');
@@ -338,12 +368,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
     const input = this.input(() => validateProjectPageRequestV2(request));
     const status = input.status ?? 'active'; const limit = input.limit ?? 10; const scope = cursorScope(snapshot, limit, undefined, status);
     const position = decodeProjectCursorV1(input.cursor, scope);
-    const rows = this.store.database.prepare(`SELECT project.project_id, project.organization_id, project.name, project.created_at, project.status, grant.role
-      FROM authority_projects_v1 AS project JOIN authority_project_memberships_v1 AS grant
-      ON grant.project_id = project.project_id AND grant.organization_id = project.organization_id
-      JOIN authority_memberships AS membership ON membership.membership_id = grant.membership_id AND membership.status = 'active'
-      WHERE project.organization_id = ? AND grant.membership_id = ? AND grant.status = 'active' AND project.status = ?
-      ORDER BY project.created_at DESC, project.project_id ASC`).all(snapshot.person.organization_id, snapshot.person.membership_id, status) as ProjectRow[];
+    const rows = memberProjects(this.store.database, snapshot.person, [status]);
     const remaining = after(rows, position, row => [row.created_at, row.project_id]); const page = remaining.slice(0, limit);
     return this.store.issue(snapshot, 'project_list_v2', validateProjectListV2({ schema_version: 2, kind: 'echo-project-list-v2', items: page.map(row => ({ schema_version: 2, kind: 'echo-project-summary-v2', project_id: row.project_id, name: row.name, created_at: row.created_at, role: row.role, status: row.status })), next_cursor: next(remaining, page, limit) ? encodeProjectCursorV1(scope, [page.at(-1)!.created_at, page.at(-1)!.project_id]) : null }));
   }

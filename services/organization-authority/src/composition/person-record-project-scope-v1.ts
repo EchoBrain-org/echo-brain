@@ -2,7 +2,7 @@ import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-proto
 import { validateProjectIdV1 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
-import type { ProjectContextRepositoryV1 } from "../application/ports/project-context-v1.js";
+import type { ProjectContextRepositoryV1, ProjectMembershipGrantV1 } from "../application/ports/project-context-v1.js";
 
 /** Server-only projection of the existing project authorization snapshot. */
 export interface RecordProjectAuthorizationV1 {
@@ -13,15 +13,23 @@ export interface RecordProjectAuthorizationV1 {
 export type CaptureRecordProjectsV1 = (person: PersonAccessAuthorization) => RecordProjectAuthorizationV1;
 
 export function createRecordProjectAuthorizationV1(repository: ProjectContextRepositoryV1): CaptureRecordProjectsV1 {
-  return (person) => repository.withReadTransaction((transaction) => {
-    const snapshot = transaction.captureAuthorization(person, { operation: "project_list" });
-    const grants = snapshot.grants.map(({ project_id, project_membership_id }) => ({ project_id, project_membership_id }));
-    return Object.freeze({
-      project_ids: Object.freeze(grants.map((grant) => grant.project_id)),
-      // Only this person's exact grants affect a release; unrelated organization
-      // project mutations are not an authorization change for this request.
-      grants_sha256: canonicalSha256(grants),
-    });
+  return (person) => repository.withReadTransaction((transaction) =>
+    recordProjectAuthorizationOfGrantsV1(transaction.captureAuthorization(person, { operation: "project_list" }).grants));
+}
+
+/**
+ * The record reads' projection of a person's project grants, from grants already read: by the capture above, or by the
+ * change check inside its own read transaction (ADR-0036).
+ */
+export function recordProjectAuthorizationOfGrantsV1(
+  value: readonly Pick<ProjectMembershipGrantV1, "project_id" | "project_membership_id">[],
+): RecordProjectAuthorizationV1 {
+  const grants = value.map(({ project_id, project_membership_id }) => ({ project_id, project_membership_id }));
+  return Object.freeze({
+    project_ids: Object.freeze(grants.map((grant) => grant.project_id)),
+    // Only this person's exact grants affect a release; unrelated organization
+    // project mutations are not an authorization change for this request.
+    grants_sha256: canonicalSha256(grants),
   });
 }
 

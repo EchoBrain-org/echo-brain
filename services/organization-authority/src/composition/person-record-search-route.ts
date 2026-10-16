@@ -291,8 +291,13 @@ export interface PersonReadableDecisionV1 {
 
 /** Which decisions an open item's viewer can read (open items and Home v1, section 4). */
 export interface PersonReadableDecisionsV1 {
-  /** The records among these that this person can read now (the exact Layer 1 check `admittedRecord`), with what a list row shows of each. A lookup, not a release: nothing is audited. */
-  readableDecisions(input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }): ReadonlyMap<Sha256Digest, PersonReadableDecisionV1>;
+  /**
+   * The records among these that this person can read now (the exact Layer 1 check `admittedRecord`), with what a list row shows
+   * of each. A lookup, not a release: nothing is audited. `projects` is this person's own grants as a caller already read them
+   * inside its own read transaction (the change check, ADR-0036), which a capture here could not nest in; otherwise they are
+   * captured here.
+   */
+  readableDecisions(input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[]; readonly projects?: RecordProjectAuthorizationV1 }): ReadonlyMap<Sha256Digest, PersonReadableDecisionV1>;
   /** The records this person can read in one project now, newest first, at most `limit` (at most 500). */
   projectRecords(input: { readonly access_token: string; readonly project_id: string; readonly limit: number }): readonly Sha256Digest[];
 }
@@ -1381,7 +1386,7 @@ export function createPersonRecordSearchRouteV1(
     readableDecisions(input: Parameters<PersonReadableDecisionsV1["readableDecisions"]>[0]): ReturnType<PersonReadableDecisionsV1["readableDecisions"]> {
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       assertExpectedOrganization(authorization);
-      const projects = captureRecordProjectsV1(options.capture_projects, authorization);
+      const projects = input.projects ?? captureRecordProjectsV1(options.capture_projects, authorization);
       // A malformed digest, like a record this reader cannot read, is simply not in the answer.
       const readable = [...new Set(input.record_sha256s)].flatMap((recordSha256) => {
         const row = typeof recordSha256 === "string" && RECORD_SHA256.test(recordSha256) ? readableRecord(authorization, projects, recordSha256) : undefined;

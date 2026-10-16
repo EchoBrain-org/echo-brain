@@ -57,6 +57,8 @@ export interface OpenItemsFixtureOptionsV1 {
   readonly meetingActions?: readonly PersonRecordActionV1[];
   /** The card also lists another atom of the approved meeting's own record as affected. */
   readonly ownRecordAffected?: boolean;
+  /** A temp-file database, so a peer handle (`peer()`) can hold a lock on the same Authority. */
+  readonly file?: boolean;
 }
 
 /** One impact card as the renderer returns it, with a copy of the ticket at another text hash when asked. */
@@ -108,7 +110,7 @@ export function fixtureCard(input: { readonly record: unknown; readonly outsideT
 export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) {
   const outsideText = options.outsideText ?? 'Kestrel cooling fan drift 0xC0FFEE';
   let now = new Date(START);
-  const f = await approvalCoreFixture();
+  const f = await approvalCoreFixture(options.file === true ? { file: true } : {});
   const { db } = f;
   const organization = f.person.organization_id;
   db.prepare('UPDATE authority_principals SET display_name=? WHERE principal_id=?').run('Ari', f.person.principal_id);
@@ -150,10 +152,10 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     },
   };
   const decisionCitation = { kind: 'approved_record' as const, atom_id: canonicalSha256('pilot planning atom'), record_sha256: recordSha256, policy_id: 'project-members-readable-person-v1' as const };
-  const readable = vi.fn((input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }) => {
-    // As the Authority's record search does: its project grants are read in a transaction of their own, which never nests, and
-    // the session is authenticated first.
-    if (db.inTransaction) throw new Error('project context transaction is not reentrant');
+  const readable = vi.fn((input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[]; readonly projects?: unknown }) => {
+    // As the Authority's record search does: its project grants are read in a transaction of their own, which never nests, unless
+    // the caller read them inside its own (the change check); the session is authenticated first.
+    if (db.inTransaction && input.projects === undefined) throw new Error('project context transaction is not reentrant');
     sessions.authenticateAccess({ access_token: input.access_token });
     const name = token(input.access_token);
     return new Map(input.record_sha256s.filter(sha => sha === recordSha256 && reads(name)).map(sha => [sha, Object.freeze({
