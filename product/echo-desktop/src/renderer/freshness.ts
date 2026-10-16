@@ -47,6 +47,8 @@ export interface Surfaces {
   status(): Promise<void>;
   /** The quiet multi-page sidebar read, the open project then following its row; false when it did not finish. */
   refreshSidebar(): Promise<boolean>;
+  /** The sidebar's last read of a list failed. */
+  sidebarFailed(): boolean;
   /** What shows read again quietly: the page on screen (`page`, R4), and what moved areas feed (R3). */
   reread(what: { readonly page: boolean; readonly areas: readonly ScreenArea[] }): void;
   /** The follow-up whose page shows, if one does. */
@@ -71,10 +73,13 @@ interface Loop {
    * read learns them. Only the first check and a move of `projects` read them all.
    */
   memberships: Map<string, ProjectSummary> | null;
-  /** When `memberships` was read, on this computer's clock: the last check, for a project you lead made since. */
-  projectsAt: number;
   /** The open follow-ups you are involved in, as last read: null until a read learns them. */
   followed: Map<string, OpenItemView> | null;
+  /**
+   * Follow-ups that left your open ones and were not read yet to say what happened to them (a read that failed, or past the
+   * twenty one check reads), as they were last seen: read again at the next check.
+   */
+  pending: Map<string, OpenItemView>;
   /** `involved`, or `mine` on an Authority that refuses it. */
   scope: 'involved' | 'mine';
   /** Milliseconds between checks, as the server last said. */
@@ -124,7 +129,7 @@ function visible(): boolean { return !hidden && surfaces?.covered() === false; }
 /** Signed in, or switched to another account: a new loop, whose first check learns and never notifies (R2, N4). */
 export function start(account: Expect): void {
   stop();
-  loop = { account, mode: 'changes', areas: null, memberships: null, projectsAt: Date.now(), followed: null, scope: 'involved', pace: PACE_SECONDS.default * 1000,
+  loop = { account, mode: 'changes', areas: null, memberships: null, followed: null, pending: new Map(), scope: 'involved', pace: PACE_SECONDS.default * 1000,
     failures: 0, timer: null, running: null, began: Number.NEGATIVE_INFINITY };
   told = { account, keys: [], rows: new Map(), projects: new Map() };
   void check('start');
@@ -158,11 +163,14 @@ function check(trigger: Trigger): Promise<Outcome | null> {
   return running;
 }
 
-/** The next check: at the server's pace, later after failures (to five minutes), every five minutes on an older Authority. */
+/**
+ * The next check: at the server's pace; after failures later, doubling up to five minutes, but never sooner than the pace
+ * the server last set; every five minutes on an older Authority.
+ */
 function schedule(run: Loop): void {
   if (run.timer) clearTimeout(run.timer);
   const delay = run.mode === 'fallback' ? FALLBACK_MS
-    : run.failures === 0 ? run.pace : Math.min(BACKOFF_MAX_MS, Math.max(PACE_SECONDS.min * 1000, run.pace * 2 ** run.failures));
+    : run.failures === 0 ? run.pace : Math.max(run.pace, Math.min(BACKOFF_MAX_MS, run.pace * 2 ** run.failures));
   run.timer = setTimeout(() => { run.timer = null; if (loop === run) void check('timer'); }, delay);
 }
 
@@ -198,18 +206,19 @@ async function once(run: Loop): Promise<Outcome> {
   }
   const known = run.areas;
   const moved = AREAS.filter(area => fresh[area] !== known[area]);
-  if (moved.length === 0) return 'ok';
-  void ask(() => rpc('log.changes', { moved }));
+  if (moved.length > 0) void ask(() => rpc('log.changes', { moved }));
+  // What a failed first read could not learn is read on every check until a read learns it, moved or not; so is a follow-up
+  // that left your open ones and could not be read yet.
   const [projects, events] = await Promise.all([
-    moved.includes('projects') ? projectsMoved(run) : Promise.resolve(null),
-    moved.includes('follow_ups') ? followUpsMoved(run) : Promise.resolve([]),
+    moved.includes('projects') ? projectsMoved(run) : run.memberships === null ? learnMemberships(run).then(() => null) : Promise.resolve(null),
+    moved.includes('follow_ups') || run.followed === null ? followUpsMoved(run) : run.pending.size > 0 ? readPending(run) : Promise.resolve([]),
   ]);
   if (loop !== run) return 'ok';
   const adds = projects?.adds ?? [];
   // An area whose read did not finish keeps its old fingerprint, so the next check reads it again.
   run.areas = {
     projects: projects !== null && projects.sidebar ? fresh.projects : known.projects,
-    follow_ups: moved.includes('follow_ups') && events !== null ? fresh.follow_ups : known.follow_ups,
+    follow_ups: events !== null ? fresh.follow_ups : known.follow_ups,
     reviews: fresh.reviews,
   };
   reread(moved.filter((area): area is ScreenArea => area !== 'projects'));
@@ -263,7 +272,8 @@ export function cameBack(shown: boolean): Promise<void> {
     await surfaces?.status();
     flush();
     const outcome = await check('came-back');
-    if ((outcome === 'fallback' || outcome === 'failed') && loop !== null) await surfaces?.refreshSidebar();
+    // No check to say whether projects moved, or a sidebar whose last read failed: it is read again, as you look at it.
+    if (loop !== null && (outcome === 'fallback' || outcome === 'failed' || surfaces?.sidebarFailed())) await surfaces?.refreshSidebar();
   })();
   returning = work;
   return work;
@@ -271,6 +281,15 @@ export function cameBack(shown: boolean): Promise<void> {
 
 /** The window was hidden or minimized: checks and notifications go on; what shows is read again once it shows (R6). */
 export function windowHidden(): void { hidden = true; }
+
+/**
+ * The window is on screen again without coming forward (macOS: no longer covered by other windows, or back on this Space):
+ * what waited on it is read, once. Not a return: no status read, and no check.
+ */
+export function windowVisible(): void {
+  hidden = false;
+  flush();
+}
 
 /**
  * Another app came in front: the page is covered, and its live reads and polls stop. Uncovered, it is read again, even on a
@@ -312,24 +331,29 @@ async function readMemberships(run: Loop): Promise<Map<string, ProjectSummary> |
   return all;
 }
 
-/** The first check: every project you belong to, learned without a word. */
+/** The first check (or the next, after it failed): every project you belong to, learned without a word. */
 async function learnMemberships(run: Loop): Promise<void> {
   const read = await readMemberships(run);
   if (loop !== run || read === null) return;
   run.memberships = read;
-  run.projectsAt = run.began;
 }
 
 /**
  * The projects you were added to: those in the full read (`now`) that were not
  * among every project you belonged to at the last one (`known`), however far
- * past the sidebar's pages they sort. Not one made on this desktop, nor one
- * you lead that was made after the last check (`since`): yours, made
- * elsewhere.
+ * past the sidebar's pages they sort; archived ones included, so archiving or
+ * restoring one never reads as an add. Not one made on this desktop, nor one
+ * you lead that was made after the newest project of the last full read, on
+ * the Authority's own clock: yours, made elsewhere. With nothing to measure
+ * against (you had no projects), one you lead is told.
  */
-export function projectAdds(known: ReadonlyMap<string, ProjectSummary>, now: ReadonlyMap<string, ProjectSummary>, made: ReadonlySet<string>, since: number): ProjectSummary[] {
+export function projectAdds(known: ReadonlyMap<string, ProjectSummary>, now: ReadonlyMap<string, ProjectSummary>, made: ReadonlySet<string>): ProjectSummary[] {
+  const since = [...known.values()].reduce<number | null>((newest, project) => {
+    const at = Date.parse(project.created_at);
+    return Number.isNaN(at) || (newest !== null && newest >= at) ? newest : at;
+  }, null);
   return [...now.values()].filter(project => !known.has(project.project_id) && !made.has(project.project_id)
-    && !(project.role === 'lead' && Date.parse(project.created_at) > since));
+    && !(project.role === 'lead' && since !== null && Date.parse(project.created_at) > since));
 }
 
 /**
@@ -344,9 +368,7 @@ async function projectsMoved(run: Loop): Promise<{ sidebar: boolean; adds: Proje
   if (loop !== run || read === null) return { sidebar, adds: [] };
   const known = run.memberships;
   run.memberships = read;
-  const since = run.projectsAt;
-  run.projectsAt = run.began;
-  return { sidebar, adds: known === null ? [] : projectAdds(known, read, created, since) };
+  return { sidebar, adds: known === null ? [] : projectAdds(known, read, created) };
 }
 
 /** A project a notification was about, as the full read had it: it opens even when the sidebar has not loaded its row. */
@@ -383,10 +405,14 @@ function newestChange(row: OpenItemView, before: OpenItemView | null): { what: '
  * else did it (N2, N3): handed to you, a first Send to you included; done or
  * dismissed (not relevant); reopened; or, on one you sent or last handed on,
  * handed on to someone else. Your own changes, from any device, are never told.
+ * One new to your open ones is told only when its change is newer than the
+ * newest change the last read saw (`since`, the Authority's clock): one that
+ * only came into view, changed long ago, is not news.
  */
-export function followUpEvent(before: OpenItemView | null, row: OpenItemView, me: string): FollowUpEvent | null {
+export function followUpEvent(before: OpenItemView | null, row: OpenItemView, me: string, since: string | null = null): FollowUpEvent | null {
   const change = newestChange(row, before);
   if (!change || change.by.membership_id === me) return null;
+  if (before === null && since !== null && !(Date.parse(change.at) > Date.parse(since))) return null;
   const yours = row.owner.membership_id === me;
   if (change.what === 'owner') {
     if (yours) return { kind: 'handed_you', item: row, by: change.by };
@@ -427,6 +453,17 @@ async function readFollowed(run: Loop): Promise<OpenItemView[] | null> {
   }
 }
 
+/** The newest change a set of rows shows, on the Authority's clock: when each was made, sent, or had its owner or state set. */
+function newestSeen(rows: Iterable<OpenItemView>): string | null {
+  let newest: string | null = null;
+  for (const row of rows) {
+    for (const at of [row.created_at, row.sent_at, row.owner_set_at, row.state_set_at]) {
+      if (at !== null && (newest === null || Date.parse(at) > Date.parse(newest))) newest = at;
+    }
+  }
+  return newest;
+}
+
 /**
  * Follow-ups moved: your open ones read again, each compared with how it was
  * last read, and each that is no longer among them read by its id (rows only)
@@ -438,23 +475,58 @@ async function followUpsMoved(run: Loop): Promise<FollowUpEvent[] | null> {
   if (rows === null) return null;
   const now = new Map(rows.map(row => [row.item_id, row]));
   const before = run.followed;
-  if (before === null) { run.followed = now; return []; }
+  if (before === null) { run.followed = now; run.pending = new Map(); return []; }
   const me = run.account.membership_id;
+  const since = newestSeen(before.values());
   const events = rows.flatMap(row => {
-    const event = followUpEvent(before.get(row.item_id) ?? null, row, me);
+    // One that left and came back before it was read is judged from how it was last seen.
+    const was = before.get(row.item_id) ?? run.pending.get(row.item_id) ?? null;
+    const event = followUpEvent(was, row, me, since);
     return event ? [event] : [];
   });
-  const left = [...before.values()].filter(row => !now.has(row.item_id)).slice(0, LEFT_READS_MAX);
-  for (const was of left) {
+  const left = new Map([...run.pending, ...before].filter(([id]) => !now.has(id)));
+  const read = await readLeft(run, left);
+  if (read === null) return null;
+  run.followed = now;
+  run.pending = read.unread;
+  return [...events, ...read.events];
+}
+
+/** Follow-ups whose read failed or waited, read again by their ids at the next check, with nothing else moved. */
+async function readPending(run: Loop): Promise<FollowUpEvent[] | null> {
+  const read = await readLeft(run, run.pending);
+  if (read === null) return null;
+  run.pending = read.unread;
+  return read.events;
+}
+
+/**
+ * Follow-ups that left your open ones, read by their ids, rows only, to say
+ * what happened to each, twenty at most a check. One you no longer see says
+ * nothing. One whose read failed, or past the twenty, stays `unread`, to be
+ * read next time, so nothing that happened to it is lost. Null when the
+ * account changed meanwhile.
+ */
+async function readLeft(run: Loop, left: ReadonlyMap<string, OpenItemView>): Promise<{ events: FollowUpEvent[]; unread: Map<string, OpenItemView> } | null> {
+  const me = run.account.membership_id;
+  const events: FollowUpEvent[] = [];
+  const unread = new Map<string, OpenItemView>();
+  let reads = 0;
+  for (const was of left.values()) {
+    if (reads >= LEFT_READS_MAX) { unread.set(was.item_id, was); continue; }
+    reads += 1;
     const read = await ask<OpenItemView>(() => rpc('runs', { expect: run.account, request: { schema_version: 1, operation: 'item', item_id: was.item_id, read: 'rows' } }));
     if (loop !== run) return null;
-    // One you no longer see says nothing; a read that failed is not retried.
-    if (!read.ok) { if (ACCOUNT_GONE.includes(read.failure.code)) surfaces?.accountLost(read.failure); continue; }
+    if (!read.ok) {
+      if (read.failure.code === 'not_found' || read.failure.code === 'forbidden') continue;
+      if (ACCOUNT_GONE.includes(read.failure.code)) surfaces?.accountLost(read.failure);
+      unread.set(was.item_id, was);
+      continue;
+    }
     const event = followUpEvent(was, read.value, me);
     if (event) events.push(event);
   }
-  run.followed = now;
-  return events;
+  return { events, unread };
 }
 
 // ---- notifications ------------------------------------------------------------------
@@ -499,9 +571,12 @@ function keyOf(target: NoticeTarget): string {
   return target.kind === 'item' ? `item:${target.item_id}` : target.kind === 'project' ? `project:${target.project_id}` : 'follow-ups';
 }
 
-/** One notification for a check: nothing about the follow-up whose page shows, which the check re-reads instead (N4). */
+/**
+ * One notification for a check: nothing about the follow-up whose page you are looking at, which the check re-reads
+ * instead (N4); with the window hidden or covered, you are not looking, and it is told.
+ */
 function tell(run: Loop, events: readonly FollowUpEvent[], adds: readonly ProjectSummary[]): void {
-  const open = surfaces?.itemShown() ?? null;
+  const open = visible() ? surfaces?.itemShown() ?? null : null;
   const untold = events.filter(event => event.item.item_id !== open);
   const notice = noticeFor(untold, adds);
   if (!notice || !told || !sameAccount(told.account, run.account)) return;

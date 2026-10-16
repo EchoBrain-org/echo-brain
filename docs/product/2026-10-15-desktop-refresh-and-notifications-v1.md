@@ -222,9 +222,11 @@ from rows the caller may read under the same policy as the matching read:
   - *Added to a project:* a project id is new among every project you belong
     to, active and archived, read in full (R3). It is not notified when it was
     created on this desktop, or when you lead it and it was created after the
-    last check, which is taken to be your own creation from elsewhere. A full
-    read that fails part-way notifies nothing and keeps what the last one
-    learned, so the next move notifies it.
+    newest project of the last full read, on the Authority's clock, which is
+    taken to be your own creation from elsewhere. With no project to measure
+    against, one you lead is notified. A full read that fails part-way
+    notifies nothing and keeps what the last one learned, so the next move
+    notifies it.
 - **N3. What never notifies:**
   - checks;
   - your own actions, from any device;

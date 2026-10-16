@@ -632,8 +632,10 @@ export interface Events {
   'capture.open': Record<string, never>;
   /** The window came forward: the tray, a shortcut, a notification, or restored from the dock or taskbar. */
   'window.shown': Record<string, never>;
-  /** The window was closed to the tray, hidden or minimized: screen re-reads wait until it shows again. */
+  /** The window was closed to the tray, hidden or minimized (on macOS, also covered by other windows): screen re-reads wait. */
   'window.hidden': Record<string, never>;
+  /** The window is on screen again without coming forward (on macOS, no longer covered, or back on its Space). */
+  'window.visible': Record<string, never>;
   'lifecycle.conceal': Record<string, never>;
   'lifecycle.resume': Record<string, never>;
   /** The machine woke from sleep (powerMonitor `resume`). */

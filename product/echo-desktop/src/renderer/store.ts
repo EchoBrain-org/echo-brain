@@ -3927,6 +3927,9 @@ export function windowShown(): Promise<void> { return freshness.cameBack(true); 
 /** The window was hidden or minimized: checks and notifications go on; what shows is read again once it shows (R6). */
 export function windowHidden(): void { freshness.windowHidden(); }
 
+/** The window is on screen again without coming forward (macOS occlusion, a Space): what waited on it is read. */
+export function windowVisible(): void { freshness.windowVisible(); }
+
 /** The machine woke from sleep: a check, so what changed meanwhile shows and notifies. */
 export function systemWoke(): void { void freshness.woke(); }
 
@@ -3993,6 +3996,7 @@ freshness.configure({
   covered: () => state.concealed,
   status: refreshStatus,
   refreshSidebar,
+  sidebarFailed: () => Boolean(state.projects.failure || state.archivedProjects.failure),
   reread: rereadShown,
   itemShown: () => {
     const view = followUpShown();

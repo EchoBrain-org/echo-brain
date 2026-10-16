@@ -62,7 +62,7 @@ describe('the first check after sign-in', () => {
     expect(followed()).toHaveLength(1);
   });
 
-  it('learns again when it could not read your follow-ups, and tells only what changes after that', async () => {
+  it('when it could not read your follow-ups, reads them again at every check, moved or not, and learns only from a read', async () => {
     authority.items = [followUp(1)];
     const fixture = changesHandlers();
     let refuse = true;
@@ -70,13 +70,20 @@ describe('the first check after sign-in', () => {
       ...fixture, 'runs': params => (refuse ? { ok: false, failure: { code: 'unavailable', retryable: true } } : fixture.runs!(params)),
     }, () => ({ active: [], archived: [] })));
     await startStore();
+    // Still refused: nothing learned, so nothing is lost either.
+    await nextCheck();
+    expect(followed()).toHaveLength(2);
     refuse = false;
+    // Nothing moved, yet the follow-ups are read, and only now learned.
+    await nextCheck();
+    expect(followed()).toHaveLength(3);
+    expect(notices()).toEqual([]);
+    // The very next change is told.
     authority.items = [followUp(1), followUp(2)];
     await nextCheck();
-    expect(notices()).toEqual([]);
-    authority.items = [followUp(1), followUp(2), followUp(3)];
+    expect(texts()).toEqual(['Mina handed you Action 2']);
     await nextCheck();
-    expect(texts()).toEqual(['Mina handed you Action 3']);
+    expect(followed()).toHaveLength(4);
   });
 });
 
@@ -167,6 +174,16 @@ describe('what notifies (N2)', () => {
     expect(store.getState().route).toMatchObject({ page: 'project', project: { name: 'Oldest' } });
   });
 
+  it('a project you lead, made before the newest you had, on the Authority\'s clock: someone else made you its lead', async () => {
+    // Your newest project was made at 10:00; Ana made hers at 09:00 and added you as its lead at 14:00.
+    authority.active = [project(1, 20, { created_at: '2026-09-20T10:00:00.000Z' })];
+    await signedIn();
+    const anas = project(2, 20, { name: 'Ana\'s', role: 'lead', created_at: '2026-09-20T09:00:00.000Z' });
+    authority.active = [...authority.active, anas];
+    await nextCheck();
+    expect(texts()).toEqual(['You were added to Ana\'s']);
+  });
+
   it('a project you lead that was made before the last check: someone else made you its lead', async () => {
     await signedIn();
     authority.active = [project(1, 10, { name: 'Old', role: 'lead' })];
@@ -186,6 +203,49 @@ describe('what notifies (N2)', () => {
     const long = texts()[1]!;
     expect(long).toMatch(/^Mina handed you Line one line two x+…$/);
     expect([...long.slice('Mina handed you '.length)]).toHaveLength(200);
+  });
+});
+
+describe('a follow-up that leaves your open ones (P3)', () => {
+  it('is read by its id again at the next check when that read failed, and told then', async () => {
+    const item = sent(1, MINA);
+    await signedIn([item]);
+    const fixture = changesHandlers();
+    let refuse = true;
+    rpc.mockImplementation(rpcFor(new Held(), {
+      ...fixture,
+      'runs': params => ((params.request as { operation: string }).operation === 'item' && refuse
+        ? { ok: false, failure: { code: 'unavailable', retryable: true } } : fixture.runs!(params)),
+    }, () => ({ active: authority.active, archived: authority.archived })));
+    authority.items = [stated(item, 'done', MINA, 30)];
+    await nextCheck();
+    expect(notices()).toEqual([]);
+    refuse = false;
+    // Nothing moved since: it is read again all the same.
+    await nextCheck();
+    expect(texts()).toEqual(['Mina marked Action 1 done']);
+    await nextCheck();
+    expect(notices()).toHaveLength(1);
+  });
+
+  it('is read twenty a check: the rest wait for the next', async () => {
+    const items = Array.from({ length: 22 }, (_, index) => sent(index + 1, MINA));
+    await signedIn(items);
+    authority.items = items.map(item => stated(item, 'done', MINA, 40));
+    await nextCheck();
+    await nextCheck();
+    expect(texts()).toEqual(['20 follow-ups changed', '2 follow-ups changed']);
+  });
+
+  it('one new to your open ones whose change is older than the newest the last read saw is not news', async () => {
+    await signedIn([followUp(5)]);
+    // Sent to you at 10:01, long before 10:05: it only came into view.
+    authority.items = [followUp(5), followUp(1)];
+    await nextCheck();
+    expect(notices()).toEqual([]);
+    authority.items = [followUp(5), followUp(1), followUp(9)];
+    await nextCheck();
+    expect(texts()).toEqual(['Mina handed you Action 9']);
   });
 });
 
@@ -303,6 +363,20 @@ describe('noise (N4)', () => {
       { text: '1 follow-up changed · added to 1 project', target: { kind: 'follow-ups' } },
       { text: 'Added to 2 projects', target: { kind: 'project', project_id: project(3, 26).project_id } },
     ]);
+  });
+
+  it('notifies of an item whose page is open while the window is hidden or covered: you are not looking at it', async () => {
+    const store = await signedIn([followUp(1)]);
+    await store.openFollowUp(id(1));
+    store.windowHidden();
+    authority.items = [stated(followUp(1), 'open', MINA, 40)];
+    await nextCheck();
+    await store.windowShown();
+    await vi.advanceTimersByTimeAsync(2_000);
+    store.conceal();
+    authority.items = [stated(followUp(1), 'open', MINA, 45)];
+    await nextCheck();
+    expect(texts()).toEqual(['Mina reopened Action 1', 'Mina reopened Action 1']);
   });
 
   it('does not notify of an item whose page is open, but reads that page again', async () => {

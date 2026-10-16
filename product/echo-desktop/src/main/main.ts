@@ -526,6 +526,8 @@ function concealApp(): void { log('lifecycle conceal'); send('lifecycle.conceal'
 function resumeApp(): void { log('lifecycle resume'); send('lifecycle.resume', {}); }
 function shownApp(): void { log('lifecycle shown'); send('window.shown', {}); }
 function hiddenApp(): void { send('window.hidden', {}); }
+/** On screen again, as the window's show event says (on macOS, also when it is no longer covered): not a return. */
+function visibleApp(): void { send('window.visible', {}); }
 function wokeApp(): void { log('lifecycle wake'); send('system.woke', {}); }
 
 // Linux has no app-level focus events: the window's own stand in for them.
@@ -565,10 +567,12 @@ function createWindow(): BrowserWindow {
   created.on('closed', () => { if (window === created) window = null; });
   created.on('blur', concealAfterBlur);
   created.on('focus', resumeOnFocus);
-  // Closed to the tray, hidden or minimized, and restored: the page holds its screen reads, then reads again.
+  // Closed to the tray, hidden or minimized, and restored: the page holds its screen reads, then reads again. macOS reports a
+  // window covered by others, or on another Space, as hidden, and on screen again as shown, with no app activation.
   created.on('hide', hiddenApp);
   created.on('minimize', hiddenApp);
   created.on('restore', shownApp);
+  created.on('show', visibleApp);
   void created.loadURL(`${ORIGIN}/index.html`);
   return created;
 }
@@ -858,6 +862,7 @@ async function runSmoke(): Promise<void> {
     ? app.listeners('did-resign-active').includes(concealApp) && app.listeners('did-become-active').includes(resumeApp)
     : probe.listeners('blur').includes(concealAfterBlur) && probe.listeners('focus').includes(resumeOnFocus)) &&
     probe.listeners('hide').includes(hiddenApp) && probe.listeners('minimize').includes(hiddenApp) && probe.listeners('restore').includes(shownApp) &&
+    probe.listeners('show').includes(visibleApp) &&
     powerMonitor.listeners('resume').includes(wokeApp);
   quitting = true;
   probe.destroy();

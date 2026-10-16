@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Account, ProjectSummary } from '../../src/shared/protocol.js';
 import { MINA, authority, followUp, id, nextCheck, sent, stated, changesHandlers } from './changes-fixture.js';
-import { ACCOUNT, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, flush, Held, keysetPage, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -98,6 +98,19 @@ describe('when a check runs (R2)', () => {
     const settled = checks();
     await nextCheck(60);
     expect(checks()).toBe(settled + 1);
+  });
+
+  it('after a failed check, never sooner than the pace the server last set', async () => {
+    authority.seconds = 600;
+    await startStore();
+    authority.changes = 'fails';
+    await nextCheck(600);
+    expect(checks()).toBe(2);
+    // Doubling would say 1,200 s, capped at five minutes; the server asked for ten, so ten it is.
+    await vi.advanceTimersByTimeAsync(599_000);
+    expect(checks()).toBe(2);
+    await nextCheck(1);
+    expect(checks()).toBe(3);
   });
 
   it('coming back on macOS: after another app was in front, with the account read again', async () => {
@@ -370,6 +383,28 @@ describe('a hidden window (R6) and the cover (R7)', () => {
     expect(homeReads()).toBe(before + 1);
   });
 
+  it('on screen again without coming forward (macOS: no longer covered by other windows), reads what waited, and is not a return', async () => {
+    const store = await startStore();
+    // Covered by other windows, then another app in front; back by ⌘-Tab: the app is active, but its window still covered.
+    store.windowHidden();
+    store.conceal();
+    const before = homeReads();
+    authority.items = [followUp(1)];
+    await nextCheck();
+    await store.resume();
+    await flush();
+    expect(homeReads()).toBe(before);
+    const [checked, statuses] = [checks(), statusReads()];
+    store.windowVisible();
+    await flush();
+    expect(homeReads()).toBe(before + 1);
+    expect([checks(), statusReads()]).toEqual([checked, statuses]);
+    // Visible with nothing waiting reads nothing.
+    store.windowVisible();
+    await flush();
+    expect(homeReads()).toBe(before + 1);
+  });
+
   it('with another app in front, checks run (a wake among them) and what shows waits for the cover to go', async () => {
     const store = await startStore();
     store.conceal();
@@ -387,6 +422,59 @@ describe('a hidden window (R6) and the cover (R7)', () => {
     await flush();
     expect(homeReads()).toBe(before + 1);
     expect(store.getState().concealed).toBe(false);
+  });
+});
+
+describe('the sidebar, and projects you were added to (P2-3)', () => {
+  it('a sidebar whose load failed is read again on a return though nothing moved, and the projects are learned then', async () => {
+    let refuse = true;
+    rpc.mockImplementation(rpcFor(new Held(), {
+      ...changesHandlers(),
+      'app.status': () => ok({ signed_in: true, account }),
+      'projects.list': params => (refuse ? { ok: false, failure: { code: 'unavailable', retryable: true } }
+        : ok(keysetPage(params.status === 'archived' ? authority.archived : authority.active, params.cursor))),
+    }, () => ({ active: authority.active, archived: authority.archived })));
+    const store = await startStore();
+    expect(store.getState().projects).toMatchObject({ items: [], failure: { code: 'unavailable' } });
+    refuse = false;
+    await store.resume();
+    await flush();
+    expect(store.getState().projects.items.map(row => row.name)).toEqual(['Apollo']);
+    expect(store.getState().projects.failure).toBeUndefined();
+    // Learned on that check, not told: Apollo was yours before.
+    expect(noticeTexts()).toEqual([]);
+    const comet = project(2, 25, { name: 'Comet', role: 'member' });
+    authority.active = [comet, apollo];
+    await nextCheck();
+    expect(noticeTexts()).toEqual(['You were added to Comet']);
+  });
+
+  it('a sidebar read outside the check (a return whose check failed) never hides an add from the next check', async () => {
+    const store = await startStore();
+    authority.changes = 'fails';
+    const comet = project(2, 25, { name: 'Comet', role: 'member' });
+    authority.active = [comet, apollo];
+    await store.resume();
+    await flush();
+    expect(store.getState().projects.items.map(row => row.name)).toEqual(['Comet', 'Apollo']);
+    expect(noticeTexts()).toEqual([]);
+    authority.changes = 'ok';
+    await nextCheck(120);
+    expect(noticeTexts()).toEqual(['You were added to Comet']);
+  });
+
+  it('archiving or restoring a project past the loaded pages is never an add', async () => {
+    authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
+    const store = await startStore();
+    expect(store.getState().projects.items).toHaveLength(10);
+    const last = authority.active.at(-1)!;
+    authority.active = authority.active.slice(0, -1);
+    authority.archived = [{ ...last, status: 'archived' }];
+    await nextCheck();
+    authority.active = [...authority.active, last];
+    authority.archived = [];
+    await nextCheck();
+    expect(noticeTexts()).toEqual([]);
   });
 });
 

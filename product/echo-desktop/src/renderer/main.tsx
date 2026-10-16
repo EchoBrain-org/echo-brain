@@ -25,7 +25,7 @@ import {
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
   hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, projectSettingsModal, readUpdate, refreshStatus, resume, retryStart,
   sheetShown, shownItem, signinPhase, systemWoke, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore,
-  WARNINGS, windowHidden, windowShown, windowTakesDrop, type State,
+  WARNINGS, windowHidden, windowShown, windowTakesDrop, windowVisible, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -122,6 +122,7 @@ function App() {
         if (!getState().concealed) focusBar();
       }),
       on('window.hidden', windowHidden),
+      on('window.visible', windowVisible),
       on('system.woke', systemWoke),
       on('signin.phase', payload => signinPhase(payload.browser_opened)),
       on('host.restarted', () => { void refreshStatus(); }),
