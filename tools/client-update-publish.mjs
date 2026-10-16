@@ -67,9 +67,11 @@ async function locked(path, action) {
   try { mkdirSync(lock, { mode: 0o700 }); } catch { fail('receipt_locked'); }
   try { return await action(); } finally { rmdirSync(lock); }
 }
+// AWS CLI 2.36.x prints this line behind exactly `aws: [ERROR]: `; 2.32.6 prints
+// it bare. Accept only those two shapes.
 export function isAbsentClientUpdateHead(args, stderr) {
   return args[0] === 's3api' && args[1] === 'head-object' &&
-    /^An error occurred \((404|NoSuchKey)\) when calling the HeadObject operation(?: \(reached max retries: [0-9]+\))?: [^\r\n]+$/.test(String(stderr ?? '').trim());
+    /^(?:aws: \[ERROR\]: )?An error occurred \((404|NoSuchKey)\) when calling the HeadObject operation(?: \(reached max retries: [0-9]+\))?: [^\r\n]+$/.test(String(stderr ?? '').trim());
 }
 function defaultAws(args, { timeout = OPERATION_BASE_MS } = {}) {
   try {

@@ -599,6 +599,9 @@ describe('authenticated S3 HEAD absence classification', () => {
     'An error occurred (404) when calling the HeadObject operation: Not Found',
     'An error occurred (NoSuchKey) when calling the HeadObject operation: The specified key does not exist.',
     'An error occurred (NoSuchKey) when calling the HeadObject operation (reached max retries: 0): The specified key does not exist.',
+    // AWS CLI 2.36.x prints the same line behind `aws: [ERROR]: `.
+    'aws: [ERROR]: An error occurred (404) when calling the HeadObject operation (reached max retries: 0): Not Found',
+    'aws: [ERROR]: An error occurred (NoSuchKey) when calling the HeadObject operation: The specified key does not exist.',
   ])('recognizes a confirmed missing key: %s', stderr => {
     expect(isAbsentClientUpdateHead(['s3api', 'head-object'], stderr)).toBe(true);
   });
@@ -609,6 +612,11 @@ describe('authenticated S3 HEAD absence classification', () => {
     'An error occurred (404) when calling the GetObject operation (reached max retries: 0): Not Found',
     'An error occurred (404) when calling the HeadObject operation (unknown annotation): Not Found',
     'An error occurred (500) when calling the HeadObject operation: Internal Server Error',
+    'aws: [ERROR]: An error occurred (403) when calling the HeadObject operation (reached max retries: 0): Forbidden',
+    'aws: [ERROR]: retrying An error occurred (404) when calling the HeadObject operation: Not Found',
+    'aws: [WARNING]: An error occurred (404) when calling the HeadObject operation: Not Found',
+    'note aws: [ERROR]: An error occurred (404) when calling the HeadObject operation: Not Found',
+    'aws: [ERROR]: An error occurred (404) when calling the HeadObject operation: Not Found\nAn error occurred (403) when calling the HeadObject operation: Forbidden',
   ])('keeps denied, unrelated, or unknown errors unconfirmed: %s', stderr => {
     expect(isAbsentClientUpdateHead(['s3api', 'head-object'], stderr)).toBe(false);
   });
