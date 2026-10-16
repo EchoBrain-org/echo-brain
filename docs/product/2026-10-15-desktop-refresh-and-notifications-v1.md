@@ -173,8 +173,8 @@ from rows the caller may read under the same policy as the matching read:
     compared with the row the last read had. An item that is no longer among
     them is read by its id, rows-only, to say what happened to it. The closed
     `involved` rows changed since the newest change the last read saw
-    (`changed_since`, on the Authority's clock; ten minutes before the last
-    read, on the desktop's clock, until a change was seen) are read too, so a
+    (`changed_since`, on the Authority's clock; from the start until a change
+    was seen, never the desktop's clock) are read too, so a
     follow-up sent and closed between two checks is told; one already handled
     is never told twice. An Authority that refuses `changed_since` skips that
     read. These reads feed notifications (section 3). Whatever follow-ups surface is on screen

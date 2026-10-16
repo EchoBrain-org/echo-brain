@@ -85,8 +85,6 @@ interface Loop {
    * changed since. Null until a read saw one.
    */
   seenUpTo: string | null;
-  /** When the last follow-ups read began, on this computer's clock: a stand-in for `seenUpTo` before any read saw a change. */
-  readAt: number;
   /** Closed follow-ups already handled, by item and change time: told, or learned. */
   closedSeen: Set<string>;
   /** The Authority refused `changed_since` (it is older): closed follow-ups are not read. */
@@ -140,7 +138,7 @@ function visible(): boolean { return !hidden && surfaces?.covered() === false; }
 /** Signed in, or switched to another account: a new loop, whose first check learns and never notifies (R2, N4). */
 export function start(account: Expect): void {
   stop();
-  loop = { account, mode: 'changes', areas: null, memberships: null, followed: null, pending: new Map(), seenUpTo: null, readAt: Date.now(), closedSeen: new Set(),
+  loop = { account, mode: 'changes', areas: null, memberships: null, followed: null, pending: new Map(), seenUpTo: null, closedSeen: new Set(),
     closedRefused: false, scope: 'involved', pace: PACE_SECONDS.default * 1000,
     failures: 0, timer: null, running: null, began: Number.NEGATIVE_INFINITY };
   told = { account, keys: [], rows: new Map(), projects: new Map() };
@@ -451,8 +449,11 @@ function readFollowed(run: Loop): Promise<OpenItemView[] | null> {
   return readRows(run, ['open']);
 }
 
-/** How far back the closed follow-ups read asks, at least ten minutes before a read on this computer's clock: its stand-in. */
-const CLOCK_MARGIN_MS = 10 * 60_000;
+/**
+ * How far back the closed follow-ups read asks before any read saw a change: from the start, on the Authority's clock, never
+ * this computer's. Until a change is seen there is nothing involving you to read, so it is a short read.
+ */
+const SINCE_EVER = '1970-01-01T00:00:00.000Z';
 
 /**
  * The follow-ups you are involved in that were closed (done or dismissed) and
@@ -531,13 +532,12 @@ function newestSeen(rows: Iterable<OpenItemView>): string | null {
  * read did not finish: nothing is learned from it.
  */
 async function followUpsMoved(run: Loop): Promise<FollowUpEvent[] | null> {
-  const began = Date.now();
   const rows = await readFollowed(run);
   if (rows === null) return null;
   // The newest change seen so far, on the Authority's clock: what is news is newer than that.
   const threshold = run.seenUpTo;
-  // Closed since then; before any change was seen, since ten minutes before the last read, on this computer's clock.
-  const since = new Date(threshold ?? run.readAt - CLOCK_MARGIN_MS).toISOString();
+  // Closed since then; before any change was seen, since ever (SINCE_EVER).
+  const since = threshold === null ? SINCE_EVER : new Date(threshold).toISOString();
   const closed = await readClosed(run, since);
   if (closed === null) return null;
   const now = new Map(rows.map(row => [row.item_id, row]));
@@ -548,7 +548,6 @@ async function followUpsMoved(run: Loop): Promise<FollowUpEvent[] | null> {
     run.pending = new Map();
     run.closedSeen = new Set(closed.map(closedKey));
     run.seenUpTo = seen(rows, closed);
-    run.readAt = began;
     return [];
   }
   const me = run.account.membership_id;
@@ -577,7 +576,6 @@ async function followUpsMoved(run: Loop): Promise<FollowUpEvent[] | null> {
   // Only the newest few hundred: older ones fall before the next read's `since`.
   run.closedSeen = new Set([...closedSeen].slice(-500));
   run.seenUpTo = seen(rows, closed, read.rows);
-  run.readAt = began;
   return [...events, ...read.events];
 }
 

@@ -286,13 +286,22 @@ describe('a follow-up sent and closed between two checks (review C)', () => {
   });
 
   it('learns, at sign-in, what closed just before it, and never tells it', async () => {
-    // Closed at 09:25, five minutes before ECHO started (09:30), with nothing else seen: the read reaches ten minutes back.
+    // Closed at 09:25, five minutes before ECHO started (09:30), with nothing else seen: the first read asks from the start.
     authority.items = [stated(sent(1, MINA), 'done', MINA, -35)];
     await startStore();
     expect(closedReads()).toHaveLength(1);
     authority.items = [...authority.items, followUp(2)];
     await nextCheck();
     expect(texts()).toEqual(['Mina handed you Action 2']);
+  });
+
+  it('a computer clock running hours ahead never hides one closed between checks: before any change is seen, it asks from the start', async () => {
+    vi.setSystemTime(new Date(CLOCK.getTime() + 3 * 60 * 60_000));
+    await startStore();
+    authority.items = [stated(sent(1, MINA), 'done', MINA, 2)];
+    await nextCheck();
+    expect(texts()).toEqual(['Mina marked Action 1 done']);
+    expect(closedReads().at(-1)).toMatchObject({ changed_since: '1970-01-01T00:00:00.000Z' });
   });
 
   it('tells one closed again by someone else: done, then dismissed', async () => {
