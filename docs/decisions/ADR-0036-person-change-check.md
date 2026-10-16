@@ -14,7 +14,6 @@ status: accepted
 supersedes: []
 superseded_by: []
 updates:
-  - ADR-0012
   - ADR-0033
 ---
 
@@ -67,7 +66,8 @@ Option 2.
     own connection, as every record read does.
   - It writes **no audit row**, because it returns no content.
   - The content reads it triggers stay audited as today.
-- **Pace.** The server sets it: 60 s by default, within 15..3600 s.
+- **Pace.** The Authority answers 60 s today. The field lets a later
+  Authority ask for longer, and clients honour any value in 15..3600 s.
 - **Compatibility.** An Authority without the route answers 404. The person
   client reports that as `not_supported`, and the desktop keeps its previous
   behaviour.

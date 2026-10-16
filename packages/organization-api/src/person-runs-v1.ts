@@ -31,10 +31,10 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * the items in those states only, so a list reads its current work first and
  * never opens a closed item to throw it away; `mine` and `involved` with
  * `changed_since` page over the items sent, handed on or set since then, so a
- * change check finds what moved without reading all closed history. Each
- * decision's counts say how
- * many of its open items last landed or could not be read, and its stage
- * says whether its impact run is the caller's own (`mine`).
+ * change check's reader pages only what moved, not every closed item. Each
+ * decision's counts say how many of its open items last landed or could not
+ * be read, and its stage says whether its impact run is the caller's own
+ * (`mine`).
  *
  * Sweep (open items and Home v1, sections 6 and 7) rechecks open items
  * against what was decided and keeps only a verdict per item. `sweep` asks for

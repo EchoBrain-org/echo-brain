@@ -6,7 +6,9 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, fail } from './valid
  * area, each a digest of rows that person may read, so a fingerprint moves
  * only with activity they can see (ADR-0012). It returns no content; the
  * desktop reads an area again only when its fingerprint moved, and asks again
- * after `check_again_after_seconds`, which the server may raise when busy.
+ * after `check_again_after_seconds`. The Authority answers 60 today; the field
+ * lets a later Authority ask for longer, and clients honour any value in
+ * 15..3600.
  */
 export const PERSON_CHANGES_ROUTE_V1 = '/v1/person/changes';
 export const PERSON_CHANGES_KIND_V1 = 'echo-person-changes-v1';

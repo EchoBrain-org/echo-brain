@@ -25,9 +25,10 @@ decision_ids:
   - ADR-0032
   - ADR-0033
   - ADR-0034
+  - ADR-0036
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads, the ADR-0036 change check (digests only), and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
