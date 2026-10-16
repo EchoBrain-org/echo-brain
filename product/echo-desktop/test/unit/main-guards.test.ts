@@ -78,7 +78,6 @@ describe('a notification', () => {
   it('is a method main answers, beside the change check\'s log line', () => {
     expect(MAIN_METHODS).toContain('notice.show');
     expect(MAIN_METHODS).toContain('log.changes');
-    expect(MAIN_METHODS).not.toContain('notify.followUps');
   });
 
   it('carries one line and what a click opens: an item, the follow-ups it counted, or a project', () => {

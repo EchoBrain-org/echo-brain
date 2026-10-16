@@ -387,6 +387,17 @@ export interface Expect {
   readonly membership_id: string;
 }
 
+/** The same account: the same Authority and the same membership. Missing is never the same. */
+export function sameExpect(a: Expect | null | undefined, b: Expect | null | undefined): boolean {
+  return a != null && b != null && a.authority === b.authority && a.membership_id === b.membership_id;
+}
+
+/** Failures that say the account on screen is gone (signed out or switched under it), not the call. */
+export const ACCOUNT_GONE: readonly string[] = ['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'];
+
+/** The change check's areas, in the contract's order. */
+export const CHANGE_AREAS: readonly PersonChangesAreaV1[] = ['projects', 'follow_ups', 'reviews'];
+
 /** Project configuration only; Jira evidence is read for each question. */
 export interface ProjectJiraMapping {
   project_id: string;
@@ -713,7 +724,7 @@ const NOTICE_PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a
 /** A name or a title a notification shows: as long as the API lets either be, in characters. */
 export const NOTICE_TEXT_MAX = 200;
 /** A notification's whole line: two titles or names and the words between them, in characters. */
-export const NOTICE_LINE_MAX = 2 * NOTICE_TEXT_MAX + 120;
+const NOTICE_LINE_MAX = 2 * NOTICE_TEXT_MAX + 120;
 
 /** The most follow-ups one notification counts, and opens. */
 export const NOTICE_ITEMS_MAX = 100;
@@ -761,7 +772,7 @@ export function changesLogLine(params: unknown): string | null {
   const { moved, unsupported } = params as Record<string, unknown>;
   if (keys === 'unsupported' && unsupported === true) return 'changes unsupported';
   if (keys !== 'moved' || !Array.isArray(moved) || moved.length === 0) return null;
-  const areas: readonly string[] = ['projects', 'follow_ups', 'reviews'];
+  const areas: readonly string[] = CHANGE_AREAS;
   if (!moved.every(area => typeof area === 'string' && areas.includes(area)) || new Set(moved).size !== moved.length) return null;
   return `changes moved ${areas.filter(area => moved.includes(area)).join(',')}`;
 }

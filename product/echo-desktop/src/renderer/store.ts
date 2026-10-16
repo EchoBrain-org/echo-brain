@@ -7,10 +7,10 @@ import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
-  NoticeTarget, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
+  NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
   ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { isWriteCall, MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, sameExpect } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
@@ -633,8 +633,9 @@ function applyStatus(status: AppStatus): void {
   lastAccount = { authority: next.authority, membership_id: next.membership_id };
   signOutPending = null;
   if (!same || !wasSignedIn) {
-    void loadProjects(); void loadArchivedProjects(); void loadHome();
-    // The change check starts over for this account: its first check learns.
+    void loadHome();
+    // The change check starts over for this account: it reads every project you belong to (filling the sidebar), and its
+    // first check learns.
     freshness.start(lastAccount);
     // New project kept through a sign-out goes on with what waited while no one was signed in.
     pumpNewProject();
@@ -911,7 +912,7 @@ async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknow
   const account = expect();
   if (!account) throw new Error('Sign in to use meetings.');
   const result = await send(account);
-  if (JSON.stringify(expect()) !== JSON.stringify(account)) {
+  if (!sameExpect(expect(), account)) {
     if (!write) throw new Error('Account changed.');
     const unsent = !result.ok && result.failure.mutation_outcome === 'not_submitted';
     throw new CommandFailed({ code: 'account_changed', retryable: false, mutation_outcome: unsent ? 'not_submitted' : 'unknown' });
@@ -1095,13 +1096,83 @@ async function loadProjectList(status: ListStatus, more: boolean): Promise<void>
   refreshIfOwed(status);
 }
 
-function sameAccount(account: Expect): boolean {
-  const now = expect();
-  return now?.authority === account.authority && now.membership_id === account.membership_id;
-}
+function sameAccount(account: Expect): boolean { return sameExpect(expect(), account); }
 
 function refreshIfOwed(status: ListStatus): void {
   if (refreshOwed.delete(status)) void (status === 'active' ? refreshSidebar() : refreshProjectList('archived'));
+}
+
+/** Pages of your projects of one status, from the first, each with the cursor after it: until they hold `enough` rows, or all. */
+async function readProjectPages(account: Expect, status: ListStatus, enough: number)
+  : Promise<{ ok: true; pages: ProjectPage[] } | { ok: false; failure: Failure } | null> {
+  const pages: ProjectPage[] = [];
+  for (let cursor: string | null = null, rows = 0; ;) {
+    const result: Result<ProjectPage> = await rpc('projects.list', { expect: account, status, ...(cursor === null ? {} : { cursor }) });
+    if (!sameAccount(account)) return null;
+    if (!result.ok) { accountLost(result.failure); return { ok: false, failure: result.failure }; }
+    pages.push(result.value);
+    rows += result.value.items.length;
+    cursor = result.value.next_cursor;
+    if (cursor === null || rows >= enough) return { ok: true, pages };
+  }
+}
+
+/** A list as the sidebar shows it, from pages read from the first: as many as cover `shown` rows (one at least), and the cursor after them. */
+function shownPages(pages: readonly ProjectPage[], shown: number): ProjectPage {
+  const items: ProjectSummary[] = [];
+  let next: string | null = null;
+  for (const page of pages) {
+    items.push(...page.items.filter(project => !items.some(row => row.project_id === project.project_id)));
+    next = page.next_cursor;
+    if (items.length >= shown) break;
+  }
+  return { items, next_cursor: next };
+}
+
+/** A list read again, shown: not over a page on its way (More, Try again), after which it is read again. */
+function showProjectList(status: ListStatus, page: ProjectPage, first = false): boolean {
+  const key = LIST_KEY[status];
+  if (!first && state[key].loading) { refreshOwed.add(status); return false; }
+  if (status === 'active' && rolesChanged(page.items)) emptyBar();
+  const list = { items: [...page.items], next: page.next_cursor, loading: false };
+  set(key === 'projects' ? { projects: list } : { archivedProjects: list });
+  return true;
+}
+
+/**
+ * Every page of your active and archived projects, side by side: what the
+ * change check tells adds from, which also feeds the sidebar as many pages as
+ * it shows, so the same audited pages are not read twice (at sign-in, `first`,
+ * the sidebar says it is loading, and a list that could not be read says so,
+ * with Try again). A change made here meanwhile has the sidebar read what it
+ * shows again. Read again (not at sign-in), the open project then follows its
+ * row. Null when a page could not be read.
+ */
+async function readProjects(first: boolean): Promise<ReadonlyMap<string, ProjectSummary> | null> {
+  const account = expect();
+  if (!account) return null;
+  const statuses = ['active', 'archived'] as const;
+  if (first) set({ projects: { items: [], next: null, loading: true }, archivedProjects: { items: [], next: null, loading: true } });
+  const edition = projectsEdition;
+  const reads = await Promise.all(statuses.map(status => readProjectPages(account, status, Number.POSITIVE_INFINITY)));
+  if (!sameAccount(account)) return null;
+  const all = new Map<string, ProjectSummary>();
+  statuses.forEach((status, index) => {
+    const read = reads[index];
+    const key = LIST_KEY[status];
+    if (!read?.ok) {
+      if (first && read) set(key === 'projects' ? { projects: { ...state.projects, loading: false, failure: read.failure } }
+        : { archivedProjects: { ...state.archivedProjects, loading: false, failure: read.failure } });
+      return;
+    }
+    for (const page of read.pages) for (const project of page.items) all.set(project.project_id, project);
+    if (edition !== projectsEdition && !first) { void refreshProjectList(status); return; }
+    showProjectList(status, shownPages(read.pages, first ? 0 : state[key].items.length), first);
+  });
+  if (first) listChanged();
+  if (!reads.every(read => read?.ok)) return null;
+  if (!first) await followOpenProject();
+  return all;
 }
 
 /** A project you were lead of is now one you are a member of, or the other way: a change of access. */
@@ -1120,32 +1191,15 @@ export function goHome(): void {
   void loadHome();
 }
 
-/** The sidebar read on its way, and whether another is owed once it ends. */
-let sidebarRead: Promise<boolean> | null = null;
-let sidebarAgain = false;
-
 /**
- * The sidebar's lists read again, quietly: the active one, then the archived
- * one once the active one could be; then the open project's header follows its
- * row. One asked for while another is on its way joins it, and one more runs
- * after it. True once both lists were read.
+ * The sidebar's lists read again, quietly, side by side, over as many pages
+ * as each shows; then the open project's header follows its row: on a return
+ * with no change check to say whether projects moved, and after a page that
+ * waited a refresh.
  */
-function refreshSidebar(): Promise<boolean> {
-  if (sidebarRead) { sidebarAgain = true; return sidebarRead; }
-  sidebarRead = (async () => {
-    let done = false;
-    try {
-      do {
-        sidebarAgain = false;
-        done = await refreshProjectList('active') && await refreshProjectList('archived');
-        if (done) await followOpenProject();
-      } while (sidebarAgain && expect());
-    } finally {
-      sidebarRead = null;
-    }
-    return done;
-  })();
-  return sidebarRead;
+async function refreshSidebar(): Promise<void> {
+  const read = await Promise.all([refreshProjectList('active'), refreshProjectList('archived')]);
+  if (read.every(Boolean)) await followOpenProject();
 }
 
 /**
@@ -1209,23 +1263,10 @@ async function refreshProjectList(status: ListStatus): Promise<boolean> {
       if (state[key].loading) { if (state[key].items.length > 0) refreshOwed.add(status); return false; }
       const edition = projectsEdition;
       const shown = state[key].items.length;
-      const items: ProjectSummary[] = [];
-      let next: string | null = null;
-      let cursor: string | undefined;
-      for (;;) {
-        const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
-        if (!sameAccount(account)) return false;
-        if (!result.ok) { accountLost(result.failure); return false; }
-        items.push(...result.value.items.filter(project => !items.some(row => row.project_id === project.project_id)));
-        next = result.value.next_cursor;
-        cursor = next ?? undefined;
-        if (next === null || items.length >= shown) break;
-      }
+      const read = await readProjectPages(account, status, shown);
+      if (!read?.ok) return false;
       if (edition !== projectsEdition) continue;
-      if (state[key].loading) { refreshOwed.add(status); return false; }
-      if (status === 'active' && rolesChanged(items)) emptyBar();
-      set(key === 'projects' ? { projects: { items, next, loading: false } } : { archivedProjects: { items, next, loading: false } });
-      return true;
+      return showProjectList(status, shownPages(read.pages, shown));
     }
     return false;
   } finally {
@@ -1265,7 +1306,7 @@ async function loadProjectReads(project_id: string): Promise<void> {
     const current = state.projectReads;
     // Save may already have confirmed this field while the initial read waited.
     if (current?.seq === mine && current[key] === undefined &&
-        expect()?.authority === account.authority && expect()?.membership_id === account.membership_id) {
+        sameAccount(account)) {
       set({ projectReads: { ...current, [key]: value } });
     }
   };
@@ -1775,7 +1816,7 @@ const confluenceMapping: MappingAdapter<'confluence'> = {
 function mappingAt<Tool extends MappingTool>(tool: Tool, account: Expect, opening: number) {
   const settings = state.projectSettings;
   const setting = settings?.[tool];
-  return settings && setting?.seq === opening && expect()?.authority === account.authority && expect()?.membership_id === account.membership_id
+  return settings && setting?.seq === opening && sameAccount(account)
     ? { settings, setting: setting as MappingSetting<Tool> } : undefined;
 }
 function setMapping<Tool extends MappingTool>(settings: ProjectSettingsState, tool: Tool, setting: MappingSetting<Tool>): void {
@@ -1788,7 +1829,7 @@ function setProjectTools(settings: ProjectSettingsState, patch: Partial<ProjectT
 /** Every reply belongs to this account and this opening of Tools. */
 function toolsAt(account: Expect, opening: number): ProjectSettingsState | undefined {
   const settings = state.projectSettings;
-  return settings?.tools?.seq === opening && expect()?.authority === account.authority && expect()?.membership_id === account.membership_id
+  return settings?.tools?.seq === opening && sameAccount(account)
     ? settings : undefined;
 }
 
@@ -3297,9 +3338,6 @@ export function answerGroups(current: State = state): SourceGroup[] {
   return sourceGroups(answerSources(current));
 }
 
-/** Access-level failures: a background read reports only these. */
-const ACCOUNT_GONE = ['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'];
-
 /**
  * An answer came on screen: its sources start unread, the pane closed, and
  * its approved records are read one after another, so each chip can name its
@@ -4009,10 +4047,17 @@ function readIfOwed(mine: number): void {
 
 freshness.configure({
   account: expect,
-  covered: () => state.concealed,
+  seen: () => !state.concealed,
   status: refreshStatus,
+  readProjects,
   refreshSidebar,
   sidebarFailed: () => Boolean(state.projects.failure || state.archivedProjects.failure),
+  readRows: async (account, { states, changed_since }) => {
+    const read = await readItems(account, { scope: 'involved', states, read: 'rows', ...(changed_since === undefined ? {} : { changed_since }) }, null,
+      Number.POSITIVE_INFINITY);
+    return read.ok ? read.pages.flatMap(page => page.items) : null;
+  },
+  readItem: (account, itemId) => readOne(account, itemId),
   reread: rereadShown,
   itemShown: () => {
     const view = followUpShown();
@@ -4967,11 +5012,11 @@ function statesOf(parts: readonly ListPart[]): PersonOpenItemStateV1[] {
   return parts.flatMap(part => (part === 'active' ? ACTIVE_STATES : [part]));
 }
 
-/** What an items read asks for: a scope, and the states and how much to read (none: live). */
-/** This Authority refused the `involved` scope (it is older than it): Yours lists what you sent or own instead. */
-let involvedRefused = false;
-
-interface ItemsQuery { scope: Exclude<FollowUpList['scope'], 'told'> | 'run'; id?: string | undefined; states?: readonly PersonOpenItemStateV1[]; read?: 'rows' | 'counts' }
+/** What an items read asks for: a scope, the states, how much to read (none: live), and changed since when. */
+interface ItemsQuery {
+  scope: Exclude<FollowUpList['scope'], 'told'> | 'run'; id?: string | undefined; states?: readonly PersonOpenItemStateV1[]; read?: 'rows' | 'counts';
+  changed_since?: string;
+}
 
 /**
  * An items read's pages from `cursor`, until they hold `atLeast` rows or there is no next page: each with the cursor it was read
@@ -4981,12 +5026,11 @@ async function readItems(account: Expect, query: ItemsQuery, cursor: string | nu
   : Promise<{ ok: true; pages: { cursor: string | null; items: readonly OpenItemView[] }[]; last: OpenItemsView } | { ok: false; failure: Failure }> {
   const pages: { cursor: string | null; items: readonly OpenItemView[] }[] = [];
   for (let next = cursor, rows = 0; ;) {
-    // Yours, on an Authority without `involved`: what you sent or own, as before it.
-    const scope = query.scope === 'involved' && involvedRefused ? 'mine' : query.scope;
+    // On an older Authority (no change check), what you are involved in is what you sent or own.
+    const scope = query.scope === 'involved' && freshness.olderAuthority() ? 'mine' : query.scope;
     const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope,
       ...(query.id === undefined ? {} : { id: query.id }), ...(query.states ? { states: query.states } : {}), ...(next === null ? {} : { cursor: next }),
-      ...(query.read ? { read: query.read } : {}) } });
-    if (!result.ok && scope === 'involved' && next === null && result.failure.code === 'invalid_request') { involvedRefused = true; continue; }
+      ...(query.read ? { read: query.read } : {}), ...(query.changed_since === undefined ? {} : { changed_since: query.changed_since }) } });
     if (!result.ok) {
       if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
       return { ok: false, failure: result.failure };

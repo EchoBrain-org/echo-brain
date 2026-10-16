@@ -208,8 +208,20 @@ describe('what notifies (N2)', () => {
 });
 
 describe('a follow-up that leaves your open ones (P3)', () => {
-  it('is read by its id again at the next check when that read failed, and told then', async () => {
+  /** One Rafael sent you that you last handed on to Mina: handed on again by her, it leaves what involves you. */
+  const handedOn = (n: number) => owned(followUp(n, { approver: RAFAEL, state_set_by: RAFAEL }), MINA, ME, 20);
+
+  it('settles one closed from the closed read, with no read by its id', async () => {
     const item = sent(1, MINA);
+    await signedIn([item]);
+    authority.items = [stated(item, 'done', MINA, 30)];
+    await nextCheck();
+    expect(texts()).toEqual(['Mina marked Action 1 done']);
+    expect(rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'item')).toEqual([]);
+  });
+
+  it('is read by its id when handed away, again at the next check when that read failed, and told then', async () => {
+    const item = handedOn(1);
     await signedIn([item]);
     const fixture = changesHandlers();
     let refuse = true;
@@ -218,21 +230,21 @@ describe('a follow-up that leaves your open ones (P3)', () => {
       'runs': params => ((params.request as { operation: string }).operation === 'item' && refuse
         ? { ok: false, failure: { code: 'unavailable', retryable: true } } : fixture.runs!(params)),
     }, () => ({ active: authority.active, archived: authority.archived })));
-    authority.items = [stated(item, 'done', MINA, 30)];
+    authority.items = [owned(item, RAFAEL, MINA, 30)];
     await nextCheck();
     expect(notices()).toEqual([]);
     refuse = false;
     // Nothing moved since: it is read again all the same.
     await nextCheck();
-    expect(texts()).toEqual(['Mina marked Action 1 done']);
+    expect(texts()).toEqual(['Mina handed Action 1 to Rafael']);
     await nextCheck();
     expect(notices()).toHaveLength(1);
   });
 
-  it('is read twenty a check: the rest wait for the next', async () => {
-    const items = Array.from({ length: 22 }, (_, index) => sent(index + 1, MINA));
+  it('is read by its id twenty a check: the rest wait for the next', async () => {
+    const items = Array.from({ length: 22 }, (_, index) => handedOn(index + 1));
     await signedIn(items);
-    authority.items = items.map(item => stated(item, 'done', MINA, 40));
+    authority.items = items.map(item => owned(item, RAFAEL, MINA, 40));
     await nextCheck();
     await nextCheck();
     expect(texts()).toEqual(['20 follow-ups changed', '2 follow-ups changed']);
@@ -313,16 +325,16 @@ describe('a follow-up sent and closed between two checks (review C)', () => {
     expect(texts()).toEqual(['Mina marked Action 1 not relevant']);
   });
 
-  it('on an Authority that refuses changed_since, reads no closed follow-ups, now or later, and tells the rest as before', async () => {
-    authority.noChangedSince = true;
+  it('on an older Authority (no change check, nor changed_since), reads none closed, and tells the rest as before', async () => {
+    authority.changes = 'not_supported';
     await startStore();
     authority.items = [stated(sent(1, MINA), 'done', MINA, 2)];
-    await nextCheck();
+    await nextCheck(300);
     expect(notices()).toEqual([]);
     authority.items = [...authority.items, followUp(3)];
-    await nextCheck();
+    await nextCheck(300);
     expect(texts()).toEqual(['Mina handed you Action 3']);
-    expect(closedReads()).toHaveLength(1);
+    expect(closedReads()).toEqual([]);
   });
 });
 
@@ -405,8 +417,8 @@ describe('what never notifies (N3)', () => {
     authority.archived = [project(50, 2, { status: 'archived' })];
     await signedIn();
     const reads = rpc.mock.calls.filter(([method]) => method === 'projects.list').map(([, params]) => `${params.status}${params.cursor ? ' more' : ''}`);
-    // The sidebar's first page of each, then all three active pages and the archived one.
-    expect(reads.sort()).toEqual(['active', 'active', 'active more', 'active more', 'archived', 'archived']);
+    // Every page, once: the three active pages, which also fill the sidebar's first, and the archived one.
+    expect(reads.sort()).toEqual(['active', 'active more', 'active more', 'archived']);
     await nextCheck();
     expect(notices()).toEqual([]);
   });
@@ -548,12 +560,11 @@ describe('an older Authority (R8)', () => {
     expect(rpc.mock.calls.filter(([method]) => method === 'changes.read')).toHaveLength(1);
   });
 
-  it('reads what you sent or own when the Authority refuses `involved`', async () => {
-    authority.noInvolved = true;
+  it('with the change check, reads what you are involved in, never what you sent or own', async () => {
     await signedIn([followUp(1)]);
     authority.items = [followUp(1), followUp(2)];
     await nextCheck();
-    expect(followed().map(([, params]) => params.request.scope)).toEqual(['involved', 'mine', 'mine']);
+    expect(new Set(followed().map(([, params]) => params.request.scope))).toEqual(new Set(['involved']));
     expect(texts()).toEqual(['Mina handed you Action 2']);
   });
 });

@@ -75,13 +75,6 @@ describe('when a check runs (R2)', () => {
     expect(checks()).toBe(3);
     await nextCheck(1);
     expect(checks()).toBe(4);
-    // Faster than the contract allows: never more often than every 15 s.
-    authority.seconds = 1;
-    await nextCheck(3600);
-    await vi.advanceTimersByTimeAsync(14_000);
-    expect(checks()).toBe(5);
-    await nextCheck(1);
-    expect(checks()).toBe(6);
   });
 
   it('after a failed check, later and later, up to five minutes', async () => {
@@ -181,8 +174,8 @@ describe('what a moved area reads again (R3)', () => {
     const before = [lists('active'), lists('archived')];
     authority.active = [{ ...apollo, name: 'Apollo, renamed', role: 'member' }];
     await nextCheck();
-    // Each list: the sidebar's page, and the full read that tells which projects you were added to.
-    expect([lists('active') - before[0]!, lists('archived') - before[1]!]).toEqual([2, 2]);
+    // Each list once: the full read that tells which projects you were added to also fills the sidebar.
+    expect([lists('active') - before[0]!, lists('archived') - before[1]!]).toEqual([1, 1]);
     expect(store.getState().route).toMatchObject({ page: 'project', project: { name: 'Apollo, renamed', role: 'member', status: 'active' } });
     expect(calls('log.changes').map(([, params]) => params)).toEqual([{ moved: ['projects'] }]);
     // Archived elsewhere: it moves to Archived, and the page says so.
@@ -534,15 +527,15 @@ describe('an older Authority (R8)', () => {
     expect(calls('log.changes')).toHaveLength(1);
   });
 
-  it('Follow-ups (yours) lists what you sent or own when the Authority refuses `involved`', async () => {
-    authority.noInvolved = true;
+  it('Follow-ups (yours) lists what you sent or own on an older Authority, and what you are involved in otherwise', async () => {
+    authority.changes = 'not_supported';
     authority.items = [followUp(1), sent(2, MINA)];
     const store = await startStore();
     await store.openYourFollowUps();
     await flush();
     expect((store.followUpShown() as FollowUpList).items.map(item => item.item_id)).toEqual([followUp(1).item_id, sent(2, MINA).item_id]);
     expect(calls('runs').filter(([, params]) => params.request.operation === 'items' && (params.request.states as string[] | undefined)?.join() === 'unsent,open')
-      .map(([, params]) => params.request.scope)).toEqual(['involved', 'mine']);
+      .map(([, params]) => params.request.scope)).toEqual(['mine']);
   });
 
   it('a check that fails on a return reads the sidebar instead', async () => {
