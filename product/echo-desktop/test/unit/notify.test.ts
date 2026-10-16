@@ -6,8 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import type { Account, OpenItemView } from '../../src/shared/protocol.js';
-import { ME, MINA, RAFAEL, at, authority, followUp, id, nextCheck, owned, sent, stated, changesHandlers, CLOCK } from './changes-fixture.js';
-import { ACCOUNT, cover, flush, Held, hide, keysetPage, ok, project, rpcFor, show, startStore, stubWindow, wake } from './harness.js';
+import { ME, MINA, RAFAEL, at, authority, followUp, id, nextCheck, owned, sent, stated, changesRpc, CLOCK, fixture } from './changes-fixture.js';
+import { ACCOUNT, cover, flush, fail, hide, ok, project, show, startStore, stubWindow, wake } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -34,15 +34,13 @@ beforeEach(() => {
   holdChanges = false;
   answers = [];
   rpc.mockReset();
-  const fixture = changesHandlers();
-  rpc.mockImplementation(rpcFor(new Held(), {
-    ...fixture,
+  rpc.mockImplementation(changesRpc({
     'app.status': () => ok(account ? { signed_in: true, account } : { signed_in: false, account: null }),
     'changes.read': params => {
       if (!holdChanges) return fixture['changes.read']!(params);
       return new Promise(resolve => { answers.push(() => resolve(fixture['changes.read']!(params))); });
     },
-  }, () => ({ active: authority.active, archived: authority.archived })));
+  }));
 });
 
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -65,11 +63,10 @@ describe('the first check after sign-in', () => {
 
   it('when it could not read your follow-ups, reads them again at every check, moved or not, and learns only from a read', async () => {
     authority.items = [followUp(1)];
-    const fixture = changesHandlers();
     let refuse = true;
-    rpc.mockImplementation(rpcFor(new Held(), {
-      ...fixture, 'runs': params => (refuse ? { ok: false, failure: { code: 'unavailable', retryable: true } } : fixture.runs!(params)),
-    }, () => ({ active: [], archived: [] })));
+    rpc.mockImplementation(changesRpc({
+      'runs': params => (refuse ? fail('unavailable', { retryable: true }) : fixture.runs!(params)),
+    }));
     await startStore();
     // Still refused: nothing learned, so nothing is lost either.
     await nextCheck();
@@ -223,13 +220,11 @@ describe('a follow-up that leaves your open ones (P3)', () => {
   it('is read by its id when handed away, again at the next check when that read failed, and told then', async () => {
     const item = handedOn(1);
     await signedIn([item]);
-    const fixture = changesHandlers();
     let refuse = true;
-    rpc.mockImplementation(rpcFor(new Held(), {
-      ...fixture,
+    rpc.mockImplementation(changesRpc({
       'runs': params => ((params.request as { operation: string }).operation === 'item' && refuse
-        ? { ok: false, failure: { code: 'unavailable', retryable: true } } : fixture.runs!(params)),
-    }, () => ({ active: authority.active, archived: authority.archived })));
+        ? fail('unavailable', { retryable: true }) : fixture.runs!(params)),
+    }));
     authority.items = [owned(item, RAFAEL, MINA, 30)];
     await nextCheck();
     expect(notices()).toEqual([]);
@@ -374,11 +369,10 @@ describe('what never notifies (N3)', () => {
     const store = await startStore();
     const made = project(2, 21, { name: 'Made here', created_at: new Date().toISOString() });
     const elsewhere = project(3, 22, { name: 'Made elsewhere', created_at: new Date(Date.now() + 1000).toISOString() });
-    rpc.mockImplementation(rpcFor(new Held(), {
-      ...changesHandlers(),
+    rpc.mockImplementation(changesRpc({
       'projects.create': () => ok({ project_id: made.project_id }),
       'projects.read': () => ok(made),
-    }, () => ({ active: authority.active, archived: authority.archived })));
+    }));
     store.openNewProject();
     store.setNewProjectName('Made here');
     authority.active = [made, project(1, 20)];
@@ -394,12 +388,10 @@ describe('what never notifies (N3)', () => {
   it('retries a failed full read of your projects at the next check, the fingerprint unchanged, and tells the add then (review B)', async () => {
     authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
     let refuseMore = false;
-    rpc.mockImplementation(rpcFor(new Held(), {
-      ...changesHandlers(),
+    rpc.mockImplementation(changesRpc({
       'app.status': () => ok({ signed_in: true, account: ACCOUNT }),
-      'projects.list': params => (refuseMore && params.cursor ? { ok: false, failure: { code: 'unavailable', retryable: true } }
-        : ok(keysetPage(params.status === 'archived' ? authority.archived : authority.active, params.cursor))),
-    }, () => ({ active: authority.active, archived: authority.archived })));
+      'projects.list': params => (refuseMore && params.cursor ? fail('unavailable', { retryable: true }) : fixture['projects.list']!(params)),
+    }));
     await startStore();
     authority.active = [...authority.active, project(40, 1, { name: 'Oldest invited project', role: 'member' })];
     // The sidebar's own page reads; the full read's second page fails.
@@ -426,13 +418,10 @@ describe('what never notifies (N3)', () => {
   it('a full read of your projects that fails part-way tells nothing, and the next move tells it', async () => {
     authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
     let refuseMore = false;
-    const fixture = changesHandlers();
-    rpc.mockImplementation(rpcFor(new Held(), {
-      ...fixture,
+    rpc.mockImplementation(changesRpc({
       'app.status': () => ok({ signed_in: true, account: ACCOUNT }),
-      'projects.list': params => (refuseMore && params.cursor ? { ok: false, failure: { code: 'unavailable', retryable: true } }
-        : ok(keysetPage(params.status === 'archived' ? authority.archived : authority.active, params.cursor))),
-    }, () => ({ active: authority.active, archived: authority.archived })));
+      'projects.list': params => (refuseMore && params.cursor ? fail('unavailable', { retryable: true }) : fixture['projects.list']!(params)),
+    }));
     await startStore();
     const oldest = project(40, 1, { name: 'Oldest', role: 'member' });
     authority.active = [...authority.active, oldest];

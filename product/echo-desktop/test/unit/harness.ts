@@ -56,7 +56,7 @@ export class Held {
   take(method: string): Promise<unknown> | undefined { return this.pending.get(method)?.shift(); }
 }
 
-type Handler = (params: Record<string, unknown>) => unknown;
+export type Handler = (params: Record<string, unknown>) => unknown;
 
 /**
  * Moves of the change check's areas a test makes by hand: each bump moves
@@ -72,11 +72,11 @@ export function digest(text: string): string {
   return `sha256:${hash.toString(16).padStart(8, '0').repeat(8)}`;
 }
 
-/** The change check, as `changes.read` answers it, for these lists and the moves made so far. */
-export function changesFor(lists: { active: ProjectSummary[]; archived: ProjectSummary[] }, seconds = 60) {
+/** The change check, as `changes.read` answers it, for these lists and the moves made so far, or the fingerprints given (`areas`). */
+export function changesFor(lists: { active: ProjectSummary[]; archived: ProjectSummary[] }, seconds = 60, areas: { follow_ups?: string; reviews?: string } = {}) {
   return ok({
     kind: 'echo-person-changes-v1', check_again_after_seconds: seconds,
-    areas: { projects: digest(JSON.stringify([lists, moved.projects])), follow_ups: digest(`f${moved.follow_ups}`), reviews: digest(`r${moved.reviews}`) },
+    areas: { projects: digest(JSON.stringify([lists, moved.projects])), follow_ups: digest(`f${moved.follow_ups}`), reviews: digest(`r${moved.reviews}`), ...areas },
   });
 }
 

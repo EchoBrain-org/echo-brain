@@ -5,8 +5,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList } from '../../src/renderer/store.js';
 import type { Account, ProjectSummary } from '../../src/shared/protocol.js';
-import { MINA, authority, followUp, id, nextCheck, sent, stated, changesHandlers, CLOCK } from './changes-fixture.js';
-import { ACCOUNT, cover, flush, Held, hide, keysetPage, ok, project, rpcFor, show, startStore, stubWindow, uncover, unhide, wake } from './harness.js';
+import { MINA, authority, followUp, id, nextCheck, sent, stated, changesRpc, CLOCK, fixture } from './changes-fixture.js';
+import { ACCOUNT, cover, flush, fail, hide, ok, project, show, startStore, stubWindow, uncover, unhide, wake } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -36,8 +36,7 @@ beforeEach(() => {
   authority.active = [apollo];
   account = ACCOUNT;
   rpc.mockReset();
-  rpc.mockImplementation(rpcFor(new Held(), {
-    ...changesHandlers(),
+  rpc.mockImplementation(changesRpc({
     'app.status': () => ok({ signed_in: true, account }),
     'account.tools': () => ok({ tools: [{ tool_id: 'granola', name: 'Granola', status: 'linked' }] }),
     'tools.meetings': params => {
@@ -49,9 +48,9 @@ beforeEach(() => {
     'employees.list': () => ok({ items: [] }),
     'projects.read': params => {
       const found = [...authority.active, ...authority.archived].find(row => row.project_id === params.project_id);
-      return found ? ok(found) : { ok: false, failure: { code: 'not_found', retryable: false } };
+      return found ? ok(found) : fail('not_found');
     },
-  }, () => ({ active: authority.active, archived: authority.archived })));
+  }));
 });
 
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -152,13 +151,11 @@ describe('when a check runs (R2)', () => {
 
   it('stops at sign-out, and starts over for another account', async () => {
     const store = await startStore();
-    rpc.mockImplementation(rpcFor(new Held(), { ...changesHandlers(), 'app.status': () => ok({ signed_in: false, account: null }) },
-      () => ({ active: authority.active, archived: authority.archived })));
+    rpc.mockImplementation(changesRpc({ 'app.status': () => ok({ signed_in: false, account: null }) }));
     await store.refreshStatus();
     await nextCheck(600);
     expect(checks()).toBe(1);
-    rpc.mockImplementation(rpcFor(new Held(), { ...changesHandlers(), 'app.status': () => ok({ signed_in: true, account: { ...ACCOUNT, membership_id: 'other' } }) },
-      () => ({ active: authority.active, archived: authority.archived })));
+    rpc.mockImplementation(changesRpc({ 'app.status': () => ok({ signed_in: true, account: { ...ACCOUNT, membership_id: 'other' } }) }));
     await store.refreshStatus();
     await flush();
     expect(calls('changes.read').at(-1)?.[1]).toEqual({ expect: { authority: ACCOUNT.authority, membership_id: 'other' } });
@@ -247,11 +244,9 @@ describe('what a moved area reads again (R3)', () => {
   it('follow-ups that move while the list on screen is still loading: it is read again once that read lands (review A)', async () => {
     const old = followUp(1);
     authority.items = [old];
-    const fixture = changesHandlers();
     let release: () => void = () => undefined;
     let hold = false;
-    rpc.mockImplementation(rpcFor(new Held(), {
-      ...fixture,
+    rpc.mockImplementation(changesRpc({
       'app.status': () => ok({ signed_in: true, account }),
       'runs': params => {
         const request = params.request as { operation: string; scope?: string; read?: string; states?: string[]; changed_since?: string };
@@ -263,7 +258,7 @@ describe('what a moved area reads again (R3)', () => {
         }
         return fixture.runs!(params);
       },
-    }, () => ({ active: authority.active, archived: authority.archived })));
+    }));
     const store = await startStore();
     hold = true;
     const opening = store.openYourFollowUps();
@@ -455,12 +450,10 @@ describe('a hidden window (R6) and the cover (R7)', () => {
 describe('the sidebar, and projects you were added to (P2-3)', () => {
   it('a sidebar whose load failed is read again on a return though nothing moved, and the projects are learned then', async () => {
     let refuse = true;
-    rpc.mockImplementation(rpcFor(new Held(), {
-      ...changesHandlers(),
+    rpc.mockImplementation(changesRpc({
       'app.status': () => ok({ signed_in: true, account }),
-      'projects.list': params => (refuse ? { ok: false, failure: { code: 'unavailable', retryable: true } }
-        : ok(keysetPage(params.status === 'archived' ? authority.archived : authority.active, params.cursor))),
-    }, () => ({ active: authority.active, archived: authority.archived })));
+      'projects.list': params => (refuse ? fail('unavailable', { retryable: true }) : fixture['projects.list']!(params)),
+    }));
     const store = await startStore();
     expect(store.getState().projects).toMatchObject({ items: [], failure: { code: 'unavailable' } });
     refuse = false;

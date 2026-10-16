@@ -3,7 +3,7 @@
 // do, so a change made "elsewhere" moves exactly the areas it touches.
 import { vi } from 'vitest';
 import type { OpenItemsView, OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
-import { ACCOUNT, digest, fail, flush, ok } from './harness.js';
+import { ACCOUNT, changesFor, digest, fail, flush, Held, keysetPage, ok, rpcFor, type Handler } from './harness.js';
 
 export const ME: { membership_id: string; name: string; active: boolean } = { membership_id: ACCOUNT.membership_id, name: ACCOUNT.display_name, active: true };
 export const MINA = { membership_id: 'mem_00000000-0000-4000-8000-000000000011', name: 'Mina Patel', active: true };
@@ -61,59 +61,56 @@ export const authority = {
   /** How `changes.read` answers: as the Authority does, failing, or not there (an older Authority). */
   changes: 'ok' as 'ok' | 'fails' | 'not_supported',
   seconds: 60,
-  /** An Authority that refuses the `involved` scope. */
-  noInvolved: false,
-  /** An Authority that refuses `changed_since` (older than it). */
-  noChangedSince: false,
   reset(): void {
-    Object.assign(authority, { items: [], active: [], archived: [], reviews: [], changes: 'ok', seconds: 60, noInvolved: false, noChangedSince: false });
+    Object.assign(authority, { items: [], active: [], archived: [], reviews: [], changes: 'ok', seconds: 60 });
   },
 };
 
 const involved = (item: OpenItemView, me = ME.membership_id) =>
   item.approver.membership_id === me || item.owner.membership_id === me || item.owner_set_by?.membership_id === me;
 
-/** The handlers `rpcFor` takes for the change check, the follow-ups reads it makes, and Home's. */
-export function changesHandlers(): Record<string, (params: Record<string, unknown>) => unknown> {
-  return {
-    'changes.read': () => {
-      if (authority.changes === 'not_supported') return fail('not_supported');
-      if (authority.changes === 'fails') return fail('unavailable', { retryable: true });
-      const tuples = authority.items.filter(item => involved(item))
-        .map(item => [item.item_id, item.state, item.owner.membership_id, item.owner_set_at, item.state_set_at, item.sent_at]);
-      return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: authority.seconds, areas: {
-        projects: digest(JSON.stringify([authority.active, authority.archived])), follow_ups: digest(JSON.stringify(tuples)), reviews: digest(JSON.stringify(authority.reviews)),
-      } });
-    },
-    'runs': params => {
-      const request = params.request as { operation: string; scope?: string; read?: string; states?: string[]; cursor?: string; item_id?: string; changed_since?: string };
-      if (request.operation === 'items' && request.read === 'rows' && (request.scope === 'involved' || request.scope === 'mine')) {
-        if (request.scope === 'involved' && authority.noInvolved) return fail('invalid_request');
-        if (request.changed_since !== undefined && (authority.noChangedSince || new Date(request.changed_since).toISOString() !== request.changed_since)) {
-          return fail('invalid_request');
-        }
-        const mine = (item: OpenItemView) => item.approver.membership_id === ME.membership_id || item.owner.membership_id === ME.membership_id;
-        // Changed since: sent, handed on or set at or after it, as instants.
-        const since = request.changed_since === undefined ? null : Date.parse(request.changed_since);
-        const changed = (item: OpenItemView) => since === null || [item.sent_at, item.owner_set_at, item.state_set_at].some(at => at !== null && Date.parse(at) >= since);
-        const rows = authority.items.filter(item => (request.scope === 'involved' ? involved(item) : mine(item)) && (!request.states || request.states.includes(item.state))
-          && changed(item));
-        const from = Number(request.cursor ?? 0);
-        return ok({ items: rows.slice(from, from + 50), next_cursor: from + 50 < rows.length ? String(from + 50) : null, stages: [], summary });
-      }
-      if (request.operation === 'item') {
-        const found = authority.items.find(item => item.item_id === request.item_id);
-        return found ? ok(found) : fail('not_found');
-      }
-      if (request.operation === 'home') {
-        const items = authority.items.filter(item => item.state === 'open' && item.owner.membership_id === ME.membership_id).slice(0, 20);
-        return ok({ send: [], items, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
-      }
-      if (request.operation === 'list') return ok({ runs: [] });
-      if (request.operation === 'items') return ok({ items: [], next_cursor: null, stages: [], summary });
-      throw new Error(`Unexpected runs operation: ${request.operation}`);
-    },
-  };
+const lists = () => ({ active: authority.active, archived: authority.archived });
+
+/** The handlers `rpcFor` takes for the change check, your projects, the follow-ups reads it makes, and Home's: a test's own fall back on them. */
+export const fixture: Record<string, Handler> = {
+  'changes.read': () => {
+    if (authority.changes === 'not_supported') return fail('not_supported');
+    if (authority.changes === 'fails') return fail('unavailable', { retryable: true });
+    const tuples = authority.items.filter(item => involved(item))
+      .map(item => [item.item_id, item.state, item.owner.membership_id, item.owner_set_at, item.state_set_at, item.sent_at]);
+    return changesFor(lists(), authority.seconds, { follow_ups: digest(JSON.stringify(tuples)), reviews: digest(JSON.stringify(authority.reviews)) });
+  },
+  'projects.list': params => ok(keysetPage(params.status === 'archived' ? authority.archived : authority.active, params.cursor)),
+  'runs': params => {
+    const request = params.request as { operation: string; scope?: string; read?: string; states?: string[]; cursor?: string; item_id?: string; changed_since?: string };
+    if (request.operation === 'items' && request.read === 'rows' && (request.scope === 'involved' || request.scope === 'mine')) {
+      if (request.changed_since !== undefined && new Date(request.changed_since).toISOString() !== request.changed_since) return fail('invalid_request');
+      const mine = (item: OpenItemView) => item.approver.membership_id === ME.membership_id || item.owner.membership_id === ME.membership_id;
+      // Changed since: sent, handed on or set at or after it, as instants.
+      const since = request.changed_since === undefined ? null : Date.parse(request.changed_since);
+      const changed = (item: OpenItemView) => since === null || [item.sent_at, item.owner_set_at, item.state_set_at].some(at => at !== null && Date.parse(at) >= since);
+      const rows = authority.items.filter(item => (request.scope === 'involved' ? involved(item) : mine(item)) && (!request.states || request.states.includes(item.state))
+        && changed(item));
+      const from = Number(request.cursor ?? 0);
+      return ok({ items: rows.slice(from, from + 50), next_cursor: from + 50 < rows.length ? String(from + 50) : null, stages: [], summary });
+    }
+    if (request.operation === 'item') {
+      const found = authority.items.find(item => item.item_id === request.item_id);
+      return found ? ok(found) : fail('not_found');
+    }
+    if (request.operation === 'home') {
+      const items = authority.items.filter(item => item.state === 'open' && item.owner.membership_id === ME.membership_id).slice(0, 20);
+      return ok({ send: [], items, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
+    }
+    if (request.operation === 'list') return ok({ runs: [] });
+    if (request.operation === 'items') return ok({ items: [], next_cursor: null, stages: [], summary });
+    throw new Error(`Unexpected runs operation: ${request.operation}`);
+  },
+};
+
+/** An rpc for the store over this Authority: the test's own handlers (`extra`) first, then the fixture's, then the harness's. */
+export function changesRpc(extra: Record<string, Handler> = {}) {
+  return rpcFor(new Held(), { ...fixture, ...extra }, lists);
 }
 
 /** The next check, at the server's pace. */
