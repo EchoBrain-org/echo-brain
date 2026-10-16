@@ -89,8 +89,22 @@ export async function launch(mode = '', files: Readonly<Record<string, string>> 
   };
 }
 
-export function emit(app: ElectronApplication, event: 'echo-test:capture' | 'echo-test:conceal' | 'echo-test:resume' | 'echo-test:kill-host' | 'echo-test:shown') {
+export function emit(app: ElectronApplication, event: 'echo-test:capture' | 'echo-test:conceal' | 'echo-test:resume' | 'echo-test:kill-host' | 'echo-test:shown'
+  | 'echo-test:hidden' | 'echo-test:wake') {
   return app.evaluate(({ app: electronApp }, name) => { electronApp.emit(name); }, event);
+}
+
+/** Test builds record the notifications main would show: no test puts one on the machine. */
+interface Notices { echoTestNotices?: { title: string; body: string; target: unknown; click(): void }[] }
+
+/** The notifications shown so far, oldest first: their title, text and what a click opens. */
+export function notices(run: Launched): Promise<{ title: string; body: string; target: unknown }[]> {
+  return run.app.evaluate(() => ((globalThis as Notices).echoTestNotices ?? []).map(({ title, body, target }) => ({ title, body, target })));
+}
+
+/** Clicks the notification at `index`, as a person does. */
+export function clickNotice(run: Launched, index: number): Promise<void> {
+  return run.app.evaluate((_electron, at) => { (globalThis as Notices).echoTestNotices![at]!.click(); }, index);
 }
 
 /** Test builds never run the updater: this sets the row it would show, and tells the page as main does. */
