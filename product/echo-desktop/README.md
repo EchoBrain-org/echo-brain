@@ -59,8 +59,9 @@ found). "Open" is one status only: a total of not sent and open together is
 
 A **follow-ups list** is a meeting's (from its Send row, its line in the
 reader, its decision page, or a follow-up's page), a project's (from the line
-above its feed), or **Follow-ups**: everything you sent or own, in every
-status, from the sidebar or Home's footer. When that list is already open
+above its feed), or **Follow-ups**: everything you sent, own or last handed
+on, in every status, from the sidebar or Home's footer (on an Authority
+without that list, what you sent or own). When that list is already open
 under what shows, its links go back to it, ticks and place kept, instead of
 opening it again. Rows are grouped Not sent, Open, Done and Dismissed, each
 group counted over the whole list, the meeting's actions first; each row
@@ -152,9 +153,11 @@ being added to a project come as one system notification per check ("Mina
 handed you Pricing page", "3 follow-ups changed", "You were added to
 Comet"). Your own changes from any device, checks, meetings and reviews,
 removals and role changes never notify, and neither does an item whose page
-is open (its page is read again instead). Clicking a notification brings the
-window forward and opens that item's page, Follow-ups, or the project; only
-what this account was told of opens, and a sheet or Capture that is up stays.
+is open while you look at it (its page is read again instead). Clicking a
+notification brings the window forward and opens that item's page, a list of
+exactly the follow-ups a summary counted (each read again by its id, one you
+can no longer read left out), or the project; only what this account was told
+of opens, and a sheet or Capture that is up stays.
 desktop.log records `lifecycle conceal|resume|shown|wake` and `changes moved
 <areas>`, by area name only.
 

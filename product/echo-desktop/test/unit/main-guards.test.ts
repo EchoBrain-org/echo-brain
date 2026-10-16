@@ -81,29 +81,35 @@ describe('a notification', () => {
     expect(MAIN_METHODS).not.toContain('notify.followUps');
   });
 
-  it('carries one line and what a click opens: an item, Follow-ups or a project', () => {
+  it('carries one line and what a click opens: an item, the follow-ups it counted, or a project', () => {
     expect(noticeOf({ text: 'Mina handed you Update the pricing page', target: { kind: 'item', item_id: item } }))
       .toEqual({ text: 'Mina handed you Update the pricing page', target: { kind: 'item', item_id: item } });
-    expect(noticeOf({ text: '3 follow-ups changed', target: { kind: 'follow-ups' } })).toEqual({ text: '3 follow-ups changed', target: { kind: 'follow-ups' } });
+    const several = { kind: 'items', item_ids: [item, item.replace(/1$/, '2'), item.replace(/1$/, '3')] };
+    expect(noticeOf({ text: '3 follow-ups changed', target: several })).toEqual({ text: '3 follow-ups changed', target: several });
     expect(noticeOf({ text: 'You were added to Comet', target: { kind: 'project', project_id: project } }))
       .toEqual({ text: 'You were added to Comet', target: { kind: 'project', project_id: project } });
     // Two titles of 200 characters fit: "Mina handed <title> to <name>".
-    expect(noticeOf({ text: `Mina handed ${'😀'.repeat(200)} to ${'x'.repeat(200)}`, target: { kind: 'follow-ups' } })).not.toBeNull();
+    expect(noticeOf({ text: `Mina handed ${'😀'.repeat(200)} to ${'x'.repeat(200)}`, target: { kind: 'item', item_id: item } })).not.toBeNull();
   });
 
   it.each([
     ['nothing', null],
     ['no target', { text: 'Hi' }],
-    ['no text', { target: { kind: 'follow-ups' } }],
-    ['an empty line', { text: '  ', target: { kind: 'follow-ups' } }],
-    ['a line break', { text: 'Hi\nthere', target: { kind: 'follow-ups' } }],
-    ['a line over the bound', { text: 'x'.repeat(521), target: { kind: 'follow-ups' } }],
-    ['text that is not text', { text: 7, target: { kind: 'follow-ups' } }],
+    ['no text', { target: { kind: 'item', item_id: item } }],
+    ['an empty line', { text: '  ', target: { kind: 'item', item_id: item } }],
+    ['a line break', { text: 'Hi\nthere', target: { kind: 'item', item_id: item } }],
+    ['a line over the bound', { text: 'x'.repeat(521), target: { kind: 'item', item_id: item } }],
+    ['text that is not text', { text: 7, target: { kind: 'item', item_id: item } }],
+    ['the old Follow-ups target', { text: 'Hi', target: { kind: 'follow-ups' } }],
+    ['one item as several', { text: 'Hi', target: { kind: 'items', item_ids: [item] } }],
+    ['the same item twice', { text: 'Hi', target: { kind: 'items', item_ids: [item, item] } }],
+    ['more than a hundred items', { text: 'Hi', target: { kind: 'items', item_ids: Array.from({ length: 101 }, (_, n) => `itm_0000-${String(n).padStart(4, '0')}`) } }],
+    ['several with an id not an item\'s', { text: 'Hi', target: { kind: 'items', item_ids: [item, '../etc'] } }],
     ['an id not an item\'s', { text: 'Hi', target: { kind: 'item', item_id: '../etc/passwd' } }],
     ['an id not a project\'s', { text: 'Hi', target: { kind: 'project', project_id: 'prj_x' } }],
     ['a target of another kind', { text: 'Hi', target: { kind: 'url', url: 'https://example.com' } }],
-    ['a key the target does not take', { text: 'Hi', target: { kind: 'follow-ups', item_id: item } }],
-    ['a key it does not take', { text: 'Hi', target: { kind: 'follow-ups' }, url: 'https://example.com' }],
+    ['a key the target does not take', { text: 'Hi', target: { kind: 'item', item_id: item, url: 'https://example.com' } }],
+    ['a key it does not take', { text: 'Hi', target: { kind: 'item', item_id: item }, url: 'https://example.com' }],
   ])('refuses %s', (_name, params) => {
     expect(noticeOf(params)).toBeNull();
   });

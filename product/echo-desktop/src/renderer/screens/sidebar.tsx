@@ -63,7 +63,7 @@ export function UpdateRow({ state }: { state: State }) {
 
 /**
  * Always beside the page: Capture, New project, Mine, Follow-ups (everything
- * you sent or own), your projects (one click switches), People & invites for
+ * you sent, own or last handed on), your projects (one click switches), People & invites for
  * owners, Tools, a new version, and who is signed in. It shares the list Home loads. While another app is in front
  * the page is covered, but the project rows stay, so a dropped file lands.
  * Mine never takes a drop.

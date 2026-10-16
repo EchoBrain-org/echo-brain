@@ -19,7 +19,7 @@ import * as freshness from './freshness.js';
 import { message } from './messages.js';
 import { ACTIVE_STATES, CLOSED_STATES, firstName, reopenSends, sentWords } from './needs.js';
 
-/** Mine: only what you added, to see and to ask about. Follow-ups: everything you sent or own. */
+/** Mine: only what you added, to see and to ask about. Follow-ups: everything you sent, own or last handed on. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision' }
   | { page: 'follow-ups' };
 
@@ -3978,8 +3978,9 @@ function rereadShown({ page, areas }: { readonly page: boolean; readonly areas: 
 /**
  * The follow-ups view on screen read again, rows only (a list as far as it
  * showed, then live what it newly lacks); those under it, and the page under
- * them all, are read again when they show. A view with a change on its way
- * reads again after it by itself.
+ * them all, are read again when they show. A view with a read or a change on
+ * its way is owed one more read: its reply may predate what moved, so it is
+ * read again once that lands.
  */
 function rereadViews(): void {
   const stack = followUpsShown();
@@ -3987,8 +3988,23 @@ function rereadViews(): void {
   if (!stack || !top) return;
   const last = stack.views.length - 1;
   set({ followUps: { ...stack, changed: true, views: stack.views.map((view, index) => (index < last ? { ...view, stale: true } : view)) } });
-  if (top.kind === 'list' && !top.busy && !top.loading) void readList(top.seq, top.reads.length === 0 ? 'first' : 'again');
-  else if (top.kind === 'item' && !top.busy && !top.loading && !top.gone) void readItem(top.seq);
+  if (top.kind === 'decision') return;
+  owedReads.add(top.seq);
+  readIfOwed(top.seq);
+}
+
+/** Lists and item pages owed a read again: what they show moved while a read or a change of theirs was on its way. */
+const owedReads = new Set<number>();
+
+/** A view owed a read again, once nothing of its own is on its way: read rows only, then live what it newly lacks. */
+function readIfOwed(mine: number): void {
+  if (!owedReads.has(mine)) return;
+  const view = viewOf('list', mine) ?? viewOf('item', mine);
+  if (!view) { owedReads.delete(mine); return; }
+  if (view.busy || view.loading) return;
+  owedReads.delete(mine);
+  if (view.kind === 'list') void readList(mine, view.reads.length === 0 ? 'first' : 'again');
+  else if (!view.gone) void readItem(mine);
 }
 
 freshness.configure({
@@ -4707,17 +4723,20 @@ type ListRead = 'first' | 'again' | ListPart;
 
 /**
  * A follow-ups list: a meeting's (by its record), a project's, or yours
- * (everything you sent or own), a page at a time. Current work (Not sent and
- * Open) shows first, so it is never behind More; each closed group (Done,
- * Dismissed) shows its rows once opened: a meeting's start open, yours and a
- * project's closed ("Done · 12"). Not sent rows you may send are ticked to
- * Send or Dismiss them.
+ * (`involved`: everything you sent, own or last handed on), a page at a time.
+ * Current work (Not sent and Open) shows first, so it is never behind More;
+ * each closed group (Done, Dismissed) shows its rows once opened: a meeting's
+ * start open, yours and a project's closed ("Done · 12"). Not sent rows you
+ * may send are ticked to Send or Dismiss them. `told`: exactly the follow-ups
+ * a notification counted (`ids`), each read by its id, every group open.
  */
 export interface FollowUpList extends ChangeView {
   kind: 'list';
-  scope: 'mine' | 'record' | 'project';
+  scope: 'involved' | 'record' | 'project' | 'told';
   /** The meeting's record or the project; yours name none. */
   id?: string;
+  /** The follow-ups a notification counted, for `told`. */
+  ids?: readonly string[];
   /** The meeting's title or the project's name; null for yours. */
   title: string | null;
   loading: boolean;
@@ -4825,7 +4844,7 @@ const UNCHANGED = { busy: false, said: null, picker: null, stale: false } as con
 
 function newList(scope: FollowUpList['scope'], id: string | undefined, title: string | null): FollowUpList {
   return { kind: 'list', seq: ++seq, scope, ...(id === undefined ? {} : { id }), title, loading: true, items: [], live: {}, reading: false, reads: [], summary: null,
-    stage: null, ticks: {}, sends: {}, check: null, expanded: scope === 'record' ? { done: true, not_relevant: true } : {}, ...UNCHANGED };
+    stage: null, ticks: {}, sends: {}, check: null, expanded: scope === 'record' || scope === 'told' ? { done: true, not_relevant: true } : {}, ...UNCHANGED };
 }
 
 /**
@@ -4845,19 +4864,88 @@ export function openFollowUps(scope: 'record' | 'project', id: string, title: st
 }
 
 /**
- * Follow-ups (yours), from the sidebar or Home's footer: everything you sent or own, as a page of its own. The bar searches all
- * context. A notification's (`fromNotice`) comes while another app may still be in front.
+ * Follow-ups (yours), from the sidebar or Home's footer: everything you sent, own or last handed on (`involved`), as a page
+ * of its own. The bar searches all context.
  */
-export function openYourFollowUps(fromNotice = false): Promise<void> {
-  if (!expect() || (state.concealed && !fromNotice)) return Promise.resolve();
+export function openYourFollowUps(): Promise<void> {
+  if (!expect() || state.concealed) return Promise.resolve();
   readSeq += 1;
   const route: Route = { page: 'follow-ups' };
-  const list = newList('mine', undefined, null);
+  const list = newList('involved', undefined, null);
   set({ route, followUps: { route, views: [list], changed: false }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null,
     barScope: { kind: 'global' }, organization: null, decision: null });
   syncSearch();
   freshness.navigated();
   return readList(list.seq, 'first');
+}
+
+/**
+ * The follow-ups a notification counted, over the page on screen: exactly those, as you may see them now, each read by its
+ * id (its row from the check at once, then rows only, then live what each lacks); one you can no longer see is left out.
+ * Opened from the notification, while another app may still be in front. Already showing, it is read again.
+ */
+function openToldFollowUps(item_ids: readonly string[]): Promise<void> {
+  if (!expect()) return Promise.resolve();
+  const top = followUpShown();
+  if (top?.kind === 'list' && top.scope === 'told' && top.ids?.join() === item_ids.join()) return readList(top.seq, 'again');
+  const rows = item_ids.flatMap(id => { const row = freshness.toldRow(id); return row ? [row] : []; });
+  // Read together, to their end: every group shows, with no More.
+  const list: FollowUpList = { ...newList('told', undefined, 'Changed follow-ups'), ids: [...item_ids], items: rows, summary: summaryOf(rows),
+    reads: [{ parts: ['active', ...CLOSED_STATES], pages: [], next: null }] };
+  pushView(list);
+  freshness.navigated();
+  return readList(list.seq, 'first');
+}
+
+/** A list's counts from the rows it holds: a told list's, which no scope counts. */
+function summaryOf(items: readonly OpenItemView[]): OpenItemsView['summary'] {
+  const count = (state: PersonOpenItemStateV1) => items.filter(item => item.state === state).length;
+  const verdicts = (verdict: string) => items.filter(item => item.state === 'open' && item.check?.verdict === verdict).length;
+  return { unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'), landed: verdicts('landed'),
+    changed: verdicts('changed'), unreadable: verdicts('unreadable'), decisions: new Set(items.flatMap(item => (item.decision ? [item.decision.record_sha256] : []))).size,
+    last_checked_at: items.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null, by_decision: [] };
+}
+
+/** Failures that say you can no longer see an item: left out of a told list. */
+const NO_LONGER_SEEN = ['not_found', 'forbidden'];
+
+/**
+ * A told list read again: each follow-up by its id, rows only, then live what each lacks (not while another app is in
+ * front: coming back reads it again). One you no longer see is left out; one whose read failed keeps what showed of it, and
+ * the list offers Try again.
+ */
+async function readTold(mine: number): Promise<void> {
+  const account = expect();
+  const list = viewOf('list', mine);
+  const ids = list?.ids;
+  if (!account || !list || !ids) return;
+  setView({ ...list, loading: true, failed: undefined });
+  const reads = await Promise.all(ids.map(id => readOne(account, id)));
+  const current = viewOf('list', mine);
+  if (!current || !sameAccount(account)) return;
+  const failure = reads.flatMap(read => ('failure' in read && !NO_LONGER_SEEN.includes(read.failure.code) ? [read.failure] : []))[0];
+  const items = ids.flatMap((id, index) => {
+    const read = reads[index]!;
+    if ('item' in read) return [read.item];
+    if (NO_LONGER_SEEN.includes(read.failure.code)) return [];
+    return current.items.filter(item => item.item_id === id);
+  });
+  setView({ ...current, loading: false, items, summary: summaryOf(items), stale: false,
+    ticks: Object.fromEntries(items.filter(item => sendable(item) && current.ticks[item.item_id]).map(item => [item.item_id, true])),
+    ...(failure ? { failed: { read: 'first' as const, failure } } : {}) });
+  const lacking = items.filter(item => awaitingLive(shownItem(item, current.live)));
+  if (lacking.length === 0) return;
+  for (const item of lacking) {
+    const now = viewOf('list', mine);
+    if (!now || state.concealed || !sameAccount(account)) break;
+    setView({ ...now, reading: true });
+    const read = await readOne(account, item.item_id, true);
+    const after = viewOf('list', mine);
+    if (!after || !sameAccount(account)) return;
+    setView({ ...after, live: { ...after.live, [item.item_id]: 'item' in read ? livePart(read.item) : UNREAD } });
+  }
+  const done = viewOf('list', mine);
+  if (done?.reading) setView({ ...done, reading: false });
 }
 
 /** A Not sent row you may send: before Send only its approver may pick its owner, exactly when they may send it. */
@@ -4880,7 +4968,10 @@ function statesOf(parts: readonly ListPart[]): PersonOpenItemStateV1[] {
 }
 
 /** What an items read asks for: a scope, and the states and how much to read (none: live). */
-interface ItemsQuery { scope: FollowUpList['scope'] | 'run'; id?: string | undefined; states?: readonly PersonOpenItemStateV1[]; read?: 'rows' | 'counts' }
+/** This Authority refused the `involved` scope (it is older than it): Yours lists what you sent or own instead. */
+let involvedRefused = false;
+
+interface ItemsQuery { scope: Exclude<FollowUpList['scope'], 'told'> | 'run'; id?: string | undefined; states?: readonly PersonOpenItemStateV1[]; read?: 'rows' | 'counts' }
 
 /**
  * An items read's pages from `cursor`, until they hold `atLeast` rows or there is no next page: each with the cursor it was read
@@ -4890,9 +4981,12 @@ async function readItems(account: Expect, query: ItemsQuery, cursor: string | nu
   : Promise<{ ok: true; pages: { cursor: string | null; items: readonly OpenItemView[] }[]; last: OpenItemsView } | { ok: false; failure: Failure }> {
   const pages: { cursor: string | null; items: readonly OpenItemView[] }[] = [];
   for (let next = cursor, rows = 0; ;) {
-    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: query.scope,
+    // Yours, on an Authority without `involved`: what you sent or own, as before it.
+    const scope = query.scope === 'involved' && involvedRefused ? 'mine' : query.scope;
+    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope,
       ...(query.id === undefined ? {} : { id: query.id }), ...(query.states ? { states: query.states } : {}), ...(next === null ? {} : { cursor: next }),
       ...(query.read ? { read: query.read } : {}) } });
+    if (!result.ok && scope === 'involved' && next === null && result.failure.code === 'invalid_request') { involvedRefused = true; continue; }
     if (!result.ok) {
       if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
       return { ok: false, failure: result.failure };
@@ -4916,7 +5010,7 @@ async function readOne(account: Expect, item_id: string, live = false): Promise<
 }
 
 /** A meeting's own check, by its record or its check (run), from a read's stages; none for a project or yours. */
-function stageFor(read: Pick<OpenItemsView, 'stages'>, scope: ItemsQuery['scope'], id: string | undefined): PersonImpactStageV1 | null {
+function stageFor(read: Pick<OpenItemsView, 'stages'>, scope: FollowUpList['scope'] | 'run', id: string | undefined): PersonImpactStageV1 | null {
   return scope === 'record' || scope === 'run' ? read.stages.find(stage => (scope === 'record' ? stage.record_sha256 : stage.run_id) === id) ?? null : null;
 }
 
@@ -4941,9 +5035,16 @@ function mergeRows(shown: readonly OpenItemView[], read: readonly OpenItemView[]
  * does not wait for that.
  */
 async function readList(mine: number, how: ListRead): Promise<void> {
+  await readListOnce(mine, how);
+  readIfOwed(mine);
+}
+
+async function readListOnce(mine: number, how: ListRead): Promise<void> {
   const account = expect();
   const list = viewOf('list', mine);
   if (!account || !list) return;
+  if (list.scope === 'told') return readTold(mine);
+  const scope = list.scope;
   const shown = shownParts(list);
   const part = how === 'first' || how === 'again' ? null : how;
   const paged = part === null ? undefined : list.reads.find(read => read.parts.includes(part));
@@ -4962,7 +5063,7 @@ async function readList(mine: number, how: ListRead): Promise<void> {
   let last: OpenItemsView | undefined;
   let failure: Failure | undefined;
   for (const { read, atLeast } of asked) {
-    const result = await readItems(account, { scope: list.scope, id: list.id, states: statesOf(read.parts), read: 'rows' }, read.pages.length > 0 ? read.next : null, atLeast);
+    const result = await readItems(account, { scope, id: list.id, states: statesOf(read.parts), read: 'rows' }, read.pages.length > 0 ? read.next : null, atLeast);
     if (!result.ok) { failure = result.failure; break; }
     rows = [...rows, ...result.pages.flatMap(page => page.items)];
     reads = [...reads, { parts: read.parts, pages: [...read.pages, ...result.pages.map(page => ({ cursor: page.cursor, ids: page.items.map(item => item.item_id) }))],
@@ -5013,7 +5114,8 @@ async function fillLive(mine: number): Promise<void> {
       for (;;) {
         const account = expect();
         const list = viewOf('list', mine);
-        if (!account || !list || state.concealed) return;
+        // A told list reads its rows live by their ids, as it reads them.
+        if (!account || !list || state.concealed || list.scope === 'told') return;
         const wanted = unreadPage(list, tried);
         if (!wanted) break;
         tried.add(wanted.page);
@@ -5178,6 +5280,7 @@ export async function sendTicked(include: boolean): Promise<void> {
   const said: Said = left === 0 ? { words: done! } : done !== null ? { words: `${done} · ${left} not ${include ? 'sent' : 'dismissed'}, try again`, error: true }
     : missed ? { words: notSent(include), error: true } : changeFailed(failure ?? { code: 'failed', retryable: true });
   setView({ ...viewOf('list', list.seq)!, busy: false, sends, said });
+  readIfOwed(list.seq);
 }
 
 /**
@@ -5209,6 +5312,11 @@ export function openFollowUp(item_id: string, shown: OpenItemView | null = null,
  * reads it again).
  */
 async function readItem(mine: number): Promise<void> {
+  await readItemOnce(mine);
+  readIfOwed(mine);
+}
+
+async function readItemOnce(mine: number): Promise<void> {
   const page = viewOf('item', mine);
   const account = expect();
   if (!page || !account) return;
@@ -5253,15 +5361,19 @@ async function rereadRow(mine: number, item_id: string): Promise<OneRead | null>
   const account = expect();
   const list = viewOf('list', mine);
   if (!account || !list) return null;
-  const [read, counted] = await Promise.all([readOne(account, item_id), readItems(account, { scope: list.scope, id: list.id, read: 'counts' }, null, 1)]);
+  const scope = list.scope;
+  const [read, counted] = await Promise.all([readOne(account, item_id),
+    scope === 'told' ? Promise.resolve(null) : readItems(account, { scope, id: list.id, read: 'counts' }, null, 1)]);
   const current = viewOf('list', mine);
   if (!current || !sameAccount(account)) return null;
-  // Yours lists what you sent or own: one you only owned and gave away leaves it.
-  const left = 'item' in read ? current.scope === 'mine' && read.item.approver.membership_id !== account.membership_id
-    && read.item.owner.membership_id !== account.membership_id : read.failure.code === 'not_found';
+  // Yours lists what you sent, own or last handed on: one you only owned, and someone else then handed on, leaves it.
+  const me = account.membership_id;
+  const left = 'item' in read ? current.scope === 'involved' && read.item.approver.membership_id !== me && read.item.owner.membership_id !== me
+    && read.item.owner_set_by?.membership_id !== me : read.failure.code === 'not_found';
   const items = left ? current.items.filter(item => item.item_id !== item_id)
     : 'item' in read ? current.items.map(item => (item.item_id === item_id ? read.item : item)) : current.items;
-  setView({ ...current, items, ...(counted.ok ? { summary: counted.last.summary, stage: stageFor(counted.last, current.scope, current.id) } : {}) });
+  setView({ ...current, items, ...(counted === null ? { summary: summaryOf(items) }
+    : counted.ok ? { summary: counted.last.summary, stage: stageFor(counted.last, scope, current.id) } : {}) });
   return read;
 }
 
@@ -5310,6 +5422,7 @@ async function changeItem(view: FollowUpList | ItemPage, item_id: string, write:
   const answer = { ...current, busy: false, said };
   setView(gone && answer.kind === 'item' ? { ...answer, gone: true } : answer);
   if (failure && !unknown) await reread();
+  readIfOwed(view.seq);
   return { went, unknown: unknown && !went && !settled };
 }
 
@@ -5515,7 +5628,7 @@ export async function openListDecision(): Promise<void> {
  */
 export async function checkNow(): Promise<void> {
   const list = shownView('list');
-  if (!list || list.scope === 'mine' || list.id === undefined || list.check === 'checking' || !expect() || state.concealed) return;
+  if (!list || list.scope === 'involved' || list.scope === 'told' || list.id === undefined || list.check === 'checking' || !expect() || state.concealed) return;
   const request = { schema_version: 1 as const, operation: 'sweep' as const, scope: list.scope, id: list.id };
   setView({ ...list, check: 'checking' });
   // Still this list's check, while the list is open.
@@ -5600,8 +5713,8 @@ export function openNotified(target: NoticeTarget): void {
   if (!expect() || (state.compose && !state.compose.hidden) || newProjectInTheWay() || state.sheet || projectSettingsModal()) return;
   if (!freshness.wasTold(target)) return;
   switch (target.kind) {
-    case 'follow-ups':
-      void openYourFollowUps(true);
+    case 'items':
+      void openToldFollowUps(target.item_ids);
       return;
     case 'project': {
       // Its row, or, for one past the sidebar's pages, the project as the change check's full read had it.

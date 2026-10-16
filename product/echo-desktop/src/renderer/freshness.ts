@@ -11,7 +11,7 @@ import type { PersonChangesAreaV1, PersonChangesV1 } from '@echo-brain/organizat
 // notification per check. The store keeps its loaders; this module only says
 // when they run.
 import type { Expect, Failure, Notice, NoticeTarget, OpenItemsView, OpenItemView, ProjectPage, ProjectSummary, Result } from '../shared/protocol.js';
-import { NOTICE_TEXT_MAX } from '../shared/protocol.js';
+import { NOTICE_ITEMS_MAX, NOTICE_TEXT_MAX } from '../shared/protocol.js';
 import { rpc } from './api.js';
 import { clip } from './format.js';
 import { firstName, itemTitle } from './needs.js';
@@ -217,7 +217,9 @@ async function once(run: Loop): Promise<Outcome> {
   const adds = projects?.adds ?? [];
   // An area whose read did not finish keeps its old fingerprint, so the next check reads it again.
   run.areas = {
-    projects: projects !== null && projects.sidebar ? fresh.projects : known.projects,
+    // Projects are handled once both their reads finished: the sidebar's, and the full read that tells adds. Until then the
+    // area stays moved, so the next check reads both again, and tells adds against the last full read that finished.
+    projects: projects !== null && projects.sidebar && projects.full ? fresh.projects : known.projects,
     follow_ups: events !== null ? fresh.follow_ups : known.follow_ups,
     reviews: fresh.reviews,
   };
@@ -360,15 +362,15 @@ export function projectAdds(known: ReadonlyMap<string, ProjectSummary>, now: Rea
  * Projects moved: the sidebar reads again the pages it shows, whatever the
  * window shows, and every project you belong to is read in full, to tell the
  * ones you were added to. A full read that did not finish tells nothing and
- * keeps what the last one learned, so the next move tells them. `sidebar` is
- * whether the sidebar's read finished.
+ * keeps what the last one learned; the area stays moved, so the next check
+ * reads again and tells them. `sidebar` and `full` say which read finished.
  */
-async function projectsMoved(run: Loop): Promise<{ sidebar: boolean; adds: ProjectSummary[] }> {
+async function projectsMoved(run: Loop): Promise<{ sidebar: boolean; full: boolean; adds: ProjectSummary[] }> {
   const [sidebar, read] = await Promise.all([surfaces?.refreshSidebar() ?? Promise.resolve(false), readMemberships(run)]);
-  if (loop !== run || read === null) return { sidebar, adds: [] };
+  if (loop !== run || read === null) return { sidebar, full: false, adds: [] };
   const known = run.memberships;
   run.memberships = read;
-  return { sidebar, adds: known === null ? [] : projectAdds(known, read, created) };
+  return { sidebar, full: true, adds: known === null ? [] : projectAdds(known, read, created) };
 }
 
 /** A project a notification was about, as the full read had it: it opens even when the sidebar has not loaded its row. */
@@ -552,23 +554,27 @@ const counted = (count: number, word: string) => `${count} ${word}${count === 1 
 /**
  * One check's one notification (N4, N5), or null for nothing to tell. One
  * follow-up says what happened and opens its page; several are counted and
- * open Follow-ups. One project add names the project and opens it; several are
- * counted and open the first. Both in one check are counted together and open
- * Follow-ups.
+ * open a list of exactly those. One project add names the project and opens
+ * it; several are counted and open the first. Both in one check are counted
+ * together and open the list of those follow-ups.
  */
 export function noticeFor(events: readonly FollowUpEvent[], adds: readonly ProjectSummary[]): Notice | null {
   if (events.length === 0 && adds.length === 0) return null;
+  const items = [...new Set(events.map(event => event.item.item_id))].slice(0, NOTICE_ITEMS_MAX);
+  const several: NoticeTarget = { kind: 'items', item_ids: items };
   if (adds.length === 0) {
-    return events.length === 1 ? { text: eventText(events[0]!), target: { kind: 'item', item_id: events[0]!.item.item_id } }
-      : { text: `${events.length} follow-ups changed`, target: { kind: 'follow-ups' } };
+    return items.length === 1 ? { text: eventText(events[0]!), target: { kind: 'item', item_id: items[0]! } }
+      : { text: `${items.length} follow-ups changed`, target: several };
   }
   const project: NoticeTarget = { kind: 'project', project_id: adds[0]!.project_id };
-  if (events.length === 0) return { text: adds.length === 1 ? `You were added to ${line(adds[0]!.name)}` : `Added to ${adds.length} projects`, target: project };
-  return { text: `${counted(events.length, 'follow-up')} changed · added to ${counted(adds.length, 'project')}`, target: { kind: 'follow-ups' } };
+  if (items.length === 0) return { text: adds.length === 1 ? `You were added to ${line(adds[0]!.name)}` : `Added to ${adds.length} projects`, target: project };
+  // One follow-up beside a project add opens its own page; several, the list of them.
+  const target: NoticeTarget = items.length === 1 ? { kind: 'item', item_id: items[0]! } : several;
+  return { text: `${counted(items.length, 'follow-up')} changed · added to ${counted(adds.length, 'project')}`, target };
 }
 
 function keyOf(target: NoticeTarget): string {
-  return target.kind === 'item' ? `item:${target.item_id}` : target.kind === 'project' ? `project:${target.project_id}` : 'follow-ups';
+  return target.kind === 'item' ? `item:${target.item_id}` : target.kind === 'project' ? `project:${target.project_id}` : `items:${target.item_ids.join()}`;
 }
 
 /**

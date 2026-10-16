@@ -242,10 +242,12 @@ from rows the caller may read under the same policy as the matching read:
   These update the screen only.
 - **N4. Noise.**
   - **One notification per check.** Two or more events become one summary
-    ("3 follow-ups changed", "Added to 2 projects"), which opens Follow-ups,
-    or the sidebar.
-  - **An item whose page is open is not notified**, but its page is
-    refreshed.
+    ("3 follow-ups changed", "Added to 2 projects"). A follow-ups summary
+    opens a list of exactly the follow-ups it counted, each read again by its
+    id under your current access (one you can no longer read is left out);
+    several project adds open the first of those projects.
+  - **An item whose page is open is not notified** while the window is
+    visible and uncovered, but its page is refreshed.
   - **The first check after start or sign-in only learns.** After a wake, the
     in-memory baseline carries on, so changes made while the machine was
     asleep notify, in one summary.
@@ -259,11 +261,13 @@ from rows the caller may read under the same policy as the matching read:
   | Reopened | "Ana reopened *title*" | The item page |
   | Handed on | "Ana handed *title* to Ben" | The item page |
   | Added to a project | "You were added to *Project*" | That project |
-  | Several | "3 follow-ups changed" | Follow-ups |
+  | Several | "3 follow-ups changed" | A list of exactly those follow-ups |
+  | Follow-ups and a project add | "2 follow-ups changed · added to 1 project" | The list of those follow-ups (one follow-up: its page) |
   | Several project adds | "Added to 2 projects" | The first of those projects |
 - **N6. Plumbing.** Main's `notify.followUps` becomes one generic notice:
-  - It carries the text plus a click target, which is an item, Follow-ups, or
-    a project.
+  - It carries the text plus a click target, which is an item, the items a
+    summary counted, or a project. Only a target this account was told of
+    opens.
   - A click brings the window forward and opens that target.
   - Where the system has no notifications, nothing shows.
 

@@ -107,7 +107,7 @@ function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { 
 
 /**
  * Under the rows, and on an empty Home (F9): what waits on others and when
- * ECHO last checked, and Follow-ups (everything you sent or own), always.
+ * ECHO last checked, and Follow-ups (everything you sent, own or last handed on), always.
  */
 function Footer({ state }: { state: State }) {
   const open = state.home?.open;

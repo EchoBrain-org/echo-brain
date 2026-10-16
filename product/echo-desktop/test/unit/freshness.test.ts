@@ -3,6 +3,7 @@
 // back reads again on each page (R4), the hidden window (R6), the cover (R7),
 // an older Authority (R8) and desktop.log (R9).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FollowUpList } from '../../src/renderer/store.js';
 import type { Account, ProjectSummary } from '../../src/shared/protocol.js';
 import { MINA, authority, followUp, id, nextCheck, sent, stated, changesHandlers } from './changes-fixture.js';
 import { ACCOUNT, flush, Held, keysetPage, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
@@ -233,7 +234,7 @@ describe('what a moved area reads again (R3)', () => {
   it('follow-ups: the Follow-ups list as far as it showed, and an item page, rows only', async () => {
     const store = await startStore();
     await store.openYourFollowUps();
-    const listRows = () => runs('items', request => request.scope === 'mine' && request.read === 'rows');
+    const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open');
     const before = listRows();
     authority.items = [followUp(1)];
     await nextCheck();
@@ -249,6 +250,41 @@ describe('what a moved area reads again (R3)', () => {
     store.closeFollowUp();
     await flush();
     expect(listRows()).toBe(before + 2);
+  });
+
+  it('follow-ups that move while the list on screen is still loading: it is read again once that read lands (review A)', async () => {
+    const old = followUp(1);
+    authority.items = [old];
+    const fixture = changesHandlers();
+    let release: () => void = () => undefined;
+    let hold = false;
+    rpc.mockImplementation(rpcFor(new Held(), {
+      ...fixture,
+      'app.status': () => ok({ signed_in: true, account }),
+      'runs': params => {
+        const request = params.request as { operation: string; scope?: string; read?: string; states?: string[] };
+        if (hold && request.operation === 'items' && request.scope === 'involved' && request.read === 'rows' && request.states?.join() !== 'open') {
+          hold = false;
+          // The reply as the Authority had it when asked: before the change below.
+          const captured = fixture.runs!(params);
+          return new Promise(resolve => { release = () => resolve(captured); });
+        }
+        return fixture.runs!(params);
+      },
+    }, () => ({ active: authority.active, archived: authority.archived })));
+    const store = await startStore();
+    hold = true;
+    const opening = store.openYourFollowUps();
+    await flush();
+    expect(store.followUpShown()).toMatchObject({ kind: 'list', loading: true });
+    authority.items = [stated(old, 'done', MINA, 50)];
+    await nextCheck();
+    expect(noticeTexts()).toHaveLength(1);
+    release();
+    await opening;
+    await flush();
+    await nextCheck();
+    expect((store.followUpShown() as FollowUpList).items.filter(item => item.state === 'open')).toEqual([]);
   });
 
   it('follow-ups: a project\'s follow-ups line', async () => {
@@ -339,7 +375,7 @@ describe('what coming back reads again, on each page (R4)', () => {
     authority.items = [followUp(1)];
     const store = await startStore();
     await store.openYourFollowUps();
-    const listRows = () => runs('items', request => request.scope === 'mine' && request.read === 'rows');
+    const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open');
     const before = listRows();
     await store.resume();
     await flush();
@@ -495,6 +531,17 @@ describe('an older Authority (R8)', () => {
     expect(checks()).toBe(1);
     expect(lists('active')).toBe(before + 2);
     expect(calls('log.changes')).toHaveLength(1);
+  });
+
+  it('Follow-ups (yours) lists what you sent or own when the Authority refuses `involved`', async () => {
+    authority.noInvolved = true;
+    authority.items = [followUp(1), sent(2, MINA)];
+    const store = await startStore();
+    await store.openYourFollowUps();
+    await flush();
+    expect((store.followUpShown() as FollowUpList).items.map(item => item.item_id)).toEqual([followUp(1).item_id, sent(2, MINA).item_id]);
+    expect(calls('runs').filter(([, params]) => params.request.operation === 'items' && (params.request.states as string[] | undefined)?.join() === 'unsent,open')
+      .map(([, params]) => params.request.scope)).toEqual(['involved', 'mine']);
   });
 
   it('a check that fails on a return reads the sidebar instead', async () => {

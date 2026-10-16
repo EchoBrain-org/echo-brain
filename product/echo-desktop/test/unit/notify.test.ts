@@ -4,7 +4,7 @@
 // notification per change check. Your own changes, checks, meetings, reviews,
 // removals and role changes only update the screen.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ItemPage } from '../../src/renderer/store.js';
+import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import type { Account, OpenItemView } from '../../src/shared/protocol.js';
 import { ME, MINA, RAFAEL, authority, followUp, id, nextCheck, owned, sent, stated, changesHandlers } from './changes-fixture.js';
 import { ACCOUNT, flush, Held, keysetPage, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
@@ -302,6 +302,27 @@ describe('what never notifies (N3)', () => {
     expect(store.getState().projects.items.map(row => row.name)).toEqual(['Made elsewhere', 'Made here', 'Project 1']);
   });
 
+  it('retries a failed full read of your projects at the next check, the fingerprint unchanged, and tells the add then (review B)', async () => {
+    authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
+    let refuseMore = false;
+    rpc.mockImplementation(rpcFor(new Held(), {
+      ...changesHandlers(),
+      'app.status': () => ok({ signed_in: true, account: ACCOUNT }),
+      'projects.list': params => (refuseMore && params.cursor ? { ok: false, failure: { code: 'unavailable', retryable: true } }
+        : ok(keysetPage(params.status === 'archived' ? authority.archived : authority.active, params.cursor))),
+    }, () => ({ active: authority.active, archived: authority.archived })));
+    await startStore();
+    authority.active = [...authority.active, project(40, 1, { name: 'Oldest invited project', role: 'member' })];
+    // The sidebar's own page reads; the full read's second page fails.
+    refuseMore = true;
+    await nextCheck();
+    expect(notices()).toEqual([]);
+    refuseMore = false;
+    await nextCheck();
+    await nextCheck(300);
+    expect(texts()).toEqual(['You were added to Oldest invited project']);
+  });
+
   it('the first check learns every page of your projects, active and archived, without a word', async () => {
     authority.active = Array.from({ length: 25 }, (_, index) => project(index + 2, 28 - index));
     authority.archived = [project(50, 2, { status: 'archived' })];
@@ -348,7 +369,7 @@ describe('what never notifies (N3)', () => {
 });
 
 describe('noise (N4)', () => {
-  it('several in one check come as one, counted, opening Follow-ups; with a project added too, both are counted', async () => {
+  it('several in one check come as one, counted, opening exactly those; with a project added too, both are counted', async () => {
     authority.active = [project(1, 20)];
     await signedIn([sent(1, MINA)]);
     authority.items = [stated(sent(1, MINA), 'done', MINA, 30), followUp(2), followUp(3)];
@@ -359,8 +380,9 @@ describe('noise (N4)', () => {
     authority.active = [project(3, 26, { role: 'member' }), project(4, 26, { role: 'member' }), ...authority.active];
     await nextCheck();
     expect(notices()).toEqual([
-      { text: '3 follow-ups changed', target: { kind: 'follow-ups' } },
-      { text: '1 follow-up changed · added to 1 project', target: { kind: 'follow-ups' } },
+      { text: '3 follow-ups changed', target: { kind: 'items', item_ids: [id(2), id(3), id(1)] } },
+      // One follow-up beside a project add opens its own page.
+      { text: '1 follow-up changed · added to 1 project', target: { kind: 'item', item_id: id(4) } },
       { text: 'Added to 2 projects', target: { kind: 'project', project_id: project(3, 26).project_id } },
     ]);
   });
@@ -396,7 +418,7 @@ describe('noise (N4)', () => {
     authority.items = [stated(sent(1, MINA), 'done', MINA, 30), followUp(2)];
     store.systemWoke();
     await flush();
-    expect(notices()).toEqual([{ text: '2 follow-ups changed', target: { kind: 'follow-ups' } }]);
+    expect(notices()).toEqual([{ text: '2 follow-ups changed', target: { kind: 'items', item_ids: [id(2), id(1)] } }]);
   });
 
   it('stops on sign-out, and learns again at sign-in', async () => {
@@ -494,12 +516,23 @@ describe('a notification clicked (N6)', () => {
     expect((store.followUpShown() as ItemPage).item?.item_id).toBe(id(1));
   });
 
-  it('opens Follow-ups for several, and the project for a project add', async () => {
+  it('opens exactly the follow-ups a summary counted, as you may see them now, and the project for a project add', async () => {
     authority.active = [project(1, 20)];
     const store = await told(followUp(1), followUp(2));
-    store.openNotified({ kind: 'follow-ups' });
+    expect(texts()).toEqual(['2 follow-ups changed']);
+    // Another follow-up came meanwhile, and one counted is no longer yours to see: the list holds the counted ones you see.
+    authority.items = [followUp(1), followUp(3)];
+    store.openNotified({ kind: 'items', item_ids: [id(1), id(2)] });
     await flush();
-    expect(store.getState().route).toEqual({ page: 'follow-ups' });
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.followUpShown()).toMatchObject({ kind: 'list', scope: 'told', title: 'Changed follow-ups', loading: false });
+    expect((store.followUpShown() as FollowUpList).items.map(item => item.item_id)).toEqual([id(1)]);
+    // Read by their ids, rows only: never a scope's list.
+    expect(rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'item').map(([, params]) => params.request.item_id))
+      .toEqual([id(1), id(2)]);
+    store.closeFollowUp();
+    // The check that tells of those changes, then a project add on its own.
+    await nextCheck();
     const comet = project(2, 25, { name: 'Comet', role: 'member' });
     authority.active = [comet, project(1, 20)];
     await nextCheck();
@@ -512,21 +545,23 @@ describe('a notification clicked (N6)', () => {
     authority.items = [followUp(1)];
     const store = await startStore();
     store.openNotified({ kind: 'item', item_id: id(1) });
-    store.openNotified({ kind: 'follow-ups' });
+    store.openNotified({ kind: 'items', item_ids: [id(1), id(2)] });
     await flush();
     expect(store.followUpShown()).toBeNull();
     authority.items = [followUp(1), followUp(2), followUp(3)];
     await nextCheck();
+    // Told as two, together: neither opens alone, nor with another.
     store.openNotified({ kind: 'item', item_id: id(2) });
+    store.openNotified({ kind: 'items', item_ids: [id(1), id(2), id(3)] });
     await flush();
     expect(store.followUpShown()).toBeNull();
     // Switched: what the last account was told opens nothing.
     account = OTHER;
     await store.refreshStatus();
     await flush();
-    store.openNotified({ kind: 'follow-ups' });
+    store.openNotified({ kind: 'items', item_ids: [id(2), id(3)] });
     await flush();
-    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.followUpShown()).toBeNull();
   });
 
   it('leaves Capture up', async () => {

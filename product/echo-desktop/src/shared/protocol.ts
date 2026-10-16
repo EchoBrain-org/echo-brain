@@ -715,8 +715,12 @@ export const NOTICE_TEXT_MAX = 200;
 /** A notification's whole line: two titles or names and the words between them, in characters. */
 export const NOTICE_LINE_MAX = 2 * NOTICE_TEXT_MAX + 120;
 
-/** What a notification opens: one follow-up's page, the Follow-ups page, or a project. */
-export type NoticeTarget = { readonly kind: 'item'; readonly item_id: string } | { readonly kind: 'follow-ups' } | { readonly kind: 'project'; readonly project_id: string };
+/** The most follow-ups one notification counts, and opens. */
+export const NOTICE_ITEMS_MAX = 100;
+
+/** What a notification opens: one follow-up's page, a list of exactly the follow-ups it counted, or a project. */
+export type NoticeTarget = { readonly kind: 'item'; readonly item_id: string } | { readonly kind: 'items'; readonly item_ids: readonly string[] }
+  | { readonly kind: 'project'; readonly project_id: string };
 
 /** One notification, as the page asks main to show it: one line ("Ana handed you Pricing page"), and what a click opens. */
 export interface Notice {
@@ -727,7 +731,8 @@ export interface Notice {
 /**
  * A notification as main shows it, or null for anything else: exactly a text
  * and a target, the text one non-empty line of at most NOTICE_LINE_MAX
- * characters, and the target an item, Follow-ups or a project by its id.
+ * characters, and the target an item, two to NOTICE_ITEMS_MAX distinct items,
+ * or a project, by their ids.
  */
 export function noticeOf(params: unknown): Notice | null {
   const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -735,7 +740,11 @@ export function noticeOf(params: unknown): Notice | null {
   const { text, target } = params;
   if (typeof text !== 'string' || text.trim() === '' || [...text].length > NOTICE_LINE_MAX || /\p{Cc}/u.test(text) || !record(target)) return null;
   const keys = Object.keys(target).sort().join();
-  if (target.kind === 'follow-ups' && keys === 'kind') return { text: text.trim(), target: { kind: 'follow-ups' } };
+  const ids = target.item_ids;
+  if (target.kind === 'items' && keys === 'item_ids,kind' && Array.isArray(ids) && ids.length >= 2 && ids.length <= NOTICE_ITEMS_MAX
+      && ids.every(id => typeof id === 'string' && ITEM_ID.test(id)) && new Set(ids).size === ids.length) {
+    return { text: text.trim(), target: { kind: 'items', item_ids: [...ids as string[]] } };
+  }
   if (target.kind === 'item' && keys === 'item_id,kind' && typeof target.item_id === 'string' && ITEM_ID.test(target.item_id)) {
     return { text: text.trim(), target: { kind: 'item', item_id: target.item_id } };
   }

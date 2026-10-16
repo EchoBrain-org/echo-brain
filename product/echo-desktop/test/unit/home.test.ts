@@ -874,9 +874,9 @@ describe('Follow-up lists and item pages', () => {
     // The Follow-ups page: yours, its closed groups closed, nothing ticked.
     await store.openYourFollowUps();
     expect(store.getState().route).toEqual({ page: 'follow-ups' });
-    expect(list(store)).toMatchObject({ scope: 'mine', ticks: {} });
-    expect(requests('items').slice(-2)).toEqual([{ schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'], read: 'rows' },
-      { schema_version: 1, operation: 'items', scope: 'mine', states: ['unsent', 'open'] }]);
+    expect(list(store)).toMatchObject({ scope: 'involved', ticks: {} });
+    expect(requests('items').slice(-2)).toEqual([{ schema_version: 1, operation: 'items', scope: 'involved', states: ['unsent', 'open'], read: 'rows' },
+      { schema_version: 1, operation: 'items', scope: 'involved', states: ['unsent', 'open'] }]);
     // Back from it is Home.
     store.closeFollowUp();
     expect(store.getState().route).toEqual({ page: 'home' });
@@ -1370,14 +1370,15 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: 'itm_00000001', read: 'rows' }]);
   });
 
-  it('drops a row from your list once you gave away an item you only owned, saying who has it now; a meeting\'s list keeps it', async () => {
+  it('keeps a row on your list once you hand on an item you only owned (you last handed it on), as a meeting\'s list does; drops one someone else handed on meanwhile', async () => {
     const rafael = { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true };
-    const yours = (id: string): OpenItemView => ({ ...item(id), owner: { membership_id: 'member', name: 'Fixture', active: true, match: 'jira_account' } });
-    const given = { ...yours('1'), owner: { ...rafael, match: 'reassigned' as const } };
+    const me = { membership_id: 'member', name: 'Fixture', active: true };
+    const yours = (id: string): OpenItemView => ({ ...item(id), owner: { ...me, match: 'jira_account' } });
+    const given = { ...yours('1'), owner: { ...rafael, match: 'reassigned' as const }, owner_set_at: '2026-10-08T13:00:00.000Z', owner_set_by: me };
     page = listPage([yours('1'), yours('2')]);
     const store = await start();
     await store.openYourFollowUps();
-    for (const scope of ['mine', 'record'] as const) {
+    for (const scope of ['involved', 'record'] as const) {
       if (scope === 'record') {
         page = listPage([yours('1'), yours('2')]);
         await store.openFollowUps('record', record, 'Pilot planning');
@@ -1387,8 +1388,17 @@ describe('Follow-up lists: current work first, results in place', () => {
       page = listPage([given, yours('2')]);
       await store.pickFollowUpOwner(RAFAEL);
       expect(said(store)).toEqual({ words: 'Owner changed to Rafael' });
-      expect(ids(store)).toEqual(scope === 'mine' ? ['2'] : ['1', '2']);
+      expect(ids(store)).toEqual(['1', '2']);
     }
+    // On your list, read again after your change: Mina had handed it on from Rafael meanwhile, so it is no longer yours to see there.
+    store.closeFollowUp();
+    await flush();
+    store.toggleOwnerPicker('itm_00000002');
+    await flush();
+    const mina = { membership_id: 'mem_00000000-0000-4000-8000-000000000077', name: 'Mina Patel', active: true };
+    page = listPage([given, { ...yours('2'), owner: { ...mina, match: 'reassigned' as const }, owner_set_at: '2026-10-08T14:00:00.000Z', owner_set_by: mina }]);
+    await store.pickFollowUpOwner(RAFAEL);
+    expect(ids(store)).toEqual(['1']);
   });
 
   it('keeps the check of a decision opened from its list when a runs list read since does not hold it', async () => {

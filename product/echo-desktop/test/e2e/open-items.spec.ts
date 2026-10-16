@@ -327,9 +327,18 @@ test('the person who sent a follow-up is told when its owner marks it done', asy
   await expect.poll(() => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length).toBe(1);
   // Mina marks done the two Ari sent her, ECHO-12 and "Confirm the trace": one notification for that check, counting them.
   writeFileSync(join(app.home, 'mina-done'), '');
-  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'follow-ups' } }]);
+  const counted = ['itm_00000000-0000-4000-8000-000000000031', 'itm_00000000-0000-4000-8000-000000000039'];
+  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'items', item_ids: counted } }]);
   // Each was read by its id, rows only, once it left the open follow-ups Ari is involved in.
-  expect(app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'item').map(call => call.body!.read)).toEqual(['rows', 'rows']);
+  const itemReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'item').map(call => call.body!.item_id);
+  expect(itemReads()).toEqual(counted);
+  // Clicked: a list of exactly those two, each read again by its id, as Ari may see them now.
+  await clickNotice(app, 0);
+  const list = app.page.getByTestId('follow-ups');
+  await expect(list.getByRole('heading', { name: 'Changed follow-ups' })).toBeVisible();
+  await expect(group(list, 'Done').getByTestId('follow-up-row')).toHaveCount(2);
+  await expect(list.getByTestId('follow-up-row')).toHaveCount(2);
+  expect(new Set(itemReads().slice(2))).toEqual(new Set(counted));
 });
 
 test('a reader who cannot open an item sees what it is, never what it says', async () => {
@@ -547,7 +556,8 @@ test('Home sweeps by itself, and the Follow-ups page lists everything you sent o
   await expect(row(open, 'ECHO-12')).toContainText('Jira ticket · Pilot planning · matches now');
   // Current work rows only, then live: yours keeps its closed groups closed, and unread.
   expect(listReads()).toEqual(['unsent+open', 'unsent+open live']);
-  expect(requests('items').filter(body => body.read !== 'counts').every(body => body.scope === 'mine')).toBe(true);
+  // Yours: what Ari sent, owns or last handed on.
+  expect(requests('items').filter(body => body.read !== 'counts').every(body => body.scope === 'involved')).toBe(true);
   await expect(list.getByRole('checkbox')).toHaveCount(0);
   // Back is Home, read again; no second sweep was asked for.
   await page.getByTestId('back').click();
