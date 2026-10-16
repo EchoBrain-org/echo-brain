@@ -10,14 +10,15 @@ test.afterEach(async () => { await run?.close(); });
 const refreshes = () => run.calls().filter(call => call.path === '/v2/session/refresh');
 
 /**
- * Both startup lists, Home's reads (its tools, runs and rows), and the independent quiet follow-ups scan fail
- * before sending; a known-not-sent refresh preserves the session for the next call.
+ * Both startup lists and Home's reads (its tools, runs and rows) fail before sending, each tried once, and so does the change
+ * check; a known-not-sent refresh preserves the session for the next call.
  */
 async function expectOfflineStartup(): Promise<void> {
   const completedLists = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')
     .match(/(projects\.list|account\.tools|runs\.\w+(?: rows| counts)?) transport_failed/g)?.length ?? 0;
-  await expect.poll(completedLists).toBe(6);
-  expect(run.calls().map(call => call.path)).toEqual(Array(6).fill('/v2/session/refresh'));
+  await expect.poll(completedLists).toBe(5);
+  await expect.poll(() => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/changes\.read \w+/);
+  expect(new Set(run.calls().map(call => call.path))).toEqual(new Set(['/v2/session/refresh']));
 }
 
 /** Sign in with the fixture's browser, which stands in for Google, and land on Home. */
@@ -92,15 +93,19 @@ test('an offline foreground refresh keeps you signed in, and a note is not sent 
   await expect(page.getByTestId('signed-out')).toHaveCount(0);
   // Active and archived lists each try once; neither list reaches the Authority.
   await expectOfflineStartup();
-  // Returning to ECHO reads local status, then retries the sidebar's active list.
-  // The failed Home read still waits for its explicit retry.
+  // Returning to ECHO reads local status, Home and the change check again; with no check to say what moved, the sidebar's
+  // active list is tried again too. Each still fails before sending.
   const statuses = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/app\.status ok/g)?.length ?? 0;
   const before = statuses();
+  const lists = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/projects\.list transport_failed/g)?.length ?? 0;
+  const listed = lists();
+  const tried = refreshes().length;
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:resume');
   await expect.poll(statuses).toBe(before + 1);
+  await expect.poll(lists).toBe(listed + 1);
   await expect(page.getByTestId('home-error')).toBeVisible();
-  await expect.poll(() => refreshes().length).toBe(7);
+  expect(refreshes().length).toBeGreaterThan(tried);
   await expect(page.getByTestId('sidebar-projects-error').getByRole('button', { name: 'Try again' })).toBeEnabled();
   await expect(page.getByTestId('signed-out')).toHaveCount(0);
 

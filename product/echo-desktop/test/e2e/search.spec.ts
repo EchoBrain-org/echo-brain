@@ -155,6 +155,8 @@ test('a new role in a project is a change of access, and empties the bar', async
   await expect(page.getByTestId('sidebar-project').nth(0)).toHaveAttribute('data-role', 'lead');
   await field.fill('apollo');
   await expect(page.getByTestId('match-row')).toHaveCount(2);
+  // Made a member elsewhere: the window comes forward, the change check says your projects moved, and the list is read again.
+  writeFileSync(join(run.home, 'role-changed'), '');
   await emit(app, 'echo-test:shown');
   await expect(page.getByTestId('sidebar-project').nth(0)).toHaveAttribute('data-role', 'member');
   await expect(field).toHaveValue('');

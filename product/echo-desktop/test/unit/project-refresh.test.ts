@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from '../../src/shared/protocol.js';
-import { flush, Held, keysetPage, names, numbered, ok, ordered, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { flush, Held, keysetPage, moved, names, numbered, ok, ordered, project, rpcFor, startStore, stubWindow } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -145,10 +145,11 @@ describe('project tool-read replies', () => {
 });
 
 /**
- * The window came forward: the sidebar reads again as many pages as it
- * shows, so what it shows is what the Authority has now, in its order
- * (creation time, newest first; then project ID), and More goes on from
- * the last row read.
+ * The window came forward, and the change check says your projects moved
+ * (here, a list changed elsewhere moves them by itself, and `moved` moves them
+ * by hand): the sidebar reads again as many pages as it shows, so what it
+ * shows is what the Authority has now, in its order (creation time, newest
+ * first; then project ID), and More goes on from the last row read.
  */
 describe('project lists on foreground refresh', () => {
   /** Made after every numbered project. */
@@ -258,6 +259,7 @@ describe('project lists on foreground refresh', () => {
     active = numbered(3);
     const store = await startStore();
     const stale = held.hold('projects.list');
+    moved.projects += 1;
     const refreshing = store.windowShown();
     await flush();
     const fresh = created('Fresh');
@@ -281,6 +283,7 @@ describe('project lists on foreground refresh', () => {
     active = numbered(3);
     const store = await startStore();
     const stale = held.hold('projects.list');
+    moved.projects += 1;
     const refreshing = store.windowShown();
     await flush();
     rpc.mockImplementation(rpcFor(held, { 'projects.leave': () => ok({}) }, () => ({ active, archived })));
@@ -319,6 +322,7 @@ describe('project lists on foreground refresh', () => {
     const store = await startStore();
     await store.loadArchivedProjects(true);
     expect(store.getState().archivedProjects.items).toHaveLength(15);
+    moved.projects += 1;
     await store.windowShown();
     await flush();
     expect(store.getState().archivedProjects.items).toHaveLength(15);
@@ -328,6 +332,7 @@ describe('project lists on foreground refresh', () => {
     active = numbered(3);
     const store = await startStore();
     const stale = held.hold('projects.list');
+    moved.projects += 1;
     const refreshing = store.windowShown();
     await flush();
     membership = 'someone-else';
@@ -344,6 +349,7 @@ describe('project lists on foreground refresh', () => {
     active = numbered(3);
     const store = await startStore();
     held.hold('projects.list')({ ok: false, failure: { code: 'transport_failed', retryable: true } });
+    moved.projects += 1;
     await store.windowShown();
     expect(names(store.getState().projects.items)).toEqual(names(numbered(3)));
     expect(store.getState().projects.failure).toBeUndefined();

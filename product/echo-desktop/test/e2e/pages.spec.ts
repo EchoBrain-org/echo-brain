@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
@@ -7,7 +9,7 @@ test.afterEach(async () => { await run?.close(); });
 const lists = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v2/person/projects' &&
   new URLSearchParams(call.query).get('status') === 'active').length;
 
-test('Back keeps the pages Home had loaded, and showing the window re-reads it', async () => {
+test('Back keeps the pages Home had loaded, and showing the window re-reads them once a project changed', async () => {
   run = await launch('many-projects');
   const { page, app } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(10);
@@ -18,10 +20,13 @@ test('Back keeps the pages Home had loaded, and showing the window re-reads it',
   await page.getByTestId('back').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
   expect(lists()).toBe(2);
-  // Both pages shown are read again, so what shows is what the Authority has now; More stays gone.
+  // Renamed elsewhere: the change check says your projects moved, and both pages shown are read again, so what shows is what
+  // the Authority has now; More stays gone.
+  writeFileSync(join(run.home, 'renamed'), '');
   await emit(app, 'echo-test:shown');
   await expect.poll(lists).toBe(4);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
+  await expect(page.getByTestId('sidebar-project').first()).toContainText('Project 1, renamed');
   await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
 });
 
@@ -29,10 +34,12 @@ test('opening ECHO again while it runs brings the window forward, as Open ECHO d
   run = await launch();
   const { page, app } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  const before = lists();
+  // Home's reads of its rows: coming forward reads what shows again.
+  const homeReads = () => run.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'home' && call.body.read === 'rows').length;
+  await expect.poll(homeReads).toBe(1);
   // What macOS sends when ECHO is opened from Spotlight or Finder while it runs.
   await app.evaluate(({ app: electronApp }) => { electronApp.emit('activate', {}, false); });
-  await expect.poll(lists).toBe(before + 1);
+  await expect.poll(homeReads).toBe(2);
   await expect(page.getByTestId('ask-field')).toBeFocused();
 });
 
@@ -50,6 +57,7 @@ for (const event of ['shown', 'resume'] as const) {
     await card.getByRole('radio', { name: 'Only me' }).check();
     await card.getByLabel('Share the transcript with them too').check();
     const before = lists();
+    writeFileSync(join(run.home, 'project-created'), '');
     if (event === 'resume') {
       await emit(app, 'echo-test:conceal');
       await expect(page.getByTestId('concealed')).toBeVisible();

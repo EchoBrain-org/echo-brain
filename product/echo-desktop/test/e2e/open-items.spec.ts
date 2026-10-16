@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emit, launch, type Launched } from './launch.js';
+import { clickNotice, emit, launch, notices, type Launched } from './launch.js';
 
 let app: Launched;
 test.afterEach(async () => { await app?.close(); });
@@ -29,7 +29,9 @@ const runOperations = () => app.calls().filter(call => call.path === '/v1/person
 /** A list's reads, in order: rows only, or live (" live"), by states, and " more" past the first page; never counts or a check's rows. */
 const listReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && !notificationScan(call.body) && call.body.read !== 'counts' && call.body.scope !== 'run')
   .map(call => `${(call.body!.states as string[]).join('+')}${call.body!.cursor === undefined ? '' : ' more'}${call.body!.read === 'rows' ? '' : ' live'}`);
-const notificationScan = (body: Record<string, unknown>) => body.operation === 'items' && body.scope === 'mine' && body.read === 'rows' && (body.states as string[] | undefined)?.join() === 'open';
+/** The change check's reads of the open follow-ups Ari is involved in (desktop refresh and notifications v1). */
+const notificationScan = (body: Record<string, unknown>) => body.operation === 'items' && (body.scope === 'involved' || body.scope === 'mine') && body.read === 'rows'
+  && (body.states as string[] | undefined)?.join() === 'open';
 /** Foreground runs requests; notification discovery is checked independently. */
 const requests = (operation: string) => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === operation && !notificationScan(call.body)).map(call => call.body!);
 /** The sweeps the app asked for, by scope. */
@@ -280,55 +282,54 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
   release();
 });
 
-/** Test builds record the notifications main would show: no test puts one on the machine. */
-interface Notices { echoTestNotices?: { title: string; body: string; click(): void }[] }
-
-test('a follow-up sent to you while ECHO runs comes as a notification that opens its page', async () => {
-  app = await launch('granola-owner-later');
+test('a follow-up sent to you while ECHO runs comes as a notification within one check, and opens its page', async () => {
+  // The Authority asks for a check every 15 s, its shortest.
+  app = await launch('granola-owner-later', { 'changes-seconds': '15' });
   const { page } = app;
-  const notices = () => app.app.evaluate(() => ((globalThis as Notices).echoTestNotices ?? []).map(({ title, body }) => ({ title, body })));
-  // Complete notification scans, independent of Home's bounded rows.
-  const rowsReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length;
-  const homeIdle = () => expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
+  const changes = () => app.calls().filter(call => call.path === '/v1/person/changes').length;
+  const scans = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).map(call => call.body!.scope);
   await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
-  // The first complete scan at sign-in only learns what already waits on Ari.
-  await homeIdle();
-  await expect.poll(rowsReads).toBe(1);
-  // The page starts again on a clock the test moves: it learns again.
-  await page.clock.install();
-  await page.reload();
-  await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
-  await homeIdle();
-  await expect.poll(rowsReads).toBe(2);
-  // Mina sends Ari a ticket from a meeting Ari cannot read. Five minutes on, the next check tells of it.
+  // The first check at sign-in only learns what already involves Ari.
+  await expect.poll(scans).toEqual(['involved']);
+  expect(await notices(app)).toEqual([]);
+  // Mina sends Ari a ticket from a meeting Ari cannot read; the window stays as it is. The next check tells of it.
+  const before = changes();
   writeFileSync(join(app.home, 'mina-sends'), '');
-  await page.clock.fastForward('05:00');
-  await expect.poll(rowsReads).toBe(3);
-  await expect.poll(notices).toEqual([{ title: 'ECHO', body: 'Mina sent you: Jira ticket' }]);
-  // The quiet check starts no sweep or run.
+  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([
+    { title: 'ECHO', body: 'Mina handed you Jira ticket', target: { kind: 'item', item_id: 'itm_00000000-0000-4000-8000-000000000042' } },
+  ]);
+  expect(changes()).toBe(before + 1);
+  // Home showed, so it was read again: the new row is there with no click.
+  await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toBeVisible();
+  // The check starts no sweep or run.
   expect(requests('sweep')).toEqual([]);
   expect(requests('start')).toEqual([]);
   // Clicked with another app in front: its page opens over Home as ECHO comes forward.
   await emit(app.app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();
-  await app.app.evaluate(() => { (globalThis as Notices).echoTestNotices![0]!.click(); });
+  await clickNotice(app, 0);
   await emit(app.app, 'echo-test:resume');
   const item = page.getByTestId('follow-up');
   await expect(item.getByRole('heading', { name: 'A Jira ticket you can\'t open' })).toBeVisible();
   await expect(item.getByTestId('follow-up-history')).toContainText('Sent to you by Mina Patel');
-  // Its row from the check, read again rows only, then live.
-  const read = { item_id: 'itm_00000000-0000-4000-8000-000000000042' };
-  expect(requests('item')).toEqual([expect.objectContaining({ ...read, read: 'rows' }), expect.not.objectContaining({ read: 'rows' })]);
-  expect(requests('item')[1]).toMatchObject(read);
   await page.getByTestId('back').click();
   await expect(page.getByTestId('needs')).toBeVisible();
-  // Told once: the next check finds nothing new.
-  await homeIdle();
-  const rows = rowsReads();
-  await page.clock.fastForward('05:00');
-  await homeIdle();
-  await expect.poll(rowsReads).toBe(rows + 1);
-  expect(await notices()).toHaveLength(1);
+  // Told once: the checks after it find nothing new.
+  const checked = changes();
+  await expect.poll(changes, { timeout: 30_000 }).toBeGreaterThan(checked);
+  expect(await notices(app)).toHaveLength(1);
+});
+
+test('the person who sent a follow-up is told when its owner marks it done', async () => {
+  app = await launch('granola-checked', { 'changes-seconds': '15' });
+  const { page } = app;
+  await expect(page.getByTestId('needs-foot')).toBeVisible();
+  await expect.poll(() => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length).toBe(1);
+  // Mina marks done the two Ari sent her, ECHO-12 and "Confirm the trace": one notification for that check, counting them.
+  writeFileSync(join(app.home, 'mina-done'), '');
+  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'follow-ups' } }]);
+  // Each was read by its id, rows only, once it left the open follow-ups Ari is involved in.
+  expect(app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'item').map(call => call.body!.read)).toEqual(['rows', 'rows']);
 });
 
 test('a reader who cannot open an item sees what it is, never what it says', async () => {
@@ -380,7 +381,8 @@ test('a Home read that fails once keeps the rows it had, and a live read that fa
   await expect(app.page.getByTestId('home-error')).toHaveCount(0);
   expect(liveReads()).toBe(1);
   // The next read brings what changed meanwhile, and its live read fails: ECHO-12 keeps what it said, and the new row says ECHO
-  // couldn't read it just now.
+  // couldn't read it just now. (A return within two seconds of the last is the same return.)
+  await app.page.waitForTimeout(2_000);
   await emit(app.app, 'echo-test:shown');
   await expect(rows).toHaveCount(2);
   await expect.poll(liveReads).toBe(2);
@@ -389,6 +391,7 @@ test('a Home read that fails once keeps the rows it had, and a live read that fa
   await expect(app.page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
   await expect(app.page.getByTestId('home-error')).toHaveCount(0);
   // Read again, live: the ticket Ari cannot open says so.
+  await app.page.waitForTimeout(2_000);
   await emit(app.app, 'echo-test:shown');
   await expect(rows.filter({ hasText: 'A Jira ticket you can\'t open' })).toBeVisible();
   await expect(rows).toHaveCount(2);
@@ -442,8 +445,13 @@ test('an approved meeting counts its follow-ups by status, and its project count
   await expect(list).toContainText('Thermostat redesign');
   // Spanning meetings, each row names its meeting.
   await expect(row(list, 'ECHO-12')).toContainText('Jira ticket · Pilot planning');
-  expect(itemReads().filter(read => !read.counts).map(read => `${read.scope} ${read.rows ? 'rows' : 'live'}`))
-    .toEqual(['record rows', 'record live', 'project rows', 'project live']);
+  // The meeting's list was read again, rows only, when ECHO came back to it (and again if the change check then said its
+  // follow-ups had moved since sign-in, as approving made them); nothing was read live twice.
+  const reads = itemReads().filter(read => !read.counts).map(read => `${read.scope} ${read.rows ? 'rows' : 'live'}`);
+  expect(reads.slice(0, 2)).toEqual(['record rows', 'record live']);
+  expect(reads.slice(-2)).toEqual(['project rows', 'project live']);
+  expect(reads.slice(2, -2).length).toBeGreaterThanOrEqual(1);
+  expect(new Set(reads.slice(2, -2))).toEqual(new Set(['record rows']));
 });
 
 test('a list reads current work first, past older closed follow-ups, each part with its own More, and keeps its place', async () => {

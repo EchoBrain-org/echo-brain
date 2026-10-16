@@ -1,5 +1,5 @@
 import type {
-  PersonChangesV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
+  PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
@@ -559,10 +559,12 @@ export interface MainMethods {
   /** New version · Restart: installs `release` (or, in state restart, relaunches), then quits. Refused while work is unresolved. */
   'update.install': { params: { release: string }; result: null };
   /**
-   * Follow-ups that newly wait on you (F8): one system notification. One item
-   * says who sent it and what it is; several are counted. See `followUpsNotification`.
+   * One system notification (desktop refresh and notifications v1, N6): what
+   * changed for you, and what a click opens. See `noticeOf`.
    */
-  'notify.followUps': { params: { item_ids: readonly string[]; from?: string; title?: string }; result: null };
+  'notice.show': { params: Notice; result: null };
+  /** desktop.log, codes only: the change check's areas that moved, or that the Authority has no change check. Never a digest or an id. */
+  'log.changes': { params: { moved: readonly PersonChangesAreaV1[] } | { unsupported: true }; result: null };
 }
 
 export type Methods = HostMethods & MainMethods;
@@ -578,7 +580,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
-  'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show', 'update.status', 'update.install', 'notify.followUps',
+  'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show', 'update.status', 'update.install', 'notice.show', 'log.changes',
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
@@ -628,9 +630,14 @@ export type AccountCommand = 'signin' | 'invitation' | 'switch' | 'signout' | 't
 /** Events main pushes to the renderer. */
 export interface Events {
   'capture.open': Record<string, never>;
+  /** The window came forward: the tray, a shortcut, a notification, or restored from the dock or taskbar. */
   'window.shown': Record<string, never>;
+  /** The window was closed to the tray, hidden or minimized: screen re-reads wait until it shows again. */
+  'window.hidden': Record<string, never>;
   'lifecycle.conceal': Record<string, never>;
   'lifecycle.resume': Record<string, never>;
+  /** The machine woke from sleep (powerMonitor `resume`). */
+  'system.woke': Record<string, never>;
   'signin.phase': { phase: 'open-browser' | 'installed'; browser_opened?: boolean };
   'host.restarted': Record<string, never>;
   /** The host kept exiting and main stopped restarting it. */
@@ -641,8 +648,8 @@ export interface Events {
   'organization.open': Record<string, never>;
   /** What the updater shows now: a check, an install's progress, or a previous run's outcome. */
   'update.changed': UpdateState;
-  /** A follow-ups notification was clicked: the page of its one item, or the Follow-ups page for several. */
-  'follow-ups.open': { item_id?: string };
+  /** A notification was clicked: what it opens, as the page said when it asked for it. */
+  'notice.open': { target: NoticeTarget };
 }
 export type EventName = keyof Events;
 
@@ -699,27 +706,53 @@ export function externalSourcePermalink(kind: unknown, raw: unknown): string | n
 
 /** A follow-up's id, in the API's own grammar. */
 const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
-/** A name or a title a follow-ups notification shows: as long as the API lets either be, in characters. */
+/** A project's id, as the API writes one. */
+const NOTICE_PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** A name or a title a notification shows: as long as the API lets either be, in characters. */
 export const NOTICE_TEXT_MAX = 200;
-/** The most follow-ups one notification counts: Home answers at most 20. */
-export const NOTICE_ITEMS_MAX = 50;
+/** A notification's whole line: two titles or names and the words between them, in characters. */
+export const NOTICE_LINE_MAX = 2 * NOTICE_TEXT_MAX + 120;
+
+/** What a notification opens: one follow-up's page, the Follow-ups page, or a project. */
+export type NoticeTarget = { readonly kind: 'item'; readonly item_id: string } | { readonly kind: 'follow-ups' } | { readonly kind: 'project'; readonly project_id: string };
+
+/** One notification, as the page asks main to show it: one line ("Ana handed you Pricing page"), and what a click opens. */
+export interface Notice {
+  readonly text: string;
+  readonly target: NoticeTarget;
+}
 
 /**
- * A follow-ups notification (F8), as main shows it: its body, and the item a
- * click opens (none for several, which open the Follow-ups page). One item reads
- * "Mina sent you: Update the pricing page"; several, "3 new follow-ups". Null
- * for anything else: distinct item ids, and for one item exactly two short
- * single lines, never more.
+ * A notification as main shows it, or null for anything else: exactly a text
+ * and a target, the text one non-empty line of at most NOTICE_LINE_MAX
+ * characters, and the target an item, Follow-ups or a project by its id.
  */
-export function followUpsNotification(params: unknown): { body: string; item_id: string | null } | null {
+export function noticeOf(params: unknown): Notice | null {
+  const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (!record(params) || Object.keys(params).sort().join() !== 'target,text') return null;
+  const { text, target } = params;
+  if (typeof text !== 'string' || text.trim() === '' || [...text].length > NOTICE_LINE_MAX || /\p{Cc}/u.test(text) || !record(target)) return null;
+  const keys = Object.keys(target).sort().join();
+  if (target.kind === 'follow-ups' && keys === 'kind') return { text: text.trim(), target: { kind: 'follow-ups' } };
+  if (target.kind === 'item' && keys === 'item_id,kind' && typeof target.item_id === 'string' && ITEM_ID.test(target.item_id)) {
+    return { text: text.trim(), target: { kind: 'item', item_id: target.item_id } };
+  }
+  if (target.kind === 'project' && keys === 'kind,project_id' && typeof target.project_id === 'string' && NOTICE_PROJECT_ID.test(target.project_id)) {
+    return { text: text.trim(), target: { kind: 'project', project_id: target.project_id } };
+  }
+  return null;
+}
+
+/** The change check's areas, as desktop.log names them: known names only, each once, in the contract's order. */
+export function changesLogLine(params: unknown): string | null {
   if (params === null || typeof params !== 'object' || Array.isArray(params)) return null;
-  const { item_ids: ids, from, title, ...rest } = params as Record<string, unknown>;
-  if (Object.keys(rest).length > 0 || !Array.isArray(ids) || ids.length === 0 || ids.length > NOTICE_ITEMS_MAX) return null;
-  if (!ids.every(id => typeof id === 'string' && ITEM_ID.test(id)) || new Set(ids).size !== ids.length) return null;
-  const line = (text: unknown): text is string =>
-    typeof text === 'string' && text.trim() !== '' && [...text].length <= NOTICE_TEXT_MAX && !/\p{Cc}/u.test(text);
-  if (ids.length > 1) return from === undefined && title === undefined ? { body: `${ids.length} new follow-ups`, item_id: null } : null;
-  return line(from) && line(title) ? { body: `${from.trim()} sent you: ${title.trim()}`, item_id: ids[0] as string } : null;
+  const keys = Object.keys(params).sort().join();
+  const { moved, unsupported } = params as Record<string, unknown>;
+  if (keys === 'unsupported' && unsupported === true) return 'changes unsupported';
+  if (keys !== 'moved' || !Array.isArray(moved) || moved.length === 0) return null;
+  const areas: readonly string[] = ['projects', 'follow_ups', 'reviews'];
+  if (!moved.every(area => typeof area === 'string' && areas.includes(area)) || new Set(moved).size !== moved.length) return null;
+  return `changes moved ${areas.filter(area => moved.includes(area)).join(',')}`;
 }
 
 /** Parameters larger than this are refused at the broker. */
