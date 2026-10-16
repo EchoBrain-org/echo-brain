@@ -131,7 +131,11 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await expect(row(unsent, 'Thermostat PRD').locator('.follow-up-open')).toBeFocused();
   await expect(unsent.getByRole('checkbox', { name: 'Send the revised quote', exact: true })).toBeChecked();
   await expect(unsent.getByRole('checkbox', { name: 'Thermostat PRD · Pilot scope', exact: true })).not.toBeChecked();
-  expect(requests('items')).toHaveLength(itemReads);
+  // Back is this list as it was, never a list of its own (no live read). The change check may have seen this list's own Send
+  // and owner changes by now, depending on timing: then the list is read again once, quietly, rows only.
+  const backReads = requests('items').slice(itemReads);
+  expect(backReads.length).toBeLessThanOrEqual(1);
+  expect(backReads.every(body => body.scope === 'record' && body.read === 'rows')).toBe(true);
   // Dismiss moves a row to Dismissed; its page offers Send to its owner, which reopens it to them.
   await list.getByRole('button', { name: 'Dismiss 1', exact: true }).click();
   await expect(list.getByTestId('follow-ups-said')).toHaveText('Dismissed');
