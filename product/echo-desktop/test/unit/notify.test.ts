@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import type { Account, OpenItemView } from '../../src/shared/protocol.js';
-import { ME, MINA, RAFAEL, authority, followUp, id, nextCheck, owned, sent, stated, changesHandlers } from './changes-fixture.js';
+import { ME, MINA, RAFAEL, at, authority, followUp, id, nextCheck, owned, sent, stated, changesHandlers, CLOCK } from './changes-fixture.js';
 import { ACCOUNT, flush, Held, keysetPage, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -27,6 +27,7 @@ const followed = () => rpc.mock.calls.filter(([method, params]) => method === 'r
 beforeEach(() => {
   vi.resetModules();
   vi.useFakeTimers();
+  vi.setSystemTime(CLOCK);
   stubWindow();
   authority.reset();
   account = ACCOUNT;
@@ -249,6 +250,73 @@ describe('a follow-up that leaves your open ones (P3)', () => {
   });
 });
 
+describe('a follow-up sent and closed between two checks (review C)', () => {
+  const closedReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.changed_since !== undefined).map(([, params]) => params.request);
+
+  it('notifies the sender when a new follow-up is completed between two checks', async () => {
+    await startStore();
+    const item = sent(1, MINA);
+    // Sent and completed while ECHO runs, before its next check: it never was among the open follow-ups.
+    authority.items = [stated(item, 'done', MINA, 2)];
+    await nextCheck();
+    expect(texts()).toEqual(['Mina marked Action 1 done']);
+  });
+
+  it('asks for what closed since the newest change seen, on the Authority\'s clock, rows only, every page', async () => {
+    await signedIn([followUp(5)]);
+    authority.items = [followUp(5), stated(sent(1, MINA), 'not_relevant', MINA, 7)];
+    await nextCheck();
+    expect(texts()).toEqual(['Mina marked Action 1 not relevant']);
+    expect(closedReads().at(-1)).toEqual({ schema_version: 1, operation: 'items', scope: 'involved', states: ['done', 'not_relevant'], read: 'rows',
+      changed_since: at(5) });
+  });
+
+  it('never tells one twice: not at the inclusive boundary, nor one that left your open ones and was read by its id', async () => {
+    const mine = sent(3, MINA);
+    await signedIn([mine]);
+    authority.items = [stated(mine, 'done', MINA, 20), stated(sent(1, MINA), 'done', MINA, 20)];
+    await nextCheck();
+    // One read by its id, one closed between the checks: both told once, together.
+    expect(texts()).toEqual(['2 follow-ups changed']);
+    // The next read asks from 10:20, which both changed at: they come again, and are not told again.
+    authority.items = [...authority.items, followUp(30)];
+    await nextCheck();
+    expect(closedReads().at(-1)).toMatchObject({ changed_since: at(20) });
+    expect(texts()).toEqual(['2 follow-ups changed', 'Mina handed you Action 30']);
+  });
+
+  it('learns, at sign-in, what closed just before it, and never tells it', async () => {
+    // Closed at 09:25, five minutes before ECHO started (09:30), with nothing else seen: the read reaches ten minutes back.
+    authority.items = [stated(sent(1, MINA), 'done', MINA, -35)];
+    await startStore();
+    expect(closedReads()).toHaveLength(1);
+    authority.items = [...authority.items, followUp(2)];
+    await nextCheck();
+    expect(texts()).toEqual(['Mina handed you Action 2']);
+  });
+
+  it('tells one closed again by someone else: done, then dismissed', async () => {
+    const item = stated(sent(1, MINA), 'done', MINA, -35);
+    authority.items = [item];
+    await startStore();
+    authority.items = [stated(item, 'not_relevant', MINA, 10)];
+    await nextCheck();
+    expect(texts()).toEqual(['Mina marked Action 1 not relevant']);
+  });
+
+  it('on an Authority that refuses changed_since, reads no closed follow-ups, now or later, and tells the rest as before', async () => {
+    authority.noChangedSince = true;
+    await startStore();
+    authority.items = [stated(sent(1, MINA), 'done', MINA, 2)];
+    await nextCheck();
+    expect(notices()).toEqual([]);
+    authority.items = [...authority.items, followUp(3)];
+    await nextCheck();
+    expect(texts()).toEqual(['Mina handed you Action 3']);
+    expect(closedReads()).toHaveLength(1);
+  });
+});
+
 describe('what never notifies (N3)', () => {
   it('your own changes, from any device: a Send, a handoff, a done, a reopen', async () => {
     const item = sent(1, MINA);
@@ -374,7 +442,7 @@ describe('noise (N4)', () => {
     await signedIn([sent(1, MINA)]);
     authority.items = [stated(sent(1, MINA), 'done', MINA, 30), followUp(2), followUp(3)];
     await nextCheck();
-    authority.items = [...authority.items, followUp(4)];
+    authority.items = [...authority.items, followUp(4, { sent_at: at(45), state_set_at: at(45) })];
     authority.active = [project(2, 25, { name: 'Comet', role: 'member' }), project(1, 20)];
     await nextCheck();
     authority.active = [project(3, 26, { role: 'member' }), project(4, 26, { role: 'member' }), ...authority.active];

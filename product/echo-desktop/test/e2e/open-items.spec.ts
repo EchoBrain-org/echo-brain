@@ -29,9 +29,9 @@ const runOperations = () => app.calls().filter(call => call.path === '/v1/person
 /** A list's reads, in order: rows only, or live (" live"), by states, and " more" past the first page; never counts or a check's rows. */
 const listReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && !notificationScan(call.body) && call.body.read !== 'counts' && call.body.scope !== 'run')
   .map(call => `${(call.body!.states as string[]).join('+')}${call.body!.cursor === undefined ? '' : ' more'}${call.body!.read === 'rows' ? '' : ' live'}`);
-/** The change check's reads of the open follow-ups Ari is involved in (desktop refresh and notifications v1). */
+/** The change check's reads of the follow-ups Ari is involved in: open ones, and those closed since (desktop refresh and notifications v1). */
 const notificationScan = (body: Record<string, unknown>) => body.operation === 'items' && (body.scope === 'involved' || body.scope === 'mine') && body.read === 'rows'
-  && (body.states as string[] | undefined)?.join() === 'open';
+  && ((body.states as string[] | undefined)?.join() === 'open' || body.changed_since !== undefined);
 /** Foreground runs requests; notification discovery is checked independently. */
 const requests = (operation: string) => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === operation && !notificationScan(call.body)).map(call => call.body!);
 /** The sweeps the app asked for, by scope. */
@@ -290,7 +290,8 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
   const scans = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).map(call => call.body!.scope);
   await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
   // The first check at sign-in only learns what already involves Ari.
-  await expect.poll(scans).toEqual(['involved']);
+  // Its open follow-ups, and those closed since just before it started.
+  await expect.poll(scans).toEqual(['involved', 'involved']);
   expect(await notices(app)).toEqual([]);
   // Mina sends Ari a ticket from a meeting Ari cannot read; the window stays as it is. The next check tells of it.
   const before = changes();
@@ -324,7 +325,7 @@ test('the person who sent a follow-up is told when its owner marks it done', asy
   app = await launch('granola-checked', { 'changes-seconds': '15' });
   const { page } = app;
   await expect(page.getByTestId('needs-foot')).toBeVisible();
-  await expect.poll(() => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length).toBe(1);
+  await expect.poll(() => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length).toBe(2);
   // Mina marks done the two Ari sent her, ECHO-12 and "Confirm the trace": one notification for that check, counting them.
   writeFileSync(join(app.home, 'mina-done'), '');
   const counted = ['itm_00000000-0000-4000-8000-000000000031', 'itm_00000000-0000-4000-8000-000000000039'];

@@ -17,6 +17,11 @@ const decision = {
 export const id = (n: number) => `itm_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 /** n minutes past ten on the 14th: later changes have higher n. */
 export const at = (n: number) => new Date(Date.UTC(2026, 9, 14, 10, n)).toISOString();
+/**
+ * This computer's clock in these tests: half past nine on the 14th, so every change the tests make (from ten) comes after
+ * ECHO started, as a change made while it runs does.
+ */
+export const CLOCK = new Date(Date.UTC(2026, 9, 14, 9, 30));
 
 /** A meeting's action Mina approved and sent to you ("member") at `at(n)`. */
 export function followUp(n: number, extra: Partial<OpenItemView> = {}): OpenItemView {
@@ -58,8 +63,10 @@ export const authority = {
   seconds: 60,
   /** An Authority that refuses the `involved` scope. */
   noInvolved: false,
+  /** An Authority that refuses `changed_since` (older than it). */
+  noChangedSince: false,
   reset(): void {
-    Object.assign(authority, { items: [], active: [], archived: [], reviews: [], changes: 'ok', seconds: 60, noInvolved: false });
+    Object.assign(authority, { items: [], active: [], archived: [], reviews: [], changes: 'ok', seconds: 60, noInvolved: false, noChangedSince: false });
   },
 };
 
@@ -79,11 +86,18 @@ export function changesHandlers(): Record<string, (params: Record<string, unknow
       } });
     },
     'runs': params => {
-      const request = params.request as { operation: string; scope?: string; read?: string; states?: string[]; cursor?: string; item_id?: string };
+      const request = params.request as { operation: string; scope?: string; read?: string; states?: string[]; cursor?: string; item_id?: string; changed_since?: string };
       if (request.operation === 'items' && request.read === 'rows' && (request.scope === 'involved' || request.scope === 'mine')) {
         if (request.scope === 'involved' && authority.noInvolved) return fail('invalid_request');
+        if (request.changed_since !== undefined && (authority.noChangedSince || new Date(request.changed_since).toISOString() !== request.changed_since)) {
+          return fail('invalid_request');
+        }
         const mine = (item: OpenItemView) => item.approver.membership_id === ME.membership_id || item.owner.membership_id === ME.membership_id;
-        const rows = authority.items.filter(item => (request.scope === 'involved' ? involved(item) : mine(item)) && (!request.states || request.states.includes(item.state)));
+        // Changed since: sent, handed on or set at or after it, as instants.
+        const since = request.changed_since === undefined ? null : Date.parse(request.changed_since);
+        const changed = (item: OpenItemView) => since === null || [item.sent_at, item.owner_set_at, item.state_set_at].some(at => at !== null && Date.parse(at) >= since);
+        const rows = authority.items.filter(item => (request.scope === 'involved' ? involved(item) : mine(item)) && (!request.states || request.states.includes(item.state))
+          && changed(item));
         const from = Number(request.cursor ?? 0);
         return ok({ items: rows.slice(from, from + 50), next_cursor: from + 50 < rows.length ? String(from + 50) : null, stages: [], summary });
       }

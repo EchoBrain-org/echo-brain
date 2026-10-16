@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList } from '../../src/renderer/store.js';
 import type { Account, ProjectSummary } from '../../src/shared/protocol.js';
-import { MINA, authority, followUp, id, nextCheck, sent, stated, changesHandlers } from './changes-fixture.js';
+import { MINA, authority, followUp, id, nextCheck, sent, stated, changesHandlers, CLOCK } from './changes-fixture.js';
 import { ACCOUNT, flush, Held, keysetPage, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -30,6 +30,7 @@ const noticeTexts = () => calls('notice.show').map(([, params]) => params.text);
 beforeEach(() => {
   vi.resetModules();
   vi.useFakeTimers();
+  vi.setSystemTime(CLOCK);
   stubWindow();
   authority.reset();
   authority.active = [apollo];
@@ -234,7 +235,7 @@ describe('what a moved area reads again (R3)', () => {
   it('follow-ups: the Follow-ups list as far as it showed, and an item page, rows only', async () => {
     const store = await startStore();
     await store.openYourFollowUps();
-    const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open');
+    const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open' && request.changed_since === undefined);
     const before = listRows();
     authority.items = [followUp(1)];
     await nextCheck();
@@ -262,8 +263,8 @@ describe('what a moved area reads again (R3)', () => {
       ...fixture,
       'app.status': () => ok({ signed_in: true, account }),
       'runs': params => {
-        const request = params.request as { operation: string; scope?: string; read?: string; states?: string[] };
-        if (hold && request.operation === 'items' && request.scope === 'involved' && request.read === 'rows' && request.states?.join() !== 'open') {
+        const request = params.request as { operation: string; scope?: string; read?: string; states?: string[]; changed_since?: string };
+        if (hold && request.operation === 'items' && request.scope === 'involved' && request.read === 'rows' && request.states?.join() === 'unsent,open') {
           hold = false;
           // The reply as the Authority had it when asked: before the change below.
           const captured = fixture.runs!(params);
@@ -375,7 +376,7 @@ describe('what coming back reads again, on each page (R4)', () => {
     authority.items = [followUp(1)];
     const store = await startStore();
     await store.openYourFollowUps();
-    const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open');
+    const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open' && request.changed_since === undefined);
     const before = listRows();
     await store.resume();
     await flush();

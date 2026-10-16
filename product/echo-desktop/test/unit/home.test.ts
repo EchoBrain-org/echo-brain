@@ -106,8 +106,8 @@ const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolv
  * The runs requests sent, but for reads of Home's rows (Home's own, each before its live read) and the change check's reads
  * of the open follow-ups you are involved in (freshness.test.ts).
  */
-const notificationScan = (request: { operation?: string; scope?: string; read?: string; states?: readonly string[] }) => request.operation === 'items'
-  && (request.scope === 'mine' || request.scope === 'involved') && request.read === 'rows' && request.states?.join() === 'open';
+const notificationScan = (request: { operation?: string; scope?: string; read?: string; states?: readonly string[]; changed_since?: string }) => request.operation === 'items'
+  && (request.scope === 'mine' || request.scope === 'involved') && request.read === 'rows' && (request.states?.join() === 'open' || request.changed_since !== undefined);
 /** Every request but the change check's, which goes on at the server's pace whatever Home does (desktop refresh v1). */
 const polls = () => rpc.mock.calls.filter(([method]) => method !== 'changes.read');
 const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows') && !notificationScan(params.request));

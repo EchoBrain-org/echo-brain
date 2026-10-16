@@ -57,6 +57,7 @@ interface Contract {
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
   operation: string; run_id?: string; scope?: 'mine' | 'involved' | 'run' | 'record' | 'project'; id?: string; cursor?: string; read?: 'rows' | 'counts'; states?: OpenItem['state'][];
+  changed_since?: string;
   item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
@@ -1015,9 +1016,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           // Counts only (a project's or a meeting's line): the summary and stages, no item. States: the items in those states
           // alone, with the same summary, paged (two a page in granola-paged) with a cursor over those states only. Rows only:
           // the same page, nothing read live.
-          const { states } = request;
-          const listed = states === undefined ? items : items.filter(item => states.includes(item.state));
-          const pageKey = `items:${scope}:${id ?? ''}:${states?.join(',') ?? ''}`;
+          const { states, changed_since: changedSince } = request;
+          // Changed since a time: sent, handed on or set at or after it.
+          const since = changedSince === undefined ? null : Date.parse(changedSince);
+          const changed = (item: OpenItem) => since === null || [item.sent_at, item.owner_set_at, item.state_set_at].some(at => at !== null && Date.parse(at) >= since);
+          const listed = (states === undefined ? items : items.filter(item => states.includes(item.state))).filter(changed);
+          const pageKey = `items:${scope}:${id ?? ''}:${states?.join(',') ?? ''}:${changedSince ?? ''}`;
           const from = pageFrom(pageKey, request.cursor);
           if (from === null) return failure('invalid_request', 400);
           const size = mode === 'granola-paged' ? 2 : 50;

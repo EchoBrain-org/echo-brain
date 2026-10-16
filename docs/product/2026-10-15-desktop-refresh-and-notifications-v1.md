@@ -171,8 +171,13 @@ from rows the caller may read under the same policy as the matching read:
     rows-only. `involved` pages oldest first by creation (section 1.5), so a
     change can be on any page and there is no early stop. Each row is
     compared with the row the last read had. An item that is no longer among
-    them is read by its id, rows-only, to say what happened to it. That read
-    feeds notifications (section 3). Whatever follow-ups surface is on screen
+    them is read by its id, rows-only, to say what happened to it. The closed
+    `involved` rows changed since the newest change the last read saw
+    (`changed_since`, on the Authority's clock; ten minutes before the last
+    read, on the desktop's clock, until a change was seen) are read too, so a
+    follow-up sent and closed between two checks is told; one already handled
+    is never told twice. An Authority that refuses `changed_since` skips that
+    read. These reads feed notifications (section 3). Whatever follow-ups surface is on screen
     is then re-read quietly: Home, the Follow-ups list, an item page, a
     project's follow-ups line, or a meeting's impact line.
   - *`reviews`:* Home and the decision page are re-read if on screen.

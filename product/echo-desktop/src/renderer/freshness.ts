@@ -80,6 +80,17 @@ interface Loop {
    * twenty one check reads), as they were last seen: read again at the next check.
    */
   pending: Map<string, OpenItemView>;
+  /**
+   * The newest change the follow-ups reads have seen, on the Authority's clock: the closed follow-ups read asks for what
+   * changed since. Null until a read saw one.
+   */
+  seenUpTo: string | null;
+  /** When the last follow-ups read began, on this computer's clock: a stand-in for `seenUpTo` before any read saw a change. */
+  readAt: number;
+  /** Closed follow-ups already handled, by item and change time: told, or learned. */
+  closedSeen: Set<string>;
+  /** The Authority refused `changed_since` (it is older): closed follow-ups are not read. */
+  closedRefused: boolean;
   /** `involved`, or `mine` on an Authority that refuses it. */
   scope: 'involved' | 'mine';
   /** Milliseconds between checks, as the server last said. */
@@ -129,7 +140,8 @@ function visible(): boolean { return !hidden && surfaces?.covered() === false; }
 /** Signed in, or switched to another account: a new loop, whose first check learns and never notifies (R2, N4). */
 export function start(account: Expect): void {
   stop();
-  loop = { account, mode: 'changes', areas: null, memberships: null, followed: null, pending: new Map(), scope: 'involved', pace: PACE_SECONDS.default * 1000,
+  loop = { account, mode: 'changes', areas: null, memberships: null, followed: null, pending: new Map(), seenUpTo: null, readAt: Date.now(), closedSeen: new Set(),
+    closedRefused: false, scope: 'involved', pace: PACE_SECONDS.default * 1000,
     failures: 0, timer: null, running: null, began: Number.NEGATIVE_INFINITY };
   told = { account, keys: [], rows: new Map(), projects: new Map() };
   void check('start');
@@ -435,17 +447,45 @@ export function followUpEvent(before: OpenItemView | null, row: OpenItemView, me
  * Authority without `involved` refuses it; what you sent or own is read
  * instead. Null when a page could not be read.
  */
-async function readFollowed(run: Loop): Promise<OpenItemView[] | null> {
+function readFollowed(run: Loop): Promise<OpenItemView[] | null> {
+  return readRows(run, ['open']);
+}
+
+/** How far back the closed follow-ups read asks, at least ten minutes before a read on this computer's clock: its stand-in. */
+const CLOCK_MARGIN_MS = 10 * 60_000;
+
+/**
+ * The follow-ups you are involved in that were closed (done or dismissed) and
+ * changed since `since`, every page, rows only: one sent and closed between two
+ * checks never was among your open ones. An Authority without `changed_since`
+ * refuses it: then none are read, now or later ([]). Null when a page could not
+ * be read.
+ */
+async function readClosed(run: Loop, since: string): Promise<OpenItemView[] | null> {
+  if (run.closedRefused) return [];
+  const rows = await readRows(run, ['done', 'not_relevant'], since);
+  if (rows === 'refused') { run.closedRefused = true; return []; }
+  return rows;
+}
+
+/** Every page of a rows-only read of your follow-ups in some states, changed since a time or not. */
+async function readRows(run: Loop, states: ('open' | 'done' | 'not_relevant')[]): Promise<OpenItemView[] | null>;
+async function readRows(run: Loop, states: ('open' | 'done' | 'not_relevant')[], since: string): Promise<OpenItemView[] | null | 'refused'>;
+async function readRows(run: Loop, states: ('open' | 'done' | 'not_relevant')[], since?: string): Promise<OpenItemView[] | null | 'refused'> {
   const rows: OpenItemView[] = [];
   let cursor: string | null = null;
   for (;;) {
     const scope = run.scope;
     const result: Result<OpenItemsView> = await ask<OpenItemsView>(() => rpc('runs', { expect: run.account, request: {
-      schema_version: 1, operation: 'items', scope, states: ['open'], read: 'rows', ...(cursor === null ? {} : { cursor }),
+      schema_version: 1, operation: 'items', scope, states, read: 'rows', ...(since === undefined ? {} : { changed_since: since }),
+      ...(cursor === null ? {} : { cursor }),
     } }));
     if (loop !== run) return null;
     if (!result.ok) {
-      if (scope === 'involved' && cursor === null && result.failure.code === 'invalid_request') { run.scope = 'mine'; continue; }
+      if (cursor === null && result.failure.code === 'invalid_request') {
+        if (since === undefined && scope === 'involved') { run.scope = 'mine'; continue; }
+        if (since !== undefined) return 'refused';
+      }
       if (ACCOUNT_GONE.includes(result.failure.code)) surfaces?.accountLost(result.failure);
       return null;
     }
@@ -453,6 +493,22 @@ async function readFollowed(run: Loop): Promise<OpenItemView[] | null> {
     cursor = result.value.next_cursor;
     if (cursor === null) return rows;
   }
+}
+
+/** When a follow-up last changed, on the Authority's clock: sent, or its owner or state set; else made. */
+function changedAt(row: OpenItemView): string {
+  return [row.sent_at, row.owner_set_at, row.state_set_at].reduce<string | null>((newest, at) => later(newest, at), null) ?? row.created_at;
+}
+
+/** A closed follow-up as handled: the item, and the time of its newest change. */
+function closedKey(row: OpenItemView): string {
+  return `${row.item_id}|${changedAt(row)}`;
+}
+
+/** The later of two times on the Authority's clock, either missing. */
+function later(a: string | null, b: string | null): string | null {
+  if (a === null || b === null) return a ?? b;
+  return Date.parse(b) > Date.parse(a) ? b : a;
 }
 
 /** The newest change a set of rows shows, on the Authority's clock: when each was made, sent, or had its owner or state set. */
@@ -469,28 +525,59 @@ function newestSeen(rows: Iterable<OpenItemView>): string | null {
 /**
  * Follow-ups moved: your open ones read again, each compared with how it was
  * last read, and each that is no longer among them read by its id (rows only)
- * to say what happened to it: done, dismissed, or handed on. The first read
- * only learns. Null when a read did not finish: nothing is learned from it.
+ * to say what happened to it: done, dismissed, or handed on. Those closed
+ * since the newest change the last read saw are read too, so one sent and
+ * closed between two checks is told. The first read only learns. Null when a
+ * read did not finish: nothing is learned from it.
  */
 async function followUpsMoved(run: Loop): Promise<FollowUpEvent[] | null> {
+  const began = Date.now();
   const rows = await readFollowed(run);
   if (rows === null) return null;
+  // The newest change seen so far, on the Authority's clock: what is news is newer than that.
+  const threshold = run.seenUpTo;
+  // Closed since then; before any change was seen, since ten minutes before the last read, on this computer's clock.
+  const since = new Date(threshold ?? run.readAt - CLOCK_MARGIN_MS).toISOString();
+  const closed = await readClosed(run, since);
+  if (closed === null) return null;
   const now = new Map(rows.map(row => [row.item_id, row]));
   const before = run.followed;
-  if (before === null) { run.followed = now; run.pending = new Map(); return []; }
+  const seen = (...more: readonly (readonly OpenItemView[])[]) => more.reduce<string | null>((newest, list) => later(newest, newestSeen(list)), threshold);
+  if (before === null) {
+    run.followed = now;
+    run.pending = new Map();
+    run.closedSeen = new Set(closed.map(closedKey));
+    run.seenUpTo = seen(rows, closed);
+    run.readAt = began;
+    return [];
+  }
   const me = run.account.membership_id;
-  const since = newestSeen(before.values());
   const events = rows.flatMap(row => {
     // One that left and came back before it was read is judged from how it was last seen.
     const was = before.get(row.item_id) ?? run.pending.get(row.item_id) ?? null;
-    const event = followUpEvent(was, row, me, since);
+    const event = followUpEvent(was, row, me, threshold);
     return event ? [event] : [];
   });
   const left = new Map([...run.pending, ...before].filter(([id]) => !now.has(id)));
   const read = await readLeft(run, left);
   if (read === null) return null;
+  // Closed since: one the reads above handle (it was among your open ones, or waits to be read) is not told twice, nor one
+  // told or learned before, the boundary included.
+  const told = new Set(read.events.map(event => closedKey(event.item)));
+  const closedSeen = new Set(run.closedSeen);
+  for (const row of closed) {
+    const key = closedKey(row);
+    if (left.has(row.item_id) || closedSeen.has(key) || told.has(key)) { closedSeen.add(key); continue; }
+    closedSeen.add(key);
+    const event = followUpEvent(null, row, me, threshold);
+    if (event) events.push(event);
+  }
   run.followed = now;
   run.pending = read.unread;
+  // Only the newest few hundred: older ones fall before the next read's `since`.
+  run.closedSeen = new Set([...closedSeen].slice(-500));
+  run.seenUpTo = seen(rows, closed, read.rows);
+  run.readAt = began;
   return [...events, ...read.events];
 }
 
@@ -509,10 +596,12 @@ async function readPending(run: Loop): Promise<FollowUpEvent[] | null> {
  * read next time, so nothing that happened to it is lost. Null when the
  * account changed meanwhile.
  */
-async function readLeft(run: Loop, left: ReadonlyMap<string, OpenItemView>): Promise<{ events: FollowUpEvent[]; unread: Map<string, OpenItemView> } | null> {
+async function readLeft(run: Loop, left: ReadonlyMap<string, OpenItemView>)
+  : Promise<{ events: FollowUpEvent[]; unread: Map<string, OpenItemView>; rows: OpenItemView[] } | null> {
   const me = run.account.membership_id;
   const events: FollowUpEvent[] = [];
   const unread = new Map<string, OpenItemView>();
+  const rows: OpenItemView[] = [];
   let reads = 0;
   for (const was of left.values()) {
     if (reads >= LEFT_READS_MAX) { unread.set(was.item_id, was); continue; }
@@ -525,10 +614,11 @@ async function readLeft(run: Loop, left: ReadonlyMap<string, OpenItemView>): Pro
       unread.set(was.item_id, was);
       continue;
     }
+    rows.push(read.value);
     const event = followUpEvent(was, read.value, me);
     if (event) events.push(event);
   }
-  return { events, unread };
+  return { events, unread, rows };
 }
 
 // ---- notifications ------------------------------------------------------------------

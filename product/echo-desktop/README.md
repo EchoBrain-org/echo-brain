@@ -138,7 +138,9 @@ no longer open goes Home, saying so; every page of your projects is read too,
 as at the first check, so a project you were added to is told however far
 past the sidebar's pages it sorts. Follow-ups moved: every page of the open
 follow-ups you sent, own or last handed on is read again, rows only, and each
-compared with the last read; one that left them is read by its id. Then
+compared with the last read; one that left them is read by its id, and those
+closed since the newest change seen are read too, so one sent and closed
+between two checks is told. Then
 whatever shows of them (Home, Follow-ups, an item page, a project's or a
 meeting's line) is read again quietly. Reviews moved: Home and the decision
 page. Coming back also reads the page on screen again, keeping what it shows.
