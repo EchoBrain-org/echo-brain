@@ -142,6 +142,7 @@ const RULES: Readonly<
   list: { accepts: ["project", "mine", "cursor"] },
   open: { accepts: ["ref", "cursor"], requires: ["ref"] },
   runs: { accepts: ["request"], requires: ["request"] },
+  changes: {},
   "evidence-search": { accepts: ["query", "project", "kind", "limit"], requires: [] },
   "evidence-open": { accepts: ["item", "project", "neighbours"], requires: ["item"] },
   "ask-source": {
@@ -200,6 +201,7 @@ Commands:
   documents   Upload, search, and download exact document originals.
   employee    List, invite, reissue, or revoke an employee.
   tools       List tools, or set up, connect and disconnect one.
+  changes     Check what moved in your own view, with no content.
 
 Run \`echo-brain person <command> --help\` for command options.
 `,
@@ -246,12 +248,16 @@ Runs a versioned request against approved-record impact runs, the open items the
   list                 your own impact runs and sweeps
   start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
   home                 what waits on you: Send rows and open items; read "rows" reads no item live (every reach not_read) and never says sweep_due
-  items                with scope mine, run, record or project, an id for run, record and project, and an optional cursor; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; read "rows" answers the same page with no item read live (every reach not_read), and read "counts" the counts alone, with no cursor or states
+  items                with scope mine, involved, run, record or project, an id for run, record and project, and an optional cursor; involved is mine plus the items you last handed on that you can still see; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; read "rows" answers the same page with no item read live (every reach not_read), and read "counts" the counts alone, with no cursor or states
   item                 with item_id; read "rows" reads it with no live read
   send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}] naming any of the run's unsent items: include true sends one to its owner, false dismisses it, and unlisted items stay unsent; the approver only
   set_state            with item_id and state open, done or not_relevant; the approver or the owner
   assign               with item_id and owner_membership_id; before send the approver only, then the approver, the owner or a lead of the decision's projects
   sweep                with scope mine, record or project, and an id for record and project; re-checks the open items you can see
+`,
+  changes: `usage: echo-brain person changes
+
+Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review), and how many seconds to wait before checking again. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line. An Authority without the check fails with code not_supported.
 `,
   evidence: `usage: echo-brain person evidence <search|open> [options]
 
@@ -1196,6 +1202,10 @@ export async function runPersonClientCli(
         break;
       case 'runs':
         print(stdout, { ok: true, result: await client.runs(runsRequest!, dependencies.abort_signal) });
+        break;
+      case 'changes':
+        // The bare change check is the last line, as the desktop reads it.
+        print(stdout, await client.changes(dependencies.abort_signal));
         break;
       case 'evidence-search': {
         const project_id = optionalProject(values);
