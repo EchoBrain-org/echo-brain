@@ -155,11 +155,14 @@ from rows the caller may read under the same policy as the matching read:
       fresh sidebar row.
     - If the open project is gone, ECHO goes Home and shows a toast that you
       no longer have access to it.
-  - *`follow_ups`:* the `involved` rows are read rows-only, newest first,
-    stopping at rows older than the last baseline. That read feeds
-    notifications (section 3). Whatever follow-ups surface is on screen is
-    then re-read quietly: Home, the Follow-ups list, an item page, a project's
-    follow-ups line, or a meeting's impact line.
+  - *`follow_ups`:* every page of the open `involved` rows is read
+    rows-only. `involved` pages oldest first by creation (section 1.5), so a
+    change can be on any page and there is no early stop. Each row is
+    compared with the row the last read had. An item that is no longer among
+    them is read by its id, rows-only, to say what happened to it. That read
+    feeds notifications (section 3). Whatever follow-ups surface is on screen
+    is then re-read quietly: Home, the Follow-ups list, an item page, a
+    project's follow-ups line, or a meeting's impact line.
   - *`reviews`:* Home and the decision page are re-read if on screen.
 - **R4. Came back or window shown is one handler on both platforms.** It does
   three things, and repeats within 2 s are absorbed:
