@@ -4586,15 +4586,18 @@ function newDecision(approval_id: string, mine: number, run: PersonRunV1 | null)
   return { approval_id, seq: mine, loading: true, open: null, command: crypto.randomUUID(), audience: 'only-me', project_ids: [], share: false, owners: [], busy: false, run };
 }
 
+/** A proposal's own choices: its suggested projects, and each action's proposed owner. */
+function choicesOf(open: ReviewOpen): Pick<DecisionState, 'audience' | 'project_ids' | 'owners'> {
+  return { audience: open.suggested_projects.length > 0 ? 'projects' : 'only-me', project_ids: open.suggested_projects.map(project => project.project_id),
+    owners: open.owners.map(owner => ({ signal_id: owner.signal_id, action: owner.action, owner: owner.proposed })) };
+}
+
 /** What was proposed, and your choices on it. */
 async function readDecision(mine: number, approval_id: string): Promise<void> {
   try {
     const open = await meetingCommand({ operation: 'review_open', approval_id });
     const decision = decisionShown(mine);
-    if (!decision) return;
-    set({ decision: { ...decision, loading: false, open, audience: open.suggested_projects.length > 0 ? 'projects' : 'only-me',
-      project_ids: open.suggested_projects.map(project => project.project_id),
-      owners: open.owners.map(owner => ({ signal_id: owner.signal_id, action: owner.action, owner: owner.proposed })) } });
+    if (decision) set({ decision: { ...decision, loading: false, open, ...choicesOf(open) } });
   } catch (error) {
     const decision = decisionShown(mine);
     if (decision) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
@@ -4619,9 +4622,7 @@ async function rereadDecision(): Promise<void> {
   const current = decisionShown(mine);
   if (!current || current.busy || current.unknown) return;
   if (current.open?.snapshot_sha256 === open.snapshot_sha256) { set({ decision: { ...current, open } }); return; }
-  set({ decision: { ...current, open, command: crypto.randomUUID(), audience: open.suggested_projects.length > 0 ? 'projects' : 'only-me',
-    project_ids: open.suggested_projects.map(project => project.project_id),
-    owners: open.owners.map(owner => ({ signal_id: owner.signal_id, action: owner.action, owner: owner.proposed })) } });
+  set({ decision: { ...current, open, command: crypto.randomUUID(), ...choicesOf(open) } });
 }
 
 function editDecision(patch: Partial<DecisionState>): void {

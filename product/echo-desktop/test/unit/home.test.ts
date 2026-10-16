@@ -197,7 +197,7 @@ beforeEach(() => {
           return ok({ runs: [...(sweep ? [{ ...sweep }] : []), ...(run ? [{ ...run }] : [])] });
         }
         if (params.request?.operation === 'home') {
-          // Its rows (Home's, and the quiet check's), answered with what `home` holds when the test lets them go; and its live read.
+          // Its rows, answered with what `home` holds when the test lets them go; and its live read.
           if (params.request.read === 'rows') {
             if (failNextHome) { failNextHome = false; return unavailable; }
             return holdRows ? new Promise(resolve => { answerRows.push(() => resolve(ok(rowsOf(home)))); }) : ok(rowsOf(home));

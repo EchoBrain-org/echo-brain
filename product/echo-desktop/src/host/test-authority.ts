@@ -744,7 +744,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let minaDone = false;
   /** Ari's sweeps, newest first. */
   const sweepRuns: SweepRun[] = [];
-  /** Home's reads of its rows (the quiet check's too), and its live reads. */
+  /** Home's reads of its rows, and its live reads. */
   let homeRowsReads = 0;
   let homeReads = 0;
   let assigns = 0;

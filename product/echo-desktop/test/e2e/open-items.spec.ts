@@ -379,7 +379,7 @@ test('a reader who cannot open an item sees what it is, never what it says', asy
 test('a Home read that fails once keeps the rows it had, and a live read that fails keeps what each row said', async () => {
   app = await launch('granola-home-fails-once');
   const rows = app.page.getByTestId('need-row');
-  // Home's reads of its rows (no quiet check reads them within five minutes of sign-in), and its live reads.
+  // Home's reads of its rows, and its live reads.
   const rowsReads = () => requests('home').filter(body => body.read === 'rows').length;
   const liveReads = () => requests('home').filter(body => body.read !== 'rows').length;
   await expect(rows.filter({ hasText: 'ECHO-12 · Pilot launch' })).toBeVisible();
@@ -395,8 +395,7 @@ test('a Home read that fails once keeps the rows it had, and a live read that fa
   await expect(app.page.getByTestId('home-error')).toHaveCount(0);
   expect(liveReads()).toBe(1);
   // The next read brings what changed meanwhile, and its live read fails: ECHO-12 keeps what it said, and the new row says ECHO
-  // couldn't read it just now. (A return within two seconds of the last is the same return.)
-  await app.page.waitForTimeout(2_000);
+  // couldn't read it just now.
   await emit(app.app, 'echo-test:shown');
   await expect(rows).toHaveCount(2);
   await expect.poll(liveReads).toBe(2);
@@ -405,7 +404,6 @@ test('a Home read that fails once keeps the rows it had, and a live read that fa
   await expect(app.page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
   await expect(app.page.getByTestId('home-error')).toHaveCount(0);
   // Read again, live: the ticket Ari cannot open says so.
-  await app.page.waitForTimeout(2_000);
   await emit(app.app, 'echo-test:shown');
   await expect(rows.filter({ hasText: 'A Jira ticket you can\'t open' })).toBeVisible();
   await expect(rows).toHaveCount(2);
