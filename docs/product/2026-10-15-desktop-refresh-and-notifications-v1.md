@@ -2,7 +2,9 @@
 
 Date: 2026-10-15. Status: approved by the founder for build (Tier 1 + Tier 2);
 the founder validates the finished result. Decision record:
-[ADR-0036](../decisions/ADR-0036-person-change-check.md).
+[ADR-0036](../decisions/ADR-0036-person-change-check.md). Replaces F8 of
+[follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md) and its definition
+of Follow-ups.
 
 ## Why
 
@@ -107,11 +109,12 @@ from rows the caller may read under the same policy as the matching read:
   transaction with no `BEGIN IMMEDIATE`, and makes no Jira, Confluence or
   Granola call. The record check reads the record log on its own connection,
   as every record read does.
-- **No audit row.** The check returns no content. The project list read it
-  triggers, which runs only when `projects` moved, is still audited as today.
-- **The server sets the pace.** `check_again_after_seconds` defaults to 60 and
-  stays within 15..3600. The server may raise it (for example under load);
-  the client honours it.
+- **No audit row.** The check returns no content. The project list reads it
+  triggers (when `projects` moved, and at the first check after sign-in or
+  start, until one full read succeeds) are still audited as today.
+- **The server sets the pace.** `check_again_after_seconds`: the Authority
+  answers 60 today; the field lets a later Authority ask for longer; clients
+  honour 15..3600.
 - **Known scan.** The `owner_set_by` part of involvement has no index, so it
   scans the organization's items. That is acceptable at pilot size.
 
@@ -136,8 +139,9 @@ from rows the caller may read under the same policy as the matching read:
 - **Exact-key validators.** The desktop and the person client validate exact
   keys, so the Authority is deployed with or before the desktop release.
 - **Older Authority.** A desktop talking to an older Authority gets
-  `not_supported` from `changes.read`, or `invalid_request` for `involved`. It
-  then runs the fallback in R8.
+  `not_supported` from `changes.read`. That one answer also stands for
+  `involved` and `changed_since`, which ship with the change check: the
+  desktop then runs the fallback in R8 and never asks for either.
 - **No schema change and no data reset.**
 
 ## 2. Desktop: one refresh rule (Tier 1)
@@ -146,72 +150,83 @@ from rows the caller may read under the same policy as the matching read:
   check loop, the last fingerprints, and what each area's move re-reads. The
   surfaces keep their existing loaders. Their scattered refresh triggers
   (resume, windowShown, the quiet check) are replaced by calls into this
-  module.
+  module, and main's window events by one `window.state` (`onScreen`,
+  `front`), sent when either changes.
 - **R2. When a check runs.**
-  - *Sign-in or start:* this first check learns the baseline and never
+  - *Sign-in or start:* every page of your projects is read at once, and fills
+    the sidebar. This first check learns the baseline from that read, your open
+    follow-ups, and those closed since their newest change, and never
     notifies.
   - *Timer:* every `check_again_after_seconds`. After a failure it backs off up
-    to 5 minutes; it is never faster than 15 s.
-  - *Window shown or came back:* on both platforms, with no recorded departure
-    required.
+    to 5 minutes, never sooner than the pace the server set; it is never faster
+    than 15 s.
+  - *Came back:* the window on screen and in front again (from another app,
+    the tray or the shortcut, minimized, or covered by other windows), on both
+    platforms, with no recorded departure required.
   - *Navigation to any page:* at most one check per 10 s from navigation.
   - *System wake:* main sends `system.woke` on `powerMonitor` `resume`.
   - *Signed out or account switch:* the loop stops or restarts.
 - **R3. What a moved area re-reads.**
-  - *`projects`:* the quiet multi-page sidebar refresh, for active and archived.
+  - *`projects`:* every page of your projects, active and archived, is read
+    side by side, to find the ones you were added to (N2), however far past
+    the sidebar's pages they sort. The same read feeds the sidebar as many
+    pages as it showed, with More going on from there. This full read happens
+    only then and at sign-in, since each page is audited.
     - The open project's header (name, role, status) is then taken from the
       fresh sidebar row.
     - If the open project is gone, ECHO goes Home and shows a toast that you
       no longer have access to it.
-    - Every page of your projects, active and archived, is also read, to find
-      the ones you were added to (N2), however far past the sidebar's pages
-      they sort. The first check reads them all too, to learn them. These full
-      reads happen only then, since each page is audited.
-  - *`follow_ups`:* every page of the open `involved` rows is read
-    rows-only. `involved` pages oldest first by creation (section 1.5), so a
-    change can be on any page and there is no early stop. Each row is
-    compared with the row the last read had. An item that is no longer among
-    them is read by its id, rows-only, to say what happened to it. The closed
+  - *`follow_ups`:* every page of the open `involved` rows, and of the closed
     `involved` rows changed since the newest change the last read saw
     (`changed_since`, on the Authority's clock; from the start until a change
-    was seen, never the desktop's clock) are read too, so a
-    follow-up sent and closed between two checks is told; one already handled
-    is never told twice. An Authority that refuses `changed_since` skips that
-    read. These reads feed notifications (section 3). Whatever follow-ups surface is on screen
-    is then re-read quietly: Home, the Follow-ups list, an item page, a
-    project's follow-ups line, or a meeting's impact line.
+    was seen, never the desktop's clock), is read rows-only, side by side.
+    `involved` pages oldest first by creation (section 1.5), so a change can be
+    on any page and there is no early stop. Each open row is compared with the
+    row the last read had. An item that is no longer among them is settled by
+    the closed read when it is there; otherwise it is read by its id,
+    rows-only, to say what happened to it (twenty a check; the rest, and any
+    whose read failed, at the next). A follow-up sent and closed between two
+    checks is told; one already handled is never told twice. These reads feed
+    notifications (section 3). Whatever follow-ups surface is on screen is
+    then re-read quietly: Home, the Follow-ups list, an item page, a project's
+    follow-ups line, or a meeting's impact line.
   - *`reviews`:* Home and the decision page are re-read if on screen.
-- **R4. Came back or window shown is one handler on both platforms.** It does
-  three things, and repeats within 2 s are absorbed:
+- **R4. Came back is one handler on both platforms.** Each time the window is
+  on screen and in front again, it does three things once:
   - It reads status.
-  - It runs a check.
-  - It quietly re-reads the page on screen:
+  - It runs a check, side by side with the status read.
+  - Then it quietly re-reads the page on screen, with what the check found
+    moved:
     - Home;
     - the Follow-ups list or item page;
     - the open project, meaning its feed's first page, its roster if open, and
       its line;
     - Mine;
     - Tools;
-    - People & invites.
+    - People & invites;
+    - the sidebar, when its last read failed or the check could not say
+      whether projects moved (it failed, or an older Authority, R8);
+    - the bar's matches and an answer's sources.
 
   The reader keeps what it shows.
 - **R5. Navigation.** The opened page reads as it does today, plus the
   debounced check from R2.
-- **R6. Hidden window.** Checks continue, so notifications still arrive. Screen
-  re-reads for areas that moved are held until the window shows again, then
-  applied once.
+- **R6. Hidden or covered window.** Checks continue, so notifications still
+  arrive. Screen re-reads are held until the window can be seen again (shown,
+  restored or uncovered), then applied once.
 - **R7. Privacy cover.** The cover shown while another app is in front stays
-  exactly as it is, and actions stay blocked while covered. It no longer gates
-  or swallows refresh triggers.
-- **R8. Fallback for an older Authority.** On `not_supported`, the module
-  keeps today's behaviour: a five-minute rows-only scan of `mine` for
-  notifications, and a sidebar refresh on came back or window shown. It logs
+  exactly as it is, and actions stay blocked while covered. It no longer
+  swallows refresh triggers: checks still run while covered.
+- **R8. Fallback for an older Authority.** On `not_supported`, the module scans
+  `mine` rows only, every five minutes and on wake, and notifies the N2 events
+  among them; the sidebar is read again on came back or window shown. The
+  Follow-ups list reads `mine` too, and no closed rows are read. It logs
   `changes unsupported` once, and checks again on the next start.
 - **R9. Diagnostic log.** `desktop.log` records codes only:
-  - `lifecycle conceal`, `lifecycle resume`, `lifecycle shown`,
-    `lifecycle wake`;
+  - `lifecycle conceal`, `lifecycle resume` (the window leaves or takes the
+    front), `lifecycle shown` (it is on screen again), `lifecycle wake`;
   - `changes moved projects,follow_ups`, with area names only, never digests
-    or ids.
+    or ids, and `changes unsupported`.
 - **R10. The five-minute quiet check is removed.** It is replaced by
   `follow_ups` handling, or by R8's fallback.
 
@@ -250,7 +265,8 @@ from rows the caller may read under the same policy as the matching read:
     ("3 follow-ups changed", "Added to 2 projects"). A follow-ups summary
     opens a list of exactly the follow-ups it counted, each read again by its
     id under your current access (one you can no longer read is left out);
-    several project adds open the first of those projects.
+    several project adds open the first of those projects. A summary counts
+    and opens at most 100 follow-ups.
   - **An item whose page is open is not notified** while the window is
     visible and uncovered, but its page is refreshed.
   - **The first check after start or sign-in only learns.** After a wake, the
@@ -269,7 +285,8 @@ from rows the caller may read under the same policy as the matching read:
   | Several | "3 follow-ups changed" | A list of exactly those follow-ups |
   | Follow-ups and a project add | "2 follow-ups changed · added to 1 project" | The list of those follow-ups (one follow-up: its page) |
   | Several project adds | "Added to 2 projects" | The first of those projects |
-- **N6. Plumbing.** Main's `notify.followUps` becomes one generic notice:
+- **N6. Plumbing.** Main's `notify.followUps` becomes `notice.show`, and its
+  click event becomes `notice.open`: one generic notice.
   - It carries the text plus a click target, which is an item, the items a
     summary counted, or a project. Only a target this account was told of
     opens.

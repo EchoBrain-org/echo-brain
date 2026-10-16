@@ -129,25 +129,30 @@ While you are signed in, ECHO asks the Authority what moved in your own
 view (the change check, ADR-0036): one fingerprint each for your projects,
 the follow-ups you are involved in, and the meetings waiting for your review,
 never any content. It checks at sign-in (which only learns), at the pace the
-Authority sets (a minute by default, 15 s to an hour, up to five minutes
-apart after failures), whenever you come back or the window comes forward
-(a second return within 2 s is the same one), when you open a page (at most
-once in 10 s), and when the machine wakes. Projects moved: the sidebar is
-read again, the open project's header follows its row, and a project you can
-no longer open goes Home, saying so; every page of your projects is read too,
-as at the first check, so a project you were added to is told however far
-past the sidebar's pages it sorts. Follow-ups moved: every page of the open
-follow-ups you sent, own or last handed on is read again, rows only, and each
-compared with the last read; one that left them is read by its id, and those
-closed since the newest change seen are read too, so one sent and closed
-between two checks is told. Then
-whatever shows of them (Home, Follow-ups, an item page, a project's or a
-meeting's line) is read again quietly. Reviews moved: Home and the decision
-page. Coming back also reads the page on screen again, keeping what it shows.
-While the window is hidden or another app is in front, checks go on, and
-what shows is read once it can be seen. An Authority without the change
-check gets the old behaviour: a five-minute scan of what you sent or own for
-notifications, and the sidebar read again on each return.
+Authority sets (a minute today, 15 s to an hour, up to five minutes apart
+after failures), whenever you come back (the window on screen and in front
+again: from another app, the tray or the shortcut, minimized, or covered by
+other windows), when you open a page (at most once in 10 s), and when the
+machine wakes. At sign-in every page of your projects is read, which fills
+the sidebar and is what the first check learns from. Projects moved: every
+page is read again, so a project you were added to is told however far past
+the sidebar's pages it sorts; the sidebar shows as many pages of that read as
+it showed, the open project's header follows its row, and a project you can
+no longer open goes Home, saying so. Follow-ups moved: every page of the open
+follow-ups you sent, own or last handed on, and of those closed since the
+newest change seen, is read again side by side, rows only; each open one is
+compared with the last read, one that left them is settled by the closed
+read or else read by its id, and one sent and closed between two checks is
+told. Then whatever shows of them (Home, Follow-ups, an item page, a
+project's or a meeting's line) is read again quietly. Reviews moved: Home
+and the decision page. Coming back reads the page on screen again once, with
+what its check found moved (and the sidebar, when its last read failed or
+the check could not say whether projects moved), keeping what it shows. While the window is hidden, minimized or covered, or
+another app is in front, checks go on, and what shows is read once it can be
+seen. An Authority without the change check: ECHO scans what you sent or own,
+rows only, every five minutes and on wake, and notifies what someone else did
+among them; the sidebar is read again on each return, and Follow-ups lists
+what you sent or own.
 
 What someone else did to a follow-up you are involved in (handed to you, done,
 not relevant, reopened, or handed on, for one you sent or last handed on) and
@@ -157,11 +162,11 @@ Comet"). Your own changes from any device, checks, meetings and reviews,
 removals and role changes never notify, and neither does an item whose page
 is open while you look at it (its page is read again instead). Clicking a
 notification brings the window forward and opens that item's page, a list of
-exactly the follow-ups a summary counted (each read again by its id, one you
-can no longer read left out), or the project; only what this account was told
-of opens, and a sheet or Capture that is up stays.
-desktop.log records `lifecycle conceal|resume|shown|wake` and `changes moved
-<areas>`, by area name only.
+exactly the follow-ups a summary counted (at most 100, each read again by its
+id, one you can no longer read left out), or the project; only what this
+account was told of opens, and a sheet or Capture that is up stays.
+desktop.log records `lifecycle conceal|resume|shown|wake`, `changes moved
+<areas>` (by area name only) and `changes unsupported`.
 
 Under the rows, and on an empty Home (with no projects too), a footer says how
 many items you sent wait on others and when ECHO last checked ("2 waiting on
