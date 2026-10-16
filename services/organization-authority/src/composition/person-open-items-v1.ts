@@ -326,10 +326,11 @@ export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' 
 /**
  * The rows a personal `items` scope weighs, before the policy: `mine` is what the viewer sent or owns; `involved` (desktop
  * refresh and notifications v1, ADR-0036) adds what they last handed on (`owner_set_by`). Every state, oldest first, within
- * one scope's bound.
+ * one scope's bound. With `changedSince`, only the rows sent, handed on or set at or after it, chosen before the bound.
  */
-export function personalOpenItemRowsV1(items: Pick<SqliteImpactItemsV1, 'involving'>, viewer: Pick<Viewer, 'organization' | 'membership'>, scope: 'mine' | 'involved'): readonly ImpactItemRowV1[] {
-  return items.involving(viewer.organization, viewer.membership, { states: STATES, limit: SCOPE_ROWS_MAX, ...(scope === 'involved' ? { handed_on: true } : {}) });
+export function personalOpenItemRowsV1(items: Pick<SqliteImpactItemsV1, 'involving'>, viewer: Pick<Viewer, 'organization' | 'membership'>, scope: 'mine' | 'involved', changedSince?: string): readonly ImpactItemRowV1[] {
+  return items.involving(viewer.organization, viewer.membership, { states: STATES, limit: SCOPE_ROWS_MAX, ...(scope === 'involved' ? { handed_on: true } : {}),
+    ...(changedSince === undefined ? {} : { changed_since: changedSince }) });
 }
 
 /**
@@ -611,10 +612,17 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const context = assess(viewer, rows, scopeRecords);
       const visible = context.assessed.filter(entry => entry.access.see_row).sort((left, right) => oldestFirst(left.row, right.row));
       const open = visible.filter(entry => entry.row.state === 'open');
+      // What changed since a time (`mine` and `involved` only; ADR-0036): the rows sent, handed on or set since then, chosen
+      // before the scope's bound, then the same policy pass. Like `states`, it narrows the page alone, never the summary or stages.
+      const changedSince = request.changed_since;
+      const listContext = changedSince === undefined || (request.scope !== 'mine' && request.scope !== 'involved') ? context
+        : assess(viewer, personalOpenItemRowsV1(options.items, viewer, request.scope, changedSince));
+      const changed = listContext === context ? visible
+        : listContext.assessed.filter(entry => entry.access.see_row).sort((left, right) => oldestFirst(left.row, right.row));
       // Items in some states only (a list's current work, then its closed items): pages over them alone, so current work is never
       // behind closed items and a closed item is never opened only to be left out (R51).
       const { states } = request;
-      const pageable = states === undefined ? visible : visible.filter(entry => states.includes(entry.row.state));
+      const pageable = states === undefined ? changed : changed.filter(entry => states.includes(entry.row.state));
       const following = after === undefined ? pageable : pageable.filter(entry => oldestFirst(entry.row, after) > 0);
       const page = following.slice(0, PERSON_OPEN_ITEMS_PAGE_V1);
 
@@ -665,7 +673,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // same page with no live read, so a list shows its rows at once and reads live only what it shows (follow-ups thread v1).
       const countsOnly = request.read === 'counts';
       return checked('items', {
-        items: countsOnly ? [] : await present(viewer, context, page, { signal: input.signal, live: request.read === undefined }),
+        items: countsOnly ? [] : await present(viewer, listContext, page, { signal: input.signal, live: request.read === undefined }),
         next_cursor: !countsOnly && following.length > page.length ? cursorOf(page.at(-1)!.row) : null,
         summary, stages,
       });

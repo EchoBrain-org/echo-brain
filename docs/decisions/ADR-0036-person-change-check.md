@@ -59,6 +59,8 @@ Option 2.
   caller can see.
 - **The `involved` scope.** `runs` `items` gains `involved`: the caller's
   `mine` items plus the items they last handed on, that they may read.
+  `changed_since` narrows a `mine` or `involved` list to what was sent, handed
+  on or set since a time.
 - **Read path.**
   - The check is database-only, in one Authority read transaction, with no
     live reads. The record check reads the separate record log through its

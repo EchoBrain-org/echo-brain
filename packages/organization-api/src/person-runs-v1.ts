@@ -29,7 +29,10 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertStri
  * and reads live only the rows it shows; `counts` (`items` only) answers the
  * counts and stages alone and opens nothing. `items` with `states` pages over
  * the items in those states only, so a list reads its current work first and
- * never opens a closed item to throw it away. Each decision's counts say how
+ * never opens a closed item to throw it away; `mine` and `involved` with
+ * `changed_since` page over the items sent, handed on or set since then, so a
+ * change check finds what moved without reading all closed history. Each
+ * decision's counts say how
  * many of its open items last landed or could not be read, and its stage
  * says whether its impact run is the caller's own (`mine`).
  *
@@ -75,7 +78,14 @@ export type PersonRunsRequestV1 =
        * alone, while the summary and stages still cover the whole scope. A cursor pages the same list: the caller sends the same
        * states with it.
        */
-      readonly states?: readonly PersonOpenItemStateV1[] }
+      readonly states?: readonly PersonOpenItemStateV1[];
+      /**
+       * `mine` and `involved` only, never beside `counts` (desktop refresh and notifications v1; ADR-0036): items whose latest
+       * of when they were sent, their owner set and their state set is at or after this UTC millisecond time. Like `states`, it
+       * narrows the page and its cursor alone (the caller sends it again with a cursor); the summary and stages still cover the
+       * whole scope.
+       */
+      readonly changed_since?: string }
   | { readonly schema_version: 1; readonly operation: 'item'; readonly item_id: string; readonly read?: 'rows' }
   | { readonly schema_version: 1; readonly operation: 'send'; readonly run_id: string; readonly command_id: string;
       /**
@@ -352,7 +362,7 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const kind = operation as PersonRunsRequestV1['operation'];
   // `items` may leave out its scope id and its cursor, and may ask for items in some states only; `home`, `items` and `item` may
   // say how much to read; a sweep of `mine` names no id.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states'] : kind === 'home' || kind === 'item' ? ['read'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
+  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states', 'changed_since'] : kind === 'home' || kind === 'item' ? ['read'] : kind === 'start' ? ['capture_id'] : kind === 'sweep' ? ['id'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
@@ -378,12 +388,17 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       if (read.read === 'counts' && (Object.hasOwn(request, 'cursor') || filtered)) fail('Runs request counts takes no cursor or states');
       const states = filtered ? list(request.states, 'Runs request states', ITEM_STATES.length, 1).map(state => oneOf(state, ITEM_STATES, 'Runs request state')) : [];
       unique(states, 'Runs request states');
+      // What changed since a time: one person's own items only, and a list to page, never the counts of a whole scope.
+      const since = Object.hasOwn(request, 'changed_since');
+      if (since && (!personal || read.read === 'counts')) fail('Runs request changed_since is for a mine or involved list');
+      if (since) assertTimestamp(request.changed_since, 'Runs request changed_since');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, scope,
         ...(scope === 'mine' || scope === 'involved' ? {} : { id: scopeId(scope, request.id) }),
         ...(Object.hasOwn(request, 'cursor') ? { cursor: matching(request.cursor, CURSOR, 'Runs request cursor') } : {}),
         ...read,
         ...(filtered ? { states: Object.freeze(states) } : {}),
+        ...(since ? { changed_since: request.changed_since as string } : {}),
       });
     }
     case 'item':

@@ -215,6 +215,85 @@ describe('runs items scope involved', () => {
   });
 });
 
+describe('runs items changed_since', () => {
+  const since = (f: OpenItemsFixtureV1, who: FixturePerson, scope: 'mine' | 'involved', changed_since: string, fields: Record<string, unknown> = {}) =>
+    items(f, who, scope, { read: 'rows', changed_since, ...fields });
+  const listed = async (f: OpenItemsFixtureV1, who: FixturePerson, scope: 'mine' | 'involved', changed_since: string, fields: Record<string, unknown> = {}) =>
+    (await since(f, who, scope, changed_since, fields)).items.map(item => item.item_id).sort();
+
+  it('lists the items sent, handed on or set at or after a time, before any paging, and the whole scope in the summary', async () => {
+    const f = await sentFixture();
+    const { ticket, action } = f;
+    const sentAt = ticket.sent_at!;
+    const at = f.clock().toISOString();
+    // Mina closes the ticket at exactly `at`: the boundary is inclusive.
+    await setState(f, 'mina', ticket.item_id, 'done');
+    const closed = { states: ['done', 'not_relevant'] };
+    expect(await listed(f, 'ari', 'involved', at, closed)).toEqual([ticket.item_id]);
+    expect(await listed(f, 'mina', 'involved', at, closed)).toEqual([ticket.item_id]);
+    expect(await listed(f, 'ari', 'involved', new Date(Date.parse(at) + 1).toISOString(), closed)).toEqual([]);
+    // The action was sent before `at` and has not changed since.
+    expect(await listed(f, 'ari', 'involved', at)).toEqual([ticket.item_id]);
+    expect(await listed(f, 'ari', 'mine', sentAt)).toEqual([action.item_id, ticket.item_id].sort());
+    expect(await listed(f, 'ari', 'mine', new Date(Date.parse(sentAt) + 1).toISOString())).toEqual([ticket.item_id]);
+    // The summary still counts the whole scope; without the field, mine and involved list everything as before.
+    const page = await since(f, 'ari', 'involved', at);
+    expect(page.summary).toMatchObject({ open: 1, done: 1, decisions: 1 });
+    expect(page.summary).toEqual((await items(f, 'ari', 'involved', { read: 'rows' })).summary);
+    expect(await ids(f, 'ari', 'mine')).toEqual([action.item_id, ticket.item_id].sort());
+    expect(await ids(f, 'ari', 'involved')).toEqual([action.item_id, ticket.item_id].sort());
+    // Rafael, involved in nothing, sees nothing changed.
+    expect(await listed(f, 'rafael', 'involved', sentAt)).toEqual([]);
+  });
+
+  it('never lists a row the caller cannot read, however recently it changed', async () => {
+    const f = await sentFixture();
+    const at = f.clock().toISOString();
+    // Okafor owns the ticket for a moment and hands it on: he is its last hand, but cannot read its decision.
+    await assign(f, 'mina', f.ticket.item_id, 'okafor');
+    expect(await listed(f, 'okafor', 'involved', at)).toEqual([f.ticket.item_id]);
+    await assign(f, 'okafor', f.ticket.item_id, 'rafael');
+    expect(await listed(f, 'okafor', 'involved', at)).toEqual([]);
+    expect(await listed(f, 'okafor', 'involved', at, { states: ['open'] })).toEqual([]);
+    expect(await listed(f, 'rafael', 'involved', at)).toEqual([f.ticket.item_id]);
+  });
+
+  it('pages the changed rows with the same cursor, keeping the filter', async () => {
+    const f = await sentFixture();
+    f.advance(1_000);
+    const run = f.runs.read(f.person, f.runId)!;
+    f.db.transaction(() => f.items.insertForRun(f.db, run, Array.from({ length: 53 }, (_, index) => ({
+      item_key: canonicalSha256(`changed extra ${index}`), relation: 'conflicts' as const, expected: 'launch next week', owner_membership_id: f.membership('mina'), owner_match: 'jira_account' as const,
+      pointer: { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: String(40_000 + index), permalink: `https://echo-fixture.atlassian.net/browse/ECHO-${400 + index}`, text_sha256: canonicalSha256(`changed extra text ${index}`) },
+    }))))();
+    // More than a page: read from the store, as a run lists them fifty at a time.
+    const extra = f.items.forRun(f.runId).filter(row => row.state === 'unsent').map(row => ({ item_id: row.item_id }) as PersonOpenItemV1);
+    expect(extra).toHaveLength(53);
+    f.advance(1_000);
+    const at = f.clock().toISOString();
+    for (let start = 0; start < extra.length; start += 10) await sendAll(f, extra.slice(start, start + 10), `send-changed-${start}`);
+    const first = await since(f, 'mina', 'involved', at);
+    expect(first.items).toHaveLength(50);
+    expect(first.next_cursor).not.toBeNull();
+    const second = await since(f, 'mina', 'involved', at, { cursor: first.next_cursor });
+    expect(second.items).toHaveLength(3);
+    expect(second.next_cursor).toBeNull();
+    // Only the newly sent items, oldest first, never the ticket sent before `at`.
+    expect([...first.items, ...second.items].map(item => item.item_id).sort()).toEqual(extra.map(item => item.item_id).sort());
+    expect([...first.items, ...second.items].map(item => item.item_id)).not.toContain(f.ticket.item_id);
+    // Without the filter, the same cursor position pages the whole list.
+    expect((await items(f, 'mina', 'involved', { read: 'rows' })).items.map(item => item.item_id)).toContain(f.ticket.item_id);
+  });
+
+  it('leaves the change check fingerprint as it was', async () => {
+    const f = await sentFixture();
+    const { read } = changesOf(f);
+    const before = (await read('ari')).areas;
+    await since(f, 'ari', 'involved', f.clock().toISOString());
+    expect((await read('ari')).areas).toEqual(before);
+  });
+});
+
 describe('change check: projects', () => {
   it('moves on an add, a removal, a rename, an archive and a role change, for the members whose own rows changed', async () => {
     const f = await openItemsFixture();

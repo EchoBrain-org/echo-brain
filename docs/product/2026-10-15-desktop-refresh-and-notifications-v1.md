@@ -124,6 +124,10 @@ from rows the caller may read under the same policy as the matching read:
   change to an old item does not move it up, so a reader that looks for
   changes reads every page.
 - `read: 'rows'` and `states` behave as for `mine`. Sweep scopes are unchanged.
+- `changed_since` (a UTC millisecond time; `mine` and `involved` only, never
+  with `counts`) lists only items whose latest send, handoff or state change
+  is at or after it, chosen before the scope's bound; it narrows the page and
+  its cursor like `states`, never the summary.
 - The validator change is in the contract commit; the server implements the
   query.
 

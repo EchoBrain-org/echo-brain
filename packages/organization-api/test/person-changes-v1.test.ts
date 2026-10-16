@@ -95,3 +95,43 @@ describe('runs items scope involved (ADR-0036)', () => {
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'involved' }), 'a sweep of involved');
   });
 });
+
+describe('runs items changed_since (ADR-0036)', () => {
+  const items = (fields: Record<string, unknown>) => ({ schema_version: 1, operation: 'items', ...fields });
+  const since = '2026-10-15T23:04:13.000Z';
+
+  it('narrows a mine or involved list, with rows, states and a cursor', () => {
+    for (const request of [
+      items({ scope: 'involved', changed_since: since }),
+      items({ scope: 'mine', changed_since: since }),
+      items({ scope: 'involved', changed_since: since, read: 'rows', states: ['done', 'not_relevant'] }),
+      items({ scope: 'involved', changed_since: since, read: 'rows', states: ['done', 'not_relevant'], cursor: 'MjAyNi0xMC0wN3xpdG1fYWJjZA' }),
+    ]) {
+      const validated = validatePersonRunsRequestV1(request);
+      expect(validated).toEqual(request);
+      expect(Object.isFrozen(validated)).toBe(true);
+    }
+    expect(validatePersonRunsRequestV1(items({ scope: 'involved' }))).not.toHaveProperty('changed_since');
+  });
+
+  it.each([
+    ['a run scope', items({ scope: 'run', id: 'run_0f6c1a2e-3b4d-4c5e-8f90-123456789abc', changed_since: since })],
+    ['a record scope', items({ scope: 'record', id: canonicalSha256('record'), changed_since: since })],
+    ['a project scope', items({ scope: 'project', id: 'prj_00000000-0000-4000-8000-000000000003', changed_since: since })],
+    ['counts', items({ scope: 'involved', changed_since: since, read: 'counts' })],
+    ['a time without milliseconds', items({ scope: 'involved', changed_since: '2026-10-15T23:04:13Z' })],
+    ['a time with an offset', items({ scope: 'involved', changed_since: '2026-10-15T23:04:13.000+00:00' })],
+    ['a date alone', items({ scope: 'involved', changed_since: '2026-10-15' })],
+    ['a time that does not exist', items({ scope: 'involved', changed_since: '2026-02-30T00:00:00.000Z' })],
+    ['a number', items({ scope: 'involved', changed_since: 1792058400000 })],
+    ['null', items({ scope: 'involved', changed_since: null })],
+  ])('refuses changed_since with %s', (label, request) => {
+    refused(() => validatePersonRunsRequestV1(request), label);
+  });
+
+  it('is not a home, item or sweep field', () => {
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', changed_since: since }), 'home');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: 'itm_abcd', changed_since: since }), 'item');
+    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'mine', changed_since: since }), 'sweep');
+  });
+});

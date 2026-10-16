@@ -135,19 +135,25 @@ export class SqliteImpactItemsV1 {
   /**
    * Items this member approved or owns, oldest first; with `handed_on`, also the items they last handed on (`owner_set_by`;
    * desktop refresh and notifications v1, ADR-0036). No index covers `owner_set_by` yet, so that part scans the organization's
-   * items. `after` is the last row of the previous page.
+   * items. `after` is the last row of the previous page. `changed_since` keeps the items whose latest of when they were sent,
+   * their owner set and their state set is at or after that instant, compared as instants before the limit applies.
    */
-  involving(organizationId: string, membershipId: string, options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly handed_on?: boolean; readonly after?: { readonly created_at: string; readonly item_id: string } }): readonly ImpactItemRowV1[] {
+  involving(organizationId: string, membershipId: string, options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly handed_on?: boolean;
+    readonly after?: { readonly created_at: string; readonly item_id: string }; readonly changed_since?: string }): readonly ImpactItemRowV1[] {
     const limit = limitOf(options.limit);
     if (options.states.length === 0 || limit === 0) return [];
     const handedOn = options.handed_on === true;
     const after = options.after;
+    const since = options.changed_since;
+    if (since !== undefined && Number.isNaN(Date.parse(since))) throw new TypeError('Open item changed_since must be a time');
     return (this.database.prepare(`${selectItems}
       WHERE item.organization_id=? AND (item.approver_membership_id=? OR item.owner_membership_id=?${handedOn ? ' OR item.owner_set_by=?' : ''})
         AND item.state IN (SELECT value FROM json_each(?))
         ${after === undefined ? '' : 'AND (item.created_at > ? OR (item.created_at = ? AND item.item_id > ?))'}
+        ${since === undefined ? '' : `AND (unixepoch(item.sent_at, 'subsec') >= unixepoch(?, 'subsec') OR unixepoch(item.owner_set_at, 'subsec') >= unixepoch(?, 'subsec')
+          OR unixepoch(item.state_set_at, 'subsec') >= unixepoch(?, 'subsec'))`}
       ${ORDER} LIMIT ?`).all(organizationId, membershipId, membershipId, ...(handedOn ? [membershipId] : []), JSON.stringify([...new Set(options.states)]),
-      ...(after === undefined ? [] : [after.created_at, after.created_at, after.item_id]), limit) as StoredItemV1[]).map(publicItem);
+      ...(after === undefined ? [] : [after.created_at, after.created_at, after.item_id]), ...(since === undefined ? [] : [since, since, since]), limit) as StoredItemV1[]).map(publicItem);
   }
 
   /** Unsent or open items whose approver and owner memberships are both inactive. */
