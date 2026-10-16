@@ -92,12 +92,19 @@ export interface OpenItemViewerV1 { readonly token: string; readonly authorizati
 /** One row with the facts the policy was given and its answer. */
 export interface AssessedOpenItemV1 { readonly row: ImpactItemRowV1; readonly facts: OpenItemFactsV1; readonly access: OpenItemAccessV1 }
 /** Rows assessed for one viewer, with the decisions the viewer reads now and the people the rows name. */
-export interface OpenItemsContextV1 { readonly decisions: ReadonlyMap<Sha256Digest, PersonReadableDecisionV1>; readonly people: People; readonly assessed: readonly AssessedOpenItemV1[] }
+export interface OpenItemsContextV1<D extends DecisionProjects = PersonReadableDecisionV1> { readonly decisions: ReadonlyMap<Sha256Digest, D>; readonly people: People; readonly assessed: readonly AssessedOpenItemV1[] }
+/** What the policy needs of a decision the viewer reads: its projects. */
+type DecisionProjects = Pick<PersonReadableDecisionV1, 'project_ids'>;
+/** Where the policy pass learns which decisions the viewer reads: the decisions a list names, or only their projects (the change check). */
+export interface OpenItemDecisionsReaderV1<D extends DecisionProjects> {
+  readableDecisions(input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }): ReadonlyMap<Sha256Digest, D>;
+}
 
 type Desk = Awaited<ReturnType<typeof bindPersonLiveEvidenceDeskV1>>;
 type DeskItem = Awaited<ReturnType<NonNullable<Desk['openCitation']>>>['items'][number];
 type Pointer = ImpactItemRowV1['pointer'];
 type People = ReturnType<SqliteOpenItemPeopleV1['people']>;
+type Person = NonNullable<ReturnType<People['get']>>;
 type Viewer = OpenItemViewerV1;
 type Assessed = AssessedOpenItemV1;
 type Context = OpenItemsContextV1;
@@ -107,10 +114,10 @@ type LiveRead = { readonly reach: 'opened'; readonly item: DeskItem } | { readon
 const STATES: readonly ImpactItemStateV1[] = ['unsent', 'open', 'done', 'not_relevant'];
 /** `involving` and `orphaned` apply their limit before any access check and have no cursor: a bound far above one person's open items. */
 const INVOLVING_MAX = 1000;
-/** The most rows one `items` scope reads; its pages and summary are within them. */
+/** The most rows a run, record or project `items` scope reads; its pages and summary are within them. */
 const SCOPE_ROWS_MAX = 5000;
-/** The involved rows the change check reads at a time; it reads every page. */
-const INVOLVED_PAGE = 1000;
+/** The rows a personal `items` scope reads at a time; it reads every page. */
+const PERSONAL_PAGE = 1000;
 /** The most records a project scope reads (the record lookup's own bound). */
 const PROJECT_RECORDS_MAX = 500;
 /** The most decisions a summary's per-decision counts, or the stages, cover. */
@@ -137,7 +144,7 @@ const SWEEP_TRIGGER = AGENTIC_TRIGGER_DEFINITIONS_V1.find(definition => definiti
 
 const notFound = () => new AuthorityOperationError('not_found', 'item is not available');
 /** An error's Authority code, or `error`. */
-function codeOf(error: unknown): string {
+export function errorCodeV1(error: unknown): string {
   return error instanceof AuthorityOperationError && ERROR_CODES.includes(error.code) ? error.code : 'error';
 }
 function refusedAccess(error: unknown): boolean {
@@ -239,10 +246,13 @@ function checkedItem(item: PersonOpenItemV1, unshowable: () => void): PersonOpen
   return invalidOutput();
 }
 
-/** Where a read failed and the error's code, nothing else. An observer that fails never fails the read. */
+/** Hands a content-free event to its observer, one line of JSON on standard error by default. An observer that fails never fails the caller. */
+export function observeEventV1<E>(observer: ((event: E) => void) | undefined, event: E): void {
+  try { (observer ?? (value => { console.error(JSON.stringify(value)); }))(event); } catch { /* observation only */ }
+}
+/** Where a read failed and the error's code, nothing else. */
 function reportLiveFailure(sources: Pick<OpenItemSourcesV1, 'on_live_failure'>, reason: OpenItemsLiveFailureV1['reason'], code: string): void {
-  const event = Object.freeze({ kind: 'open_items_live_read' as const, reason, code });
-  try { (sources.on_live_failure ?? (value => { console.error(JSON.stringify(value)); }))(event); } catch { /* observation only */ }
+  observeEventV1(sources.on_live_failure, Object.freeze({ kind: 'open_items_live_read' as const, reason, code }));
 }
 
 /** The person an open-items read is for, as their session authorized them. */
@@ -259,11 +269,11 @@ function approvedBy(row: ImpactItemRowV1, viewer: Viewer): boolean {
  * decisions the viewer reads now, who is still an active member, whether the
  * viewer leads one of a decision's projects, and whether the item reached its owner.
  */
-export function assessOpenItemsV1(sources: { readonly records: Pick<PersonReadableDecisionsV1, 'readableDecisions'>; readonly people: OpenItemSourcesV1['people'] },
-  viewer: Viewer, found: readonly ImpactItemRowV1[], scopeRecords: readonly Sha256Digest[] = []): Context {
+export function assessOpenItemsV1<D extends DecisionProjects = PersonReadableDecisionV1>(sources: { readonly records: OpenItemDecisionsReaderV1<D>; readonly people: OpenItemSourcesV1['people'] },
+  viewer: Viewer, found: readonly ImpactItemRowV1[], scopeRecords: readonly Sha256Digest[] = []): OpenItemsContextV1<D> {
   const rows = found.filter(row => row.organization_id === viewer.organization);
   const records = [...new Set([...rows.map(row => row.record_sha256), ...scopeRecords])];
-  const decisions = records.length === 0 ? new Map<Sha256Digest, PersonReadableDecisionV1>() : sources.records.readableDecisions({ access_token: viewer.token, record_sha256s: records });
+  const decisions = records.length === 0 ? new Map<Sha256Digest, D>() : sources.records.readableDecisions({ access_token: viewer.token, record_sha256s: records });
   // Everyone a row names: its approver and owner, who set its state and its owner last, and who checked it last.
   const people = sources.people.people(viewer.organization, [...new Set(rows.flatMap(row => [row.approver.membership_id, row.owner_membership_id,
     ...[row.state_set_by, row.owner_set_by, row.check?.by].filter((id): id is string => typeof id === 'string')]))]);
@@ -297,7 +307,7 @@ function firstDecidedLines(sources: Pick<OpenItemSourcesV1, 'runs' | 'on_live_fa
       const row = typeof run === 'string' ? sources.runs.readUnfenced(run) : run;
       let line: string | null = null;
       try { if (row?.result_json !== null && row?.result_json !== undefined) line = readStoredImpactCardV1(row.result_json).decided[0]?.text ?? null; }
-      catch (error) { reportLiveFailure(sources, 'first_line', codeOf(error)); line = null; }
+      catch (error) { reportLiveFailure(sources, 'first_line', errorCodeV1(error)); line = null; }
       lines.set(runId, line);
     }
     return lines.get(runId)!;
@@ -324,29 +334,26 @@ export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' 
 }
 
 /**
- * The rows a personal `items` scope weighs, before the policy: `mine` is what the viewer sent or owns; `involved` (desktop
- * refresh and notifications v1, ADR-0036) adds what they last handed on (`owner_set_by`). Every state, oldest first, within
- * one scope's bound. With `changedSince`, only the rows sent, handed on or set at or after it, chosen before the bound.
+ * Every row a personal `items` scope shows this viewer, with no bound before the policy (ADR-0036): `mine` is what they sent or
+ * own, and `involved` adds what they last handed on (`owner_set_by`). The rows are read a page at a time by (created_at,
+ * item_id), each page through the same policy pass, so a change to a row the viewer cannot see never moves another into or out
+ * of view. `items` lists and counts these, and the change check fingerprints `involved` from them.
  */
-export function personalOpenItemRowsV1(items: Pick<SqliteImpactItemsV1, 'involving'>, viewer: Pick<Viewer, 'organization' | 'membership'>, scope: 'mine' | 'involved', changedSince?: string): readonly ImpactItemRowV1[] {
-  return items.involving(viewer.organization, viewer.membership, { states: STATES, limit: SCOPE_ROWS_MAX, ...(scope === 'involved' ? { handed_on: true } : {}),
-    ...(changedSince === undefined ? {} : { changed_since: changedSince }) });
-}
-
-/**
- * Every row `involved` shows this viewer, with no bound: what the change check fingerprints (ADR-0036). The involved rows are
- * read a page at a time by (created_at, item_id), and each page goes through the same policy pass as `items`. No bound applies
- * before the policy, so a change to a row the viewer cannot see never moves another row into or out of what they see.
- */
-export function visibleInvolvedOpenItemsV1(sources: { readonly items: Pick<SqliteImpactItemsV1, 'involving'> } & Parameters<typeof assessOpenItemsV1>[0],
-  viewer: Viewer, page: number = INVOLVED_PAGE): readonly AssessedOpenItemV1[] {
-  if (!Number.isSafeInteger(page) || page < 1) throw new TypeError('The involved page must be a positive whole number');
-  const visible: AssessedOpenItemV1[] = [];
+export function visiblePersonalOpenItemsV1<D extends DecisionProjects = PersonReadableDecisionV1>(
+  sources: { readonly items: Pick<SqliteImpactItemsV1, 'involving'>; readonly records: OpenItemDecisionsReaderV1<D>; readonly people: OpenItemSourcesV1['people'] },
+  viewer: Viewer, scope: 'mine' | 'involved', page: number = PERSONAL_PAGE): OpenItemsContextV1<D> {
+  if (!Number.isSafeInteger(page) || page < 1) throw new TypeError('A personal scope page must be a positive whole number');
+  const decisions = new Map<Sha256Digest, D>();
+  const people = new Map<string, Person>();
+  const assessed: AssessedOpenItemV1[] = [];
   for (let after: { readonly created_at: string; readonly item_id: string } | undefined; ;) {
-    const rows = sources.items.involving(viewer.organization, viewer.membership, { states: STATES, limit: page, handed_on: true, ...(after === undefined ? {} : { after }) });
-    visible.push(...assessOpenItemsV1(sources, viewer, rows).assessed.filter(entry => entry.access.see_row));
+    const rows = sources.items.involving(viewer.organization, viewer.membership, { states: STATES, limit: page, ...(scope === 'involved' ? { handed_on: true } : {}), ...(after === undefined ? {} : { after }) });
+    const context = assessOpenItemsV1(sources, viewer, rows);
+    for (const [record, decision] of context.decisions) decisions.set(record, decision);
+    for (const [membership, person] of context.people) people.set(membership, person);
+    assessed.push(...context.assessed.filter(entry => entry.access.see_row));
     const last = rows.at(-1);
-    if (rows.length < page || last === undefined) return visible;
+    if (rows.length < page || last === undefined) return { decisions, people, assessed };
     after = { created_at: last.created_at, item_id: last.item_id };
   }
 }
@@ -428,7 +435,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     /** The whole request could not be read: every item tried is unavailable. A cancelled request is not an outage. */
     const outage = (reason: 'bind' | 'fence', error: unknown): ReadonlyMap<Sha256Digest, LiveRead> => {
       if (signal?.aborted === true) throw error;
-      report(reason, codeOf(error));
+      report(reason, errorCodeV1(error));
       return new Map([...targets.keys()].map(key => [key, unavailable]));
     };
     let desk: Desk;
@@ -446,7 +453,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         } catch (error) {
           if (signal?.aborted === true) throw error;
           if (refusedAccess(error)) { reads.set(key, noAccess); continue; }
-          report('open', codeOf(error));
+          report('open', errorCodeV1(error));
           reads.set(key, unavailable);
         }
       }
@@ -458,7 +465,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
 
   /**
    * Rows the policy lets the viewer see, as the API carries them, with live parts from one open each. `live: false` opens nothing
-   * and binds no desk: every row is `not_read` (a rows-only read: Home's quiet check, F8, and a list's rows before their live read).
+   * and binds no desk: every row is `not_read` (a rows-only read: the desktop's `involved` reads after a change check, and a list's
+   * rows before their live read).
    */
   const present = async (viewer: Viewer, context: Context, shown: readonly Assessed[], read: { readonly signal?: AbortSignal | undefined; readonly live?: boolean } = {}): Promise<readonly PersonOpenItemV1[]> => {
     const reads = read.live !== false ? await openLive(viewer, shown.map(entry => entry.row), read.signal) : new Map<Sha256Digest, LiveRead>();
@@ -564,8 +572,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // A sweep is due (section 6) for one of those items that a sweep would check and nobody checked in the last day, unless the
       // caller asked for a sweep in the last hour (R32: one that keeps failing, or leaves items unassessed, is not asked for on every
       // load) or one of theirs is running. A sweep still waiting after the hour lets the desktop ask again, which hands back that run
-      // to start (R58). Check now is the caller's own request, and never limited. Rows only never makes one due: the quiet
-      // background check (F8) must never start a sweep.
+      // to start (R58). Check now is the caller's own request, and never limited. Rows only never makes one due: a quiet re-read
+      // after a change check must never start a sweep.
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
       const stale = !rowsOnly && theirs.some(entry => (entry.row.check === null || entry.row.check.at < dayAgo) && sweepTakesItem(entry.row));
@@ -585,40 +593,37 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const viewer = viewerOf(input.access_token, input.signal);
       const { request } = input;
       const after = request.cursor === undefined ? undefined : cursorAfter(request.cursor);
-      let rows: readonly ImpactItemRowV1[];
+      let context: Context;
       /** Decisions whose impact stage this scope shows when the viewer reads them, besides those of its visible rows. */
       let scopeRecords: readonly Sha256Digest[] = [];
       let projectRecords: readonly Sha256Digest[] | undefined;
       switch (request.scope) {
         case 'mine':
         case 'involved':
-          rows = personalOpenItemRowsV1(options.items, viewer, request.scope);
+          context = visiblePersonalOpenItemsV1(options, viewer, request.scope);
           break;
         case 'run': {
-          rows = options.items.forRun(request.id!);
           const run = options.runs.readUnfenced(request.id!);
           scopeRecords = run !== undefined && run.trigger === 'approved_record' && run.record_sha256 !== null && run.actor.organization_id === viewer.organization ? [run.record_sha256] : [];
+          context = assess(viewer, options.items.forRun(request.id!), scopeRecords);
           break;
         }
         case 'record':
-          rows = options.items.forRecords([request.id as Sha256Digest], { states: STATES, limit: SCOPE_ROWS_MAX });
           scopeRecords = [request.id as Sha256Digest];
+          context = assess(viewer, options.items.forRecords(scopeRecords, { states: STATES, limit: SCOPE_ROWS_MAX }), scopeRecords);
           break;
         default:
           // project: the records the viewer reads in it now, newest first.
           projectRecords = options.records.projectRecords({ access_token: input.access_token, project_id: request.id!, limit: PROJECT_RECORDS_MAX });
-          rows = options.items.forRecords(projectRecords, { states: STATES, limit: SCOPE_ROWS_MAX });
+          context = assess(viewer, options.items.forRecords(projectRecords, { states: STATES, limit: SCOPE_ROWS_MAX }));
       }
-      const context = assess(viewer, rows, scopeRecords);
       const visible = context.assessed.filter(entry => entry.access.see_row).sort((left, right) => oldestFirst(left.row, right.row));
       const open = visible.filter(entry => entry.row.state === 'open');
-      // What changed since a time (`mine` and `involved` only; ADR-0036): the rows sent, handed on or set since then, chosen
-      // before the scope's bound, then the same policy pass. Like `states`, it narrows the page alone, never the summary or stages.
-      const changedSince = request.changed_since;
-      const listContext = changedSince === undefined || (request.scope !== 'mine' && request.scope !== 'involved') ? context
-        : assess(viewer, personalOpenItemRowsV1(options.items, viewer, request.scope, changedSince));
-      const changed = listContext === context ? visible
-        : listContext.assessed.filter(entry => entry.access.see_row).sort((left, right) => oldestFirst(left.row, right.row));
+      // What changed since a time (`mine` and `involved` only; ADR-0036): the rows whose latest send, handoff or state change is
+      // at or after it, compared as instants. Like `states`, it narrows the page alone, never the summary or stages.
+      const since = request.changed_since === undefined ? undefined : Date.parse(request.changed_since);
+      const changed = since === undefined ? visible
+        : visible.filter(({ row }) => [row.sent_at, row.owner_set_at, row.state_set_at].some(at => at !== null && Date.parse(at) >= since));
       // Items in some states only (a list's current work, then its closed items): pages over them alone, so current work is never
       // behind closed items and a closed item is never opened only to be left out (R51).
       const { states } = request;
@@ -673,7 +678,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // same page with no live read, so a list shows its rows at once and reads live only what it shows (follow-ups thread v1).
       const countsOnly = request.read === 'counts';
       return checked('items', {
-        items: countsOnly ? [] : await present(viewer, listContext, page, { signal: input.signal, live: request.read === undefined }),
+        items: countsOnly ? [] : await present(viewer, context, page, { signal: input.signal, live: request.read === undefined }),
         next_cursor: !countsOnly && following.length > page.length ? cursorOf(page.at(-1)!.row) : null,
         summary, stages,
       });

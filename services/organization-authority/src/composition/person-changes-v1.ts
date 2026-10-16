@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
+import { canonicalJson, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { PERSON_CHANGES_CHECK_SECONDS_V1, PERSON_CHANGES_KIND_V1, validatePersonChangesV1, type PersonChangesV1 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -8,14 +8,15 @@ import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open
 import type { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import type { PersonChangesHttpApplicationV1 } from '../presentation/person-changes-http-application.js';
 import type { PersonReviewStatusesV1 } from './person-meeting-runtime-v1.js';
-import { openItemViewerV1, visibleInvolvedOpenItemsV1 } from './person-open-items-v1.js';
+import { errorCodeV1, observeEventV1, openItemViewerV1, visiblePersonalOpenItemsV1 } from './person-open-items-v1.js';
 import { recordProjectAuthorizationOfGrantsV1 } from './person-record-project-scope-v1.js';
-import type { PersonReadableDecisionsV1 } from './person-record-search-route.js';
+import type { PersonReadableDecisionProjectsV1 } from './person-record-search-route.js';
 
 /**
  * The change check (desktop refresh and notifications v1, section 1;
  * ADR-0036): `GET /v1/person/changes` answers one fingerprint per area of the
- * caller's own view, and no content.
+ * caller's own view, and no content. The route authenticates the caller
+ * before it asks.
  *
  * Each fingerprint is the canonical SHA-256 of a sorted array of tuples, built
  * only from rows the caller may read, through the same policy as the read the
@@ -33,10 +34,10 @@ import type { PersonReadableDecisionsV1 } from './person-record-search-route.js'
  *   `reviews` lists for the caller. Reviews that cannot be read just now are
  *   none (the digest of `[]`), and are reported; the other areas still answer.
  *
- * The check authenticates first, then reads the Authority database in one
- * Authority read transaction (the record check reads the record log on its own
- * connection, as every record read does): no `BEGIN IMMEDIATE`, no live tool
- * read and no audit row, since it releases nothing.
+ * The check reads the Authority database in one Authority read transaction
+ * (the record check reads the record log on its own connection, as every
+ * record read does): no `BEGIN IMMEDIATE`, no live tool read and no audit row,
+ * since it releases nothing. It answers the contract's default wait.
  */
 export interface CreatePersonChangesV1Options {
   /** The Authority database every source below reads; the check's one read transaction is opened on it. */
@@ -45,41 +46,23 @@ export interface CreatePersonChangesV1Options {
   readonly projects: Pick<SqliteProjectContextRepositoryV1, 'personChangeView'>;
   readonly items: Pick<SqliteImpactItemsV1, 'involving'>;
   readonly people: Pick<SqliteOpenItemPeopleV1, 'people' | 'leadsAny'>;
-  readonly records: Pick<PersonReadableDecisionsV1, 'readableDecisions'>;
+  readonly records: PersonReadableDecisionProjectsV1;
   /** The meetings waiting for a person's review, once a personal meeting runtime is composed; none otherwise. */
   readonly reviews?: () => Promise<PersonReviewStatusesV1>;
-  /** How long the client waits before it checks again: 60 s unless the server is set to ask for longer (15..3600). */
-  readonly check_again_after_seconds?: number;
   /** Where reviews that could not be read are reported; one content-free line of JSON on standard error by default. */
   readonly on_reviews_failure?: (event: PersonChangesReviewsFailureV1) => void;
-  /** Test seam: the involved rows read at a time (the check reads every page). */
-  readonly involved_page?: number;
 }
 /** Reviews the check could not read: where it failed and the error's Authority code (`error` otherwise), nothing else. */
 export interface PersonChangesReviewsFailureV1 { readonly kind: 'person_changes_reviews'; readonly reason: 'ready' | 'read'; readonly code: string }
 
-/** One area's fingerprint: the canonical SHA-256 of its tuples in canonical order, so the order rows are read in never moves it. */
+/** One area's fingerprint: the SHA-256 of the canonical JSON array of its tuples in canonical order, each tuple canonicalized once. */
 function fingerprint(tuples: readonly (readonly (string | null)[])[]): Sha256Digest {
-  const keyed = tuples.map(tuple => ({ tuple, key: canonicalJson(tuple) }));
-  keyed.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
-  return canonicalSha256(keyed.map(entry => entry.tuple));
-}
-
-function checkAgainAfter(value: number | undefined): number {
-  const seconds = value ?? PERSON_CHANGES_CHECK_SECONDS_V1.default;
-  if (!Number.isSafeInteger(seconds) || seconds < PERSON_CHANGES_CHECK_SECONDS_V1.min || seconds > PERSON_CHANGES_CHECK_SECONDS_V1.max) {
-    throw new Error('The change check wait must be a whole number of seconds within 15..3600');
-  }
-  return seconds;
+  return sha256Digest(`[${tuples.map(tuple => canonicalJson(tuple)).sort().join(',')}]`);
 }
 
 export function createPersonChangesV1(options: CreatePersonChangesV1Options): PersonChangesHttpApplicationV1 {
-  const check_again_after_seconds = checkAgainAfter(options.check_again_after_seconds);
-  const report = (reason: PersonChangesReviewsFailureV1['reason'], error: unknown): void => {
-    const code = error instanceof AuthorityOperationError ? error.code : 'error';
-    const event = Object.freeze({ kind: 'person_changes_reviews' as const, reason, code });
-    try { (options.on_reviews_failure ?? (value => { console.error(JSON.stringify(value)); }))(event); } catch { /* observation only */ }
-  };
+  const report = (reason: PersonChangesReviewsFailureV1['reason'], error: unknown): void =>
+    observeEventV1(options.on_reviews_failure, Object.freeze({ kind: 'person_changes_reviews' as const, reason, code: errorCodeV1(error) }));
   /** The reviews reader, or none when there is no meeting runtime or it cannot be made ready just now. */
   const reviewsReader = async (): Promise<PersonReviewStatusesV1 | undefined> => {
     if (options.reviews === undefined) return undefined;
@@ -92,9 +75,7 @@ export function createPersonChangesV1(options: CreatePersonChangesV1Options): Pe
   return Object.freeze({
     async read(input: Parameters<PersonChangesHttpApplicationV1['read']>[0]): Promise<PersonChangesV1> {
       input.signal?.throwIfAborted();
-      // Authenticated first: an unauthenticated request never makes the approval core ready.
-      options.sessions.authenticateAccess({ access_token: input.access_token });
-      // The approval core is made ready next; everything after it reads synchronously, inside the one read transaction.
+      // The approval core is made ready first; everything after it reads synchronously, inside the one read transaction.
       const reviewsOf = await reviewsReader();
       input.signal?.throwIfAborted();
       if (options.database.inTransaction) throw new Error('The change check opens its own read transaction');
@@ -102,10 +83,10 @@ export function createPersonChangesV1(options: CreatePersonChangesV1Options): Pe
         const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
         const view = options.projects.personChangeView(authorization);
         // The record check reads the grants just read here: a capture of its own would need a transaction of its own.
-        const grants = recordProjectAuthorizationOfGrantsV1(view.grants);
-        const records = { readableDecisions: (lookup: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }) => options.records.readableDecisions({ ...lookup, projects: grants }) };
+        const projects = recordProjectAuthorizationOfGrantsV1(view.grants);
+        const records = { readableDecisions: (lookup: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }) => options.records.readableDecisionProjects({ ...lookup, projects }) };
         const viewer = openItemViewerV1(input.access_token, authorization);
-        const involved = visibleInvolvedOpenItemsV1({ items: options.items, records, people: options.people }, viewer, ...(options.involved_page === undefined ? [] : [options.involved_page]));
+        const involved = visiblePersonalOpenItemsV1({ items: options.items, records, people: options.people }, viewer, 'involved').assessed;
         return {
           projects: fingerprint(view.projects.map(project => [project.project_id, project.name, project.status, project.role])),
           follow_ups: fingerprint(involved.map(({ row }) => [row.item_id, row.state, row.owner_membership_id, row.owner_set_at, row.state_set_at, row.sent_at])),
@@ -113,7 +94,7 @@ export function createPersonChangesV1(options: CreatePersonChangesV1Options): Pe
         };
       }).deferred();
       try {
-        return validatePersonChangesV1({ kind: PERSON_CHANGES_KIND_V1, areas, check_again_after_seconds });
+        return validatePersonChangesV1({ kind: PERSON_CHANGES_KIND_V1, areas, check_again_after_seconds: PERSON_CHANGES_CHECK_SECONDS_V1.default });
       } catch {
         throw new AuthorityOperationError('invalid_output', 'change check response is invalid');
       }

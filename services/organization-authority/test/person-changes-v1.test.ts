@@ -9,24 +9,24 @@ import {
   validatePersonChangesV1,
   validateProjectListV2,
   type PersonChangesAreaV1,
-  type PersonOpenItemV1,
   type ProjectStatusV2,
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createPersonChangesV1, type CreatePersonChangesV1Options, type PersonChangesReviewsFailureV1 } from '../src/composition/person-changes-v1.js';
+import { openItemViewerV1, visiblePersonalOpenItemsV1 } from '../src/composition/person-open-items-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
-import { CLOUD, openItemsFixture, sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { CLOUD, assign, openItemsFixture, sendAll, sentFixture, setState, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 const PEOPLE: readonly FixturePerson[] = ['ari', 'mina', 'rafael', 'okafor'];
 type Areas = Readonly<Record<PersonChangesAreaV1, string>>;
 
-/** The change check over the open-items fixture's Authority; Ari's reviews are the approval core's proposals for him. */
+/** The change check over the open-items fixture's Authority; Ari's reviews are the approval core's proposal statuses for him. */
 function changesOf(f: OpenItemsFixtureV1, overrides: Partial<CreatePersonChangesV1Options> = {}, withReviews = true) {
   const app = createPersonChangesV1({
     database: f.db, sessions: f.openItemsOptions.sessions, projects: new SqliteProjectContextRepositoryV1(f.db), items: f.items, people: f.directory, records: f.records,
-    ...(withReviews ? { reviews: async () => (person: Parameters<typeof f.core.proposals>[0]) => f.core.proposals(person).map(view => ({ approval_id: view.approval_id, status: view.status })) } : {}),
+    ...(withReviews ? { reviews: async () => (person: Parameters<typeof f.core.proposalStatuses>[0]) => f.core.proposalStatuses(person) } : {}),
     ...overrides,
   });
   const read = async (access_token: FixturePerson) => validatePersonChangesV1(await app.read({ access_token }));
@@ -48,19 +48,13 @@ const digestOf = (tuples: readonly (readonly (string | null)[])[]) => canonicalS
 const items = (f: OpenItemsFixtureV1, access_token: FixturePerson, scope: 'mine' | 'involved', fields: Record<string, unknown> = {}) =>
   f.app.items({ access_token, request: { schema_version: 1, operation: 'items', scope, ...fields } as never });
 const ids = async (f: OpenItemsFixtureV1, who: FixturePerson, scope: 'mine' | 'involved') => (await items(f, who, scope, { read: 'rows' })).items.map(item => item.item_id).sort();
-const assign = (f: OpenItemsFixtureV1, access_token: FixturePerson, item_id: string, owner: FixturePerson) =>
-  f.app.assign({ access_token, request: { schema_version: 1, operation: 'assign', item_id, owner_membership_id: f.membership(owner) } });
-const setState = (f: OpenItemsFixtureV1, access_token: FixturePerson, item_id: string, state: 'open' | 'done' | 'not_relevant') =>
-  f.app.set_state({ access_token, request: { schema_version: 1, operation: 'set_state', item_id, state } });
-const sendAll = (f: OpenItemsFixtureV1, unsent: readonly PersonOpenItemV1[], command_id = 'send-1') =>
-  f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id, items: unsent.map(item => ({ item_id: item.item_id, include: true })) } });
 const projectsApp = (f: OpenItemsFixtureV1) => createProjectContextApplicationV1({
   authenticate: access_token => f.openItemsOptions.sessions.authenticateAccess({ access_token }), repository: new SqliteProjectContextRepositoryV1(f.db),
 });
 const request = () => ({ schema_version: 1 as const, request_id: randomUUID() });
 
 describe('change check: what it answers', () => {
-  it('answers one fingerprint per area and the server-set wait, the same on every read', async () => {
+  it("answers one fingerprint per area and the contract's default wait, the same on every read", async () => {
     const f = await sentFixture();
     const { app, read } = changesOf(f);
     const first = await app.read({ access_token: 'mina' });
@@ -70,8 +64,6 @@ describe('change check: what it answers', () => {
     expect(await read('mina')).toEqual(first);
     // Fingerprints are per person: Mina and Ari share a project and a follow-up, not a view.
     expect((await read('ari')).areas.follow_ups).not.toBe(first.areas.follow_ups);
-    expect((await changesOf(f, { check_again_after_seconds: 900 }).read('mina')).check_again_after_seconds).toBe(900);
-    for (const seconds of [14, 3601, 60.5, 0]) expect(() => changesOf(f, { check_again_after_seconds: seconds })).toThrow('15..3600');
   });
 
   it('fingerprints exactly what the matching reads list: the V2 project list, runs items involved, and reviews', async () => {
@@ -112,16 +104,6 @@ describe('change check: what it answers', () => {
     await expect(app.read({ access_token: 'stranger' })).rejects.toMatchObject({ code: 'unauthorized' });
     f.revoke('rafael');
     await expect(app.read({ access_token: 'rafael' })).rejects.toMatchObject({ code: 'unauthorized' });
-  });
-
-  it('authenticates before it makes the approval core ready', async () => {
-    const f = await sentFixture();
-    const reviews = vi.fn(async () => () => []);
-    const { app, read } = changesOf(f, { reviews });
-    await expect(app.read({ access_token: 'stranger' })).rejects.toMatchObject({ code: 'unauthorized' });
-    expect(reviews).not.toHaveBeenCalled();
-    await read('mina');
-    expect(reviews).toHaveBeenCalledTimes(1);
   });
 
   it('answers projects and follow-ups when reviews cannot be read, with no reviews, and reports it', async () => {
@@ -267,7 +249,7 @@ describe('runs items changed_since', () => {
       pointer: { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: String(40_000 + index), permalink: `https://echo-fixture.atlassian.net/browse/ECHO-${400 + index}`, text_sha256: canonicalSha256(`changed extra text ${index}`) },
     }))))();
     // More than a page: read from the store, as a run lists them fifty at a time.
-    const extra = f.items.forRun(f.runId).filter(row => row.state === 'unsent').map(row => ({ item_id: row.item_id }) as PersonOpenItemV1);
+    const extra = f.items.forRun(f.runId).filter(row => row.state === 'unsent').map(row => ({ item_id: row.item_id }));
     expect(extra).toHaveLength(53);
     f.advance(1_000);
     const at = f.clock().toISOString();
@@ -390,17 +372,18 @@ describe('change check: privacy (ADR-0012)', () => {
     expect(extra).toHaveLength(3);
     await sendAll(f, extra, 'send-extra');
     expect(await ids(f, 'okafor', 'involved')).toEqual(extra.map(item => item.item_id).sort());
-    // Two rows a page: the unreadable ticket and the first new item fill the first page.
-    const paged = changesOf(f, { involved_page: 2 });
-    const whole = changesOf(f);
-    const before = (await paged.read('okafor')).areas.follow_ups;
-    expect(before).toBe((await whole.read('okafor')).areas.follow_ups);
-    expect(before).toBe((await changesOf(f, { involved_page: 1 }).read('okafor')).areas.follow_ups);
+    // Read a page at a time, two rows a page: the unreadable ticket and the first new item fill the first page.
+    const viewer = openItemViewerV1('okafor', f.openItemsOptions.sessions.authenticateAccess({ access_token: 'okafor' }));
+    const seen = (page?: number) => visiblePersonalOpenItemsV1(f.openItemsOptions, viewer, 'involved', page).assessed.map(entry => entry.row.item_id).sort();
+    const { read } = changesOf(f);
+    const before = (await read('okafor')).areas.follow_ups;
+    for (const page of [1, 2, undefined]) expect(seen(page), `page ${String(page)}`).toEqual(extra.map(item => item.item_id).sort());
+    expect(() => seen(0)).toThrow('positive whole number');
     // Rafael hands the ticket on: it leaves Okafor's involvement, which he could never see.
     f.advance(1_000);
     await assign(f, 'rafael', f.ticket.item_id, 'mina');
-    expect((await paged.read('okafor')).areas.follow_ups).toBe(before);
-    expect((await whole.read('okafor')).areas.follow_ups).toBe(before);
+    for (const page of [1, 2, undefined]) expect(seen(page), `page ${String(page)}`).toEqual(extra.map(item => item.item_id).sort());
+    expect((await read('okafor')).areas.follow_ups).toBe(before);
   });
 });
 
@@ -410,18 +393,18 @@ describe('change check: cost', () => {
     const inTransaction: boolean[] = [];
     const seen = <T extends (...args: never[]) => unknown>(call: T): T => ((...args: Parameters<T>) => { inTransaction.push(f.db.inTransaction); return call(...args); }) as T;
     const repository = new SqliteProjectContextRepositoryV1(f.db);
-    const reviewer = (person: Parameters<typeof f.core.proposals>[0]) => f.core.proposals(person).map(view => ({ approval_id: view.approval_id, status: view.status }));
+    const reviewer = (person: Parameters<typeof f.core.proposalStatuses>[0]) => f.core.proposalStatuses(person);
     const inTransactionBy = new Map<string, boolean[]>();
     const traced = <T extends (...args: never[]) => unknown>(name: string, call: T): T => seen(((...args: Parameters<T>) => {
       inTransactionBy.set(name, [...(inTransactionBy.get(name) ?? []), f.db.inTransaction]);
       return call(...args);
     }) as T);
     const { app } = changesOf(f, {
-      sessions: { authenticateAccess: f.openItemsOptions.sessions.authenticateAccess },
+      sessions: { authenticateAccess: traced('sessions', f.openItemsOptions.sessions.authenticateAccess) },
       projects: { personChangeView: traced('projects', repository.personChangeView.bind(repository)) },
       items: { involving: traced('items', f.items.involving.bind(f.items)) },
       people: { people: traced('people', f.directory.people.bind(f.directory)), leadsAny: traced('leads', f.directory.leadsAny.bind(f.directory)) },
-      records: { readableDecisions: traced('records', f.records.readableDecisions) },
+      records: { readableDecisionProjects: traced('records', f.records.readableDecisionProjects) },
       reviews: async () => traced('reviews', reviewer),
     });
     const audits = () => Object.fromEntries((f.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%audit%' ORDER BY name").pluck().all() as string[])
@@ -431,7 +414,7 @@ describe('change check: cost', () => {
     for (const who of PEOPLE) await app.read({ access_token: who });
     expect({ audits: audits(), changes: changes(), binds: f.bindDesk.mock.calls.length, opens: f.openCitation.mock.calls.length }).toEqual(before);
     // Every database read after the session check runs inside the one read transaction: projects, items, people, records, reviews.
-    expect([...inTransactionBy.keys()].sort()).toEqual(['items', 'leads', 'people', 'projects', 'records', 'reviews']);
+    expect([...inTransactionBy.keys()].sort()).toEqual(['items', 'leads', 'people', 'projects', 'records', 'reviews', 'sessions']);
     expect(inTransactionBy.get('reviews')).toHaveLength(PEOPLE.length);
     expect(inTransaction.length).toBeGreaterThan(PEOPLE.length * 4);
     expect(inTransaction.every(Boolean)).toBe(true);
@@ -458,6 +441,17 @@ describe('change check HTTP route', () => {
     const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
     return `http://127.0.0.1:${address.port}`;
   }
+
+  it('authenticates before the check makes the approval core ready', async () => {
+    const f = await sentFixture();
+    const reviews = vi.fn(async () => () => []);
+    const base = await origin(changesOf(f, { reviews }).app, f.openItemsOptions.sessions);
+    const get = (authorization: string) => fetch(`${base}${PERSON_CHANGES_ROUTE_V1}`, { headers: { authorization } });
+    expect((await get('Bearer stranger')).status).toBe(401);
+    expect(reviews).not.toHaveBeenCalled();
+    expect((await get('Bearer mina')).status).toBe(200);
+    expect(reviews).toHaveBeenCalledTimes(1);
+  });
 
   it('authenticates like every Person read, answers the exact shape, and takes no query or body', async () => {
     const f = await sentFixture();

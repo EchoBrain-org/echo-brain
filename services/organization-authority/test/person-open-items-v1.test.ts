@@ -3,19 +3,13 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonOpenItemV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonOpenItemsV1 } from '../src/composition/person-open-items-v1.js';
-import { CLOUD, openItemsFixture, sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { CLOUD, assign, openItemsFixture, sendAll, sentFixture, setState, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 import { addMembership } from './fixtures/project-context-sqlite.js';
 
 const scope = (f: OpenItemsFixtureV1, access_token: FixturePerson, kind: 'mine' | 'run' | 'record' | 'project', cursor?: string) => f.app.items({ access_token, request: {
   schema_version: 1, operation: 'items', scope: kind, ...(kind === 'mine' ? {} : { id: kind === 'run' ? f.runId : kind === 'record' ? f.record : f.projectA }), ...(cursor === undefined ? {} : { cursor }),
 } });
-const setState = (f: OpenItemsFixtureV1, access_token: FixturePerson, item_id: string, state: 'open' | 'done' | 'not_relevant') =>
-  f.app.set_state({ access_token, request: { schema_version: 1, operation: 'set_state', item_id, state } });
-const assign = (f: OpenItemsFixtureV1, access_token: FixturePerson, item_id: string, owner: FixturePerson) =>
-  f.app.assign({ access_token, request: { schema_version: 1, operation: 'assign', item_id, owner_membership_id: f.membership(owner) } });
 const item = (f: OpenItemsFixtureV1, access_token: FixturePerson, item_id: string) => f.app.item({ access_token, request: { schema_version: 1, operation: 'item', item_id } });
-const sendAll = (f: OpenItemsFixtureV1, unsent: readonly PersonOpenItemV1[], command_id: string, choose: (item: PersonOpenItemV1) => { readonly include: boolean; readonly owner_membership_id?: string }) =>
-  f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id, items: unsent.map(entry => ({ item_id: entry.item_id, ...choose(entry) })) } });
 
 describe('open items: who sees what', () => {
   it('shows unsent items to decision readers, the decision only to readers, and live parts only to those who can open them', async () => {

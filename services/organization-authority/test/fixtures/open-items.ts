@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonRunsResultV1, type PersonRunsRequestV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import { validatePersonRunsResultV1, type PersonOpenItemV1, type PersonRunsRequestV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { expect, vi } from 'vitest';
@@ -9,7 +9,7 @@ import { SqliteOpenItemPeopleV1 } from '../../src/adapters/persistence/sqlite/op
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { TicketOwnerAccountsV1 } from '../../src/application/ports/ticket-owner-accounts-v1.js';
 import { createPersonOpenItemsV1, type OpenItemsLiveFailureV1 } from '../../src/composition/person-open-items-v1.js';
-import type { PersonReadableDecisionsV1, PersonRecordActionV1 } from '../../src/composition/person-record-search-route.js';
+import type { PersonReadableDecisionProjectsV1, PersonReadableDecisionsV1, PersonRecordActionV1 } from '../../src/composition/person-record-search-route.js';
 import { createPersonTriggerRunsV1 } from '../../src/composition/person-trigger-runs-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../../src/presentation/person-trigger-runs-http-application.js';
 import { approvalCoreFixture } from './approval-core.js';
@@ -154,7 +154,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   const decisionCitation = { kind: 'approved_record' as const, atom_id: canonicalSha256('pilot planning atom'), record_sha256: recordSha256, policy_id: 'project-members-readable-person-v1' as const };
   const readable = vi.fn((input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[]; readonly projects?: unknown }) => {
     // As the Authority's record search does: its project grants are read in a transaction of their own, which never nests, unless
-    // the caller read them inside its own (the change check); the session is authenticated first.
+    // the caller read them inside its own (the change check's lookup); the session is authenticated first.
     if (db.inTransaction && input.projects === undefined) throw new Error('project context transaction is not reentrant');
     sessions.authenticateAccess({ access_token: input.access_token });
     const name = token(input.access_token);
@@ -162,8 +162,10 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
       approval_id: f.approvalId, record_sha256: sha, title: 'Pilot planning', approved_at: '2026-10-07T09:00:00.000Z', project_ids: Object.freeze([f.projectA]) as never,
     })]));
   });
-  const records: PersonReadableDecisionsV1 & Parameters<typeof createPersonTriggerRunsV1>[0]['records'] = {
+  const records: PersonReadableDecisionsV1 & PersonReadableDecisionProjectsV1 & Parameters<typeof createPersonTriggerRunsV1>[0]['records'] = {
     readableDecisions: readable,
+    // The change check's lookup: the same readers, with the grants it read inside its own transaction, and projects only.
+    readableDecisionProjects: input => new Map([...readable(input)].map(([record, decision]) => [record, { project_ids: decision.project_ids }])),
     projectRecords: ({ access_token, project_id }) => (project_id === f.projectA && reads(token(access_token)) ? [recordSha256] : []),
     recordAnchor: () => decisionCitation,
     recordActions: ({ access_token, record_sha256 }) => {
@@ -301,3 +303,14 @@ export async function sentFixture(options: OpenItemsFixtureOptionsV1 & { readonl
   f.advance(1_000);
   return { ...f, ticket: after.find(item => item.kind === 'ticket')!, action: after.find(item => item.kind === 'record')! };
 }
+
+/** Sets an item's state as `access_token`. */
+export const setState = (f: OpenItemsFixtureV1, access_token: FixturePerson, item_id: string, state: 'open' | 'done' | 'not_relevant') =>
+  f.app.set_state({ access_token, request: { schema_version: 1, operation: 'set_state', item_id, state } });
+/** Hands an item to `owner` as `access_token`. */
+export const assign = (f: OpenItemsFixtureV1, access_token: FixturePerson, item_id: string, owner: FixturePerson) =>
+  f.app.assign({ access_token, request: { schema_version: 1, operation: 'assign', item_id, owner_membership_id: f.membership(owner) } });
+/** Ari sends these items of the run: each ticked to its owner unless `choose` says otherwise. */
+export const sendAll = <T extends Pick<PersonOpenItemV1, 'item_id'>>(f: OpenItemsFixtureV1, unsent: readonly T[], command_id = 'send-1',
+  choose: (item: T) => { readonly include: boolean; readonly owner_membership_id?: string } = () => ({ include: true })) =>
+  f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id, items: unsent.map(entry => ({ item_id: entry.item_id, ...choose(entry) })) } });
