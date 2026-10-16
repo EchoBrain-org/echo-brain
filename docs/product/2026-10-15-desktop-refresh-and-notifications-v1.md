@@ -118,7 +118,9 @@ from rows the caller may read under the same policy as the matching read:
 - `runs` `items` gains the scope `involved`. Like `mine`, it takes no id.
 - It lists what `mine` lists (approver or owner) plus items whose
   `owner_set_by` is the caller, filtered by the same visibility pass. It pages
-  and orders exactly as `mine` does, newest change first.
+  and orders exactly as `mine` does: oldest first by creation, 50 a page. A
+  change to an old item does not move it up, so a reader that looks for
+  changes reads every page.
 - `read: 'rows'` and `states` behave as for `mine`. Sweep scopes are unchanged.
 - The validator change is in the contract commit; the server implements the
   query.

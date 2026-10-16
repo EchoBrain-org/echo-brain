@@ -11,6 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0036
   - ADR-0035
   - ADR-0032
   - ADR-0033
@@ -119,6 +120,15 @@ Ask to what the caller added or approved, and every citation that carries a
 `ref` opens with `person open`. `--project` and `--mine` are exclusive, and
 the request is validated before any session or network use
 ([`person-list-cli.test.ts`](../../tests/person-client/person-list-cli.test.ts)).
+
+`person changes` takes no options and reads the Authority's change check
+([ADR-0036](../decisions/ADR-0036-person-change-check.md)) under the signed-in
+session. It prints `echo-person-changes-v1` (one fingerprint each for
+`projects`, `follow_ups` and `reviews`, and `check_again_after_seconds`) as
+its last stdout line, exactly as the API validator accepts it. An Authority
+without the route answers 404, which the client reports as code
+`not_supported`, never `not_found`
+([`person-changes.test.ts`](../../tests/person-client/person-changes.test.ts)).
 
 The shared `person tools <verb> --tool <id>` dispatcher selects client-only
 provider fragments at composition. Slack and the Jira and Confluence flows (Jira
