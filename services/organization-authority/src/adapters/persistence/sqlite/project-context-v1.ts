@@ -168,7 +168,7 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
    */
   personChangeView(actor: PersonAccessAuthorization): ProjectChangeViewV1 {
     if (!this.database.inTransaction || transactionActive) throw new Error('The change check reads projects inside its own read transaction');
-    const { grants } = this.projectState(actor);
+    const grants = Object.freeze(this.grantsOf(actor));
     const projects = memberProjects(this.database, actor, ['active', 'archived'])
       .map(row => Object.freeze({ project_id: row.project_id, name: row.name, status: row.status, role: row.role }));
     return Object.freeze({ grants, projects: Object.freeze(projects) });
@@ -196,10 +196,15 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
     return Object.freeze({ database: this.database, now: this.now, projectState: this.projectState.bind(this), assertActive: this.assertActive.bind(this), issue: this.issue.bind(this), release: this.release.bind(this), capture: this.capture.bind(this), activeMembership: this.activeMembership.bind(this), readable: this.readable.bind(this), source: this.source.bind(this), sourceOwned: this.sourceOwned.bind(this), replay: this.replay.bind(this), record: this.record.bind(this), validateSource: this.validateSource.bind(this) });
   }
   private projectState(actor: PersonAccessAuthorization): { readonly grants: readonly ProjectMembershipGrantV1[]; readonly digest: Sha256Digest } {
-    this.assertActive(actor);
+    const grants = this.grantsOf(actor);
     const revision = this.database.prepare('SELECT revision FROM authority_project_authorization_state_v1 WHERE organization_id = ?').get(actor.organization_id) as { revision: number } | undefined;
     if (revision === undefined) throw new Error('project authorization state is missing');
-    const grants = this.database.prepare(`SELECT grant.project_id, grant.project_membership_id, grant.organization_id, grant.principal_id, grant.membership_id, grant.role
+    return { grants: immutable(grants), digest: canonicalSha256({ revision: revision.revision, grants, person_state_sha256: actor.person_state_sha256 }) };
+  }
+  /** This active person's active project grants; an inactive membership is refused. */
+  private grantsOf(actor: PersonAccessAuthorization): ProjectMembershipGrantV1[] {
+    this.assertActive(actor);
+    return this.database.prepare(`SELECT grant.project_id, grant.project_membership_id, grant.organization_id, grant.principal_id, grant.membership_id, grant.role
       FROM authority_project_memberships_v1 AS grant
       JOIN authority_memberships AS organization_membership
         ON organization_membership.membership_id = grant.membership_id
@@ -209,7 +214,6 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
       WHERE grant.organization_id = ? AND grant.membership_id = ? AND grant.principal_id = ?
         AND grant.status = 'active' AND organization_membership.status = 'active'
       ORDER BY grant.project_id, grant.project_membership_id`).all(actor.organization_id, actor.membership_id, actor.principal_id) as ProjectMembershipGrantV1[];
-    return { grants: immutable(grants), digest: canonicalSha256({ revision: revision.revision, grants, person_state_sha256: actor.person_state_sha256 }) };
   }
   private assertActive(actor: AuthorityPersonMembershipBinding): void {
     const current = this.database.prepare(`SELECT 1 FROM authority_memberships

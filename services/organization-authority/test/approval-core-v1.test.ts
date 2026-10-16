@@ -353,6 +353,26 @@ describe('approval core: views', () => {
     expect(f.core.proposals(f.person)).toEqual([]);
     expect(f.core.proposal('apr_' + 'f'.repeat(64))).toBeUndefined();
   });
+  it("lists each proposal's id and status alone exactly as proposals lists them, in every status (ADR-0036)", async () => {
+    const f = await approvalCoreFixture({ stage: false });
+    const statuses = (limit?: number) => f.core.proposalStatuses(f.person, limit);
+    const listed = (limit?: number) => f.core.proposals(f.person, limit).map(view => ({ approval_id: view.approval_id, status: view.status }));
+    // An unfrozen proposal is in neither.
+    expect(statuses()).toEqual([]);
+    await f.core.stager.stage({ admission: f.first.admission, candidate: f.first.candidate, meeting: f.first.meeting, decisions: f.first.decisions });
+    const other = await f.otherProposal();
+    const third = await f.otherProposal(true, 'note-3');
+    await f.newRevision();                                                     // supersedes the first
+    f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-other' }), () => f.session);
+    expect(statuses().map(entry => entry.status).sort()).toEqual(['pending', 'pending', 'publishing', 'superseded']);
+    expect(statuses()).toEqual(listed());
+    f.core.decide('desktop', f.reject({ approval_id: third.approvalId, command_id: 'reject-third' }), () => f.session);
+    await f.publisher().appendFinalizedApprovalsToV4(new AbortController().signal);
+    expect(statuses().map(entry => entry.status).sort()).toEqual(['approved', 'pending', 'rejected', 'superseded']);
+    expect(statuses()).toEqual(listed());
+    expect(statuses(1)).toEqual(listed(1));
+    expect(f.core.proposalStatuses({ ...f.person, membership_id: 'mem_00000000-0000-4000-8000-0000000000e2' })).toEqual([]);
+  });
   it('clamps the list limit to 1..100', async () => {
     const f = await approvalCoreFixture();
     await f.otherProposal();

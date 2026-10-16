@@ -52,6 +52,13 @@ const selectItems = `SELECT item.item_id, item.run_id, item.item_key, item.point
   item.checked_verdict, item.checked_by, item.checked_at, item.checked_run_id, item.created_at, item.updated_at
   FROM authority_impact_items_v1 AS item`;
 const ORDER = 'ORDER BY item.created_at, item.item_id';
+/** A page's position in ORDER: the last row of the previous page. */
+type After = { readonly created_at: string; readonly item_id: string };
+/** The rows after `after` in ORDER: a clause and its parameters, none for a first page. */
+function afterRow(after: After | undefined): { readonly clause: string; readonly params: readonly string[] } {
+  return after === undefined ? { clause: '', params: [] }
+    : { clause: 'AND (item.created_at > ? OR (item.created_at = ? AND item.item_id > ?))', params: [after.created_at, after.created_at, after.item_id] };
+}
 
 function frozen<T>(value: T): T {
   if (typeof value === 'object' && value !== null) for (const entry of Object.values(value)) frozen(entry);
@@ -121,39 +128,30 @@ export class SqliteImpactItemsV1 {
   }
 
   /** Oldest first by created_at, then item_id; `after` is the last row of the previous page. */
-  forRecords(recordSha256s: readonly Sha256Digest[], options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly after?: { readonly created_at: string; readonly item_id: string } }): readonly ImpactItemRowV1[] {
+  forRecords(recordSha256s: readonly Sha256Digest[], options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly after?: After }): readonly ImpactItemRowV1[] {
     const limit = limitOf(options.limit);
     if (recordSha256s.length === 0 || options.states.length === 0 || limit === 0) return [];
-    const after = options.after;
+    const after = afterRow(options.after);
     return (this.database.prepare(`${selectItems}
       WHERE item.record_sha256 IN (SELECT value FROM json_each(?)) AND item.state IN (SELECT value FROM json_each(?))
-      ${after === undefined ? '' : 'AND (item.created_at > ? OR (item.created_at = ? AND item.item_id > ?))'} ${ORDER} LIMIT ?`).all(
-      JSON.stringify([...new Set(recordSha256s)]), JSON.stringify([...new Set(options.states)]),
-      ...(after === undefined ? [] : [after.created_at, after.created_at, after.item_id]), limit) as StoredItemV1[]).map(publicItem);
+      ${after.clause} ${ORDER} LIMIT ?`).all(
+      JSON.stringify([...new Set(recordSha256s)]), JSON.stringify([...new Set(options.states)]), ...after.params, limit) as StoredItemV1[]).map(publicItem);
   }
 
   /**
    * Items this member approved or owns, oldest first; with `handed_on`, also the items they last handed on (`owner_set_by`;
    * desktop refresh and notifications v1, ADR-0036). No index covers `owner_set_by` yet, so that part scans the organization's
-   * items. `after` is the last row of the previous page. `changed_since` keeps the items whose latest of when they were sent,
-   * their owner set and their state set is at or after that instant, compared as instants before the limit applies.
+   * items. `after` is the last row of the previous page.
    */
-  involving(organizationId: string, membershipId: string, options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly handed_on?: boolean;
-    readonly after?: { readonly created_at: string; readonly item_id: string }; readonly changed_since?: string }): readonly ImpactItemRowV1[] {
+  involving(organizationId: string, membershipId: string, options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly handed_on?: boolean; readonly after?: After }): readonly ImpactItemRowV1[] {
     const limit = limitOf(options.limit);
     if (options.states.length === 0 || limit === 0) return [];
     const handedOn = options.handed_on === true;
-    const after = options.after;
-    const since = options.changed_since;
-    if (since !== undefined && Number.isNaN(Date.parse(since))) throw new TypeError('Open item changed_since must be a time');
+    const after = afterRow(options.after);
     return (this.database.prepare(`${selectItems}
       WHERE item.organization_id=? AND (item.approver_membership_id=? OR item.owner_membership_id=?${handedOn ? ' OR item.owner_set_by=?' : ''})
-        AND item.state IN (SELECT value FROM json_each(?))
-        ${after === undefined ? '' : 'AND (item.created_at > ? OR (item.created_at = ? AND item.item_id > ?))'}
-        ${since === undefined ? '' : `AND (unixepoch(item.sent_at, 'subsec') >= unixepoch(?, 'subsec') OR unixepoch(item.owner_set_at, 'subsec') >= unixepoch(?, 'subsec')
-          OR unixepoch(item.state_set_at, 'subsec') >= unixepoch(?, 'subsec'))`}
-      ${ORDER} LIMIT ?`).all(organizationId, membershipId, membershipId, ...(handedOn ? [membershipId] : []), JSON.stringify([...new Set(options.states)]),
-      ...(after === undefined ? [] : [after.created_at, after.created_at, after.item_id]), ...(since === undefined ? [] : [since, since, since]), limit) as StoredItemV1[]).map(publicItem);
+        AND item.state IN (SELECT value FROM json_each(?)) ${after.clause}
+      ${ORDER} LIMIT ?`).all(organizationId, membershipId, membershipId, ...(handedOn ? [membershipId] : []), JSON.stringify([...new Set(options.states)]), ...after.params, limit) as StoredItemV1[]).map(publicItem);
   }
 
   /** Unsent or open items whose approver and owner memberships are both inactive. */

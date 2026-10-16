@@ -97,6 +97,10 @@ known layering debt:
 - `person-trigger-runs-v1.ts`, `person-sweep-runs-v1.ts` and
   `person-open-items-v1.ts`: runs, sweeps and open items (typed against
   `Sqlite*` adapter classes, with `better-sqlite3` write callbacks);
+- `person-changes-v1.ts`: the change check (ADR-0036), which opens its one
+  read transaction on the `better-sqlite3` handle and reads through
+  `SqliteProjectContextRepositoryV1.personChangeView` and the open-items
+  adapters;
 - `person-record-search-route.ts`: record list, search and open (raw SQL on
   record-log tables), with `person-record-read-route.ts` and
   `person-answer-v3-route.ts` (concrete SQLite audit adapters); and

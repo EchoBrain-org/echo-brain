@@ -1154,7 +1154,7 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
     } finally { w.close(); }
   });
 
-  it("reads the grants the change check already read inside its own read transaction, with the same answer (ADR-0036)", async () => {
+  it("answers the change check which decisions a reader reads, with their projects, from grants read in its own transaction (ADR-0036)", async () => {
     const w = await meetingWorld();
     try {
       const route = w.route();
@@ -1172,9 +1172,10 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
           expect(projects).toEqual(captured);
           // Capturing the grants again would nest a second transaction.
           expect(() => route.readableDecisions({ access_token: token, record_sha256s: records })).toThrow("not reentrant");
-          return route.readableDecisions({ access_token: token, record_sha256s: records, projects });
+          return route.readableDecisionProjects({ access_token: token, record_sha256s: records, projects });
         }).deferred();
-        expect([...inside.entries()]).toEqual([...outside.entries()]);
+        // The same readers and projects as readableDecisions, with no record read beyond the check.
+        expect([...inside.entries()]).toEqual([...outside.entries()].map(([record, decision]) => [record, { project_ids: decision.project_ids }]));
         expect(auditCount(w.authority)).toBe(before);
       }
       // The change view lists every project the V2 list pages through, active and archived, with no audit row.
