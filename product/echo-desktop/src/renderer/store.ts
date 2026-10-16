@@ -1075,25 +1075,27 @@ const refreshing = new Set<ListStatus>();
 
 function listChanged(): void { projectsEdition += 1; }
 
+/** One of the sidebar's lists, shown. */
+function showList(status: ListStatus, list: State['projects']): void { set(status === 'active' ? { projects: list } : { archivedProjects: list }); }
+
 /** Your active or archived projects: the first page again, or the next page appended. */
 async function loadProjectList(status: ListStatus, more: boolean): Promise<void> {
   const key = LIST_KEY[status];
-  const show = (list: State['projects']) => set(key === 'projects' ? { projects: list } : { archivedProjects: list });
   const account = expect();
   if (!account || (more && !state[key].next)) return;
   const cursor = more ? state[key].next ?? undefined : undefined;
-  show({ ...state[key], loading: true, failure: undefined });
+  showList(status, { ...state[key], loading: true, failure: undefined });
   const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
   if (!sameAccount(account)) return;
   if (!result.ok) {
     accountLost(result.failure);
-    show({ ...state[key], loading: false, failure: result.failure });
+    showList(status, { ...state[key], loading: false, failure: result.failure });
     refreshIfOwed(status);
     return;
   }
   if (status === 'active' && rolesChanged(result.value.items)) emptyBar();
   const items = appendPage(more ? state[key].items : [], result.value.items, project => project.project_id);
-  show({ items, next: result.value.next_cursor, loading: false });
+  showList(status, { items, next: result.value.next_cursor, loading: false });
   listChanged();
   refreshIfOwed(status);
 }
@@ -1119,8 +1121,13 @@ async function readProjectPages(account: Expect, status: ListStatus, enough: num
   }
 }
 
-/** A list as the sidebar shows it, from pages read from the first: as many as cover `shown` rows (one at least), and the cursor after them. */
-function shownPages(pages: readonly ProjectPage[], shown: number): ProjectPage {
+/**
+ * A list read again from its first page, shown as far as it showed (`shown` rows, a page at least), More going on from the
+ * last page shown: not over a page on its way (More, Try again), after which it is read again; at sign-in (`first`), over its
+ * loading.
+ */
+function showProjectList(status: ListStatus, pages: readonly ProjectPage[], shown: number, first = false): boolean {
+  if (!first && state[LIST_KEY[status]].loading) { refreshOwed.add(status); return false; }
   const items: ProjectSummary[] = [];
   let next: string | null = null;
   for (const page of pages) {
@@ -1128,16 +1135,8 @@ function shownPages(pages: readonly ProjectPage[], shown: number): ProjectPage {
     next = page.next_cursor;
     if (items.length >= shown) break;
   }
-  return { items, next_cursor: next };
-}
-
-/** A list read again, shown: not over a page on its way (More, Try again), after which it is read again. */
-function showProjectList(status: ListStatus, page: ProjectPage, first = false): boolean {
-  const key = LIST_KEY[status];
-  if (!first && state[key].loading) { refreshOwed.add(status); return false; }
-  if (status === 'active' && rolesChanged(page.items)) emptyBar();
-  const list = { items: [...page.items], next: page.next_cursor, loading: false };
-  set(key === 'projects' ? { projects: list } : { archivedProjects: list });
+  if (status === 'active' && rolesChanged(items)) emptyBar();
+  showList(status, { items, next, loading: false });
   return true;
 }
 
@@ -1158,23 +1157,17 @@ async function readProjects(first: boolean): Promise<ReadonlyMap<string, Project
   const edition = projectsEdition;
   const reads = await Promise.all(statuses.map(status => readProjectPages(account, status, Number.POSITIVE_INFINITY)));
   if (!sameAccount(account)) return null;
-  const all = new Map<string, ProjectSummary>();
   statuses.forEach((status, index) => {
     const read = reads[index];
     const key = LIST_KEY[status];
-    if (!read?.ok) {
-      if (first && read) set(key === 'projects' ? { projects: { ...state.projects, loading: false, failure: read.failure } }
-        : { archivedProjects: { ...state.archivedProjects, loading: false, failure: read.failure } });
-      return;
-    }
-    for (const page of read.pages) for (const project of page.items) all.set(project.project_id, project);
-    if (edition !== projectsEdition && !first) { void refreshProjectList(status); return; }
-    showProjectList(status, shownPages(read.pages, first ? 0 : state[key].items.length), first);
+    if (!read?.ok) { if (first && read) showList(status, { ...state[key], loading: false, failure: read.failure }); }
+    else if (edition !== projectsEdition && !first) void refreshProjectList(status);
+    else showProjectList(status, read.pages, first ? 0 : state[key].items.length, first);
   });
   if (first) listChanged();
   if (!reads.every(read => read?.ok)) return null;
   if (!first) await followOpenProject();
-  return all;
+  return new Map(reads.flatMap(read => (read?.ok ? read.pages.flatMap(page => page.items.map(project => [project.project_id, project] as const)) : [])));
 }
 
 /** A project you were lead of is now one you are a member of, or the other way: a change of access. */
@@ -1206,43 +1199,33 @@ async function refreshSidebar(): Promise<void> {
 
 /**
  * The project on screen, after the sidebar was read again: its header (name,
- * role, status) from its row. Not in the lists read, it is read on its own,
- * unless they were read to their end; a project you can no longer open sends
- * you Home, saying so (R3).
+ * role, status) from its row; a new role for you in it is a change of access,
+ * so the bar's text goes. Not in the lists read, it is read on its own, unless
+ * they were read to their end; a project you can no longer open sends you
+ * Home, saying so (R3).
  */
 async function followOpenProject(): Promise<void> {
   const account = expect();
-  const route = state.route;
-  if (!account || route.page !== 'project') return;
-  const { project_id } = route.project;
-  const row = [...state.projects.items, ...state.archivedProjects.items].find(project => project.project_id === project_id);
-  if (row) { projectRowRead(row); return; }
-  if (state.projects.next !== null || state.archivedProjects.next !== null) {
-    const result = await rpc('projects.read', { expect: account, project_id });
-    const now = state.route;
-    if (!sameAccount(account) || now.page !== 'project' || now.project.project_id !== project_id) return;
-    if (result.ok) { projectRowRead(result.value); return; }
-    if (!['not_found', 'unauthorized', 'forbidden'].includes(result.failure.code)) return;
+  const opened = state.route.page === 'project' ? state.route.project.project_id : null;
+  if (!account || opened === null) return;
+  let row = [...state.projects.items, ...state.archivedProjects.items].find(project => project.project_id === opened);
+  if (!row && (state.projects.next !== null || state.archivedProjects.next !== null)) {
+    const result = await rpc('projects.read', { expect: account, project_id: opened });
+    if (!sameAccount(account) || (!result.ok && !['not_found', 'unauthorized', 'forbidden'].includes(result.failure.code))) return;
+    row = result.ok ? result.value : undefined;
   }
-  const shown = state.route;
-  if (shown.page === 'project') lostProject(shown.project);
-}
-
-/** The open project as its fresh row has it. A new role for you in it is a change of access: the bar's text goes. */
-function projectRowRead(row: ProjectSummary): void {
-  if (state.route.page !== 'project' || state.route.project.project_id !== row.project_id) return;
-  const shown = state.route.project;
-  if (shown.name === row.name && shown.role === row.role && shown.status === row.status) return;
-  if (shown.role !== row.role) emptyBar();
-  set(sameProjectRoute({ ...shown, name: row.name, role: row.role, status: row.status }));
-}
-
-/** The open project is one you can no longer open: Home, with a toast that says so. */
-function lostProject(project: ProjectSummary): void {
-  // Its settings go with it, unless a change to it waits on the Authority's answer.
-  if (state.projectSettings?.project.project_id === project.project_id && !projectSettingsBlocked()) set({ projectSettings: null });
-  forgetLeftProject(project.project_id);
-  set({ toast: `You no longer have access to ${project.name}` });
+  const now = state.route.page === 'project' && state.route.project.project_id === opened ? state.route.project : null;
+  if (!now) return;
+  if (!row) {
+    // Its settings go with it, unless a change to it waits on the Authority's answer.
+    if (state.projectSettings?.project.project_id === opened && !projectSettingsBlocked()) set({ projectSettings: null });
+    forgetLeftProject(opened);
+    set({ toast: `You no longer have access to ${now.name}` });
+    return;
+  }
+  if (now.name === row.name && now.role === row.role && now.status === row.status) return;
+  if (now.role !== row.role) emptyBar();
+  set(sameProjectRoute({ ...now, name: row.name, role: row.role, status: row.status }));
 }
 
 /**
@@ -1268,7 +1251,7 @@ async function refreshProjectList(status: ListStatus): Promise<boolean> {
       const read = await readProjectPages(account, status, shown);
       if (!read?.ok) return false;
       if (edition !== projectsEdition) continue;
-      return showProjectList(status, shownPages(read.pages, shown));
+      return showProjectList(status, read.pages, shown);
     }
     return false;
   } finally {
@@ -3986,30 +3969,32 @@ function conceal(): void {
 interface Surface {
   readonly areas: readonly freshness.ScreenArea[];
   shows(): boolean;
-  busy(): boolean;
+  busy?(): boolean;
   read(back: boolean): Promise<unknown>;
 }
 
-const homeOrDecision = () => state.route.page === 'home' || state.route.page === 'decision';
 const topView = () => { const view = followUpShown(); return view?.kind === 'list' || view?.kind === 'item' ? view : null; };
 const projectShown = () => (state.route.page === 'project' ? state.route.project : null);
 
 const SURFACES: readonly Surface[] = [
   // Home, and the decision page over it: their rows, and the decision's check (only new rows read live, but on a return).
-  { areas: ['follow_ups', 'reviews'], shows: () => homeOrDecision() && state.home !== null, busy: () => false, read: back => loadHome(back) },
+  { areas: ['follow_ups', 'reviews'], shows: () => (state.route.page === 'home' || state.route.page === 'decision') && state.home !== null, read: back => loadHome(back) },
   { areas: ['reviews'], shows: () => state.route.page === 'decision' && state.decision !== null,
-    busy: () => Boolean(state.decision?.loading || state.decision?.busy || state.decision?.unknown), read: () => rereadDecision() },
+    busy: () => Boolean(state.decision?.loading || state.decision?.busy || state.decision?.unknown),
+    read: () => readDecision(state.decision!.seq, state.decision!.approval_id, true) },
   // The follow-ups view on screen: those under it, and the page under them all, read again when they show.
   { areas: ['follow_ups'], shows: () => topView() !== null, busy: () => Boolean(topView()?.loading || topView()?.busy), read: () => rereadViews() },
-  { areas: ['follow_ups'], shows: () => projectShown() !== null, busy: () => false, read: () => loadLine('projectLine', 'project', projectShown()!.project_id) },
-  { areas: ['follow_ups'], shows: () => impactLineShown() !== null, busy: () => false, read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
-  // The page itself, on a return: a project's feed and members, Mine, Tools, People & invites, and the bar's matches.
-  { areas: [], shows: () => projectShown() !== null, busy: () => false, read: () => Promise.all([loadList('quiet'),
+  { areas: ['follow_ups'], shows: () => projectShown() !== null, read: () => loadLine('projectLine', 'project', projectShown()!.project_id) },
+  { areas: ['follow_ups'], shows: () => impactLineShown() !== null, read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
+  // The page itself, on a return: a project's feed and members, Mine, Tools, People & invites, a sidebar whose read failed,
+  // and the bar's matches.
+  { areas: [], shows: () => projectShown() !== null, read: () => Promise.all([loadList('quiet'),
     state.roster?.projectId === projectShown()?.project_id ? loadRoster(state.roster!.projectId) : null]) },
-  { areas: [], shows: () => state.route.page === 'mine', busy: () => false, read: () => loadList('quiet') },
-  { areas: [], shows: () => state.route.page === 'tools', busy: () => false, read: () => loadToolList(true) },
-  { areas: [], shows: () => state.route.page === 'organization', busy: () => false, read: () => loadEmployees() },
-  { areas: [], shows: () => true, busy: () => false, read: async () => {
+  { areas: [], shows: () => state.route.page === 'mine', read: () => loadList('quiet') },
+  { areas: [], shows: () => state.route.page === 'tools', read: () => loadToolList(true) },
+  { areas: [], shows: () => state.route.page === 'organization', read: () => loadEmployees() },
+  { areas: [], shows: () => Boolean(state.projects.failure || state.archivedProjects.failure), read: () => refreshSidebar() },
+  { areas: [], shows: () => true, read: async () => {
     searchAgain();
     // The answer's records are read again: another app in front forgot them.
     if (state.sources) await readRecords(state.sources.gen);
@@ -4046,7 +4031,7 @@ function owe({ back, areas }: { readonly back: boolean; readonly areas: readonly
 function settleOwed(): void {
   if (owed.size === 0 || !canSee() || comingBack) return;
   for (const [surface, back] of owed) {
-    if (reading.has(surface) || surface.busy()) continue;
+    if (reading.has(surface) || surface.busy?.()) continue;
     owed.delete(surface);
     if (!surface.shows()) continue;
     reading.add(surface);
@@ -4066,24 +4051,12 @@ async function rereadViews(): Promise<void> {
 }
 
 freshness.configure({
-  account: expect,
-  seen: canSee,
-  status: refreshStatus,
-  readProjects,
-  refreshSidebar,
-  sidebarFailed: () => Boolean(state.projects.failure || state.archivedProjects.failure),
-  readRows: async (account, { states, changed_since }) => {
-    const read = await readItems(account, { scope: 'involved', states, read: 'rows', ...(changed_since === undefined ? {} : { changed_since }) }, null,
-      Number.POSITIVE_INFINITY);
+  account: expect, seen: canSee, status: refreshStatus, readProjects, refreshSidebar, readItem: readOne, owe, accountLost,
+  readRows: async (account, query) => {
+    const read = await readItems(account, { scope: 'involved', read: 'rows', ...query }, null, Number.POSITIVE_INFINITY);
     return read.ok ? read.pages.flatMap(page => page.items) : null;
   },
-  readItem: (account, itemId) => readOne(account, itemId),
-  owe,
-  itemShown: () => {
-    const view = followUpShown();
-    return view?.kind === 'item' ? view.item_id : null;
-  },
-  accountLost,
+  itemShown: () => { const view = followUpShown(); return view?.kind === 'item' ? view.item_id : null; },
 });
 
 // ---- Home: what needs you ---------------------------------------------------------
@@ -4592,37 +4565,25 @@ function choicesOf(open: ReviewOpen): Pick<DecisionState, 'audience' | 'project_
     owners: open.owners.map(owner => ({ signal_id: owner.signal_id, action: owner.action, owner: owner.proposed })) };
 }
 
-/** What was proposed, and your choices on it. */
-async function readDecision(mine: number, approval_id: string): Promise<void> {
-  try {
-    const open = await meetingCommand({ operation: 'review_open', approval_id });
-    const decision = decisionShown(mine);
-    if (decision) set({ decision: { ...decision, loading: false, open, ...choicesOf(open) } });
-  } catch (error) {
-    const decision = decisionShown(mine);
-    if (decision) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
-  }
-}
-
 /**
- * The decision page read again quietly, while nothing on it is on its way:
- * the same proposal keeps the choices made on it; a new one comes with its
- * own, under a new command. A read that fails keeps what shows.
+ * What was proposed, and your choices on it. Read again (`again`, quietly,
+ * while nothing on it is on its way), the same proposal keeps the choices made
+ * on it, a new one comes with its own under a new command, and a read that
+ * fails keeps what shows.
  */
-async function rereadDecision(): Promise<void> {
-  const decision = state.decision;
-  if (!decision || decision.loading || decision.busy || decision.unknown || !decisionShown(decision.seq)) return;
-  const mine = decision.seq;
+async function readDecision(mine: number, approval_id: string, again = false): Promise<void> {
   let open: ReviewOpen;
   try {
-    open = await meetingCommand({ operation: 'review_open', approval_id: decision.approval_id });
-  } catch {
+    open = await meetingCommand({ operation: 'review_open', approval_id });
+  } catch (error) {
+    const decision = decisionShown(mine);
+    if (decision && !again) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
     return;
   }
-  const current = decisionShown(mine);
-  if (!current || current.busy || current.unknown) return;
-  if (current.open?.snapshot_sha256 === open.snapshot_sha256) { set({ decision: { ...current, open } }); return; }
-  set({ decision: { ...current, open, command: crypto.randomUUID(), ...choicesOf(open) } });
+  const decision = decisionShown(mine);
+  if (!decision || (again && (decision.busy || decision.unknown))) return;
+  const same = again && decision.open?.snapshot_sha256 === open.snapshot_sha256;
+  set({ decision: { ...decision, loading: false, open, ...(same ? {} : { ...choicesOf(open), ...(again ? { command: crypto.randomUUID() } : {}) }) } });
 }
 
 function editDecision(patch: Partial<DecisionState>): void {
@@ -5084,7 +5045,7 @@ async function readList(mine: number, how: ListRead): Promise<void> {
       return parts.length === 0 ? [] : [{ read: { parts, pages: [], next: null }, atLeast: Math.max(rowsOf(read), 1) }];
     })
     : [{ read: paged ?? { parts: [part!], pages: [], next: null }, atLeast: 1 }];
-  let reads = how === 'first' || how === 'again' ? [] : list.reads.filter(read => read !== paged);
+  let reads = part === null ? [] : list.reads.filter(read => read !== paged);
   let rows: OpenItemView[] = [];
   let last: Extract<RowsRead, { ok: true }>['last'] | undefined;
   let failure: Failure | undefined;
@@ -5100,7 +5061,7 @@ async function readList(mine: number, how: ListRead): Promise<void> {
   if (!current) return;
   // A first read or a read again that failed shows what it showed before.
   if (failure && part === null) { setView({ ...current, loading: false, failed: { read: how, failure } }); return; }
-  const items = mergeRows(how === 'first' || how === 'again' ? [] : current.items, rows);
+  const items = mergeRows(part === null ? [] : current.items, rows);
   const ticked = how === 'first' && current.scope === 'record' ? items.filter(sendable) : items.filter(item => sendable(item) && current.ticks[item.item_id]);
   setView({
     ...current, loading: false, items, ...(failure ? { failed: { read: how, failure } } : { reads }),
@@ -5607,8 +5568,8 @@ function refreshUnder(): void {
   const route = state.route;
   if (route.page === 'home') void loadHome(false);
   if (route.page === 'project' && state.projectLine?.id === route.project.project_id) void loadLine('projectLine', 'project', route.project.project_id);
-  const line = state.impactLine;
-  if (line && (route.page === 'decision' || (state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id))) void loadLine('impactLine', line.scope, line.id);
+  const line = impactLineShown();
+  if (line) void loadLine('impactLine', line.scope, line.id);
 }
 
 /**

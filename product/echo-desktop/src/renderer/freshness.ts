@@ -52,8 +52,6 @@ export interface Surfaces {
   readProjects(first: boolean): Promise<ReadonlyMap<string, ProjectSummary> | null>;
   /** The sidebar's own quiet read of the pages it shows: on a return without a change check to say whether projects moved. */
   refreshSidebar(): Promise<void>;
-  /** The sidebar's last read of a list failed. */
-  sidebarFailed(): boolean;
   /** Every page of your follow-ups in some states (changed since a time), rows only; null when a page could not be read. */
   readRows(account: Expect, query: { states: readonly OpenItemView['state'][]; changed_since?: string }): Promise<OpenItemView[] | null>;
   /** One follow-up by its id, rows only. */
@@ -244,12 +242,12 @@ async function scan(run: Loop): Promise<void> {
  * (from another app, the tray, minimized, or covered by other windows). The
  * account is read again and a check runs side by side; then the page on screen
  * is read again quietly, with what the check found moved, once. Without a
- * change check to say whether projects moved, or with a sidebar whose last
- * read failed, the sidebar is read again too (R4, R8).
+ * change check to say whether projects moved, the sidebar is read again too
+ * (R4, R8).
  */
 export async function cameBack(): Promise<void> {
   const [, checked] = await Promise.all([surfaces.status(), check('came-back')]);
-  const sidebar = loop !== null && (checked?.outcome !== 'ok' || surfaces.sidebarFailed()) ? surfaces.refreshSidebar() : null;
+  const sidebar = loop !== null && checked?.outcome !== 'ok' ? surfaces.refreshSidebar() : null;
   surfaces.owe({ back: true, areas: checked?.moved ?? [] });
   await sidebar;
 }
