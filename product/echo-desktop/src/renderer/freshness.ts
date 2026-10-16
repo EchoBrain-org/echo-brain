@@ -4,9 +4,9 @@ import type { PersonChangesAreaV1, PersonChangesV1 } from '@echo-brain/organizat
 // (the change check: a fingerprint per area, never content) and reacts to
 // each area that moved: projects read every project you belong to again
 // (which also feeds the sidebar), follow-ups read the follow-ups you are
-// involved in again (rows only), and what shows that an area feeds is read
-// again quietly. Coming back to ECHO, a page opened and the machine waking
-// each run a check; between them the server sets the pace. A change someone
+// involved in again (rows only), and what shows that an area feeds is owed a
+// quiet read. Coming back to ECHO, a page opened and the machine waking each
+// run a check; between them the server sets the pace. A change someone
 // else made to a follow-up you are involved in, and being added to a project,
 // come as one system notification per check. The store keeps its loaders;
 // this module only says when they run.
@@ -58,8 +58,11 @@ export interface Surfaces {
   readRows(account: Expect, query: { states: readonly OpenItemView['state'][]; changed_since?: string }): Promise<OpenItemView[] | null>;
   /** One follow-up by its id, rows only. */
   readItem(account: Expect, itemId: string): Promise<{ item: OpenItemView } | { failure: Failure }>;
-  /** What shows read again quietly: the page on screen (`page`, R4), and what moved areas feed (R3). */
-  reread(what: { readonly page: boolean; readonly areas: readonly ScreenArea[] }): void;
+  /**
+   * What shows of moved areas (R3), and on a return everything that shows (`back`, R4), owed a quiet read each: the store
+   * reads each once it can be seen and nothing of its own is on its way (R6).
+   */
+  owe(what: { readonly back: boolean; readonly areas: readonly ScreenArea[] }): void;
   /** The follow-up whose page shows, if one does. */
   itemShown(): string | null;
   accountLost(failure: Failure): void;
@@ -113,14 +116,6 @@ interface Loop {
 
 let surfaces!: Surfaces;
 let loop: Loop | null = null;
-/** The window is hidden (closed to the tray, or minimized): checks go on, screen re-reads wait (R6). */
-let hidden = false;
-/** Re-reads owed to what shows, held while the window is hidden or covered: applied once it shows. */
-let held: { page: boolean; areas: Set<ScreenArea> } = { page: false, areas: new Set() };
-let returnedAt = Number.NEGATIVE_INFINITY;
-let returning: Promise<void> | null = null;
-/** Coming back and the window coming forward, again within this long, are the same return (R4). */
-const ABSORB_MS = 2_000;
 /** `changes unsupported` is logged once a run of the app. */
 let unsupportedLogged = false;
 
@@ -135,9 +130,6 @@ async function ask<T>(call: () => Promise<{ ok: true; value: unknown } | { ok: f
     return { ok: false, failure: { code: 'failed', retryable: true } };
   }
 }
-
-/** The window can be seen: shown, and no other app in front. */
-function visible(): boolean { return !hidden && surfaces.seen(); }
 
 /** The latest of some times on the Authority's clock, compared as instants; null for none. */
 function latest(...times: readonly (string | null | undefined)[]): string | null {
@@ -164,7 +156,6 @@ export function start(account: Expect): void {
 export function stop(): void {
   if (loop?.timer) clearTimeout(loop.timer);
   loop = null;
-  held = { page: false, areas: new Set() };
 }
 
 /** This account's Authority has no change check, nor `involved` or `changed_since` (R8): lists read what you sent or own. */
@@ -181,7 +172,7 @@ function check(trigger: Trigger): Promise<Checked | null> {
   if (run.running) return run.running;
   if (run.older && trigger !== 'timer' && trigger !== 'wake') return Promise.resolve({ outcome: 'older', moved: [] });
   const running = once(run).then(checked => {
-    if (trigger !== 'came-back' && loop === run) reread(checked.moved);
+    if (trigger !== 'came-back' && loop === run && checked.moved.length > 0) surfaces.owe({ back: false, areas: checked.moved });
     return checked;
   }).finally(() => {
     run.running = null;
@@ -246,70 +237,22 @@ async function scan(run: Loop): Promise<void> {
   if (loop === run && events) tell(run, events, []);
 }
 
-/** Moved areas re-read what shows of them, or wait while the window is hidden or covered (R6). */
-function reread(areas: readonly ScreenArea[]): void {
-  if (areas.length === 0) return;
-  for (const area of areas) held.areas.add(area);
-  flush();
-}
-
-/** What waited on the window showing, read once now that it shows. */
-function flush(): void {
-  if (!visible() || !surfaces.account()) return;
-  const { page, areas } = held;
-  if (!page && areas.size === 0) return;
-  held = { page: false, areas: new Set() };
-  surfaces.reread({ page, areas: [...areas] });
-}
-
 // ---- triggers ---------------------------------------------------------------------
 
 /**
- * Coming back to ECHO, or the window coming forward (`shown`), on either
- * platform and with no departure recorded: the account is read again and a
- * check runs side by side, then the page on screen is read again quietly,
- * with what the check found moved, once it shows. A return within two seconds
- * of the last is the same return. Without a change check to say whether
- * projects moved, or with a sidebar whose last read failed, the sidebar is
- * read again too (R4, R8). Only the window coming forward ends a hidden
- * window: ECHO can come back in front with its window still in the tray.
+ * ECHO came back: the window on screen and in front again, on either platform
+ * (from another app, the tray, minimized, or covered by other windows). The
+ * account is read again and a check runs side by side; then the page on screen
+ * is read again quietly, with what the check found moved, once. Without a
+ * change check to say whether projects moved, or with a sidebar whose last
+ * read failed, the sidebar is read again too (R4, R8).
  */
-export function cameBack(shown: boolean): Promise<void> {
-  if (shown) hidden = false;
-  const now = Date.now();
-  if (now - returnedAt < ABSORB_MS) {
-    flush();
-    return returning ?? Promise.resolve();
-  }
-  returnedAt = now;
-  held.page = true;
-  const work = (async () => {
-    const [, checked] = await Promise.all([surfaces.status(), check('came-back')]);
-    for (const area of checked?.moved ?? []) held.areas.add(area);
-    flush();
-    if (loop !== null && (checked?.outcome !== 'ok' || surfaces.sidebarFailed())) await surfaces.refreshSidebar();
-  })();
-  returning = work;
-  return work;
+export async function cameBack(): Promise<void> {
+  const [, checked] = await Promise.all([surfaces.status(), check('came-back')]);
+  const sidebar = loop !== null && (checked?.outcome !== 'ok' || surfaces.sidebarFailed()) ? surfaces.refreshSidebar() : null;
+  surfaces.owe({ back: true, areas: checked?.moved ?? [] });
+  await sidebar;
 }
-
-/** The window was hidden or minimized: checks and notifications go on; what shows is read again once it shows (R6). */
-export function windowHidden(): void { hidden = true; }
-
-/**
- * The window is on screen again without coming forward (macOS: no longer covered by other windows, or back on this Space):
- * what waited on it is read, once. Not a return: no status read, and no check.
- */
-export function windowVisible(): void {
-  hidden = false;
-  flush();
-}
-
-/**
- * Another app came in front: the page is covered, and its live reads and polls stop. Uncovered, it is read again, even on a
- * return the last one absorbed.
- */
-export function concealed(): void { held.page = true; }
 
 /** The machine woke: a check, whose baseline from before the sleep carries on, so what changed meanwhile notifies (N4). */
 export function woke(): void { void check('wake'); }
@@ -547,7 +490,7 @@ function keepNewest<T>(entries: Map<string, T>): void {
  * instead (N4); with the window hidden or covered, you are not looking, and it is told.
  */
 function tell(run: Loop, events: readonly FollowUpEvent[], adds: readonly ProjectSummary[]): void {
-  const open = visible() ? surfaces.itemShown() : null;
+  const open = surfaces.seen() ? surfaces.itemShown() : null;
   const untold = events.filter(event => event.item.item_id !== open);
   const notice = noticeFor(untold, adds);
   if (!notice) return;

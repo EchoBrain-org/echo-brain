@@ -518,27 +518,60 @@ function send<N extends EventName>(name: N, payload: Events[N]): void {
 }
 
 /**
- * Another app in front, or ECHO back in front: the page covers, then uncovers, what it shows, and coming back reads what it
- * shows again. The window shown or hidden, and the machine waking: the page reads again, or holds its reads. desktop.log
- * records each, as a code.
+ * Where the window stands: on screen (shown, not minimized, and on macOS not
+ * covered by other windows or on another Space, which macOS reports as hidden
+ * and shown), and in front (ECHO the active app on macOS; elsewhere, one of its
+ * windows focused). The page covers what it shows while ECHO is not in front,
+ * holds its screen reads while the window cannot be seen, and reads again when
+ * it comes back: on screen and in front again. Main works it out on every
+ * native event and tells the page only when it changes; desktop.log records
+ * each change as a code. Test builds never follow the machine: their window is
+ * on screen and in front until a test hook says otherwise.
  */
-function concealApp(): void { log('lifecycle conceal'); send('lifecycle.conceal', {}); }
-function resumeApp(): void { log('lifecycle resume'); send('lifecycle.resume', {}); }
-function shownApp(): void { log('lifecycle shown'); send('window.shown', {}); }
-function hiddenApp(): void { send('window.hidden', {}); }
-/** On screen again, as the window's show event says (on macOS, also when it is no longer covered): not a return. */
-function visibleApp(): void { send('window.visible', {}); }
-function wokeApp(): void { log('lifecycle wake'); send('system.woke', {}); }
+/** Test builds: where the test says the window stands. */
+let testState: Events['window.state'] = { onScreen: true, front: true };
+/** What the page was last told. It starts as the page assumes: a test window on screen and in front, a real one not yet shown. */
+let windowState: Events['window.state'] = test.ECHO_DESKTOP_HIDDEN ? testState : { onScreen: false, front: true };
+/** The window's own show and hide events, which on macOS also follow it being covered and uncovered. */
+let shownOnScreen = false;
+/** ECHO is the active app (macOS). */
+let active = true;
 
-// Linux has no app-level focus events: the window's own stand in for them.
-// Hidden tests drive lifecycle explicitly; native focus must not override their state.
-function concealAfterBlur(): void {
-  if (process.platform === 'darwin' || test.ECHO_DESKTOP_HIDDEN) return;
-  setTimeout(() => { if (!BrowserWindow.getFocusedWindow()) concealApp(); }, 150);
+function nativeState(): Events['window.state'] {
+  const onScreen = window !== null && !window.isDestroyed() && shownOnScreen && window.isVisible() && !window.isMinimized();
+  const front = process.platform === 'darwin' ? active : BrowserWindow.getFocusedWindow() !== null;
+  return { onScreen, front };
 }
 
-function resumeOnFocus(): void {
-  if (process.platform !== 'darwin' && !test.ECHO_DESKTOP_HIDDEN) resumeApp();
+function updateWindowState(next: Events['window.state'] = test.ECHO_DESKTOP_HIDDEN ? testState : nativeState()): void {
+  const was = windowState;
+  if (next.onScreen === was.onScreen && next.front === was.front) return;
+  windowState = next;
+  if (next.front !== was.front) log(next.front ? 'lifecycle resume' : 'lifecycle conceal');
+  if (next.onScreen && !was.onScreen) log('lifecycle shown');
+  send('window.state', next);
+}
+
+/** Native events the state follows. Linux reports a blur before focus moves between windows: it is looked at a moment later. */
+function windowShown(): void { shownOnScreen = true; updateWindowState(); }
+function windowHidden(): void { shownOnScreen = false; updateWindowState(); }
+function windowMoved(): void { updateWindowState(); }
+function windowBlurred(): void { setTimeout(() => updateWindowState(), 150); }
+function appActive(): void { active = true; updateWindowState(); }
+function appInactive(): void { active = false; updateWindowState(); }
+function wokeApp(): void { log('lifecycle wake'); updateWindowState(); send('system.woke', {}); }
+
+/**
+ * Test builds: the window as a hook puts it. Shown, it comes back as from the tray: off screen, then on screen; another app
+ * still in front keeps it covered until echo-test:resume.
+ */
+function testWindow(next: Partial<Events['window.state']>): void {
+  testState = { ...testState, ...next };
+  updateWindowState();
+}
+function testShown(): void {
+  testWindow({ onScreen: false });
+  testWindow({ onScreen: true });
 }
 
 // ---- window, tray, shortcuts -----------------------------------------------
@@ -565,14 +598,15 @@ function createWindow(): BrowserWindow {
   });
   // Quitting closes the window before macOS stops reporting app events.
   created.on('closed', () => { if (window === created) window = null; });
-  created.on('blur', concealAfterBlur);
-  created.on('focus', resumeOnFocus);
-  // Closed to the tray, hidden or minimized, and restored: the page holds its screen reads, then reads again. macOS reports a
-  // window covered by others, or on another Space, as hidden, and on screen again as shown, with no app activation.
-  created.on('hide', hiddenApp);
-  created.on('minimize', hiddenApp);
-  created.on('restore', shownApp);
-  created.on('show', visibleApp);
+  // Hidden tests drive the window's state with hooks: a hidden test window never follows the machine.
+  if (!test.ECHO_DESKTOP_HIDDEN) {
+    created.on('show', windowShown);
+    created.on('hide', windowHidden);
+    created.on('minimize', windowMoved);
+    created.on('restore', windowMoved);
+    created.on('focus', windowMoved);
+    created.on('blur', windowBlurred);
+  }
   void created.loadURL(`${ORIGIN}/index.html`);
   return created;
 }
@@ -582,7 +616,6 @@ function show(): void {
   window.show();
   window.focus();
   if (process.platform === 'darwin') app.focus({ steal: true });
-  shownApp();
 }
 
 function toggle(): void {
@@ -592,7 +625,7 @@ function toggle(): void {
 
 /** The window comes forward. Tests never put a window on screen or take focus from other apps: the page hears what show() tells it. */
 function bringForward(): void {
-  if (test.ECHO_DESKTOP_HIDDEN) shownApp(); else show();
+  if (test.ECHO_DESKTOP_HIDDEN) testShown(); else show();
 }
 
 function capture(): void {
@@ -775,8 +808,8 @@ app.on('activate', bringForward);
 // Tests drive these with echo-test:conceal and echo-test:resume: a hidden test
 // window never follows which app the machine has in front.
 if (!test.ECHO_DESKTOP_HIDDEN) {
-  app.on('did-resign-active', concealApp);
-  app.on('did-become-active', resumeApp);
+  app.on('did-resign-active', appInactive);
+  app.on('did-become-active', appActive);
 }
 /** The wait for a refresh to finish, while it runs: another Quit joins it. */
 let draining: Promise<void> | null = null;
@@ -828,12 +861,12 @@ app.on('window-all-closed', () => { /* stays in the tray */ });
 if (__ECHO_TEST_HOOK__) {
   // Playwright cannot press a global shortcut; it emits these instead.
   (app as unknown as NodeJS.EventEmitter).on('echo-test:capture', capture);
-  (app as unknown as NodeJS.EventEmitter).on('echo-test:conceal', concealApp);
-  (app as unknown as NodeJS.EventEmitter).on('echo-test:resume', resumeApp);
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:conceal', () => testWindow({ front: false }));
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:resume', () => testWindow({ front: true }));
   (app as unknown as NodeJS.EventEmitter).on('echo-test:kill-host', () => { host?.kill(); });
   // What show() tells the page, without putting a window on the test machine's screen; and what hiding it and waking say.
-  (app as unknown as NodeJS.EventEmitter).on('echo-test:shown', shownApp);
-  (app as unknown as NodeJS.EventEmitter).on('echo-test:hidden', hiddenApp);
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:shown', testShown);
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:hidden', () => testWindow({ onScreen: false }));
   (app as unknown as NodeJS.EventEmitter).on('echo-test:wake', wokeApp);
   // The updater never runs in test builds: tests set the row it would show.
   (app as unknown as NodeJS.EventEmitter).on('echo-test:update', (state: UpdateState) => setUpdate(state));
@@ -858,11 +891,11 @@ async function runSmoke(): Promise<void> {
   checks.test_hook_absent = !__ECHO_TEST_HOOK__;
   // ECHO's own handlers, not a count: Electron adds window focus listeners of its own. Coming back (app focus on macOS, the
   // window's focus elsewhere), the window hidden and restored, and the machine waking each reach the page.
-  checks.lifecycle_wired = (process.platform === 'darwin'
-    ? app.listeners('did-resign-active').includes(concealApp) && app.listeners('did-become-active').includes(resumeApp)
-    : probe.listeners('blur').includes(concealAfterBlur) && probe.listeners('focus').includes(resumeOnFocus)) &&
-    probe.listeners('hide').includes(hiddenApp) && probe.listeners('minimize').includes(hiddenApp) && probe.listeners('restore').includes(shownApp) &&
-    probe.listeners('show').includes(visibleApp) &&
+  checks.lifecycle_wired = (process.platform !== 'darwin'
+    || (app.listeners('did-resign-active').includes(appInactive) && app.listeners('did-become-active').includes(appActive))) &&
+    probe.listeners('show').includes(windowShown) && probe.listeners('hide').includes(windowHidden) &&
+    probe.listeners('minimize').includes(windowMoved) && probe.listeners('restore').includes(windowMoved) &&
+    probe.listeners('focus').includes(windowMoved) && probe.listeners('blur').includes(windowBlurred) &&
     powerMonitor.listeners('resume').includes(wokeApp);
   quitting = true;
   probe.destroy();

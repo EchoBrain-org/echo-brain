@@ -20,10 +20,9 @@ test('the 2026-10-15 scenario: added to a project while ECHO keeps focus, the si
   const { page } = run;
   const rows = page.getByTestId('sidebar-project');
   await expect(rows).toHaveCount(2);
-  // The first check, at sign-in, only learns: its fingerprints, and every page of Ari's projects (beside the sidebar's own
-  // first reads).
+  // The first check, at sign-in, only learns: its fingerprints, and every page of Ari's projects (which filled the sidebar).
   await expect.poll(checks).toBe(1);
-  await expect.poll(lists).toBe(4);
+  await expect.poll(lists).toBe(2);
   // Another person adds Ari to Comet. Nothing happens to the window: no focus change, no shown, no click.
   writeFileSync(join(run.home, 'project-added'), '');
   await expect(rows).toHaveCount(3, { timeout: 30_000 });
@@ -41,9 +40,9 @@ test('added to the oldest of many projects: past the sidebar\'s pages, it is sti
   const { page } = run;
   const rows = page.getByTestId('sidebar-project');
   await expect(rows).toHaveCount(10);
-  // Learned at sign-in: the sidebar's first pages, then all of Ari's, active (two pages) and archived.
+  // Learned at sign-in: every page of Ari's projects, active (two pages) and archived, which filled the sidebar's first.
   await expect.poll(checks).toBe(1);
-  await expect.poll(lists).toBe(5);
+  await expect.poll(lists).toBe(3);
   writeFileSync(join(run.home, 'added-oldest'), '');
   await expect.poll(() => notices(run), { timeout: 45_000 }).toEqual([
     { title: 'ECHO', body: 'You were added to Oldest launch', target: { kind: 'project', project_id: OLDEST } },
@@ -65,7 +64,7 @@ test('waking the machine checks at once, and the log says so', async () => {
   const { page, app } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await expect.poll(checks).toBe(1);
-  await expect.poll(lists).toBe(4);
+  await expect.poll(lists).toBe(2);
   writeFileSync(join(run.home, 'project-added'), '');
   await emit(app, 'echo-test:wake');
   await expect(page.getByTestId('sidebar-project')).toHaveCount(3);

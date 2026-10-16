@@ -546,6 +546,8 @@ function set(patch: Partial<State>): void {
   // A held update click says what to settle only while it is unsettled, here or in main.
   if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
   listeners.forEach(listener => listener());
+  // A read owed to what shows may have been waiting on this change: a read of its own that landed, the window seen.
+  settleOwed();
 }
 
 export function useStore(): State {
@@ -3927,16 +3929,40 @@ export function toggleSidebar(): void {
   try { localStorage.setItem(SIDEBAR_OPEN, String(open)); } catch { /* optional convenience */ }
 }
 
-// ---- concealment ---------------------------------------------------------------
+// ---- the window: covered, seen, and back ------------------------------------------
+
+/** The window is on screen (not hidden, minimized or covered by other windows), as main last said. */
+let windowOnScreen = true;
+
+/** The window can be seen: on screen, and not covered by another app in front. */
+function canSee(): boolean { return windowOnScreen && !state.concealed; }
+/** ECHO is coming back: what waited is read with the page, once the return's check says what moved. */
+let comingBack = false;
+
+/**
+ * Where the window stands, as main says when it changes. Not in front: the
+ * page is covered (the privacy cover), and its live reads and polls stop. In
+ * front: it uncovers. On screen and in front again: ECHO came back, and what
+ * shows is read again (R4). Owed reads wait while the window cannot be seen
+ * (R6). Answers the return's reads when it came back, else null.
+ */
+export function windowState(next: { onScreen: boolean; front: boolean }): Promise<void> | null {
+  const back = next.onScreen && next.front && !canSee();
+  if (back) comingBack = true;
+  windowOnScreen = next.onScreen;
+  if (!next.front && !state.concealed) conceal();
+  else if (next.front && state.concealed) set({ concealed: false });
+  settleOwed();
+  return back ? freshness.cameBack() : null;
+}
 
 /**
  * Another app is in front: cover the window until ECHO is back. The bar keeps
  * its text (out of sight over a covered page); its matches go, and are read
  * again for the account on return.
  */
-export function conceal(): void {
+function conceal(): void {
   stopRunPolling();
-  freshness.concealed();
   // The source pane closes and forgets what it read; the records are read again on return.
   const reading = state.sources !== null;
   // People closes, as the sidebar's rows must take a drop; unless a change in it is on its way.
@@ -3950,104 +3976,98 @@ export function conceal(): void {
   });
   syncSearch();
 }
+
 /**
- * ECHO is back in front: the page uncovers, and coming back reads what it
- * shows again (R4): on both platforms, with or without a departure recorded.
+ * A part of what shows that a moved area, or coming back, reads again: the
+ * areas whose move it shows, whether it shows now, whether a read or change of
+ * its own is on its way, and its quiet read (`back`: ECHO came back, so Home
+ * reads every row live again).
  */
-export function resume(): Promise<void> {
-  if (state.concealed) set({ concealed: false });
-  return freshness.cameBack(false);
+interface Surface {
+  readonly areas: readonly freshness.ScreenArea[];
+  shows(): boolean;
+  busy(): boolean;
+  read(back: boolean): Promise<unknown>;
 }
 
-/** The window came forward (⌘E, the tray, a notification): the same as coming back (R4). The cover, if up, stays. */
-export function windowShown(): Promise<void> { return freshness.cameBack(true); }
+const homeOrDecision = () => state.route.page === 'home' || state.route.page === 'decision';
+const topView = () => { const view = followUpShown(); return view?.kind === 'list' || view?.kind === 'item' ? view : null; };
+const projectShown = () => (state.route.page === 'project' ? state.route.project : null);
 
-/** The window was hidden or minimized: checks and notifications go on; what shows is read again once it shows (R6). */
-export function windowHidden(): void { freshness.windowHidden(); }
-
-/** The window is on screen again without coming forward (macOS occlusion, a Space): what waited on it is read. */
-export function windowVisible(): void { freshness.windowVisible(); }
-
-/** The machine woke from sleep: a check, so what changed meanwhile shows and notifies. */
-export function systemWoke(): void { void freshness.woke(); }
-
-/**
- * What shows, read again quietly, keeping what it shows meanwhile: the page on
- * screen when ECHO comes back (`page`, R4), and what an area that moved feeds
- * (R3). Follow-ups moved: Home's rows, the follow-ups list or item page on
- * screen (the views under it, and the page under them, once they show), a
- * project's follow-ups line, a meeting's line. Reviews moved: Home and the
- * decision page.
- */
-function rereadShown({ page, areas }: { readonly page: boolean; readonly areas: readonly freshness.ScreenArea[] }): void {
-  if (!expect() || state.concealed) return;
-  const followUps = page || areas.includes('follow_ups');
-  const reviews = areas.includes('reviews');
-  const route = state.route;
-  if (page) {
+const SURFACES: readonly Surface[] = [
+  // Home, and the decision page over it: their rows, and the decision's check (only new rows read live, but on a return).
+  { areas: ['follow_ups', 'reviews'], shows: () => homeOrDecision() && state.home !== null, busy: () => false, read: back => loadHome(back) },
+  { areas: ['reviews'], shows: () => state.route.page === 'decision' && state.decision !== null,
+    busy: () => Boolean(state.decision?.loading || state.decision?.busy || state.decision?.unknown), read: () => rereadDecision() },
+  // The follow-ups view on screen: those under it, and the page under them all, read again when they show.
+  { areas: ['follow_ups'], shows: () => topView() !== null, busy: () => Boolean(topView()?.loading || topView()?.busy), read: () => rereadViews() },
+  { areas: ['follow_ups'], shows: () => projectShown() !== null, busy: () => false, read: () => loadLine('projectLine', 'project', projectShown()!.project_id) },
+  { areas: ['follow_ups'], shows: () => impactLineShown() !== null, busy: () => false, read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
+  // The page itself, on a return: a project's feed and members, Mine, Tools, People & invites, and the bar's matches.
+  { areas: [], shows: () => projectShown() !== null, busy: () => false, read: () => Promise.all([loadList('quiet'),
+    state.roster?.projectId === projectShown()?.project_id ? loadRoster(state.roster!.projectId) : null]) },
+  { areas: [], shows: () => state.route.page === 'mine', busy: () => false, read: () => loadList('quiet') },
+  { areas: [], shows: () => state.route.page === 'tools', busy: () => false, read: () => loadToolList(true) },
+  { areas: [], shows: () => state.route.page === 'organization', busy: () => false, read: () => loadEmployees() },
+  { areas: [], shows: () => true, busy: () => false, read: async () => {
     searchAgain();
     // The answer's records are read again: another app in front forgot them.
-    if (state.sources) void readRecords(state.sources.gen);
-  }
-  if ((route.page === 'home' || route.page === 'decision') && state.home && (page || followUps || reviews)) {
-    // Coming back, Home reads every row live again; after a change, only the rows that newly lack what they say now.
-    void loadHome(page);
-  }
-  if (route.page === 'decision' && (page || reviews)) void rereadDecision();
-  if (followUps) rereadViews();
-  if (route.page === 'project') {
-    const { project_id } = route.project;
-    if (followUps) void loadLine('projectLine', 'project', project_id);
-    if (page) {
-      void loadList('quiet');
-      if (state.roster?.projectId === project_id) void loadRoster(project_id);
-    }
-  }
+    if (state.sources) await readRecords(state.sources.gen);
+  } },
+];
+
+/** The meeting line the reader or the decision page shows. */
+function impactLineShown(): ItemsLine | null {
   const line = state.impactLine;
-  if (followUps && line && (route.page === 'decision' || (state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id))) {
-    void loadLine('impactLine', line.scope, line.id);
+  return line && (state.route.page === 'decision' || (state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id)) ? line : null;
+}
+
+/** Surfaces owed a read, and whether for a return; and those whose read is on its way. */
+const owed = new Map<Surface, boolean>();
+const reading = new Set<Surface>();
+
+/** What shows of the moved areas (and, coming back, all that shows) is owed one quiet read each. */
+function owe({ back, areas }: { readonly back: boolean; readonly areas: readonly freshness.ScreenArea[] }): void {
+  if (back) comingBack = false;
+  if (!expect()) return;
+  for (const surface of SURFACES) {
+    if ((back || surface.areas.some(area => areas.includes(area))) && surface.shows()) owed.set(surface, back || owed.get(surface) === true);
   }
-  if (!page) return;
-  if (route.page === 'mine') void loadList('quiet');
-  if (route.page === 'tools') void loadToolList(true);
-  if (route.page === 'organization') void loadEmployees();
+  settleOwed();
 }
 
 /**
- * The follow-ups view on screen read again, rows only (a list as far as it
- * showed, then live what it newly lacks); those under it, and the page under
- * them all, are read again when they show. A view with a read or a change on
- * its way is owed one more read: its reply may predate what moved, so it is
- * read again once that lands.
+ * Owed reads run once the window can be seen (R6) and nothing of their own is
+ * on its way (its reply may predate what moved), one at a time each; owed
+ * again meanwhile, it runs once more after. Coming back, they wait for the
+ * return's own, so each is read once (R4). One that no longer shows is let
+ * go: opening it reads it. Every state change looks again.
  */
-function rereadViews(): void {
+function settleOwed(): void {
+  if (owed.size === 0 || !canSee() || comingBack) return;
+  for (const [surface, back] of owed) {
+    if (reading.has(surface) || surface.busy()) continue;
+    owed.delete(surface);
+    if (!surface.shows()) continue;
+    reading.add(surface);
+    void surface.read(back).finally(() => { reading.delete(surface); settleOwed(); });
+  }
+}
+
+/** The follow-ups view on screen read again, rows only (then live what it newly lacks); those under it once they show. */
+async function rereadViews(): Promise<void> {
   const stack = followUpsShown();
-  const top = stack?.views.at(-1);
+  const top = topView();
   if (!stack || !top) return;
   const last = stack.views.length - 1;
   set({ followUps: { ...stack, changed: true, views: stack.views.map((view, index) => (index < last ? { ...view, stale: true } : view)) } });
-  if (top.kind === 'decision') return;
-  owedReads.add(top.seq);
-  readIfOwed(top.seq);
-}
-
-/** Lists and item pages owed a read again: what they show moved while a read or a change of theirs was on its way. */
-const owedReads = new Set<number>();
-
-/** A view owed a read again, once nothing of its own is on its way: read rows only, then live what it newly lacks. */
-function readIfOwed(mine: number): void {
-  if (!owedReads.has(mine)) return;
-  const view = viewOf('list', mine) ?? viewOf('item', mine);
-  if (!view) { owedReads.delete(mine); return; }
-  if (view.busy || view.loading) return;
-  owedReads.delete(mine);
-  if (view.kind === 'list') void readList(mine, view.reads.length === 0 ? 'first' : 'again');
-  else if (!view.gone) void readItem(mine);
+  if (top.kind === 'list') await readList(top.seq, top.reads.length === 0 ? 'first' : 'again');
+  else if (!top.gone) await readItem(top.seq);
 }
 
 freshness.configure({
   account: expect,
-  seen: () => !state.concealed,
+  seen: canSee,
   status: refreshStatus,
   readProjects,
   refreshSidebar,
@@ -4058,7 +4078,7 @@ freshness.configure({
     return read.ok ? read.pages.flatMap(page => page.items) : null;
   },
   readItem: (account, itemId) => readOne(account, itemId),
-  reread: rereadShown,
+  owe,
   itemShown: () => {
     const view = followUpShown();
     return view?.kind === 'item' ? view.item_id : null;
@@ -5079,11 +5099,6 @@ function mergeRows(shown: readonly OpenItemView[], read: readonly OpenItemView[]
  * does not wait for that.
  */
 async function readList(mine: number, how: ListRead): Promise<void> {
-  await readListOnce(mine, how);
-  readIfOwed(mine);
-}
-
-async function readListOnce(mine: number, how: ListRead): Promise<void> {
   const account = expect();
   const list = viewOf('list', mine);
   if (!account || !list) return;
@@ -5324,7 +5339,6 @@ export async function sendTicked(include: boolean): Promise<void> {
   const said: Said = left === 0 ? { words: done! } : done !== null ? { words: `${done} · ${left} not ${include ? 'sent' : 'dismissed'}, try again`, error: true }
     : missed ? { words: notSent(include), error: true } : changeFailed(failure ?? { code: 'failed', retryable: true });
   setView({ ...viewOf('list', list.seq)!, busy: false, sends, said });
-  readIfOwed(list.seq);
 }
 
 /**
@@ -5356,11 +5370,6 @@ export function openFollowUp(item_id: string, shown: OpenItemView | null = null,
  * reads it again).
  */
 async function readItem(mine: number): Promise<void> {
-  await readItemOnce(mine);
-  readIfOwed(mine);
-}
-
-async function readItemOnce(mine: number): Promise<void> {
   const page = viewOf('item', mine);
   const account = expect();
   if (!page || !account) return;
@@ -5466,7 +5475,6 @@ async function changeItem(view: FollowUpList | ItemPage, item_id: string, write:
   const answer = { ...current, busy: false, said };
   setView(gone && answer.kind === 'item' ? { ...answer, gone: true } : answer);
   if (failure && !unknown) await reread();
-  readIfOwed(view.seq);
   return { went, unknown: unknown && !went && !settled };
 }
 

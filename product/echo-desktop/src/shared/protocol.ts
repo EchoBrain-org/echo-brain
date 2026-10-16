@@ -641,14 +641,12 @@ export type AccountCommand = 'signin' | 'invitation' | 'switch' | 'signout' | 't
 /** Events main pushes to the renderer. */
 export interface Events {
   'capture.open': Record<string, never>;
-  /** The window came forward: the tray, a shortcut, a notification, or restored from the dock or taskbar. */
-  'window.shown': Record<string, never>;
-  /** The window was closed to the tray, hidden or minimized (on macOS, also covered by other windows): screen re-reads wait. */
-  'window.hidden': Record<string, never>;
-  /** The window is on screen again without coming forward (on macOS, no longer covered, or back on its Space). */
-  'window.visible': Record<string, never>;
-  'lifecycle.conceal': Record<string, never>;
-  'lifecycle.resume': Record<string, never>;
+  /**
+   * Where the window stands, when that changes: on screen (shown, not minimized, not covered by other windows), and in
+   * front (ECHO the active app on macOS; elsewhere its window focused). Not in front, the page is covered; back on screen
+   * and in front, it came back.
+   */
+  'window.state': { onScreen: boolean; front: boolean };
   /** The machine woke from sleep (powerMonitor `resume`). */
   'system.woke': Record<string, never>;
   'signin.phase': { phase: 'open-browser' | 'installed'; browser_opened?: boolean };

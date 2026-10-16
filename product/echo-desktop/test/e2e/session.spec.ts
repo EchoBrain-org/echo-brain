@@ -94,7 +94,7 @@ test('an offline foreground refresh keeps you signed in, and a note is not sent 
   // Active and archived lists each try once; neither list reaches the Authority.
   await expectOfflineStartup();
   // Returning to ECHO reads local status, Home and the change check again; with no check to say what moved, the sidebar's
-  // active list is tried again too. Each still fails before sending.
+  // lists are tried again too, side by side. Each still fails before sending.
   const statuses = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/app\.status ok/g)?.length ?? 0;
   const before = statuses();
   const lists = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/projects\.list transport_failed/g)?.length ?? 0;
@@ -103,7 +103,7 @@ test('an offline foreground refresh keeps you signed in, and a note is not sent 
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:resume');
   await expect.poll(statuses).toBe(before + 1);
-  await expect.poll(lists).toBe(listed + 1);
+  await expect.poll(lists).toBe(listed + 2);
   await expect(page.getByTestId('home-error')).toBeVisible();
   expect(refreshes().length).toBeGreaterThan(tried);
   await expect(page.getByTestId('sidebar-projects-error').getByRole('button', { name: 'Try again' })).toBeEnabled();

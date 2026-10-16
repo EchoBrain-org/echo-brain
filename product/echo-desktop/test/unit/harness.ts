@@ -121,3 +121,32 @@ export function stubWindow(): void {
 }
 
 export const names = (rows: readonly { name: string }[]) => rows.map(row => row.name);
+
+/** The store's window, as main tells it where the window stands. */
+interface Windowed {
+  getState(): { concealed: boolean };
+  windowState(next: { onScreen: boolean; front: boolean }): Promise<void> | null;
+}
+
+/** Another app comes in front: the page is covered. */
+export function cover(store: Windowed): void { store.windowState({ onScreen: true, front: false }); }
+
+/** ECHO is back in front, from another app: it came back. Answers the return's reads. */
+export function uncover(store: Windowed): Promise<void> { return store.windowState({ onScreen: true, front: true }) ?? Promise.resolve(); }
+
+/** The window is closed to the tray, minimized, or covered by other windows: ECHO in front or not, as it was. */
+export function hide(store: Windowed): void { store.windowState({ onScreen: false, front: !store.getState().concealed }); }
+
+/** The window is on screen again (restored, or uncovered by other windows): ECHO in front or not, as it was. */
+export function unhide(store: Windowed): Promise<void> {
+  return store.windowState({ onScreen: true, front: !store.getState().concealed }) ?? Promise.resolve();
+}
+
+/** The window comes forward (the tray, a shortcut, a notification): from off screen, on screen and in front. Answers the return's reads. */
+export function show(store: Windowed): Promise<void> {
+  hide(store);
+  return uncover(store);
+}
+
+/** The machine wakes from sleep. */
+export async function wake(): Promise<void> { (await import('../../src/renderer/freshness.js')).woke(); }

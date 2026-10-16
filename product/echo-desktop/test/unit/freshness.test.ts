@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList } from '../../src/renderer/store.js';
 import type { Account, ProjectSummary } from '../../src/shared/protocol.js';
 import { MINA, authority, followUp, id, nextCheck, sent, stated, changesHandlers, CLOCK } from './changes-fixture.js';
-import { ACCOUNT, flush, Held, keysetPage, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, cover, flush, Held, hide, keysetPage, ok, project, rpcFor, show, startStore, stubWindow, uncover, unhide, wake } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -56,8 +56,6 @@ beforeEach(() => {
 
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-/** Past the window in which a return is the same return. */
-const later = () => vi.advanceTimersByTimeAsync(2_000);
 
 describe('when a check runs (R2)', () => {
   it('at sign-in, learning; then at the pace the server sets, kept within 15 s and an hour', async () => {
@@ -110,21 +108,21 @@ describe('when a check runs (R2)', () => {
 
   it('coming back on macOS: after another app was in front, with the account read again', async () => {
     const store = await startStore();
-    store.conceal();
-    await store.resume();
+    cover(store);
+    await uncover(store);
     expect(checks()).toBe(2);
     expect(statusReads()).toBe(2);
   });
 
-  it('coming back on Linux, and the window shown: no departure needs to be recorded, and a return within two seconds is the same one', async () => {
+  it('the window shown from the tray, or restored (or uncovered by other windows): the same return; the same state again is none', async () => {
     const store = await startStore();
-    await store.resume();
+    await show(store);
     expect([checks(), statusReads()]).toEqual([2, 2]);
-    await store.windowShown();
-    await store.resume();
+    expect(store.windowState({ onScreen: true, front: true })).toBeNull();
+    await flush();
     expect([checks(), statusReads()]).toEqual([2, 2]);
-    await later();
-    await store.windowShown();
+    hide(store);
+    await unhide(store);
     expect([checks(), statusReads()]).toEqual([3, 3]);
   });
 
@@ -147,7 +145,7 @@ describe('when a check runs (R2)', () => {
 
   it('the machine waking', async () => {
     const store = await startStore();
-    store.systemWoke();
+    void wake();
     await flush();
     expect(checks()).toBe(2);
   });
@@ -326,7 +324,7 @@ describe('what coming back reads again, on each page (R4)', () => {
   it('Home: its rows, read live again', async () => {
     const store = await startStore();
     const before = homeReads();
-    await store.resume();
+    await show(store);
     await flush();
     expect(homeReads()).toBe(before + 1);
   });
@@ -335,7 +333,7 @@ describe('what coming back reads again, on each page (R4)', () => {
     const store = await startStore();
     await store.openProject(apollo);
     const before = [calls('list.page').length, calls('projects.members').length, runs('items', request => request.scope === 'project')];
-    await store.resume();
+    await show(store);
     await flush();
     expect([calls('list.page').length, calls('projects.members').length, runs('items', request => request.scope === 'project')])
       .toEqual(before.map(count => count + 1));
@@ -346,21 +344,20 @@ describe('what coming back reads again, on each page (R4)', () => {
     const store = await startStore();
     await store.openMine();
     let before = calls('list.page').length;
-    await store.resume();
+    await show(store);
     await flush();
     expect(calls('list.page').length).toBe(before + 1);
-    await later();
     store.openTools();
     await flush();
     before = calls('account.tools').length;
-    await store.windowShown();
+    await show(store);
     await flush();
     expect(calls('account.tools').length).toBe(before + 1);
-    await later();
     store.openOrganization();
     await flush();
     before = calls('employees.list').length;
-    await store.resume();
+    cover(store);
+    await uncover(store);
     await flush();
     expect(calls('employees.list').length).toBe(before + 1);
   });
@@ -371,13 +368,12 @@ describe('what coming back reads again, on each page (R4)', () => {
     await store.openYourFollowUps();
     const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open' && request.changed_since === undefined);
     const before = listRows();
-    await store.resume();
+    await show(store);
     await flush();
     expect(listRows()).toBe(before + 1);
     await store.openFollowUp(id(1));
     const read = runs('item');
-    await later();
-    await store.windowShown();
+    await show(store);
     await flush();
     expect(runs('item')).toBeGreaterThan(read);
   });
@@ -386,7 +382,7 @@ describe('what coming back reads again, on each page (R4)', () => {
 describe('a hidden window (R6) and the cover (R7)', () => {
   it('checks and notifies while hidden, and reads what shows once, when it shows again', async () => {
     const store = await startStore();
-    store.windowHidden();
+    hide(store);
     const before = homeReads();
     authority.items = [followUp(1)];
     await nextCheck();
@@ -394,61 +390,62 @@ describe('a hidden window (R6) and the cover (R7)', () => {
     await nextCheck();
     expect(noticeTexts()).toEqual(['Mina handed you Action 1', 'Mina handed you Action 2']);
     expect(homeReads()).toBe(before);
-    await store.windowShown();
+    await show(store);
     await flush();
     expect(homeReads()).toBe(before + 1);
   });
 
-  it('stays hidden when ECHO comes back in front with its window still in the tray', async () => {
+  it('is no return while ECHO is in front with its window still in the tray', async () => {
     const store = await startStore();
-    store.windowHidden();
+    cover(store);
+    hide(store);
     const before = homeReads();
-    await store.resume();
+    // ECHO the app in front again, its window still in the tray.
+    store.windowState({ onScreen: false, front: true });
     await flush();
-    expect(checks()).toBe(2);
-    expect(homeReads()).toBe(before);
-    await later();
-    await store.windowShown();
+    expect([checks(), homeReads()]).toEqual([1, before]);
+    await unhide(store);
     await flush();
-    expect(homeReads()).toBe(before + 1);
+    expect([checks(), homeReads()]).toEqual([2, before + 1]);
   });
 
-  it('on screen again without coming forward (macOS: no longer covered by other windows), reads what waited, and is not a return', async () => {
+  it('covered by other windows, then uncovered (macOS, ⌘-Tab back): what waited and the page are read once, as it comes back', async () => {
     const store = await startStore();
     // Covered by other windows, then another app in front; back by ⌘-Tab: the app is active, but its window still covered.
-    store.windowHidden();
-    store.conceal();
+    hide(store);
+    cover(store);
     const before = homeReads();
     authority.items = [followUp(1)];
     await nextCheck();
-    await store.resume();
+    store.windowState({ onScreen: false, front: true });
     await flush();
     expect(homeReads()).toBe(before);
     const [checked, statuses] = [checks(), statusReads()];
-    store.windowVisible();
+    await unhide(store);
     await flush();
     expect(homeReads()).toBe(before + 1);
-    expect([checks(), statusReads()]).toEqual([checked, statuses]);
-    // Visible with nothing waiting reads nothing.
-    store.windowVisible();
+    expect([checks(), statusReads()]).toEqual([checked + 1, statuses + 1]);
+    // The same again reads nothing.
+    await unhide(store);
     await flush();
     expect(homeReads()).toBe(before + 1);
   });
 
   it('with another app in front, checks run (a wake among them) and what shows waits for the cover to go', async () => {
     const store = await startStore();
-    store.conceal();
+    cover(store);
     const before = homeReads();
     authority.items = [sent(1, MINA)];
-    store.systemWoke();
+    void wake();
     await flush();
     expect(checks()).toBe(2);
     expect(homeReads()).toBe(before);
-    // Shown while covered: the account and a check, but the page waits; uncovered right after, it is read once.
-    await store.windowShown();
+    // Off screen and back while covered: the page still waits; uncovered, it is read once.
+    hide(store);
+    await unhide(store);
     await flush();
     expect(homeReads()).toBe(before);
-    await store.resume();
+    await uncover(store);
     await flush();
     expect(homeReads()).toBe(before + 1);
     expect(store.getState().concealed).toBe(false);
@@ -467,7 +464,7 @@ describe('the sidebar, and projects you were added to (P2-3)', () => {
     const store = await startStore();
     expect(store.getState().projects).toMatchObject({ items: [], failure: { code: 'unavailable' } });
     refuse = false;
-    await store.resume();
+    await show(store);
     await flush();
     expect(store.getState().projects.items.map(row => row.name)).toEqual(['Apollo']);
     expect(store.getState().projects.failure).toBeUndefined();
@@ -484,7 +481,7 @@ describe('the sidebar, and projects you were added to (P2-3)', () => {
     authority.changes = 'fails';
     const comet = project(2, 25, { name: 'Comet', role: 'member' });
     authority.active = [comet, apollo];
-    await store.resume();
+    await show(store);
     await flush();
     expect(store.getState().projects.items.map(row => row.name)).toEqual(['Comet', 'Apollo']);
     expect(noticeTexts()).toEqual([]);
@@ -514,13 +511,12 @@ describe('an older Authority (R8)', () => {
     const store = await startStore();
     expect(calls('log.changes').map(([, params]) => params)).toEqual([{ unsupported: true }]);
     const before = lists('active');
-    await store.resume();
+    await show(store);
     await flush();
     expect(lists('active')).toBe(before + 1);
     await vi.advanceTimersByTimeAsync(10_000);
     await store.openMine();
-    await later();
-    await store.windowShown();
+    await show(store);
     await flush();
     expect(checks()).toBe(1);
     expect(lists('active')).toBe(before + 2);
@@ -542,7 +538,7 @@ describe('an older Authority (R8)', () => {
     const store = await startStore();
     authority.changes = 'fails';
     authority.active = [project(9, 29, { name: 'New' }), apollo];
-    await store.resume();
+    await show(store);
     await flush();
     expect(store.getState().projects.items.map(row => row.name)).toEqual(['New', 'Apollo']);
     // No notification: without a check, nothing says what moved.

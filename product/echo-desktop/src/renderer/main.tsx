@@ -22,11 +22,12 @@ import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
-  closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, conceal, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
-  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, projectSettingsModal, readUpdate, refreshStatus, resume, retryStart,
-  sheetShown, shownItem, signinPhase, systemWoke, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore,
-  WARNINGS, windowHidden, windowShown, windowTakesDrop, windowVisible, type State,
+  closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
+  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, projectSettingsModal, readUpdate, refreshStatus, retryStart,
+  sheetShown, shownItem, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore,
+  WARNINGS, windowState, windowTakesDrop, type State,
 } from './store.js';
+import { woke } from './freshness.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
 
@@ -114,16 +115,9 @@ function App() {
     void readUpdate();
     const stops = [
       on('capture.open', () => { if (getState().status?.signed_in) openCapture(); }),
-      on('lifecycle.conceal', conceal),
-      // Coming back and the window coming forward read what shows again, covered or not; only the caret waits for the cover to go.
-      on('lifecycle.resume', () => { void resume(); }),
-      on('window.shown', () => {
-        void windowShown();
-        if (!getState().concealed) focusBar();
-      }),
-      on('window.hidden', windowHidden),
-      on('window.visible', windowVisible),
-      on('system.woke', systemWoke),
+      // Covered while another app is in front; back on screen and in front, what shows is read again, and the caret waits in the bar.
+      on('window.state', next => { if (windowState(next)) focusBar(); }),
+      on('system.woke', woke),
       on('signin.phase', payload => signinPhase(payload.browser_opened)),
       on('host.restarted', () => { void refreshStatus(); }),
       on('host.failed', hostFailed),

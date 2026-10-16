@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
+import { cover, show, uncover } from './harness.js';
 import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -415,12 +416,12 @@ describe('Home rows', () => {
 describe('Home decisions and impact checks', () => {
   it('covers meeting rows and a private decision when another app is in front', async () => {
     const store = await start();
-    store.conceal();
+    cover(store);
     expect(store.pageCovered()).toBe(true);
-    store.resume();
+    uncover(store);
     await flush();
     await store.openDecision(approval);
-    store.conceal();
+    cover(store);
     expect(store.pageCovered()).toBe(true);
   });
 
@@ -466,11 +467,11 @@ describe('Home decisions and impact checks', () => {
     review = { ...review, status: 'approved', decided_on: 'desktop' };
     run = impactRun('running');
     const store = await start();
-    store.conceal();
+    cover(store);
     const requests = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(rpc.mock.calls).toHaveLength(requests);
-    store.resume();
+    uncover(store);
     await flush();
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
@@ -483,10 +484,10 @@ describe('Home decisions and impact checks', () => {
     run = impactRun('running');
     const store = await start();
     await store.openDecision(approval, run);
-    store.conceal();
+    cover(store);
     await vi.advanceTimersByTimeAsync(5_000);
     run = impactRun('done');
-    store.resume();
+    uncover(store);
     await flush();
     expect(store.getState().decision?.run?.state).toBe('done');
     // Its follow-ups, counted by its check for the page's line; its card is never asked for.
@@ -635,11 +636,11 @@ describe('Home decisions and impact checks', () => {
     await store.loadHome();
     expect(store.getState().home?.failure).toMatchObject({ code: 'unavailable' });
     if (owed) expect(store.homeRows()).toHaveLength(0);
-    store.conceal();
+    cover(store);
     await vi.advanceTimersByTimeAsync(60_000);
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
-    store.resume();
+    uncover(store);
     await flush();
     expect(store.getState().home?.failure).toBeUndefined();
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
@@ -650,17 +651,17 @@ describe('Home decisions and impact checks', () => {
     run = impactRun('running');
     const store = await start();
     if (openCard) await store.openDecision(approval, run);
-    store.conceal();
+    cover(store);
     failNextList = true;
-    store.resume();
+    uncover(store);
     await flush();
     expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
     expect(store.getState().home?.failure).toBeUndefined();
     if (openCard) expect(store.getState().decision?.run?.state).toBe('running');
     // A second focus change must not strand the retry after stopping its timer.
-    store.conceal();
+    cover(store);
     failNextList = true;
-    store.resume();
+    uncover(store);
     await flush();
     run = impactRun('done');
     home = { ...emptyHome(), send: [sendRow()] };
@@ -1410,7 +1411,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
     // Home is read again under them: its runs list holds only the newest checks, not this one.
     const lists = requests('list').length;
-    await store.windowShown();
+    await show(store);
     await flush();
     expect(requests('list').length).toBeGreaterThan(lists);
     expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
@@ -1637,7 +1638,7 @@ describe('Rows first, then what each says now', () => {
     await store.openFollowUp('itm_00000001', homeItems(store)[0]!);
     home = { ...emptyHome(), items: [opened('1'), opened('2')] };
     const rows = rowsReads();
-    await store.windowShown();
+    await show(store);
     await flush();
     expect(rowsReads()).toBe(rows + 1);
     expect(live()).toBe(before);
@@ -1903,12 +1904,12 @@ describe('Rows first, then what each says now', () => {
     await flush();
     // A row's page opens over the list while its rows read is on its way; then another app comes in front.
     await store.openFollowUp('itm_00000001', opened('1'));
-    store.conceal();
+    cover(store);
     holdListRows = false;
     answerListRows.shift()!();
     await opening;
     expect(reads()).toEqual(['unsent+open']);
-    store.resume();
+    uncover(store);
     await flush();
     expect(reads()).toEqual(['unsent+open']);
     // Back on the list: ECHO came back meanwhile, so its rows are read again, then what they show is read live.

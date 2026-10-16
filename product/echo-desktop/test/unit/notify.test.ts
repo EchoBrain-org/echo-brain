@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import type { Account, OpenItemView } from '../../src/shared/protocol.js';
 import { ME, MINA, RAFAEL, at, authority, followUp, id, nextCheck, owned, sent, stated, changesHandlers, CLOCK } from './changes-fixture.js';
-import { ACCOUNT, flush, Held, keysetPage, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, cover, flush, Held, hide, keysetPage, ok, project, rpcFor, show, startStore, stubWindow, wake } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -479,12 +479,12 @@ describe('noise (N4)', () => {
   it('notifies of an item whose page is open while the window is hidden or covered: you are not looking at it', async () => {
     const store = await signedIn([followUp(1)]);
     await store.openFollowUp(id(1));
-    store.windowHidden();
+    hide(store);
     authority.items = [stated(followUp(1), 'open', MINA, 40)];
     await nextCheck();
-    await store.windowShown();
+    await show(store);
     await vi.advanceTimersByTimeAsync(2_000);
-    store.conceal();
+    cover(store);
     authority.items = [stated(followUp(1), 'open', MINA, 45)];
     await nextCheck();
     expect(texts()).toEqual(['Mina reopened Action 1', 'Mina reopened Action 1']);
@@ -505,7 +505,7 @@ describe('noise (N4)', () => {
   it('after a wake, what changed while asleep notifies, in one summary', async () => {
     const store = await signedIn([sent(1, MINA)]);
     authority.items = [stated(sent(1, MINA), 'done', MINA, 30), followUp(2)];
-    store.systemWoke();
+    void wake();
     await flush();
     expect(notices()).toEqual([{ text: '2 follow-ups changed', target: { kind: 'items', item_ids: [id(2), id(1)] } }]);
   });
@@ -580,7 +580,7 @@ describe('a notification clicked (N6)', () => {
 
   it('opens the item page over the page on screen, with another app in front, and only once', async () => {
     const store = await told(followUp(1));
-    store.conceal();
+    cover(store);
     store.openNotified({ kind: 'item', item_id: id(1) });
     await flush();
     expect(store.followUpShown()).toMatchObject({ kind: 'item', item_id: id(1), item: { item_id: id(1) } });

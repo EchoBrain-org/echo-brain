@@ -334,16 +334,16 @@ test('the person who sent a follow-up is told when its owner marks it done', asy
   writeFileSync(join(app.home, 'mina-done'), '');
   const counted = ['itm_00000000-0000-4000-8000-000000000031', 'itm_00000000-0000-4000-8000-000000000039'];
   await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'items', item_ids: counted } }]);
-  // Each was read by its id, rows only, once it left the open follow-ups Ari is involved in.
+  // Each left the open follow-ups Ari is involved in, and the read of those closed since settled it: none was read by its id.
   const itemReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'item').map(call => call.body!.item_id);
-  expect(itemReads()).toEqual(counted);
-  // Clicked: a list of exactly those two, each read again by its id, as Ari may see them now.
+  expect(itemReads()).toEqual([]);
+  // Clicked: a list of exactly those two, each read by its id, as Ari may see them now.
   await clickNotice(app, 0);
   const list = app.page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Changed follow-ups' })).toBeVisible();
   await expect(group(list, 'Done').getByTestId('follow-up-row')).toHaveCount(2);
   await expect(list.getByTestId('follow-up-row')).toHaveCount(2);
-  expect(new Set(itemReads().slice(2))).toEqual(new Set(counted));
+  expect(new Set(itemReads())).toEqual(new Set(counted));
 });
 
 test('a reader who cannot open an item sees what it is, never what it says', async () => {
