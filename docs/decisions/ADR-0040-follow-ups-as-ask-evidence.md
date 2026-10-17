@@ -198,8 +198,12 @@ Negative disclosure tests, required by
 - Mine, trigger research and V4 to V6 answers never bind or cite follow-ups;
 - audit rows hold no title, name, phrase or decision text;
 - a streamed `/v6` Ask names a follow-up only by its citation projection,
-  never its owner, status, check, decision or expected phrase, and `/v5`
-  never names one.
+  never its owner, status, check, due date or decision, and `/v5` never
+  names one. The projection's label is the follow-up's title, so when
+  nothing was read live for it in this request (a meeting action, a search
+  across sources, a ticket the asker cannot open or could not be read, or
+  the live-read cap reached) the label is ECHO's `expected` phrase, which the
+  runs API already shows whoever sees the row.
 
 They are in `services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`,
 `person-follow-ups-ask-integration.test.ts` and, for the stream,

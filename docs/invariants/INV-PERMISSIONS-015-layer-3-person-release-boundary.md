@@ -198,7 +198,8 @@ not seen, a known gap of open items and Home v1.
 items to Ask, as follow-ups, on V7 answers, served by the additive
 `POST /v6/person/ask`, which streams them under the ADR-0039 rules above in
 progress V2: a follow-up is named only after the access check before the call
-that reads it, by its citation projection alone. The follow-ups source decides what it releases
+that reads it, by its citation projection alone, whose label is its title (ECHO's
+`expected` phrase when nothing was read live for it). The follow-ups source decides what it releases
 with the same open-items policy and assessment path as the runs API's `items`,
 so the asker gets exactly what that policy shows them, and nothing in Mine, in
 trigger research or in V4 to V6 answers. Its search matches only words ECHO

@@ -1,6 +1,7 @@
 import { once } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import {
   PERSON_ANSWER_PATH_V5, PERSON_ANSWER_PATH_V6, PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
@@ -136,6 +137,26 @@ describe('the V7 Ask streamed on /v6 (ADR-0039, ADR-0040)', () => {
     expect(audits).toHaveLength(2);
     expect(audits[0]).not.toHaveProperty('named_citation_digests');
     expect(audits[1]).toMatchObject({ outcome: 'answered', named_citation_digests: [canonicalSha256(followUp.citation)] });
+  });
+
+  it('names a follow-up nothing was read live for by its title, the expected phrase ECHO holds, and still never its owner, decision or check', async () => {
+    // Mina's Jira read fails, so the follow-up's title is the ECHO-held expected phrase, as its citation label is.
+    const f = await sentFixture({ openFails: { ticket: new AuthorityOperationError('unavailable', 'Jira is down') } });
+    f.check(f.ticket.item_id, 'still_open');
+    const planner = myOpenTasks();
+    const base = await origin(f, planner.model);
+    const json = validatePersonAnswerResponseV7(await (await ask(base, { progress: null })).json());
+    planner.reset();
+    expect(json.citations).toEqual([expect.objectContaining({ kind: 'follow_up', label: 'launch next week', ref: `follow_up:${f.ticket.item_id}` })]);
+    const raw = await (await ask(base)).text();
+    const events = decode(raw);
+    expect(events.filter(event => event.type === 'read')).toEqual([{ type: 'read', items: json.citations }]);
+    const progress = raw.slice(0, raw.lastIndexOf('data: '));
+    expect(progress).toContain('launch next week');
+    // The citation projection alone: no owner, status, check, due date, decision or tool words.
+    for (const secret of ['Mina Patel', 'Pilot planning', '2026-10-30', 'still_open', 'checked_at', '"status"', '"owner"', f.outsideText, 'PLANNER-CANARY']) {
+      expect(progress).not.toContain(secret);
+    }
   });
 
   it('streams /v6 only for its own header value, and leaves /v5 streaming V1, which never names a follow-up', async () => {
