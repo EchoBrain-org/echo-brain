@@ -347,6 +347,22 @@ describe("research loop: starting evidence", () => {
     expect(h.generate).not.toHaveBeenCalled();
   });
 
+  it("binds the receipts of starting reads the desk released when the caller cancels a later one", async () => {
+    const stop = new AbortController();
+    const openCitation = vi.fn(async (input: EvidenceDeskOpenCitationInputV2) => {
+      // The third read hangs until the caller cancels.
+      if (keyOf(input) === "47") return new Promise<EvidenceDeskResultV2>(() => undefined);
+      return result([items.find(item => (item.citation as { readonly ticket_id: string }).ticket_id === keyOf(input))!]);
+    });
+    const h = harness([], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const run = h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), { planner: false }, "report"), signal: stop.signal });
+    await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(3));
+    stop.abort();
+    await expect(run).rejects.toThrow();
+    const released = items.slice(0, 2).flatMap(item => [item.receipt_sha256, canonicalSha256({ desk: [item.id] })]);
+    expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", outcome: "cancelled", receipt_digests: released })]);
+  });
+
   it("fails with the first failure in brief order, as reading one at a time would", async () => {
     const openCitation = vi.fn(async (input: EvidenceDeskOpenCitationInputV2) => {
       if (keyOf(input) === "48") { await new Promise(resolve => setTimeout(resolve, 5)); throw new AuthorityOperationError("not_found", "Evidence item is not available"); }

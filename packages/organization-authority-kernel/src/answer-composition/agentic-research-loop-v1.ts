@@ -799,6 +799,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const stopReads = brief.starting.map(() => new AbortController());
     let reading = 0;
     const waiting: (() => void)[] = [];
+    /** What each starting read released, by brief index, kept the moment the desk returns it. */
+    const released: (EvidenceDeskResultV2 | undefined)[] = [];
     const settled = await Promise.allSettled(brief.starting.map(async ({ citation, if_unreadable: ifUnreadable }, index): Promise<StartingRead> => {
       const signal = AbortSignal.any([activeSignal, stopReads[index]!.signal]);
       if (reading >= STARTING_READS_AT_ONCE) await new Promise<void>(resolve => { waiting.push(resolve); });
@@ -809,6 +811,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
           return raceAbort(signal, desk.openCitation({ citation, signal }));
         }, releasedView);
+        released[index] = opened;
         const readable = opened.items.filter(item => item.text !== undefined);
         const anchor = readable.find(item => citationIdentity(item.citation) === citationIdentity(citation)) ?? readable[0];
         // Fail closed unless the brief asked to report it: research never runs without evidence its brief names.
@@ -825,7 +828,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       }
     }));
     const failed = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
-    if (failed !== undefined) throw failed.reason;
+    if (failed !== undefined) {
+      // The audit of a cancelled or timed-out request still binds everything the desk released, in brief order, including
+      // what a read that failed closed returned.
+      for (const opened of released) if (opened !== undefined) observe(opened);
+      throw failed.reason;
+    }
     // Each starting item's id, in brief order; null when it could not be read.
     const startingIds: (string | null)[] = [];
     for (const [index, outcome] of settled.entries()) {
