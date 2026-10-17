@@ -141,7 +141,8 @@ function keyOf(word: string): string | undefined {
 /**
  * A search's words, as the desk matches stored passages: whole Unicode terms,
  * lower case, without function words unless written as an acronym. A ticket
- * key stays one key, matched only against a ticket item's own key.
+ * key stays one key, matched against a ticket item's own key and against the
+ * same key-shaped word where ECHO's text holds it.
  */
 function queryOf(query: string): { readonly terms: readonly string[]; readonly keys: readonly string[] } {
   const keys = new Set<string>();
@@ -155,6 +156,10 @@ function queryOf(query: string): { readonly terms: readonly string[]; readonly k
     }
   }
   return { terms: [...terms], keys: [...keys] };
+}
+/** Words of ECHO-held text shaped like a ticket key, such as the build name "EVT-2", as written: a query's key matches them too. */
+function keysOf(values: readonly (string | null | undefined)[]): ReadonlySet<string> {
+  return new Set(values.flatMap(value => (value ?? '').normalize('NFC').split(/\s+/u).flatMap(word => keyOf(word) ?? [])));
 }
 /** A name as one compares it with another: NFC, lower case, runs of space as one. */
 function spelled(name: string): string {
@@ -342,11 +347,14 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const context = visible(input.signal);
       const decisionPart = openItemDecisionPartsV1(sources, context);
       // Only ECHO-held text the policy shows the asker: the decision's title and first line where the decision is shown, the
-      // expected phrase, the owner's name; and a ticket's own key. Never a word read from a tool.
+      // expected phrase, the owner's name, each with its key-shaped words as written; and a ticket's own key. Never a word read from a tool.
       const candidates = context.assessed.flatMap(entry => {
         const decision = decisionPart(entry);
-        const words = wordsOf([decision?.title, decision?.first_line, entry.row.expected, openItemNameV1(context.people, entry.row.owner_membership_id)]);
-        const matched = terms.filter(term => words.has(term)).length;
+        const held = [decision?.title, decision?.first_line, entry.row.expected, openItemNameV1(context.people, entry.row.owner_membership_id)];
+        const words = wordsOf(held);
+        const written = keysOf(held);
+        // A key-shaped word ECHO holds as written ("EVT-2") is one of its words; the key's parts alone are not.
+        const matched = terms.filter(term => words.has(term)).length + keys.filter(key => written.has(key)).length;
         const key = ticketKeyOf(entry.row);
         const keyed = key !== undefined && keys.includes(key);
         // Ranked by ECHO's words alone: a key, which the asker may not be able to open, never moves or cuts a hit.

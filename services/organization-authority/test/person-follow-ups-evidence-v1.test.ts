@@ -54,9 +54,9 @@ const search = (desk: EvidenceDeskPortV2, query: string, extra: Record<string, u
 const list = (desk: EvidenceDeskPortV2, extra: Record<string, unknown> = {}) => desk.list({ source: 'follow_ups', limit: 50, ...extra });
 const titles = (result: EvidenceDeskResultV2) => result.items.map(item => item.label).sort();
 /** Rows straight into the store, for the fixture's one decision: every decision reader sees them, nobody else does. */
-function insertRows(f: OpenItemsFixtureV1, count: number, expected = 'launch next week') {
+function insertRows(f: OpenItemsFixtureV1, count: number, expected = 'launch next week', from = 0) {
   const run = f.runs.read(f.person, f.runId)!;
-  f.db.transaction(() => f.items.insertForRun(f.db, run, Array.from({ length: count }, (_, index) => ({
+  f.db.transaction(() => f.items.insertForRun(f.db, run, Array.from({ length: count }, (_, offset) => from + offset).map(index => ({
     item_key: canonicalSha256(`extra ${index}`), relation: 'conflicts' as const, expected, owner_membership_id: f.membership('ari'), owner_match: 'approver' as const,
     pointer: { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: String(20_000 + index), permalink: `https://echo-fixture.atlassian.net/browse/ECHO-${100 + index}`, text_sha256: canonicalSha256(`extra text ${index}`) },
   }))))();
@@ -139,6 +139,17 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
     const down = await sentFixture({ openFails: { ticket: new AuthorityOperationError('unavailable', 'Jira is down') } });
     expect((await search(askDesk(down, 'mina').desk, 'ECHO-12')).items).toEqual([]);
     expect((await search(askDesk(down, 'mina').desk, 'launch')).items[0]).toMatchObject({ label: 'launch next week' });
+  });
+
+  it('matches a word shaped like a ticket key where ECHO holds it as written, such as a build name', async () => {
+    const f = await sentFixture();
+    insertRows(f, 1, 'Ship the fan curve in the (EVT-2) build');
+    insertRows(f, 1, 'Review the EVT build 3', 1);
+    // Rafael opens no ticket, so only ECHO's own words can find these.
+    const { desk } = askDesk(f, 'rafael');
+    for (const query of ['EVT-2', 'evt-2', '"EVT-2"']) expect([query, titles(await search(desk, query))]).toEqual([query, ['Ship the fan curve in the (EVT-2) build']]);
+    // The key's parts are not the key, and another build is not this one.
+    for (const query of ['EVT-3', 'EVT-23']) expect((await search(desk, query)).items).toEqual([]);
   });
 
   it('never ranks a hit by a ticket key the asker could not open', async () => {
