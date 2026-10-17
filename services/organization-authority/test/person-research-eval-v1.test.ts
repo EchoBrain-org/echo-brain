@@ -197,15 +197,15 @@ describe('staging research evaluation runs', () => {
     expect(h.generate).not.toHaveBeenCalled();
   });
 
-  it('runs a Sweep on its own background budget, listing a cited item it can no longer read and researching on', async () => {
+  it('runs a Sweep on its own background budget, listing a cited item it can no longer read without asking any model', async () => {
     const h = harness();
     const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'sweep', input: { findings: [{ finding: 'Two decimals shipped', expected: 'Record updated', citations: [record] }] } } });
     const result = await h.settled('token-a', run.run_id);
     expect(result).toMatchObject({ status: 'completed', research: { trigger: 'sweep', unreadable_starting: [record], budget: { deadline_ms: 300_000 } } });
     // The finding whose item it could not read is reported, and no model is asked about it.
     expect(result.rendered).toEqual({ findings: [{ finding_index: 0, verdict: 'unreadable', line: 'ECHO could not read this item.', citation_indexes: [] }], status: 'assessed', citations: [] });
-    expect(h.generate).toHaveBeenCalled();
-    expect(h.generate.mock.calls.filter(([input]) => input.system_prompt.startsWith('You recheck open items'))).toEqual([]);
+    // A sweep runs no planner, and the judge is never asked about an item it could not read.
+    expect(h.generate).not.toHaveBeenCalled();
     expect(h.audits).toEqual([expect.objectContaining({ trigger: 'sweep', budget: 'background', outcome: 'partial' })]);
   });
 

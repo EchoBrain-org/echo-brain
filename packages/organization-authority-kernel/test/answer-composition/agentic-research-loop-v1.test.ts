@@ -1,7 +1,9 @@
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
-import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
+import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
+import type { PersonSweepResultV1 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskOpenCitationInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { need, part, record, researchHarness as harness, result, step } from "./fixtures/agentic-scenarios.js";
@@ -246,6 +248,58 @@ describe("research loop: starting evidence", () => {
     // The first item fails after the second, and its brief asked to fail on it.
     await expect(h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)} affect.`, items.slice(0, 2).map(item => item.citation)) }))
       .rejects.toMatchObject({ code: "not_found" });
+    expect(h.generate).not.toHaveBeenCalled();
+  });
+});
+
+describe("research loop: no planner (sweeps)", () => {
+  const therm = ticket("THERM-48", "THERM-48: firmware now formats two decimals.");
+  const gone = ticket("THERM-49");
+  const openCitation = async (input: EvidenceDeskOpenCitationInputV2) => {
+    if ((input.citation as { readonly ticket_id: string }).ticket_id === "49") throw new AuthorityOperationError("not_found", "Evidence item is not available");
+    return result([therm]);
+  };
+
+  it("reads the starting evidence and stops as finished, with no planner call; what it read in full counts as read", async () => {
+    const h = harness([], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, [therm.citation, gone.citation], { planner: false }, "report") });
+    expect(h.generate).not.toHaveBeenCalled();
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+    expect(view).toMatchObject({ goal: { kind: "task", task: "Recheck E1 and an item that could not be read." }, plan: [], rounds: [], unreadable_starting: [gone.citation] });
+    expect(view.items).toEqual([expect.objectContaining({ id: "E1", text: therm.text, read_in_full: true, opened: true, preloaded: true, cited_by_plan: false })]);
+    expect(view.cost).toMatchObject({ rounds: 0, model_calls: 0, repairs: 0, fallbacks: 0 });
+    expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", rounds: 0, model_calls: 0 })]);
+  });
+
+  it("lets the sweep's one judge call cite the starting items it read", async () => {
+    const sweep = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "sweep")!;
+    const event = sweep.parseEvent({ findings: [
+      { finding: "Firmware shows one decimal", expected: "two decimals", citations: [therm.citation] },
+      { finding: "Test case expects one decimal", expected: "two decimals", citations: [gone.citation] },
+    ] });
+    const h = harness([{ findings: [{ index: 0, verdict: "landed", line: "THERM-48 now formats two decimals.", cites: ["E1"] }] }], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const output = await h.research.renderWithResearch({ trigger: sweep.name, brief: sweep.brief(event), renderer: sweep.renderer!, trigger_input: event });
+    // One model call, and it is the judge's.
+    expect(h.inputs.map(input => input.system_prompt.slice(0, 22))).toEqual(["You recheck open items"]);
+    expect(JSON.parse(h.inputs[0]!.user_prompt)).toMatchObject({ findings: [{ index: 0, about: ["E1"] }], items: [expect.objectContaining({ id: "E1", text: therm.text })] });
+    expect(output.rendered as PersonSweepResultV1).toMatchObject({
+      findings: [
+        { finding_index: 0, verdict: "landed", line: "THERM-48 now formats two decimals.", citation_indexes: [0] },
+        { finding_index: 1, verdict: "unreadable", citation_indexes: [] },
+      ],
+      citations: [expect.objectContaining({ citation: therm.citation })],
+    });
+    expect(output.research).toMatchObject({ trigger: "sweep", stop: { reason: "finished", completed: true }, rounds: [] });
+    expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", outcome: "partial", rounds: 0, model_calls: 1, citation_count: 1 })]);
+  });
+
+  it("refuses a brief with no planner and nothing to read before any read", async () => {
+    const h = harness([], { openCitation: vi.fn(async () => result([therm])) });
+    await expect(h.research.research({ trigger: "sweep", brief: brief("Recheck.", [], { planner: false }) })).rejects.toThrow("research goal is invalid");
+    await expect(h.research.research({ trigger: "ask", brief: { goal: { kind: "question", question: "What changed?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: true, planner: false } } }))
+      .rejects.toThrow("question is invalid");
+    await expect(h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], { planner: "no" as never }) })).rejects.toThrow("research goal is invalid");
+    expect(h.port.openCitation).not.toHaveBeenCalled();
     expect(h.generate).not.toHaveBeenCalled();
   });
 });

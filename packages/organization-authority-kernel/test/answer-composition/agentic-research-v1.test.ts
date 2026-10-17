@@ -369,9 +369,10 @@ describe("task briefs with a renderer", () => {
       let checks = 0;
       let entered!: () => void;
       const started = new Promise<void>(resolve => { entered = resolve; });
-      // Research finishes at once; the renderer's call never replies.
+      // Research finishes at once (a sweep runs no planner); the renderer's call never replies.
+      const plannerCalls = trigger === "sweep" ? 0 : 1;
       const h = harness((_input, index) => {
-        if (index === 0) return step([part("Part", [need("affected tickets", "not_found")])], [{ tool: "finish", args: {} }]);
+        if (index < plannerCalls) return step([part("Part", [need("affected tickets", "not_found")])], [{ tool: "finish", args: {} }]);
         entered(); return new Promise<never>(() => undefined);
       }, { openCitation: async () => result([decision]), revalidate: async () => ({ checked_at: `2026-10-06T00:00:0${checks += 1}.000Z` }) });
       const defined = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === trigger)!;
@@ -383,9 +384,9 @@ describe("task briefs with a renderer", () => {
       if (outcome === "timed_out") await vi.advanceTimersByTimeAsync(AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1.deadline_ms); else controller.abort();
       await rejected;
       // The witness binds the check before the renderer's call; no release check follows.
-      expect(checks).toBe(2);
+      expect(checks).toBe(plannerCalls + 1);
       expect(h.audit).toEqual([expect.objectContaining({
-        trigger, budget: "background", outcome, model_calls: 2, checked_at: "2026-10-06T00:00:02.000Z", prompt_sha256: null, answer_sha256: null, response_sha256: null,
+        trigger, budget: "background", outcome, model_calls: plannerCalls + 1, checked_at: `2026-10-06T00:00:0${plannerCalls + 1}.000Z`, prompt_sha256: null, answer_sha256: null, response_sha256: null,
       })]);
     } finally { vi.useRealTimers(); }
   });

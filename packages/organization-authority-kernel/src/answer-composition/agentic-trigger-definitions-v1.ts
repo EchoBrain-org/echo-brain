@@ -120,9 +120,12 @@ const approvedRecord = define<ApprovedRecordEventV1>({
   }),
 });
 
-/** Sweep: research rechecks earlier findings against current evidence. */
+/**
+ * Sweep: earlier findings rechecked against their items as they read now. No planner runs: research re-reads each cited
+ * item in full and looks for nothing newer, and the renderer's one judge call decides each verdict from those items.
+ */
 const SWEEP_TASK = [
-  "Recheck the earlier findings below. Each says what was expected to change and lists the items cited then, already re-read now. Make each finding one part. Re-read the current items and find their current state, and any newer item about the same change.",
+  "Recheck the earlier findings below. Each says what was expected to change and lists the items it cited then, each re-read in full now. Judge each finding from its own current items.",
   "Never treat a finding as resolved without reading the current item. An item that could not be read is not evidence that anything changed.",
   "Findings:",
 ].join("\n");
@@ -157,7 +160,7 @@ const sweep = define<SweepEventV1>({
       `${index + 1}. ${text(finding.finding)} Expected: ${text(finding.expected)}. Cited then: ${finding.citations.map(slot).join(", ")}.`);
     return {
       goal: { kind: "task", task: [SWEEP_TASK, ...lines].join("\n"), data }, starting: starting.map(value => ({ citation: value, if_unreadable: "report" })),
-      options: { small_scope_preload: false },
+      options: { small_scope_preload: false, planner: false },
     };
   },
 });

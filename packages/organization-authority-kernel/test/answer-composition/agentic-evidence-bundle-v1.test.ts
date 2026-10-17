@@ -12,9 +12,11 @@ const owned = record("action-owned", "Jules will publish the dashboard.", { kind
 const unowned = record("action-unowned", "Someone checks the numbers.", { kind: "action", attributes: { due_at: "2026-09-12" } });
 const listedOnly = listed("listed");
 const sweepTrigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "sweep")!;
-const sweep = { trigger: "sweep", brief: sweepTrigger.brief(sweepTrigger.parseEvent({ findings: [
+const sweepBrief = sweepTrigger.brief(sweepTrigger.parseEvent({ findings: [
   { finding: "Dashboard published", expected: "Published by September 11", citations: [anchor.citation, followUp.citation] },
-] })) };
+] }));
+// A sweep's brief with the planner on, so research rounds fill the bundle.
+const sweep = { trigger: "sweep", brief: { ...sweepBrief, options: { ...sweepBrief.options, planner: true } } };
 
 /**
  * A Sweep run with a rejected first reply on a pinned clock (model calls 1 s, desk reads 7 ms) and a model that

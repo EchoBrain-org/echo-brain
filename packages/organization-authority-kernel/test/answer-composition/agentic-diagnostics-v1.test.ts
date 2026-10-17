@@ -14,8 +14,9 @@ describe('shared research diagnostics lifecycle', () => {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const metadata: CoreRuntimeObservationV1[] = [];
     const body = record('display', 'Approved: show two decimals.');
+    // A sweep runs no planner: its judge makes the only model call.
     const h = researchHarness([
-      finish(),
+      ...(trigger === 'sweep' ? [] : [finish()]),
       trigger === 'approved_record' ? { decided: [{ id: 'E1', text: 'Show two decimals.' }], affected: [] }
         : trigger === 'sweep' ? { findings: [{ index: 0, verdict: 'landed', line: 'The decision shows two decimals.', cites: ['E1'] }] }
           : { sentences: [{ text: 'Show two decimals.', evidence: ['E1'] }], not_found: [] },
@@ -37,7 +38,7 @@ describe('shared research diagnostics lifecycle', () => {
       expect(stages.filter(event => event.stage === stage).map(event => event.event)).toEqual(['started', 'succeeded']);
     }
     expect(stages.filter(event => event.stage === 'revalidation' && event.event === 'started').map(event => event.data?.purpose))
-      .toEqual(['model', 'model', 'before_audit', 'after_audit']);
+      .toEqual([...(trigger === 'sweep' ? [] : ['model']), 'model', 'before_audit', 'after_audit']);
     expect(stages.at(-1)).toMatchObject({ stage: 'run', event: 'succeeded', data: { result: output } });
     expect(stages.find(event => event.stage === 'release' && event.event === 'succeeded')).toMatchObject({ data: { result: output } });
     expect(new Set(events.map(event => event.operation_id)).size).toBe(1);
@@ -85,14 +86,13 @@ describe('shared research diagnostics lifecycle', () => {
   it('reports an unreadable sweep anchor without calling it resolved', async () => {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const body = record('hidden');
-    const h = researchHarness([
-      step([part('Current state', [need('current state', 'open')])], [{ tool: 'search', args: { query: 'display precision' } }, { tool: 'search', args: { query: 'two decimals' } }]),
-      finish('not_found', []),
-    ], { openCitation: async () => { throw new AuthorityOperationError('not_found', 'private source exception'); } });
+    // A sweep runs no planner, and its only item is unreadable: no model is called.
+    const h = researchHarness([], { openCitation: async () => { throw new AuthorityOperationError('not_found', 'private source exception'); } });
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'sweep')!;
     const input = definition.parseEvent({ findings: [{ finding: 'Display precision', expected: 'Show two decimals', citations: [body.citation] }] });
     const output = await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: 'sweep', brief: definition.brief(input) }));
     expect(output.unreadable_starting).toEqual([body.citation]);
+    expect(events.filter(event => event.kind === 'model_request')).toEqual([]);
     expect(lifecycle(events)).toContainEqual(expect.objectContaining({ stage: 'starting_read', event: 'failed', error_kind: 'not_found' }));
     expect(lifecycle(events).at(-1)).toMatchObject({ stage: 'run', event: 'succeeded', data: { result: output } });
     expect(JSON.stringify(events)).not.toContain('private source exception');

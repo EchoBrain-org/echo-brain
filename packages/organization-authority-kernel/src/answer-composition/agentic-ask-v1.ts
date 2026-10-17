@@ -119,6 +119,9 @@ function questionText(value: unknown): string | null {
 function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
   const { goal, starting } = brief;
   if (!Array.isArray(starting) || !starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report"))) return null;
+  // With no planner research only reads its starting items: a question, or a task with none, would read nothing.
+  const planner = object(brief.options)?.planner;
+  if (planner !== undefined && (typeof planner !== "boolean" || (!planner && (goal.kind === "question" || starting.length === 0)))) return null;
   if (goal.kind === "question") return questionText(goal.question) === null ? null : brief;
   const data = goal.data === undefined ? [] : goal.data;
   if (goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0 || !Array.isArray(data) || !data.every(value => typeof value === "string")) return null;
@@ -290,7 +293,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
 
       // ---- research: the loop owns its state; the runner reads its progress and its bundle ----
       const loop = createAgenticResearchLoopV1({
-        desk, brief: { ...brief, options: { small_scope_preload: options.small_scope_shortcut === true && brief.options.small_scope_preload } },
+        desk, brief: { ...brief, options: { ...brief.options, small_scope_preload: options.small_scope_shortcut === true && brief.options.small_scope_preload } },
         prompt: researchOnly ? taskPrompt : stepPrompt, prompt_budget: researchOnly ? taskBudget : stepBudget, step_span: "ask_planner",
         context: context(requestDay), scope, catalog,
         now, remaining, signal: activeSignal, assert_live: assertLive,

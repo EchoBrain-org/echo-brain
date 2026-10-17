@@ -87,12 +87,19 @@ describe("Sweep definition", () => {
   it("reports unreadable starting items, reads each cited item once, and lists each finding with its items' ids", () => {
     const value = brief("sweep", { findings });
     expect(value.starting).toEqual([{ citation: ticket, if_unreadable: "report" }, { citation: page, if_unreadable: "report" }, { citation: record, if_unreadable: "report" }]);
-    expect(value).toMatchObject({ budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false } });
+    expect(value).toMatchObject({ budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 });
     const task = filled(value, ["E1", null, "E3"]);
     expect(task).toContain('1. "Firmware formats two decimals" Expected: "SW-22b updated". Cited then: E1.');
     expect(task).toContain('2. "Test case expects \\"two\\" decimals" Expected: "TC-D-06 updated". Cited then: an item that could not be read, E1, E3.');
-    // What the removed Sweep paragraph said.
-    for (const phrase of ["Make each finding one part", "current state, and any newer item about the same change", "Never treat a finding as resolved without reading the current item", "An item that could not be read is not evidence that anything changed"]) expect(task).toContain(phrase);
+    for (const phrase of ["each re-read in full now", "Judge each finding from its own current items", "Never treat a finding as resolved without reading the current item", "An item that could not be read is not evidence that anything changed"]) expect(task).toContain(phrase);
+  });
+
+  it("runs no planner: research re-reads the cited items and looks for nothing newer (decision 3)", () => {
+    const value = brief("sweep", { findings });
+    expect(value.options).toEqual({ small_scope_preload: false, planner: false });
+    // The task no longer says the items were already read and then asks to read them again, or to look for newer items.
+    const task = filled(value, ["E1", null, "E3"]);
+    for (const phrase of ["Make each finding one part", "Re-read the current items", "any newer item"]) expect(task).not.toContain(phrase);
   });
 
   it("never reads a finding's own text as template: a slot written in it reaches the model as typed", () => {
