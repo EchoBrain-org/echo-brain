@@ -115,7 +115,8 @@ type Viewer = OpenItemViewerV1;
 type Assessed = AssessedOpenItemV1;
 type Context = OpenItemsContextV1;
 /** How one item's live read went: the item read, or why there is none. An item no read was tried for has no entry. */
-type LiveRead = { readonly reach: 'opened'; readonly item: DeskItem } | { readonly reach: 'no_access' | 'unavailable' };
+export type OpenItemLiveReadV1 = { readonly reach: 'opened'; readonly item: DeskItem } | { readonly reach: 'no_access' | 'unavailable' };
+type LiveRead = OpenItemLiveReadV1;
 
 const STATES: readonly ImpactItemStateV1[] = ['unsent', 'open', 'done', 'not_relevant'];
 /** `involving` and `orphaned` apply their limit before any access check and have no cursor: a bound far above one person's open items. */
@@ -243,6 +244,8 @@ function currentOf(item: DeskItem): PersonOpenItemCurrentV1 | undefined {
   return Object.freeze({ citation, says_now, ...(assignee === '' ? {} : { assignee }), ...(status === '' ? {} : { status }), ...(due_at === '' ? {} : { due_at }) });
 }
 
+export { currentOf as openItemCurrentV1, meetingAction as openItemIsMeetingActionV1, nameOf as openItemNameV1 };
+
 /** The API's own result check on everything this service answers. */
 function checked<K extends keyof PersonRunsResultsV1>(operation: K, value: unknown): PersonRunsResultsV1[K] {
   try { return validatePersonRunsResultV1(operation, value); } catch { return invalidOutput(); }
@@ -276,6 +279,27 @@ export function observeEventV1<E>(observer: ((event: E) => void) | undefined, ev
 /** Where a read failed and the error's code, nothing else. */
 function reportLiveFailure(sources: Pick<OpenItemSourcesV1, 'on_live_failure'>, reason: OpenItemsLiveFailureV1['reason'], code: string): void {
   observeEventV1(sources.on_live_failure, Object.freeze({ kind: 'open_items_live_read' as const, reason, code }));
+}
+
+const UNAVAILABLE: LiveRead = Object.freeze({ reach: 'unavailable' });
+const NO_ACCESS: LiveRead = Object.freeze({ reach: 'no_access' });
+/**
+ * One item's live read as the viewer, on a desk bound to them: the item itself; `no_access` when the desk refuses the viewer's
+ * access (`unauthorized`, `not_found`, `stale_access_state`) or releases anything but the item; else `unavailable`, its code
+ * reported. A cancelled request is not an outage: it throws. The runs API's opens and Ask's follow-ups (ADR-0040) read this way.
+ */
+export async function openItemLiveReadV1(desk: Pick<Desk, 'openCitation'>, row: Pick<ImpactItemRowV1, 'item_key' | 'pointer'>,
+  input: { readonly signal?: AbortSignal | undefined; readonly report: (code: string) => void }): Promise<OpenItemLiveReadV1> {
+  try {
+    const result = await desk.openCitation!({ citation: row.pointer, ...(input.signal === undefined ? {} : { signal: input.signal }) });
+    const item = result.items.find(entry => impactItemKeyV1(entry.citation) === row.item_key);
+    return item === undefined ? NO_ACCESS : Object.freeze({ reach: 'opened' as const, item });
+  } catch (error) {
+    if (input.signal?.aborted === true) throw error;
+    if (refusedAccess(error)) return NO_ACCESS;
+    input.report(errorCodeV1(error));
+    return UNAVAILABLE;
+  }
 }
 
 /** The person an open-items read is for, as their session authorized them. */
@@ -485,13 +509,11 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     for (const row of rows) if (targets.size < LIVE_OPENS_MAX && !targets.has(row.item_key) && !meetingAction(row)) targets.set(row.item_key, row.pointer);
     if (targets.size === 0) return new Map();
     const withSignal = signal === undefined ? {} : { signal };
-    const unavailable = Object.freeze({ reach: 'unavailable' as const });
-    const noAccess = Object.freeze({ reach: 'no_access' as const });
     /** The whole request could not be read: every item tried is unavailable. A cancelled request is not an outage. */
     const outage = (reason: 'bind' | 'fence', error: unknown): ReadonlyMap<Sha256Digest, LiveRead> => {
       if (signal?.aborted === true) throw error;
       report(reason, errorCodeV1(error));
-      return new Map([...targets.keys()].map(key => [key, unavailable]));
+      return new Map([...targets.keys()].map(key => [key, UNAVAILABLE]));
     };
     let desk: Desk;
     try { desk = await options.bindDesk(options.bind_options, compatible, { access_token: viewer.token, scope: GLOBAL, ...withSignal }, requestContext(viewer)); }
@@ -501,16 +523,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     const openNext = async (): Promise<void> => {
       for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
         const [key, pointer] = next;
-        try {
-          const result = await desk.openCitation!({ citation: pointer, ...withSignal });
-          const item = result.items.find(entry => impactItemKeyV1(entry.citation) === key);
-          reads.set(key, item === undefined ? noAccess : Object.freeze({ reach: 'opened' as const, item }));
-        } catch (error) {
-          if (signal?.aborted === true) throw error;
-          if (refusedAccess(error)) { reads.set(key, noAccess); continue; }
-          report('open', errorCodeV1(error));
-          reads.set(key, unavailable);
-        }
+        reads.set(key, await openItemLiveReadV1(desk, { item_key: key, pointer }, { signal, report: code => report('open', code) }));
       }
     };
     await Promise.all(Array.from({ length: Math.min(LIVE_OPENS_AT_ONCE, queue.length) }, openNext));
