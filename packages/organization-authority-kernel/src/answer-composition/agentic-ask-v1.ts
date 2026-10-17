@@ -345,6 +345,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           ...(bundle.stop.admission === undefined ? {} : { research_admission: bundle.stop.admission }),
           counts: { released_atom_count: bundle.items.length },
         });
+        /** Ticket items among short ids: what a renderer was shown, and what its result cites. */
+        const ticketsAmong = (shorts: readonly string[]) => shorts.filter(short => bundle.items.find(item => item.short === short)?.item.citation.kind === "ticket").length;
         if (researchOnly) {
           // A task brief: its trigger's renderer, which reads only the bundle, or research only.
           // Either result goes through the shared release step.
@@ -354,7 +356,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           const output = render === undefined ? researchOnlyOutput(bundle, researched) : await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'rendered' }, () => render.renderer.render({
             bundle, trigger_input: render.trigger_input, gate, signal: activeSignal, prompt_budget: promptBudget,
             remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
-            on_context: ids => { selectedEvidence = ids; },
+            // Counted as renderer context only once its model call starts (its span), as Ask's writer is.
+            on_context: ids => { selectedEvidence = ids; selectedTicketCount = ticketsAmong(ids); },
           }), value => ({ output_kind: 'rendered', selected_evidence: selectedEvidence, fallback_count: value.fallbacks, outcome: value.outcome, result: value.result }));
           writerFallbacks += output.fallbacks;
           annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
@@ -365,6 +368,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           });
           annotateCoreRuntimeV1({ result: output.outcome, counts: { citation_count: output.cited.length } });
           clearTimeout(deadlineTimer);
+          ticketCitationCount = ticketsAmong(output.cited);
           return Object.freeze({ ...(render === undefined ? {} : { rendered: released }), research: researched, writer_evidence: Object.freeze([]) });
         }
 
@@ -376,7 +380,6 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           response_version: responseVersion, answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
         });
-        const ticketsAmong = (shorts: readonly string[]) => shorts.filter(short => bundle.items.find(item => item.short === short)?.item.citation.kind === "ticket").length;
         let selectedEvidence: readonly string[] = [];
         const rendered = await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'answer' }, () => writer.render({
           bundle, trigger_input: { question: goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,

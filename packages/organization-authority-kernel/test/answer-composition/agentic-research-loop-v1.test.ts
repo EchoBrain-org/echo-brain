@@ -7,6 +7,7 @@ import type { PersonSweepResultV1 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskOpenCitationInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { SEARCH_ONLY_STEP_PROMPT, STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { need, part, record, researchHarness as harness, result, step } from "./fixtures/agentic-scenarios.js";
 import { deferred } from "./fixtures/deferred.js";
 
@@ -356,5 +357,32 @@ describe("research loop: search only (a record in no project)", () => {
     const h = harness([], { openCitation: vi.fn(async () => result([approved])) });
     await expect(h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation], { list: "no" as never }) })).rejects.toThrow("research goal is invalid");
     expect(h.port.openCitation).not.toHaveBeenCalled();
+  });
+});
+
+describe("research core: what a task trigger's renderer was shown and cited", () => {
+  const decision = record("two-decimals", "Approved on Oct 8: show 0.01 °C on the display for MRD-02.");
+  const therm = ticket("THERM-46", "THERM-46: the firmware formats one decimal.");
+
+  it.each(["approved_record", "sweep"] as const)("counts the tickets the %s renderer was shown and cited", async trigger => {
+    const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === trigger)!;
+    const replies = trigger === "approved_record" ? [
+      reads("open", [{ tool: "search", args: { query: "display decimals" } }]),
+      step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
+      { decided: [{ id: "E1", text: "Show two decimals on the display." }], affected: [{ id: "E2", says_now: "The firmware formats one decimal.", relation: "conflicts", date_at_risk: "", milestone: "" }] },
+    ] : [{ findings: [{ index: 0, verdict: "still_open", line: "THERM-46 still formats one decimal.", cites: ["E1"] }] }];
+    const h = harness(replies, {
+      live_sources: [JIRA], ticket_available: true, search: async () => result([therm]),
+      openCitation: async input => result([(input.citation as { readonly kind: string }).kind === "ticket" ? therm : decision]),
+    });
+    const event = trigger === "approved_record" ? definition.parseEvent({ record: decision.citation })
+      : definition.parseEvent({ findings: [{ finding: "Firmware shows one decimal", expected: "two decimals", citations: [therm.citation, decision.citation] }] });
+    const metadata: CoreRuntimeObservationV1[] = [];
+    const output = await observeCoreRuntimeV1("research_run", () => h.research.renderWithResearch({ trigger, brief: definition.brief(event, h.port.scope), renderer: definition.renderer!, trigger_input: event }),
+      { observer: value => { metadata.push(value); } });
+    expect(JSON.stringify(output.rendered)).toContain((therm.citation as { readonly permalink: string }).permalink);
+    expect(metadata.filter(value => value.phase === "research_run" && value.event === "succeeded")).toEqual([
+      expect.objectContaining({ counts: expect.objectContaining({ ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 }) }),
+    ]);
   });
 });
