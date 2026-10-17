@@ -864,12 +864,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
             // never advance research with an invented item reference.
             if (entryOf(id) !== undefined || entryByTitle(id) !== undefined) continue;
             throw new AgenticAskOutputErrorV1(openIds.length === 0
-              ? 'open is unavailable: no items have been discovered. Use search or list first.'
+              ? `open is unavailable: no items have been discovered. Use ${listAvailable ? 'search or list' : 'search'} first.`
               : `open requires a discovered id from your scratchpad, such as ${openIds.slice(0, 12).join(', ')}`);
           }
           if (parsed.actions.every(action => action.tool === 'finish')) {
             const completionPlan = proposedPlan(parsed.parts);
-            const problems = [...askResearchCompletionProblemsV1(completionPlan, researchObservations, citable)];
+            const problems = [...askResearchCompletionProblemsV1(completionPlan, researchObservations, citable, listAvailable)];
             if (completionPlan.some(part => part.needs.some(need => need.status === 'not_found'))) {
               if (entries.size > 0 && [...entries.values()].every(entry => entry.item.text === undefined)) {
                 problems.unshift('discovered items have metadata only; open potentially relevant discovered items before concluding that it is absent');
@@ -878,8 +878,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               const unsearched = [...new Set(unread.filter(state => sourcesById.get(state.source)?.metadata_only_list === true).map(state => state.args.source))];
               if (unread.length > 0) problems.unshift(`listed inventory still has unread pages; repeat list with ${unread.slice(0, 3).map(state => JSON.stringify(state.args)).join(' or ')}${unsearched.length === 0 ? '' : `, or search ${unsearched.join(' and ')} for the fact`}`);
             }
-            if (!finishAvailable) problems.unshift('no source has been read; use search or list first');
-            if (problems.length > 0) throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. Search, list or open more, or correct the need status and evidence.`);
+            if (!finishAvailable) problems.unshift(`no source has been read; use ${listAvailable ? 'search or list' : 'search'} first`);
+            if (problems.length > 0) throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. ${listAvailable ? 'Search, list or open more' : 'Search or open more'}, or correct the need status and evidence.`);
           }
           return parsed;
         }, reason => stepRejections.push(cleanLine(reason, 600)));

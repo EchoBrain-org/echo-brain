@@ -18,11 +18,13 @@ export interface AskResearchNeedV1 {
  * checks that research happened, not semantic relevance: the model still
  * chooses queries/items and the writer checks whether their text answers.
  * A failed call or an unfinished inventory is never evidence of absence.
+ * Without the list tool (a search-only brief) the problems never name list.
  */
 export function askResearchCompletionProblemsV1(
   parts: readonly { readonly needs: readonly AskResearchNeedV1[] }[],
   observations: readonly AskResearchObservationV1[],
   citable: (id: string) => boolean,
+  list = true,
 ): readonly string[] {
   if (parts.length === 0) return ['no parts were written'];
   const problems: string[] = [];
@@ -35,7 +37,7 @@ export function askResearchCompletionProblemsV1(
         const completed = observations.slice(need.observations_before).filter(value => value.complete);
         const searches = new Set(completed.filter(value => value.operation === 'search').map(value => value.fingerprint));
         if (searches.size < 2 && !completed.some(value => value.operation === 'list')) {
-          problems.push(`${label} is not_found after fewer than two completed searches or a completed list`);
+          problems.push(`${label} is not_found after fewer than two completed searches${list ? " or a completed list" : ""}`);
         }
       }
     }
