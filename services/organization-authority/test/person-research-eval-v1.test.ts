@@ -12,7 +12,7 @@ import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-s
 vi.mock('@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1', async importOriginal => {
   const real = await importOriginal<typeof import('@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1')>();
   const ask = real.AGENTIC_TRIGGER_DEFINITIONS_V1.find(definition => definition.name === 'ask')!;
-  const started = { ...ask, name: 'ask_with_start', brief: (event: unknown) => ({ ...ask.brief(event), starting: [{ citation: { kind: 'approved_record' }, if_unreadable: 'fail' as const }] }) };
+  const started = { ...ask, name: 'ask_with_start', brief: (event: unknown, scope: Parameters<typeof ask.brief>[1]) => ({ ...ask.brief(event, scope), starting: [{ citation: { kind: 'approved_record' }, if_unreadable: 'fail' as const }] }) };
   return { ...real, AGENTIC_TRIGGER_DEFINITIONS_V1: Object.freeze([...real.AGENTIC_TRIGGER_DEFINITIONS_V1, started]) };
 });
 
@@ -156,7 +156,7 @@ describe('staging research evaluation runs', () => {
     expect(h.recordProjects.mock.invocationCallOrder[0]).toBeLessThan(h.deskAuthorize.mock.invocationCallOrder[0]!);
     expect(h.deskAuthorize).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'token-a', scope: { kind: 'project', project_id: PROJECT } }));
     expect(h.openDeskCitation).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'token-a', atom_id: record.atom_id, project_id: PROJECT }));
-    expect(JSON.parse(h.generate.mock.calls[0]![0].user_prompt)).toMatchObject({ task: expect.stringMatching(/^A PM just approved record E1\. Find every ticket, PRD section and document in this project /u) });
+    expect(JSON.parse(h.generate.mock.calls[0]![0].user_prompt)).toMatchObject({ task: expect.stringMatching(/^A PM just approved record E1\. Find the tickets, PRD sections and documents in this project /u) });
     expect(h.audits).toEqual([expect.objectContaining({ trigger: 'approved_record', budget: 'background' })]);
   });
 

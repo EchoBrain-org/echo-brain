@@ -344,7 +344,7 @@ describe("task briefs with a renderer", () => {
       model: { generate: async input => { trace.push(`generate:${inputs.length}`); inputs.push(input); return replies[inputs.length - 1]; } },
     });
     const event = definition.parseEvent({ record: decision.citation });
-    const output = await research.renderWithResearch({ trigger: definition.name, brief: definition.brief(event), renderer: definition.renderer!, trigger_input: event });
+    const output = await research.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, port.scope), renderer: definition.renderer!, trigger_input: event });
     const card = output.rendered as PersonImpactCardV1;
     expect(card).toMatchObject({ status: "assessed", decided: [{ citation_index: 0 }], affected: [{ citation_index: 1, relation: "conflicts", owner: "Tobias Lund" }], people: [{ name: "Tobias Lund", items: [1] }] });
     expect(output.research).toMatchObject({ kind: "echo-agentic-research-result-v1", trigger: "approved_record", stop: { reason: "finished" } });
@@ -378,7 +378,7 @@ describe("task briefs with a renderer", () => {
       const defined = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === trigger)!;
       const event = defined.parseEvent(trigger === "approved_record" ? { record: decision.citation }
         : { findings: [{ finding: "The display shows one decimal.", expected: "two decimals", citations: [decision.citation] }] });
-      const pending = h.research.renderWithResearch({ trigger: defined.name, brief: defined.brief(event), renderer: defined.renderer!, trigger_input: event, signal: controller.signal });
+      const pending = h.research.renderWithResearch({ trigger: defined.name, brief: defined.brief(event, h.port.scope), renderer: defined.renderer!, trigger_input: event, signal: controller.signal });
       await started;
       const rejected = expect(pending).rejects.toMatchObject({ name: outcome === "timed_out" ? "AgenticAskDeadlineErrorV1" : "AbortError" });
       if (outcome === "timed_out") await vi.advanceTimersByTimeAsync(AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1.deadline_ms); else controller.abort();

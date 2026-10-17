@@ -148,10 +148,11 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     // The meeting's own actions, read as the approver before any model call (`recordAnchor` has already refused a record they
     // cannot read, which fails the run as no_access).
     const actions = options.records.recordActions({ access_token: token, record_sha256 });
-    const run = await research(scopeFor(options.records, token, record_sha256));
+    const scope = scopeFor(options.records, token, record_sha256);
+    const run = await research(scope);
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
     const event = definition.parseEvent({ record: anchor });
-    const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event), renderer: definition.renderer!, trigger_input: event, signal });
+    const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, scope), renderer: definition.renderer!, trigger_input: event, signal });
     const card = validatePersonImpactCardV1(output.rendered);
     const outsideLabels = output.research.items
       .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);

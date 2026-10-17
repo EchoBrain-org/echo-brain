@@ -7,6 +7,8 @@ import {
   normalizeQuery,
   parseAnswer,
   parseStep,
+  SEARCH_ONLY_STEP_PROMPT,
+  STEP_PROMPT,
   stepSchema,
   stripEvidenceIds,
 } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
@@ -81,6 +83,20 @@ describe("agentic Ask model protocol parity", () => {
     const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
     const tools = (variants.anyOf as Schema[]).map(variant => ((variant.properties as Schema).tool as Schema).enum![0]);
     expect(tools).toEqual(["search", "list"]);
+  });
+
+  it("can withhold list for a search-only run, in the schema and in the prompt", () => {
+    const schema = createStepSchema(["meetings", "tickets"], ["E1"], true, false);
+    const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
+    expect((variants.anyOf as Schema[]).map(variant => ((variant.properties as Schema).tool as Schema).enum![0])).toEqual(["search", "open", "finish"]);
+    // The search-only prompt names no list tool and no inventory rule; the full prompt keeps both. Only rule 1 ("list only
+    // the facts") and rule 4, which says there is no list tool, still say "list".
+    expect(SEARCH_ONLY_STEP_PROMPT.split("\n").filter(line => /\blist\b/u.test(line)).map(line => line.slice(0, 2))).toEqual(["1.", "4."]);
+    expect(SEARCH_ONLY_STEP_PROMPT).not.toContain("inventor");
+    expect(SEARCH_ONLY_STEP_PROMPT).toContain("4. There is no list tool in this run");
+    expect(SEARCH_ONLY_STEP_PROMPT).toContain("\"tool\" is \"search\", \"open\" or \"finish\".");
+    expect(STEP_PROMPT).toContain("list, args {\"source\"");
+    expect(STEP_PROMPT.split("\n").length - SEARCH_ONLY_STEP_PROMPT.split("\n").length).toBe(8);
   });
 
   it("binds each action's argument schema to the selected tool", () => {

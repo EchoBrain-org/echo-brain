@@ -5,6 +5,7 @@ import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { PersonSweepResultV1 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskOpenCitationInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
+import { SEARCH_ONLY_STEP_PROMPT, STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { need, part, record, researchHarness as harness, result, step } from "./fixtures/agentic-scenarios.js";
 import { deferred } from "./fixtures/deferred.js";
@@ -278,7 +279,7 @@ describe("research loop: no planner (sweeps)", () => {
       { finding: "Test case expects one decimal", expected: "two decimals", citations: [gone.citation] },
     ] });
     const h = harness([{ findings: [{ index: 0, verdict: "landed", line: "THERM-48 now formats two decimals.", cites: ["E1"] }] }], { live_sources: [JIRA], ticket_available: true, openCitation });
-    const output = await h.research.renderWithResearch({ trigger: sweep.name, brief: sweep.brief(event), renderer: sweep.renderer!, trigger_input: event });
+    const output = await h.research.renderWithResearch({ trigger: sweep.name, brief: sweep.brief(event, { kind: "global" }), renderer: sweep.renderer!, trigger_input: event });
     // One model call, and it is the judge's.
     expect(h.inputs.map(input => input.system_prompt.slice(0, 22))).toEqual(["You recheck open items"]);
     expect(JSON.parse(h.inputs[0]!.user_prompt)).toMatchObject({ findings: [{ index: 0, about: ["E1"] }], items: [expect.objectContaining({ id: "E1", text: therm.text })] });
@@ -301,5 +302,59 @@ describe("research loop: no planner (sweeps)", () => {
     await expect(h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], { planner: "no" as never }) })).rejects.toThrow("research goal is invalid");
     expect(h.port.openCitation).not.toHaveBeenCalled();
     expect(h.generate).not.toHaveBeenCalled();
+  });
+});
+
+describe("research loop: search only (a record in no project)", () => {
+  const approved = record("canary", "Approved: staging must verify owner approval of a staged meeting.");
+  const tools = (index: number, h: ReturnType<typeof harness>) => (((h.inputs[index]!.schema as { properties: { actions: { items: { anyOf: { properties: { tool: { enum: string[] } } }[] } } } }).properties.actions.items.anyOf).map(variant => variant.properties.tool.enum[0]));
+
+  it("offers no list tool, refuses a proposed list, and finishes with nothing affected after searching", async () => {
+    const list = vi.fn(async () => result([]));
+    const h = harness([
+      reads("open", [{ tool: "list", args: { source: "tickets" } }]),
+      reads("open", [{ tool: "search", args: { query: "staged meeting approval" } }, { tool: "search", args: { query: "canary" } }]),
+      affects("not_found"),
+    ], { scope: { kind: "global" }, live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation], { list: false }) });
+    expect(h.inputs[0]!.system_prompt).toBe(`${SEARCH_ONLY_STEP_PROMPT}\n\nLive sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only search discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.\n\n${TASK_RULE_PROMPT}`);
+    expect(tools(0, h)).toEqual(["search", "open", "finish"]);
+    // The catalog keeps each source's description but drops what only list uses.
+    const catalog = h.prompt(0).source_catalog as readonly Record<string, unknown>[];
+    expect(catalog.map(entry => entry.source)).toEqual(["meetings", "documents", "tickets"]);
+    expect(catalog[2]).toMatchObject({ description: "Live work items.", tool_id: "jira" });
+    expect(catalog[2]).not.toHaveProperty("metadata_only_list");
+    expect(h.prompt(1).validation_error).toContain("list is unavailable in this run; use search and open");
+    expect(list).not.toHaveBeenCalled();
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+    expect(view.coverage.inventories).toEqual([]);
+  });
+
+  it("keeps the full prompt and the list tool when the brief allows list", async () => {
+    const h = harness([affects("not_found"), affects("not_found")], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]) });
+    await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(h.inputs[0]!.system_prompt.startsWith(`${STEP_PROMPT}\n\n`)).toBe(true);
+    expect(tools(0, h)).toEqual(["search", "open", "list", "finish"]);
+    expect(h.prompt(0).source_catalog).toEqual(expect.arrayContaining([expect.objectContaining({ source: "tickets", metadata_only_list: true })]));
+  });
+
+  it("runs the approved record at global scope search-only, from its definition", async () => {
+    const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "approved_record")!;
+    const event = definition.parseEvent({ record: approved.citation });
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "staged meeting approval" } }, { tool: "search", args: { query: "canary" } }]),
+      affects("not_found"),
+      { decided: [{ id: "E1", text: "Staging verifies approval of a staged meeting." }], affected: [] },
+    ], { scope: { kind: "global" }, live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]) });
+    const output = await h.research.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, { kind: "global" }), renderer: definition.renderer!, trigger_input: event });
+    expect(tools(0, h)).toEqual(["search", "open", "finish"]);
+    expect(h.prompt(0).task).not.toContain("in this project");
+    expect(output.research.stop).toEqual({ reason: "finished", completed: true });
+  });
+
+  it("refuses a brief whose list option is not a boolean", async () => {
+    const h = harness([], { openCitation: vi.fn(async () => result([approved])) });
+    await expect(h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation], { list: "no" as never }) })).rejects.toThrow("research goal is invalid");
+    expect(h.port.openCitation).not.toHaveBeenCalled();
   });
 });

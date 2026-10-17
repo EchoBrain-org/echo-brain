@@ -36,6 +36,11 @@ export interface AgenticBriefV1 {
      * read. A sweep checks its items and searches for nothing more. Only a task with starting items can run without one.
      */
     readonly planner?: boolean;
+    /**
+     * False: research has no list tool, only search and open, and is never told of list-only source options. An approved
+     * record in no project reads everything its approver can read: it searches the record's own terms, never whole inventories.
+     */
+    readonly list?: boolean;
   };
 }
 

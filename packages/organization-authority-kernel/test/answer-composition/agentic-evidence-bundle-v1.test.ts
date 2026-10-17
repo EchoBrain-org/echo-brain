@@ -14,7 +14,7 @@ const listedOnly = listed("listed");
 const sweepTrigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "sweep")!;
 const sweepBrief = sweepTrigger.brief(sweepTrigger.parseEvent({ findings: [
   { finding: "Dashboard published", expected: "Published by September 11", citations: [anchor.citation, followUp.citation] },
-] }));
+] }), { kind: "project" });
 // A sweep's brief with the planner on, so research rounds fill the bundle.
 const sweep = { trigger: "sweep", brief: { ...sweepBrief, options: { ...sweepBrief.options, planner: true } } };
 

@@ -78,6 +78,8 @@ const OPEN_NEIGHBOURS = 2;
 const OPEN_BYTES = 24 * 1024;
 const SHORTCUT_ITEMS = 20;
 const MAX_SEEN_ENTRIES = 300;
+/** What a search-only brief's planner is told when it proposes list. */
+const LIST_UNAVAILABLE = "list is unavailable in this run; use search and open";
 
 /** One source research can read: the selector the model uses, the desk kinds behind it, and its list options. */
 export interface AgenticResearchSourceV1 {
@@ -314,7 +316,11 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
 export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1Options): AgenticResearchLoopV1 {
   const { desk, brief, context, scope, now, remaining, assert_live: assertLive, signal: activeSignal } = options;
   const { prompt: researchPrompt, prompt_budget: researchBudget } = options;
-  const { entries: sourceCatalog, by_id: sourcesById, resolve: readSource } = options.catalog;
+  const { by_id: sourcesById, resolve: readSource } = options.catalog;
+  /** A search-only brief has no list tool, and its catalog shows nothing only list uses. */
+  const listAvailable = brief.options.list !== false;
+  const sourceCatalog: readonly AgenticResearchCatalogEntryV1[] = listAvailable ? options.catalog.entries
+    : Object.freeze(options.catalog.entries.map(({ metadata_only_list: _metadata, requires_channel: _channel, default_since_days: _since, ...entry }) => Object.freeze(entry)));
   const budget = brief.budget;
   /** Research steps: the audit records them as `step` calls, in the span the runner names. */
   const stepCall: AgenticModelCallV1 = Object.freeze({ role: "step", span: options.step_span });
@@ -453,6 +459,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     return admit === undefined ? apply() : admit(apply);
   };
   const list = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
+    if (!listAvailable) return { tool: "list", args, error: LIST_UNAVAILABLE };
     const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource);
     if ("error" in normalized) return { tool: "list", args, error: normalized.error };
     const { notes, status, owner, ...request } = normalized;
@@ -823,13 +830,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const user = { ...header, opened: pad.opened, seen: pad.seen };
       const openIds = [...entries.values()].map(entry => entry.short);
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
-      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable);
+      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable);
       let step: Step;
       try {
         step = await gate.withRepair(stepCall, researchPrompt, user, stepSchema, stepTimeout, value => {
           const parsed = parseStep(value);
           if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
           for (const action of parsed.actions) {
+            if (action.tool === 'list' && !listAvailable) throw new AgenticAskOutputErrorV1(LIST_UNAVAILABLE);
             if ((action.tool === 'search' || action.tool === 'list') && action.args.source !== undefined) {
               const source = readSource(action.args.source);
               if (!sourceCatalog.some(value => readSource(value.source) === source)) throw new AgenticAskOutputErrorV1(`source is unavailable; choose from ${sourceCatalog.map(value => value.source).join(', ')}`);

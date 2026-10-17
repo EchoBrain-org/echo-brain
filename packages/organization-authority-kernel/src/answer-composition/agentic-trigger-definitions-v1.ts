@@ -6,6 +6,7 @@ import {
   validatePersonTicketCitationV1,
 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "../domain/errors.js";
+import type { EvidenceDeskPortV2 } from "../shared/evidence-desk-v2.js";
 import { agenticDataSlotV1, agenticStartingSlotV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import type { AgenticRendererV1 } from "./agentic-renderer-v1.js";
 import { AGENTIC_RESEARCH_BUDGETS_V1 } from "./agentic-research-v1.js";
@@ -24,12 +25,12 @@ export interface AgenticTriggerDefinitionV1<Event> {
   /** The trigger's event from its input, or an `invalid_request` error. */
   parseEvent(input: unknown): Event;
   /**
-   * The event's brief. A task names its starting items by slot
-   * (`agenticStartingSlotV1`) because their ids exist only once the loop has
-   * read them, and places the event's own text by data slot
-   * (`agenticDataSlotV1`); the loop fills both in one pass.
+   * The event's brief, for the scope the run reads (its desk's). A task names
+   * its starting items by slot (`agenticStartingSlotV1`) because their ids
+   * exist only once the loop has read them, and places the event's own text
+   * by data slot (`agenticDataSlotV1`); the loop fills both in one pass.
    */
-  brief(event: Event): AgenticBriefV1;
+  brief(event: Event, scope: AgenticTriggerScopeV1): AgenticBriefV1;
   /** The budget profile its brief runs on; `brief` always carries this profile's limits. */
   readonly budget: keyof typeof AGENTIC_RESEARCH_BUDGETS_V1;
   /**
@@ -47,20 +48,24 @@ export interface AgenticTriggerDefinitionV1<Event> {
   /**
    * Where the run reads. `requested`: the scope the request names.
    * `record_project`: the project of its first starting item, an approved
-   * record, or everything the actor can read when the record is in none.
+   * record, or everything the actor can read when the record is in none. A
+   * record in no project is researched by search alone: its brief has no list.
    */
   readonly scope: "requested" | "record_project";
   /** Who may receive the result: in this round only the person the run acted as. */
   readonly recipients: "actor_only";
 }
 
+/** Where a run reads, as far as its brief may depend on it: the kind of scope the run's desk binds. */
+export interface AgenticTriggerScopeV1 { readonly kind: EvidenceDeskPortV2["scope"]["kind"] }
+
 /** As many findings as a sweep result holds. */
 const MAX_FINDINGS = PERSON_SWEEP_RESULT_LIMITS_V1.findings;
 const MAX_FINDING_CITATIONS = 12;
 
 /** Freezes a definition and gives its brief the budget its label names, so the two can never disagree. */
-function define<Event>(definition: Omit<AgenticTriggerDefinitionV1<Event>, "brief"> & { brief(event: Event): Omit<AgenticBriefV1, "budget"> }): AgenticTriggerDefinitionV1<Event> {
-  return Object.freeze({ ...definition, brief: (event: Event): AgenticBriefV1 => ({ ...definition.brief(event), budget: AGENTIC_RESEARCH_BUDGETS_V1[definition.budget] }) });
+function define<Event>(definition: Omit<AgenticTriggerDefinitionV1<Event>, "brief"> & { brief(event: Event, scope: AgenticTriggerScopeV1): Omit<AgenticBriefV1, "budget"> }): AgenticTriggerDefinitionV1<Event> {
+  return Object.freeze({ ...definition, brief: (event: Event, scope: AgenticTriggerScopeV1): AgenticBriefV1 => ({ ...definition.brief(event, scope), budget: AGENTIC_RESEARCH_BUDGETS_V1[definition.budget] }) });
 }
 
 function invalid(message: string): never {
@@ -104,8 +109,19 @@ const ask = define<AskEventV1>({
   brief: (event: AskEventV1) => ({ goal: { kind: "question", question: event.question }, starting: [], options: { small_scope_preload: true } }),
 });
 
-/** The approved record (spec section 5; replaces Check): research starts from a record a person just approved. */
-const APPROVED_RECORD_TASK = `A PM just approved record ${agenticStartingSlotV1(1)}. Find every ticket, PRD section and document in this project that it confirms, conflicts with or changes. For each, record what it says now, who owns it, and any date it affects.`;
+/**
+ * The approved record (spec section 5; replaces Check): research starts from a record a person just approved and finds
+ * what its decisions bear on. The impact card adds owners and dates from each item's own details, so research never looks
+ * for them. Only a run in the record's one project reads "this project".
+ */
+function approvedRecordTask(project: boolean): string {
+  return [
+    `A PM just approved record ${agenticStartingSlotV1(1)}.`,
+    `Find the tickets, PRD sections and documents${project ? " in this project" : ""} whose current text its decisions confirm, contradict or make out of date.`,
+    "Search the record's distinctive terms and identifiers, then open the candidates and note what each says now.",
+    "Finishing with nothing affected is a valid result after those searches.",
+  ].join(" ");
+}
 
 const approvedRecord = define<ApprovedRecordEventV1>({
   name: "approved_record", budget: "background", acts_as: "approver", scope: "record_project", recipients: "actor_only", renderer: IMPACT_CARD_RENDERER_V1,
@@ -114,10 +130,15 @@ const approvedRecord = define<ApprovedRecordEventV1>({
     if ((record as { readonly kind: unknown }).kind !== "approved_record") invalid("An approved-record run starts from an approved record citation");
     return Object.freeze({ record });
   },
-  // The record is the whole point: research never runs without it.
-  brief: (event: ApprovedRecordEventV1) => ({
-    goal: { kind: "task", task: APPROVED_RECORD_TASK }, starting: [{ citation: event.record, if_unreadable: "fail" }], options: { small_scope_preload: false },
-  }),
+  // The record is the whole point: research never runs without it. A record in no single project reads everything the
+  // approver can read, so research searches the record's own terms and opens hits; it never lists whole inventories.
+  brief: (event: ApprovedRecordEventV1, scope: AgenticTriggerScopeV1) => {
+    const project = scope.kind === "project";
+    return {
+      goal: { kind: "task", task: approvedRecordTask(project) }, starting: [{ citation: event.record, if_unreadable: "fail" }],
+      options: { small_scope_preload: false, ...(project ? {} : { list: false }) },
+    };
+  },
 });
 
 /**

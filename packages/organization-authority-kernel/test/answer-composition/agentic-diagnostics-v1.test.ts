@@ -28,8 +28,8 @@ describe('shared research diagnostics lifecycle', () => {
       ? { record: body.citation } : { findings: [{ finding: 'Display precision', expected: 'Show two decimals', citations: [body.citation] }] });
     const output = await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('research_run', async () => {
       if (trigger === 'ask') return (await h.research.answerWithResearch({ question: 'What is the display decision?' })).response;
-      if (definition.renderer !== undefined) return (await h.research.renderWithResearch({ trigger, brief: definition.brief(input), renderer: definition.renderer, trigger_input: input })).rendered;
-      return h.research.research({ trigger, brief: definition.brief(input) });
+      if (definition.renderer !== undefined) return (await h.research.renderWithResearch({ trigger, brief: definition.brief(input, h.port.scope), renderer: definition.renderer, trigger_input: input })).rendered;
+      return h.research.research({ trigger, brief: definition.brief(input, h.port.scope) });
     }, { observer: event => { metadata.push(event); } }));
 
     const stages = lifecycle(events);
@@ -90,7 +90,7 @@ describe('shared research diagnostics lifecycle', () => {
     const h = researchHarness([], { openCitation: async () => { throw new AuthorityOperationError('not_found', 'private source exception'); } });
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'sweep')!;
     const input = definition.parseEvent({ findings: [{ finding: 'Display precision', expected: 'Show two decimals', citations: [body.citation] }] });
-    const output = await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: 'sweep', brief: definition.brief(input) }));
+    const output = await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: 'sweep', brief: definition.brief(input, h.port.scope) }));
     expect(output.unreadable_starting).toEqual([body.citation]);
     expect(events.filter(event => event.kind === 'model_request')).toEqual([]);
     expect(lifecycle(events)).toContainEqual(expect.objectContaining({ stage: 'starting_read', event: 'failed', error_kind: 'not_found' }));

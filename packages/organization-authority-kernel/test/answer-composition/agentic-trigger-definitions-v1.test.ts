@@ -17,7 +17,8 @@ const definition = (name: string) => {
   if (found === undefined) throw new Error(`no ${name} definition`);
   return found;
 };
-const brief = (name: string, input: unknown) => { const value = definition(name); return value.brief(value.parseEvent(input)); };
+const PROJECT = { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" } as const;
+const brief = (name: string, input: unknown, scope: { readonly kind: "global" | "project" | "mine" } = PROJECT) => { const value = definition(name); return value.brief(value.parseEvent(input), scope); };
 /** A task brief's goal as the model sees it, with its starting ids. */
 const filled = (value: AgenticBriefV1, ids: readonly (string | null)[]) => value.goal.kind === "task" ? fillAgenticTaskV1(value.goal.task, ids, value.goal.data) : "";
 const refused = (name: string, input: unknown) => {
@@ -64,13 +65,21 @@ describe("Ask definition", () => {
 });
 
 describe("Approved record definition", () => {
-  it("starts from the approved record, fails closed, and gives the spec's task with the record's id in its slot", () => {
+  it("starts from the approved record, fails closed, and gives a research-only task with the record's id in its slot", () => {
     const value = brief("approved_record", { record });
     expect(value).toEqual({
       goal: { kind: "task", task: expect.any(String) }, starting: [{ citation: record, if_unreadable: "fail" }],
       budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false },
     });
-    expect(filled(value, ["E1"])).toBe("A PM just approved record E1. Find every ticket, PRD section and document in this project that it confirms, conflicts with or changes. For each, record what it says now, who owns it, and any date it affects.");
+    expect(filled(value, ["E1"])).toBe("A PM just approved record E1. Find the tickets, PRD sections and documents in this project whose current text its decisions confirm, contradict or make out of date. Search the record's distinctive terms and identifiers, then open the candidates and note what each says now. Finishing with nothing affected is a valid result after those searches.");
+    // The impact card adds owners and dates from each item's own details: research never looks for them.
+    for (const phrase of ["who owns", "date it affects"]) expect(filled(value, ["E1"])).not.toContain(phrase);
+  });
+
+  it("searches a record in no project, never lists, and never says \"in this project\" (decision 2)", () => {
+    const value = brief("approved_record", { record }, { kind: "global" });
+    expect(value.options).toEqual({ small_scope_preload: false, list: false });
+    expect(filled(value, ["E1"])).toBe("A PM just approved record E1. Find the tickets, PRD sections and documents whose current text its decisions confirm, contradict or make out of date. Search the record's distinctive terms and identifiers, then open the candidates and note what each says now. Finishing with nothing affected is a valid result after those searches.");
   });
 
   it("refuses anything but one approved record citation", () => {

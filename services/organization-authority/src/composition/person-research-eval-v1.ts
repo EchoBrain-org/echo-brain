@@ -102,7 +102,8 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       if (definition === undefined) throw new AuthorityOperationError('invalid_request', 'Research evaluation trigger is not known');
       // The definition refuses an event it cannot run, before any run starts.
       const event = definition.parseEvent(request.input);
-      const defined = definition.brief(event);
+      // Checked as the widest scope would brief it; the run rebuilds its brief for the scope it reads.
+      const defined = definition.brief(event, { kind: 'global' });
       // Ask's writer runs Ask's own brief, rebuilt from the question: anything more in a question brief would be dropped, so it is refused.
       if (defined.goal.kind === 'question' && (defined.starting.length > 0 || !defined.options.small_scope_preload)) throw new AuthorityOperationError('invalid_request', 'Research evaluation brief is invalid');
       // Only a person's question reads their own additions alone; a task's starting items are shared evidence.
@@ -130,6 +131,8 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
         try {
           // The record's scope is looked up with the person's own access before the desk exists; an unreadable record stops here.
           const scope = requested ?? recordScope(options.records, input.access_token, brief.starting[0]?.citation);
+          // A task's brief can depend on its scope: an approved record in no project is searched, never listed.
+          const scoped = { ...definition.brief(event, scope), budget: brief.budget };
           const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, signal }, context);
           run.revalidate = readSignal => desk.revalidate({ ...(readSignal === undefined ? {} : { signal: readSignal }) });
           const asker = askerOf(options, authorization);
@@ -145,13 +148,13 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
           } else if (definition.renderer !== undefined) {
             // A task with a renderer: its result and the trimmed bundle it was written from. The renderer, never the
             // definition's name, says which contract the result keeps: a sweep's verdicts, one per finding, or an impact card.
-            const output = await loop.renderWithResearch({ trigger: definition.name, brief, renderer: definition.renderer, trigger_input: event, signal });
+            const output = await loop.renderWithResearch({ trigger: definition.name, brief: scoped, renderer: definition.renderer, trigger_input: event, signal });
             run.research = output.research;
             run.rendered = definition.renderer === SWEEP_RENDERER_V1
               ? validatePersonSweepResultV1(output.rendered, (event as SweepTriggerInputV1).findings.length)
               : validatePersonImpactCardV1(output.rendered);
           } else {
-            run.research = await loop.research({ trigger: definition.name, brief, signal });
+            run.research = await loop.research({ trigger: definition.name, brief: scoped, signal });
           }
           run.status = 'completed';
         } catch (error) {
