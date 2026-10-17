@@ -149,6 +149,35 @@ describe('when a check runs (R2)', () => {
     expect(checks()).toBe(2);
   });
 
+  it.each([false, true])('a wake during the initial check queues one fresh check, unless stopped (%s)', async stopped => {
+    let release: () => void = () => undefined;
+    let held = false;
+    rpc.mockImplementation(changesRpc({
+      'app.status': () => ok({ signed_in: true, account }),
+      'runs': params => {
+        const request = params.request as { operation: string; scope?: string; states?: string[] };
+        const captured = fixture.runs!(params);
+        if (!held && request.operation === 'items' && request.scope === 'involved' && request.states?.join() === 'open') {
+          held = true;
+          return new Promise(resolve => { release = () => resolve(captured); });
+        }
+        return captured;
+      },
+    }));
+    const store = await startStore();
+    expect(held).toBe(true);
+    expect(checks()).toBe(1);
+    authority.active = [apollo, project(2, 30, { name: 'Comet' })];
+    await wake();
+    await wake();
+    expect(checks()).toBe(1);
+    if (stopped) (await import('../../src/renderer/freshness.js')).stop();
+    release();
+    await flush();
+    expect(checks()).toBe(stopped ? 1 : 2);
+    if (!stopped) expect(store.getState().projects.items.map(row => row.name)).toContain('Comet');
+  });
+
   it('stops at sign-out, and starts over for another account', async () => {
     const store = await startStore();
     rpc.mockImplementation(changesRpc({ 'app.status': () => ok({ signed_in: false, account: null }) }));
