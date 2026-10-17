@@ -117,6 +117,39 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(JSON.stringify(f.audits)).not.toContain('Gate readiness evidence.');
   });
 
+  it('keeps fencing a long background run past 160 requests: checks and revalidation do not spend the content cap', async () => {
+    const f = await fixture({ pages: Array.from({ length: 15 }, (_, index) => page({ id: String(100 + index),
+      document: document('Gate readiness evidence. '.repeat(270)) })) });
+    const found = await f.source.list({ limit: 20 });
+    const opened = await f.source.open({ item: found.items[0]!.id });
+    expect(opened.items).toHaveLength(3);
+    // A 48-call budget fences before every model call and twice at release.
+    for (let fence = 0; fence < 50; fence += 1) await f.source.revalidate({});
+    f.state.searchIds = ['101'];
+    await expect(f.source.search({ query: 'gate readiness' })).resolves.toMatchObject({ items: [{ kind: 'page' }] });
+    expect(f.calls.length).toBeGreaterThan(300);
+  });
+
+  it('still caps content reads at 160 per request', async () => {
+    const f = await fixture();
+    // Each unmapped search is one CQL request plus one exact metadata read.
+    for (let search = 0; search < 80; search += 1) await f.source.search({ query: `gate ${search}` });
+    await expect(f.source.search({ query: 'one more' })).rejects.toMatchObject({ code: 'unavailable' });
+    expect(f.calls.filter(call => call.path === '/rest/api/search' || call.path.startsWith('/api/v2/pages/'))).toHaveLength(160);
+    // Fences still run: a revalidation of everything released so far succeeds.
+    await expect(f.source.revalidate({})).resolves.toBeUndefined();
+  });
+
+  it('stops a runaway loop at a hard bound of 2048 requests, fences included', async () => {
+    const f = await fixture();
+    let failure: unknown;
+    for (let fence = 0; fence < 600 && failure === undefined; fence += 1) {
+      try { await f.source.revalidate({}); } catch (error) { failure = error; }
+    }
+    expect(failure).toMatchObject({ code: 'unavailable' });
+    expect(f.calls.length).toBe(2048);
+  });
+
   it('lists, searches, opens, and revalidates a mapped page with the minimal granular resource grant', async () => {
     const f = await fixture({ selected: ['42'], scopes: ['read:page:confluence', 'read:space:confluence', 'read:content-details:confluence'] });
     const listed = await f.source.list({ limit: 20 });
