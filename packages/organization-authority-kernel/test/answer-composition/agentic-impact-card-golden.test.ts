@@ -139,9 +139,10 @@ async function run(name: string, scenario: Scenario) {
       return reply;
     },
   };
-  const research = createAgenticResearchV1({ desk: scenario.desk(), model, generation, audit: { append: entry => { audit.push(entry); } }, now_ms: () => time, today: () => "2026-10-06" });
+  const desk = scenario.desk();
+  const research = createAgenticResearchV1({ desk, model, generation, audit: { append: entry => { audit.push(entry); } }, now_ms: () => time, today: () => "2026-10-06" });
   const event = definition.parseEvent({ record: DECISION.citation });
-  const output = await research.renderWithResearch({ trigger: definition.name, brief: definition.brief(event), renderer: definition.renderer!, trigger_input: event });
+  const output = await research.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, desk.scope), renderer: definition.renderer!, trigger_input: event });
   const entry = audit.at(-1)!;
   return {
     calls: inputs.length,

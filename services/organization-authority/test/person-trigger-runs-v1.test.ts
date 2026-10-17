@@ -62,7 +62,7 @@ describe('durable approved-record trigger runs', () => {
     const trigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
     expect(f.renderInputs[0]).toMatchObject({
       trigger: 'approved_record', trigger_input: { record }, renderer: trigger.renderer,
-      brief: { starting: [{ citation: record, if_unreadable: 'fail' }], budget: trigger.brief(trigger.parseEvent({ record })).budget },
+      brief: { starting: [{ citation: record, if_unreadable: 'fail' }], budget: trigger.brief(trigger.parseEvent({ record }), { kind: 'global' }).budget },
     });
     expect(f.runs.read(f.person, f.row.run_id)!.result_json).not.toContain('0xC0FFEE');
     await expect(f.app.start({ access_token: 'other', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });

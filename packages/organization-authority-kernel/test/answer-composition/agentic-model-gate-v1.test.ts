@@ -2,7 +2,7 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import { AgenticAskPostRevalidationNoTimeErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
-import { AgenticAskOutputErrorV1, repairPrompt } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { AgenticAskOutputErrorV1, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { StructuredGenerationInput, StructuredGenerationJsonSchema } from "../../src/answer-composition/structured-generation-v1.js";
 
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
@@ -142,8 +142,11 @@ describe("agentic model gate", () => {
     }, reason => rejections.push(reason));
     expect(value).toEqual({ good: true });
     expect(rejections).toEqual(["needs are missing"]);
-    expect(inputs[1]!.system_prompt).toBe(repairPrompt("system", "needs are missing"));
-    expect(JSON.parse(inputs[1]!.user_prompt)).toEqual({ question: "q", validation_error: "needs are missing", rejected_response: JSON.stringify({ bad: true }) });
+    // The system prompt and the rejected call's user prompt are the repair's prefix; the reason goes last.
+    expect(inputs[1]!.system_prompt).toBe("system");
+    expect(inputs[1]!.user_prompt.startsWith(inputs[0]!.user_prompt.slice(0, -1))).toBe(true);
+    expect(inputs[1]!.user_prompt).toBe(JSON.stringify({ question: "q", rejected_response: JSON.stringify({ bad: true }), validation_error: repairInstruction("needs are missing") }));
+    expect(repairInstruction("needs are missing")).toBe("Your previous reply could not be used: needs are missing. Reply again with only the JSON object, in exactly the shape your instructions show.");
     expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1, stopped: false });
   });
 

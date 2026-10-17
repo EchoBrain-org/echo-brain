@@ -166,11 +166,11 @@ function mineFixture() {
   const records = { initializeDesk: vi.fn((_input: object) => { throw new PersonRecordSearchIndexLagV1(); }) };
   // Searches once, finishes on what it found, and cites it.
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
+    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: string[] }[]; evidence?: { id: string }[] };
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
       return { sentences: [{ text: "You decided to launch on Tuesday.", evidence: [prompt.evidence![0]!.id] }], not_found: [] };
     }
-    const hit = prompt.last_results?.[0]?.results?.[0]?.id;
+    const hit = prompt.last_results?.[0]?.results?.[0];
     return hit === undefined
       ? { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "launch" } }] }
       : { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "found", evidence: [hit] }], notes: "" }], actions: [{ tool: "finish", args: {} }] };

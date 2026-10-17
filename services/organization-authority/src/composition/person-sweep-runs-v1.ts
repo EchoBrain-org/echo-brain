@@ -144,9 +144,10 @@ export async function sweepOpenItemsV1(input: {
     };
   });
 
-  const research = await input.research(deskScopeOf(run.scope, context, checked));
+  const scope = deskScopeOf(run.scope, context, checked);
+  const research = await input.research(scope);
   const event = SWEEP.parseEvent({ findings }) as SweepTriggerInputV1;
-  const output = await research.renderWithResearch({ trigger: SWEEP.name, brief: SWEEP.brief(event), renderer: SWEEP_RENDERER_V1, trigger_input: event, signal: input.signal });
+  const output = await research.renderWithResearch({ trigger: SWEEP.name, brief: SWEEP.brief(event, scope), renderer: SWEEP_RENDERER_V1, trigger_input: event, signal: input.signal });
   const result = validatePersonSweepResultV1(output.rendered, findings.length);
 
   return {

@@ -23,7 +23,7 @@ type Listing = { id: string; title?: string; text?: string };
 type Prompt = {
   question?: string;
   step?: number;
-  last_results?: { tool: string; items?: Listing[]; results?: Listing[] }[];
+  last_results?: { tool: string; items?: string[]; results?: string[] }[];
   opened?: Listing[];
   plan?: { part?: number; question: string }[];
   evidence?: Listing[];
@@ -80,7 +80,7 @@ function fixture(options: { readonly small_scope_shortcut?: boolean; readonly me
     const part = (status: string, evidence: string[] = []) => ({ question: prompt.question!, needs: [{ need: "project summary", status, evidence }], notes: "" });
     if ((prompt.opened ?? []).length > 0) return { parts: [part("found", prompt.opened!.map(item => item.id))], actions: [{ tool: "finish", args: {} }] };
     const listed = prompt.last_results?.find(result => result.tool === "list")?.items ?? [];
-    if (listed.length > 0) return { parts: [part("open")], actions: [{ tool: "open", args: { id: listed[0]!.id } }] };
+    if (listed.length > 0) return { parts: [part("open")], actions: [{ tool: "open", args: { id: listed[0]! } }] };
     if (prompt.step === 1) return { parts: [part("open")], actions: [{ tool: "list", args: { source: "documents" } }] };
     return { parts: [part("not_found")], actions: [{ tool: "finish", args: {} }] };
   } };
@@ -296,7 +296,7 @@ describe("Agentic Ask V5 combined request-local sources", () => {
       const listed = prompt.last_results?.find(result => result.tool === "search")?.items ?? [];
       return listed.length === 0
         ? { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "open", evidence: [] }] }], actions: [{ tool: "search", args: { query: "EVT Tuesday" } }] }
-        : { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "found", evidence: listed.map(item => item.id) }] }], actions: [{ tool: "finish", args: {} }] };
+        : { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "found", evidence: [...listed] }] }], actions: [{ tool: "finish", args: {} }] };
     } };
     const route = liveRoute(f, model, [{ ...LEGACY_TICKET_CONNECTOR_V1, application: { source: async () => ticketSource } }, { ...LEGACY_PAGE_CONNECTOR_V1, application: { source: async () => pageSource } }]);
     const answer = await route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } });

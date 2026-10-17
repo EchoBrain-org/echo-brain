@@ -7,6 +7,8 @@ import {
   normalizeQuery,
   parseAnswer,
   parseStep,
+  SEARCH_ONLY_STEP_PROMPT,
+  STEP_PROMPT,
   stepSchema,
   stripEvidenceIds,
 } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
@@ -83,6 +85,20 @@ describe("agentic Ask model protocol parity", () => {
     expect(tools).toEqual(["search", "list"]);
   });
 
+  it("can withhold list for a search-only run, in the schema and in the prompt", () => {
+    const schema = createStepSchema(["meetings", "tickets"], ["E1"], true, false);
+    const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
+    expect((variants.anyOf as Schema[]).map(variant => ((variant.properties as Schema).tool as Schema).enum![0])).toEqual(["search", "open", "finish"]);
+    // The search-only prompt names no list tool and no inventory rule; the full prompt keeps both. Only rule 1 ("list only
+    // the facts") and rule 4, which says there is no list tool, still say "list".
+    expect(SEARCH_ONLY_STEP_PROMPT.split("\n").filter(line => /\blist\b/u.test(line)).map(line => line.slice(0, 2))).toEqual(["1.", "4."]);
+    expect(SEARCH_ONLY_STEP_PROMPT).not.toContain("inventor");
+    expect(SEARCH_ONLY_STEP_PROMPT).toContain("4. There is no list tool in this run");
+    expect(SEARCH_ONLY_STEP_PROMPT).toContain("\"tool\" is \"search\", \"open\" or \"finish\".");
+    expect(STEP_PROMPT).toContain("list, args {\"source\"");
+    expect(STEP_PROMPT.split("\n").length - SEARCH_ONLY_STEP_PROMPT.split("\n").length).toBe(8);
+  });
+
   it("binds each action's argument schema to the selected tool", () => {
     const argumentsByTool: Record<string, readonly string[]> = {
       search: ["query", "source"], open: ["id"],
@@ -154,6 +170,15 @@ describe("agentic Ask model protocol parity", () => {
     expect(step.parts[0]!.needs.map(need => [need.need, need.status])).toEqual([["A", "found"], ["B", "not_found"], ["C", "open"]]);
   });
 
+  it("reads a need's id in common spellings, ignores the rest, and drops a second need with the same id", () => {
+    const step = parseStep({ parts: [{ question: "q", needs: [
+      { id: "N1", need: "A", status: "open", evidence: [] }, { id: " n2 ", need: "B", status: "open", evidence: [] }, { id: "[N3]", need: "C", status: "open", evidence: [] },
+      { id: 4, need: "D", status: "open", evidence: [] }, { id: "E5", need: "E", status: "open", evidence: [] }, { id: "N1", need: "F", status: "found", evidence: [] },
+    ], notes: "" }], actions: [{ tool: "finish", args: {} }] });
+    expect(step.parts[0]!.needs.map(need => [need.id, need.need])).toEqual([["N1", "A"], ["N2", "B"], ["N3", "C"], ["N4", "D"], [undefined, "E"]]);
+    expect(step.parts[0]!.needs[4]).not.toHaveProperty("id");
+  });
+
   it("truncates over-long text to its bound instead of rejecting it", () => {
     const step = parseStep({ parts: [{ question: "q".repeat(900), needs: [{ need: "n".repeat(900), status: "open", evidence: [] }], notes: "n".repeat(5_000) }], actions: [{ tool: "finish", args: {} }] });
     expect([...step.parts[0]!.question].length).toBeLessThanOrEqual(400);
@@ -166,6 +191,27 @@ describe("agentic Ask model protocol parity", () => {
     expect(stripEvidenceIds("Model E12 ships in October (e4 and E5).")).toBe("Model E12 ships in October.");
     const many = parseAnswer({ sentences: Array.from({ length: 12 }, (_, index) => ({ text: `Fact ${index}.`, evidence: ["E1"] })), not_found: [] });
     expect(many.sentences).toHaveLength(10);
+  });
+
+  it.each([
+    // f6184afc and 1dab4548: the writer's markers that reached the answer.
+    ["The release is proposed (evidence: E5).", "The release is proposed."],
+    ["The gate is on hold (evidence).", "The gate is on hold."],
+    ["Both tickets are open (evidence E2, E4), and the vendor slipped (Evidence: E7; E9).", "Both tickets are open, and the vendor slipped."],
+    ["Mara owns it (ids E1).", "Mara owns it."],
+    ["It was approved (see E3) on Oct 8 (E4, E5, and E6).", "It was approved on Oct 8."],
+  ])("drops evidence references from %j", (text, expected) => {
+    expect(stripEvidenceIds(text)).toBe(expected);
+  });
+
+  it("keeps brackets and words that are not evidence references", () => {
+    for (const text of [
+      "THERM-48 (THERM-48) still formats one decimal.",
+      "The E2E tests (E2E) passed on Oct 8.",
+      "The gate is pending (no evidence of approval).",
+      "The badge shows the employee number (ID).",
+      "Model E12 ships in October.",
+    ]) expect(stripEvidenceIds(text), text).toBe(text);
   });
 
   it("accepts common id spellings and ignores the rest", () => {

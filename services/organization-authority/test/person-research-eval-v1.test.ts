@@ -12,7 +12,7 @@ import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-s
 vi.mock('@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1', async importOriginal => {
   const real = await importOriginal<typeof import('@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1')>();
   const ask = real.AGENTIC_TRIGGER_DEFINITIONS_V1.find(definition => definition.name === 'ask')!;
-  const started = { ...ask, name: 'ask_with_start', brief: (event: unknown) => ({ ...ask.brief(event), starting: [{ citation: { kind: 'approved_record' }, if_unreadable: 'fail' as const }] }) };
+  const started = { ...ask, name: 'ask_with_start', brief: (event: unknown, scope: Parameters<typeof ask.brief>[1]) => ({ ...ask.brief(event, scope), starting: [{ citation: { kind: 'approved_record' }, if_unreadable: 'fail' as const }] }) };
   return { ...real, AGENTIC_TRIGGER_DEFINITIONS_V1: Object.freeze([...real.AGENTIC_TRIGGER_DEFINITIONS_V1, started]) };
 });
 
@@ -156,7 +156,7 @@ describe('staging research evaluation runs', () => {
     expect(h.recordProjects.mock.invocationCallOrder[0]).toBeLessThan(h.deskAuthorize.mock.invocationCallOrder[0]!);
     expect(h.deskAuthorize).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'token-a', scope: { kind: 'project', project_id: PROJECT } }));
     expect(h.openDeskCitation).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'token-a', atom_id: record.atom_id, project_id: PROJECT }));
-    expect(JSON.parse(h.generate.mock.calls[0]![0].user_prompt)).toMatchObject({ task: expect.stringMatching(/^A PM just approved record E1\. Find every ticket, PRD section and document in this project /u) });
+    expect(JSON.parse(h.generate.mock.calls[0]![0].user_prompt)).toMatchObject({ task: expect.stringMatching(/^A PM just approved record E1\. Find the tickets, PRD sections and documents in this project /u) });
     expect(h.audits).toEqual([expect.objectContaining({ trigger: 'approved_record', budget: 'background' })]);
   });
 
@@ -197,15 +197,15 @@ describe('staging research evaluation runs', () => {
     expect(h.generate).not.toHaveBeenCalled();
   });
 
-  it('runs a Sweep on its own background budget, listing a cited item it can no longer read and researching on', async () => {
+  it('runs a Sweep on its own background budget, listing a cited item it can no longer read without asking any model', async () => {
     const h = harness();
     const run = await h.application.start({ access_token: 'token-a', request: { schema_version: 1, trigger: 'sweep', input: { findings: [{ finding: 'Two decimals shipped', expected: 'Record updated', citations: [record] }] } } });
     const result = await h.settled('token-a', run.run_id);
     expect(result).toMatchObject({ status: 'completed', research: { trigger: 'sweep', unreadable_starting: [record], budget: { deadline_ms: 300_000 } } });
     // The finding whose item it could not read is reported, and no model is asked about it.
     expect(result.rendered).toEqual({ findings: [{ finding_index: 0, verdict: 'unreadable', line: 'ECHO could not read this item.', citation_indexes: [] }], status: 'assessed', citations: [] });
-    expect(h.generate).toHaveBeenCalled();
-    expect(h.generate.mock.calls.filter(([input]) => input.system_prompt.startsWith('You recheck open items'))).toEqual([]);
+    // A sweep runs no planner, and the judge is never asked about an item it could not read.
+    expect(h.generate).not.toHaveBeenCalled();
     expect(h.audits).toEqual([expect.objectContaining({ trigger: 'sweep', budget: 'background', outcome: 'partial' })]);
   });
 

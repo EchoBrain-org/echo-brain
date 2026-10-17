@@ -289,7 +289,7 @@ describe("impact card renderer", () => {
     const run = alone({ replies: [edit, REPLY] });
     const rendered = await run.render();
     expect(run.inputs).toHaveLength(2);
-    expect(run.inputs[1]!.system_prompt).toContain("never what to change");
+    expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain("never what to change");
     expect(rendered.result.status).toBe("assessed");
     expect(JSON.stringify(rendered.result)).not.toContain(text);
     const twice = await alone({ replies: [edit, edit] }).render();
@@ -306,7 +306,7 @@ describe("impact card renderer", () => {
       const run = alone({ replies: [edit, REPLY] });
       const rendered = await run.render();
       expect(run.inputs).toHaveLength(2);
-      expect(run.inputs[1]!.system_prompt).toContain("never say who owns, is assigned to or is responsible for anything");
+      expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain("never say who owns, is assigned to or is responsible for anything");
       expect(JSON.stringify(rendered.result)).not.toMatch(/Zhen Ye said|Ana Ruiz|responsible/u);
     }
   });
