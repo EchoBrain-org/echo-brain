@@ -15,7 +15,7 @@ import { checked, generation, LIST_READ_AT, record, researchHarness as harness, 
  * Ask's lists as evidence of which items exist (ADR-0041): a list read to its
  * end lets research finish without opening its members; an unfinished one
  * asks for its next page; an exactly full last page is never trusted as the
- * end; a filter a source cannot apply is recorded, never silently widened; and
+ * end; a filter a source cannot apply is said, never silently widened; and
  * the access check before every model call still covers a list's members.
  * The same path serves pages, tickets, meetings and follow-ups. A task goal
  * keeps the rules before ADR-0041.
@@ -211,8 +211,8 @@ describe("Ask research: reading a list to its end", () => {
   });
 });
 
-describe("Ask research: filters are applied or refused, never silently widened", () => {
-  it("records an owner filter tickets cannot apply as ignored", async () => {
+describe("Ask research: filters are applied, refused or said, never silently widened", () => {
+  it("records an owner filter tickets cannot apply as ignored, and tells the person", async () => {
     const list = vi.fn(async (_input: EvidenceDeskListInputV2) => result(tickets(1, 3)) as EvidenceDeskResultV2);
     const text = "Which tickets does Dana own?";
     const h = harness([
@@ -224,9 +224,10 @@ describe("Ask research: filters are applied or refused, never silently widened",
     expect(h.prompt(1).last_results).toEqual([expect.objectContaining({ list: "L1", note: "owner applies to meeting actions only; ignored" })]);
     expect(h.prompt(1).lists).toEqual([expect.objectContaining({ id: "L1", notes: ["owner applies to meeting actions only; ignored"] })]);
     expect(view.lists).toEqual([expect.objectContaining({ id: "L1", filter: { time_zone: "UTC" }, filter_applied: { owner: "ignored" }, complete: true })]);
+    expect(view.coverage.notices).toEqual(["Jira tickets could not be filtered by owner, so this list is not limited to that owner."]);
   });
 
-  it("records a status filter meeting actions apply only where they record one", async () => {
+  it("says when meeting actions were filtered by status only where they record one", async () => {
     const actions = [
       record("a1", "Dana will publish the dashboard.", { kind: "action", attributes: { owner: "Dana Lee", status: "open" } }),
       record("a2", "Dana will order samples.", { kind: "action", attributes: { owner: "Dana Lee" } }),
@@ -240,6 +241,19 @@ describe("Ask research: filters are applied or refused, never silently widened",
     ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
     const view = await h.research.research({ trigger: "ask", brief: question(text) });
     expect(view.lists).toEqual([expect.objectContaining({ id: "L1", filter: { kind: "action", status: "open", time_zone: "UTC" }, filter_applied: { status: "partial" }, members: ["E1", "E2"], complete: true })]);
+    expect(view.coverage.notices).toEqual(["Meetings were filtered by status only where they record one, so this list also includes items that record none."]);
+  });
+
+  it("names no filter a found need does not rest on", async () => {
+    const launch = record("launch", "Launch is Tuesday.");
+    const h = harness([
+      ask("When is launch?", "launch date", "open", [], [{ tool: "list", args: { source: "tickets", owner: "Dana" } }, { tool: "search", args: { query: "launch" } }]),
+      ask("When is launch?", "launch date", "found", ["E4"], [finish], "N1"),
+      { sentences: [{ text: "Launch is Tuesday.", evidence: ["E4"] }], not_found: [] },
+    ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 3)) as EvidenceDeskResultV2), search: vi.fn(async () => result([launch])) });
+    const view = await h.research.research({ trigger: "ask", brief: question("When is launch?") });
+    expect(view.lists).toEqual([expect.objectContaining({ id: "L1", filter_applied: { owner: "ignored" } })]);
+    expect(view.coverage.notices).toEqual([]);
   });
 
   it("gives a list the source refused no id, and keeps the refusal for research to disclose", async () => {

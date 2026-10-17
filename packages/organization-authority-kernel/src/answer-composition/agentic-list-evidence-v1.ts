@@ -143,6 +143,40 @@ export function agenticListEndUnverifiedV1(page: { readonly returned: number; re
   return page.returned > 0 && page.returned >= page.requested;
 }
 
+// ---- how a list is named, and what its filter could not do -------------
+
+/**
+ * A list's noun for the person (ADR-0041): the source's selector, after its tool when the catalog names one ("Jira
+ * tickets", "Confluence pages", "meetings", "follow-ups"). It reads only the catalog entry, never a source-specific rule.
+ */
+export function agenticListNounV1(source: { readonly selector: string; readonly tool_id?: string }): string {
+  const selector = source.selector.replace(/_/gu, "-");
+  const tool = source.tool_id === undefined || source.tool_id.length === 0 || source.tool_id === source.selector ? undefined : source.tool_id;
+  return tool === undefined ? selector : `${tool.charAt(0).toUpperCase()}${tool.slice(1)} ${selector}`;
+}
+
+const FILTER_WORDS: Readonly<Record<AgenticListFilterFieldV1, string>> = Object.freeze({
+  kind: "kind", status: "status", owner: "owner", channel: "channel", since: "date", until: "date", date_field: "date",
+});
+function sentence(value: string): string { return `${value.charAt(0).toUpperCase()}${value.slice(1)}`; }
+function words(fields: readonly AgenticListFilterFieldV1[]): readonly string[] { return [...new Set(fields.map(field => FILTER_WORDS[field]))]; }
+
+/**
+ * What the person is told about a list's filter (addition 3): a requested filter the source ignored, so the list is
+ * wider than asked, or one applied only where items record the field. Undefined when every requested filter applied.
+ * A date filter is never here: a source that cannot apply one refuses the read.
+ */
+export function agenticListFilterNoticeV1(list: Pick<AgenticListEvidenceV1, "filter_applied">, noun: string): string | undefined {
+  const fields = Object.entries(list.filter_applied) as [AgenticListFilterFieldV1, AgenticListFilterApplicationV1][];
+  const ignored = words(fields.filter(([, how]) => how === "ignored").map(([field]) => field));
+  const partial = words(fields.filter(([, how]) => how === "partial").map(([field]) => field));
+  const notices = [
+    ...(ignored.length === 0 ? [] : [`${sentence(noun)} could not be filtered by ${ignored.join(" or ")}, so this list is not limited to ${ignored.length === 1 ? `that ${ignored[0]}` : "those filters"}.`]),
+    ...(partial.length === 0 ? [] : [`${sentence(noun)} were filtered by ${partial.join(" and ")} only where they record ${partial.length === 1 ? "one" : "them"}, so this list also includes items that record none.`]),
+  ];
+  return notices.length === 0 ? undefined : notices.join(" ");
+}
+
 // ---- support kinds ----------------------------------------------------
 
 /** What can support a found need. A list gives list facts; an item read in full gives content. */

@@ -10,8 +10,10 @@ import {
   AGENTIC_SUPPORT_KINDS_V1,
   agenticListCompleteV1,
   agenticListEndUnverifiedV1,
+  agenticListFilterNoticeV1,
   agenticListIdV1,
   agenticListNameSharesV1,
+  agenticListNounV1,
   agenticNeedSupportV1,
   agenticSupportKindsV1,
   agenticWriterListMemberV1,
@@ -143,6 +145,28 @@ describe("an unverified end (addition 1)", () => {
     expectTypeOf<EvidenceDeskResultV2["page_full"]>().toEqualTypeOf<boolean | undefined>();
     expectTypeOf<PersonLiveEvidencePageV1["page_full"]>().toEqualTypeOf<boolean | undefined>();
     expectTypeOf<PersonLiveEvidenceResultV1["page_full"]>().toEqualTypeOf<boolean | undefined>();
+  });
+});
+
+describe("a list's noun and its filter notice (addition 3)", () => {
+  it("names a list from the catalog's selector and tool, with no source-specific rule", () => {
+    expect(agenticListNounV1({ selector: "tickets", tool_id: "jira" })).toBe("Jira tickets");
+    expect(agenticListNounV1({ selector: "pages", tool_id: "confluence" })).toBe("Confluence pages");
+    expect(agenticListNounV1({ selector: "meetings" })).toBe("meetings");
+    expect(agenticListNounV1({ selector: "follow_ups" })).toBe("follow-ups");
+    expect(agenticListNounV1({ selector: "slack", tool_id: "slack" })).toBe("slack");
+  });
+
+  it("says which requested filters a source ignored or applied only where items record them", () => {
+    expect(agenticListFilterNoticeV1({ filter_applied: { owner: "ignored" } }, "Jira tickets")).toBe("Jira tickets could not be filtered by owner, so this list is not limited to that owner.");
+    expect(agenticListFilterNoticeV1({ filter_applied: { owner: "ignored", status: "ignored", since: "applied" } }, "Confluence pages"))
+      .toBe("Confluence pages could not be filtered by owner or status, so this list is not limited to those filters.");
+    expect(agenticListFilterNoticeV1({ filter_applied: { status: "partial", owner: "applied" } }, "meetings"))
+      .toBe("Meetings were filtered by status only where they record one, so this list also includes items that record none.");
+    expect(agenticListFilterNoticeV1({ filter_applied: { kind: "ignored", status: "partial" } }, "follow-ups"))
+      .toBe("Follow-ups could not be filtered by kind, so this list is not limited to that kind. Follow-ups were filtered by status only where they record one, so this list also includes items that record none.");
+    expect(agenticListFilterNoticeV1({ filter_applied: { since: "applied", until: "applied", date_field: "applied" } }, "Confluence pages")).toBeUndefined();
+    expect(agenticListFilterNoticeV1({ filter_applied: {} }, "meetings")).toBeUndefined();
   });
 });
 

@@ -233,9 +233,13 @@ route, header, database table or client changes.
 - **Filters are never silently widened (addition 3).** The response notice
   names a requested filter that a source ignored, or applied only where items
   record it, for example "Jira tickets could not be filtered by owner, so this
-  list is not limited to that owner." A source that cannot apply a requested
-  date field refuses the read. It never answers empty and never substitutes
-  another field.
+  list is not limited to that owner." Research adds it to the bundle's
+  coverage notices, which reach the writer and the response notice, for each
+  list a found need rests on (`agenticListFilterNoticeV1`, with the noun from
+  `agenticListNounV1`). A source that cannot apply a requested date field
+  refuses the read. It never answers empty and never substitutes another
+  field. A desk asked for an owner or status filter a source cannot apply
+  refuses the read too.
 - **A list id in a sentence** adds no citation of its own: the sentence cites
   the members or texts it also names, and a sentence left with no citation is
   dropped, as today.
@@ -392,15 +396,22 @@ not candidates.
      text was read stops before its end.
    - Replacement: for a question goal, a list page that adds members counts as
      progress.
-8. **A date filter a source cannot apply, answered as empty.** Retired
-   (addition 3).
+8. **A date filter a source cannot apply, answered as empty.** Checked when
+   building; already refused, so nothing is retired (addition 3).
    - Where:
      `services/organization-authority/src/adapters/persistence/sqlite/person-original-context-retrieval-v1.ts:42`:
      a document read with a `date_field` other than `received` adds `AND 0`.
    - Evidence: code only. Such a list would be empty and complete, and so
      would say that nothing exists when its filter was never applied.
-   - Replacement: the source refuses the read and names the date fields it
-     supports, as the Jira, Confluence and record readers already do.
+   - Found when building: a document read never reaches `:42` with another
+     field. `deskSearch` refuses it first (`:349`, "This source supports
+     date_field: received"), as the Jira, Confluence and record readers refuse
+     theirs. `AND 0` is reached only by an inventory across sources, where it
+     excludes items without that date, as the step prompt documents. A test
+     pins the refusal; the code does not change.
+   - Elsewhere the build makes the desk refuse, rather than drop, an owner or
+     status filter a source cannot apply
+     (`services/organization-authority/src/composition/person-live-evidence-desk-v2.ts`).
 
 **Considered and kept:**
 
