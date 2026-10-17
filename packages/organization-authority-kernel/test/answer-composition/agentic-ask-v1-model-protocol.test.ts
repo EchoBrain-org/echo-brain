@@ -130,6 +130,10 @@ describe("agentic Ask model protocol parity", () => {
     expect(parseStep(value).parts[0]!.needs[0]!.evidence).toEqual(["E4"]);
     const many = { ...value, parts: [{ question: "q", needs: [{ need: "n", status: "found", evidence: [...Array.from({ length: 11 }, (_, index) => `E${index + 1}`), "L1", "L2"] }], notes: "" }] };
     expect(parseStep(many, { lists: true }).parts[0]!.needs[0]!.evidence).toHaveLength(12);
+    // A list id after 12 item ids is never the one cut: research cited the rows, was asked for the list's id, and appended it.
+    const appended = { ...value, parts: [{ question: "q", needs: [{ need: "n", status: "found", evidence: [...Array.from({ length: 15 }, (_, index) => `E${index + 1}`), "L1"] }], notes: "" }] };
+    expect(parseStep(appended, { lists: true }).parts[0]!.needs[0]!.evidence).toEqual([...Array.from({ length: 11 }, (_, index) => `E${index + 1}`), "L1"]);
+    expect(parseAnswer({ sentences: [{ text: "x", evidence: [...Array.from({ length: 13 }, (_, index) => `E${index + 1}`), "L2"] }], not_found: [] }, { lists: true }).sentences[0]!.evidence.at(-1)).toBe("L2");
     // Without lists the writer's evidence keeps item ids only; Ask's writer parses with lists.
     expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }).sentences[0]!.evidence).toEqual(["E2"]);
     expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }, { lists: true }).sentences[0]!.evidence).toEqual(["L1", "E2"]);

@@ -152,16 +152,25 @@ export function cleanId(value: unknown): string | null {
   const match = /^\s*\[?\s*[Ee]?\s*(\d{1,4})\s*\]?\s*$/u.exec(String(value));
   return match === null ? null : `E${Number(match[1])}`;
 }
-/** Evidence ids, each once, at most 12. With `lists` (an Ask step, ADR-0041), list ids such as L1 are kept beside item ids. */
+/** Raw entries read from one evidence array before the cap. */
+const EVIDENCE_IDS_READ = 64;
+/**
+ * Evidence ids, each once, at most 12. With `lists` (an Ask step, ADR-0041), list ids such as L1 are kept beside item
+ * ids, and never the ones the cap cuts: past 12 ids, every list id stays and item ids fill the rest, in their order.
+ */
 function cleanIds(value: unknown, lists = false): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
-  for (const raw of value) {
+  // Without lists the first 12 ids are kept, as before ADR-0041; with lists a bounded read finds a list id past them.
+  for (const raw of lists ? value.slice(0, EVIDENCE_IDS_READ) : value) {
     const id = (lists ? parseAgenticListIdV1(raw) : null) ?? cleanId(raw);
     if (id !== null && !result.includes(id)) result.push(id);
-    if (result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) break;
+    if (!lists && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) break;
   }
-  return Object.freeze(result);
+  if (result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return Object.freeze(result);
+  const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, AGENTIC_ASK_MAX_EVIDENCE_IDS_V1);
+  let items = AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 - listIds.length;
+  return Object.freeze(result.filter(id => listIds.includes(id) || (parseAgenticListIdV1(id) === null && items-- > 0)));
 }
 function needStatus(value: unknown): NeedStatus {
   const normalized = typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/gu, "_") : "";
