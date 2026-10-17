@@ -103,8 +103,10 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     const shown = pane();
     expect(text(byTestId(shown, 'source-pane'))).toContain('Follow-up');
     expect(text(byTestId(shown, 'pane-follow-up').flatMap(node => elements(node).filter(child => child.type === 'h2')))).toBe('Ship the launch checklist');
-    expect(text(byTestId(shown, 'pane-follow-up-owner'))).toBe('Mina');
-    expect(text(byTestId(shown, 'pane-follow-up-status'))).toBe('Open');
+    // Owner and status in the source row's own two words, with no field labels.
+    expect(text(byTestId(shown, 'pane-follow-up-meta'))).toBe('Mina · Open');
+    expect(elements(byTestId(shown, 'pane-follow-up')).some(node => node.type === 'dl' || node.type === 'dt')).toBe(false);
+    expect(text(byTestId(shown, 'pane-follow-up'))).not.toMatch(/Owner|Status/u);
     expect(text(byTestId(shown, 'pane-follow-up-check'))).toBe('Checked 2 h ago · not updated yet');
     // Leaving Ask would cancel it: no Open, and Open does nothing.
     expect(byTestId(shown, 'source-open')).toEqual([]);
@@ -152,11 +154,7 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     expect(text(byTestId(thread(), 'source-row'))).toBe('1Ship the launch checklistPick owner · Not sent');
     store.chooseSource(0);
     await flush();
-    const [owner] = byTestId(pane(), 'pane-follow-up-owner');
-    expect(text(owner)).toBe('Pick owner');
-    expect(text(owner)).not.toContain('Mina');
-    expect(elements(owner).some(node => node.props.class === 'faint')).toBe(true);
-    expect(text(byTestId(pane(), 'pane-follow-up-status'))).toBe('Not sent');
+    expect(text(byTestId(pane(), 'pane-follow-up-meta'))).toBe('Pick owner · Not sent');
   });
 
   it('says why a follow-up could not be read, and reads it again on Try again', async () => {
@@ -173,7 +171,7 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     expect(byTestId(pane(), 'pane-follow-up')).toEqual([]);
     store.retryRecord();
     await flush();
-    expect(text(byTestId(pane(), 'pane-follow-up-status'))).toBe('Open');
+    expect(text(byTestId(pane(), 'pane-follow-up-meta'))).toBe('Mina · Open');
     expect(itemReads()).toHaveLength(3);
   });
 });

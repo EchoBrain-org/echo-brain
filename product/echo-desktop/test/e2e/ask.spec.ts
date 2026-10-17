@@ -490,8 +490,7 @@ test('an answer that cites a follow-up opens it beside the running Ask, with its
   const pane = page.getByTestId('source-pane');
   await expect(pane).toContainText('Follow-up');
   await expect(pane.getByTestId('pane-follow-up').locator('h2')).toHaveText('Ship the launch checklist');
-  await expect(pane.getByTestId('pane-follow-up-owner')).toHaveText('Mina');
-  await expect(pane.getByTestId('pane-follow-up-status')).toHaveText('Open');
+  await expect(pane.getByTestId('pane-follow-up-meta')).toHaveText('Mina · Open');
   await expect(pane.getByTestId('pane-follow-up-check')).toHaveText(/^Checked .+ · not updated yet$/);
   await expect(pane.getByTestId('source-open')).toHaveCount(0);
   await expect(page.getByTestId('asking')).toBeVisible();
@@ -504,7 +503,7 @@ test('an answer that cites a follow-up opens it beside the running Ask, with its
   await expect(page.getByTestId('statement-text')).toHaveText('Mina still owes the launch checklist.');
   await expect(page.getByTestId('source-row')).toHaveText(/^1\s*Ship the launch checklist\s*Mina · Open$/);
   await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 2 items · \d+s$/);
-  await expect(pane.getByTestId('pane-follow-up-status')).toHaveText('Open');
+  await expect(pane.getByTestId('pane-follow-up-meta')).toHaveText('Mina · Open');
   await pane.getByTestId('source-open').click();
 
   // Its item page, in place of Ask, read again: its title, its status and its check.
