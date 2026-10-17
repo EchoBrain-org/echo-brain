@@ -1,6 +1,7 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
-import { AgenticAskPostRevalidationNoTimeErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskPostRevalidationNoTimeErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { StructuredGenerationInput, StructuredGenerationJsonSchema } from "../../src/answer-composition/structured-generation-v1.js";
@@ -15,6 +16,9 @@ function harness(options: {
   readonly replies?: readonly (unknown | Error)[];
   readonly max_model_calls?: number;
   readonly desk_revalidate?: () => Promise<{ readonly checked_at: string }>;
+  readonly modes?: string[];
+  readonly deadline?: number;
+  readonly signal?: AbortSignal;
   readonly model?: Parameters<typeof createAgenticModelGateV1>[0]["model"];
 } = {}) {
   const trace: string[] = [];
@@ -31,15 +35,15 @@ function harness(options: {
         return reply;
       },
     },
-    desk_revalidate: async () => {
-      trace.push("revalidate");
+    desk_revalidate: async ({ mode }) => {
+      trace.push("revalidate"); options.modes?.push(mode);
       return options.desk_revalidate?.() ?? { checked_at: `2026-10-06T00:00:0${checked.length}.000Z` };
     },
     on_checked: at => { checked.push(at); },
     budget: { max_model_calls: options.max_model_calls ?? 24 },
     now: () => 0,
-    deadline: 90_000,
-    signal: new AbortController().signal,
+    deadline: options.deadline ?? 90_000,
+    signal: options.signal ?? new AbortController().signal,
     is_deadline_expired: () => false,
   });
   return { gate, trace, inputs, checked };
@@ -53,6 +57,57 @@ describe("agentic model gate", () => {
     expect(trace).toEqual(["revalidate", "generate:0", "revalidate", "generate:1"]);
     expect(checked).toEqual(["2026-10-06T00:00:00.000Z", "2026-10-06T00:00:01.000Z"]);
     expect(gate.stats().calls).toBe(2);
+  });
+
+  it("asks for an incremental check before every call, repairs included", async () => {
+    const modes: string[] = [];
+    const { gate, trace } = harness({ replies: [{ bad: true }, { good: true }, { c: 3 }], modes });
+    await gate.withRepair(STEP, "system", {}, schema, () => 20_000, reply => {
+      if ((reply as { bad?: boolean }).bad) throw new AgenticAskOutputErrorV1("needs are missing");
+      return reply;
+    });
+    await gate.call(ANSWER, "system", {}, schema, () => 20_000);
+    expect(trace).toEqual(["revalidate", "generate:0", "revalidate", "generate:1", "revalidate", "generate:2"]);
+    expect(modes).toEqual(["incremental", "incremental", "incremental"]);
+  });
+
+  it.each(["unavailable", "rate_limited"] as const)("retries a %s pre-call check once after a short pause", async code => {
+    let checks = 0;
+    const { gate, trace, checked } = harness({ replies: [{ a: 1 }], desk_revalidate: async () => {
+      if (++checks === 1) throw new AuthorityOperationError(code, "Live evidence operation could not be completed");
+      return { checked_at: "2026-10-06T00:00:01.000Z" };
+    } });
+    const started = Date.now();
+    await expect(gate.call(STEP, "system", {}, schema, () => 20_000)).resolves.toEqual({ a: 1 });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1 - 50);
+    expect(trace).toEqual(["revalidate", "revalidate", "generate:0"]);
+    expect(checked).toEqual(["2026-10-06T00:00:01.000Z"]);
+  });
+
+  it("fails the call when the retried pre-call check fails again", async () => {
+    const { gate, trace } = harness({ desk_revalidate: async () => { throw new AuthorityOperationError("unavailable", "Live evidence operation could not be completed"); } });
+    await expect(gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toMatchObject({ code: "unavailable" });
+    expect(trace).toEqual(["revalidate", "revalidate"]);
+    expect(gate.stats().calls).toBe(0);
+  });
+
+  it.each(["unauthorized", "stale_access_state", "not_found", "invalid_output"] as const)("never retries a %s pre-call check", async code => {
+    const { gate, trace } = harness({ desk_revalidate: async () => { throw new AuthorityOperationError(code, "Live evidence operation could not be completed"); } });
+    await expect(gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toMatchObject({ code });
+    expect(trace).toEqual(["revalidate"]);
+  });
+
+  it("does not retry a transient pre-call check without time for the pause, or once the request stops", async () => {
+    const late = harness({ deadline: AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, desk_revalidate: async () => { throw new AuthorityOperationError("unavailable", "Live evidence operation could not be completed"); } });
+    await expect(late.gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toMatchObject({ code: "unavailable" });
+    expect(late.trace).toEqual(["revalidate"]);
+    const controller = new AbortController();
+    const stopped = harness({ signal: controller.signal, desk_revalidate: async () => {
+      setTimeout(() => controller.abort(), 10);
+      throw new AuthorityOperationError("unavailable", "Live evidence operation could not be completed");
+    } });
+    await expect(stopped.gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toMatchObject({ name: "AbortError" });
+    expect(stopped.trace).toEqual(["revalidate"]);
   });
 
   it("enforces the request's call budget before revalidating", async () => {

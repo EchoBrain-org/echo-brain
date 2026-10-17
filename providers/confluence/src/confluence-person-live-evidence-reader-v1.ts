@@ -346,7 +346,11 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       return openItem(citedSection(current, citation), maximum, input.signal, citation);
     },
     async revalidate(input): Promise<void> {
-      await verify(input.signal);
+      // An incremental check carries only sections released since the caller's
+      // last successful check (ADR-0038). It reads them and then verifies the
+      // account and site once; a full check also verifies before its reads.
+      if (input.mode === 'incremental' && origin !== undefined) current(input.signal);
+      else await verify(input.signal);
       const grouped = new Map<string, Item[]>();
       for (const raw of input.citations) {
         const citation = validatePersonPageCitationV1(raw);

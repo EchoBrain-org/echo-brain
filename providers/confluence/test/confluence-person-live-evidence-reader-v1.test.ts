@@ -223,6 +223,31 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(JSON.stringify(f.audits)).not.toContain('EVT decision');
   });
 
+  it('re-reads only newly released pages and sections in an incremental check and verifies the connection once, after them', async () => {
+    const f = await fixture({ pages: [page(), page({ id: '124' })] });
+    const verify = ['/oauth/token/accessible-resources', '/rest/api/user/current'];
+    const reads = () => f.calls.map(call => call.query.has('id') ? `bulk:${call.query.get('id')}` : call.query.get('body-format') === 'atlas_doc_format' ? `body:${call.path}` : call.path);
+    const listed = await f.source.list({});
+    f.calls.length = 0; await f.source.revalidate({ mode: 'incremental' });
+    expect(reads()).toEqual(['bulk:123,124', ...verify]);
+    // A repair with no new evidence re-reads nothing and still verifies the account and site.
+    f.calls.length = 0; await f.source.revalidate({ mode: 'incremental' });
+    expect(reads()).toEqual(verify);
+    await f.source.open({ item: listed.items[0]!.id });
+    f.calls.length = 0; await f.source.revalidate({ mode: 'incremental' });
+    expect(reads()).toEqual(['body:/api/v2/pages/123', ...verify]);
+    // The full check re-reads every released page and its opened body between two verifications.
+    f.calls.length = 0; await f.source.revalidate({});
+    expect(reads()).toEqual([...verify, 'bulk:124', 'body:/api/v2/pages/123', ...verify]);
+    // An already-checked page hidden mid-run is not re-read before the next
+    // model call (ADR-0038), but the full release check refuses it.
+    f.state.denied.add('/api/v2/pages/124');
+    await expect(f.source.revalidate({ mode: 'incremental' })).resolves.toBeUndefined();
+    await expect(f.source.revalidate({})).rejects.toMatchObject({ code: 'not_found' });
+    f.state.denied.clear(); f.state.account = 'different-account';
+    await expect(f.source.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
   it('revalidates every released metadata page in bounded batches regardless of response order', async () => {
     const pages = Array.from({ length: 107 }, (_, index) => page({ id: String(100 + index) }));
     const f = await fixture({ pages });

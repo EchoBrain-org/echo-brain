@@ -1,6 +1,7 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createAgenticAskV1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from "../../src/shared/evidence-desk-v1.js";
 import { deferred } from "./fixtures/deferred.js";
 
@@ -62,6 +63,50 @@ describe("agentic Ask: final publication boundary", () => {
 
     expectNoPublicationOrRetry(f);
     expect(f.append).not.toHaveBeenCalled();
+  });
+
+  it("checks each model call incrementally but releases nothing when already-checked evidence is revoked mid-run", async () => {
+    const launch: EvidenceDeskItemV1 = {
+      id: "desk_launch", kind: "decision", text: "Launch is Tuesday.", label: "Launch review", visibility: "team",
+      citation: { kind: "approved_record", atom_id: canonicalSha256("launch"), record_sha256: canonicalSha256("record"), policy_id: "organization-member-readable-person-v2" },
+      receipt_sha256: canonicalSha256("receipt"),
+    };
+    // A desk that honours the incremental mode: it re-checks an item only
+    // once per request unless the check is full.
+    const released = new Set<string>(); const passed = new Set<string>(); const modes: string[] = []; let revoked = false;
+    const desk: EvidenceDeskPortV1 = {
+      scope: { kind: "global" },
+      search: async () => { released.add(launch.id); return { items: [launch], truncated: false, receipt_digests: [launch.receipt_sha256] }; },
+      open: async () => { throw new Error("unexpected open"); },
+      list: async () => { throw new Error("unexpected list"); },
+      revalidate: async ({ mode }) => {
+        modes.push(mode ?? "full");
+        for (const id of released) {
+          if (mode === "incremental" && passed.has(id)) continue;
+          if (revoked) throw new AuthorityOperationError("unauthorized", "the launch review is no longer readable");
+          passed.add(id);
+        }
+        return checked;
+      },
+    };
+    const need = (status: string, evidence: string[]) => [{ question: "When is launch?", notes: "", needs: [{ need: "launch date", status, evidence }] }];
+    const replies = [
+      { parts: need("open", []), actions: [{ tool: "search", args: { query: "launch" } }] },
+      { parts: need("found", ["E1"]), actions: [{ tool: "finish", args: {} }] },
+      { sentences: [{ text: "Launch is Tuesday.", evidence: ["E1"] }], not_found: [] },
+    ];
+    let calls = 0;
+    // The reader loses access after research finished, before the writer runs.
+    const generate = vi.fn(async () => { if (calls === 1) revoked = true; return replies[calls++]; });
+    const append = vi.fn();
+    const ask = createAgenticAskV1({ desk, model: { generate }, audit: { append },
+      generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 30_000 } });
+    await expect(ask.answer({ question: "When is launch?" })).rejects.toMatchObject({ code: "unauthorized" });
+    // Three incremental pre-call checks (the writer's passes: launch was
+    // already checked), then the full release check refuses the answer.
+    expect(modes).toEqual(["incremental", "incremental", "incremental", "full"]);
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(append).not.toHaveBeenCalled();
   });
 
   it("does not retry the audit or publish a valid answer when its audit append fails", async () => {

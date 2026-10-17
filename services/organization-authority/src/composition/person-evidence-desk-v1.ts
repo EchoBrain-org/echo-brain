@@ -12,6 +12,7 @@ import {
   type EvidenceDeskListInputV1,
   type EvidenceDeskOpenInputV1,
   type EvidenceDeskScopeV1,
+  type EvidenceDeskRevalidateInputV1,
 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
 import type { PersonAnswerCitationV3, PersonOpenRefV1 } from "@echo-brain/organization-api";
 import type {
@@ -136,6 +137,8 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
 } {
   const stored = new Map<string, Stored>();
   const originalReleases: OriginalContextDeskReleaseV1[] = [];
+  /** How many of `originalReleases` a successful check of this desk has covered. */
+  let checkedOriginalReleases = 0;
   const recordReleases: PersonRecordSearchBatchReleaseV1[] = [];
   let pointer: PersonRecordSearchReleasePointerV1 | undefined;
   let recordsUnavailableAtStart = false;
@@ -286,11 +289,20 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     const release = options.originals.deskOpen({ access_token: options.access_token, scope: options.scope, citation: input.citation, ...(input.neighbours === undefined ? {} : { neighbours: input.neighbours }) });
     return result(originals(release), release.truncated, [release.receipt]);
   };
-  const revalidate = async (input: { readonly signal?: AbortSignal }) => {
+  const revalidate = async (input: EvidenceDeskRevalidateInputV1) => {
     input.signal?.throwIfAborted();
     let checkedAt: string | undefined = initialize();
-    for (const release of originalReleases) checkedAt = options.originals.revalidateDeskRelease({ access_token: options.access_token, release }).checked_at;
+    // An incremental check (ADR-0038) re-reads the items of original releases
+    // made since this desk's last successful check; earlier ones keep only
+    // their session, scope and authorization pins. Record releases re-read no
+    // items either way, so each one's session, grant and snapshot pin runs on
+    // every check. The check is synchronous: no release can land during it.
+    const incremental = input.mode === "incremental";
+    originalReleases.forEach((release, index) => {
+      checkedAt = options.originals.revalidateDeskRelease({ access_token: options.access_token, release, ...(incremental && index < checkedOriginalReleases ? { items_checked: true as const } : {}) }).checked_at;
+    });
     for (const release of recordReleases) checkedAt = options.records.revalidateBatchRelease({ access_token: options.access_token, release }).checked_at;
+    checkedOriginalReleases = originalReleases.length;
     return Object.freeze({ checked_at: checkedAt });
   };
   return Object.freeze({
@@ -299,6 +311,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     open: (input: EvidenceDeskOpenInputV1) => observedDeskCall("evidence_open", () => open(input)),
     list: (input: EvidenceDeskListInputV1) => observedDeskCall("evidence_list", () => list(input)),
     openCitation: (input: Parameters<typeof openCitation>[0]) => observedDeskCall("evidence_open", () => openCitation(input)),
-    revalidate: (input: { readonly signal?: AbortSignal }) => observeCoreRuntimeV1("evidence_revalidate", () => revalidate(input)),
+    revalidate: (input: EvidenceDeskRevalidateInputV1) => observeCoreRuntimeV1("evidence_revalidate", () => revalidate(input)),
   });
 }

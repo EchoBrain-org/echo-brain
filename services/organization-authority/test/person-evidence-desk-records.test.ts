@@ -216,6 +216,40 @@ describe('Person evidence desk over the real approved-record route', () => {
     await expect(driftedDesk.revalidate({})).rejects.toThrow('person authentication failed');
   });
 
+  it('re-reads only original releases made since its last check in an incremental check, while session and record pins run every time', async () => {
+    const value = await fixture();
+    const originals = emptyOriginals();
+    const empty = originals.deskSearch({ access_token: 'token', scope: { kind: 'global' } });
+    const releases = [1, 2].map(index => ({ ...empty, receipt: digest(`original-${index}`) }));
+    let next = 0;
+    const deskAuthorize = vi.fn(() => ({ checked_at: '2026-09-27T01:00:00.000Z' }));
+    const revalidateDeskRelease = vi.fn<PersonOriginalContextEvidenceDeskPortV1['revalidateDeskRelease']>(() => ({ checked_at: '2026-09-27T01:00:00.000Z' }));
+    const desk = createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, records: value.route,
+      originals: { ...originals, deskAuthorize, deskSearch: () => releases[next++]!, revalidateDeskRelease } });
+    const checks = () => revalidateDeskRelease.mock.calls.splice(0).map(([input]) => [input.release.receipt, input.items_checked === true ? 'pins' : 'items']);
+    await desk.search({ query: 'Decision', limit: 10 });
+    await desk.revalidate({ mode: 'incremental' });
+    expect(checks()).toEqual([[digest('original-1'), 'items']]);
+    // A repair with no new evidence re-reads no item.
+    await desk.revalidate({ mode: 'incremental' });
+    expect(checks()).toEqual([[digest('original-1'), 'pins']]);
+    await desk.search({ query: 'Decision', limit: 10 });
+    // A failed check fails the same way and leaves the new release pending.
+    revalidateDeskRelease.mockImplementationOnce(() => ({ checked_at: '2026-09-27T01:00:00.000Z' }))
+      .mockImplementationOnce(() => { throw new AuthorityOperationError('unauthorized', 'person authentication failed'); });
+    await expect(desk.revalidate({ mode: 'incremental' })).rejects.toThrow('person authentication failed');
+    expect(checks()).toEqual([[digest('original-1'), 'pins'], [digest('original-2'), 'items']]);
+    await desk.revalidate({ mode: 'incremental' });
+    expect(checks()).toEqual([[digest('original-1'), 'pins'], [digest('original-2'), 'items']]);
+    // The full check re-reads every release.
+    await desk.revalidate({});
+    expect(checks()).toEqual([[digest('original-1'), 'items'], [digest('original-2'), 'items']]);
+    expect(deskAuthorize.mock.calls.length).toBeGreaterThanOrEqual(5);
+    // The record snapshot pin is checked on an incremental check too.
+    value.authority.prepare('UPDATE authority_readable_search_active_generation SET manifest_sha256=? WHERE singleton=1').run(digest('drift'));
+    await expect(desk.revalidate({ mode: 'incremental' })).rejects.toThrow('person authentication failed');
+  });
+
   it('does not turn a valid release witness into authority for a forged atom anchor', async () => {
     const value = await fixture();
     const batch = value.route.searchBatch({ access_token: 'token', queries: ['Decision'], desk: true });

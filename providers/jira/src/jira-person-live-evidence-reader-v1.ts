@@ -291,7 +291,11 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     },
     async revalidate(input): Promise<void> {
       return safe(async () => {
-        const origin = await verifyConnection(input.signal);
+        // An incremental check carries only tickets released since the caller's
+        // last successful check (ADR-0038). It reads them against the pinned
+        // site and then verifies the account, site and project pin once; a full
+        // check also verifies before its reads.
+        const origin = input.mode === 'incremental' && pinnedOrigin !== undefined ? pinnedOrigin : await verifyConnection(input.signal);
         const ids = new Set<string>();
         for (const raw of jiraArray(input.citations, REQUEST_MAX_HANDLES)) {
           let citation: PersonTicketCitationV1;

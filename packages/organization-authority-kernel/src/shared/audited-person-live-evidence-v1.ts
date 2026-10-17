@@ -73,6 +73,8 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
   if (canonicalSha256(reader.binding) !== bindingDigest) throw new AuthorityOperationError('unauthorized', 'Live evidence reader belongs to a different binding');
   const stored = new Map<string, { readonly handle: string; readonly citation: C }>();
   const released = new Map<string, C>();
+  /** Citation keys a successful check of this source has covered; request-local, like `released`. */
+  const checked = new Set<string>();
   const cursors = new Map<string, { readonly provider: string; readonly selection: string }>();
   // Audit is asynchronous. Reserve request-owned identifiers before it starts
   // so concurrent releases cannot each admit themselves against the same stale
@@ -258,9 +260,15 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     },
     async revalidate(input) {
       current(input.signal);
-      const citations = Object.freeze([...released.values()]);
-      await safeCall(() => reader.revalidate({ citations, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
+      // An incremental check (ADR-0038) re-reads only citations released since
+      // this request's last successful check. Releases that land while the
+      // check runs are not in this snapshot and stay pending for the next one.
+      const incremental = input.mode === 'incremental';
+      const pending = [...released].filter(([key]) => !incremental || !checked.has(key));
+      const citations = Object.freeze(pending.map(([, citation]) => citation));
+      await safeCall(() => reader.revalidate({ citations, ...(incremental ? { mode: 'incremental' as const } : {}), ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
       current(input.signal);
+      for (const [key] of pending) checked.add(key);
     },
     assertCurrent: current,
   } satisfies PersonLiveEvidenceSourceV1<C>);

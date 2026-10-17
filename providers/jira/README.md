@@ -213,9 +213,13 @@ organization, grant or site selector in model arguments or connection commands.
    Every release commits current Person/grant, ticket coordinates and exact
    released-text digest and normalized-value digest (including inventory metadata)
    to the immutable Authority read-decision table before
-   reaching a model. Revalidation includes inventory, earlier revisions and
-   evidence omitted from the answer, before every subsequent model call and
-   after the terminal audit. The desk rechecks its local snapshot after Jira I/O.
+   reaching a model. Before every subsequent model call, revalidation rechecks
+   the evidence released since the previous successful check, plus the session,
+   grant and connection; before and after the terminal audit it rechecks all
+   released evidence, including inventory, earlier revisions and evidence
+   omitted from the answer
+   ([ADR-0038](../../docs/decisions/ADR-0038-incremental-access-check-before-model-calls.md)).
+   The desk rechecks its local snapshot after Jira I/O.
 4. V5 citations open the adapter-verified Jira permalink directly. The
    desktop's global and project Ask call `person ask --live`
    (`POST /v5/person/ask`, strict V6 response with Jira tickets and Confluence

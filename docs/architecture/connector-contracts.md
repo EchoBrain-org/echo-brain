@@ -104,9 +104,13 @@ implements the common release boundary:
    an item id issued in that request. List continuations are request-owned and
    bound to the original container and dates; provider cursors remain internal.
 6. Before every later model call and the final response, the composing desk
-   calls `revalidate`. This checks current ECHO authorization and the provider's
-   connection and visibility of every released citation, including inventory
-   metadata and earlier ticket revisions. A valid token alone is insufficient.
+   calls `revalidate`. Every call checks current ECHO authorization and the
+   provider's connection. Before the final response it also checks the
+   visibility of every released citation, including inventory metadata and
+   earlier ticket revisions; before a model call it checks only the citations
+   released since the previous successful check
+   ([ADR-0038](../decisions/ADR-0038-incremental-access-check-before-model-calls.md)).
+   A valid token alone is insufficient.
 
 Provider errors become bounded messages without raw bodies or exception
 causes. Abort signals reach provider reads and prevent release after

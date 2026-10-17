@@ -176,6 +176,13 @@ export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalC
   revalidateDeskRelease(input: {
     readonly access_token: string;
     readonly release: OriginalContextDeskReleaseV1;
+    /**
+     * The request's desk already checked this release's items (an incremental
+     * check, ADR-0038): recheck only the session, identity, scope and
+     * authorization pins, not each item. An implementation may ignore it and
+     * check everything.
+     */
+    readonly items_checked?: true;
   }): { readonly checked_at: string };
 }
 

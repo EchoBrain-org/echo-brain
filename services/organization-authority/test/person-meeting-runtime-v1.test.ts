@@ -920,6 +920,26 @@ describe('personal meeting intake uses the shared processing path', () => {
     f.leave(project, 'reader-a');
     expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release })).toThrow();
   });
+  it('rechecks only the session, identity and authorization pins of a desk release whose items the desk already checked', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    await f.processUntilIdle(runtime);
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
+    const release = originals.deskSearch({ access_token: 'reader-a', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] });
+    expect(release.items).toHaveLength(1);
+    const reads = originals as unknown as { assertReleasedAtomReadable(): void; currentDeskItem(): unknown };
+    const atomReads = vi.spyOn(reads, 'assertReleasedAtomReadable');
+    const itemReads = vi.spyOn(reads, 'currentDeskItem');
+    expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release, items_checked: true })).not.toThrow();
+    expect(atomReads).not.toHaveBeenCalled(); expect(itemReads).not.toHaveBeenCalled();
+    originals.revalidateDeskRelease({ access_token: 'reader-a', release });
+    expect(atomReads).toHaveBeenCalledTimes(1); expect(itemReads).toHaveBeenCalledTimes(1);
+    // Another person's session never inherits the release.
+    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release, items_checked: true })).toThrow();
+    // Leaving the project moves the authorization pin, so even the narrow check refuses.
+    f.leave(project, 'reader-a');
+    expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release, items_checked: true })).toThrow();
+  });
   it('opens a valid transcript-only imported meeting with no releasable body', async () => {
     const f = await fixture({ transcriptOnly: true }), runtime = f.create();
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
