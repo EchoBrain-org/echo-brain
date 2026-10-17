@@ -406,7 +406,10 @@ not candidates.
      (`agentic-research-loop-v1.test.ts:83`); a complete unfiltered list
      covers its filtered ones (`:101`); rows alone need an open before absence
      (`agentic-ask-v1.test.ts:501`). The only redundant part is the
-     model-facing `inventories` field, retired in item 3.
+     model-facing `inventories` field, retired in item 3. Built: for a
+     question goal they read the same end as list evidence, so a list whose
+     last page was exactly full is never "a completed list" for not_found and
+     never covers its filtered lists (addition 1). A task goal keeps its rule.
 5. **"You may stop early when the facts the question asks for are already
    supported."** Reworded for Ask; kept for task goals.
    - Where: `agentic-ask-v1-model-protocol.ts:286-287`. The same rule 4 tells

@@ -194,6 +194,26 @@ describe("Ask research: reading a list to its end", () => {
     expect(view.lists).toEqual([expect.objectContaining({ id: "L1", shown: 25, ended: true, unverified_end: true, complete: false })]);
   });
 
+  it("never takes a list whose end is unverified as a completed list for not_found (addition 1)", async () => {
+    const need = "a ticket about the fixture vendor";
+    const run = async (page_full: boolean) => {
+      // Research reads the list, opens one row, then says the fact is absent.
+      const steps = [
+        ask(TICKETS, need, "open", [], [LIST]), ask(TICKETS, need, "open", [], [{ tool: "open", args: { id: "E1" } }], "N1"),
+        ask(TICKETS, need, "not_found", [], [finish], "N1"), ask(TICKETS, need, "not_found", [], [finish], "N1"),
+      ];
+      const open = vi.fn(async () => result([{ ...ticketRow(1), text: "THERM-1: Fixture work 1. Calibrate the probe." }]) as EvidenceDeskResultV2);
+      const h = harness(input => input.system_prompt.startsWith("You write") ? { lists: [], sentences: [], not_found: [need] } : steps.shift(),
+        { live_sources: [JIRA], ticket_available: true, open, list: vi.fn(async () => result(tickets(1, 25), { page_full }) as EvidenceDeskResultV2) });
+      return h.research.research({ trigger: "ask", brief: question(TICKETS) });
+    };
+    // A list read to a confirmed end shows absence; an exactly full last page does not.
+    expect((await run(false)).stop).toEqual({ reason: "finished", completed: true });
+    const unverified = await run(true);
+    expect(unverified.rounds[2]!.rejected).toEqual([expect.stringContaining(`need N1 "${need}" is not_found after fewer than two completed searches or a completed list`), expect.stringContaining("is not_found after fewer than two completed searches or a completed list")]);
+    expect(unverified.stop).toEqual({ reason: "unusable_step", completed: false });
+  });
+
   it("treats a page with as many rows as research asked for as full when the desk does not say", async () => {
     const meetings = Array.from({ length: 50 }, (_, index) => record(`action-${index + 1}`, `Action ${index + 1}.`, { kind: "action", attributes: { owner: "Dana Lee" } }));
     const list = vi.fn(async () => result(meetings) as EvidenceDeskResultV2);

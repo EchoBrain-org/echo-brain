@@ -666,8 +666,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       currentState.paged += page.length;
       if (page.length > 0) retrievalProgress += 1;
       const more = inventoryMore(currentState);
-      if (currentState.unfiltered && currentState.available && !more && !currentState.truncated && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
-      if (!before.fetched || before.paged !== currentState.paged || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: currentState.available && !more && !currentState.truncated });
+      // What shows absence is the same end the list evidence trusts: for a question goal, an exactly full last page is no
+      // confirmed end (addition 1). A task goal keeps its rule.
+      const readToEnd = currentState.available && !more && !currentState.truncated && !(ask && currentState.unverified_end);
+      if (currentState.unfiltered && readToEnd && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
+      if (!before.fetched || before.paged !== currentState.paged || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: readToEnd });
       // An empty page is never "nothing more" while pages remain: a filter applied after each page can empty one. A repeat
       // of an inventory read to its end makes no desk call and no progress, and says so; only a complete one is "in full".
       // For a question goal, an exactly full last page is not trusted as the end (addition 1).
@@ -856,7 +859,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
    */
   const blockingInventories = (): readonly ListState[] => {
     const fetched = [...lists.values()].filter(state => state.fetched);
-    const covered = new Set(fetched.filter(state => state.unfiltered && state.available && !state.truncated && !inventoryMore(state)).map(state => state.source));
+    const covered = new Set(fetched.filter(state => state.unfiltered && state.available && !state.truncated && !inventoryMore(state) && !(ask && state.unverified_end)).map(state => state.source));
     const searched = (source: EvidenceDeskSourceV2) => searchedSources.has(null) || searchedSources.has(source);
     return fetched.filter(state => inventoryMore(state) && !covered.has(state.source) && !(sourcesById.get(state.source)?.metadata_only_list === true && searched(state.source)));
   };
