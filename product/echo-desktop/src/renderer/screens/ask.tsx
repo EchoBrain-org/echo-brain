@@ -1,17 +1,20 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { Answer, AnswerSource, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
+import type { Answer, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import { documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
-import { openerOf } from '../openers.js';
+import { openerOf, sourceKey } from '../openers.js';
+import {
+  announceAfter, announcement, liveRows, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
+} from '../progress.js';
 import {
   answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject, fullPageOffered,
-  matchesShown, openCompose, openFullPage, openMatch, openExternalSource, pageCovered, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
+  matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
   submitBar, widenScope, type AskTurn, type PaneTarget, type Read, type SourcesState, type State,
 } from '../store.js';
-import { Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
+import { Check, Chevron, Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -255,6 +258,7 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
     <div class="turn">
       <div class="question selectable" data-testid="question">{turn.question}</div>
       <div class="asked">{turn.scopeName}</div>
+      {turn.receipt && <Receipt state={state} receipt={turn.receipt} />}
       <AgenticAnswer state={state} turn={turn} />
       {foundNothingInProject(turn) && (
         <div class="project-empty" data-testid="project-empty">
@@ -284,10 +288,11 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
 export function AskView({ state }: { state: State }) {
   const thread = state.ask!;
   const scroller = useRef<HTMLElement>(null);
-  // A new question, answer or failure scrolls to the bottom.
+  // A new question, answer or failure scrolls to the bottom, and so does a new row of the question on its way.
+  const progress = thread.asking?.progress;
   useLayoutEffect(() => {
     if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
-  }, [thread.seq, thread.shown, thread.asking, thread.failed]);
+  }, [thread.seq, thread.shown, thread.asking === null, thread.failed, progress?.rows.length, (progress?.pending ?? 0) > 0]);
   const { asking, failed } = thread;
   return (
     <section class="ask" data-testid="ask-view" aria-live="polite" ref={scroller}>
@@ -297,7 +302,7 @@ export function AskView({ state }: { state: State }) {
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>
           <div class="asked">{asking.scopeName}</div>
-          <Asking />
+          <Asking state={state} progress={asking.progress} />
         </div>
       )}
       {failed && (
@@ -316,18 +321,122 @@ export function AskView({ state }: { state: State }) {
   );
 }
 
-function Asking() {
-  const [elapsed, setElapsed] = useState(0);
+/** How often the live line's timer moves. */
+const TICK_MS = 250;
+
+/** `text`, said to a screen reader at most every few seconds: the latest text once the wait is over. */
+function useAnnouncement(text: string): string {
+  const [said, setSaid] = useState<{ text: string; at: number } | null>(null);
   useEffect(() => {
-    const started = Date.now();
-    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 250);
+    const wait = announceAfter(text, said, Date.now());
+    if (wait === null) return;
+    const timer = setTimeout(() => setSaid({ text, at: Date.now() }), wait);
+    return () => clearTimeout(timer);
+  }, [text, said]);
+  return said?.text ?? '';
+}
+
+/**
+ * The question on its way: one live line (the stage now, how long, Cancel)
+ * and, once it has worked a few seconds, at most three rows of what it
+ * searched and read. Each name opens beside Ask, which keeps running. The
+ * section is a live region: the line, its timer and its rows are kept out of
+ * it, and a screen reader hears the stage at most every few seconds instead.
+ */
+function Asking({ state, progress }: { state: State; progress: AskProgress }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => clearInterval(timer);
   }, []);
-  return <div class="asking" data-testid="asking">
-    {/* The section is a live region: the counter would be read out every second. */}
-    <i /><i /><i /><span>Thinking…</span><span aria-hidden="true">{elapsed}s</span>
-    <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
-  </div>;
+  const elapsed = Math.max(0, now - progress.started);
+  // A quick Ask shows nothing more than it always did.
+  const live = elapsed >= PROGRESS_AFTER_MS;
+  const rows = live ? liveRows(progress) : [];
+  // Heard at once, as the line always was; then the stage, once it shows, at most every few seconds.
+  const heard = useAnnouncement(live ? announcement(progress) || 'Thinking…' : 'Thinking…');
+  return <>
+    <div class="ask-progress" aria-live="off">
+      <div class="asking" data-testid="asking">
+        <i /><i /><i /><span data-testid="ask-stage">{live ? stageWords(progress) : 'Thinking…'}</span>
+        <span class={`timer${live && progress.stage ? ' dotted' : ''}`} aria-hidden="true">{Math.floor(elapsed / 1000)}s</span>
+        <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
+      </div>
+      {rows.length > 0 && (
+        <ul class="ask-steps" data-testid="ask-steps" aria-label="What Ask has looked through">
+          {rows.map((row, index) => <LiveStep key={index} state={state} row={row} />)}
+        </ul>
+      )}
+    </div>
+    <span class="sr-only" aria-live="polite" data-testid="ask-announcement">{heard}</span>
+  </>;
+}
+
+/** A row's mark: done, or still going. */
+function Mark({ done }: { done: boolean }) {
+  return done ? <span class="mark"><Check /></span> : <span class="mark" aria-hidden="true"><i /></span>;
+}
+
+/** A search: its source kinds, never the words searched, and what it found. */
+function SearchedStep({ state, row }: { state: State; row: AskSearched }) {
+  return <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">{searchedWords(row, state.tools?.items)}</span></li>;
+}
+
+/** One live row: a search, a read with its names (the first few, then +N), or how many are being read. */
+function LiveStep({ state, row }: { state: State; row: LiveRow }) {
+  if (row.type === 'searched') return <SearchedStep state={state} row={row.row} />;
+  if (row.type === 'pending') {
+    return (
+      <li class="ask-step" data-testid="ask-step"><Mark done={false} />
+        <span class="words">Reading {row.count} {row.more ? 'more' : row.count === 1 ? 'item' : 'items'}</span></li>
+    );
+  }
+  const { names, more } = rowNames(row.row.items);
+  return (
+    <li class={`ask-step${row.done ? ' done' : ''}`} data-testid="ask-step"><Mark done={row.done} />
+      <span class="words">{row.done ? 'Read' : 'Reading'} <Names state={state} items={names} />{more > 0 && <span class="more"> +{more}</span>}</span>
+    </li>
+  );
+}
+
+/** What a named item is called: a file's name as a person says it, otherwise its label. */
+function namedLabel(source: AnswerSource): string {
+  return source.kind === 'original' ? documentName(source.label).name : source.label;
+}
+
+/** Names, each opening its item beside Ask. The one the pane shows is lit. */
+function Names({ state, items }: { state: State; items: readonly AnswerSource[] }) {
+  const shown = state.sources?.item ? sourceKey(state.sources.item) : null;
+  return <>{items.map((source, index) => {
+    const on = shown === sourceKey(source);
+    return <span key={sourceKey(source)}>{index > 0 && ', '}
+      <button type="button" class={`step-name${on ? ' on' : ''}`} data-testid="ask-step-name" aria-pressed={on} onClick={() => openNamed(source)}>
+        {namedLabel(source)}</button></span>;
+  })}</>;
+}
+
+/**
+ * Above an answer that took a while: one dim line, "Looked through 14 items
+ * · 48s ›", that opens the searches and reads the Authority audited, each
+ * name opening beside the answer.
+ */
+function Receipt({ state, receipt }: { state: State; receipt: AskReceipt }) {
+  const [open, setOpen] = useState(false);
+  const unnamed = receiptUnnamed(receipt);
+  return (
+    <div class="receipt">
+      <button type="button" class={`receipt-line${open ? ' open' : ''}`} data-testid="ask-receipt" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span>{receiptWords(receipt)}</span><Chevron />
+      </button>
+      {open && (
+        <ul class="ask-steps" data-testid="receipt-rows">
+          {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} />
+            : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} items={row.items} /></span></li>)}
+          {unnamed > 0 && <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">and {unnamed} more not listed</span></li>}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** A decision, action or rationale, and the excerpts that support it. One an answer cites is lit (`on`). */

@@ -5,7 +5,7 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
+  AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
   NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
   ExternalAnswerSource, UpdateState,
@@ -14,6 +14,7 @@ import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, sameExpect } from '../
 import { askText, searchQuery } from '../shared/query.js';
 import { sourceGroups, type SourceGroup } from './answer.js';
 import { openerOf } from './openers.js';
+import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import * as freshness from './freshness.js';
@@ -35,6 +36,13 @@ export interface AskQuestion {
 export interface AskTurn extends AskQuestion {
   id: number;
   answer: Answer;
+  /** What it looked through, above the answer: only when the Authority streamed it and the Ask took long enough to show it. */
+  receipt?: AskReceipt;
+}
+
+/** The question on its way, and what it has done so far (ADR-0039). */
+export interface AskAsking extends AskQuestion {
+  progress: AskProgress;
 }
 
 /**
@@ -51,7 +59,7 @@ export interface AskState {
   previous: AskTurn | null;
   /** The current answer. */
   shown: AskTurn | null;
-  asking: AskQuestion | null;
+  asking: AskAsking | null;
   /** The last question that could not be answered. */
   failed: (AskQuestion & { failure: Failure }) | null;
 }
@@ -3247,7 +3255,9 @@ export function earlierTurns(thread: AskState): readonly AskTurn[] {
 /**
  * Asks, as a follow-up when a thread is open. One question at a time: a
  * second never replaces one on its way. The current answer moves up, and
- * joins the earlier ones only once the new question is answered.
+ * joins the earlier ones only once the new question is answered. While it
+ * works, the steps the host reports show under it (ADR-0039); with no answer,
+ * they go, and so does any item they opened in the pane.
  */
 export async function ask(question: string, scope: AskScope = state.barScope): Promise<void> {
   const account = expect();
@@ -3257,21 +3267,38 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
   activeAskCancelId = cancelId;
-  const asking: AskQuestion = { question: text, scope, scopeName: scopeName(scope) };
-  set({ ask: { seq: mine, earlier: thread?.earlier ?? [], previous: thread?.shown ?? null, shown: null, asking, failed: null }, sources: null, toast: null });
+  const asked: AskQuestion = { question: text, scope, scopeName: scopeName(scope) };
+  const started = Date.now();
+  set({
+    ask: { seq: mine, earlier: thread?.earlier ?? [], previous: thread?.shown ?? null, shown: null, asking: { ...asked, progress: startProgress(started) }, failed: null },
+    sources: emptySources(), toast: null,
+  });
   const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId });
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
   const current = state.ask;
   if (current?.seq !== mine) return; // cancelled, or Ask was left
   if (!result.ok) {
-    set({ ask: { ...current, previous: null, shown: current.previous, asking: null, failed: { ...asking, failure: result.failure } } });
+    set({ ask: { ...current, previous: null, shown: current.previous, asking: null, failed: { ...asked, failure: result.failure } }, sources: null });
     if (current.previous) startSources();
     accountLost(result.failure);
     return;
   }
   const earlier = current.previous ? [...current.earlier, current.previous].slice(-MAX_EARLIER) : current.earlier;
-  set({ ask: { ...current, earlier, previous: null, shown: { id: mine, ...asking, answer: result.value }, asking: null } });
-  startSources();
+  // Only an Ask that took long enough to show its work keeps its receipt.
+  const receipt = result.value.receipt !== undefined && Date.now() - started >= PROGRESS_AFTER_MS ? result.value.receipt : undefined;
+  set({ ask: { ...current, earlier, previous: null, shown: { id: mine, ...asked, answer: result.value, ...(receipt === undefined ? {} : { receipt }) }, asking: null } });
+  startSources(true);
+}
+
+/**
+ * A step of the Ask on its way, as the host reports it. Only the Ask this
+ * page asked last, still on its way, for the account it shows, takes it: a
+ * step of an earlier Ask, a cancelled one or another account is dropped.
+ */
+export function askProgress(notice: AskProgressNotice): void {
+  const thread = state.ask;
+  if (!thread?.asking || activeAskCancelId === null || notice.cancel_id !== activeAskCancelId || !sameExpect(notice.expect, expect())) return;
+  set({ ask: { ...thread, asking: { ...thread.asking, progress: withStep(thread.asking.progress, notice.step) } } });
 }
 
 /**
@@ -3296,7 +3323,10 @@ export function askEverywhere(): void {
   void ask(turn.question, { kind: 'global' });
 }
 
-/** Cancel, while asking: the answer before comes back, or with none Ask closes. A late answer is dropped. */
+/**
+ * Cancel, while asking: the answer before comes back, or with none Ask closes.
+ * A late answer, and any step after, is dropped; what it named goes.
+ */
 export function cancelAsk(): void {
   const thread = state.ask;
   if (!thread?.asking) return;

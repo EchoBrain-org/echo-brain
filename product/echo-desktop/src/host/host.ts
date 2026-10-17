@@ -7,13 +7,13 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type AskStep, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
+  abandonView, answerView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
   NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
@@ -249,13 +249,13 @@ function sameAccount(current: AppStatus | null, expect: Expect): boolean {
 /** Runs a command for the account the renderer is showing, never another. */
 async function forAccount<T>(
   method: HostMethodName, expect: Expect, argv: readonly string[], view: (stdout: string) => T, requestId?: string, abortSignal?: AbortSignal,
-  write = WRITE_METHODS.has(method),
+  write = WRITE_METHODS.has(method), onLine?: (line: string) => void,
 ): Promise<Result<T>> {
   if (!sameAccount(await status(), expect)) return code('account_changed', write, requestId);
   if (write && requestId !== undefined) inFlight.add(requestId);
   let run: CliRun;
   try {
-    run = await cli(argv, undefined, abortSignal === undefined ? {} : { abort_signal: abortSignal });
+    run = await cli(argv, onLine, abortSignal === undefined ? {} : { abort_signal: abortSignal });
   } finally {
     if (write && requestId !== undefined) inFlight.delete(requestId);
   }
@@ -282,6 +282,30 @@ async function forAccount<T>(
     }
     throw error;
   }
+}
+
+/**
+ * An Ask's progress lines (ADR-0039): each step the page shows while the Ask
+ * runs, tagged with the account it runs for and the page's own cancel id, so
+ * the page drops a step of any other Ask or account. A line that is not a
+ * valid step, and any line once the Ask was cancelled or timed out, goes nowhere.
+ */
+function progressLines(cancelId: string, expect: Expect, abortSignal: AbortSignal): (line: string) => void {
+  const account = { authority: expect.authority, membership_id: expect.membership_id };
+  return line => {
+    if (abortSignal.aborted) return;
+    for (const value of jsonLines(line)) {
+      if (value === null || typeof value !== 'object' || !Object.hasOwn(value, 'progress')) continue;
+      let step: AskStep;
+      try {
+        step = askStepView(value);
+      } catch {
+        if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused');
+        continue;
+      }
+      port.postMessage({ notice: 'ask.progress', payload: { cancel_id: cancelId, expect: account, step } });
+    }
+  };
 }
 
 /** Google in the browser, then the new session. Only the phase crosses to the renderer; the sign-in URL never does. */
@@ -619,12 +643,15 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
         stdout => abandonView(lastJson(stdout), request_id));
     }
     case 'ask.run': {
-      const { expect, question, scope } = params as Params<'ask.run'>;
+      const { expect, question, scope, cancel_id } = params as Params<'ask.run'>;
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      // Mine reads only retained context and must also work on older Authorities.
-      return forAccount(method, expect, ['ask', option('question', text), ...(scope.kind === 'mine' ? [] : ['--live']), ...askScopeArgs(scope)],
-        stdout => answerView(lastJson(stdout), scope), undefined, abortSignal);
+      // Mine reads only retained context and must also work on older Authorities; it never streams.
+      // A live Ask asks for its progress; an Authority that predates it answers as before, with none.
+      const live = scope.kind !== 'mine';
+      return forAccount(method, expect, ['ask', option('question', text), ...(live ? ['--live', '--progress'] : []), ...askScopeArgs(scope)],
+        stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined,
+        live && abortSignal !== undefined ? progressLines(cancel_id, expect, abortSignal) : undefined);
     }
     case 'ask.cancel':
       return ok(null);

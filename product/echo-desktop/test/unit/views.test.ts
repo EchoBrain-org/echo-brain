@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, listView, membersView, noteMatchesView,
+  abandonView, answerView, askReceiptView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, listView, membersView, noteMatchesView,
   noteTitle, openItemsView, openItemView, openView, revokedView, NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
@@ -707,4 +707,56 @@ describe('an Ask citation opens the exact item it cites', () => {
     ]) expect(() => sources([citation])).toThrow(ViewError);
   });
 
+});
+
+describe('Ask progress lines and the receipt (ADR-0039)', () => {
+  it('carries each step of a working Ask, and nothing else a line holds', () => {
+    expect(askStepView({ ok: true, progress: { type: 'stage', stage: 'reading', pending: 3 } })).toEqual({ type: 'stage', stage: 'reading', pending: 3 });
+    expect(askStepView({ ok: true, progress: { type: 'stage', stage: 'checking_access' } })).toEqual({ type: 'stage', stage: 'checking_access' });
+    expect(askStepView({ ok: true, progress: { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 } }))
+      .toEqual({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 });
+    const read = askStepView({ ok: true, progress: { type: 'read', items: [named, ticket] } });
+    expect(read).toEqual({ type: 'read', items: [
+      { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') },
+      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' },
+    ] });
+    expect(JSON.stringify(read)).not.toContain('private-tenant');
+  });
+
+  it('refuses a line with a note, a query, a body, an id or a round, a count out of bounds, or the answer itself', () => {
+    for (const progress of [
+      { type: 'stage', stage: 'reading', note: 'Mara owns THERM-48' },
+      { type: 'stage', stage: 'planning' },
+      { type: 'stage', stage: 'searching', pending: 2 },
+      { type: 'searched', sources: [{ kind: 'meetings' }], found: 2, query: 'THERM owner' },
+      { type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira', jql: 'assignee = currentUser()' }], found: 1 },
+      { type: 'searched', sources: [{ kind: 'meetings' }], found: 1001 },
+      { type: 'read', items: [{ ...named, text: 'The whole decision.' }] },
+      { type: 'read', items: [named], round: 2 },
+      { type: 'read', items: [] },
+      { type: 'answer', response: v6([named]), receipt: { looked_through: 1, elapsed_ms: 1, rows: [] } },
+    ]) expect(() => askStepView({ ok: true, progress })).toThrow(ViewError);
+    expect(() => askStepView({ ok: false, progress: { type: 'stage', stage: 'reading' } })).toThrow(ViewError);
+    expect(() => askStepView({ ok: true, progress: { type: 'stage', stage: 'reading' }, id: 'E5' })).toThrow(ViewError);
+  });
+
+  it('keeps a streamed answer\'s receipt, only with a V6 answer, only as the contract has it', () => {
+    const receipt = { looked_through: 14, elapsed_ms: 48_000, rows: [
+      { type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [named] },
+    ] };
+    const answer = answerView({ ok: true, result: v6([named]), receipt }, { kind: 'global' });
+    expect(answer.receipt).toEqual({ looked_through: 14, elapsed_ms: 48_000, rows: [
+      { type: 'searched', sources: [{ kind: 'meetings' }], found: 6 },
+      { type: 'read', items: [{ kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') }] },
+    ] });
+    expect(answerView({ ok: true, result: v6([named]) }, { kind: 'global' }).receipt).toBeUndefined();
+    const v5 = { ...v6([]), schema_version: 5, kind: 'echo-clean-person-answer-v5', outcome: 'not_found',
+      parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Nothing.' }] };
+    expect(() => answerView({ ok: true, result: v5, receipt }, { kind: 'global' })).toThrow(ViewError);
+    // Fewer looked through than it names, neighbours not merged, an item named twice.
+    for (const bad of [{ ...receipt, looked_through: 0 }, { ...receipt, rows: [receipt.rows[1], receipt.rows[1]] },
+      { ...receipt, rows: [{ type: 'read', items: [named, named] }] }]) {
+      expect(() => askReceiptView(bad)).toThrow(ViewError);
+    }
+  });
 });

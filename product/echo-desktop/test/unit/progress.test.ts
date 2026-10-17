@@ -1,0 +1,104 @@
+import { describe, expect, it } from 'vitest';
+import type { AnswerSource, AskReceipt } from '../../src/shared/protocol.js';
+import {
+  ANNOUNCE_MS, announceAfter, announcement, duration, liveRows, listWords, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, startProgress, withStep,
+  type AskProgress,
+} from '../../src/renderer/progress.js';
+
+const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
+const decision = (atom: string, label = 'Tuesday sync'): AnswerSource =>
+  ({ kind: 'record', label, record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha(atom) });
+const ticket = (key: string): AnswerSource => ({ kind: 'ticket', tool_id: 'jira', label: key, permalink: `https://example.atlassian.net/browse/${key}` });
+
+const steps = (...events: Parameters<typeof withStep>[1][]): AskProgress => events.reduce(withStep, startProgress(0));
+
+describe('the live line and its rows', () => {
+  it('say only the stage ECHO is in, and what Ask always said before any step came', () => {
+    expect(stageWords(null)).toBe('Thinking…');
+    expect(stageWords(startProgress(0))).toBe('Thinking…');
+    expect(['searching', 'reading', 'checking_access', 'writing'].map(stage => stageWords(steps({ type: 'stage', stage: stage as 'reading' }))))
+      .toEqual(['Searching', 'Reading', 'Checking access', 'Writing']);
+  });
+
+  it('merge neighbours of a type as the receipt does, and name each item once', () => {
+    const progress = steps(
+      { type: 'searched', sources: [{ kind: 'meetings' }], found: 4 },
+      { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }], found: 2 },
+      { type: 'stage', stage: 'reading', pending: 3 },
+      { type: 'read', items: [decision('1'), ticket('THERM-48')] },
+      { type: 'read', items: [ticket('THERM-48'), ticket('THERM-46')] },
+    );
+    expect(progress.rows).toEqual([
+      { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }], found: 6 },
+      { type: 'read', items: [decision('1'), ticket('THERM-48'), ticket('THERM-46')] },
+    ]);
+    // Every name the reads promised came.
+    expect(progress.pending).toBe(0);
+  });
+
+  it('show a read going on while the model reads, done once the stage moves on, and how many are still to be named', () => {
+    const reading = steps(
+      { type: 'searched', sources: [{ kind: 'meetings' }], found: 22 },
+      { type: 'stage', stage: 'reading', pending: 2 },
+      { type: 'read', items: [decision('1')] },
+    );
+    expect(liveRows(reading)).toEqual([
+      { type: 'searched', row: reading.rows[0] },
+      { type: 'read', row: reading.rows[1], done: true },
+      { type: 'pending', count: 1, more: true },
+    ]);
+    const named = withStep(reading, { type: 'read', items: [ticket('THERM-48')] });
+    expect(liveRows(named).at(-1)).toEqual({ type: 'read', row: named.rows[1], done: false });
+    const writing = withStep(named, { type: 'stage', stage: 'writing' });
+    expect(liveRows(writing).at(-1)).toMatchObject({ type: 'read', done: true });
+    // Before any name: "Reading 3 items".
+    expect(liveRows(steps({ type: 'stage', stage: 'reading', pending: 3 }))).toEqual([{ type: 'pending', count: 3, more: false }]);
+  });
+
+  it('keep three rows: the oldest fold away', () => {
+    const progress = steps(
+      { type: 'searched', sources: [{ kind: 'meetings' }], found: 1 }, { type: 'read', items: [decision('1')] },
+      { type: 'searched', sources: [{ kind: 'documents' }], found: 2 }, { type: 'read', items: [decision('2')] },
+      { type: 'stage', stage: 'reading', pending: 4 },
+    );
+    expect(liveRows(progress).map(row => row.type)).toEqual(['searched', 'read', 'pending']);
+  });
+
+  it('name sources as a person says them, never the words searched, and the first names of a read with +N', () => {
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'slack' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 }))
+      .toBe('Searched meetings, Slack and Jira · 22 found');
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 })).toBe('Searched Knowledge Base · nothing new');
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'confluence' }], found: 1 }, [{ tool_id: 'confluence', name: 'Wiki', status: 'linked' }]))
+      .toBe('Searched Wiki · 1 found');
+    expect(listWords(['meetings', 'documents'])).toBe('meetings and documents');
+    const items = [decision('1', 'THERM DVT recovery sync'), ticket('THERM-48'), ticket('THERM-46'), ticket('THERM-44'), ticket('THERM-41')];
+    expect(rowNames(items)).toEqual({ names: items.slice(0, 3), more: 2 });
+    expect(rowNames(items.slice(0, 2))).toEqual({ names: items.slice(0, 2), more: 0 });
+  });
+});
+
+describe('the receipt', () => {
+  const receipt: AskReceipt = { looked_through: 14, elapsed_ms: 48_400, rows: [
+    { type: 'searched', sources: [{ kind: 'meetings' }], found: 9 }, { type: 'read', items: [decision('1'), ticket('THERM-48')] },
+  ] };
+  it('says how many items it looked through and how long, and how many it does not name', () => {
+    expect(receiptWords(receipt)).toBe('Looked through 14 items · 48s');
+    expect(receiptWords({ ...receipt, looked_through: 1 })).toBe('Looked through 1 item · 48s');
+    expect(receiptUnnamed(receipt)).toBe(12);
+    expect(duration(72_000)).toBe('1m 12s');
+    expect(duration(400)).toBe('0s');
+  });
+});
+
+describe('a screen reader hears the stage at most every few seconds', () => {
+  it('announces at once the first time, then after the wait, the latest only, and never the same twice', () => {
+    expect(announcement(null)).toBe('');
+    expect(announcement(steps({ type: 'stage', stage: 'reading', pending: 3 }))).toBe('Reading 3 items');
+    expect(announcement(steps({ type: 'stage', stage: 'checking_access' }))).toBe('Checking access');
+    expect(announceAfter('Searching', null, 1_000)).toBe(0);
+    expect(announceAfter('Reading', { text: 'Searching', at: 1_000 }, 2_000)).toBe(ANNOUNCE_MS - 1_000);
+    expect(announceAfter('Reading', { text: 'Searching', at: 1_000 }, 1_000 + ANNOUNCE_MS + 1)).toBe(0);
+    expect(announceAfter('Reading', { text: 'Reading', at: 1_000 }, 9_000)).toBeNull();
+    expect(announceAfter('', null, 0)).toBeNull();
+  });
+});

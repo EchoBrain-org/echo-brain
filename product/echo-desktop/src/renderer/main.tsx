@@ -21,7 +21,7 @@ import { Sidebar, UpdateRow } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
-  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
+  acceptDrop, accountCommand, askProgress, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
   hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, paneTarget, projectSettingsModal, readUpdate, refreshStatus, retryStart,
   sheetShown, shownItem, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore,
@@ -125,6 +125,8 @@ function App() {
       on('organization.open', () => { if (getState().status?.signed_in) trayOrganization(); }),
       on('update.changed', updateChanged),
       on('notice.open', payload => openNotified(payload.target)),
+      // A step of the Ask on its way: the store drops one of another Ask or account.
+      on('ask.progress', askProgress),
     ];
     // One Escape handler for the whole window: it steps back exactly one level.
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); escape(); } };

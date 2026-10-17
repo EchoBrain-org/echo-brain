@@ -2,13 +2,16 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools,
+  Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskRead, AskReceipt, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
   CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { PersonOpenItemV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import {
+  validatePersonAskProgressLineV1, validatePersonAskReceiptV1, type PersonAskProgressLineV1, type PersonAskReceiptRowV1, type PersonAskReceiptV1, type PersonOpenItemV1,
+  type PersonRunsResultsV1,
+} from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
@@ -379,13 +382,50 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   if (outcome !== 'answered' && outcome !== 'partial' && outcome !== 'not_found' && outcome !== 'off_scope') throw new ViewError();
   const assumption = optionalText(value.assumption);
   const notice = optionalText(value.notice);
+  // A receipt comes only with a streamed answer, which is always V6 (ADR-0039).
+  const printed = object(raw);
+  if (Object.hasOwn(printed, 'receipt') && !pages) throw new ViewError();
+  const receipt = Object.hasOwn(printed, 'receipt') ? askReceiptView(printed.receipt) : undefined;
   // One part answers the question itself, so its question is not repeated.
   const single = parts.length === 1;
   const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
     ...(part.records?.map(record => record.text) ?? []), part.gap])]
     .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
   return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }) };
+    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }), ...(receipt === undefined ? {} : { receipt }) };
+}
+
+/** A name Ask shows while it works, or in its receipt, is a citation as an answer's: it opens the same way. */
+const NAMED = 'Item';
+
+function askRow(row: PersonAskReceiptRowV1): AskSearched | AskRead {
+  return row.type === 'searched'
+    ? { type: 'searched', sources: row.sources.map(source => 'tool_id' in source ? { kind: source.kind, tool_id: source.tool_id } : { kind: source.kind }), found: row.found }
+    : { type: 'read', items: row.items.map(item => v4Source(item, NAMED, true, true)) };
+}
+
+/**
+ * The receipt of a streamed Ask, as the contract has it: built by the
+ * Authority from what passed its final check. Anything else is refused.
+ */
+export function askReceiptView(raw: unknown): AskReceipt {
+  let receipt: PersonAskReceiptV1;
+  try { receipt = validatePersonAskReceiptV1(raw); } catch { throw new ViewError(); }
+  return { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) };
+}
+
+/**
+ * One line `person ask --live --progress` printed before its answer: a step
+ * of the Ask, as the contract has it (ADR-0039). Only the stage, a search's
+ * source kinds and count, and the items just read cross, each item as an
+ * answer's citation does. Anything else is refused.
+ */
+export function askStepView(raw: unknown): AskStep {
+  let line: PersonAskProgressLineV1;
+  try { line = validatePersonAskProgressLineV1(raw); } catch { throw new ViewError(); }
+  const step = line.progress;
+  if (step.type !== 'stage') return askRow(step);
+  return { type: 'stage', stage: step.stage, ...(step.pending === undefined ? {} : { pending: step.pending }) };
 }
 
 /** The Authority's open refs (ADR-0024), by kind: each names exactly one item. */
