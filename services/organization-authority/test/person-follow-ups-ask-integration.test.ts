@@ -5,6 +5,7 @@ import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { SqlitePersonAgenticAskAuditV1 } from '../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
+import { SqlitePersonSessionRepository } from '../src/adapters/persistence/sqlite/sqlite-person-session-repository.js';
 import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
@@ -140,5 +141,116 @@ describe('Ask V7 with follow-ups as evidence (ADR-0040)', () => {
     expect(ask7.live_sources).toEqual([expect.objectContaining({ source_id: 'follow_ups' })]);
     // A desk bound for one person never reads follow-ups as another.
     await expect(bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'rafael', scope: { kind: 'global' }, response_version: 7 }, context)).rejects.toMatchObject({ code: 'stale_access_state' });
+  });
+});
+
+type StepPrompt = Prompt & { readonly asked_by?: string; readonly last_results?: readonly { readonly tool: string; readonly args?: { readonly owner?: string }; readonly items?: readonly string[]; readonly results?: readonly string[] }[] };
+/**
+ * A planner that does what "my open tasks" asks: it lists follow-ups owned by
+ * the asker (`asked_by`, as the route names them) that are open, runs any
+ * `probes` steps, opens the first follow-up the owner list returned, and
+ * finishes on it. The writer states one sentence from it.
+ */
+function myOpenTasks(probes: readonly (readonly unknown[])[] = []) {
+  const steps: StepPrompt[] = [];
+  const writer: string[] = [];
+  let mine: string | undefined;
+  const model: StructuredGenerationPort = { async generate(input: StructuredGenerationInput) {
+    const prompt = JSON.parse(input.user_prompt) as StepPrompt & { readonly evidence?: readonly { readonly id: string }[] };
+    if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
+      writer.push(input.user_prompt);
+      return { sentences: [{ text: 'Your open follow-up is on the launch ticket.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    }
+    steps.push(prompt);
+    mine ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.owner !== undefined)?.items?.[0];
+    const index = steps.length - 1;
+    const actions = index === 0 ? [{ tool: 'list', args: { source: 'follow_ups', owner: prompt.asked_by, status: 'open' } }]
+      : index <= probes.length ? probes[index - 1]!
+        : index === probes.length + 1 && mine !== undefined ? [{ tool: 'open', args: { id: mine } }]
+          : [{ tool: 'finish', args: {} }];
+    const found = actions[0] !== undefined && (actions[0] as { readonly tool: string }).tool === 'finish' && mine !== undefined;
+    return { parts: [{ question: prompt.question!, notes: '', needs: [{ need: 'Open follow-ups', status: found ? 'found' : 'open', evidence: found ? [mine] : [] }] }], actions };
+  } };
+  return { model, steps, writer, seen: () => [...steps.map(step => JSON.stringify(step)), ...writer].join('\n') };
+}
+/** The V7 route as the runtime builds it, with the asker's own directory entry, so the loop reads "my" as their name. */
+function myTasksRoute(f: OpenItemsFixtureV1, model: StructuredGenerationPort) {
+  const repository = new SqlitePersonSessionRepository(f.db);
+  const memberships = { membership: (id: string) => repository.read(transaction => transaction.membership(id)) };
+  return createPersonLiveAnswerRouteV1({ ...routeOf(f, model).options, memberships }, 7);
+}
+const followUpReleases = (f: OpenItemsFixtureV1) => auditBodies(f).filter(body => body.kind === 'echo-person-follow-up-release-audit-v1') as
+  { readonly operation: string; readonly principal_id: string; readonly items: readonly { readonly item_id: string }[] }[];
+
+describe('"What are my open tasks?" through the real Authority composition (ADR-0040)', () => {
+  it("lists the asker's open follow-ups by owner at the desk, opens one, and cites it with the follow-up kind and ref", async () => {
+    const f = await sentFixture();
+    // Mina owns the ticket's follow-up; Ari, the approver ECHO fell back to, owns the action's. Mina sees both.
+    expect([f.ticket.state, f.action.state]).toEqual(['open', 'open']);
+    const planner = myOpenTasks();
+    const answer = await myTasksRoute(f, planner.model).ask({ access_token: 'mina', request: { schema_version: 3, question: 'What are my open tasks?' } });
+
+    expect(validatePersonAnswerResponseV7(answer)).toEqual(answer);
+    expect(answer).toMatchObject({ schema_version: 7, kind: 'echo-clean-person-answer-v7', outcome: 'answered' });
+    // Research read "my" as her name, and the desk applied owner and status: only her follow-up came back, with no
+    // note that either was ignored.
+    expect(planner.steps[0]!.asked_by).toBe('Mina Patel');
+    expect(planner.steps[1]!.last_results).toEqual([{
+      tool: 'list', args: { source: 'follow_ups', owner: 'Mina Patel', status: 'open' }, items: ['E1'], more: false,
+    }]);
+    expect(planner.steps[2]!.last_results).toEqual([expect.objectContaining({ tool: 'open', opened: ['E1'] })]);
+    // The answer cites it as a follow-up, with the open ref that names its item for the desktop.
+    expect(answer.citations).toEqual([{
+      citation: { kind: 'follow_up', item_id: f.ticket.item_id }, kind: 'follow_up', label: `ECHO-12 ${f.outsideText}`, visibility: 'only_me', ref: `follow_up:${f.ticket.item_id}`,
+    }]);
+    expect(answer.parts.flatMap(part => part.statements)).toEqual([expect.objectContaining({ citation_indexes: [0], private: true })]);
+    // The writer read what the follow-up is: its owner, status and due date, and its decision.
+    const evidence = (JSON.parse(planner.writer[0]!) as { evidence: unknown[] }).evidence;
+    expect(evidence).toEqual([expect.objectContaining({
+      id: 'E1', source: 'follow_ups', kind: 'follow_up', title: `ECHO-12 ${f.outsideText}`, provenance: { kind: 'follow_up' },
+      attributes: { owner: 'Mina Patel', status: 'open', due_at: '2026-10-30' }, text: expect.stringContaining('Decision: Pilot planning'),
+    })]);
+    // Ari's follow-up never left the desk, and the list and the open were each audited, as Mina, before release.
+    expect(planner.seen()).not.toContain(f.action.item_id);
+    expect(planner.seen()).not.toContain('Thermostat rollout plan');
+    const releases = followUpReleases(f);
+    expect(releases.map(release => [release.operation, release.items.map(item => item.item_id)])).toEqual([['list', [f.ticket.item_id]], ['open', [f.ticket.item_id]]]);
+    expect(new Set(releases.map(release => release.principal_id))).toEqual(new Set([f.people.mina.principal_id]));
+    expect(auditBodies(f).find(body => body.kind === 'echo-person-agentic-ask-audit-v1')).toMatchObject({ outcome: 'answered' });
+  });
+
+  it('never shows the asker a follow-up they cannot see: not by owner, by an unfiltered list, or by its words', async () => {
+    // S. Okafor owns the ticket's follow-up but is not in project A. Ari's follow-up on the action is in project A only.
+    const f = await sentFixture({ ticketOwner: 'okafor' });
+    const hidden = f.action.item_id;
+    // The control: Ari, who owns it, finds it by the same question.
+    const control = myOpenTasks();
+    const ari = await myTasksRoute(f, control.model).ask({ access_token: 'ari', request: { schema_version: 3, question: 'What are my open tasks?' } });
+    expect(ari.citations).toEqual([expect.objectContaining({ kind: 'follow_up', citation: { kind: 'follow_up', item_id: hidden }, ref: `follow_up:${hidden}` })]);
+
+    const before = followUpReleases(f).length;
+    // One step of probes: a step that finds nothing new is idle, and two idle steps end research.
+    const planner = myOpenTasks([[
+      { tool: 'list', args: { source: 'follow_ups' } },
+      { tool: 'list', args: { source: 'follow_ups', owner: 'Ari', status: 'open' } },
+      { tool: 'search', args: { source: 'follow_ups', query: 'Ari pilot planning rollout' } },
+      { tool: 'search', args: { query: 'pilot starts next week' } },
+    ]]);
+    const answer = await myTasksRoute(f, planner.model).ask({ access_token: 'okafor', request: { schema_version: 3, question: 'What are my open tasks?' } });
+
+    expect(answer.outcome).toBe('answered');
+    // His own follow-up only, without the decision he does not read.
+    expect(answer.citations).toEqual([expect.objectContaining({ kind: 'follow_up', citation: { kind: 'follow_up', item_id: f.ticket.item_id }, ref: `follow_up:${f.ticket.item_id}` })]);
+    // Every list and search returned his follow-up or nothing (the search across sources finds his by "next week"):
+    // Ari's never appears, nor its owner, decision or words.
+    const returned = planner.steps.flatMap(step => step.last_results ?? []).filter(result => result.tool !== 'open').map(result => result.items ?? result.results ?? []);
+    expect(returned).toEqual([['E1'], ['E1'], [], [], ['E1']]);
+    const seen = planner.seen() + JSON.stringify(answer);
+    for (const word of [hidden, 'Pilot planning', 'The pilot starts next week', 'Thermostat rollout plan', '"attributes":{"owner":"Ari"', 'meeting:sha256']) expect(seen).not.toContain(word);
+    // Nothing released to him names it, in any audit row.
+    const releases = followUpReleases(f).slice(before);
+    expect(releases.length).toBeGreaterThan(0);
+    expect(new Set(releases.map(release => release.principal_id))).toEqual(new Set([f.people.okafor.principal_id]));
+    expect(new Set(releases.flatMap(release => release.items.map(item => item.item_id)))).toEqual(new Set([f.ticket.item_id]));
   });
 });
