@@ -134,6 +134,14 @@ Two selected diagnostic paths are explicit exceptions to that capture rule:
   other origin, and the onboarding wrapper refuses non-staging Authorities (see
   [LangSmith staging tracing](../../deploy/organization-authority/README.md#langsmith-staging-tracing)).
 
+Ask progress is not a capture path. A streamed Ask
+([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) may name a live ticket, page or message while
+it runs, but only after the access check before the model call that reads
+it, and only by the citation projection its answer citation would carry:
+coordinates, kind, label, visibility and checked link. It never sends the
+item's body, a generated Jira query or the model's search terms, and it names
+a live tool only by its tool id.
+
 ## Meeting exports
 
 Meeting ingestion continues to use

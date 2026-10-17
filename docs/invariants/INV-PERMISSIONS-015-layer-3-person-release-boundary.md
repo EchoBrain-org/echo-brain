@@ -27,9 +27,10 @@ decision_ids:
   - ADR-0034
   - ADR-0036
   - ADR-0038
+  - ADR-0039
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads, the ADR-0036 change check (digests only), and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -102,6 +103,34 @@ keeps such an item out of a response. Malformed output permits one
 repair within the hard budget and then a deterministic cited-evidence fallback. Unknown or
 out-of-part citations never establish support. Authorization, audit, snapshot
 and cancellation failures release no answer.
+
+[ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)
+adds one release path before the final response. A `POST /v5/person/ask`
+request that sends `x-echo-ask-progress: 1` receives progress events while
+it runs. Before the answer, an event may carry only:
+
+- the stage;
+- the source kinds a research step searched, from the request's own catalog,
+  with a count of distinct items those reads returned to this Person;
+- the number of items about to be read in full;
+- names of items whose complete released text the research model is about
+  to be given. Each name is the answer-citation projection: citation, kind,
+  label, visibility and open ref.
+
+A name is emitted only at the model gate's `before_call` point, after the
+access check before that call. Later per-call checks do not re-read the item.
+An item revoked after the check that covered it may therefore stay named, or
+be named for the first time, until the request ends, just as it may stay in
+model input. Only the final check keeps it out of the answer and out of the
+receipt. The receipt travels with the answer and is built after the final
+check.
+
+Progress events never carry notes, needs, plans, model-written or provider
+queries, bodies, excerpts, scratchpad or desk ids, round numbers, or counts
+that include unreadable items. Cancellation, the deadline, a refused check
+or any failure sends no further event and no receipt. The request's audit
+record, when one is written (released, cancelled or timed out), lists the
+named items as citation digests, never labels.
 
 ADR-0026 extends this boundary to Jira live evidence on `POST /v4/person/ask`.
 The provider reads as the authenticated Person's current Jira grant. Audits commit

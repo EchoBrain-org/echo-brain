@@ -60,6 +60,7 @@ separately.
 | [ADR-0036](ADR-0036-person-change-check.md) | A Person change check tells the desktop what moved in their own view | accepted |
 | [ADR-0037](ADR-0037-openrouter-routing-for-research-calls.md) | Research model calls skip measured bad hosts, run at temperature 0 and record the serving host | accepted |
 | [ADR-0038](ADR-0038-incremental-access-check-before-model-calls.md) | The access check before a model call re-reads only new evidence | accepted |
+| [ADR-0039](ADR-0039-ask-progress-names-after-the-access-check.md) | Ask streams its progress and names what it read only after the access check | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary
