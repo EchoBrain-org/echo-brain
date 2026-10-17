@@ -718,6 +718,25 @@ describe("research loop: step time", () => {
     expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000]);
     expect(view.stop).toEqual({ reason: "budget", completed: false });
   });
+
+  it("stops for budget, not with an unusable step, when a retried access check leaves a step less than it needs", async () => {
+    let time = 0; let checks = 0;
+    const h = harness((_input, index) => { time += 8_000; return searching(index); }, {
+      search,
+      revalidate: async () => {
+        checks += 1;
+        // The seventh step starts with 15 s, over its 10 s need. Its check fails after 3 s, and the retry takes 2.5 s more: 9.5 s.
+        if (checks === 7) { time += 3_000; throw new AuthorityOperationError("unavailable", "Jira briefly unavailable"); }
+        if (checks === 8) time += 2_500;
+        return { checked_at: "2026-10-06T00:00:00.000Z" };
+      },
+    }, { now_ms: () => time });
+    const view = await h.research.research({ trigger: "approved_record", brief: timed });
+    // No seventh model call goes out with 9.5 s, where one as slow as the others would time out and leave no time to repair.
+    expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 23_000]);
+    expect(view.stop).toEqual({ reason: "budget", completed: false, admission: "post_revalidation_no_time" });
+    expect(view.cost).toMatchObject({ fallbacks: 0 });
+  });
 });
 
 describe("research core: what a task trigger's renderer was shown and cited", () => {

@@ -1174,15 +1174,16 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const launch = item("a");
     const evidence = desk({ search: () => [launch], open: () => [launch], revalidate: async () => {
       checks += 1;
-      // Steps of 12 s leave the third step room to start; its permission check then takes 26 s.
-      if (checks === 3) clock += 26_000.25;
+      // Steps of 10 s leave the third step room to start; its permission check then takes 30 s, which still leaves the 12.5 s
+      // the step needs after the longest step call so far.
+      if (checks === 3) clock += 30_000.25;
       if (checks === 4) clock += 15_000.25;
       return { checked_at: checked };
     } });
     const timeouts: number[] = [];
     const script = scripted([
-      () => { clock += 12_000; return step([{}], [search("launch")]); },
-      () => { clock += 12_000; return step([{}], [open("E1")]); },
+      () => { clock += 10_000; return step([{}], [search("launch")]); },
+      () => { clock += 10_000; return step([{}], [open("E1")]); },
       (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); clock += 10_000; return finish([found(["E1"])]); },
       (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); return answer([{ text: "Tuesday.", evidence: ["E1"] }]); },
     ]);

@@ -937,8 +937,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
       const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable);
       let step: Step;
+      // The need holds after the access check too: a check retried after a transient failure can spend the margin, and a
+      // step call sent below it would likely time out with no time to repair. No time here is the gate's budget stop. The one
+      // repair keeps the gate's plain minimum.
+      const callsBefore = gate.stats().calls;
+      const timeout = () => (gate.stats().calls === callsBefore && stepTimeout() < stepNeeds() ? 0 : stepTimeout());
       try {
-        step = await gate.withRepair(stepCall, researchPrompt, user, stepSchema, stepTimeout, value => {
+        step = await gate.withRepair(stepCall, researchPrompt, user, stepSchema, timeout, value => {
           const parsed = parseStep(value);
           if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
           for (const action of parsed.actions) {
