@@ -6,6 +6,7 @@ title: Follow-ups are an Ask source, seen exactly as Home shows them
 component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERMISSIONS
+  - CMP-PERSON-CLIENT
 created_at: 2026-10-16
 reviewed_at: 2026-10-16
 reviewed_ref: c9d77a23ebf60008a67702dc36176aeb9ab04ac3

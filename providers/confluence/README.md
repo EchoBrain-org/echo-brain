@@ -29,7 +29,9 @@ deployment remains unconfigured.
 The desktop **Tools** screen uses the same per-person connect, reconnect, cancel,
 status, and disconnect flow as Jira. The equivalent initial connection is
 `echo-brain person tools connect --tool confluence`; consent occurs in the browser.
-Desktop Ask selects the additive `/v5/person/ask` route with a strict V6 response.
+Desktop Ask selects the additive `/v6/person/ask` route with a strict V7 response
+([ADR-0040](../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)), then
+`/v5/person/ask` with a strict V6 response on an Authority without `/v6`.
 The CLI uses `echo-brain person ask --live --question '<question>'`, optionally
 with `--project <id>`. Older ticket-only and local-context response contracts remain
 unchanged; an older Authority that has no new route receives the ticket-capable

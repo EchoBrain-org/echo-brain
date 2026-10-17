@@ -99,8 +99,9 @@ what ECHO ran, never from model output:
   text the research model is given for the first time: an opened item, a
   search hit shown in full, or a starting item. Metadata-only rows, related
   references and neighbours an open admitted are not named. Each name is the
-  projection an answer citation uses (`PersonAnswerCitationV6`: citation
-  coordinates, kind, label, visibility and the open ref). The label is the
+  projection an answer citation uses (`PersonAnswerCitationV6` on `/v5`,
+  `PersonAnswerCitationV7` on `/v6`: citation coordinates, kind, label,
+  visibility and the open ref). The label is the
   one the answer's source list would show. At most 100 items are named in a
   run.
 
@@ -124,8 +125,9 @@ diagnostics observer, which would replace a person's capture sink and copy
 full prompts. What the sink throws is ignored, and nothing is emitted after
 the run settles.
 
-**The receipt.** The final event carries the released V6 answer, byte for
-byte the response today's JSON route returns, together with a receipt. The
+**The receipt.** The final event carries the released answer (V6 on `/v5`,
+V7 on `/v6`), byte for byte the response the same route returns as JSON,
+together with a receipt. The
 receipt is built after the release step has passed: the full final check,
 the audit write, and the check after the audit. It comes from the run's own
 record and holds:
