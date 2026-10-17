@@ -79,9 +79,18 @@ function stepResponse(userPrompt) {
   return Object.freeze({ parts: [part("not_found")], actions: [{ tool: "finish", args: {} }] });
 }
 
+/**
+ * Ask's writer sees released text and, since ADR-0041, the lists research read as rows without text. The
+ * deterministic writer uses the lists the plan found its answer in (code then names their members) and quotes the
+ * first released text; with only lists, it writes no sentence of its own.
+ */
 function answerResponse(userPrompt) {
-  const evidence = parseJson(userPrompt)?.evidence;
-  if (!Array.isArray(evidence) || evidence.length === 0) throw new Error("deterministic answerer received no released evidence");
+  const prompt = parseJson(userPrompt);
+  const evidence = prompt?.evidence;
+  const lists = (Array.isArray(prompt?.lists) ? prompt.lists : []).map(record).filter((list) => list !== null && typeof list.id === "string");
+  const uses = lists.filter((list) => list.cited_by_plan === true).map((list) => Object.freeze({ id: list.id }));
+  if (!Array.isArray(evidence) || (evidence.length === 0 && lists.length === 0)) throw new Error("deterministic answerer received no released evidence");
+  if (evidence.length === 0) return Object.freeze({ lists: uses, sentences: [], not_found: [] });
   const first = record(evidence[0]);
   if (first === null || typeof first.id !== "string" || first.id.length === 0 || typeof first.text !== "string" || first.text.length === 0) {
     throw new Error("deterministic answerer received invalid released evidence");
@@ -89,7 +98,7 @@ function answerResponse(userPrompt) {
   // Return only released text and its released id.
   const text = first.text.slice(0, 500).trim();
   if (text.length === 0) throw new Error("deterministic answerer received empty released evidence");
-  return Object.freeze({ sentences: [{ text, evidence: [first.id] }], not_found: [] });
+  return Object.freeze({ lists: uses, sentences: [{ text, evidence: [first.id] }], not_found: [] });
 }
 
 /**

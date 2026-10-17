@@ -6,7 +6,7 @@ const stepSchema = Object.freeze({ properties: Object.freeze({ parts: Object.fre
 const answerSchema = Object.freeze({ properties: Object.freeze({ sentences: Object.freeze({}), not_found: Object.freeze({}) }) });
 
 const step = (port, prompt) => port.generate({ schema: stepSchema, user_prompt: JSON.stringify(prompt) });
-const answer = (port, evidence) => port.generate({ schema: answerSchema, user_prompt: JSON.stringify({ question: "What did the team decide?", evidence }) });
+const answer = (port, evidence, lists) => port.generate({ schema: answerSchema, user_prompt: JSON.stringify({ question: "What did the team decide?", ...(lists === undefined ? {} : { lists }), evidence }) });
 
 test("deterministic agent searches, then completes a bounded inventory before reporting absence", async () => {
   const port = createCoreDeterministicStructuredGenerationPort();
@@ -48,8 +48,20 @@ test("deterministic answer output is grounded in the current released evidence a
   const port = createCoreDeterministicStructuredGenerationPort();
   const first = await answer(port, [{ id: "E1", text: "Use the durable checkpoint." }]);
   const second = await answer(port, [{ id: "E7", text: "Use the active release fence." }]);
-  assert.deepEqual(first, { sentences: [{ text: "Use the durable checkpoint.", evidence: ["E1"] }], not_found: [] });
-  assert.deepEqual(second, { sentences: [{ text: "Use the active release fence.", evidence: ["E7"] }], not_found: [] });
+  assert.deepEqual(first, { lists: [], sentences: [{ text: "Use the durable checkpoint.", evidence: ["E1"] }], not_found: [] });
+  assert.deepEqual(second, { lists: [], sentences: [{ text: "Use the active release fence.", evidence: ["E7"] }], not_found: [] });
   await assert.rejects(answer(port, []), /no released evidence/);
+  await assert.rejects(answer(port, [], []), /no released evidence/);
   await assert.rejects(answer(port, [{ id: "", text: "unbound" }]), /invalid released evidence/);
+});
+
+test("deterministic answer uses the lists the plan found its answer in and never writes their names (ADR-0041)", async () => {
+  const port = createCoreDeterministicStructuredGenerationPort();
+  const rows = [{ id: "E1", kind: "decision", title: "Checkpoint review", checked: false }];
+  const list = (id, cited_by_plan) => ({ id, source: "meetings", complete: true, count: 1, checked: 0, cited_by_plan, members: rows });
+  // Rows only: code names the members of the cited list; a list research merely read adds nothing.
+  assert.deepEqual(await answer(port, [], [list("L1", true), list("L2", false)]), { lists: [{ id: "L1" }], sentences: [], not_found: [] });
+  assert.deepEqual(await answer(port, [], [list("L2", false)]), { lists: [], sentences: [], not_found: [] });
+  // Beside released text, it still quotes only that text.
+  assert.deepEqual(await answer(port, [{ id: "E3", text: "Use the durable checkpoint." }], [list("L1", true)]), { lists: [{ id: "L1" }], sentences: [{ text: "Use the durable checkpoint.", evidence: ["E3"] }], not_found: [] });
 });
