@@ -296,7 +296,9 @@ question, with its 8 pages as members. Built: a list part's research measures
 hold only for the whole list too (found; read, when a complete list holds every
 member; handed over), and whether the answer names every member is a code
 check, "lists named in full", that holds without a judge and overrides a
-judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`).
+judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`). The rows the
+writer sees are never counted as noise or distractors handed, and hand over a
+part only when it is a row fact (a date, owner or status).
 
 ### Safety rules kept
 

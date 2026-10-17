@@ -40,6 +40,9 @@ export function codeChecks(testCase, run, dataset) {
   const handedIds = new Set(testCase.trigger === "ask" ? ask?.writer_evidence ?? [] : items.filter(item => item.cited_by_plan).map(item => item.id));
   const answer = ask?.response ?? null;
   const lists = listIndex(research, items);
+  // Ask's writer also sees every list research read as rows without text (ADR-0041). A row carries an item's title,
+  // dates, status and owner only, so it hands over a part of those types, never other content, and is never noise.
+  const textHanded = item => handedIds.has(item.id) && (item.read_in_full || item.text !== undefined);
   const parts = testCase.parts.map(part => {
     if (part.type === "list") return listPart(part, items, meetings, lists, handedIds, answer);
     // Found: research discovered a supporting item (a page counts once discovered).
@@ -51,13 +54,13 @@ export function codeChecks(testCase, run, dataset) {
       found: discovered.length > 0,
       read: supporting.some(item => item.read_in_full),
       cited_by_plan: supporting.some(item => item.cited_by_plan),
-      handed: supporting.some(item => handedIds.has(item.id)),
+      handed: supporting.some(item => textHanded(item) || (ROW_FACT_PARTS.has(part.type) && handedIds.has(item.id))),
       item_ids: [...new Set([...discovered, ...supporting].map(item => item.id))],
     };
   });
   const supportingIds = new Set(parts.flatMap(part => part.item_ids));
   const distractorItems = items.filter(item => (testCase.distractors ?? []).some(ref => itemMatches(item, ref, meetings)));
-  const noise = [...handedIds].filter(id => !supportingIds.has(id));
+  const noise = items.filter(item => textHanded(item) && !supportingIds.has(item.id)).map(item => item.id);
   // An answer cites what research read in full, or a list member's row (ADR-0041): a list supports which items exist.
   const answer_citation_violations = (answer?.citations ?? []).flatMap((entry, item_index) =>
     items.some(item => (item.read_in_full || lists.of(item.id).length > 0) && isDeepStrictEqual(item.citation, entry.citation)) ? [] : [{ item_index, label: entry.label }]);
@@ -79,7 +82,7 @@ export function codeChecks(testCase, run, dataset) {
       ...(listParts === 0 ? {} : { lists_named: parts.filter(part => part.named === true).length }),
     },
     leaks,
-    distractors: { found: distractorItems.length, handed: distractorItems.filter(item => handedIds.has(item.id)).length },
+    distractors: { found: distractorItems.length, handed: distractorItems.filter(textHanded).length },
     noise_handed: noise.length,
     answer_citations: { total: answer?.citations.length ?? 0, resolved_to_read: (answer?.citations.length ?? 0) - answer_citation_violations.length, unresolved: answer_citation_violations.length },
     answer_citation_violations,
@@ -93,6 +96,9 @@ export function codeChecks(testCase, run, dataset) {
     ...(testCase.trigger === "sweep" ? { sweep: { status: rendered.status, ...gradeSweep(testCase, rendered) } } : {}),
   };
 }
+
+/** Part types a list member's row can carry (ADR-0041): dates, owner and status are row facts. */
+const ROW_FACT_PARTS = new Set(["date", "owner", "status"]);
 
 /**
  * The lists a run's research read (ADR-0041; a run from before it has none): the lists holding each item, and those

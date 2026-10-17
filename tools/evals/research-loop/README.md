@@ -58,6 +58,11 @@ cards and sweeps record no lists. The judge sees research's lists as rows
 for any part may take a member's own title, dates, status or owner from its
 row, never what the item says.
 
+Ask's writer now also sees every list research read as rows without text. A
+row hands over a date, owner or status part, never other content, and rows
+count as neither noise nor distractors handed, so those numbers keep their
+meaning across ADR-0041.
+
 **Baselines across ADR-0041 (2026-10-17).** Ask's research and writer changed:
 a complete list is evidence, and code names its members. Ask baselines taken
 before it measure the old loop, and their saved runs carry no lists, so a list

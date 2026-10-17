@@ -753,6 +753,22 @@ test("a failed run of a list case scores zero on naming its list, and reports sh
   assert.match(renderers, new RegExp(`\\| ${OCT4_CASE} \\| ask \\| live \\| 0% \\| — \\| — \\| — \\| — \\| 50% \\|`, "u"));
 });
 
+test("list rows the writer saw are never noise, and hand over row facts but not other content (ADR-0041)", () => {
+  const testCase = caseById("bug-fix-dates-vs-dvt-review");
+  // Research read SW-14c in full, and listed DVT-R2 and 60 ECHO tickets (distractors) as rows; the writer saw all of them.
+  const read = ticket("THERM-12", { id: "E1", text: "SW-14c is due 2026-10-20." });
+  const row = (key, id) => ({ ...ticket(key, { id, read: false, cited: false }), attributes: { status: "In Progress" } });
+  const rows = [row("THERM-48", "E2"), ...Array.from({ length: 60 }, (_, index) => row(`ECHO-${index + 1}`, `E${index + 3}`))];
+  const items = [read, ...rows];
+  const run = completedRun(testCase, items, { writer_evidence: items.map(item => item.id), response: { outcome: "answered", parts: [{ statements: [] }], citations: [] } });
+  run.result.research = { ...run.result.research, lists: [{ ...OCT4_LIST, source: "tickets", members: rows.map(item => item.id) }] };
+  const checks = codeChecks(testCase, run, dataset);
+  const part = id => checks.parts.find(entry => entry.id === id);
+  // DVT-R2's row carries its date (p4), but not why the hold stands (p6, a conflict); SW-14c's text hands over p3.
+  assert.deepEqual([part("p3").handed, part("p4").handed, part("p6").handed], [true, true, false]);
+  assert.deepEqual([checks.noise_handed, checks.distractors.found, checks.distractors.handed], [0, 60, 0]);
+});
+
 test("saved runs keep Ask's lists, and the judge sees them as rows without text and grades a list part on the whole list", () => {
   const research = { schema_version: 1, kind: "echo-agentic-research-result-v1", trigger: "ask", goal: { kind: "question", question: "q" }, plan: [], items: ROWS, lists: [OCT4_LIST], rounds: [], coverage: {}, stop: {}, cost: {} };
   assert.deepEqual(savedResult({ status: "completed", research: { ...research, server: { receipts: [] } } }).research.lists, [OCT4_LIST]);
