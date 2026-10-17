@@ -257,6 +257,15 @@ function citation(value: unknown): PersonAnswerCitationV3 {
   fail('Ask citation kind is invalid');
 }
 
+/**
+ * The identity an Ask response checks for duplicate citations: a response cites each key once. A page's section and
+ * version are part of it; a ticket's or a follow-up's released text is not, so a listed ticket's row and its opened body
+ * are one citation. A renderer that numbers citations uses this key so it never builds a response this refuses.
+ */
+export function personAnswerCitationKeyV7(value: PersonAnswerEvidenceCitationV7): string {
+  return citationKey(value);
+}
+
 function citationKey(value: PersonAnswerEvidenceCitationV7): string {
   if (value.kind === 'follow_up') return `follow_up:${value.item_id}`;
   if (value.kind === 'page') return `page:${value.tool_id}:${value.external_scope_id}:${value.page_id}:${value.section_id}:${value.version}`;

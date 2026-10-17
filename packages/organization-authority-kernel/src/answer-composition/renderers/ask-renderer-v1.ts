@@ -1,11 +1,12 @@
 import { MISSING_EVENT_DATE_NOTICE_V1 } from "../../shared/temporal-query-v1.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import type {
-  PersonAnswerPartV4,
-  PersonAnswerResponseV4,
-  PersonAnswerResponseV5,
-  PersonAnswerResponseV6,
-  PersonAnswerResponseV7,
+import {
+  personAnswerCitationKeyV7,
+  type PersonAnswerPartV4,
+  type PersonAnswerResponseV4,
+  type PersonAnswerResponseV5,
+  type PersonAnswerResponseV6,
+  type PersonAnswerResponseV7,
 } from "@echo-brain/organization-api";
 import {
   AGENTIC_ASK_MAX_SENTENCES_V1,
@@ -120,19 +121,6 @@ function checkedItems(bundle: AgenticEvidenceBundleV1): ReadonlySet<string> {
   return checked;
 }
 
-/**
- * The response's identity of a cited object: one citation per key (the Ask
- * response refuses duplicates). A listed ticket's row and its opened body are
- * two items with one key, so they share one citation.
- */
-function citationKey(citation: Entry["item"]["citation"]): string {
-  const value = citation as unknown as Readonly<Record<string, unknown>>;
-  const fields: Readonly<Record<string, readonly string[]>> = {
-    follow_up: ["item_id"], page: ["tool_id", "external_scope_id", "page_id", "section_id", "version"], ticket: ["tool_id", "external_scope_id", "ticket_id"],
-    slack_message: ["team_id", "channel_id", "message_ts"], approved_record: ["atom_id"], source_revision: ["source_id", "revision_id", "representation_sha256", "anchor_sha256"],
-  };
-  return JSON.stringify([value.kind, ...(fields[String(value.kind)] ?? []).map(field => value[field] ?? null)]);
-}
 
 /** The sentence with code's note before its closing punctuation. */
 function withNote(text: string, note: string): string {
@@ -299,7 +287,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       type Statement = { text: string; citation_indexes: number[]; private: boolean };
       const used: Entry[] = [];
       const usedKeys = new Map<string, number>();
-      const keyOf = (short: string) => citationKey(byShort.get(short)!.item.citation);
+      // One citation per key, the key the Ask response checks for duplicates: a listed ticket's row and its opened body
+      // are two items with one key, so they share one citation.
+      const keyOf = (short: string) => personAnswerCitationKeyV7(byShort.get(short)!.item.citation);
       /** Citation indexes of `shorts`, each once; a new cited object becomes the next citation. */
       const cite = (shorts: readonly string[]): number[] => {
         const indexes: number[] = [];
