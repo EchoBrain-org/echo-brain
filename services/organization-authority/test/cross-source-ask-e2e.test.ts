@@ -93,13 +93,21 @@ describe('one runtime without live connectors', () => {
   afterAll(async () => { await runtime?.close(); shared.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
   beforeEach(() => { generate.mockClear(); });
 
-  it.each([{ version: 4, schema: 5, mine: false }, { version: 4, schema: 5, mine: true }, { version: 5, schema: 6, mine: false }, { version: 5, schema: 6, mine: true }])('serves V$version Ask with no live connectors (mine=$mine)', async ({ version, schema, mine }) => {
+  it.each([
+    { version: 4, schema: 5, mine: false }, { version: 4, schema: 5, mine: true }, { version: 5, schema: 6, mine: false }, { version: 5, schema: 6, mine: true },
+    // The V7 Ask (ADR-0040) is mounted with the runtime's follow-up sources: outside Mine its catalog lists follow-ups.
+    { version: 6, schema: 7, mine: false }, { version: 6, schema: 7, mine: true },
+  ])('serves V$version Ask with no live connectors (mine=$mine)', async ({ version, schema, mine }) => {
     const response = await fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ schema_version: 3, question: 'What changed?', ...(mine ? { mine: true } : {}) }),
     });
     expect(response.status).toBe(200);
+    expect(response.headers.get('x-echo-person-ask-route')).toBe(version >= 5 ? String(version) : null);
     expect(await response.json()).toMatchObject({ schema_version: schema, scope: { kind: mine ? 'mine' : 'global' }, citations: [] });
     expect(generate).toHaveBeenCalled();
+    const [prompt] = generate.mock.calls[0] as unknown as [{ readonly user_prompt: string }];
+    const catalog = (JSON.parse(prompt.user_prompt) as { source_catalog?: { source: string }[] }).source_catalog?.map(entry => entry.source) ?? [];
+    expect(catalog.includes('follow_ups')).toBe(version === 6 && !mine);
   });
 });
 

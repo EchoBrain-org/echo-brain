@@ -373,8 +373,8 @@ export async function startOrganizationAuthorityApiRuntime(
       database, sessions, projects: projectRepository, items, people, records: recordSearch,
       ...(reviewStatuses === undefined ? {} : { reviews: reviewStatuses }),
     });
-    const triggerRuns: PersonTriggerRunsHttpApplicationV1 = answerOptions === undefined ? unavailablePersonTriggerRunsV1(sessions) : (() => {
-      const runs = new SqliteTriggerRunsV1(database);
+    const runs = answerOptions === undefined ? undefined : new SqliteTriggerRunsV1(database);
+    const triggerRuns: PersonTriggerRunsHttpApplicationV1 = answerOptions === undefined || runs === undefined ? unavailablePersonTriggerRunsV1(sessions) : (() => {
       // Ticket assignees match impact owners only when a live connector that reads them is configured.
       const owners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
       return Object.freeze({
@@ -430,6 +430,10 @@ export async function startOrganizationAuthorityApiRuntime(
         // source is configured. The request catalog still contains local context.
         person_answer_v4: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 5),
         person_answer_v5: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 6),
+        // The V7 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040); without these sources its desk would bind none.
+        ...(runs === undefined ? {} : {
+          person_answer_v6: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: { runs, items, people, records: recordSearch } }, 7),
+        }),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
       ...(diagnostics === undefined ? {} : { person_diagnostics: diagnostics }),

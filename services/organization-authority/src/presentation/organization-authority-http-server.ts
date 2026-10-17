@@ -1,6 +1,6 @@
 import { PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1 } from "@echo-brain/organization-api";
-import { PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, type PersonAskProgressErrorStatusV1 } from "@echo-brain/organization-api";
-import { startPersonAskProgressStreamV1, type PersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
+import { PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, type PersonAskProgressErrorStatusV1 } from "@echo-brain/organization-api";
+import { startPersonAskProgressStreamV1, startPersonAskProgressStreamV2 } from "./person-ask-progress-stream-v1.js";
 import {
   PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
@@ -66,6 +66,7 @@ import {
   PERSON_ANSWER_PATH_V3,
   PERSON_ANSWER_PATH_V4,
   PERSON_ANSWER_PATH_V5,
+  PERSON_ANSWER_PATH_V6,
   PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
@@ -91,6 +92,7 @@ import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttp
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
 import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-application.js";
 import type { PersonAnswerV5HttpApplication } from "./person-answer-v5-http-application.js";
+import type { PersonAnswerV6HttpApplication } from "./person-answer-v6-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
 import type { PersonDiagnosticsHttpApplicationV1 } from './person-diagnostics-http-application.js';
@@ -131,6 +133,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_ANSWER_PATH_V3}`,
   `POST ${PERSON_ANSWER_PATH_V4}`,
   `POST ${PERSON_ANSWER_PATH_V5}`,
+  `POST ${PERSON_ANSWER_PATH_V6}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
@@ -179,6 +182,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_answer_v4?: PersonAnswerV4HttpApplication;
   /** Optional page-capable Ask. It preserves the V3/V4 routes for installed clients. */
   readonly person_answer_v5?: PersonAnswerV5HttpApplication;
+  /** Optional follow-up-capable Ask (`/v6`, the V7 answer, ADR-0040). It preserves `/v3` to `/v5` for installed clients. */
+  readonly person_answer_v6?: PersonAnswerV6HttpApplication;
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
@@ -531,22 +536,51 @@ const streamedFailureStatus = new WeakMap<ServerResponse, number>();
  * today's JSON. A disconnect still cancels the Ask, and nothing more is written.
  */
 function personAskV5Post(application: PersonAnswerV5HttpApplication | undefined): PersonPostHandler {
+  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, startPersonAskProgressStreamV1);
+}
+
+/**
+ * `POST /v6/person/ask`, the V7 answer (ADR-0040), streamed exactly as `/v5`
+ * is, in Ask progress V2, for the header value `2`. Any other value, `1`
+ * included, gets the JSON V7 answer: a V1 client never meets a follow-up.
+ */
+function personAskV6Post(application: PersonAnswerV6HttpApplication | undefined): PersonPostHandler {
+  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, startPersonAskProgressStreamV2);
+}
+
+type StreamingAskInput = Parameters<PersonAnswerV5HttpApplication['ask']>[0];
+interface StreamingAskApplication<Step, Answered> {
+  ask(input: StreamingAskInput): Promise<unknown>;
+  askWithProgress?(input: StreamingAskInput & { readonly on_start: () => void; readonly on_progress: (event: Step) => void }): Promise<Answered>;
+}
+interface StreamingAskStream<Step, Answered> {
+  step(event: Step): void;
+  end(event: ({ readonly type: "answer" } & Answered) | { readonly type: "error"; readonly status: PersonAskProgressErrorStatusV1; readonly error: { readonly code: string; readonly message: string } }): void;
+  close(): void;
+}
+
+/** A live Ask route that streams its progress in one version, for that version's exact header value. */
+function personAskStreamingPost<Step, Answered extends { readonly response: unknown; readonly receipt: unknown }>(
+  application: StreamingAskApplication<Step, Answered> | undefined,
+  headerValue: string,
+  startStream: (response: ServerResponse) => StreamingAskStream<Step, Answered>,
+): PersonPostHandler {
   const plain = personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
   return async (request, response) => {
-    if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V1) { await plain(request, response); return; }
+    if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== headerValue) { await plain(request, response); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
-    let stream: PersonAskProgressStreamV1 | undefined;
+    let stream: StreamingAskStream<Step, Answered> | undefined;
     try {
       const requestBody = await personBody(request, validatePersonAnswerRequestV3);
       const time_context = askTimeContext(request);
       const answered = await application.askWithProgress({
         access_token, request: requestBody, ...(time_context === undefined ? {} : { time_context }), signal: disconnect.signal,
-        on_start: () => { stream ??= startPersonAskProgressStreamV1(response); },
+        on_start: () => { stream ??= startStream(response); },
         on_progress: event => { stream?.step(event); },
       });
-      stream ??= startPersonAskProgressStreamV1(response);
-      stream.end({ type: "answer", response: answered.response, receipt: answered.receipt });
+      stream ??= startStream(response);
+      stream.end({ type: "answer", response: answered.response, receipt: answered.receipt } as { readonly type: "answer" } & Answered);
     } catch (error) {
       // Before the stream starts, the server's ordinary JSON error.
       if (stream === undefined) throw error;
@@ -789,6 +823,7 @@ export function createOrganizationAuthorityHttpServer(
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
     [PERSON_ANSWER_PATH_V5, personAskV5Post(options.person_answer_v5)],
+    [PERSON_ANSWER_PATH_V6, personAskV6Post(options.person_answer_v6)],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     ...(options.person_research_eval === undefined ? [] : [
@@ -1206,8 +1241,9 @@ export function createOrganizationAuthorityHttpServer(
         const personRead = personReadPosts.get(url.pathname);
         if (personRead !== undefined) {
           // Distinguish a provider's not-found from an older server with no V5
-          // route. Set this before body validation or application execution.
+          // or V6 route. Set this before body validation or application execution.
           if (url.pathname === PERSON_ANSWER_PATH_V5) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '5');
+          if (url.pathname === PERSON_ANSWER_PATH_V6) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '6');
           await personRead(request, response); return;
         }
       }
