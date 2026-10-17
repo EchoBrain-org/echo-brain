@@ -68,22 +68,27 @@ function textJql(terms: readonly string[], relaxed: boolean, projectId?: string)
   return `${projectId === undefined ? expression : `project = ${projectId} AND (${expression})`} ORDER BY created DESC, id DESC`;
 }
 
-function shiftDay(day: string, days: number): string {
+/** A UTC day moved by whole days, or undefined once it leaves the four-digit years a JQL date can name. */
+function shiftDay(day: string, days: number): string | undefined {
   const value = new Date(`${day}T00:00:00Z`);
   value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
+  const shifted = value.toISOString().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(shifted) ? shifted : undefined;
 }
 
 /**
  * Inventory JQL. JQL dates use the account timezone, so the created bounds are
  * coarse, with one day of margin either side; the exact UTC filter stays in code.
+ * A bound past four-digit years is left out rather than sent malformed.
  */
 function listJql(projectId: string | undefined, since: string | undefined, until: string | undefined): string {
+  const lower = since === undefined ? undefined : shiftDay(since, -1);
+  const upper = until === undefined ? undefined : shiftDay(until, 2);
   const clauses = [
     ...(projectId === undefined ? [] : [`project = ${projectId}`]),
     // The search endpoint refuses an unbounded query; a site-wide list keeps a created restriction.
-    ...(since !== undefined ? [`created >= "${shiftDay(since, -1)}"`] : projectId === undefined ? ['created >= "1970-01-01"'] : []),
-    ...(until === undefined ? [] : [`created < "${shiftDay(until, 2)}"`]),
+    ...(lower !== undefined ? [`created >= "${lower}"`] : projectId === undefined ? ['created >= "1970-01-01"'] : []),
+    ...(upper === undefined ? [] : [`created < "${upper}"`]),
   ];
   return `${clauses.join(' AND ')} ORDER BY created DESC, id DESC`;
 }

@@ -781,6 +781,20 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     ]);
   });
 
+  it('leaves out a coarse created bound past four-digit years instead of sending a malformed JQL date', async () => {
+    const f = fixture(); f.state.pages = [page(), page(), page()];
+    const { source } = await f.make();
+    // A planner may ask for everything until 9999-12-31; the exact UTC filter still applies.
+    await expect(source.list({ until: '9999-12-31' })).resolves.toMatchObject({ items: [{ citation: { ticket_id: '10001' } }] });
+    await expect(source.list({ since: '0000-01-01' })).resolves.toMatchObject({ items: [{ citation: { ticket_id: '10001' } }] });
+    await source.list({ container: 'ECHO', since: '0000-01-01', until: '9999-12-30' });
+    expect(f.jqls()).toEqual([
+      'created >= "1970-01-01" ORDER BY created DESC, id DESC',
+      'created >= "1970-01-01" ORDER BY created DESC, id DESC',
+      'project = 10000 ORDER BY created DESC, id DESC',
+    ]);
+  });
+
   it('refuses malformed search pages, repeated cursors/IDs and project mismatches', async () => {
     for (const malformed of [{ issues: [{ id: '10001' }] }, { isLast: false, issues: [] }, { isLast: true, issues: [], nextPageToken: 'bad' },
       page(['10001', '10001']), { isLast: true, issues: Array(1) }, page(['bad-id'])]) {
