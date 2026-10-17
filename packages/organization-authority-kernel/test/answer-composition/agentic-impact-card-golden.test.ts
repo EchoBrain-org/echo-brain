@@ -161,13 +161,32 @@ describe("impact card golden replay", () => {
     expect(canonicalSha256(recorded)).toBe(HISTORICAL_FIXTURE_SHA256);
   });
 
-  it("preserves historical cards outside the intentional planner-need removal", async () => {
+  it("preserves historical cards outside the intentional planner-need removal and the fallback's decided lines", async () => {
     const observed: Record<string, Awaited<ReturnType<typeof run>>> = {};
     for (const [name, scenario] of Object.entries(SCENARIOS)) observed[name] = await run(name, scenario);
     const recorded = JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as typeof observed;
-    for (const name of Object.keys(observed).filter(name => name !== "research_stopped_on_budget")) {
+    for (const name of Object.keys(observed).filter(name => name !== "research_stopped_on_budget" && name !== "fallback_after_two_bad_replies")) {
       expect(observed[name]!.card).toEqual(recorded[name]!.card);
     }
+  });
+
+  it("adds the record's approved text to the fallback card, and keeps the rest of its historical card", async () => {
+    type Card = {
+      readonly decided: readonly unknown[]; readonly affected: readonly { readonly citation_index: number }[];
+      readonly people: readonly { readonly name: string; readonly items: readonly number[] }[]; readonly citations: readonly { readonly citation: unknown }[];
+    };
+    const observed = (await run("fallback_after_two_bad_replies", SCENARIOS.fallback_after_two_bad_replies!)).card as Card;
+    const recorded = (JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as Record<string, { readonly card: Card }>).fallback_after_two_bad_replies!.card;
+    // What was decided needs no model: the record's decision and action, in their approved words, cited first.
+    expect(observed.decided).toEqual([{ text: DECISION.text, citation_index: 0 }, { text: ACTION.text, citation_index: 1 }]);
+    expect(observed.citations.slice(0, 2).map(entry => entry.citation)).toEqual([DECISION.citation, ACTION.citation]);
+    // The rest is the historical card, its citations after the record's two.
+    const shift = (index: number) => index + 2;
+    expect(observed).toEqual({
+      ...recorded, decided: observed.decided, citations: [...observed.citations.slice(0, 2), ...recorded.citations],
+      affected: recorded.affected.map(entry => ({ ...entry, citation_index: shift(entry.citation_index) })),
+      people: recorded.people.map(entry => ({ ...entry, items: entry.items.map(shift) })),
+    });
   });
 
   it("removes an unfulfilled planner need from the stopped-research card", async () => {
