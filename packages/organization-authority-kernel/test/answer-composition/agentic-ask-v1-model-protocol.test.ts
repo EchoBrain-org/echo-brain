@@ -184,6 +184,27 @@ describe("agentic Ask model protocol parity", () => {
     expect(many.sentences).toHaveLength(10);
   });
 
+  it.each([
+    // f6184afc and 1dab4548: the writer's markers that reached the answer.
+    ["The release is proposed (evidence: E5).", "The release is proposed."],
+    ["The gate is on hold (evidence).", "The gate is on hold."],
+    ["Both tickets are open (evidence E2, E4), and the vendor slipped (Evidence: E7; E9).", "Both tickets are open, and the vendor slipped."],
+    ["Mara owns it (ids E1).", "Mara owns it."],
+    ["It was approved (see E3) on Oct 8 (E4, E5, and E6).", "It was approved on Oct 8."],
+  ])("drops evidence references from %j", (text, expected) => {
+    expect(stripEvidenceIds(text)).toBe(expected);
+  });
+
+  it("keeps brackets and words that are not evidence references", () => {
+    for (const text of [
+      "THERM-48 (THERM-48) still formats one decimal.",
+      "The E2E tests (E2E) passed on Oct 8.",
+      "The gate is pending (no evidence of approval).",
+      "The badge shows the employee number (ID).",
+      "Model E12 ships in October.",
+    ]) expect(stripEvidenceIds(text), text).toBe(text);
+  });
+
   it("accepts common id spellings and ignores the rest", () => {
     expect(["E4", "e4", "[E4]", " E4 ", "4", 4].map(cleanId)).toEqual(["E4", "E4", "E4", "E4", "E4", "E4"]);
     expect(["desk_abc", "E", "item 4", ""].map(cleanId)).toEqual([null, null, null, null]);

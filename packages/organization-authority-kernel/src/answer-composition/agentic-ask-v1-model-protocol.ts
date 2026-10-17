@@ -223,10 +223,19 @@ export function parseStep(value: unknown): Step {
   return Object.freeze({ parts: Object.freeze(parts), actions: Object.freeze(actions) });
 }
 
-/** Evidence ids belong in "evidence", not in prose; drop "(E4)", "[E4, E7]" and similar from sentence text. */
+/** One or more evidence ids: "E4", "E4, E7", "e4 and E5", "E2, and E4". */
+const EVIDENCE_ID_LIST = String.raw`e\d{1,4}(?:\s*(?:,\s*(?:and|&)|,|;|and|&)\s*e\d{1,4})*`;
+/**
+ * A bracket that only points at evidence: ids, optionally after "ids:" or "see", or the word "evidence" with or without
+ * ids ("(E4)", "[E4, E7]", "(ids: E4)", "(evidence)", "(evidence: E5)", "(evidence E2, E4)"). A bracket that says
+ * anything else ("(no evidence of approval)", "(THERM-48)", "(E2E tests)") is prose and stays.
+ */
+const EVIDENCE_REFERENCE = new RegExp(String.raw`\s*[([]\s*(?:(?:see\s+)?evidence\b(?:\s*:?\s*${EVIDENCE_ID_LIST})?|(?:see\s+|ids?\s*:?\s*)?${EVIDENCE_ID_LIST})\s*[)\]]`, "giu");
+
+/** Evidence ids belong in "evidence", not in prose; drop "(E4)", "[E4, E7]", "(evidence: E5)" and similar from sentence text. */
 export function stripEvidenceIds(text: string): string {
   return text
-    .replace(/\s*[([]\s*(?:ids?:?\s*)?[Ee]\d{1,4}(?:\s*(?:,|;|and|&)\s*[Ee]\d{1,4})*\s*[)\]]/gu, "")
+    .replace(EVIDENCE_REFERENCE, "")
     .replace(/\s+([.,;:!?])/gu, "$1")
     .replace(/\s{2,}/gu, " ")
     .trim();
