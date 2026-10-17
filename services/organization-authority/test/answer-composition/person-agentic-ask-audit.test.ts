@@ -90,4 +90,35 @@ describe("agentic Ask audit", () => {
     const sentinelKind = outcome === "timed_out" ? "echo-agentic-ask-timed-out-v1" : "echo-agentic-ask-cancelled-v1";
     expect(row.prompt_sha256).toBe(canonicalSha256({ kind: sentinelKind, field: "prompt" }));
   });
+
+  it("copies a streamed Ask's named citation commitments, on any outcome, and omits the field when the Ask did not stream", () => {
+    const database = openedDatabase();
+    const store = new SqlitePersonAgenticAskAuditV1(database);
+    const named = [digest("first named citation"), digest("second named citation")];
+    const terminal = { ...entry, rounds: 2, prompt_sha256: null, answer_sha256: null, response_sha256: null };
+    store.forRequest({ ...requestContext, request_id: "ask_named" }).append({ ...entry, rounds: 2, named_citation_digests: named });
+    store.forRequest({ ...requestContext, request_id: "ask_cancelled" }).append({ ...terminal, outcome: "cancelled", named_citation_digests: [] });
+    store.forRequest({ ...requestContext, request_id: "ask_timed_out" }).append({ ...terminal, outcome: "timed_out", named_citation_digests: named.slice(0, 1) });
+    store.forRequest({ ...requestContext, request_id: "ask_plain" }).append({ ...entry, rounds: 2 });
+    const bodies = (database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").all() as { body_json: string }[]).map(row => JSON.parse(row.body_json) as Record<string, unknown>);
+    const byRequest = new Map(bodies.map(body => [body.request_id, body]));
+    expect(byRequest.get("ask_named")).toMatchObject({ outcome: "partial", named_citation_digests: named });
+    expect(byRequest.get("ask_cancelled")).toMatchObject({ outcome: "cancelled", named_citation_digests: [] });
+    expect(byRequest.get("ask_timed_out")).toMatchObject({ outcome: "timed_out", named_citation_digests: named.slice(0, 1) });
+    expect(byRequest.get("ask_plain")).not.toHaveProperty("named_citation_digests");
+  });
+
+  it("refuses named citations that are not distinct commitments or exceed the naming bound", () => {
+    const store = new SqlitePersonAgenticAskAuditV1(openedDatabase());
+    const ask = { ...entry, rounds: 2 };
+    const invalid = [
+      { ...ask, named_citation_digests: [digest("same"), digest("same")] },
+      { ...ask, named_citation_digests: ["Launch review" as Sha256Digest] },
+      { ...ask, named_citation_digests: Array.from({ length: 101 }, (_, index) => digest(`named ${index}`)) },
+      { ...ask, named_citation_digests: "sha256:" as unknown as Sha256Digest[] },
+    ];
+    for (const [index, value] of invalid.entries()) {
+      expect(() => store.forRequest({ ...requestContext, request_id: `invalid_${index}` }).append(value)).toThrow("Agentic Ask audit entry is invalid");
+    }
+  });
 });
