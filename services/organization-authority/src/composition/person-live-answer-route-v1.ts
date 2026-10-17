@@ -37,11 +37,13 @@ export async function bindPersonLiveEvidenceDeskV1(
   context: PersonLiveRequestContextV1,
 ) {
   const { scope } = input;
-  const bound: RegisteredPersonLiveEvidenceSourceV2[] = [];
-  for (const selected of compatible) {
+  // Each binding verifies its own connection, so sources bind concurrently.
+  // They register in catalog order, and the first failure in that order is
+  // the request's failure, exactly as when they bound one after another.
+  const settled = await Promise.allSettled(compatible.map(selected => {
     const category = selected.descriptor.kind === 'slack_message' ? 'slack' : selected.descriptor.kind;
-    await observePersonLiveEvidenceV1('evidence_connection', category, async () => {
-      if (scope.kind === 'mine' || !selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return; }
+    return observePersonLiveEvidenceV1('evidence_connection', category, async (): Promise<RegisteredPersonLiveEvidenceSourceV2 | undefined> => {
+      if (scope.kind === 'mine' || !selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return undefined; }
       const source = await selected.application.source({
         ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}),
         access_token: input.access_token, audit: options.audit.forLiveRequest(context),
@@ -49,9 +51,15 @@ export async function bindPersonLiveEvidenceDeskV1(
       });
       input.signal?.throwIfAborted();
       annotateCoreRuntimeV1({ result: source === undefined ? (scope.kind === 'project' ? 'unavailable' : 'unlinked') : 'verified' });
-      if (source !== undefined) bound.push({ descriptor: selected.descriptor, source, scope });
+      return source === undefined ? undefined : { descriptor: selected.descriptor, source, scope };
     });
+  }));
+  const bound: RegisteredPersonLiveEvidenceSourceV2[] = [];
+  for (const result of settled) {
+    if (result.status === 'rejected') throw result.reason;
+    if (result.value !== undefined) bound.push(result.value);
   }
+  input.signal?.throwIfAborted();
   const base = createPersonEvidenceDeskV1({ access_token: input.access_token, scope, originals: options.originals, records: options.records });
   return createRegisteredPersonLiveEvidenceDeskV2(base, bound);
 }

@@ -14,6 +14,12 @@ const TEXT_FIELDS = `${INVENTORY_FIELDS},description`;
 const OPEN_FIELDS = `${TEXT_FIELDS},issuelinks`;
 const REQUEST_MAX_HANDLES = 512;
 const REVALIDATION_BATCH_SIZE = 50;
+/**
+ * One list page is one search plus one bulk read. 25 matches the research
+ * loop's shown page; at worst-case label, owner and status bytes a page of
+ * 25 still fits the shared 64 KiB result bound, which 50 would not.
+ */
+const LIST_MAX_ITEMS = 25;
 /** One-hop expansion is deliberately bounded; deeper traversal requires an explicit existing open. */
 const OPEN_RELATED_MAX_ITEMS = 4;
 
@@ -30,17 +36,61 @@ function limit(value: number): number {
   return value;
 }
 
-/** Shared keyword semantics, or an exact key. Never caller-authored JQL or Lucene operators. */
-function searchJql(query: string, projectId?: string): string {
+/** A relaxed retry drops one term at a time; past this many terms it would be too broad and too long. */
+const RELAXED_SEARCH_MAX_TERMS = 6;
+
+interface SearchTerms {
+  /** Distinct literal keywords, compared case-insensitively. */
+  readonly terms: readonly string[];
+  /** Distinct issue keys among the terms, ignoring surrounding punctuation. */
+  readonly keys: readonly string[];
+}
+
+/** Shared keyword semantics. Never caller-authored JQL or Lucene operators. */
+function searchTerms(query: string): SearchTerms {
   if (typeof query !== 'string' || query.trim() === '' || Buffer.byteLength(query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query)) jiraFailure('invalid_request');
   const terms = [...new Map(query.trim().split(/\s+/u).map(term => [term.toLowerCase(), term])).values()];
   if (terms.length > 32) jiraFailure('invalid_request');
-  const ticketKey = query.trim().toUpperCase();
-  const expression = JIRA_TICKET_KEY.test(ticketKey) ? `key = ${JSON.stringify(ticketKey)}` : terms.map(term => {
-    const literal = term.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&');
-    return `text ~ ${JSON.stringify(`"${literal}"`)}`;
-  }).join(' AND ');
+  const keys = [...new Set(terms.map(term => term.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase()).filter(term => JIRA_TICKET_KEY.test(term)))];
+  return Object.freeze({ terms: Object.freeze(terms), keys: Object.freeze(keys) });
+}
+
+/**
+ * Every term as an escaped literal text clause. The relaxed form, for one
+ * retry after an empty search, matches all terms but one: an OR of each
+ * term dropped in turn. With two terms that is a plain OR.
+ */
+function textJql(terms: readonly string[], relaxed: boolean, projectId?: string): string {
+  const clause = (term: string) => `text ~ ${JSON.stringify(`"${term.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&')}"`)}`;
+  const expression = relaxed
+    ? terms.map((_, dropped) => `(${terms.filter((_, index) => index !== dropped).map(clause).join(' AND ')})`).join(' OR ')
+    : terms.map(clause).join(' AND ');
   return `${projectId === undefined ? expression : `project = ${projectId} AND (${expression})`} ORDER BY created DESC, id DESC`;
+}
+
+/** A UTC day moved by whole days, or undefined once it leaves the four-digit years a JQL date can name. */
+function shiftDay(day: string, days: number): string | undefined {
+  const value = new Date(`${day}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  const shifted = value.toISOString().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(shifted) ? shifted : undefined;
+}
+
+/**
+ * Inventory JQL. JQL dates use the account timezone, so the created bounds are
+ * coarse, with one day of margin either side; the exact UTC filter stays in code.
+ * A bound past four-digit years is left out rather than sent malformed.
+ */
+function listJql(projectId: string | undefined, since: string | undefined, until: string | undefined): string {
+  const lower = since === undefined ? undefined : shiftDay(since, -1);
+  const upper = until === undefined ? undefined : shiftDay(until, 2);
+  const clauses = [
+    ...(projectId === undefined ? [] : [`project = ${projectId}`]),
+    // The search endpoint refuses an unbounded query; a site-wide list keeps a created restriction.
+    ...(lower !== undefined ? [`created >= "${lower}"`] : projectId === undefined ? ['created >= "1970-01-01"'] : []),
+    ...(upper === undefined ? [] : [`created < "${upper}"`]),
+  ];
+  return `${clauses.join(' AND ')} ORDER BY created DESC, id DESC`;
 }
 
 /** Construct once per request from trusted ECHO state, never from model arguments. */
@@ -184,18 +234,68 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       if (ids.size > REQUEST_MAX_HANDLES || tokens.size > REQUEST_MAX_HANDLES) jiraFailure('unavailable');
       return id;
     });
-    for (let offset = 0; offset < discovered.length; offset += 4) {
-      // Search is eventually consistent. Exact reads enforce current issue security before exposing even its title.
-      // Independent reads overlap in bounded batches, with results admitted in
-      // discovery order only after the entire batch passes its scope checks.
-      const batch = await Promise.all(discovered.slice(offset, offset + 4).map(async id => {
-        const current = await issue(id, input.origin, input.inventory, input.signal);
-        if (input.projectId !== undefined && current.project_id !== input.projectId) jiraFailure('invalid_output');
-        return current;
-      }));
-      selected.push(...batch);
+    // Search is eventually consistent. Current reads enforce issue security
+    // before exposing even a title; results keep discovery order.
+    for (const current of await currentIssues(discovered, input.origin, input.inventory, input.signal)) {
+      if (input.projectId !== undefined && current.project_id !== input.projectId) jiraFailure('invalid_output');
+      selected.push(current);
     }
     return { selected, token, tokens, ids };
+  }
+
+  /**
+   * One bulk fetch per discovered page; it applies current issue permissions.
+   * It omits hidden and deleted issues without saying which, so an omitted hit
+   * gets its own exact read, whose refusal fails the page as before.
+   */
+  async function currentIssues(ids: readonly string[], origin: string, inventory: boolean, signal?: AbortSignal): Promise<readonly ParsedJiraIssueV1[]> {
+    if (ids.length === 0) return Object.freeze([]);
+    const page = jiraRecord(await transport.request({ path: `${pathPrefix}/issue/bulkfetch`, method: 'POST',
+      body: { issueIdsOrKeys: [...ids], fields: (inventory ? INVENTORY_FIELDS : TEXT_FIELDS).split(',') }, signal }));
+    signal?.throwIfAborted();
+    // issueErrors are retriable failures, never a partial page.
+    if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, ids.length).length > 0) jiraFailure('unavailable');
+    const expected = new Set(ids);
+    const found = new Map<string, ParsedJiraIssueV1>();
+    for (const raw of jiraArray(page.issues, ids.length)) {
+      const parsed = parseJiraIssueV1(raw, { cloudid, origin, inventory });
+      if (!expected.has(parsed.id) || found.has(parsed.id)) jiraFailure('invalid_output');
+      if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
+      found.set(parsed.id, parsed);
+    }
+    const missing = ids.filter(id => !found.has(id));
+    for (let offset = 0; offset < missing.length; offset += 4) {
+      for (const parsed of await Promise.all(missing.slice(offset, offset + 4).map(id => issue(id, origin, inventory, signal)))) found.set(parsed.id, parsed);
+    }
+    return Object.freeze(ids.map(id => found.get(id)!));
+  }
+
+  /**
+   * Issue keys named in a search, read through the bulk issue read rather than
+   * JQL: Jira refuses a whole JQL query when one named key is missing or
+   * hidden, while the bulk read applies current permissions and simply omits
+   * it. A missing, hidden or out-of-scope key is no match, not a failure.
+   */
+  async function keyIssues(keys: readonly string[], origin: string, signal?: AbortSignal): Promise<readonly ParsedJiraIssueV1[]> {
+    if (keys.length === 0) return Object.freeze([]);
+    // Diagnostics name the lookup in JQL form; it runs as a bulk read.
+    observeCoreRuntimeDiagnosticV1({ kind: 'provider_query', provider: 'jira', operation: 'search', query: `key in (${keys.map(key => JSON.stringify(key)).join(', ')})`, max_results: keys.length });
+    const page = jiraRecord(await transport.request({ path: `${pathPrefix}/issue/bulkfetch`, method: 'POST',
+      body: { issueIdsOrKeys: [...keys], fields: INVENTORY_FIELDS.split(',') }, signal }));
+    signal?.throwIfAborted();
+    if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, keys.length).length > 0) jiraFailure('unavailable');
+    const ids = new Set<string>();
+    const found: ParsedJiraIssueV1[] = [];
+    for (const raw of jiraArray(page.issues, keys.length)) {
+      // A moved issue answers to its old key with its current one, so keys cannot be matched one to one.
+      const parsed = parseJiraIssueV1(raw, { cloudid, origin, inventory: true });
+      if (ids.has(parsed.id)) jiraFailure('invalid_output');
+      ids.add(parsed.id);
+      if (pinnedProject === undefined || parsed.project_id === pinnedProject.id) found.push(parsed);
+    }
+    // Bulk results arrive in id order; answer in the order the keys were named.
+    const rank = (issue: ParsedJiraIssueV1) => { const index = keys.indexOf(issue.key); return index < 0 ? keys.length : index; };
+    return Object.freeze(found.sort((left, right) => rank(left) - rank(right)));
   }
 
   /**
@@ -235,12 +335,26 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = Math.min(limit(input.limit), 5);
-      const jql = searchJql(input.query, pinnedProject?.id);
+      const { terms, keys } = searchTerms(input.query);
+      const projectId = pinnedProject?.id;
+      const named = keys.slice(0, maximum);
+      // A query of only keys is a key lookup. Otherwise named keys match
+      // exactly, or as words alongside the rest: key in (...) OR every term.
+      const text = keys.length === terms.length ? undefined : terms;
       return safe(async () => {
         const origin = await verifyConnection(input.signal);
-        const page = await searchPage({ jql, maximum, origin, inventory: true, projectId: pinnedProject?.id, signal: input.signal });
+        const textPage = (relaxed: boolean) => searchPage({ jql: textJql(text!, relaxed, projectId), maximum, origin, inventory: true, projectId, signal: input.signal });
+        const [byKey, firstText] = await Promise.all([keyIssues(named, origin, input.signal), text === undefined ? undefined : textPage(false)]);
+        let byText = firstText;
+        // One bounded retry when nothing at all matched every term.
+        if (byKey.length === 0 && byText !== undefined && byText.selected.length === 0 && byText.token === undefined &&
+            text!.length >= 2 && text!.length <= RELAXED_SEARCH_MAX_TERMS) byText = await textPage(true);
         await verifyConnection(input.signal);
-        return Object.freeze({ items: remember(page.selected), truncated: page.token !== undefined || page.selected.some(item => item.truncated) });
+        const seen = new Set(byKey.map(item => item.id));
+        const matches = [...byKey, ...(byText?.selected ?? []).filter(item => !seen.has(item.id))];
+        const selected = matches.slice(0, maximum);
+        return Object.freeze({ items: remember(selected),
+          truncated: byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated) });
       }, input.signal);
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
@@ -259,7 +373,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       return openIssue(citation.ticket_id, maximum, input.signal, false);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
-      const maximum = Math.min(limit(input.limit), 20);
+      const maximum = Math.min(limit(input.limit), LIST_MAX_ITEMS);
       if (input.container !== undefined && (typeof input.container !== 'string' || !(JIRA_ID.test(input.container) || JIRA_PROJECT_KEY.test(input.container)))) jiraFailure('invalid_request');
       if (pinnedProject !== undefined && input.container !== undefined && input.container !== fixedProject && !jiraProjectMatches(pinnedProject, input.container)) jiraFailure('unauthorized');
       if (input.since !== undefined) jiraDay(input.since, 'invalid_request');
@@ -274,19 +388,22 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         input.signal?.throwIfAborted();
         if (project !== undefined && input.container !== undefined && !jiraProjectMatches(project, input.container)) jiraFailure('invalid_output');
         if (cursor !== undefined && cursor.projectId !== project?.id) jiraFailure('stale_access_state');
-        const jql = `${project === undefined ? 'created >= "1970-01-01"' : `project = ${project.id}`} ORDER BY created DESC, id DESC`;
+        const jql = listJql(project?.id, input.since, input.until);
         const page = await searchPage({ jql, maximum, origin, inventory: true, cursor, projectId: project?.id, signal: input.signal });
-        // UTC inclusive calendar days. Jira JQL dates use the account timezone, so do not push these filters into JQL.
+        // UTC inclusive calendar days; the JQL date bounds are only coarse.
         const selected = page.selected.filter(item => (input.since === undefined || item.value.occurred_at! >= input.since) && (input.until === undefined || item.value.occurred_at! <= input.until));
+        // Pages run newest first: once a page's oldest issue predates since, no later page can match.
+        const oldest = page.selected.at(-1);
+        const token = input.since !== undefined && oldest !== undefined && oldest.value.occurred_at! < input.since ? undefined : page.token;
         await verifyConnection(input.signal);
         const items = remember(selected);
         let next_cursor: string | undefined;
-        if (page.token !== undefined) {
+        if (token !== undefined) {
           if (cursors.size >= REQUEST_MAX_HANDLES) jiraFailure('unavailable');
           next_cursor = `jira_cursor_${randomUUID()}`;
-          cursors.set(next_cursor, { selection, token: page.token, projectId: project?.id, tokens: page.tokens, ids: page.ids });
+          cursors.set(next_cursor, { selection, token, projectId: project?.id, tokens: page.tokens, ids: page.ids });
         }
-        return Object.freeze({ items, truncated: page.token !== undefined || selected.some(item => item.truncated), ...(next_cursor === undefined ? {} : { next_cursor }) });
+        return Object.freeze({ items, truncated: token !== undefined || selected.some(item => item.truncated), ...(next_cursor === undefined ? {} : { next_cursor }) });
       }, input.signal);
     },
     async revalidate(input): Promise<void> {

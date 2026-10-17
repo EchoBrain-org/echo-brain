@@ -28,7 +28,36 @@ export interface OpenRouterFailureDiagnostic extends StructuredGenerationFailure
 export interface OpenRouterFailureGenerationObservation {
   readonly usage: StructuredGenerationUsageV1;
   readonly provider_latency_ms: number | null;
+  /** The upstream host that served the call, from a closed vocabulary ("other" when unlisted). */
+  readonly upstream_provider: string | null;
+  /** OpenRouter's generation id, for its generation stats. */
+  readonly generation_id: string | null;
 }
+
+/** A successful call's observation, with the same routing identity as a failure's. */
+export interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 {
+  readonly upstream_provider: string | null;
+  readonly generation_id: string | null;
+}
+
+/**
+ * ADR-0037: upstream hosts that garbled this model's output in the 2026-09-30
+ * per-host replay, even at temperature 0. Slugs, as provider.ignore takes them;
+ * the evidence is per model, so the list is too.
+ */
+const OPENROUTER_IGNORED_PROVIDERS_BY_MODEL: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "deepseek/deepseek-v3.2": Object.freeze(["friendli", "atlas-cloud"]),
+});
+
+/**
+ * Upstream host display names recorded as themselves: the hosts OpenRouter
+ * lists, or has listed, for the routed model. A response is never a source of
+ * new labels; any other name is recorded as "other".
+ */
+const OPENROUTER_UPSTREAM_PROVIDERS: readonly string[] = Object.freeze([
+  "Alibaba", "AtlasCloud", "Baidu", "DeepInfra", "DeepSeek", "DigitalOcean", "Friendli",
+  "GMICloud", "Google", "Mara", "Phala", "SambaNova", "SiliconFlow", "Venice",
+]);
 
 export class OpenRouterStructuredGenerationError extends Error implements StructuredGenerationFailureV1 {
   readonly diagnostic: OpenRouterFailureDiagnostic;
@@ -157,12 +186,35 @@ function elapsed(startedAt: number | null, now: () => number): number | null {
   return Number.isSafeInteger(value) ? value : null;
 }
 
-const OPENROUTER_GENERATION_ID = /^gen-[A-Za-z0-9]{8,64}$/;
+// OpenRouter ids read gen-<digits>-<token>; the older single-token form is still accepted.
+const OPENROUTER_GENERATION_ID = /^gen-[A-Za-z0-9]{8,64}(?:-[A-Za-z0-9]{8,64})?$/;
 
 function generationId(value: unknown): string | null {
   return typeof value === "string" && OPENROUTER_GENERATION_ID.test(value)
     ? value
     : null;
+}
+
+function responseGenerationId(response: Response | undefined, root: Record<string, unknown> | null): string | null {
+  const error = root === null ? null : object(root.error);
+  const metadata = error === null ? null : object(error.metadata);
+  return generationId(response?.headers.get("x-generation-id")) ??
+    generationId(root?.id) ??
+    generationId(metadata?.generation_id) ??
+    null;
+}
+
+/**
+ * The serving host: the selected endpoint in the routing metadata this
+ * adapter opts into, or else the response's top-level provider name.
+ */
+function upstreamProvider(root: Record<string, unknown> | null): string | null {
+  const endpoints = object(object(root?.openrouter_metadata)?.endpoints);
+  const available = Array.isArray(endpoints?.available) ? endpoints.available : [];
+  const selected = available.map(object).find(endpoint => endpoint?.selected === true);
+  const name = selected?.provider ?? root?.provider;
+  if (typeof name !== "string") return null;
+  return OPENROUTER_UPSTREAM_PROVIDERS.includes(name) ? name : "other";
 }
 
 function finishReason(value: unknown): OpenRouterFinishReason | null {
@@ -211,32 +263,26 @@ interface OpenRouterFailureInput {
 function failureDiagnostic(
   input: OpenRouterFailureInput,
 ): OpenRouterFailureDiagnostic {
-  const root = input.root ?? null;
-  const error = root === null ? null : object(root.error);
-  const metadata = error === null ? null : object(error.metadata);
-  const providerGenerationId =
-    generationId(input.response?.headers.get("x-generation-id")) ??
-    generationId(root?.id) ??
-    generationId(metadata?.generation_id) ??
-    null;
   return Object.freeze({
     failure_class: input.failure_class,
     http_status: input.response?.status ?? null,
     adapter_id: "openrouter",
     finish_reason: input.finish_reason ?? null,
-    adapter_request_id: providerGenerationId,
+    adapter_request_id: responseGenerationId(input.response, input.root ?? null),
   });
 }
 
 function failureGenerationObservation(
   input: Pick<
     OpenRouterFailureInput,
-    "usage" | "provider_latency_ms"
+    "usage" | "provider_latency_ms" | "response" | "root"
   >,
 ): OpenRouterFailureGenerationObservation {
   return Object.freeze({
     usage: observedUsage(input.usage),
     provider_latency_ms: nonnegativeSafeInteger(input.provider_latency_ms),
+    upstream_provider: upstreamProvider(input.root ?? null),
+    generation_id: responseGenerationId(input.response, input.root ?? null),
   });
 }
 
@@ -269,12 +315,12 @@ export function createOpenRouterStructuredGenerationAdapter(
   const url = endpoint(options.endpoint);
   const fetchImpl = options.fetch_impl ?? fetch;
   const nowMs = options.now_ms ?? (() => performance.now());
-  async function generateWithObservation(input: StructuredGenerationInput): Promise<StructuredGenerationObservedResultV1> {
+  async function generateWithObservation(input: StructuredGenerationInput): Promise<OpenRouterObservedResult> {
     return observeCoreRuntimeV1("model_call", async () => generateObserved(input));
   }
   async function generateObserved(
     input: StructuredGenerationInput,
-  ): Promise<StructuredGenerationObservedResultV1> {
+  ): Promise<OpenRouterObservedResult> {
     observeCoreModelMetadataV1({ provider: "openrouter", model: input.model });
     model(input.model);
     boundedInteger(
@@ -304,11 +350,14 @@ export function createOpenRouterStructuredGenerationAdapter(
     const timeoutSignal = AbortSignal.timeout(input.timeout_ms);
     const signals: AbortSignal[] = [timeoutSignal];
     if (input.signal !== undefined) signals.push(input.signal);
+    const ignored = OPENROUTER_IGNORED_PROVIDERS_BY_MODEL[input.model];
     const request: RequestInit = {
       method: "POST",
       headers: {
         authorization: `Bearer ${apiKey}`,
         "content-type": "application/json",
+        // Documented routing metadata names the endpoint that served the call.
+        "x-openrouter-metadata": "enabled",
       },
       signal: AbortSignal.any(signals),
       body: JSON.stringify({
@@ -319,6 +368,8 @@ export function createOpenRouterStructuredGenerationAdapter(
         ],
         stream: false,
         max_tokens: input.max_output_tokens,
+        // ADR-0037: structured protocol output; sampling only adds variance.
+        temperature: 0,
         response_format: {
           type: "json_schema",
           json_schema: {
@@ -334,6 +385,7 @@ export function createOpenRouterStructuredGenerationAdapter(
           // deadline, and OpenRouter's default price-weighted routing picked
           // slow providers; route to the fastest provider that qualifies.
           sort: "throughput",
+          ...(ignored === undefined ? {} : { ignore: ignored }),
         },
       }),
     };
@@ -484,6 +536,8 @@ export function createOpenRouterStructuredGenerationAdapter(
         usage: generationUsage,
         finish_reason: completed,
         provider_latency_ms: providerLatency,
+        upstream_provider: upstreamProvider(root),
+        generation_id: responseGenerationId(response, root),
       });
     } catch {
       fail("OpenRouter response is invalid", {

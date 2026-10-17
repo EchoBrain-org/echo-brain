@@ -7,6 +7,18 @@ import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
 
 const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'];
+/** Live inventory pages match the research loop's list fetch; each reader still applies its own smaller cap. */
+const LIVE_LIST_MAX = 50;
+/** Coverage notices for a live source that was briefly unavailable to a search across sources. */
+const UNAVAILABLE_NOTICES: Readonly<Record<PersonLiveSourceDescriptorV2['kind'], string>> = Object.freeze({
+  ticket: 'Live tickets could not be searched just now, so these results leave them out.',
+  page: 'Live pages could not be searched just now, so these results leave them out.',
+  slack_message: 'Live Slack messages could not be searched just now, so these results leave them out.',
+});
+/** A provider outage, timeout or rate limit. Authorization, stale access and cancellation are never transient. */
+function transientLiveFailure(error: unknown): boolean {
+  return error instanceof AuthorityOperationError && (error.code === 'unavailable' || error.code === 'rate_limited');
+}
 
 export type { PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 export interface RegisteredPersonLiveEvidenceSourceV2 {
@@ -64,22 +76,34 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       const liveKinds = new Set([...sources.values()].map(value => value.descriptor.kind));
       const localKinds = selectedId === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : selectedId === 'slack' ? ['slack_message'] as const : undefined;
       const kinds = (requestedKinds ?? localKinds)?.filter((kind): kind is EvidenceDeskKindV1 => kind !== 'ticket' && kind !== 'page' && !liveKinds.has(kind as 'slack_message')) ?? (liveKinds.has('slack_message') ? LOCAL_KINDS : undefined);
-      const page = (source: Source, operation: () => Promise<EvidenceDeskResultV2>) =>
+      type Page = { readonly source: Source; readonly result: EvidenceDeskResultV2 };
+      type Unavailable = { readonly source: RegisteredPersonLiveEvidenceSourceV2; readonly result?: undefined; readonly failure: unknown };
+      const page = (source: Source, operation: () => Promise<EvidenceDeskResultV2>): Promise<Page> =>
         Promise.resolve().then(operation).then(result => ({ source, result }));
-      const lookups: Promise<{ readonly source: Source; readonly result: EvidenceDeskResultV2 }>[] = [];
+      const lookups: Promise<Page | Unavailable>[] = [];
       if (selectedSource === undefined && kinds?.length !== 0) {
         lookups.push(page(base, () => base.search({ ...request, ...(kinds === undefined ? {} : { kinds }) })));
       }
       for (const registration of selectedSource === undefined ? (localSource ? [] : sources.values()) : [selectedSource]) {
         const { source, descriptor } = registration;
         if (requestedKinds !== undefined && !requestedKinds.includes(descriptor.kind)) continue;
-        lookups.push(page(registration, () => input.query === undefined
-          ? lookup('evidence_list', registration, () => source.list({ limit: Math.min(maximum, 20), signal: input.signal }))
-          : lookup('evidence_search', registration, () => source.search({ query: input.query!, limit: Math.min(maximum, 5), signal: input.signal }))));
+        const live = page(registration, () => input.query === undefined
+          ? lookup('evidence_list', registration, () => source.list({ limit: Math.min(maximum, LIVE_LIST_MAX), signal: input.signal }))
+          : lookup('evidence_search', registration, () => source.search({ query: input.query!, limit: Math.min(maximum, 5), signal: input.signal })));
+        // Across sources, one live source's transient failure becomes a
+        // coverage notice and the others still answer. A chosen source fails as asked.
+        lookups.push(selectedSource !== undefined ? live : live.catch((failure: unknown): Unavailable => {
+          if (!transientLiveFailure(failure)) throw failure;
+          return { source: registration, failure };
+        }));
       }
-      const pages = await Promise.all(lookups);
+      const settled = await Promise.all(lookups);
       input.signal?.throwIfAborted();
-      if (pages.length === 1 && pages[0]!.source === base) return remember(pages[0]!.result, base);
+      const pages = settled.filter((value): value is Page => value.result !== undefined);
+      const unavailable = settled.filter((value): value is Unavailable => value.result === undefined);
+      // With nothing that answered, the failure stays the result.
+      if (pages.length === 0 && unavailable.length > 0) throw unavailable[0]!.failure;
+      if (unavailable.length === 0 && pages.length === 1 && pages[0]!.source === base) return remember(pages[0]!.result, base);
       // Take one item from each nonempty source before taking any second
       // item. One full provider page cannot hide matching evidence from another source.
       const selected: EvidenceDeskResultV2['items'][number][] = [];
@@ -94,7 +118,8 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         }
         if (!found) break;
       }
-      const notices = pages.flatMap(page => page.result.notice === undefined ? [] : [page.result.notice]);
+      const notices = [...pages.flatMap(page => page.result.notice === undefined ? [] : [page.result.notice]),
+        ...unavailable.map(value => UNAVAILABLE_NOTICES[value.source.descriptor.kind])];
       return Object.freeze({
         items: Object.freeze(selected),
         truncated: pages.some(page => page.result.truncated) || pages.reduce((count, page) => count + page.result.items.length, 0) > maximum,
@@ -123,7 +148,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       }
       const { source, descriptor } = registration;
       if ((input.channel !== undefined && !descriptor.requires_channel) || input.kinds?.some(kind => kind !== descriptor.kind)) refused();
-      const result = await lookup('evidence_list', registration, () => source.list({ ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, 20), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
+      const result = await lookup('evidence_list', registration, () => source.list({ ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, LIVE_LIST_MAX), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
       input.signal?.throwIfAborted();
       return remember(result, registration);
     },

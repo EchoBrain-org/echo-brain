@@ -12,7 +12,14 @@ import { confluenceArray, confluenceFailure, confluenceRecord, confluenceString,
 const API_ORIGIN = 'https://api.atlassian.com';
 const ID = /^[1-9][0-9]{0,19}$/;
 const MAX_HANDLES = 512;
-const MAX_REQUESTS = 160;
+/**
+ * Content reads (search, list and open traffic) per request. Connection
+ * checks and revalidation are mandatory fences whose count grows with the
+ * run's model calls, so they count only toward the hard bound below, which
+ * stops a runaway loop without failing a long run after research finished.
+ */
+const MAX_CONTENT_REQUESTS = 160;
+const MAX_REQUESTS = 2048;
 const REVALIDATION_BATCH_SIZE = 50;
 const LIST_STATUSES = Object.freeze(['current', 'archived', 'deleted', 'trashed']);
 const STATUSES = Object.freeze([...LIST_STATUSES, 'draft', 'historical']);
@@ -80,18 +87,22 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
   const issued = new Map<string, Item>();
   const cursors = new Map<string, Cursor>();
   let requests = 0;
+  let contentRequests = 0;
   let origin = options.expected_origin;
-  const transport: ConfluenceCloudTransportV1 = Object.freeze({ binding, async request(input: Parameters<ConfluenceCloudTransportV1['request']>[0]) {
-    if (++requests > MAX_REQUESTS) confluenceFailure('unavailable');
+  const counted = (content: boolean): ConfluenceCloudTransportV1 => Object.freeze({ binding, async request(input: Parameters<ConfluenceCloudTransportV1['request']>[0]) {
+    if (++requests > MAX_REQUESTS || (content && ++contentRequests > MAX_CONTENT_REQUESTS)) confluenceFailure('unavailable');
     return options.transport.request(input);
   } });
+  const transport = counted(true);
+  /** Connection checks and revalidation. */
+  const fences = counted(false);
   function current(signal?: AbortSignal): void {
     signal?.throwIfAborted();
     if (canonicalSha256(options.transport.binding) !== bindingHash) confluenceFailure('stale_access_state');
   }
   const verifyQueued = createAtlassianVerificationBatchV1(async (signal?: AbortSignal): Promise<void> => {
     current(signal);
-    const result = await verifyConfluenceConnectionV1(transport, { signal, expected_origin: origin,
+    const result = await verifyConfluenceConnectionV1(fences, { signal, expected_origin: origin,
       require_account(account) { if (account !== binding.external_subject_id) confluenceFailure('unauthorized'); } });
     origin = result.origin;
     current(signal);
@@ -105,8 +116,9 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
   }
   function inScope(page: Page): void { if (selected !== undefined && !selected.includes(page.space_id)) confluenceFailure('unauthorized'); }
   function permalink(page: Page): string { return `${origin}/wiki/pages/viewpage.action?pageId=${page.id}`; }
-  async function exact(id: string, body: boolean, status?: string, signal?: AbortSignal): Promise<Page> {
-    const page = metadata(await transport.request({ path: `/api/v2/pages/${id}`, query: { ...(body ? { 'body-format': 'atlas_doc_format' } : {}), ...(status === undefined ? {} : { status }) }, signal }), body);
+  /** Revalidation's exact reads are fence traffic; content operations pass the content transport. */
+  async function exact(id: string, body: boolean, status?: string, signal?: AbortSignal, via = fences): Promise<Page> {
+    const page = metadata(await via.request({ path: `/api/v2/pages/${id}`, query: { ...(body ? { 'body-format': 'atlas_doc_format' } : {}), ...(status === undefined ? {} : { status }) }, signal }), body);
     if (page.id !== id) confluenceFailure('invalid_output');
     inScope(page);
     return page;
@@ -194,7 +206,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       });
       // CQL uses v1 content envelopes. Fetch only v2 metadata, never assume the
       // v1 fields are the v2 page schema or release a search excerpt as evidence.
-      pages = await parallel(ids, id => exact(id, false, undefined, signal));
+      pages = await parallel(ids, id => exact(id, false, undefined, signal, transport));
     } else pages = rows.map(row => metadata(row));
     if (new Set(pages.map(page => page.id)).size !== pages.length) confluenceFailure('invalid_output');
     pages.forEach(inScope);
@@ -213,7 +225,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         current(signal);
         // GET /pages applies the asker's current permissions to this exact ID
         // set. Never retrieve bodies merely to revalidate inventory metadata.
-        const response = confluenceRecord(await transport.request({ path: '/api/v2/pages',
+        const response = confluenceRecord(await fences.request({ path: '/api/v2/pages',
           query: { id: [...expected.keys()], limit: String(batch.length), status: LIST_STATUSES,
             ...(cursor === undefined ? {} : { cursor }) }, signal }));
         current(signal);
@@ -240,7 +252,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
   /** Opens one released item: its page's current body from the item's section on. */
   async function openItem(item: Item, maximum: number, signal?: AbortSignal, cited?: PersonPageCitationV1): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
     await verify(signal);
-    const page = await exact(item.page.id, true, item.page.status, signal);
+    const page = await exact(item.page.id, true, item.page.status, signal, transport);
     if (!samePage(page, item.page)) confluenceFailure('stale_access_state');
     const normalized = normalizeConfluencePageDocumentV1(page.document!);
     const texts = normalized.sections;
@@ -341,7 +353,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       // Current metadata through the exact read (space pin and permissions), then
       // the cited section from the current page: a re-read never trusts an old
       // version or silently substitutes another section.
-      const current = await exact(citation.page_id, false, undefined, input.signal);
+      const current = await exact(citation.page_id, false, undefined, input.signal, transport);
       if (citation.permalink !== permalink(current)) confluenceFailure('unauthorized');
       return openItem(citedSection(current, citation), maximum, input.signal, citation);
     },
