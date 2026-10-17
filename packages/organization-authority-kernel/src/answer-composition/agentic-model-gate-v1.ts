@@ -139,8 +139,12 @@ export interface CreateAgenticModelGateV1Options {
   /** The provider binding; every role uses answer_model. */
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly model: StructuredGenerationPort;
-  /** The request's cumulative access check, run before every call. */
-  readonly desk_revalidate: (input: { readonly signal: AbortSignal }) => Promise<{ readonly checked_at: string }>;
+  /**
+   * The request's access check, run before every call. The gate asks for an
+   * incremental check (ADR-0038): everything released since the last check,
+   * plus the session, membership, grant and connection checks.
+   */
+  readonly desk_revalidate: (input: { readonly signal: AbortSignal; readonly mode: "incremental" }) => Promise<{ readonly checked_at: string }>;
   /** Receives each pre-call check's time, for the request's audit. */
   readonly on_checked: (checked_at: string) => void;
   readonly budget: { readonly max_model_calls: number };
@@ -188,9 +192,11 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
   const call = async ({ role, span }: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery = false): Promise<unknown> => {
     assertLive();
     if (calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
-    // Every call is preceded by a cumulative desk revalidation of what it may carry.
-    const validated = await observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'model', role, next_call_id: calls + 1 },
-      () => raceAbort(activeSignal, options.desk_revalidate({ signal: activeSignal })), value => ({ checked_at: value.checked_at }));
+    // Every call is preceded by a desk check of what it may carry: what was
+    // released since the last check, plus the session, membership, grant and
+    // connection (ADR-0038). Release runs the full cumulative check.
+    const validated = await observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'model', mode: 'incremental', role, next_call_id: calls + 1 },
+      () => raceAbort(activeSignal, options.desk_revalidate({ signal: activeSignal, mode: "incremental" })), value => ({ checked_at: value.checked_at }));
     options.on_checked(validated.checked_at);
     assertLive();
     // Revalidation itself spends request time. Recompute the role budget after the fence,

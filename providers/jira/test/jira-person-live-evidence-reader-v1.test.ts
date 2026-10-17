@@ -655,6 +655,46 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     await expect(source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
   });
 
+  it('re-reads only newly released tickets in an incremental check and verifies the connection once, after them', async () => {
+    const f = fixture(); f.state.pages = [page(['10001']), page(['10002'])];
+    const { source } = await f.make('ECHO');
+    const verify = ['/oauth/token/accessible-resources', `${prefix}/myself`, `${prefix}/project/ECHO`];
+    const calls = () => f.request.mock.calls.map(([request]) => request.path === `${prefix}/issue/bulkfetch` ? `bulk:${(request.body!.issueIdsOrKeys as string[]).join(',')}` : request.path);
+    await source.list({});
+    f.request.mockClear(); await source.revalidate({ mode: 'incremental' });
+    expect(calls()).toEqual(['bulk:10001', ...verify]);
+    // A repair with no new evidence re-reads nothing and still verifies the account, site and project.
+    f.request.mockClear(); await source.revalidate({ mode: 'incremental' });
+    expect(calls()).toEqual(verify);
+    await source.list({});
+    f.request.mockClear(); await source.revalidate({ mode: 'incremental' });
+    expect(calls()).toEqual(['bulk:10002', ...verify]);
+    // The full check keeps both verifications around every released ticket.
+    f.request.mockClear(); await source.revalidate({});
+    expect(calls()).toEqual([...verify, 'bulk:10001,10002', ...verify]);
+    // An already-checked ticket hidden mid-run is not re-read before the next
+    // model call (ADR-0038), but the full release check refuses it.
+    f.state.denied.set('10001', 'not_found');
+    await expect(source.revalidate({ mode: 'incremental' })).resolves.toBeUndefined();
+    await expect(source.revalidate({})).rejects.toMatchObject({ code: 'not_found' });
+    f.state.denied.clear(); f.state.myself = { accountId: 'changed', active: true, accountType: 'atlassian' };
+    await expect(source.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it('refuses a newly released ticket hidden before an incremental check', async () => {
+    const f = fixture(); f.state.pages = [page(['10001']), page(['10002'])];
+    const { source } = await f.make('ECHO');
+    await source.list({});
+    await source.revalidate({ mode: 'incremental' });
+    await source.list({});
+    f.state.denied.set('10002', 'not_found');
+    await expect(source.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'not_found', message: 'Live evidence operation could not be completed' });
+    // The failed check left 10002 pending, so the next incremental check reads it again.
+    f.state.denied.clear(); f.request.mockClear();
+    await source.revalidate({ mode: 'incremental' });
+    expect(f.request.mock.calls.filter(([request]) => request.path === `${prefix}/issue/bulkfetch`).map(([request]) => request.body!.issueIdsOrKeys)).toEqual([['10002']]);
+  });
+
   it('checks every released issue in bounded batches and accepts a different response order', async () => {
     const f = fixture(); const ids = Array.from({ length: 107 }, (_, index) => String(10001 + index));
     for (const id of ids) f.state.tickets.set(id, ticket(id));

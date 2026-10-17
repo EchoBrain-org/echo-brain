@@ -1,5 +1,5 @@
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
-import type { EvidenceDeskDateKindV1 } from './evidence-desk-v1.js';
+import type { EvidenceDeskDateKindV1, EvidenceDeskRevalidationModeV1 } from './evidence-desk-v1.js';
 import type { PersonConnectorAccessV1, PersonEvidenceAttributesV1, PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
 
 export type PersonLiveEvidenceCitationV1 = PersonSlackMessageCitationV1 | PersonTicketCitationV1 | PersonPageCitationV1;
@@ -71,8 +71,12 @@ export interface PersonLiveEvidenceReaderV1<C extends PersonLiveEvidenceCitation
    */
   openCitation?(input: { readonly citation: unknown; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidencePageV1<C>>;
   list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<C>>;
-  /** Checks the provider connection AND current visibility of every released item, including inventory metadata. Token validity alone is insufficient. */
-  revalidate(input: { readonly citations: readonly C[]; readonly signal?: AbortSignal }): Promise<void>;
+  /**
+   * Checks the provider connection AND current visibility of every given item, including inventory metadata. Token validity alone is insufficient.
+   * `full` (the default) carries every item released so far. `incremental` carries only the items released since the
+   * caller's last successful check, possibly none; the reader then verifies its connection once, after those reads.
+   */
+  revalidate(input: { readonly citations: readonly C[]; readonly signal?: AbortSignal; readonly mode?: EvidenceDeskRevalidationModeV1 }): Promise<void>;
 }
 
 /** Audit coordinates/digests only. Empty and metadata-only reads also commit a receipt. */
@@ -122,8 +126,12 @@ export interface PersonLiveEvidenceSourceV1<C extends PersonLiveEvidenceCitation
   /** Opens a citation released by an earlier request (background trigger starting evidence). */
   openCitation?(input: { readonly citation: unknown; readonly limit?: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceResultV1<C>>;
   list(input: Omit<PersonLiveEvidenceListInputV1, 'limit'> & { readonly limit?: number }): Promise<PersonLiveEvidenceResultV1<C>>;
-  /** Required before every subsequent model call and final response containing any released evidence. */
-  revalidate(input: { readonly signal?: AbortSignal }): Promise<void>;
+  /**
+   * Required before every subsequent model call and final response containing any released evidence.
+   * `incremental` re-reads only items released since this source's last successful check; the local
+   * grant and the provider connection are checked on every call either way.
+   */
+  revalidate(input: { readonly signal?: AbortSignal; readonly mode?: EvidenceDeskRevalidationModeV1 }): Promise<void>;
   /** Rechecks the pinned local grant synchronously after all sources have finished provider I/O. */
   assertCurrent(): void;
 }

@@ -57,6 +57,21 @@ describe('thin live ticket dispatcher', () => {
       expect(f.page.assertCurrent).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
+  it('passes an incremental check to both base fences and every source, and keeps each final grant check', async () => {
+    const f = mixedFixture();
+    const desk = deskWith(f.base, f.ticket, undefined, undefined, f.page);
+    await desk.revalidate({ mode: 'incremental' });
+    expect(vi.mocked(f.base.revalidate).mock.calls.map(([input]) => input.mode)).toEqual(['incremental', 'incremental']);
+    expect(f.ticket.revalidate).toHaveBeenCalledWith({ mode: 'incremental' });
+    expect(f.page.revalidate).toHaveBeenCalledWith({ mode: 'incremental' });
+    expect(f.ticket.assertCurrent).toHaveBeenCalledTimes(1);
+    expect(f.page.assertCurrent).toHaveBeenCalledTimes(1);
+    await desk.revalidate({});
+    expect(vi.mocked(f.base.revalidate).mock.calls.slice(2).map(([input]) => input.mode)).toEqual([undefined, undefined]);
+    // A failed provider check fails the incremental check exactly as it fails a full one.
+    vi.mocked(f.page.revalidate).mockRejectedValueOnce(new AuthorityOperationError('unauthorized', 'Live evidence operation could not be completed'));
+    await expect(desk.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unauthorized' });
+  });
   it('describes only the live sources bound for this request using provider-neutral source kinds', () => {
     const f = mixedFixture();
     const ticket = { ...f.ticket, tool_id: 'issue-fixture' };

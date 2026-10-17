@@ -96,9 +96,30 @@ export interface EvidenceDeskOpenInputV1 {
 }
 
 /**
+ * How much one access check re-reads (ADR-0038). `full` re-checks every item
+ * released so far. `incremental` re-checks only what was released since this
+ * desk's last successful check, and still checks the session, membership
+ * tenure, grants, connections and snapshot pins on every call.
+ */
+export type EvidenceDeskRevalidationModeV1 = 'full' | 'incremental';
+
+export interface EvidenceDeskRevalidateInputV1 {
+  readonly signal?: AbortSignal;
+  /**
+   * Omitted means `full`. Only the check before a model call asks for
+   * `incremental`; the final response always runs `full`. A desk or source
+   * that cannot check incrementally runs a full check instead.
+   */
+  readonly mode?: EvidenceDeskRevalidationModeV1;
+}
+
+/**
  * Layer-3 port. Its construction binds the actor, scope and pinned snapshot.
  * `revalidate` checks every item released so far, including inventory metadata
  * and the evidence about to be sent to the next model call, plus that snapshot.
+ * An `incremental` check narrows "every item" to items released since the
+ * last successful check of this desk instance; that state is never shared
+ * across requests.
  */
 export interface EvidenceDeskPortV1 {
   readonly scope: EvidenceDeskScopeV1;
@@ -110,5 +131,5 @@ export interface EvidenceDeskPortV1 {
   search(input: EvidenceDeskSearchInputV1): Promise<EvidenceDeskResultV1>;
   open(input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV1>;
   list(input: EvidenceDeskListInputV1): Promise<EvidenceDeskResultV1>;
-  revalidate(input: { readonly signal?: AbortSignal }): Promise<{ readonly checked_at: string }>;
+  revalidate(input: EvidenceDeskRevalidateInputV1): Promise<{ readonly checked_at: string }>;
 }

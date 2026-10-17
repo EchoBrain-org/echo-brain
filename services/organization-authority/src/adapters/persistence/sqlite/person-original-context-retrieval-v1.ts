@@ -436,14 +436,20 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   revalidateDeskRelease(input: {
     readonly access_token: string;
     readonly release: OriginalContextDeskReleaseV1;
+    readonly items_checked?: true;
   }): { readonly checked_at: string } {
     if (!this.deskReleases.has(input.release)) unavailable();
-    const checked = this.revalidate({ access_token: input.access_token, release: input.release.release });
+    // A release whose items this request already checked keeps its session,
+    // identity and scope checks but does not re-read each atom (ADR-0038).
+    const checked = input.items_checked === true
+      ? Object.freeze({ checked_at: this.releaseActor(input.access_token, input.release.release).checked_at })
+      : this.revalidate({ access_token: input.access_token, release: input.release.release });
     const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
     // The release keeps its per-atom revalidation semantics.  The
     // request-bound desk additionally pins the authorization revision so a
     // later desk call cannot mix project-association snapshots.
     if (this.authorizationRevision(actor.organization_id) !== input.release.release.authorization_revision) denied();
+    if (input.items_checked === true) return checked;
     for (const item of input.release.items) {
       const atom = input.release.release.released_atoms.find((candidate) => this.citationMatches(candidate, item.citation));
       if (atom === undefined || canonicalJson(this.currentDeskItem(actor, input.release.release.scope, atom, item.text !== undefined)) !== canonicalJson(item)) denied();
@@ -452,15 +458,21 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   revalidate(input: { readonly access_token: string; readonly release: OriginalContextReleaseV1 }) {
-    if (!this.releases.has(input.release)) unavailable();
-    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
-    this.assertOrganization(actor);
-    if (actor.principal_id !== input.release.authorization.principal_id ||
-      actor.membership_id !== input.release.authorization.membership_id ||
-      actor.session_family_id !== input.release.authorization.session_family_id) denied();
-    this.assertScope(actor, input.release.scope);
+    const actor = this.releaseActor(input.access_token, input.release);
     for (const atom of input.release.released_atoms) this.assertReleasedAtomReadable(actor, input.release.scope, atom);
     return Object.freeze({ checked_at: actor.checked_at });
+  }
+
+  /** The release's session, organization, identity and scope checks, without its atoms. */
+  private releaseActor(accessToken: string, release: OriginalContextReleaseV1): PersonAccessAuthorization {
+    if (!this.releases.has(release)) unavailable();
+    const actor = this.sessions.authenticateAccess({ access_token: accessToken });
+    this.assertOrganization(actor);
+    if (actor.principal_id !== release.authorization.principal_id ||
+      actor.membership_id !== release.authorization.membership_id ||
+      actor.session_family_id !== release.authorization.session_family_id) denied();
+    this.assertScope(actor, release.scope);
+    return actor;
   }
 
   read(input: { readonly access_token: string; readonly scope: PersonAskScopeV2; readonly citation: OriginalContextCitationV1 }) {

@@ -155,6 +155,10 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       return remember(result, base);
     },
     async revalidate(input) {
+      // Every layer receives the same mode. An incremental check (ADR-0038)
+      // re-reads only what each layer released since its own last check, so
+      // the second base check below re-reads nothing new and keeps only its
+      // session, grant and snapshot pins.
       input.signal?.throwIfAborted();
       const checked = await base.revalidate(input);
       input.signal?.throwIfAborted();

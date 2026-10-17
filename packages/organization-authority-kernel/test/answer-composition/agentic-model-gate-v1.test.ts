@@ -15,6 +15,7 @@ function harness(options: {
   readonly replies?: readonly (unknown | Error)[];
   readonly max_model_calls?: number;
   readonly desk_revalidate?: () => Promise<{ readonly checked_at: string }>;
+  readonly modes?: string[];
   readonly model?: Parameters<typeof createAgenticModelGateV1>[0]["model"];
 } = {}) {
   const trace: string[] = [];
@@ -31,8 +32,8 @@ function harness(options: {
         return reply;
       },
     },
-    desk_revalidate: async () => {
-      trace.push("revalidate");
+    desk_revalidate: async ({ mode }) => {
+      trace.push("revalidate"); options.modes?.push(mode);
       return options.desk_revalidate?.() ?? { checked_at: `2026-10-06T00:00:0${checked.length}.000Z` };
     },
     on_checked: at => { checked.push(at); },
@@ -53,6 +54,18 @@ describe("agentic model gate", () => {
     expect(trace).toEqual(["revalidate", "generate:0", "revalidate", "generate:1"]);
     expect(checked).toEqual(["2026-10-06T00:00:00.000Z", "2026-10-06T00:00:01.000Z"]);
     expect(gate.stats().calls).toBe(2);
+  });
+
+  it("asks for an incremental check before every call, repairs included", async () => {
+    const modes: string[] = [];
+    const { gate, trace } = harness({ replies: [{ bad: true }, { good: true }, { c: 3 }], modes });
+    await gate.withRepair(STEP, "system", {}, schema, () => 20_000, reply => {
+      if ((reply as { bad?: boolean }).bad) throw new AgenticAskOutputErrorV1("needs are missing");
+      return reply;
+    });
+    await gate.call(ANSWER, "system", {}, schema, () => 20_000);
+    expect(trace).toEqual(["revalidate", "generate:0", "revalidate", "generate:1", "revalidate", "generate:2"]);
+    expect(modes).toEqual(["incremental", "incremental", "incremental"]);
   });
 
   it("enforces the request's call budget before revalidating", async () => {
