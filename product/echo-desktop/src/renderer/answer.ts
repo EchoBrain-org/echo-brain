@@ -11,7 +11,12 @@ export interface SourceGroup {
   readonly indexes: readonly number[];
 }
 
-function groupKey(source: AnswerSource): string {
+/**
+ * The place a source opens, as a person reads it: a meeting (whichever of its
+ * items is cited), a document or note (whichever passage), a transcript's
+ * meeting, or one link. Sources of one place are one source.
+ */
+export function groupKey(source: AnswerSource): string {
   if (source.kind === 'record') return `record:${source.record.record_sha256}`;
   if (source.kind === 'original') return `original:${source.ref.source_id}`;
   if (source.kind === 'transcript') return `transcript:${source.meeting}`;

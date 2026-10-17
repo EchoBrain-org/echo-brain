@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerSource, AskReceipt } from '../../src/shared/protocol.js';
 import {
-  ANNOUNCE_MS, announceAfter, announcement, duration, liveRows, listWords, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, startProgress, withStep,
+  ANNOUNCE_MS, announceAfter, announcement, distinctNames, duration, liveRows, listWords, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, startProgress, withStep,
   type AskProgress,
 } from '../../src/renderer/progress.js';
 
@@ -74,6 +74,21 @@ describe('the live line and its rows', () => {
     const items = [decision('1', 'THERM DVT recovery sync'), ticket('THERM-48'), ticket('THERM-46'), ticket('THERM-44'), ticket('THERM-41')];
     expect(rowNames(items)).toEqual({ names: items.slice(0, 3), more: 2 });
     expect(rowNames(items.slice(0, 2))).toEqual({ names: items.slice(0, 2), more: 0 });
+  });
+
+  it('name a place once: two items of one meeting, or two sections of one page, are one name', () => {
+    // Two sections of one page come as one link: the host keeps no section.
+    const page: AnswerSource = { kind: 'page', tool_id: 'confluence', label: 'Launch plan', permalink: 'https://example.atlassian.net/wiki/x/1' };
+    const progress = steps(
+      { type: 'stage', stage: 'reading', pending: 5 },
+      { type: 'read', items: [decision('1'), decision('2'), page, ticket('THERM-48'), page] },
+    );
+    // Each item read stays in the row; its names are its places.
+    expect(progress.rows).toEqual([{ type: 'read', items: [decision('1'), decision('2'), page, ticket('THERM-48')] }]);
+    expect(progress.pending).toBe(0);
+    expect(distinctNames([decision('1'), decision('2'), page, ticket('THERM-48'), page])).toEqual([decision('1'), page, ticket('THERM-48')]);
+    expect(rowNames([decision('1'), decision('2'), decision('3'), ticket('THERM-48'), ticket('THERM-46'), ticket('THERM-44')], 2))
+      .toEqual({ names: [decision('1'), ticket('THERM-48')], more: 2 });
   });
 });
 

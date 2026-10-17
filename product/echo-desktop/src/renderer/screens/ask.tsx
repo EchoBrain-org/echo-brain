@@ -7,7 +7,7 @@ import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, liveRows, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
+  announceAfter, announcement, distinctNames, liveRows, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
 } from '../progress.js';
 import {
   answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject, fullPageOffered,
@@ -431,7 +431,7 @@ function Receipt({ state, receipt }: { state: State; receipt: AskReceipt }) {
       {open && (
         <ul class="ask-steps" data-testid="receipt-rows">
           {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} />
-            : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} items={row.items} /></span></li>)}
+            : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} items={distinctNames(row.items)} /></span></li>)}
           {unnamed > 0 && <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">and {unnamed} more not listed</span></li>}
         </ul>
       )}

@@ -1,4 +1,5 @@
 import type { AnswerSource, AskRead, AskReceipt, AskSearched, AskSearchedSource, AskStage, AskStep, ConnectedTool } from '../shared/protocol.js';
+import { groupKey } from './answer.js';
 import { sourceKey } from './openers.js';
 
 /**
@@ -103,9 +104,25 @@ export function searchedWords(row: AskSearched, tools?: readonly ConnectedTool[]
   return `Searched ${listWords(row.sources.map(source => sourceWords(source, tools)))} · ${row.found === 0 ? 'nothing new' : `${row.found} found`}`;
 }
 
-/** A read row's names: the first ROW_NAMES, and how many more. */
+/**
+ * Names as a person reads them: one per place, as an answer's sources are
+ * grouped. Two decisions of one meeting, or two sections of one page, carry
+ * the same name and open the same place, so the first read stands for both.
+ */
+export function distinctNames(items: readonly AnswerSource[]): AnswerSource[] {
+  const places = new Set<string>();
+  return items.filter(item => {
+    const place = groupKey(item);
+    if (places.has(place)) return false;
+    places.add(place);
+    return true;
+  });
+}
+
+/** A read row's names: the first ROW_NAMES of its distinct names, and how many more. */
 export function rowNames(items: readonly AnswerSource[], shown = ROW_NAMES): { names: readonly AnswerSource[]; more: number } {
-  return { names: items.slice(0, shown), more: Math.max(0, items.length - shown) };
+  const names = distinctNames(items);
+  return { names: names.slice(0, shown), more: Math.max(0, names.length - shown) };
 }
 
 /** "48s", "1m 12s". */
