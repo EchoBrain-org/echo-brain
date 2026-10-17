@@ -83,8 +83,9 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
     schema_version: 1,
     kind: "echo-person-evidence-desk-v1",
     scope: desk.scope,
-    // The desk contract carries no ref; only Ask citations do (ADR-0024).
-    items: result.items.map(({ ref: _ref, ...item }) => item),
+    // Preserve the public desk contract: named dates are internal research
+    // metadata, and only Ask citations carry ref (ADR-0024).
+    items: result.items.map(({ ref: _ref, dates: _dates, date_kind: _dateKind, ...item }) => item),
     truncated: result.truncated,
     ...(result.notice === undefined ? {} : { notice: result.notice }),
   });

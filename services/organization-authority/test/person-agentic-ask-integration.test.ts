@@ -160,6 +160,8 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(f.originals.read({ access_token: "owner", scope: answer.scope, citation }).atom.text).toBe("Atlas plan.md\nThe launch window is October.");
     const opened = await f.route.openEvidence({ access_token: "owner", request: { schema_version: 1, citation, project_id: PROJECT_ALPHA } });
     expect(opened.items[0]!.text).toBe("Atlas plan.md\nThe launch window is October.");
+    expect(opened.items[0]).not.toHaveProperty("dates");
+    expect(opened.items[0]).not.toHaveProperty("date_kind");
     const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
     expect(body.response_sha256).toBe(canonicalSha256(answer)); expect(body.principal_id).toBe(OWNER.principal_id);
     expect(body).toMatchObject({ model_calls: 4, rounds: 3 }); expect(auditRow(f.database)!.body_json).not.toContain("October");

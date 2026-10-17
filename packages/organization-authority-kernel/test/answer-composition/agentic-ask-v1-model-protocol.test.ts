@@ -101,8 +101,8 @@ describe("agentic Ask model protocol parity", () => {
 
   it("binds each action's argument schema to the selected tool", () => {
     const argumentsByTool: Record<string, readonly string[]> = {
-      search: ["query", "source"], open: ["id"],
-      list: ["source", "kind", "status", "owner", "channel", "since", "until"], finish: [],
+      search: ["query", "source", "since", "until", "date_field"], open: ["id"],
+      list: ["source", "kind", "status", "owner", "channel", "since", "until", "date_field"], finish: [],
     };
     for (let seed = 1; seed <= 400; seed += 1) {
       const value = generator(seed)(stepSchema) as { actions: { tool: string; args: Record<string, unknown> }[] };
