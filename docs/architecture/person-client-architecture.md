@@ -297,7 +297,10 @@ person who runs them; an agent has no membership of its own
   come on a later page. A first page with no items and that notice is not the
   end: follow its cursor later. A later page that could only wait answers 503
   `unavailable`; retry the same cursor later.
-- `person open --ref <ref>` reads one row or one Ask citation's `ref`.
+- `person open --ref <ref>` reads one row or one Ask citation's `ref`,
+  except a follow-up's `follow_up:<item_id>`, which `person runs` reads with
+  operation `item` and that `item_id`
+  ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)).
   Documents, meetings and transcripts page with `--cursor` and the same ref. A
   meeting's first page carries `transcript_ref` when its transcript was shared
   with the reader. Anything the person cannot read is `not_found`.

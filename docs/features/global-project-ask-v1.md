@@ -170,8 +170,9 @@ client does not silently downgrade a project or mine request to global Ask.
 
 `--live` calls `POST /v6/person/ask`, which returns V7 answers: those of
 `/v5` (V6), which may also cite ECHO's shared follow-ups, seen as Home shows
-them ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)). It
-uses every configured request-local live source: Jira ticket citations
+them ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)); a
+follow-up's `follow_up:<item_id>` ref opens with `person runs` operation
+`item`, not `person open`. It uses every configured request-local live source: Jira ticket citations
 ([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md)) and
 Confluence page citations, read under the asker's own connections. Global
 scope reads what those connections can access; a project reads only its
