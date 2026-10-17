@@ -107,8 +107,10 @@ and cancellation failures release no answer.
 
 [ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)
 adds one release path before the final response. A `POST /v5/person/ask`
-request that sends `x-echo-ask-progress: 1` receives progress events while
-it runs. Before the answer, an event may carry only:
+request that sends `x-echo-ask-progress: 1`, or a `POST /v6/person/ask`
+request that sends `x-echo-ask-progress: 2` (progress V2, whose names may be
+follow-ups, ADR-0040), receives progress events while it runs. Before the
+answer, an event may carry only:
 
 - the stage;
 - the source kinds a research step searched, from the request's own catalog,
@@ -193,9 +195,10 @@ transaction, not inside it: access another process revokes in that instant is
 not seen, a known gap of open items and Home v1.
 
 [ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md) adds open
-items to Ask, as follow-ups, on V7 answers. Their route, the additive
-`POST /v6/person/ask`, is defined but not yet mounted (ADR-0040, migration),
-so no Authority serves it yet. The follow-ups source decides what it releases
+items to Ask, as follow-ups, on V7 answers, served by the additive
+`POST /v6/person/ask`, which streams them under the ADR-0039 rules above in
+progress V2: a follow-up is named only after the access check before the call
+that reads it, by its citation projection alone. The follow-ups source decides what it releases
 with the same open-items policy and assessment path as the runs API's `items`,
 so the asker gets exactly what that policy shows them, and nothing in Mine, in
 trigger research or in V4 to V6 answers. Its search matches only words ECHO

@@ -168,20 +168,24 @@ scope rules here still apply to every route. The CLI accepts
 `--project` and `--mine` are exclusive, as are `--tickets` and `--live`. The
 client does not silently downgrade a project or mine request to global Ask.
 
-`--live` calls `POST /v5/person/ask`, which returns V6 answers. It uses every
-configured request-local live source: Jira ticket citations
+`--live` calls `POST /v6/person/ask`, which returns V7 answers: those of
+`/v5` (V6), which may also cite ECHO's shared follow-ups, seen as Home shows
+them ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)). It
+uses every configured request-local live source: Jira ticket citations
 ([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md)) and
 Confluence page citations, read under the asker's own connections. Global
 scope reads what those connections can access; a project reads only its
 lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
 [Confluence spaces](project-settings-v1.md#confluence-space-mapping). Mine and
-unmapped projects exclude live tools. The desktop uses `--live` for every
-question outside Mine. An older Authority without the `/v5` route gets the
-ticket-capable fallback, `POST /v4/person/ask` with V5 answers; permission
-failures never fall back. `person ask --tickets` keeps that `/v4` route for
+unmapped projects exclude live tools, and Mine excludes follow-ups. The
+desktop uses `--live` for every question outside Mine. An older Authority
+without the `/v6` route gets `POST /v5/person/ask` with V6 answers, and one
+without `/v5` either the ticket-capable fallback, `POST /v4/person/ask` with V5
+answers; only a 404 without the route header falls back, and permission
+failures never do. `person ask --tickets` keeps that `/v4` route for
 compatibility. `--live --progress` streams Ask's progress
 ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)): one JSON line per step before the final
-line, which adds the answer's receipt. An Authority that does not stream
+line, which adds the answer's receipt; on `/v6` a step may name a follow-up. An Authority that does not stream
 gets today's output. The desktop pins the streamed Ask to the account it
 shows (`--expected-membership-id` and `--expected-authority`): a client
 signed in as another asks nothing and prints no step. See [Person client architecture](../architecture/person-client-architecture.md)

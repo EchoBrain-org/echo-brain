@@ -119,13 +119,23 @@ How an answer could cite one:
   approver, other members, who checked, the relation, run ids, item keys,
   pointers, `says_now`, or any count of rows the asker cannot see
   (ADR-0012).
-- **Answer.** The V7 answer (`echo-clean-person-answer-v7`), for the
+- **Answer.** The V7 answer (`echo-clean-person-answer-v7`), served by the
   additive `POST /v6/person/ask`, adds the citation kind `follow_up`
   (`{ kind, item_id }`) and the open ref `follow_up:<item_id>`, which every
-  follow-up citation carries and which opens the item page. The V7 route is
-  defined but not yet mounted; see the migration below. The V3 request is
-  unchanged. `/v3`, `/v4` and `/v5` and their answers are unchanged, and no
-  version below V7 binds or cites follow-ups.
+  follow-up citation carries and which opens the item page. A matched `/v6`
+  response carries the route header `x-echo-person-ask-route: 6`. The V3
+  request is unchanged. `/v3`, `/v4` and `/v5` and their answers are
+  unchanged, and no version below V7 binds or cites follow-ups.
+- **Progress ([ADR-0039](ADR-0039-ask-progress-names-after-the-access-check.md)).**
+  `/v6` streams exactly as `/v5` does, for its own header value
+  `x-echo-ask-progress: 2`, in Ask progress V2
+  (`person-ask-progress-v2.ts`). V2 adds only what follow-ups need: a
+  searched row may name `follow_ups`, and a read event or receipt row names a
+  follow-up by its V7 citation. A follow-up is named under ADR-0039's rules,
+  only after the access check before the model call that reads it in full,
+  and its owner, status, check and decision never travel in a step. `/v5`
+  keeps streaming V1 for `1`; `/v6` answers JSON for any other value, so a
+  V1 client never meets a follow-up.
 - **Checks ([ADR-0038](ADR-0038-incremental-access-check-before-model-calls.md)).**
   Before each model call, the source puts every follow-up it released since
   its last successful check through the policy again: the row is still shown,
@@ -151,17 +161,22 @@ How an answer could cite one:
 ## Migration, rollback, and evidence
 
 No schema or stored-state change: follow-ups are read, never written, and
-nothing new is kept after the request. This change defines the V7 route
-(`createPersonLiveAnswerRouteV1(options, 7)`) but mounts nothing: no
-Authority serves `/v6` yet. The route is mounted, and the Person client and
-desktop prefer it, with the Ask change that follows ADR-0039, since that
-change reworks the Ask route. That mount must pass the runtime's follow-up
+nothing new is kept after the request. The API runtime mounts the V7 route
+(`createPersonLiveAnswerRouteV1(options, 7)`) at `/v6` with its follow-up
 sources as `follow_ups` (the runs store, open items, people and record
-search), and its streamed path must pass the request's `response_version`
-and answer V7 with `createAgenticAskV4`; without them a V7 desk binds no
-follow-ups and raises no error. A client falls back from `/v6` to `/v5` only
-when the Authority has no `/v6` route. Rollback is a code revert; older
-clients never reach V7.
+search); without them a V7 desk would bind no follow-ups and raise no error.
+Its JSON and streamed paths both pass the request's `response_version` to
+the desk and answer V7 with `createAgenticAskV4`, inside the same
+snapshot-retry wrapper as `/v5` (`withPersonAskSnapshotRetryV1`).
+
+The Person client's `ask --live` prefers `/v6`. It falls back to `/v5` only
+on a 404 without the route header, as an Authority without `/v6` answers,
+and from `/v5` to `/v4` as before; a failure `/v6` itself answers never falls
+back. With `--progress` it streams `/v6` as progress V2 and `/v5` as V1. The
+desktop reads V7 answers and V2 steps: a follow-up opens in Ask's side panel
+with its title, owner, status and latest check, its Open (shown only once the
+answer came) goes to the item page, and its source row says "owner ·
+status". Rollback is a code revert; older clients never reach V7.
 
 Negative disclosure tests, required by
 [INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md):
@@ -181,9 +196,19 @@ Negative disclosure tests, required by
 - a follow-up hidden, or its decision made unreadable, mid-run makes the
   release check refuse the answer;
 - Mine, trigger research and V4 to V6 answers never bind or cite follow-ups;
-- audit rows hold no title, name, phrase or decision text.
+- audit rows hold no title, name, phrase or decision text;
+- a streamed `/v6` Ask names a follow-up only by its citation projection,
+  never its owner, status, check, decision or expected phrase, and `/v5`
+  never names one.
 
-They are in `services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`
-and `person-follow-ups-ask-integration.test.ts`. The contracts are tested in
-`packages/organization-api/test/person-answer-v7.test.ts` and
+They are in `services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`,
+`person-follow-ups-ask-integration.test.ts` and, for the stream,
+`person-ask-progress-v6-http.test.ts`. The contracts are tested in
+`packages/organization-api/test/person-answer-v7.test.ts`,
+`person-ask-progress-v2.test.ts` and
 `packages/organization-authority-kernel/test/shared/follow-up-evidence-v1.test.ts`.
+`tests/architecture/ask-progress-roundtrip.test.ts` carries a cited
+follow-up from the real Authority runtime through the Person client to the
+desktop page and its item page; the Person client's fallback chain is in
+`tests/person-client/person-ask-progress.test.ts`, and the desktop's opener
+and panel in `product/echo-desktop/test/unit/ask-follow-up.test.ts`.
