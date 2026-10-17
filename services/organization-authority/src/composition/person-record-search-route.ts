@@ -85,9 +85,9 @@ interface ActiveGenerationRow {
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
 const EVIDENCE_DESK_MAX_ITEM_UTF8_BYTES_V1 = 3_072;
 
-/** Only an observed head/pointer lag may put the request in originals-only mode. */
+/** Only an observed head/pointer lag may put the request in originals-only mode. Diagnostics name it `index_lag` by its name. */
 export class PersonRecordSearchIndexLagV1 extends AuthorityOperationError {
-  constructor() { super("unavailable", "an exact-head readable-search generation is not available"); }
+  constructor() { super("unavailable", "an exact-head readable-search generation is not available"); this.name = "PersonRecordSearchIndexLagV1"; }
 }
 
 /**
@@ -259,6 +259,18 @@ export interface PersonRecordAnchorV1 {
   recordAnchor(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): Extract<PersonAnswerCitationV3, { readonly kind: "approved_record" }>;
 }
 
+/** Whether an approved record's run can start yet (runs store v1, section 3). */
+export interface PersonRecordIndexReadinessV1 {
+  /**
+   * True while the active readable-search generation is a verified lag
+   * behind the record log: exactly when `recordAnchor` answers
+   * `PersonRecordSearchIndexLagV1`, whatever the record. Organization-wide
+   * and content-free: it reads no record as a person, audits nothing and
+   * says nothing of any one record.
+   */
+  recordIndexLags(): boolean;
+}
+
 /** One action an approved meeting decided, as an impact run makes it into an open item (follow-ups thread v1). ECHO data only. */
 export interface PersonRecordActionV1 {
   /** The action's signal id in the approved brief. */
@@ -315,6 +327,7 @@ export type PersonRecordSearchRouteV1 =
     PersonMeetingItemsPortV1 &
     PersonRecordProjectsV1 &
     PersonRecordAnchorV1 &
+    PersonRecordIndexReadinessV1 &
     PersonRecordActionsV1 &
     PersonReadableDecisionsV1 &
     PersonReadableDecisionProjectsV1;
@@ -395,6 +408,20 @@ function isVerifiedIndexLag(
   if (pointer.record_head_position >= head.position || pointer.record_head_position < 0) return false;
   const row = record.prepare("SELECT record_sha256 FROM organization_record_log WHERE position=?").get(pointer.record_head_position) as { readonly record_sha256: Sha256Digest } | undefined;
   return row !== undefined && row.record_sha256 === pointer.record_head_hash;
+}
+
+/**
+ * The anchor's index-lag test on its own (`recordAnchor`): no active
+ * generation, or one a verified lag behind the record log head. A generation
+ * of another organization or contract is not lag; the anchor answers it as
+ * unavailable.
+ */
+export function personRecordSearchIndexLagsV1(
+  options: Pick<CreatePersonRecordSearchRouteV1Options, "authority" | "record" | "organization_id" | "retrieval_contract_sha256">,
+): boolean {
+  const head = recordHead(options.record);
+  const pointer = activeGeneration(options.authority);
+  return pointer === null || (!sameHead(pointer, head) && isVerifiedIndexLag(options.record, pointer, head, options));
 }
 
 function samePointer(
@@ -1390,6 +1417,9 @@ export function createPersonRecordSearchRouteV1(
       const released = options.sessions.authenticateAccess({ access_token: input.access_token });
       if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
       return Object.freeze({ kind: "approved_record" as const, atom_id: first.atom_id, record_sha256: first.record_sha256, policy_id: first.policy_id });
+    },
+    recordIndexLags(): boolean {
+      return personRecordSearchIndexLagsV1(options);
     },
     recordActions(input: Parameters<PersonRecordActionsV1["recordActions"]>[0]): ReturnType<PersonRecordActionsV1["recordActions"]> {
       // Admitted as openMeeting admits a record; then the approved record itself, read as open reads it.

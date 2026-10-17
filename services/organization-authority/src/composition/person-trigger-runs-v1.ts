@@ -14,7 +14,7 @@ import type { SqlitePersonAgenticAskAuditV1 } from '../adapters/persistence/sqli
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import { matchImpactOwnersV1, type ImpactOwnerCandidateV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
 import {
-  PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordProjectsV1,
+  PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordIndexReadinessV1, type PersonRecordProjectsV1,
 } from './person-record-search-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
@@ -38,7 +38,8 @@ type RunOutput = { readonly result: object; readonly writes?: () => (transaction
 export interface CreatePersonTriggerRunsV1Options {
   readonly runs: SqliteTriggerRunsV1;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
-  readonly records: PersonRecordAnchorV1 & PersonRecordActionsV1 & PersonRecordProjectsV1 & PersonReadableDecisionsV1;
+  /** `recordIndexLags` holds an impact run unclaimed while the index lags; without it a start claims as before and the anchor refuses. */
+  readonly records: PersonRecordAnchorV1 & PersonRecordActionsV1 & PersonRecordProjectsV1 & PersonReadableDecisionsV1 & Partial<PersonRecordIndexReadinessV1>;
   /** The open items: a finished impact run writes the items it found, and a finished sweep its checks, in the run's finishing transaction. */
   readonly items: Pick<SqliteImpactItemsV1, 'insertForRun' | 'involving' | 'forRecords' | 'read' | 'recordCheck'>;
   /** ECHO's member directory: exact owner matches, and the facts the open-items policy weighs for a sweep. */
@@ -228,6 +229,12 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     },
     async start(input: Parameters<PersonTriggerRunsHttpApplicationV1['start']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);
+      // An impact run is enqueued with its approval, before the search index publishes the record. While the index lags, its
+      // anchor would refuse it before any model call: it stays pending, with no claim, attempt or trace, until a later start.
+      const queued = options.runs.read(actor, input.request.run_id);
+      if (queued?.trigger === 'approved_record' && triggerRunStateAtV1(queued, now().toISOString()) === 'pending' && options.records.recordIndexLags?.() === true) {
+        return Object.freeze({ state: 'pending' as const });
+      }
       const claim = options.runs.claim(actor, input.request.run_id, lease, () => controllers.size < maxRunning);
       if (claim.kind !== 'claimed') { if (claim.kind === 'not_found') throw new AuthorityOperationError('not_found', 'run is not available'); return Object.freeze({ state: claim.kind }); }
       const row = options.runs.read(actor, input.request.run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');

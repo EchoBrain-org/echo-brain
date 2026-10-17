@@ -4457,7 +4457,10 @@ const BUSY: Failure = { code: 'busy', retryable: true };
 /**
  * Starts a queued run. A start that starts nothing (refused, failed, or
  * `busy`) is answered with why, so the next look waits longer, as after a
- * failed runs read (ruling R50).
+ * failed runs read (ruling R50). A start the Authority holds `pending` (its
+ * decision is not searchable yet) is not one: holding costs it a few reads,
+ * so Home looks again at the usual pace and the check starts soon after the
+ * search index catches up.
  */
 async function startRun(run_id: string): Promise<Failure | undefined> {
   try {

@@ -45,7 +45,9 @@ const RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/;
 const TRACE_EVENT_KINDS = new Set(['model_request', 'model_response', 'model_error', 'tool_request', 'tool_response', 'tool_error', 'provider_query', 'lifecycle']);
 const LIFECYCLE_STAGES = new Set(['run', 'trigger', 'application', 'brief', 'starting_read', 'preload', 'research', 'renderer', 'revalidation', 'audit', 'persistence', 'release', 'output_view', 'extraction', 'grounding']);
 const LIFECYCLE_EVENTS = new Set(['started', 'succeeded', 'failed', 'skipped']);
-const LIFECYCLE_ERROR_KINDS = new Set(['aborted', 'deadline', 'invalid_output', 'unavailable', 'unauthorized', 'not_found', 'stale_access_state', 'rate_limited', 'other']);
+// The kernel's diagnostic error kinds: the structured-generation failure classes are their own kinds, and index lag is a wait.
+const LIFECYCLE_ERROR_KINDS = new Set(['aborted', 'deadline', 'invalid_output', 'unavailable', 'unauthorized', 'not_found', 'stale_access_state', 'rate_limited',
+  'adapter_timeout', 'adapter_transport', 'adapter_http', 'adapter_provider_error', 'adapter_finish', 'adapter_refusal', 'adapter_response', 'adapter_json', 'index_lag', 'other']);
 const ERROR_CODES = new Set(['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable', 'timed_out']);
 
 export function validatePersonDiagnosticCaptureIdV1(value: unknown): PersonDiagnosticCaptureIdV1 {

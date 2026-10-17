@@ -11,6 +11,7 @@ import {
 import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, repairInstruction } from "./agentic-ask-v1-model-protocol.js";
 import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
+import { coreRuntimeModelRoutingV1 } from '../shared/core-runtime-diagnostics-v1.js';
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import { AuthorityOperationError } from '../domain/errors.js';
 
@@ -267,13 +268,13 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
         const generate = async <T>(operation: () => Promise<T>): Promise<T> => {
           try { return await raceAbort(activeSignal, operation()); }
           catch (error) {
-            observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: callId, role, error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
+            observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: callId, role, error_kind: coreRuntimeDiagnosticErrorKindV1(error), ...coreRuntimeModelRoutingV1(error, 'failure') });
             throw error;
           }
         };
         if (options.model.generate_with_observation !== undefined) {
           const observed = await generate(() => options.model.generate_with_observation!(modelInput));
-          observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: callId, role, value: observed.value, usage: observed.usage, finish_reason: observed.finish_reason });
+          observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: callId, role, value: observed.value, usage: observed.usage, finish_reason: observed.finish_reason, ...coreRuntimeModelRoutingV1(observed, 'result') });
           generations.push(Object.freeze({ role, finish_reason: observed.finish_reason, usage: observed.usage }));
           if (observed.finish_reason !== null && observed.finish_reason !== "stop") throw finishFailure(observed.finish_reason);
           return observed.value;

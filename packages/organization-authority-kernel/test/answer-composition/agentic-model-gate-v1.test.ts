@@ -188,6 +188,35 @@ describe("agentic model gate", () => {
     expect(gate.stats()).toMatchObject({ calls: requests.length, repairs: finish_reason === 'length' ? 1 : 0, stopped: finish_reason === 'content_filter' });
   });
 
+  it('puts the serving host and generation id an adapter reports on the call\'s terminal event, served or failed', async () => {
+    const events: CoreRuntimeDiagnosticObservationV1[] = [];
+    const usage = { input_tokens: 10, output_tokens: 5, total_tokens: 15, cached_input_tokens: null, reasoning_tokens: null };
+    const served = { upstream_provider: 'DeepInfra', generation_id: 'gen-1760650000-AbCdEfGh12345678' };
+    const timeout = Object.assign(new Error('private provider text'), {
+      diagnostic: { failure_class: 'adapter_timeout', http_status: null, finish_reason: null },
+      generation_observation: { usage, provider_latency_ms: 7_000, upstream_provider: 'Friendli', generation_id: 'gen-1760650001-ZyXwVuTs98765432' },
+    });
+    let calls = 0;
+    const { gate } = harness({
+      model: {
+        generate: async () => { throw new Error('value-only method must not be used'); },
+        generate_with_observation: async () => {
+          if (calls++ === 0) return { value: { a: 1 }, usage, provider_latency_ms: 1, finish_reason: 'stop', ...served };
+          throw timeout;
+        },
+      },
+    });
+    await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, async () => {
+      await gate.call(STEP, 'system', {}, schema, () => 20_000);
+      await expect(gate.call(STEP, 'system', {}, schema, () => 20_000)).rejects.toMatchObject({ recovery: 'retry' });
+    });
+    expect(events.filter(event => event.kind === 'model_response' || event.kind === 'model_error')).toEqual([
+      expect.objectContaining({ kind: 'model_response', call_id: 1, ...served }),
+      expect.objectContaining({ kind: 'model_error', call_id: 2, error_kind: 'adapter_timeout', upstream_provider: 'Friendli', generation_id: 'gen-1760650001-ZyXwVuTs98765432' }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain('private provider text');
+  });
+
   it("repairs once with the validation error and the rejected reply", async () => {
     const { gate, inputs } = harness({ replies: [{ bad: true }, { good: true }] });
     const rejections: string[] = [];
