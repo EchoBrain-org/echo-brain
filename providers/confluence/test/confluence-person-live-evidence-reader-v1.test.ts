@@ -532,6 +532,13 @@ describe('Confluence live reader through the audited evidence source', () => {
     const query = f.calls.find(call => call.path === '/rest/api/search')!.query;
     expect(query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-09-29" AND lastmodified < "2026-10-08"');
     expect(f.bodyCalls()).toEqual([]);
+    // A date field pages do not record is refused, never answered empty or swapped for another (ADR-0041, addition 3).
+    const calls = f.calls.length;
+    for (const date_field of ['occurred', 'due', 'received'] as const) {
+      await expect(f.source.list({ since: '2026-10-01', until: '2026-10-05', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
+      await expect(f.source.search({ query: 'gate', since: '2026-10-01', until: '2026-10-05', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(f.calls.length).toBe(calls);
   });
 
   it('reports truncated search discovery when more permission-visible matches exist', async () => {

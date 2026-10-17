@@ -110,6 +110,13 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect((await source.list({ ...dates })).items).toHaveLength(1);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ body: expect.objectContaining({ jql: expect.stringContaining('updated >=') }) }));
     await expect(source.list({ since: '2026-02-30' })).rejects.toMatchObject({ code: 'invalid_request' });
+    // A date field Jira does not record is refused, never answered empty or swapped for another (ADR-0041, addition 3).
+    const requests = f.request.mock.calls.length;
+    for (const date_field of ['occurred', 'received'] as const) {
+      await expect(source.list({ since: '2026-10-16', until: '2026-10-16', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
+      await expect(source.search({ query: 'ECHO-1', since: '2026-10-16', until: '2026-10-16', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(f.request.mock.calls.length).toBe(requests);
     await source.revalidate({});
   });
 
