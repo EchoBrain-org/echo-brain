@@ -4453,16 +4453,18 @@ export function runToStart(runs: readonly PersonRunV1[]): PersonRunV1 | undefine
 
 /** A start answered `busy`: another run goes first, and this one stays queued. */
 const BUSY: Failure = { code: 'busy', retryable: true };
+/** A start answered `pending`: the Authority holds it (its decision is not searchable yet), and it stays queued. */
+const WAITING: Failure = { code: 'waiting', retryable: true };
 
 /**
- * Starts a queued run. A start that starts nothing (refused, failed, or
- * `busy`) is answered with why, so the next look waits longer, as after a
- * failed runs read (ruling R50).
+ * Starts a queued run. A start that starts nothing (refused, failed, `busy`
+ * or held `pending`) is answered with why, so the next look waits longer, as
+ * after a failed runs read (ruling R50).
  */
 async function startRun(run_id: string): Promise<Failure | undefined> {
   try {
     const { state: started } = await runsCommand({ schema_version: 1, operation: 'start', run_id });
-    return started === 'busy' ? BUSY : undefined;
+    return started === 'busy' ? BUSY : started === 'pending' ? WAITING : undefined;
   } catch (error) {
     return failureOf(error);
   }

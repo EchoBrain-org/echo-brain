@@ -52,6 +52,8 @@ let member = 'member';
 let sweepAnswer: { run_id: string } | { state: 'nothing_to_check' } | 'fails' = { state: 'nothing_to_check' };
 let sweep: PersonRunV1 | null = null;
 let sweepStarts: 'running' | 'busy' | 'done' | 'failed' | 'fails' = 'running';
+/** What starting the impact check answers: `pending` while the Authority's search index has not caught up with its decision. */
+let impactStarts: 'running' | 'pending' = 'running';
 /** What an items read answers, when a test says. */
 let page: OpenItemsView | null = null;
 /** How an assign fails, when a test says; what a read of one item answers (unavailable while null). */
@@ -154,6 +156,7 @@ beforeEach(() => {
   sweepAnswer = { state: 'nothing_to_check' };
   sweep = null;
   sweepStarts = 'running';
+  impactStarts = 'running';
   page = null;
   assignFailure = null;
   readItem = null;
@@ -212,6 +215,7 @@ beforeEach(() => {
             if (sweepStarts !== 'busy') sweep = sweepRun(sweepStarts);
             return ok({ state: sweepStarts });
           }
+          if (impactStarts === 'pending') return ok({ state: 'pending' });
           run = impactRun('running');
           return ok({ state: 'running' });
         }
@@ -742,6 +746,31 @@ describe('Sweeps from Home', () => {
     const calls = polls().length;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(polls()).toHaveLength(calls);
+  });
+
+  it('keeps a check queued while the Authority holds its start, waiting longer after each, then starts it', async () => {
+    review = { ...review, status: 'approved', decided_on: 'desktop' };
+    run = impactRun('pending');
+    impactStarts = 'pending';
+    const store = await start();
+    const rows = store.homeRows().map(row => row.kind);
+    expect(requests('start')).toHaveLength(1);
+    // Held while its decision is not yet searchable: as after busy, the next start is 10 s away, then 20 s.
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(requests('start')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requests('start')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(requests('start')).toHaveLength(2);
+    expect(store.homeRows().map(row => row.kind)).toEqual(rows);
+    impactStarts = 'running';
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(requests('start')).toHaveLength(3);
+    expect(new Set(requests('start').map(request => request.run_id))).toEqual(new Set([impactRun('pending').run_id]));
+    // Started: Home looks again at the usual pace, and starts nothing more.
+    const calls = requests('list').length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect([requests('list').length, requests('start').length]).toEqual([calls + 1, 3]);
   });
 
   it('starts a sweep that went back to the queue again, waiting longer after each start that starts nothing', async () => {
