@@ -5,7 +5,7 @@ import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../../src/answer-composition/agentic-research-v1.js";
 import type { AgenticEvidenceBundleItemV1, AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import { AGENTIC_MODEL_OUTPUT_TOKENS_V1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
-import { IMPACT_CARD_PROMPT, IMPACT_CARD_RENDERER_V1 } from "../../../src/answer-composition/renderers/impact-card-renderer-v1.js";
+import { IMPACT_CARD_PROMPT, IMPACT_CARD_RENDERER_V1, screenImpactLineV1 } from "../../../src/answer-composition/renderers/impact-card-renderer-v1.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2 } from "../../../src/shared/evidence-desk-v2.js";
 import { EMPTY_BUNDLE, scriptedGate } from "../fixtures/agentic-scenarios.js";
@@ -380,6 +380,29 @@ describe("impact card renderer", () => {
       const swapped = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: CANARY }], [affected("E4", "THERM-48 needs owner approval of a staged meeting.", "needs_updating")]), reply([{ id: "E1", text: CANARY }])] });
       await swapped.render();
       expect(swapped.inputs).toHaveLength(2);
+    });
+
+    // A quote carries a word of the line's own on each side of a screened word, so common words around it never excuse a claim.
+    const BENCH = "THERM-49: Update the display firmware. Bench slot will be assigned to whoever is free. Nobody is responsible for the bench yet. Waiting on the owner to confirm the candidate. Change the label colour later.";
+    it.each([
+      ["an assignee after a quoted \"assigned to\"", "THERM-49's bench slot will be assigned to Zhen Ye.", "ownership", "assigned"],
+      ["a person before a quoted \"is responsible for\"", "Bob is responsible for the bench.", "ownership", "responsible"],
+      ["an owner after a quoted \"the owner\"", "THERM-49 says the owner is Alice.", "ownership", "owner"],
+      ["an owner at the start of the line", "The owner is Alice.", "ownership", "owner"],
+      ["an instruction that only opens like a source sentence (\"Update the\")", "Update the PRD display section to two decimals.", "edit", "Update"],
+      ["an instruction that only opens like a source sentence (\"Change the\")", "Change the firmware to two decimals.", "edit", "Change"],
+    ] as const)("never excuses %s", (_label, text, screen, words) => {
+      expect(screenImpactLineV1(text, [BENCH])).toEqual({ screen, words });
+    });
+
+    it.each([
+      ["the record's own words", "Release clean-v1 must verify owner approval of a staged meeting.", CANARY],
+      ["a noun the source names (\"owner approval\")", "Release clean-v1 requires owner approval.", CANARY],
+      ["a ticket's title", "THERM-47 asks for confirmation of the BUG-412 requirement and fix-owner links.", "THERM-47: TRACE-01 — Confirm BUG-412 requirement and fix-owner links"],
+      ["a record's action, word for word", "Update the acceptance criteria to reflect the revised range.", "Update the acceptance criteria to reflect the revised range. Owner: Rafael Moreno."],
+      ["a source sentence, quoted whole", "THERM-49 says nobody is responsible for the bench yet.", BENCH],
+    ])("excuses %s", (_label, text, source) => {
+      expect(screenImpactLineV1(text, [source])).toBeNull();
     });
 
     it("quotes a long repair line only in part", async () => {

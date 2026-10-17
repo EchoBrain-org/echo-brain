@@ -107,29 +107,58 @@ export interface ImpactLineScreenFailureV1 { readonly screen: "edit" | "ownershi
 const folded = (value: string): string => value.normalize("NFC").toLowerCase().replace(/\s+/gu, " ").trim();
 /** A quote without the punctuation around it. */
 const bare = (value: string): string => value.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+/** Where a sentence ends: a stop, colon or semicolon before a space or the end, a line break, or a bullet. "0.01" stays whole. */
+const SENTENCE_END = /[.!?;:]+(?=\s|$)|[\n•]+/u;
 /**
- * Whether one of `sources` quotes the words of `text` from `start` to `end`: the words the match touches, together with the word
- * before or the word after them, appear in it whatever their case ("verify owner" or "owner approval"). A match that opens the
- * line must open a sentence of the source, with the word after it, so a record's "Mara will update the PRD" never lets a line
- * instruct "Update the PRD".
+ * Words a quote reaches past to the nearest word of its own: articles, pronouns, auxiliaries, prepositions and conjunctions. So
+ * "the owner", "assigned to" or "is responsible for", which many texts hold, never excuse a claim around them.
+ */
+const FUNCTION_WORDS: ReadonlySet<string> = new Set([
+  "a", "an", "the", "this", "that", "these", "those", "it", "its", "he", "she", "they", "we", "you", "i", "him", "her", "them", "us", "his", "their", "our", "your", "my",
+  "is", "are", "was", "were", "be", "been", "being", "am", "has", "have", "had", "do", "does", "did", "will", "would", "shall", "should", "can", "could", "may", "might", "must",
+  "to", "of", "for", "in", "on", "at", "by", "with", "from", "as", "into", "onto", "about", "and", "or", "but", "nor", "not", "no", "so", "if", "then", "than",
+  "who", "whom", "whose", "which", "what",
+]);
+/** Whether `phrase` occurs in `source` as whole words, whatever their case. */
+function occursIn(source: string, phrase: string): boolean {
+  const text = folded(source);
+  const edge = (at: number) => !/[\p{L}\p{N}]/u.test(text.charAt(at));
+  for (let at = text.indexOf(phrase); phrase.length > 0 && at >= 0; at = text.indexOf(phrase, at + 1)) if (edge(at - 1) && edge(at + phrase.length)) return true;
+  return false;
+}
+/**
+ * Whether one of `sources` quotes the screened words of `text` from `start` to `end`. One source holds the words the match
+ * touches together with the words around them, on each side up to the nearest word of the line's own (not a function word), or
+ * the line's start or end: "verify owner approval", "requirement and fix-owner links". So a line never adds a name to a quoted
+ * "assigned to" or "the owner". "owner" or "owners" ending a word and followed by a word of the line's own is a noun naming a
+ * thing, and is quoted with that word alone: "owner approval", "fix-owner links". A match that opens the line is quoted only with
+ * the whole of its sentence, which must open a sentence of the source, so neither a record's "Mara will update the PRD" nor a
+ * ticket's "Update the display firmware" lets a line instruct "Update the PRD".
  */
 function quoted(text: string, start: number, end: number, sources: readonly string[]): boolean {
-  const space = (at: number) => /\s/u.test(text.charAt(at));
-  const wordStart = (at: number) => { let index = at; while (index > 0 && !space(index - 1)) index -= 1; return index; };
-  const wordEnd = (at: number) => { let index = at; while (index < text.length && !space(index)) index += 1; return index; };
-  const from = wordStart(start);
-  const to = wordEnd(end);
-  let before = from;
-  while (before > 0 && space(before - 1)) before -= 1;
-  let after = to;
-  while (after < text.length && space(after)) after += 1;
-  const quote = (left: number, right: number) => bare(folded(text.slice(left, right)));
-  const withNext = quote(from, after < text.length ? wordEnd(after) : to);
-  if (before === 0) {
-    return withNext.length > 0 && sources.some(source => source.normalize("NFC").toLowerCase().split(/[\n.!?;:•]+/u).some(sentence => bare(folded(sentence)).startsWith(withNext)));
+  const tokens = [...text.matchAll(/\S+/gu)].map(token => ({ start: token.index, end: token.index + token[0].length, word: bare(folded(token[0])) }));
+  if (tokens.length === 0) return false;
+  let first = 0;
+  while (first < tokens.length - 1 && tokens[first]!.end <= start) first += 1;
+  let last = first;
+  while (last < tokens.length - 1 && tokens[last + 1]!.start < end) last += 1;
+  const own = (index: number) => tokens[index]!.word.length > 0 && !FUNCTION_WORDS.has(tokens[index]!.word);
+  const phrase = (from: number, to: number) => bare(folded(text.slice(tokens[from]!.start, tokens[to]!.end)));
+  const quotes = (value: string) => sources.some(source => occursIn(source, value));
+  if (/^owners?$/iu.test(text.slice(start, end)) && tokens[last]!.end === end && last + 1 < tokens.length && own(last + 1) && quotes(phrase(first, last + 1))) return true;
+  if (first === 0) {
+    const stop = text.slice(end).search(SENTENCE_END);
+    const clause = bare(folded(text.slice(0, stop < 0 ? text.length : end + stop)));
+    return clause.length > 0 && sources.some(source => source.split(SENTENCE_END).some(sentence => {
+      const words = bare(folded(sentence));
+      return words.startsWith(clause) && !/[\p{L}\p{N}]/u.test(words.charAt(clause.length));
+    }));
   }
-  const quotes = [quote(wordStart(before), to), ...(after < text.length ? [withNext] : [])].filter(value => value.length > 0);
-  return sources.some(source => { const words = folded(source); return quotes.some(value => words.includes(value)); });
+  let from = first - 1;
+  while (from > 0 && !own(from)) from -= 1;
+  let to = last;
+  if (to + 1 < tokens.length) { to += 1; while (to < tokens.length - 1 && !own(to)) to += 1; }
+  return quotes(phrase(from, to));
 }
 /**
  * The screen a line a model wrote fails, or null. A match the line quotes from `sources` (the record's own words, or the title
