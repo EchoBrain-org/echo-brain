@@ -422,7 +422,9 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         // Jira's last page can be exactly full (ADR-0041): its end is confirmed only when the page held fewer issues than
         // asked for, or when the newest-first order passed since. Counted before ECHO's own date filter.
         const page_full = token === undefined && page.token === undefined && page.selected.length >= maximum;
-        return Object.freeze({ items, truncated: token !== undefined || selected.some(item => item.truncated), ...(next_cursor === undefined ? {} : { next_cursor }), page_full });
+        // Only a next page means more items exist. A summary cut to its label bound is one row's title, never a sign that
+        // the list did not reach its end (ADR-0041).
+        return Object.freeze({ items, truncated: token !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full });
       }, input.signal);
     },
     async revalidate(input): Promise<void> {

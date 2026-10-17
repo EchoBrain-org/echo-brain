@@ -163,6 +163,25 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(JSON.stringify(f.releases)).not.toContain('page_full');
   });
 
+  it('never marks a list read to its end truncated because one summary was cut to its label bound (ADR-0041)', async () => {
+    const f = fixture();
+    const ids = ['10006', '10005', '10004', '10003', '10002', '10001'];
+    for (const id of ids) f.state.tickets.set(id, ticket(id));
+    // 85 CJK characters are 255 bytes: the "ECHO-6: ..." label passes its 256-byte bound and is cut.
+    f.state.tickets.set('10006', withFields({ summary: '温度计固件校准流程'.repeat(10).slice(0, 85) }, ticket('10006')));
+    f.state.pages = [page(ids)];
+    const { source } = await f.make();
+    const result = await source.list({ limit: 50 });
+    expect(result.items).toHaveLength(6);
+    const summary = '温度计固件校准流程'.repeat(10).slice(0, 85);
+    expect(result.items[0]!.label.startsWith('ECHO-6: ')).toBe(true);
+    expect(Buffer.byteLength(result.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
+    expect(result.items[0]!.label.length).toBeLessThan(`ECHO-6: ${summary}`.length);
+    // The page has no next token and is not full: the list ended, so a cut title says nothing about more items.
+    expect(result).toMatchObject({ truncated: false, page_full: false });
+    expect(result).not.toHaveProperty('next_cursor');
+  });
+
   it('keeps a full list page of worst-case metadata inside the shared result bound', async () => {
     const f = fixture();
     const ids = Array.from({ length: 30 }, (_, index) => String(10030 - index));
