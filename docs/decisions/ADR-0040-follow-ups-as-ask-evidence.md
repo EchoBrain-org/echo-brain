@@ -85,7 +85,13 @@ How an answer could cite one:
   alone, so a key never moves or cuts a hit. A hit matched only by its ticket
   key ranks after every word match and is released only if the live read
   opened it: Home shows the key only with the opened item. A search returns
-  at most 5 hits; only hits are read live.
+  at most 5 hits; only hits are read live. A keyword search across sources
+  reads none live, since the desk keeps only some of each source's hits: its
+  follow-ups carry ECHO-held text only, and a ticket key alone finds none
+  there. A search with a ticket key says so in a notice when it ran across
+  sources, or when the request had already made nearly all its live reads; the
+  notice turns on the query and those reads, never on whether a follow-up
+  holds the key.
 - **List** takes an owner (each word a whole word of the name, ignoring
   case) and a status (`open` or `done`), applied before anything is released
   or read live. An owner of `me`, or the asker's own display name, which

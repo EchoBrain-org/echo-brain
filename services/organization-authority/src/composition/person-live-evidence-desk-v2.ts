@@ -119,10 +119,11 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         }));
       }
       // Follow-ups join a keyword search across sources. They have no dates, so none matches a date bound, and they hold no inventory.
+      // Only some of them are kept below, so they are released with ECHO-held text and none is read live (ADR-0040).
       if (followUpSource !== undefined && selectedId === undefined && input.query !== undefined && input.inventory_mode === undefined &&
           input.since === undefined && input.until === undefined && input.date_field === undefined && (requestedKinds === undefined || requestedKinds.includes(FOLLOW_UP_EVIDENCE_KIND_V1))) {
         const query = input.query;
-        lookups.push(page(followUpSource, () => followUpSource.search({ ...evidenceDateFilterV1(input), query, limit: Math.min(maximum, FOLLOW_UPS_LIMITS_V1.search_hits), signal: input.signal }))
+        lookups.push(page(followUpSource, () => followUpSource.search({ ...evidenceDateFilterV1(input), query, limit: Math.min(maximum, FOLLOW_UPS_LIMITS_V1.search_hits), live: false, signal: input.signal }))
           .catch((failure: unknown): Unavailable => {
             if (!transientLiveFailure(failure)) throw failure;
             return { source: followUpSource, failure };

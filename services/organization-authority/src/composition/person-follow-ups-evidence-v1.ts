@@ -84,7 +84,12 @@ export interface CreatePersonFollowUpsEvidenceSourceV1Options {
 /** One request's follow-ups source; `createRegisteredPersonLiveEvidenceDeskV2` dispatches to it by its selector. */
 export interface PersonFollowUpsEvidenceSourceV1 {
   readonly descriptor: FollowUpsSourceDescriptorV1;
-  search(input: EvidenceDateFilterV1 & { readonly query: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<EvidenceDeskResultV2>;
+  /**
+   * `live: false` is a search across sources: its follow-ups carry ECHO-held
+   * text only and nothing is read live, since the desk keeps only some of
+   * them; a ticket key alone, which needs a live open, then finds none.
+   */
+  search(input: EvidenceDateFilterV1 & { readonly query: string; readonly limit?: number; readonly live?: boolean; readonly signal?: AbortSignal }): Promise<EvidenceDeskResultV2>;
   list(input: EvidenceDeskListInputV2): Promise<EvidenceDeskResultV2>;
   open(input: { readonly item: string; readonly signal?: AbortSignal }): Promise<EvidenceDeskResultV2>;
   /**
@@ -117,6 +122,13 @@ const LIVE_READS_AT_ONCE = 4;
 const ASKER = new Set(['me', 'myself', 'mine', 'i']);
 const TICKET_KEY = /^[A-Z][A-Z0-9_]{0,63}-[1-9][0-9]{0,19}$/u;
 const DEFAULT_TITLE = 'Follow-up';
+/**
+ * Why a ticket key may have found less than every follow-up. Each turns on the
+ * query and on the reads the request made before any key lookup, never on
+ * whether a follow-up holds the key.
+ */
+const KEY_ACROSS_SOURCES = 'Follow-ups are found by a ticket key only when follow_ups is searched on its own.';
+const KEY_PAST_READS = 'This request has read as many follow-up items as it can, so a ticket key may not find every follow-up.';
 /** Private visibilities first: an answer statement citing any of them is private. */
 const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_only', 'project', 'projects', 'team'];
 
@@ -315,7 +327,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
   };
 
   /** Audits one call's follow-ups before they leave, then remembers each for `open` and the checks. */
-  const release = (operation: 'search' | 'list' | 'open', context: Context, entries: readonly Entry[], truncated: boolean, next_cursor?: string): EvidenceDeskResultV2 => {
+  const release = (operation: 'search' | 'list' | 'open', context: Context, entries: readonly Entry[], truncated: boolean,
+    { next_cursor, notice }: { readonly next_cursor?: string | undefined; readonly notice?: string | undefined } = {}): EvidenceDeskResultV2 => {
     const decisionPart = openItemDecisionPartsV1(sources, context);
     const shaped = entries.flatMap(entry => { const value = shape(context, decisionPart, entry); return value === undefined ? [] : [value]; });
     const receipt = options.audit.record({ operation, items: shaped.map(({ evidence, visibility }) => ({ item_id: evidence.item_id, released_fields_sha256: canonicalSha256({ evidence, visibility }) })) });
@@ -331,6 +344,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       items: Object.freeze(items), truncated,
       receipt_digests: Object.freeze([...new Set([receipt, ...shaped.flatMap(value => value.receipts)])]),
       ...(next_cursor === undefined ? {} : { next_cursor }),
+      ...(notice === undefined ? {} : { notice }),
     });
   };
   const withReads = (entries: readonly Assessed[], signal?: AbortSignal): Promise<readonly Entry[]> =>
@@ -343,6 +357,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       refuseDates(input);
       const limit = pageSize(input.limit, FOLLOW_UPS_LIMITS_V1.search_hits);
       if (typeof input.query !== 'string') invalid('query is required');
+      const live = input.live !== false;
       const { terms, keys } = queryOf(input.query);
       const context = visible(input.signal);
       const decisionPart = openItemDecisionPartsV1(sources, context);
@@ -360,21 +375,26 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         // Ranked by ECHO's words alone: a key, which the asker may not be able to open, never moves or cuts a hit.
         return matched === 0 && !keyed ? [] : [{ entry, score: matched, keyOnly: matched === 0 }];
       }).sort((left, right) => right.score - left.score || STATE_ORDER[left.entry.row.state] - STATE_ORDER[right.entry.row.state] || newestFirst(left.entry.row, right.entry.row));
+      // Every word match is a hit, read live only when follow-ups were searched on their own.
+      const worded = candidates.filter(value => !value.keyOnly).map(value => value.entry);
+      const chosen = worded.slice(0, limit);
+      const hits: Entry[] = live ? [...await withReads(chosen, input.signal)] : chosen.map(entry => ({ entry }));
+      const readBefore = reads.size;
       // Home shows an item's key only with the item opened: a hit its key alone matched ranks after every word match, and is a hit
       // only once the live read opened it. One that did not is as if it never matched, and never counts toward truncation.
-      const hits: Entry[] = [];
-      let next = 0;
-      while (hits.length < limit && next < candidates.length) {
-        const round = candidates.slice(next, next + limit - hits.length);
+      const keyOnly = live ? candidates.filter(value => value.keyOnly).map(value => value.entry) : [];
+      for (let next = 0; hits.length < limit && next < keyOnly.length;) {
+        const round = keyOnly.slice(next, next + limit - hits.length);
         next += round.length;
-        for (const [index, entry] of (await withReads(round.map(value => value.entry), input.signal)).entries()) {
+        for (const entry of await withReads(round, input.signal)) {
           const read = entry.read?.read;
-          const opened = read?.reach === 'opened' && openItemAccessV1({ ...entry.entry.facts, opens_item: true }).see_outside && openItemCurrentV1(read.item) !== undefined;
-          if (!round[index]!.keyOnly || opened) hits.push(entry);
+          if (read?.reach === 'opened' && openItemAccessV1({ ...entry.entry.facts, opens_item: true }).see_outside && openItemCurrentV1(read.item) !== undefined) hits.push(entry);
         }
       }
       input.signal?.throwIfAborted();
-      return release('search', context, hits, candidates.slice(next).some(value => !value.keyOnly));
+      // Each key may need one more read than the request had made before its lookup.
+      const notice = keys.length === 0 ? undefined : !live ? KEY_ACROSS_SOURCES : readBefore + keys.length > FOLLOW_UPS_LIMITS_V1.live_reads ? KEY_PAST_READS : undefined;
+      return release('search', context, hits, worded.length > chosen.length, { notice });
     },
 
     async list(input) {
@@ -408,7 +428,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         next_cursor = `follow_ups_${++cursorSequence}`;
         cursors.set(next_cursor, Object.freeze({ selection, after: page.at(-1)!.row }));
       }
-      return release('list', context, entries, false, next_cursor);
+      return release('list', context, entries, false, { next_cursor });
     },
 
     async open(input) {

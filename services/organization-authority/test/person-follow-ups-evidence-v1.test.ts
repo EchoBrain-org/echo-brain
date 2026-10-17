@@ -53,6 +53,8 @@ function askDesk(f: OpenItemsFixtureV1, name: FixturePerson, options: { readonly
 const search = (desk: EvidenceDeskPortV2, query: string, extra: Record<string, unknown> = {}) => desk.search({ source: 'follow_ups', kinds: ['follow_up'], query, limit: 8, ...extra });
 const list = (desk: EvidenceDeskPortV2, extra: Record<string, unknown> = {}) => desk.list({ source: 'follow_ups', limit: 50, ...extra });
 const titles = (result: EvidenceDeskResultV2) => result.items.map(item => item.label).sort();
+const ACROSS = 'Follow-ups are found by a ticket key only when follow_ups is searched on its own.';
+const CAPPED = 'This request has read as many follow-up items as it can, so a ticket key may not find every follow-up.';
 /** Rows straight into the store, for the fixture's one decision: every decision reader sees them, nobody else does. */
 function insertRows(f: OpenItemsFixtureV1, count: number, expected = 'launch next week', from = 0) {
   const run = f.runs.read(f.person, f.runId)!;
@@ -255,6 +257,11 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     await search(desk, 'pilot');
     await list(desk);
     expect(f.opened.length - opens).toBe(20);
+    // Past the bound a ticket key cannot be checked, and the search says so whether or not any follow-up holds that key.
+    for (const query of ['ECHO-12', 'ECHO-999']) expect([query, await search(desk, query)]).toEqual([query, expect.objectContaining({ items: [], notice: CAPPED })]);
+    expect(f.opened.length - opens).toBe(20);
+    // Within it, a key no follow-up holds says nothing.
+    expect(await search(askDesk(f, 'mina').desk, 'ECHO-999')).not.toHaveProperty('notice');
   });
 
   it('opens a released follow-up again through the policy, and refuses one the asker no longer sees', async () => {
@@ -379,7 +386,7 @@ describe('follow-ups on the request desk (ADR-0040)', () => {
     const f = await sentFixture();
     const bound = askDesk(f, 'mina');
     expect(bound.desk.live_sources).toEqual([expect.objectContaining({ source_id: 'jira' }), FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]);
-    expect(titles(await bound.desk.search({ query: 'launch', limit: 8 }))).toEqual([`ECHO-12 ${f.outsideText}`]);
+    expect(titles(await bound.desk.search({ query: 'launch', limit: 8 }))).toEqual(['launch next week']);
     expect((await bound.desk.search({ query: 'launch', limit: 8, since: '2026-10-01' })).items).toEqual([]);
     expect(bound.audits()).toHaveLength(1);
     // Meeting kinds alone never reach follow-ups, nor follow-up kinds the meetings.
@@ -399,6 +406,29 @@ describe('follow-ups on the request desk (ADR-0040)', () => {
     await expect(unbound.desk.search({ query: 'launch', kinds: ['follow_up'], limit: 8 })).rejects.toMatchObject({ code: 'unauthorized' });
     expect((await unbound.desk.search({ query: 'launch', limit: 8 })).items).toEqual([]);
     expect(unbound.audits()).toEqual([]);
+  });
+
+  it('reads nothing live for a search across sources, and says when a ticket key needs follow-ups on their own', async () => {
+    const f = await sentFixture();
+    const { desk, audits } = askDesk(f, 'mina');
+    const opens = f.opened.length;
+    // Across sources a follow-up carries ECHO-held text only: no live read is spent on an item the desk may drop.
+    const across = await desk.search({ query: 'Pilot planning', limit: 8 });
+    expect(titles(across)).toEqual(['launch next week', 'pilot starts next week']);
+    expect(across.items.every(item => item.attributes?.due_at === undefined && item.visibility === 'project')).toBe(true);
+    expect(across).not.toHaveProperty('notice');
+    expect(f.opened.length).toBe(opens);
+    // A key alone needs a live open, so across sources it finds no follow-up, and says so whether or not one holds it.
+    for (const query of ['ECHO-12', 'ECHO-999']) {
+      const keyed = await desk.search({ query, limit: 8 });
+      expect([query, keyed.items, keyed.notice]).toEqual([query, [], ACROSS]);
+    }
+    expect(f.opened.length).toBe(opens);
+    expect(audits().map(row => (row.body.items as unknown[]).length)).toEqual([2, 0, 0]);
+    // On their own, follow-ups read each hit's tool item live, once.
+    expect(titles(await search(desk, 'ECHO-12'))).toEqual([`ECHO-12 ${f.outsideText}`]);
+    expect(titles(await search(desk, 'Pilot planning'))).toEqual([`ECHO-12 ${f.outsideText}`, 'Thermostat rollout plan'].sort());
+    expect(f.opened.slice(opens).map(open => open.kind).sort()).toEqual(['approved_record', 'ticket']);
   });
 
   it('reserves the follow-ups selector, and refuses a follow-up search with kinds of another source', async () => {
