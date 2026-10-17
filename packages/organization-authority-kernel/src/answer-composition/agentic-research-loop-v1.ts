@@ -344,6 +344,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   let retrievalProgress = 0;
   let evidenceNovelty = 0;
   const lists = new Map<string, ListState>();
+  /** Items whose latest open was truncated or carried a notice. */
+  const limitedOpens = new Set<string>();
   let touch = 0;
 
   const observe = (result: EvidenceDeskResultV2) => {
@@ -425,8 +427,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const entry = entryOf(raw) ?? entryByTitle(raw);
     if (entry === undefined) return { tool: "open", args, error: "unknown id; pass an id such as E4 from your scratchpad" };
     // Like a repeated search: an item already open whose full text was in the scratchpad the planner just read is not
-    // read again (the access check before every model call already covers it), and adds nothing new.
-    if (entry.opened && researchPromptEntries.includes(entry)) return { tool: "open", id: entry.short, note: "already open; its full text is in your scratchpad" };
+    // read again (the access check before every model call already covers it), and adds nothing new. An item a truncated
+    // or noticed open returned is still read again: only a clean open of it resolves that limit.
+    if (entry.opened && researchPromptEntries.includes(entry) && !limitedOpens.has(entry.item.id)) return { tool: "open", id: entry.short, note: "already open; its full text is in your scratchpad" };
     let result: EvidenceDeskResultV2;
     try { result = await raceAbort(signal, desk.open({ item: entry.item.id, neighbours: OPEN_NEIGHBOURS, signal })); }
     catch (error) {
@@ -448,6 +451,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         if (!opened.full || !opened.opened) { retrievalProgress += 1; evidenceNovelty += 1; }
         opened.opened = true; used += bytes(item.text);
         admitted.push(opened);
+        if (result.truncated || result.notice !== undefined) limitedOpens.add(item.id); else limitedOpens.delete(item.id);
       }
       // Open may also release continuation metadata. Register it beside
       // the bounded text, without treating the continuation as read evidence.

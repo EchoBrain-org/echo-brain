@@ -154,6 +154,28 @@ describe("research loop: open", () => {
   });
 });
 
+describe("research loop: open after a limited open", () => {
+  it("still re-reads an item whose open was truncated or carried a notice, so a clean open can resolve it", async () => {
+    const approved = record("display", "Approved: the display shows two decimals.");
+    const body = ticket("THERM-46", "THERM-46: firmware formats one decimal.");
+    const open = vi.fn(async () => result([body], open.mock.calls.length === 1 ? { truncated: true } : {}));
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "display decimals" } }]),
+      reads("open", [{ tool: "open", args: { id: "E2" } }]),
+      reads("open", [{ tool: "open", args: { id: "E2" } }]),
+      reads("open", [{ tool: "open", args: { id: "E2" } }]),
+      step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
+    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), search: async () => result([ticket("THERM-46")]), open });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    // The truncated open is read again; once a clean open has returned it, a repeat is answered from the scratchpad.
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(view.rounds.slice(1).map(round => round.actions[0]!.result)).toEqual([
+      expect.objectContaining({ opened: ["E2"], truncated: true }), expect.objectContaining({ opened: ["E2"] }),
+      expect.objectContaining({ opened: [], note: "already open; its full text is in your scratchpad" }),
+    ]);
+  });
+});
+
 describe("research loop: progress", () => {
   it("counts new full text and text upgrades as progress, never new metadata rows or related references (35130ae1)", async () => {
     const approved = record("display", "Approved: the display shows two decimals.");
