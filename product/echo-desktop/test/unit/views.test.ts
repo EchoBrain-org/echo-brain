@@ -4,9 +4,18 @@ import {
   noteTitle, openItemsView, openItemView, openView, revokedView, NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
-import { derivedAtomIdentity } from '@echo-brain/organization-record/application/atom-identity';
+import { createHash } from 'node:crypto';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
+
+/**
+ * An approved item's id as the Authority derives it (organization-record's
+ * atom identity): the digest of its record and signal, spelled out here so
+ * the desktop job needs no Authority package. The root's Ask progress
+ * round trip checks it against the Authority's own function.
+ */
+const atomOf = (record: string, signal: string) =>
+  `sha256:${createHash('sha256').update(JSON.stringify({ kind: 'echo-organization-record-atom', record_hash: record, signal_id: signal })).digest('hex')}`;
 
 // The store reads the preload's bridge when it loads; its record join needs none.
 (globalThis as { window?: unknown }).window = { echo: {} };
@@ -508,9 +517,9 @@ describe('an approved record shows only what the source pane needs', () => {
       participants: ['Maya Chen', 'Ari'], participants_more: false, visibility: 'organization',
       decisions: { more: false, items: [{ text: 'Ship annual plans first.', status: 'proposed', excerpts: [
         { quote: 'Annual first.', at: '2026-09-15T17:12:00Z' }, { quote: 'Two' }, { quote: 'Three' },
-      ], atom_id: derivedAtomIdentity(sha('5'), 'd1') }] },
-      actions: { more: false, items: [{ text: 'Update pricing.', excerpts: [], atom_id: derivedAtomIdentity(sha('5'), 'a1') }] },
-      rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [], atom_id: derivedAtomIdentity(sha('5'), 'r1') }] },
+      ], atom_id: atomOf(sha('5'), 'd1') }] },
+      actions: { more: false, items: [{ text: 'Update pricing.', excerpts: [], atom_id: atomOf(sha('5'), 'a1') }] },
+      rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [], atom_id: atomOf(sha('5'), 'r1') }] },
     });
     expect(JSON.stringify(view)).not.toContain('private@example.test');
   });
@@ -523,8 +532,8 @@ describe('an approved record shows only what the source pane needs', () => {
       body.human_act_resolution_ref = { action_owners: [{ signal_id: 'a2', owner: 'Priya Shah' }, { signal_id: 'd9', owner: 'Nobody' }] };
     }), asked);
     expect(view.actions.items).toEqual([
-      { text: 'Send the quote.', excerpts: [], atom_id: derivedAtomIdentity(sha('5'), 'a1') },
-      { text: 'Book the venue.', owner: 'Priya Shah', excerpts: [], atom_id: derivedAtomIdentity(sha('5'), 'a2') },
+      { text: 'Send the quote.', excerpts: [], atom_id: atomOf(sha('5'), 'a1') },
+      { text: 'Book the venue.', owner: 'Priya Shah', excerpts: [], atom_id: atomOf(sha('5'), 'a2') },
     ]);
   });
 
