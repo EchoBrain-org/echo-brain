@@ -281,6 +281,34 @@ describe('Confluence live reader through the audited evidence source', () => {
     await expect(f.source.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unauthorized' });
   });
 
+  it('runs an incremental check of newly released pages through the fences, so a spent content cap never blocks it', async () => {
+    const f = await fixture({ pages: [page(), page({ id: '124' })] });
+    const verify = ['/oauth/token/accessible-resources', '/rest/api/user/current'];
+    const reads = () => f.calls.map(call => call.query.has('id') ? `bulk:${call.query.get('id')}` : call.query.get('body-format') === 'atlas_doc_format' ? `body:${call.path}` : call.path);
+    // Pages 123 and 124 are listed and checked.
+    const listed = await f.source.list({});
+    await f.source.revalidate({ mode: 'incremental' });
+    // New since that check: an opened section of 123, and page 125, created later, which searches release.
+    await f.source.open({ item: listed.items[0]!.id });
+    f.state.pages.set('125', page({ id: '125' }));
+    f.state.searchIds = ['125'];
+    let spent: unknown;
+    for (let search = 0; search < 100 && spent === undefined; search += 1) {
+      try { await f.source.search({ query: `gate ${search}` }); } catch (error) { spent = error; }
+    }
+    // Content reads (list, search, open and their exact reads) are capped at 160 per request.
+    expect(spent).toMatchObject({ code: 'unavailable' });
+    expect(f.calls.filter(call => call.path === '/rest/api/search' || (/^\/api\/v2\/pages(\/\d+)?$/.test(call.path) && !call.query.has('id')))).toHaveLength(160);
+    // The check before the next model call re-reads exactly the new page and the opened body, then verifies the connection:
+    // every request is fence traffic, so it succeeds although the content cap is spent.
+    f.calls.length = 0;
+    await expect(f.source.revalidate({ mode: 'incremental' })).resolves.toBeUndefined();
+    expect(reads()).toEqual(['bulk:125', 'body:/api/v2/pages/123', ...verify]);
+    // And so does the full check at release; the fences did not hand content reads back.
+    await expect(f.source.revalidate({})).resolves.toBeUndefined();
+    await expect(f.source.search({ query: 'after the checks' })).rejects.toMatchObject({ code: 'unavailable' });
+  });
+
   it('revalidates every released metadata page in bounded batches regardless of response order', async () => {
     const pages = Array.from({ length: 107 }, (_, index) => page({ id: String(100 + index) }));
     const f = await fixture({ pages });

@@ -377,10 +377,12 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         // bodies also keep their exact read and same-version digest check.
         (items.every(item => item.text === undefined && LIST_STATUSES.includes(item.page.status)) ? metadataOnly : exactReads).push(items);
       }
+      // Every request here, incremental or full, is fence traffic (MAX_REQUESTS only), never a content read: a check
+      // must still run after research spent the content cap.
       await revalidateMetadata(metadataOnly, input.signal);
       await parallel(exactReads, async items => {
         const needsBody = items.some(item => item.text !== undefined);
-        const page = await exact(items[0]!.page.id, needsBody, items[0]!.page.status, input.signal);
+        const page = await exact(items[0]!.page.id, needsBody, items[0]!.page.status, input.signal, fences);
         const normalized = needsBody ? normalizeConfluencePageDocumentV1(page.document!) : undefined;
         for (const item of items) {
           if (!samePage(item.page, page)) confluenceFailure('stale_access_state');
