@@ -343,6 +343,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const retrievedTickets = new Set<string>();
   const byShort = new Map<string, string>();
   const searchesRun: { readonly query: string; readonly source?: EvidenceDeskSourceV2 }[] = [];
+  /** Sources a completed search read (null: every source). A noticed or truncated search shows nothing about absence. */
+  const searchedSources = new Set<EvidenceDeskSourceV2 | null>();
   const researchObservations: AskResearchObservationV1[] = [];
   // Observed read coverage, never the planner's hypotheses or raw tool arguments.
   const readCoverage: { tool: 'search' | 'open' | 'list'; source: string; returned_items: number; truncated: boolean; notice: boolean; unavailable: boolean }[] = [];
@@ -420,7 +422,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const apply = () => {
       observe(result);
       cover('search', source, result);
-      researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete: !result.truncated && result.notice === undefined });
+      const complete = !result.truncated && result.notice === undefined;
+      researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete });
+      if (complete) searchedSources.add(source ?? null);
       retrievalProgress += 1;
       const found = result.items.map(item => register(item));
       for (const entry of found) entry.query = query;
@@ -700,13 +704,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
    * Inventories whose unread pages still block a not_found finish. A complete
    * unfiltered inventory of a source covers its filtered ones. A metadata-only
    * list (live tickets or pages, newest first) shows titles and dates only, so
-   * its pages cannot show that a fact is absent: once research has searched
-   * that source, its unread pages no longer block.
+   * its pages cannot show that a fact is absent: once a search of that source
+   * (or of every source) has completed, its unread pages no longer block.
    */
   const blockingInventories = (): readonly ListState[] => {
     const fetched = [...lists.values()].filter(state => state.fetched);
     const covered = new Set(fetched.filter(state => state.unfiltered && state.available && !state.truncated && !inventoryMore(state)).map(state => state.source));
-    const searched = (source: EvidenceDeskSourceV2) => searchesRun.some(previous => previous.source === undefined || previous.source === source);
+    const searched = (source: EvidenceDeskSourceV2) => searchedSources.has(null) || searchedSources.has(source);
     return fetched.filter(state => inventoryMore(state) && !covered.has(state.source) && !(sourcesById.get(state.source)?.metadata_only_list === true && searched(state.source)));
   };
 

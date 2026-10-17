@@ -79,6 +79,24 @@ describe("research loop: finishing with nothing found", () => {
     expect(view.stop).toEqual({ reason: "finished", completed: true });
   });
 
+  it("keeps a listed source's unread pages blocking when its search did not complete", async () => {
+    const search = vi.fn(async (input: Parameters<EvidenceDeskPortV2["search"]>[0]) => result([], input.source === "jira" ? { notice: "Tickets are temporarily unavailable." } : {}));
+    const h = harness([
+      reads("open", [
+        { tool: "list", args: { source: "tickets" } }, { tool: "search", args: { source: "tickets", query: "canary" } },
+        { tool: "search", args: { source: "meetings", query: "staged meeting approval" } }, { tool: "search", args: { source: "meetings", query: "canary" } },
+      ]),
+      affects("not_found"), affects("not_found"),
+    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list: async input => ticketPage(pageOf(input), 5), search });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    // A search that returned a notice shows nothing about the source, so its unread pages still block absence.
+    expect(view.rounds[1]!.rejected).toEqual([
+      expect.stringContaining('listed inventory still has unread pages; repeat list with {"source":"tickets"}, or search tickets for the fact'),
+      expect.stringContaining("listed inventory still has unread pages"),
+    ]);
+    expect(view.stop).toEqual({ reason: "unusable_step", completed: false });
+  });
+
   it("treats a filtered inventory as read when the same source's unfiltered inventory is complete", async () => {
     const action = record("action", "Mara will publish the dashboard.", { kind: "action", attributes: { owner: "Mara Quinn" } });
     const h = harness([
