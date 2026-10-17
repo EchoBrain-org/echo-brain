@@ -199,9 +199,16 @@ describe("support kinds", () => {
     expect(agenticNeedSupportV1(["E40"], lookup)).toEqual({ lists: [], content: [], unsupported: ["E40"] });
   });
 
-  it("counts a member read in full as content, not as its list", () => {
+  it("counts one member read in full as content, not as its list", () => {
     const opened: AgenticNeedSupportLookupV1 = { ...lookup, full: id => id === "E3" };
     expect(agenticNeedSupportV1(["E3"], opened)).toEqual({ lists: [], content: ["E3"], unsupported: [] });
+  });
+
+  it("rests a need on a list when it cites two or more of its members, read in full or not", () => {
+    // Follow-up rows carry text, and an opened meeting record keeps its row's id: such members are read in full.
+    const opened: AgenticNeedSupportLookupV1 = { ...lookup, full: id => ["E2", "E3", "E9"].includes(id) };
+    expect(agenticNeedSupportV1(["E2", "E3"], opened)).toEqual({ lists: ["L1"], content: ["E2", "E3"], unsupported: [] });
+    expect(agenticNeedSupportV1(["E9", "E3"], opened)).toEqual({ lists: [], content: ["E9", "E3"], unsupported: [] });
   });
 });
 

@@ -9,7 +9,7 @@ import type { StructuredGenerationInput } from "../../src/answer-composition/str
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from "../../src/shared/follow-up-evidence-v1.js";
-import { checked, generation, LIST_READ_AT, record, researchHarness as harness, result } from "./fixtures/agentic-scenarios.js";
+import { checked, generation, LIST_READ_AT, listed, record, researchHarness as harness, result } from "./fixtures/agentic-scenarios.js";
 
 /**
  * Ask's lists as evidence of which items exist (ADR-0041): a list read to its
@@ -56,6 +56,13 @@ function ticketRow(n: number, owner = "Dana Lee", status = "In Progress"): Evide
   } satisfies EvidenceDeskItemV2);
 }
 const tickets = (from: number, count: number) => Array.from({ length: count }, (_, index) => ticketRow(from + index));
+
+/** A follow-up as the desk releases it: its row carries its text (ADR-0040). */
+function followUpItem(n: number): EvidenceDeskItemV2 {
+  const decision = { title: "THERM DVT recovery sync", first_line: "Ship fan curve v2 before DVT.", ref: `meeting:sha256:${"a".repeat(64)}` } as const;
+  const fields = followUpDeskFieldsV1(validatePersonFollowUpEvidenceV1({ item_id: `itm_6b0f8a52-55a4-4f6e-9a39-${String(n).padStart(12, "0")}`, kind: "ticket", title: `THERM-${40 + n} follow-up`, owner: "Mara Lind", status: "open", decision }));
+  return Object.freeze({ id: `follow-up-${n}`, ...fields, visibility: "team" as const, receipt_sha256: canonicalSha256(`follow-up-${n}`) });
+}
 
 const question = (text: string): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false } });
 const ask = (text: string, need: string, status: "open" | "found" | "not_found", evidence: readonly string[], actions: readonly unknown[], id?: string) =>
@@ -333,6 +340,46 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
     }]);
     expect(replies).toEqual([]);
   });
+
+  it("asks to keep reading a follow-up list research cited by its members, though their rows carry text, then names all 12", async () => {
+    // A follow-up row always carries its text, so research reads it in full; the desk pages 10 at a time.
+    const items = Array.from({ length: 12 }, (_, index) => followUpItem(index + 1));
+    const list = vi.fn(async (input: EvidenceDeskListInputV2) => (input.cursor === undefined
+      ? { ...result(items.slice(0, 10)), next_cursor: "page-2", page_full: false }
+      : { ...result(items.slice(10)), page_full: false }) as EvidenceDeskResultV2);
+    const desk = {
+      scope: { kind: "global" as const }, live_sources: [FOLLOW_UPS_SOURCE_DESCRIPTOR_V1], list,
+      search: vi.fn(async () => result([]) as EvidenceDeskResultV2), open: vi.fn(async () => result([]) as EvidenceDeskResultV2), revalidate: vi.fn(async () => checked),
+    } satisfies EvidenceDeskPortV2;
+    const inputs: StructuredGenerationInput[] = [];
+    const text = "What are my open follow-ups?";
+    const need = "my open follow-ups";
+    const LIST = { tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } } as const;
+    const replies: unknown[] = [
+      ask(text, need, "open", [], [LIST]),
+      ask(text, need, "found", Array.from({ length: 10 }, (_, index) => `E${index + 1}`), [finish], "N1"),
+      ask(text, need, "open", [], [LIST], "N1"),
+      ask(text, need, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1"),
+      { lists: [], sentences: [{ text: "You have 12 open follow-ups.", evidence: Array.from({ length: 12 }, (_, index) => `E${index + 1}`) }], not_found: [] },
+      { lists: [{ id: "L1" }], sentences: [], not_found: [] },
+    ];
+    const response = await createAgenticAskV4({
+      desk, generation, audit: { append: () => undefined }, asker: { display_name: "Mara Lind" }, wall_ms: () => Date.parse(LIST_READ_AT),
+      model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift(); } },
+    }).answer({ question: text });
+    const steps = inputs.filter(input => input.system_prompt.startsWith("You are Echo's research agent"));
+    expect(JSON.parse(steps[2]!.user_prompt).validation_error).toContain('need N1 "my open follow-ups": list L1 is unfinished: keep reading the list (repeat list with {"source":"follow_ups","status":"open","owner":"Mara Lind"})');
+    expect(list).toHaveBeenCalledTimes(2);
+    // The plan rests on the list, so the writer's count without it is sent back once.
+    const writers = inputs.filter(input => input.system_prompt.startsWith("You write"));
+    expect(writers).toHaveLength(2);
+    expect(JSON.parse(writers[0]!.user_prompt).lists[0]).toMatchObject({ id: "L1", complete: true, count: 12, cited_by_plan: true });
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+      `12 follow-ups with owner Mara Lind and status open: ${items.map(item => item.label).join("; ")}.`,
+    ]);
+    expect(replies).toEqual([]);
+  });
 });
 
 describe("Ask's answer: code names a list's members (ADR-0041)", () => {
@@ -498,6 +545,31 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(revoked.generate).toHaveBeenCalledTimes(2);
   });
 
+  it("checks a meeting-action list whose members research opened and cited: code names all 8, not the 4 opened", async () => {
+    // A list row has no text; opening it returns the same item with its text, so research reads the member in full.
+    const action = { kind: "action" as const, attributes: { owner: "Mara Quinn" } };
+    const rows = Array.from({ length: 8 }, (_, index) => listed(`a${index + 1}`, action));
+    const bodies = new Map(rows.map((row, index) => [row.id, record(`a${index + 1}`, `Mara will do task ${index + 1}.`, action)]));
+    const open = vi.fn(async (input: { readonly item: string }) => result([bodies.get(input.item)!]) as EvidenceDeskResultV2);
+    const text = "Which actions does Mara own?";
+    const opened = ["E1", "E2", "E3", "E4"];
+    const subset = { lists: [], sentences: [{ text: "Mara owns tasks 1, 2, 3 and 4.", evidence: opened }], not_found: [] };
+    const h = harness([
+      ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
+      ask(text, "actions owned by Mara", "open", [], opened.map(id => ({ tool: "open", args: { id } })), "N1"),
+      ask(text, "actions owned by Mara", "found", opened, [finish], "N1"),
+      subset, subset,
+    ], { list: vi.fn(async () => result(rows) as EvidenceDeskResultV2), open });
+    const { response, research: view } = await h.research.answerWithResearch({ question: text });
+    expect(view.items.filter(item => item.read_in_full).map(item => item.id)).toEqual(opened);
+    expect(writerInputs(h)).toHaveLength(2);
+    expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", complete: true, count: 8, checked: 4, cited_by_plan: true });
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+      `8 meetings with kind action and owner Mara: ${rows.map(row => row.label).join("; ")}.`,
+    ]);
+  });
+
   it("names a meeting-action list the same way, with a due date where members differ", async () => {
     const actions = [
       record("a1", "Mara will publish the dashboard.", { kind: "action", attributes: { owner: "Mara Quinn", due_at: "2026-10-09" } }),
@@ -569,6 +641,14 @@ describe("the finish check for a question goal (ADR-0041)", () => {
     expect(problems(["E4"])).toEqual([]);
     expect(problems(["E1", "E2"])).toEqual(['part 1 need N1 "which items" is found but cites no item whose full text you have read: cite L1 for which items exist, or open the items for what they say']);
     expect(problems(["E7", "L9"])).toEqual(['part 1 need N1 "which items" is found but cites no item whose full text you have read']);
+  });
+
+  it("asks to keep reading a list two of whose members a need cites, even when research read them in full", () => {
+    const read = (id: string) => ["E1", "E2", "E4", "E5"].includes(id);
+    expect(askQuestionCompletionProblemsV1(found(["E4", "E5"]), [], lists, read)).toEqual(['part 1 need N1 "which items": list L2 is unfinished: keep reading the list (repeat list with {"source":"tickets"})']);
+    // One member read in full is content; two of a list read to its end are accepted.
+    expect(askQuestionCompletionProblemsV1(found(["E5"]), [], lists, read)).toEqual([]);
+    expect(askQuestionCompletionProblemsV1(found(["E1", "E2"]), [], lists, read)).toEqual([]);
   });
 
   it("keeps the not_found and open rules", () => {

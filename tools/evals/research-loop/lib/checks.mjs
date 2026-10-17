@@ -102,17 +102,20 @@ const ROW_FACT_PARTS = new Set(["date", "owner", "status"]);
 
 /**
  * The lists a run's research read (ADR-0041; a run from before it has none): the lists holding each item, and those
- * the plan rests on. As Ask's finish check divides support, a found need rests on each list it cites by id, and on the
- * first list holding each member row it cites that research never read in full.
+ * the plan rests on. As Ask's finish check divides support, a found need rests on each list it cites by id, on the
+ * first list holding each member row it cites that research never read in full, and on the first list holding two or
+ * more of the members it cites, read in full or not.
  */
 function listIndex(research, items) {
   const all = Array.isArray(research.lists) ? research.lists : [];
   const full = new Set(items.filter(item => item.read_in_full).map(item => item.id));
   const of = id => all.filter(list => list.members.includes(id));
-  const relied = new Set(research.plan.flatMap(part => part.needs.filter(need => need.status === "found").flatMap(need => need.evidence.flatMap(id => {
-    if (all.some(list => list.id === id)) return [id];
-    return full.has(id) ? [] : of(id).slice(0, 1).map(list => list.id);
-  }))));
+  const relied = new Set(research.plan.flatMap(part => part.needs.filter(need => need.status === "found").flatMap(need => {
+    const first = id => of(id).slice(0, 1).map(list => list.id);
+    const cited = need.evidence.flatMap(first);
+    return need.evidence.flatMap(id => all.some(list => list.id === id) ? [id] : full.has(id) ? [] : first(id))
+      .concat(cited.filter(id => cited.filter(other => other === id).length >= 2));
+  })));
   return { of, relied: list => relied.has(list.id) };
 }
 

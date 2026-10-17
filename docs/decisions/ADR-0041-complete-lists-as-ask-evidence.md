@@ -162,7 +162,11 @@ route, header, database table or client changes.
 - **How a found need's evidence divides** (`agenticNeedSupportV1`). The lists
   it cites by id, plus the list of each cited member row (a member research
   never read in full), give list facts. Cited items read in full give content.
-  Any other cited id supports nothing.
+  Any other cited id supports nothing. Built: a need that cites two or more
+  members of one list also rests on that list, read in full or not. A
+  follow-up's row carries its text, and an opened meeting record keeps its
+  row's id, so "my open follow-ups" citing a first page of ten members must
+  still read the list to its end. One member read in full stays content.
 - **The finish check** replaces `need.evidence.some(citable)` for a question
   goal:
   - A need with list support is checked against those lists. A list that can
@@ -254,16 +258,18 @@ route, header, database table or client changes.
   - the plan found a need on the list (that need's support includes it), but
     the answer does not use it: no `lists` entry for it and no kept sentence
     citing it; or
-  - the answer cites two or more of the list's members by their rows (members
-    whose text the writer was not given), but not all of them, and does not
-    use the list.
+  - the answer cites two or more of the list's members, but not all of them,
+    and does not use the list. Built: a member counts whether the writer has
+    its text or only its row, and the answer uses a list only through
+    `lists` or a sentence that cites the list's id beside text the writer read;
+    a list id beside rows only never stands in for code's statement.
 
   The writer has one repair in total, as today; a failed check uses it if it
   is still unused and the request has time and model calls left. If the
   repaired answer still fails, or no repair can run, code writes that list's
   full statement and keeps the writer's sentences. Built: a sentence that
-  cites only rows of a list code wrote this way is dropped, since it restated
-  part of that list (the October 4 answer's "the pages are A, B, C, D" beside
+  cites only members of a list code wrote this way, two or more of them or
+  rows only, is dropped, since it restated part of that list (the October 4 answer's "the pages are A, B, C, D" beside
   all eight names would contradict them). A first reply that fails only the
   check stays the writer's answer when the repair's reply is unusable.
 - **One citation per cited object.** The response refuses duplicate

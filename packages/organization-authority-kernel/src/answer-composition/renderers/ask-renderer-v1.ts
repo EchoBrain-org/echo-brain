@@ -251,14 +251,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
        */
       const usesList = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id) ||
         keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short)));
-      /** Lists the answer should use but does not: one the plan rests on, or one it cites some, not all, members of by their rows. */
+      /**
+       * Lists the answer should use but does not: one the plan rests on, or one it cites some, not all, members of. A
+       * member counts whether the writer has its text or only its row: a follow-up's row carries its text.
+       */
       const listProblems = (answer: Answer): readonly { readonly id: AgenticListIdV1; readonly reason: string }[] => writerLists.flatMap(list => {
         if (list.count === 0 || usesList(answer, list.id)) return [];
         if (list.cited_by_plan) return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members` }];
         const members = new Set(rows.get(list.id)!.map(member => member.id));
-        const rowsCited = new Set(keptSentences(answer).flatMap(sentence => sentence.evidence).filter(short => members.has(short) && allowed.has(short) && !textGiven.has(short)));
-        return rowsCited.size >= 2 && rowsCited.size < list.count
-          ? [{ id: list.id, reason: `the answer cites ${rowsCited.size} of the ${list.count} members of list ${list.id} without the list: put {"id": "${list.id}"} in "lists", with "where" to select by owner or status, so code names every matching member` }]
+        const cited = new Set(keptSentences(answer).flatMap(sentence => sentence.evidence).filter(short => members.has(short) && allowed.has(short)));
+        return cited.size >= 2 && cited.size < list.count
+          ? [{ id: list.id, reason: `the answer cites ${cited.size} of the ${list.count} members of list ${list.id} without the list: put {"id": "${list.id}"} in "lists", with "where" to select by owner or status, so code names every matching member; for what those members say, cite ${list.id} beside their evidence` }]
           : [];
       });
       // A failed check takes the writer's one repair when the first reply fails it and a repair can still run; the
@@ -345,11 +348,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       });
 
       // The writer's sentences: cited ids it was given, each list it cites adding no citation of its own. A sentence that
-      // cites only rows of a list code wrote after the check restates part of that list, which code now names in full.
+      // cites only members of a list code wrote after the check, two or more of them or rows only, restates part of that
+      // list, which code now names in full. A sentence about one member's text stays.
       const forcedRows = new Set(forced.flatMap(id => rows.get(id)!.map(member => member.id)));
+      const restates = (shorts: readonly string[]) => shorts.every(short => forcedRows.has(short)) && (shorts.length >= 2 || !shorts.some(short => textGiven.has(short)));
       const writerSentences = (answer?.sentences ?? []).flatMap(sentence => {
         const shorts = sentence.evidence.filter(short => allowed.has(short));
-        if (shorts.length === 0 || shorts.every(short => forcedRows.has(short) && !textGiven.has(short))) return [];
+        if (shorts.length === 0 || restates(shorts)) return [];
         // A sentence that claims content across a list cites the list beside text it read: say how much was checked (addition 4).
         const notes = !shorts.some(short => textGiven.has(short)) ? [] : sentence.evidence.flatMap(id => {
           const list = writerById.get(parseAgenticListIdV1(id) ?? "L0");

@@ -132,7 +132,8 @@ describe("agentic Ask: research loop", () => {
         { tool: 'list', args: { source: 'meetings', since: '7d' } },
       ]),
       finish([found(['E1', 'E2', 'E3'])]),
-      answer([{ text: 'All three records found.', evidence: ['E1', 'E2', 'E3'] }]),
+      // The plan cites both members of the meetings list, so it rests on that list and the answer uses it (ADR-0041).
+      { lists: [{ id: 'L1' }], sentences: [{ text: 'All three records found.', evidence: ['E1', 'E2', 'E3'] }], not_found: [] },
     ]);
     const today = vi.fn().mockReturnValueOnce('2026-10-05').mockReturnValue('2026-10-06');
     const pending = createAgenticAskV1({ desk: evidence, model: script.model, generation, audit: { append: () => undefined }, today }).answer({ question: 'Which records exist?' });

@@ -250,6 +250,25 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.outcome).toBe("partial");
   });
 
+  it("sends back an answer that cites some members whose text it has, then writes the list and drops the subset sentence", async () => {
+    // Follow-up and opened meeting rows carry their text: citing two of five by it is still a subset.
+    const read = (n: number) => ({ item: ticketRow(n, `THERM-${n}: work ${n} is in progress.`), full: true });
+    const research: AgenticEvidenceBundleV1 = Object.freeze({
+      ...EMPTY_BUNDLE, lists: [list("L1", ids(1, 5))],
+      plan: [{ part: 1, question: "Which tickets?", notes: "", needs: [{ need: "the ticket", status: "found" as const, evidence: ["E1"] }] }],
+      items: Array.from({ length: 5 }, (_, index) => ({ ...read(index + 1), short: `E${index + 1}`, source: "tickets", opened: true, preloaded: false, touched: index + 1, cited_by_plan: index === 0 })),
+    });
+    const subset = { lists: [], sentences: [{ text: "THERM-1 and THERM-2 were created on October 4.", evidence: ["E1", "E2"] }, { text: "THERM-1 is in progress.", evidence: ["E1"] }], not_found: [] };
+    const run = alone({ bundle: research, replies: [subset, subset], version: 6 });
+    const rendered = await run.render("Which tickets were created on October 4?");
+    expect(run.prompt(0).lists[0]).toMatchObject({ id: "L1", cited_by_plan: false, count: 5 });
+    expect(run.prompt(1).validation_error).toContain('the answer cites 2 of the 5 members of list L1 without the list: put {"id": "L1"} in "lists"');
+    // The sentence about one member stays; the one that named two of the five is replaced by the list.
+    expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+      `5 tickets created on October 4, 2026: ${names(1, 5).join("; ")}.`, "THERM-1 is in progress.",
+    ]);
+  });
+
   it("accepts a list's rows cited in full or by one, without the list", async () => {
     for (const evidence of [ids(1, 3), ["E2"]]) {
       const run = alone({ bundle: listBundle(3, 1, [list("L1", ids(1, 3))], ["E4"]), replies: [{ sentences: [{ text: "Those are in progress.", evidence }], not_found: [] }], version: 6 });

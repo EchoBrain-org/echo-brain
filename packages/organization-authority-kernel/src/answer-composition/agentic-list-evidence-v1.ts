@@ -183,7 +183,10 @@ export function agenticListFilterNoticeV1(list: Pick<AgenticListEvidenceV1, "fil
 
 /** How one found need's cited ids divide into support. */
 export interface AgenticNeedSupportV1 {
-  /** Lists cited by id, then the list of each cited member row (a member research never read in full), each once. List facts. */
+  /**
+   * Lists cited by id, then the list of each cited member row (a member research never read in full), then each list
+   * two or more of whose members the need cites, read in full or not; each once. List facts.
+   */
   readonly lists: readonly AgenticListIdV1[];
   /** Cited items research read in full. Content. */
   readonly content: readonly string[];
@@ -205,17 +208,26 @@ export interface AgenticNeedSupportLookupV1 {
  * Divides a found need's evidence (ADR-0041). The finish check then refuses a
  * need whose lists can still be read further ("keep reading the list"), and a
  * need with no list and no content (today's rule for content needs).
+ *
+ * One member research read in full is content about that item. Two or more
+ * members of one list are a selection of it, read in full or not, so the need
+ * also rests on that list: a follow-up row carries its text, and an opened
+ * meeting record keeps its row's id, so "my open follow-ups" citing the first
+ * page's ten members still has to read the list to its end.
  */
 export function agenticNeedSupportV1(evidence: readonly string[], lookup: AgenticNeedSupportLookupV1): AgenticNeedSupportV1 {
   const lists: AgenticListIdV1[] = []; const content: string[] = []; const unsupported: string[] = [];
   const add = <T>(values: T[], value: T) => { if (!values.includes(value)) values.push(value); };
+  const members = new Map<AgenticListIdV1, Set<string>>();
   for (const id of evidence) {
     const list = parseAgenticListIdV1(id);
     if (list !== null) { if (lookup.list(list)) add(lists, list); else add(unsupported, id); continue; }
-    if (lookup.full(id)) { add(content, id); continue; }
     const member = lookup.list_of(id);
+    if (member !== undefined) members.set(member, (members.get(member) ?? new Set()).add(id));
+    if (lookup.full(id)) { add(content, id); continue; }
     if (member !== undefined) add(lists, member); else add(unsupported, id);
   }
+  for (const [list, cited] of members) if (cited.size >= 2) add(lists, list);
   return Object.freeze({ lists: Object.freeze(lists), content: Object.freeze(content), unsupported: Object.freeze(unsupported) });
 }
 

@@ -47,9 +47,9 @@ export interface AskResearchListV1 {
 
 /**
  * The finish check for a question goal (Ask, ADR-0041). A found need's
- * evidence divides into list support (lists cited by id, or the list of a
- * cited member row research never read in full) and content (items read in
- * full). A need with list support is checked against its lists: one that can
+ * evidence divides into list support (lists cited by id, the list of a cited
+ * member row research never read in full, or a list two or more of whose
+ * members it cites) and content (items read in full). A need with list support is checked against its lists: one that can
  * still be read further refuses the finish ("keep reading the list"); one
  * that cannot (truncated, unavailable or an unverified end) is accepted, and
  * the answer says "at least". A need without list support still needs at
