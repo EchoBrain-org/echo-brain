@@ -108,6 +108,8 @@ interface Loop {
   failures: number;
   timer: ReturnType<typeof setTimeout> | null;
   running: Promise<Checked> | null;
+  /** A wake during a check needs one fresh read after that pre-wake check finishes. */
+  wakePending: boolean;
   /** When the last check began. */
   began: number;
 }
@@ -146,7 +148,7 @@ export function start(account: Expect): void {
   stop();
   loop = { account, older: false, areas: {}, projects: surfaces.readProjects(true), memberships: null, followed: null, pending: new Map(),
     seenUpTo: null, boundary: new Set(), told: { keys: [], rows: new Map(), projects: new Map() }, created: new Set(), pace: 60_000, failures: 0,
-    timer: null, running: null, began: Number.NEGATIVE_INFINITY };
+    timer: null, running: null, wakePending: false, began: Number.NEGATIVE_INFINITY };
   void check('start');
 }
 
@@ -161,20 +163,27 @@ export function olderAuthority(): boolean { return loop?.older === true; }
 
 /**
  * A check: the change check's fingerprints, and a reaction to each area that moved or is not learned yet. One runs at a
- * time; another trigger meanwhile joins it. Its moved screen areas are read again (but a return reads them with the page).
+ * time; another trigger meanwhile joins it, except a wake also queues one fresh check. Its moved screen areas are read
+ * again (but a return reads them with the page).
  * On an older Authority (R8), only the timer and a wake scan your follow-ups.
  */
 function check(trigger: Trigger): Promise<Checked | null> {
   const run = loop;
   if (!run) return Promise.resolve(null);
-  if (run.running) return run.running;
+  if (run.running) {
+    if (trigger === 'wake') run.wakePending = true;
+    return run.running;
+  }
   if (run.older && trigger !== 'timer' && trigger !== 'wake') return Promise.resolve({ outcome: 'older', moved: [] });
   const running = once(run).then(checked => {
     if (trigger !== 'came-back' && loop === run && checked.moved.length > 0) surfaces.owe({ back: false, areas: checked.moved });
     return checked;
   }).finally(() => {
     run.running = null;
-    if (loop === run) schedule(run);
+    if (loop === run) {
+      if (run.wakePending) { run.wakePending = false; void check('wake'); }
+      else schedule(run);
+    }
   });
   run.running = running;
   return running;

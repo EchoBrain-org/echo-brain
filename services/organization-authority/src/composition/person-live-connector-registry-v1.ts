@@ -11,11 +11,11 @@ export const LEGACY_PAGE_CONNECTOR_V1 = Object.freeze({
 });
 export const JIRA_LIVE_CONNECTOR_V1 = Object.freeze({
   ...LEGACY_TICKET_CONNECTOR_V1,
-  descriptor: Object.freeze({ ...LEGACY_TICKET_CONNECTOR_V1.descriptor, source_id: 'jira', tool_id: 'jira', description: `${LEGACY_TICKET_CONNECTOR_V1.descriptor.description} Date filters select ticket creation dates.` }),
+  descriptor: Object.freeze({ ...LEGACY_TICKET_CONNECTOR_V1.descriptor, source_id: 'jira', tool_id: 'jira', description: `${LEGACY_TICKET_CONNECTOR_V1.descriptor.description} Date filters support date_field created (default), updated or due.` }),
 });
 export const CONFLUENCE_LIVE_CONNECTOR_V1 = Object.freeze({
   ...LEGACY_PAGE_CONNECTOR_V1,
-  descriptor: Object.freeze({ ...LEGACY_PAGE_CONNECTOR_V1.descriptor, source_id: 'confluence', tool_id: 'confluence', description: `${LEGACY_PAGE_CONNECTOR_V1.descriptor.description} Date filters select page last-modified dates.` }),
+  descriptor: Object.freeze({ ...LEGACY_PAGE_CONNECTOR_V1.descriptor, source_id: 'confluence', tool_id: 'confluence', description: `${LEGACY_PAGE_CONNECTOR_V1.descriptor.description} Date filters support date_field created or updated (default).` }),
 });
 
 /** One translation at the boundary; all lifecycle and request code consumes the registry. */

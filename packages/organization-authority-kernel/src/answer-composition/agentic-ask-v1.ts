@@ -317,7 +317,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
 
       const remaining = () => deadline - now();
       const assertLive = () => {
-        if (input.signal?.aborted) abort();
+        if (input.signal?.aborted) abort(input.signal);
         if (deadlineExpired || now() >= deadline) throw new AgenticAskDeadlineErrorV1();
         if (activeSignal.aborted) throw new DOMException("Ask stopped", "AbortError");
       };
@@ -434,10 +434,11 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence, ...(receipt === undefined ? {} : { receipt }) });
       } catch (error) {
         clearTimeout(deadlineTimer);
-        if (deadlineExpired || error instanceof AgenticAskDeadlineErrorV1) {
+        const inheritedDeadline = input.signal?.aborted && input.signal.reason instanceof AgenticAskDeadlineErrorV1 ? input.signal.reason : undefined;
+        if (deadlineExpired || error instanceof AgenticAskDeadlineErrorV1 || inheritedDeadline !== undefined) {
           terminalAbort.abort();
           if (!terminalAudited) await auditAgenticTerminalV1("timed_out", { ...auditContext(), checked_at: checkedAt });
-          throw error instanceof AgenticAskDeadlineErrorV1 ? error : new AgenticAskDeadlineErrorV1();
+          throw error instanceof AgenticAskDeadlineErrorV1 ? error : inheritedDeadline ?? new AgenticAskDeadlineErrorV1();
         }
         if (input.signal?.aborted || isAbort(error, input.signal)) {
           terminalAbort.abort();

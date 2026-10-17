@@ -1,3 +1,4 @@
+import { withPersonAskSnapshotRetryV1 } from './person-ask-snapshot-retry-v1.js';
 import { AgenticAskDeadlineErrorV1, createAgenticAskV2, createAgenticAskV3, type AgenticAskAnswerWithReceiptV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { PersonAnswerResponseV5, PersonAnswerResponseV6 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -91,18 +92,19 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     // Authenticated and validated: anything that fails from here on fails inside the stream.
     progress?.on_start();
     try {
-      return await observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, async () => {
-        const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, context);
-        capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
-        const asker = askerOf(options, authorization);
-        const askOptions = { ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-          ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
-        };
-        const signal = input.signal === undefined ? {} : { signal: input.signal };
-        if (progress !== undefined) return createAgenticAskV3(askOptions).answerWithReceipt({ question: input.request.question, ...signal, on_progress: progress.on_progress });
-        const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
-        return create(askOptions).answer({ question: input.request.question, ...signal });
-      });
+      return await withPersonAskSnapshotRetryV1({ signal: input.signal, capture: capture !== undefined, run: async signal => {
+        return await observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, async () => {
+          const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, signal }, context);
+          capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
+          const asker = askerOf(options, authorization);
+          const askOptions = { ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+          };
+          if (progress !== undefined) return createAgenticAskV3(askOptions).answerWithReceipt({ question: input.request.question, signal, on_progress: progress.on_progress });
+          const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
+          return create(askOptions).answer({ question: input.request.question, signal });
+        });
+      } });
     } catch (error) {
       if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) throw new AuthorityOperationError('unavailable', 'Ask deadline exhausted');
       throw error;

@@ -7,6 +7,7 @@ export const PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1 = 48 * 1024;
 /** Explicit content kinds; submitting notes never manufactures a transcript. */
 export interface PersonSyntheticMeetingV1 {
   readonly id: string; readonly title: string; readonly notes: string; readonly transcript: string;
+  readonly started_at?: string; readonly ended_at?: string; readonly time_zone?: string;
 }
 export type PersonMeetingOperationV2 =
   | { readonly operation: 'home' } | { readonly operation: 'reviews' }
@@ -56,7 +57,17 @@ function text(value: unknown, maximum = 256): asserts value is string {
 function digest(value: unknown): asserts value is string { text(value); if (!/^sha256:[a-f0-9]{64}$/.test(value)) fail('Invalid meeting digest'); }
 export function validatePersonSyntheticMeetingV1(value: unknown): PersonSyntheticMeetingV1 {
   const row = asEnumerableRecord(value, 'Synthetic meeting');
-  assertExactKeys(row, ['id', 'title', 'notes', 'transcript'], 'Synthetic meeting');
+  assertExactKeys(row, ['id', 'title', 'notes', 'transcript', ...['started_at', 'ended_at', 'time_zone'].filter(key => Object.hasOwn(row, key))], 'Synthetic meeting');
+  if (row.started_at !== undefined) assertTimestamp(row.started_at, 'Synthetic meeting start');
+  if (row.ended_at !== undefined) {
+    assertTimestamp(row.ended_at, 'Synthetic meeting end');
+    if (row.started_at === undefined || Date.parse(row.ended_at as string) < Date.parse(row.started_at as string)) fail('Invalid synthetic meeting time range');
+  }
+  if (row.time_zone !== undefined) {
+    text(row.time_zone, 100);
+    if (row.started_at === undefined) fail('Synthetic meeting time zone requires a start');
+    try { new Intl.DateTimeFormat('en', { timeZone: row.time_zone }); } catch { fail('Invalid synthetic meeting time zone'); }
+  }
   text(row.id, 128); text(row.title, 200);
   if (!/^synthetic-custom-[a-z0-9][a-z0-9-]*$/.test(row.id) || row.title.trim() !== row.title ||
       typeof row.notes !== 'string' || typeof row.transcript !== 'string' ||

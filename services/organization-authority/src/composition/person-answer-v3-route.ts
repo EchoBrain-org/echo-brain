@@ -1,3 +1,4 @@
+import { withPersonAskSnapshotRetryV1 } from './person-ask-snapshot-retry-v1.js';
 import {
   validatePersonEvidenceDeskResponseV1,
   type PersonAnswerResponseV4,
@@ -102,22 +103,24 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
       });
       if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
       try {
-        return await observePersonResearchV1({ trigger: 'ask', run_id: requestId, ...(capture === undefined ? {} : { capture }) }, async () => {
-          const desk = deskFor(options, input.access_token, input.request);
-          capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
-          const asker = askerOf(options, authorization);
-          return createAgenticAskV1({
-            ...(asker === undefined ? {} : { asker }),
-            ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
-            desk, model: options.model, generation: options.generation,
-            audit: options.audit.forRequest({
-              authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
-              principal_id: authorization.principal_id, membership_id: authorization.membership_id,
-              session_family_id: authorization.session_family_id, request_id: requestId,
-            }),
-            ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
-          }).answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-        });
+        return await withPersonAskSnapshotRetryV1({ signal: input.signal, capture: capture !== undefined, run: async signal => {
+          return await observePersonResearchV1({ trigger: 'ask', run_id: requestId, ...(capture === undefined ? {} : { capture }) }, async () => {
+            const desk = deskFor(options, input.access_token, input.request);
+            capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
+            const asker = askerOf(options, authorization);
+            return createAgenticAskV1({
+              ...(asker === undefined ? {} : { asker }),
+              ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
+              desk, model: options.model, generation: options.generation,
+              audit: options.audit.forRequest({
+                authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
+                principal_id: authorization.principal_id, membership_id: authorization.membership_id,
+                session_family_id: authorization.session_family_id, request_id: requestId,
+              }),
+              ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+            }).answer({ question: input.request.question, signal });
+          });
+        } });
       } catch (error) {
         // Observe the original timeout before translating it into the Person API error.
         if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) {
