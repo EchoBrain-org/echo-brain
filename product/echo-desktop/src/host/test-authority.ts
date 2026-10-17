@@ -56,6 +56,9 @@ interface Contract {
   PERSON_ASK_PROGRESS_HEADER_V1: string;
   PERSON_ASK_PROGRESS_HEADER_VALUE_V1: string;
   formatPersonAskProgressEventV1(event: unknown): string;
+  /** Ask progress V2 on `/v6` (ADR-0040): its header value, and one event, which may name a follow-up, as its frame. */
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V2: string;
+  formatPersonAskProgressEventV2(event: unknown): string;
 }
 
 /** A runs request, as the contract's validator returns it. */
@@ -576,37 +579,53 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     ];
   };
   /**
+   * The follow-up `ask-progress-follow-up` cites (ADR-0040): Mina's, on Launch
+   * review's action, sent to her, which Ari reads as a member of its decision's
+   * audience. Its citation names it alone; its row is read again by its id.
+   */
+  const FOLLOW_UP_ITEM = 'itm_00000000-0000-4000-8000-000000000051';
+  const followUpCitation = { citation: { kind: 'follow_up', item_id: FOLLOW_UP_ITEM }, kind: 'follow_up', label: 'Ship the launch checklist', visibility: 'team',
+    ref: `follow_up:${FOLLOW_UP_ITEM}` };
+  /**
    * A streamed Ask, framed by the contract itself: a search of meetings,
    * documents and Jira, its four reads, then, once the test lets it answer
    * (`release-ask`), the writer, the final check and the answer with its
    * receipt. `ask-progress-quick` answers at once; `ask-progress-fails` ends
    * with an error event instead. A cancelled Ask ends the stream. Once a
    * test writes `more-steps`, an Ask still waiting searches Jira once more.
+   * On `/v6` (progress V2, `ask-progress-follow-up`) it searches meetings and
+   * follow-ups, reads Tuesday sync's decision and the follow-up, and the V7
+   * answer cites the follow-up.
    */
-  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined): Response => {
-    const items = progressItems();
-    const searched = { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
+  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, version: 1 | 2 = 1): Response => {
+    const format = version === 2 ? api.formatPersonAskProgressEventV2 : api.formatPersonAskProgressEventV1;
+    const items = version === 2 ? [progressItems()[0]!, followUpCitation] : progressItems();
+    const searched = version === 2 ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 2 }
+      : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
     const [part] = desktop.answer.parts as Record<string, unknown>[];
-    const response = { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
+    const response = version === 2
+      ? { ...desktop.answer, schema_version: 7, kind: 'echo-clean-person-answer-v7', scope, citations: [followUpCitation], parts: [{ question, status: 'answered', statements: [
+        { text: 'Mina still owes the launch checklist.', citation_indexes: [0], private: false }] }] }
+      : { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
     const encoder = new TextEncoder();
     let cancelled = false;
     const frames = (async function* () {
       for (const step of [{ type: 'stage', stage: 'searching' }, searched, { type: 'stage', stage: 'reading', pending: items.length }, { type: 'read', items }]) {
-        yield api.formatPersonAskProgressEventV1(step);
+        yield format(step);
       }
       let more = false;
       while (mode !== 'ask-progress-quick' && !existsSync(join(home, 'release-ask'))) {
         if (cancelled || signal?.aborted) return;
         if (!more && existsSync(join(home, 'more-steps'))) {
           more = true;
-          yield api.formatPersonAskProgressEventV1({ type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira' }], found: 0 });
+          yield format({ type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira' }], found: 0 });
           continue;
         }
         await new Promise(resolveLater => setTimeout(resolveLater, 25));
       }
-      yield api.formatPersonAskProgressEventV1({ type: 'stage', stage: 'writing' });
-      yield api.formatPersonAskProgressEventV1({ type: 'stage', stage: 'checking_access' });
-      yield api.formatPersonAskProgressEventV1(mode === 'ask-progress-fails'
+      yield format({ type: 'stage', stage: 'writing' });
+      yield format({ type: 'stage', stage: 'checking_access' });
+      yield format(mode === 'ask-progress-fails'
         ? { type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } }
         : { type: 'answer', response, receipt: { looked_through: items.length, elapsed_ms: 48_000, rows: [searched, { type: 'read', items }] } });
     })();
@@ -617,7 +636,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       },
       cancel() { cancelled = true; },
     });
-    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-echo-person-ask-route': '5' } });
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-echo-person-ask-route': version === 2 ? '6' : '5' } });
   };
 
   // Open items. Ari's own check of Pilot planning finds two once it is done;
@@ -702,6 +721,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (mode === 'granola-paged') {
       for (const item of openItems.filter(entry => entry.run_id === sent.run_id)) Object.assign(item, { state: 'done', state_set_at: '2026-10-01T09:00:00.000Z', state_set_by: MINA });
     }
+  }
+  // ask-progress-follow-up: the follow-up an Ask cites, Launch review's action, which Mina sent to herself; Ari reads its decision.
+  if (mode === 'ask-progress-follow-up') {
+    const launch = { approval_id: 'apr_' + 'f'.repeat(64), record_sha256: sha('record:Launch review'), title: 'Launch review',
+      first_line: 'Ship the launch checklist before Friday.', approved_at: '2026-10-05T15:00:00.000Z', project_ids: [THERMOSTAT] };
+    openItems.push({
+      ...minaSent({ item_id: FOLLOW_UP_ITEM, run_id: 'run_00000000-0000-4000-8000-000000000051', kind: 'action', decision: launch, readable: true, opens: false, live: {},
+        relation: 'needs_updating', expected: 'Ship the launch checklist', owner: { ...MINA, match: 'name' }, created_at: '2026-10-05T15:05:00.000Z', sent_at: '2026-10-05T16:00:00.000Z' }),
+      check: { verdict: 'still_open', checked_at: '2026-10-16T09:00:00.000Z', checked_by: 'Mina Patel' },
+    });
   }
   // The meetings Mina approved that Ari can read, each once: in their project's feed, where their follow-ups line shows.
   for (const item of openItems.filter(entry => entry.readable)) {
@@ -1666,7 +1695,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask')) {
+    // Only ask-progress-follow-up's Authority has `/v6` (ADR-0040); every other mode's predates it, so its client asks `/v5`.
+    const v6 = mode === 'ask-progress-follow-up' && path === '/v6/person/ask';
+    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask' || v6)) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);
@@ -1684,7 +1715,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const answer = { ...desktop.answer, ...(live ? { schema_version: 6, kind: 'echo-clean-person-answer-v6' } : tickets ? { schema_version: 5, kind: 'echo-clean-person-answer-v5' } : {}) };
       // Ask progress: a client that asks for it gets the Ask's steps as they happen, then its answer and receipt.
       const api = await contract();
-      if (mode.startsWith('ask-progress') && live && new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1) === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V1) {
+      const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
+      if (v6) {
+        if (progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V2) return progressStream(api, question, scope, init?.signal ?? undefined, 2);
+        const answered = json({ schema_version: 7, kind: 'echo-clean-person-answer-v7', scope, outcome: 'answered', citations: [followUpCitation],
+          parts: [{ question, status: 'answered', statements: [{ text: 'Mina still owes the launch checklist.', citation_indexes: [0], private: false }] }] });
+        answered.headers.set('x-echo-person-ask-route', '6');
+        return answered;
+      }
+      if (mode.startsWith('ask-progress') && live && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V1) {
         return progressStream(api, question, scope, init?.signal ?? undefined);
       }
       if (mode === 'ask-ticket') {

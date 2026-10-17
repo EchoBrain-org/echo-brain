@@ -635,13 +635,13 @@ function paneHeading(source: AnswerSource, state: State): string {
 function FollowUpSource({ state, source, item }: { state: State; source: Extract<AnswerSource, { kind: 'follow_up' }>; item: OpenItemView }) {
   const checked = checkWords(item.check);
   return (
-    <div class="source-detail selectable" data-testid="follow-up">
+    <div class="source-detail selectable" data-testid="pane-follow-up">
       <h2>{source.label}</h2>
       <dl class="fields">
-        <dt>Owner</dt><dd data-testid="follow-up-owner">{ownerWords(item, state.status?.account?.membership_id)}</dd>
-        <dt>Status</dt><dd data-testid="follow-up-status">{STAGES[item.state]}</dd>
+        <dt>Owner</dt><dd data-testid="pane-follow-up-owner">{ownerWords(item, state.status?.account?.membership_id)}</dd>
+        <dt>Status</dt><dd data-testid="pane-follow-up-status">{STAGES[item.state]}</dd>
       </dl>
-      {checked && <div class="meta" data-testid="follow-up-check">{checked}</div>}
+      {checked && <div class="meta" data-testid="pane-follow-up-check">{checked}</div>}
     </div>
   );
 }

@@ -102,10 +102,10 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     expect(itemReads()).toEqual([{ expect: EXPECT, request: { schema_version: 1, operation: 'item', item_id: ITEM, read: 'rows' } }]);
     const shown = pane();
     expect(text(byTestId(shown, 'source-pane'))).toContain('Follow-up');
-    expect(text(byTestId(shown, 'follow-up').flatMap(node => elements(node).filter(child => child.type === 'h2')))).toBe('Ship the launch checklist');
-    expect(text(byTestId(shown, 'follow-up-owner'))).toBe('Mina');
-    expect(text(byTestId(shown, 'follow-up-status'))).toBe('Open');
-    expect(text(byTestId(shown, 'follow-up-check'))).toBe('Checked 2 h ago · not updated yet');
+    expect(text(byTestId(shown, 'pane-follow-up').flatMap(node => elements(node).filter(child => child.type === 'h2')))).toBe('Ship the launch checklist');
+    expect(text(byTestId(shown, 'pane-follow-up-owner'))).toBe('Mina');
+    expect(text(byTestId(shown, 'pane-follow-up-status'))).toBe('Open');
+    expect(text(byTestId(shown, 'pane-follow-up-check'))).toBe('Checked 2 h ago · not updated yet');
     // Leaving Ask would cancel it: no Open, and Open does nothing.
     expect(byTestId(shown, 'source-open')).toEqual([]);
     store.openFullPage();
@@ -153,10 +153,10 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     store.chooseSource(0);
     await flush();
     expect(byTestId(pane(), 'source-error')).toHaveLength(1);
-    expect(byTestId(pane(), 'follow-up')).toEqual([]);
+    expect(byTestId(pane(), 'pane-follow-up')).toEqual([]);
     store.retryRecord();
     await flush();
-    expect(text(byTestId(pane(), 'follow-up-status'))).toBe('Open');
+    expect(text(byTestId(pane(), 'pane-follow-up-status'))).toBe('Open');
     expect(itemReads()).toHaveLength(3);
   });
 });
