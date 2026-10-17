@@ -936,6 +936,49 @@
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-6" }, { "ticket": "ECHO-23" }]
     },
     {
+      "id": "confluence-pages-created-on-october-4-global",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 12,
+      "kind": "list",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "Which Confluence pages were created on October 4, 2026?",
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "list",
+          "requirement": "Eight Confluence pages were created on 2026-10-04: ECHO Product Pipeline — Start Here; Assumptions and decisions — source facts versus proposals; Gate reviews — EVT pass, DVT hold, PVT pending; Traceability — requirement threads and BUG-412 walkthrough; PRD — System and acceptance requirements; Verification plan — EVT, DVT and PVT mock results; MRD — Mock Digital Thermometer; Mock Digital Thermometer Home.",
+          "evidence": [
+            { "page": "589865" },
+            { "page": "1474561" },
+            { "page": "1441793" },
+            { "page": "1409042" },
+            { "page": "1409025" },
+            { "page": "1212607" },
+            { "page": "1212589" },
+            { "page": "1015989" }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "Confluence pages created on 2026-10-04"
+      ],
+      "gaps": [],
+      "must_not": [
+        "names a page created on another day as created on 2026-10-04, or says more or fewer than eight pages were created that day",
+        "dates a page by its last update or version instead of its creation (ECHO Product Pipeline — Start Here was updated on 2026-10-05)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": []
+    },
+    {
       "id": "restricted-supplier-sensor-decision",
       "trigger": "ask",
       "state": "S0",

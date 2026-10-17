@@ -292,7 +292,11 @@ every member. A list part scores on naming the whole list: it counts only when
 the answer cites every member, and naming some members earns nothing. A
 citation of a member of a list in the research result resolves like a
 citation of an item read in full. A development case asks the October 4
-question, with its 8 pages as members.
+question, with its 8 pages as members. Built: a list part's research measures
+hold only for the whole list too (found; read, when a complete list holds every
+member; handed over), and whether the answer names every member is a code
+check, "lists named in full", that holds without a judge and overrides a
+judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`).
 
 ### Safety rules kept
 

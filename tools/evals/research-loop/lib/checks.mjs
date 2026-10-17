@@ -3,14 +3,17 @@ import { itemMatches, leakMarkers, matching, meetingIndex, satisfying, sectionCo
 
 /**
  * Code checks for one saved run (spec section 5): what research found, read,
- * cited and handed over for each required part; restricted leaks; noise;
+ * cited and handed over for each required part, and for a list part whether
+ * the answer names its whole list (ADR-0041); restricted leaks; noise;
  * stop and cost; the impact card or sweep result against its key.
  * Meaning-level checks belong to the judge. A sweep run always carries its
  * verdict counts (`sweep`), so failed runs count toward the findings.
  */
 export function codeChecks(testCase, run, dataset) {
   const meetings = meetingIndex(dataset.additions);
-  const base = { case_id: testCase.id, split: testCase.split, trigger: testCase.trigger, trial: run.trial, budget: run.budget };
+  // List parts are counted on every run, so a failed run still scores zero on naming its lists.
+  const listParts = testCase.parts.filter(part => part.type === "list").length;
+  const base = { case_id: testCase.id, split: testCase.split, trigger: testCase.trigger, trial: run.trial, budget: run.budget, ...(listParts === 0 ? {} : { list_parts: listParts }) };
   // A run that delivered nothing scores zero: a sweep's findings all count as wrong.
   const nothing = { parts: [], leaks: [], stop: null, cost: null, ...(testCase.trigger === "sweep" ? { sweep: gradeSweep(testCase, { findings: [] }) } : {}) };
   if (run.outcome !== "completed" || run.result?.status !== "completed") {
@@ -35,7 +38,10 @@ export function codeChecks(testCase, run, dataset) {
   }
   const card = testCase.trigger === "approved_record" ? rendered : null;
   const handedIds = new Set(testCase.trigger === "ask" ? ask?.writer_evidence ?? [] : items.filter(item => item.cited_by_plan).map(item => item.id));
+  const answer = ask?.response ?? null;
+  const lists = listIndex(research, items);
   const parts = testCase.parts.map(part => {
+    if (part.type === "list") return listPart(part, items, meetings, lists, handedIds, answer);
     // Found: research discovered a supporting item (a page counts once discovered).
     const discovered = part.evidence.flatMap(ref => matching(items, ref, meetings));
     // Read, cited and handed need the item that actually carries the evidence (for a page, its section).
@@ -52,9 +58,9 @@ export function codeChecks(testCase, run, dataset) {
   const supportingIds = new Set(parts.flatMap(part => part.item_ids));
   const distractorItems = items.filter(item => (testCase.distractors ?? []).some(ref => itemMatches(item, ref, meetings)));
   const noise = [...handedIds].filter(id => !supportingIds.has(id));
-  const answer = ask?.response ?? null;
+  // An answer cites what research read in full, or a list member's row (ADR-0041): a list supports which items exist.
   const answer_citation_violations = (answer?.citations ?? []).flatMap((entry, item_index) =>
-    items.some(item => item.read_in_full && isDeepStrictEqual(item.citation, entry.citation)) ? [] : [{ item_index, label: entry.label }]);
+    items.some(item => (item.read_in_full || lists.of(item.id).length > 0) && isDeepStrictEqual(item.citation, entry.citation)) ? [] : [{ item_index, label: entry.label }]);
   return {
     ...base,
     status: "completed",
@@ -70,6 +76,7 @@ export function codeChecks(testCase, run, dataset) {
       read: parts.filter(part => part.read).length,
       cited_by_plan: parts.filter(part => part.cited_by_plan).length,
       handed: parts.filter(part => part.handed).length,
+      ...(listParts === 0 ? {} : { lists_named: parts.filter(part => part.named === true).length }),
     },
     leaks,
     distractors: { found: distractorItems.length, handed: distractorItems.filter(item => handedIds.has(item.id)).length },
@@ -84,6 +91,46 @@ export function codeChecks(testCase, run, dataset) {
     },
     card: card === null ? null : cardChecks(testCase, card, items, meetings),
     ...(testCase.trigger === "sweep" ? { sweep: { status: rendered.status, ...gradeSweep(testCase, rendered) } } : {}),
+  };
+}
+
+/**
+ * The lists a run's research read (ADR-0041; a run from before it has none): the lists holding each item, and those
+ * the plan rests on. As Ask's finish check divides support, a found need rests on each list it cites by id, and on the
+ * first list holding each member row it cites that research never read in full.
+ */
+function listIndex(research, items) {
+  const all = Array.isArray(research.lists) ? research.lists : [];
+  const full = new Set(items.filter(item => item.read_in_full).map(item => item.id));
+  const of = id => all.filter(list => list.members.includes(id));
+  const relied = new Set(research.plan.flatMap(part => part.needs.filter(need => need.status === "found").flatMap(need => need.evidence.flatMap(id => {
+    if (all.some(list => list.id === id)) return [id];
+    return full.has(id) ? [] : of(id).slice(0, 1).map(list => list.id);
+  }))));
+  return { of, relied: list => relied.has(list.id) };
+}
+
+/**
+ * A list part scores on the whole list (ADR-0041, addition 7): each measure holds only when it holds for every member,
+ * so naming some members earns nothing. Found: research came across every member. Read: a complete list research
+ * read holds every member. Cited: the plan cites every member or rests on a list holding it. Handed: the writer saw
+ * every member. Named: the answer cites every member (any item of it: a page's row or one of its sections).
+ */
+function listPart(part, items, meetings, lists, handedIds, answer) {
+  const members = part.evidence.map(ref => matching(items, ref, meetings));
+  const every = holds => members.every(found => found.some(holds));
+  const inAnswer = item => (answer?.citations ?? []).some(entry => isDeepStrictEqual(entry.citation, item.citation));
+  return {
+    id: part.id, type: part.type,
+    found: every(() => true),
+    read: every(item => lists.of(item.id).some(list => list.complete === true)),
+    cited_by_plan: every(item => item.cited_by_plan || lists.of(item.id).some(lists.relied)),
+    handed: every(item => handedIds.has(item.id)),
+    named: answer !== null && every(inAnswer),
+    // For reading a run, never for its score.
+    members: members.length,
+    members_named: members.filter(found => found.some(inAnswer)).length,
+    item_ids: [...new Set(members.flat().map(item => item.id))],
   };
 }
 

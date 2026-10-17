@@ -41,6 +41,30 @@ Approved-record keys carry a relation and an owner per affected item
 verdicts are counted, not averaged: per case over all its runs, then over all
 Sweep cases; a failed run's findings all count as wrong.
 
+**List parts ([ADR-0041](../../../docs/decisions/ADR-0041-complete-lists-as-ask-evidence.md)).**
+A part of type `list` asks which items exist ("Which Confluence pages were
+created on October 4, 2026?"), and its evidence names every member of the list,
+each a whole item. It scores on the whole list, never item by item: found when
+research came across every member, read when a complete list research read
+holds every member, handed over when the writer saw every member, and correct
+in the answer only when the answer cites every member (a page's row or one of
+its sections). Naming 4 of 8 earns nothing, whatever the judge says. "Lists
+named in full" is that last check, made by code, so it is reported without a
+judge too, and a run whose answer misses a member is never complete and
+supported. An answer may cite a list member's row, which counts as research
+evidence like an item read in full. Only Ask cases have list parts: impact
+cards and sweeps record no lists. The judge sees research's lists as rows
+(filter, completeness, members' titles, dates and details, never text), and
+for any part may take a member's own title, dates, status or owner from its
+row, never what the item says.
+
+**Baselines across ADR-0041 (2026-10-17).** Ask's research and writer changed:
+a complete list is evidence, and code names its members. Ask baselines taken
+before it measure the old loop, and their saved runs carry no lists, so a list
+part in them is never read. Take Ask baselines again on an endpoint built
+after ADR-0041, and regrade any earlier one with the current `grade` before
+comparing it. Approved-record and Sweep runs are unchanged.
+
 **Baselines across the research trigger contract.** Ask is byte-identical
 across that change, so an Ask baseline taken before or after it measures the
 same thing. Grading changed, though: the judge's prompt now covers the impact
@@ -268,6 +292,12 @@ delete traces already uploaded.
   much hedging it causes.
 - The global cross-project cases meet the ECHO distractors only if the test
   person can reach Jira project ECHO or page 589865 through a mapped project.
+- `confluence-pages-created-on-october-4-global` keys the 8 pages the founder's
+  October 4 list returned on staging on 2026-10-17 (trace `ee2f0973`), page
+  589865 among them, outside the THERM space. Its key holds only while the test
+  person can read those 8 pages and no other page created that day. The
+  evaluation's Ask sends no time zone, so it reads dates in UTC; all 8 were
+  created on October 4 in UTC as well as in the trace's Los Angeles time.
 - History-only facts (when a ticket moved to Done) are expected to be not
   found: Ask cannot read Jira history today.
 - Questions over 240 characters are rejected at ingress, as in the product;

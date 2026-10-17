@@ -27,8 +27,11 @@ export function rejectedAtIngress(testCase, error) {
   return testCase.trigger === "ask" && error?.code === "invalid_request";
 }
 
-/** The trimmed bundle's fields (`AgenticResearchResultV1`); anything else in a read, such as server records, is never saved. */
-const TRIMMED_BUNDLE = ["schema_version", "kind", "trigger", "goal", "budget", "plan", "items", "unreadable_starting", "rounds", "coverage", "stop", "cost"];
+/**
+ * The trimmed bundle's fields (`AgenticResearchResultV1`), with Ask's lists (ADR-0041); anything else in a read, such
+ * as server records, is never saved.
+ */
+const TRIMMED_BUNDLE = ["schema_version", "kind", "trigger", "goal", "budget", "plan", "items", "lists", "unreadable_starting", "rounds", "coverage", "stop", "cost"];
 
 /** What a saved run keeps of a read: its status, the trimmed bundle, and Ask's answer or the rendered result. */
 export function savedResult(read) {

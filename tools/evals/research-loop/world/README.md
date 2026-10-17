@@ -107,6 +107,14 @@ be reverted, but ECHO cannot read either of them.
     relation.
   - Owner: the Jira assignee from `additions.json` (only THERM-47, 52, 53 and
     54 have one), and `null` for every other ticket and every page.
+- A `list` part asks which items exist. Its `evidence` names every member
+  of that list, each a whole item (a ticket, a page without a section, or a
+  meeting item) and each once, and it scores only when the answer names all
+  of them ([ADR-0041](../../../../docs/decisions/ADR-0041-complete-lists-as-ask-evidence.md)).
+  Only Ask cases have one. The October 4 case keys every Confluence page the
+  test person could read that was created on 2026-10-04: the 7 THERM pages and
+  page 589865. Record in the seed log whether the test person can still read
+  page 589865, and that no other page they can read was created that day.
 - `never_appears` lists the M6 items in every case. Any trace of them in a
   research result, the notes or an answer fails the run.
 - THERM items carry "SYNTHETIC MOCK" banners. An answer that reports a mock

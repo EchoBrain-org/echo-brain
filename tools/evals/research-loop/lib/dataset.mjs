@@ -10,7 +10,8 @@ const TRIGGERS = new Set(["ask", "approved_record", "sweep"]);
 const STATES = new Set(["S0", "S1"]);
 const BUDGETS = new Set(["live", "background"]);
 const OUTCOMES = new Set(["answerable", "partial", "not_found"]);
-const PART_TYPES = new Set(["fact", "date", "owner", "status", "conflict", "change"]);
+/** `list` (ADR-0041): which items exist; its evidence names every member, and it scores only on naming them all. */
+const PART_TYPES = new Set(["fact", "date", "owner", "status", "conflict", "change", "list"]);
 const MEETING_ITEMS = new Set(["decision", "action", "rationale", "transcript"]);
 const VERDICTS = new Set(["landed", "not_landed", "no_evidence"]);
 const RELATIONS = new Set(["confirms", "conflicts", "needs_updating"]);
@@ -75,6 +76,19 @@ function affectedProblems(entry, meetings, restricted) {
   return problems;
 }
 
+/**
+ * A list part (ADR-0041) names every member of the list its question asks for, each once and each a whole item: a
+ * ticket, a page without a section, or a meeting item. Only Ask records lists; a task goal keeps the rules before it.
+ */
+function listPartProblems(entry, part, where) {
+  const evidence = Array.isArray(part.evidence) ? part.evidence : [];
+  const problems = [];
+  if (entry.trigger !== "ask") problems.push(`${where}: only Ask cases have list parts`);
+  if (evidence.some(ref => ref?.section !== undefined || ref?.jira_project !== undefined)) problems.push(`${where}: a list part names whole items, never a section or a Jira project`);
+  if (new Set(evidence.map(ref => JSON.stringify(ref))).size !== evidence.length) problems.push(`${where}: a list part names each member once`);
+  return problems;
+}
+
 /** Structural checks every committed case must pass; the export-based checks live in the dataset README. */
 export function datasetProblems(dataset) {
   const problems = [];
@@ -104,6 +118,7 @@ export function datasetProblems(dataset) {
     if (!Array.isArray(entry.parts) || (entry.parts.length === 0 && entry.expected_outcome !== "not_found")) problems.push(`${where}: parts are required unless nothing should be found`);
     for (const part of entry.parts ?? []) {
       if (!PART_TYPES.has(part.type) || typeof part.requirement !== "string" || !Array.isArray(part.evidence) || part.evidence.length === 0) problems.push(`${where}/${part.id}: part is invalid`);
+      if (part.type === "list") problems.push(...listPartProblems(entry, part, `${where}/${part.id}`));
       for (const ref of part.evidence ?? []) {
         problems.push(...refProblems(ref, meetings, `${where}/${part.id}`));
         if (restricted.has(ref.meeting)) problems.push(`${where}/${part.id}: restricted meeting used as evidence`);

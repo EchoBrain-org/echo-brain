@@ -636,6 +636,143 @@ test("only a complete, current 15-run blind calibration certifies judge metrics"
   assert.throws(() => calibrationSheet({ ...graded, runs: runs.map(run => ({ ...run, checks: { ...run.checks, trial: 1 } })) }, cases), /duplicate run identities/u);
 });
 
+/** The 8 pages the October 4 list returned on staging (trace ee2f0973, release c15cd0f), in its order: id, title, version. */
+const OCTOBER_4 = [
+  ["589865", "ECHO Product Pipeline — Start Here", "3"],
+  ["1474561", "Assumptions and decisions — source facts versus proposals", "3"],
+  ["1441793", "Gate reviews — EVT pass, DVT hold, PVT pending", "3"],
+  ["1409042", "Traceability — requirement threads and BUG-412 walkthrough", "3"],
+  ["1409025", "PRD — System and acceptance requirements", "3"],
+  ["1212607", "Verification plan — EVT, DVT and PVT mock results", "3"],
+  ["1212589", "MRD — Mock Digital Thermometer", "3"],
+  ["1015989", "Mock Digital Thermometer Home", "5"],
+];
+const OCT4_CASE = "confluence-pages-created-on-october-4-global";
+const pageCitation = (id, version, section) => ({ kind: "page", tool_id: "confluence", external_scope_id: "site", page_id: id, section_id: section, version,
+  permalink: `https://echobrain.atlassian.net/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: digest(section === "inventory" ? "" : `text-${id}-${section}`) });
+/** A page as its list row: title, dates and status, no text, never read in full. */
+const pageRow = ([id, title, version], index) => ({ id: `E${index + 1}`, source: "pages", kind: "page", title, citation: pageCitation(id, version, "inventory"),
+  dates: { created: "2026-10-04T23:20:00.000Z" }, attributes: { status: "current" }, read_in_full: false, opened: false, preloaded: false, cited_by_plan: false });
+/** An opened page's first section, read in full, as Confluence releases it under a new id. */
+const pageSection = ([id, title, version], index) => ({ id: `E${index + 9}`, source: "pages", kind: "page", title: `${title} · section 1`, citation: pageCitation(id, version, "s1"),
+  text: "SYNTHETIC MOCK", read_in_full: true, opened: true, preloaded: false, cited_by_plan: true });
+const ROWS = OCTOBER_4.map(pageRow);
+/** The list research read (ADR-0041): its 8 rows, read to a confirmed end and all shown to research. */
+const OCT4_LIST = { id: "L1", source: "pages", filter: { since: "2026-10-04", until: "2026-10-04", date_field: "created", time_zone: "UTC" }, filter_applied: { since: "applied", until: "applied", date_field: "applied" },
+  members: ROWS.map(row => row.id), shown: 8, ended: true, unverified_end: false, available: true, truncated: false, read_at: "2026-10-17T06:58:31.000Z", complete: true };
+/** An October 4 run: research's items, lists and found evidence, the ids the writer saw, and the items the answer cites. */
+function october4Run({ items = ROWS, lists, evidence, writer, cites }) {
+  const testCase = caseById(OCT4_CASE);
+  const answer = { outcome: "answered", parts: [{ status: "answered", statements: [{ text: "The pages.", citation_indexes: cites.map((_, index) => index) }] }], citations: cites.map(citationOf) };
+  const run = completedRun(testCase, items, { writer_evidence: writer, response: answer });
+  run.result.research = { ...run.result.research, plan: [{ part: 1, question: testCase.question, notes: "", needs: [{ need: "Confluence pages created on 2026-10-04", status: "found", evidence }] }], ...(lists === undefined ? {} : { lists }) };
+  return { testCase, run };
+}
+/** A judge that says yes to everything: list parts must still score on the whole list. */
+function lenientJudge(testCase) {
+  return parseJudge(testCase, { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [],
+    parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "yes", answer_correct: "yes" })),
+    gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: [], notes: "" });
+}
+
+test("the October 4 case keys the trace's 8 pages as one list part, and list parts name whole items, once, in Ask cases only", () => {
+  const testCase = caseById(OCT4_CASE);
+  assert.deepEqual([testCase.trigger, testCase.scope, testCase.question], ["ask", { kind: "global" }, "Which Confluence pages were created on October 4, 2026?"]);
+  assert.deepEqual(testCase.parts.map(part => part.type), ["list"]);
+  assert.deepEqual(testCase.parts[0].evidence, OCTOBER_4.map(([page]) => ({ page })));
+  for (const [, title] of OCTOBER_4) assert.ok(testCase.parts[0].requirement.includes(title), title);
+  const entry = dataset.cases.find(value => value.id === OCT4_CASE);
+  const problems = part => datasetProblems({ ...dataset, cases: [{ ...entry, parts: [{ ...entry.parts[0], ...part }] }] });
+  assert.deepEqual(problems({}), []);
+  assert.ok(problems({ evidence: [{ page: "1441793", section: "Gate policy" }] }).some(problem => problem.includes("whole items")), "a section is not a member");
+  assert.ok(problems({ evidence: [{ jira_project: "THERM" }] }).some(problem => problem.includes("whole items")), "a project is not a member");
+  assert.ok(problems({ evidence: [{ page: "589865" }, { page: "589865" }] }).some(problem => problem.includes("each member once")));
+  // A task goal records no lists, so an approved record or a sweep has no list part.
+  const record = dataset.cases.find(value => value.id === "approved-record-t1-two-decimal-display");
+  assert.ok(datasetProblems({ ...dataset, cases: [{ ...record, parts: [...record.parts, { id: "p9", type: "list", requirement: "x", evidence: [{ ticket: "THERM-2" }] }] }] }).some(problem => problem.includes("only Ask cases have list parts")));
+});
+
+test("the October 4 answer that named 4 of the 8 pages earns nothing on its list part, whatever the judge says (trace ee2f0973)", () => {
+  // As the failing run went: no list evidence, the plan cites the 8 rows and the 4 opened sections, and the writer
+  // got only the sections, so the answer names 4 pages.
+  const sections = OCTOBER_4.slice(0, 4).map(pageSection);
+  const { testCase, run } = october4Run({ items: [...ROWS, ...sections], evidence: [...ROWS, ...sections].map(item => item.id), writer: sections.map(item => item.id), cites: sections });
+  const checks = codeChecks(testCase, run, dataset);
+  const [part] = checks.parts;
+  assert.deepEqual([part.found, part.read, part.cited_by_plan, part.handed, part.named, part.members, part.members_named], [true, false, false, false, false, 8, 4]);
+  assert.deepEqual([checks.coverage.lists_named, checks.answer_citations.unresolved], [0, 0]);
+  const judged = runScores({ checks, judge: lenientJudge(testCase) });
+  assert.deepEqual([judged.writer_parts_correct, judged.writer_lists_named, judged.research_established, judged.complete_and_supported], [0, 0, 0, false]);
+  // Code decides without a judge too: the list was not named, so the run is not complete.
+  assert.equal(runScores({ checks, judge: null }).complete_and_supported, false);
+});
+
+test("the fixed October 4 answer names all 8 pages from a complete list, citing each page's row, and scores; 7 of 8 earns nothing", () => {
+  const ids = ROWS.map(row => row.id);
+  const fixed = october4Run({ lists: [OCT4_LIST], evidence: ["L1"], writer: ids, cites: ROWS });
+  const checks = codeChecks(fixed.testCase, fixed.run, dataset);
+  const [part] = checks.parts;
+  assert.deepEqual([part.found, part.read, part.cited_by_plan, part.handed, part.named, part.members_named], [true, true, true, true, true, 8]);
+  // A list member's row resolves like an item read in full (ADR-0041).
+  assert.deepEqual(checks.answer_citations, { total: 8, resolved_to_read: 8, unresolved: 0 });
+  const scores = runScores({ checks, judge: lenientJudge(fixed.testCase) });
+  assert.deepEqual([scores.tools_read, scores.tools_handed, scores.research_established, scores.writer_parts_correct, scores.writer_lists_named, scores.complete_and_supported], [1, 1, 1, 1, 1, true]);
+  // A plan that cites a member row rests on that row's list, as the finish check divides support.
+  assert.equal(codeChecks(fixed.testCase, october4Run({ lists: [OCT4_LIST], evidence: ["E3"], writer: ids, cites: ROWS }).run, dataset).parts[0].cited_by_plan, true);
+
+  const seven = codeChecks(fixed.testCase, october4Run({ lists: [OCT4_LIST], evidence: ["L1"], writer: ids, cites: ROWS.slice(0, 7) }).run, dataset);
+  assert.deepEqual([seven.parts[0].named, seven.parts[0].members_named], [false, 7]);
+  const sevenScores = runScores({ checks: seven, judge: lenientJudge(fixed.testCase) });
+  assert.deepEqual([sevenScores.writer_parts_correct, sevenScores.writer_lists_named, sevenScores.complete_and_supported], [0, 0, false]);
+
+  // A list not read to a confirmed end holds the members but is not read: research did not establish the whole list.
+  const unverified = { ...OCT4_LIST, unverified_end: true, complete: false };
+  const partial = codeChecks(fixed.testCase, october4Run({ lists: [unverified], evidence: ["L1"], writer: ids, cites: ROWS }).run, dataset);
+  assert.deepEqual([partial.parts[0].read, partial.parts[0].named], [false, true]);
+  assert.equal(runScores({ checks: partial, judge: lenientJudge(fixed.testCase) }).research_established, 0);
+
+  // Without the list, a row's citation resolves to nothing research read.
+  const unlisted = codeChecks(fixed.testCase, october4Run({ evidence: ids, writer: ids, cites: ROWS }).run, dataset);
+  assert.deepEqual([unlisted.answer_citations.unresolved, unlisted.parts[0].read], [8, false]);
+});
+
+test("a failed run of a list case scores zero on naming its list, and reports show lists named apart from parts correct", () => {
+  const testCase = caseById(OCT4_CASE);
+  const failed = codeChecks(testCase, { trial: 2, budget: "live", outcome: "failed", result: { status: "failed", error: { code: "timed_out" } } }, dataset);
+  assert.equal(failed.list_parts, 1);
+  assert.equal(runScores({ checks: failed, judge: null }).writer_lists_named, 0);
+  // A case without list parts has no such measure.
+  const other = caseById("bug-fix-dates-vs-dvt-review");
+  assert.equal("writer_lists_named" in runScores({ checks: codeChecks(other, { trial: 1, budget: "live", outcome: "failed", error: { code: "unavailable" } }, dataset), judge: null }), false);
+  const fixed = october4Run({ lists: [OCT4_LIST], evidence: ["L1"], writer: ROWS.map(row => row.id), cites: ROWS });
+  const report = aggregate([{ checks: codeChecks(testCase, fixed.run, dataset), judge: null }, { checks: failed, judge: null }]);
+  assert.equal(report.cases[0].writer_lists_named, 0.5);
+  const [, renderers] = markdownReport({ split: "development", state: "S0", world: "therm-v1", graded_at: "2026-10-17" }, report).split("## Renderers");
+  assert.match(renderers, /\| Ask writer \| lists named in full \(code check\) \| 50% \|/u);
+  // Unjudged, parts correct counts only the failed run's zero; lists named is a code check, so both runs count.
+  assert.match(renderers, new RegExp(`\\| ${OCT4_CASE} \\| ask \\| live \\| 0% \\| — \\| — \\| — \\| — \\| 50% \\|`, "u"));
+});
+
+test("saved runs keep Ask's lists, and the judge sees them as rows without text and grades a list part on the whole list", () => {
+  const research = { schema_version: 1, kind: "echo-agentic-research-result-v1", trigger: "ask", goal: { kind: "question", question: "q" }, plan: [], items: ROWS, lists: [OCT4_LIST], rounds: [], coverage: {}, stop: {}, cost: {} };
+  assert.deepEqual(savedResult({ status: "completed", research: { ...research, server: { receipts: [] } } }).research.lists, [OCT4_LIST]);
+  const sections = OCTOBER_4.slice(0, 1).map(pageSection);
+  const { testCase, run } = october4Run({ items: [...ROWS, ...sections], lists: [OCT4_LIST], evidence: ["L1"], writer: ROWS.map(row => row.id), cites: ROWS });
+  const input = judgeInput(testCase, run);
+  assert.deepEqual(input.research.lists.map(list => [list.id, list.complete, list.count, list.filter.date_field]), [["L1", true, 8, "created"]]);
+  assert.deepEqual(input.research.lists[0].members[0], { id: "E1", kind: "page", title: "ECHO Product Pipeline — Start Here", dates: { created: "2026-10-04T23:20:00.000Z" }, attributes: { status: "current" } });
+  assert.equal(JSON.stringify(input.research.lists).includes("SYNTHETIC MOCK"), false, "a list shows rows, never text");
+  assert.deepEqual(input.key.parts.map(part => part.type), ["list"]);
+  assert.match(JUDGE_SYSTEM, /A part of type list names a set of items/u);
+  assert.match(JUDGE_SYSTEM, /Naming some of them is no\./u);
+  // A run without lists shows the judge none.
+  assert.equal("lists" in judgeInput(caseById("bug-fix-dates-vs-dvt-review"), completedRun(caseById("bug-fix-dates-vs-dvt-review"), [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } })).research, false);
+  // The founder's blind sheet asks about every member of a list part.
+  const questions = judgeChecks(testCase, lenientJudge(testCase)).map(check => check.question);
+  assert.ok(questions.some(question => question.startsWith("Does a complete list research read hold every item in:")));
+  assert.ok(questions.some(question => question.startsWith("Does the answer name every item in this list")));
+});
+
 test("results may not be written inside the repository", () => {
   const repository = fileURLToPath(new URL("../../../../", import.meta.url));
   assert.throws(() => privateDirectory(join(repository, "tools", "evals", "research-loop", "results")), /outside the repository/u);
