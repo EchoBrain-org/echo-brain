@@ -394,6 +394,32 @@ describe("impact card renderer", () => {
       expect(JSON.parse(fromItem.inputs[1]!.user_prompt).validation_error).toContain('The line "fix-owner links" says "owner".');
     });
 
+    it("lets expected quote any item of the approved record, but never a page's body or another record's words", async () => {
+      // The approved record (E1, E2), a ticket and a page research read, and a decision of another record research came across.
+      const value = bundle({ cited: ["E1", "E2", "E3", "E4", "E5"], items: [
+        recordItem("canary", CANARY),
+        recordItem("criteria", "Update the acceptance criteria to reflect the revised twenty-metre Bluetooth range requirement. Owner: Rafael Moreno.", { kind: "action", attributes: { owner: "Rafael Moreno" } }),
+        ticket("THERM-48", "THERM-48: rerun the six DVT test bars.", { status: "To Do" }),
+        page("1441793", "PRD: Release gates", "Release gates: every release names its gate owner before sign-off."),
+        recordItem("policy", "Every release needs a named fix-owner before sign-off.", {}, canonicalSha256({ record: "release-policy" })),
+      ] });
+      const card = (row: Record<string, unknown>) => alone({ bundle: value, replies: [reply([{ id: "E1", text: CANARY }], [row]), reply([{ id: "E1", text: CANARY }])] });
+      // Another of the record's items than the decided line's own: an instruction the record gives is the record's own terms.
+      const fromAction = card({ ...affected("E3", "THERM-48 asks for a rerun of the six DVT test bars.", "needs_updating"), expected: "Update the acceptance criteria to reflect the revised twenty-metre Bluetooth range requirement" });
+      expect((await fromAction.render()).result.affected).toMatchObject([{ relation: "needs_updating", expected: "Update the acceptance criteria to reflect the revised twenty-metre Bluetooth range requirement" }]);
+      expect(fromAction.inputs).toHaveLength(1);
+      // A live page's body is not the record, even for the row about that page: expected is shown to viewers who cannot open it.
+      const fromPage = card({ ...affected("E4", "The PRD release gates section asks for sign-off.", "conflicts"), expected: "names its gate owner before sign-off" });
+      await fromPage.render();
+      expect(fromPage.inputs).toHaveLength(2);
+      expect(JSON.parse(fromPage.inputs[1]!.user_prompt).validation_error).toContain('The line "names its gate owner before sign-off" says "owner".');
+      // Nor is another record's text: only the approved record's own items are its terms.
+      const fromOther = card({ ...affected("E3", "THERM-48 asks for a rerun of the six DVT test bars.", "needs_updating"), expected: "a named fix-owner before sign-off" });
+      await fromOther.render();
+      expect(fromOther.inputs).toHaveLength(2);
+      expect(JSON.parse(fromOther.inputs[1]!.user_prompt).validation_error).toContain('The line "a named fix-owner before sign-off" says "owner".');
+    });
+
     // A quote carries a word of the line's own on each side of a screened word, so common words around it never excuse a claim.
     const BENCH = "THERM-49: Update the display firmware. Bench slot will be assigned to whoever is free. Nobody is responsible for the bench yet. Waiting on the owner to confirm the candidate. Change the label colour later.";
     it.each([
