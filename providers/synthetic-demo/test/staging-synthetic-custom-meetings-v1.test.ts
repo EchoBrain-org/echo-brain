@@ -36,6 +36,26 @@ describe('custom synthetic meeting custody', () => {
     } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it('preserves explicit event time through source pull without inventing it from receipt time', async () => {
+    const db = new Database(':memory:');
+    try {
+      const store = new StagingSyntheticMeetingStoreV1(db);
+      const provider = createStagingSyntheticPersonalMeetingProviderV1({ custom_store: store });
+      const session = await provider.open(person, () => undefined);
+      const timed = { ...input, started_at: '2026-10-17T00:00:00.000Z', ended_at: '2026-10-17T00:30:00.000Z', time_zone: 'America/Los_Angeles' };
+      session.submit!(timed);
+      const source = provider.source({ source_adapter_id: session.identity.adapter_id, source_adapter_version: session.identity.version, source_adapter_instance_id: session.identity.instance_id }, () => undefined);
+      const batch = await source.pull({ limit: 1, cursor: writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: [input.id] }) });
+      expect(batch.meetings[0]?.time).toEqual({ actual_start_at: timed.started_at, actual_end_at: timed.ended_at, timezone: timed.time_zone });
+      expect(() => session.submit!({ ...timed, started_at: '2026-10-16T00:00:00.000Z' })).toThrow('different content');
+      session.submit!({ ...input, id: 'synthetic-custom-undated' });
+      expect(store.get(session.identity.instance_id, 'synthetic-custom-undated')?.time).toBeUndefined();
+      for (const invalid of [{ started_at: 'yesterday' }, { ended_at: timed.ended_at }, { started_at: timed.started_at, ended_at: '2026-10-15T00:00:00.000Z' }, { started_at: timed.started_at, time_zone: 'No/SuchZone' }]) {
+        expect(() => session.submit!({ ...input, id: 'synthetic-custom-invalid', ...invalid })).toThrow();
+      }
+    } finally { db.close(); }
+  });
+
   it('bounds storage while allowing a retry at the limit, and rechecks access before storing', async () => {
     const db = new Database(':memory:');
     try {

@@ -165,6 +165,8 @@ from rows the caller may read under the same policy as the matching read:
     platforms, with no recorded departure required.
   - *Navigation to any page:* at most one check per 10 s from navigation.
   - *System wake:* main sends `system.woke` on `powerMonitor` `resume`.
+    If a check is still finishing, queue one fresh check after it settles;
+    repeated wake events coalesce, and stopping the account loop discards it.
   - *Signed out or account switch:* the loop stops or restarts.
 - **R3. What a moved area re-reads.**
   - *`projects`:* every page of your projects, active and archived, is read
