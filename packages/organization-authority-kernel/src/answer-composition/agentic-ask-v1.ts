@@ -33,6 +33,7 @@ import {
   object,
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
+import type { AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
 import type { AgenticRendererV1, AgenticRenderOutputV1 } from "./agentic-renderer-v1.js";
 import { createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
 import { createAskRendererV1 } from "./renderers/ask-renderer-v1.js";
@@ -47,6 +48,7 @@ import {
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
 export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
+export type { AgenticAskAnswerWithReceiptV1, AgenticAskProgressInputV1, AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
 
 /** Request-wide model-call budget, including retries and repairs. */
 export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
@@ -100,6 +102,8 @@ export interface AgenticResearchInputV1 {
   readonly trigger: string;
   readonly brief: AgenticBriefV1;
   readonly signal?: AbortSignal;
+  /** A streamed Ask's progress sink (ADR-0039); a run without one names nothing and audits no names. */
+  readonly on_progress?: AgenticAskProgressSinkV1;
 }
 
 /** A task brief's run with its trigger definition's renderer, which receives the trigger's own input. */

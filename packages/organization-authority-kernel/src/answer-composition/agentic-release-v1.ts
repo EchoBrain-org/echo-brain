@@ -36,6 +36,13 @@ export interface AgenticAskAuditEntryV1 {
   readonly generations: readonly AgenticAskGenerationObservationV1[];
   readonly generation_usage: { readonly input_tokens: number | null; readonly output_tokens: number | null; readonly total_tokens: number | null };
   readonly finish_reason_counts: Readonly<Record<string, number>>;
+  /**
+   * Present exactly when the request streamed progress (ADR-0039), on a
+   * release and on a cancelled or timed-out witness alike: `canonicalSha256`
+   * of each named item's citation, in the order the items were first named,
+   * each once; empty when nothing was named. Commitments only, never labels.
+   */
+  readonly named_citation_digests?: readonly Sha256Digest[];
 }
 
 export interface AgenticAskAuditPortV1 {
