@@ -17,6 +17,7 @@ updates:
   - ADR-0022
   - ADR-0026
   - ADR-0034
+  - RFC-0002
 ---
 
 # ADR-0038: The access check before a model call re-reads only new evidence
@@ -94,7 +95,8 @@ under. ADR-0019's per-call check prevented this exposure; the founder accepted
 it in exchange for the time and request savings.
 
 This record updates the per-call wording of ADR-0019, ADR-0022, ADR-0026 and
-ADR-0034, and it is the rule
+ADR-0034, and of [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md) (step 9 and
+the "Revocation between rounds" mitigation), and it is the rule
 [INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)
 now states. Nothing else in those records changes.
 
