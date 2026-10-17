@@ -661,9 +661,9 @@ const ROWS = OCTOBER_4.map(pageRow);
 const OCT4_LIST = { id: "L1", source: "pages", filter: { since: "2026-10-04", until: "2026-10-04", date_field: "created", time_zone: "UTC" }, filter_applied: { since: "applied", until: "applied", date_field: "applied" },
   members: ROWS.map(row => row.id), shown: 8, ended: true, unverified_end: false, available: true, truncated: false, read_at: "2026-10-17T06:58:31.000Z", complete: true };
 /** An October 4 run: research's items, lists and found evidence, the ids the writer saw, and the items the answer cites. */
-function october4Run({ items = ROWS, lists, evidence, writer, cites }) {
+function october4Run({ items = ROWS, lists, evidence, writer, cites, text = "The pages." }) {
   const testCase = caseById(OCT4_CASE);
-  const answer = { outcome: "answered", parts: [{ status: "answered", statements: [{ text: "The pages.", citation_indexes: cites.map((_, index) => index) }] }], citations: cites.map(citationOf) };
+  const answer = { outcome: "answered", parts: [{ status: "answered", statements: [{ text, citation_indexes: cites.map((_, index) => index) }] }], citations: cites.map(citationOf) };
   const run = completedRun(testCase, items, { writer_evidence: writer, response: answer });
   run.result.research = { ...run.result.research, plan: [{ part: 1, question: testCase.question, notes: "", needs: [{ need: "Confluence pages created on 2026-10-04", status: "found", evidence }] }], ...(lists === undefined ? {} : { lists }) };
   return { testCase, run };
@@ -740,6 +740,16 @@ test("the fixed October 4 answer names all 8 pages from a complete list, citing 
   assert.deepEqual([unlisted.answer_citations.unresolved, unlisted.parts[0].read], [8, false]);
 });
 
+test("a list longer than an answer's 25 names scores as named when its statement counts the rest from the list", () => {
+  // The renderer names at most 25 members, then "and N more" with N from ECHO's own list (ADR-0041, addition 5).
+  const ids = ROWS.map(row => row.id);
+  const part = text => codeChecks(caseById(OCT4_CASE), october4Run({ lists: [OCT4_LIST], evidence: ["L1"], writer: ids, cites: ROWS.slice(0, 6), text }).run, dataset).parts[0];
+  const counted = part("8 Confluence pages created on October 4, 2026: A; B; C; D; E; F; and 2 more.");
+  assert.deepEqual([counted.named, counted.members_named], [true, 6]);
+  // A count that leaves members out, or no count at all, is still some of the list.
+  assert.deepEqual([part("8 Confluence pages: A; B; C; D; E; F; and 1 more.").named, part("The pages.").named], [false, false]);
+});
+
 test("a failed run of a list case scores zero on naming its list, and reports show lists named apart from parts correct", () => {
   const testCase = caseById(OCT4_CASE);
   const failed = codeChecks(testCase, { trial: 2, budget: "live", outcome: "failed", result: { status: "failed", error: { code: "timed_out" } } }, dataset);
@@ -784,7 +794,9 @@ test("saved runs keep Ask's lists, and the judge sees them as rows without text 
   assert.equal(JSON.stringify(input.research.lists).includes("SYNTHETIC MOCK"), false, "a list shows rows, never text");
   assert.deepEqual(input.key.parts.map(part => part.type), ["list"]);
   assert.match(JUDGE_SYSTEM, /A part of type list names a set of items/u);
-  assert.match(JUDGE_SYSTEM, /Naming some of them is no\./u);
+  assert.match(JUDGE_SYSTEM, /Naming some of them otherwise is no\./u);
+  // Past an answer's 25 names, "and N more" counts the rest, as the code check does.
+  assert.match(JUDGE_SYSTEM, /ends 'and N more' names the whole set when the items it names plus N are every one of them/u);
   // A run without lists shows the judge none.
   assert.equal("lists" in judgeInput(caseById("bug-fix-dates-vs-dvt-review"), completedRun(caseById("bug-fix-dates-vs-dvt-review"), [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } })).research, false);
   // The founder's blind sheet asks about every member of a list part.

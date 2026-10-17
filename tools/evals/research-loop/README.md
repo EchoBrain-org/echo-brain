@@ -48,7 +48,10 @@ each a whole item. It scores on the whole list, never item by item: found when
 research came across every member, read when a complete list research read
 holds every member, handed over when the writer saw every member, and correct
 in the answer only when the answer cites every member (a page's row or one of
-its sections). Naming 4 of 8 earns nothing, whatever the judge says. "Lists
+its sections). A list longer than the 25 names an answer gives is named in
+full when a statement citing its members ends "and N more" and the members
+the answer cites plus N are exactly the list. Naming 4 of 8 earns nothing,
+whatever the judge says. "Lists
 named in full" is that last check, made by code, so it is reported without a
 judge too, and a run whose answer misses a member is never complete and
 supported. An answer may cite a list member's row, which counts as research

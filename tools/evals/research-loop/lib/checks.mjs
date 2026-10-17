@@ -141,22 +141,31 @@ function listIndex(research, items) {
  * A list part scores on the whole list (ADR-0041, addition 7): each measure holds only when it holds for every member,
  * so naming some members earns nothing. Found: research came across every member. Read: a complete list research
  * read holds every member. Cited: the plan cites every member or rests on a list holding it. Handed: the writer saw
- * every member. Named: the answer cites every member (any item of it: a page's row or one of its sections).
+ * every member. Named: the answer cites every member (any item of it: a page's row or one of its sections), or, for a
+ * list longer than the 25 names an answer gives, a statement citing members ends "and N more" and the members the
+ * answer cites plus N are exactly the list.
  */
 function listPart(part, items, meetings, lists, handedIds, answer) {
   const members = part.evidence.map(ref => matching(items, ref, meetings));
   const every = holds => members.every(found => found.some(holds));
-  const inAnswer = item => (answer?.citations ?? []).some(entry => isDeepStrictEqual(entry.citation, item.citation));
+  const citedBy = indexes => item => indexes.some(index => isDeepStrictEqual(answer?.citations[index]?.citation, item.citation));
+  const inAnswer = citedBy((answer?.citations ?? []).map((_, index) => index));
+  const membersNamed = members.filter(found => found.some(inAnswer)).length;
+  // The code-written statement counts the members it does not name, from ECHO's own list (ADR-0041, addition 5).
+  const more = (answer?.parts ?? []).flatMap(value => value.statements).flatMap(statement => {
+    const counted = /; and (\d+) more\.$/u.exec(statement.text);
+    return counted !== null && members.some(found => found.some(citedBy(statement.citation_indexes))) ? [Number(counted[1])] : [];
+  });
   return {
     id: part.id, type: part.type,
     found: every(() => true),
     read: every(item => lists.of(item.id).some(list => list.complete === true)),
     cited_by_plan: every(item => item.cited_by_plan || lists.of(item.id).some(lists.relied)),
     handed: every(item => handedIds.has(item.id)),
-    named: answer !== null && every(inAnswer),
+    named: answer !== null && (every(inAnswer) || more.some(rest => membersNamed + rest === members.length)),
     // For reading a run, never for its score.
     members: members.length,
-    members_named: members.filter(found => found.some(inAnswer)).length,
+    members_named: membersNamed,
     item_ids: [...new Set(members.flat().map(item => item.id))],
   };
 }
