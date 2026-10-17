@@ -18,11 +18,28 @@ import type { PersonAnswerResponseV6, PersonAskProgressStepEventV1, PersonAskRec
  */
 export type AgenticAskProgressSinkV1 = (event: PersonAskProgressStepEventV1) => void;
 
+/**
+ * One streamed request across the attempts it runs. The Authority restarts an
+ * Ask once when its record snapshot advances, and every attempt sends on the
+ * one stream: an item an earlier attempt named is not named again, and the
+ * named bound counts the whole request. Each attempt still audits only what it
+ * named itself. Only the released attempt's receipt is sent, and its
+ * `elapsed_ms` counts from the request's start.
+ */
+export interface AgenticAskProgressRequestV1 {
+  /** Every item an attempt of this request named, by its citation's canonical JSON; a run adds each item it names. */
+  readonly named: Set<string>;
+  /** Milliseconds since the request started. */
+  elapsed(): number;
+}
+
 /** One streamed Ask: today's answer input plus the sink. */
 export interface AgenticAskProgressInputV1 {
   readonly question: string;
   readonly signal?: AbortSignal;
   readonly on_progress: AgenticAskProgressSinkV1;
+  /** The request this run is an attempt of; without it, the run is the whole request. */
+  readonly request?: AgenticAskProgressRequestV1;
 }
 
 /**

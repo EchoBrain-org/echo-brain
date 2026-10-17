@@ -120,7 +120,7 @@ the audit write, and the check after the audit. It comes from the run's own
 record and holds:
 
 - `looked_through`, the number of distinct items read in full;
-- `elapsed_ms`, the Authority's time from the start of the run to release,
+- `elapsed_ms`, the Authority's time from the start of the request to release,
   kept for audit and diagnostics (a client shows the wait it timed itself,
   which also counts the client and the network);
 - the run's searched and read rows, merged.
@@ -146,6 +146,27 @@ audit.
 A run that fails any other way, such as a refused final check or a provider
 failure, writes no request record today, and this decision adds none. Its
 names are covered only by their desk release audits.
+
+**Retries.** When the approved-record snapshot advances during an Ask, the
+Authority restarts it once with a new desk and research state, within the
+same 90-second deadline (`withPersonAskSnapshotRetryV1`). A streamed Ask
+restarts on the same stream:
+
+- Step events keep coming. The new attempt starts again at `searching`, and
+  its `searched` counts are its own.
+- An item the first attempt named is not named again, and the `reading`
+  count leaves it out. The 100-name bound covers the whole request.
+- Each attempt's request record lists only the names that attempt sent. The
+  first attempt writes one when the check after its audit write sees the
+  change. If it stops earlier, it writes no record, like any failed run
+  above, and its names are covered by their desk release audits.
+- Only the final, released attempt's receipt is sent. `looked_through`
+  counts that attempt's distinct reads, its rows hold only the names it
+  sent, and `elapsed_ms` counts from the request's start, before the first
+  attempt. If the final attempt is refused, the one `error` event follows
+  and no receipt is sent.
+
+These rules are tested in the kernel test and the HTTP test named below.
 
 **Security trade-off.** An item is not checked again after the check that
 first covered it (ADR-0038). If the person loses access to that one item

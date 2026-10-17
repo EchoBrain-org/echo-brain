@@ -119,7 +119,7 @@ export interface PersonAskProgressReadEventV1 {
 export interface PersonAskReceiptV1 {
   /** Distinct items whose full text research read; at least the items listed. */
   readonly looked_through: number;
-  /** Authority time from the start of the run to release. */
+  /** Authority time from the start of the request to release, across any restarted attempt. */
   readonly elapsed_ms: number;
   /**
    * The run's searched and read rows in order, already merged: no two

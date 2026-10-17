@@ -11,7 +11,7 @@ import type { AgenticAskAuditEntryV1 } from '@echo-brain/organization-authority-
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
-import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
+import { PersonRecordSearchIndexLagV1, PersonRecordSearchSnapshotChangedV1 } from '../src/composition/person-record-search-route.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import type { CoreRuntimeObservationV1, CoreRuntimeObserverV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 
@@ -29,7 +29,7 @@ afterEach(async () => {
 const BODY = 'The PVT fixture is ready.\nManufacturing approved it.';
 const QUERY = 'pvt fixture';
 
-function fixture(options: { readonly writer?: () => Promise<unknown> } = {}) {
+function fixture(options: { readonly writer?: (attempt: number, written: () => unknown) => Promise<unknown> } = {}) {
   let revoked = false;
   const checked_at = '2026-10-16T20:00:00.000Z';
   const authenticateAccess = vi.fn(({ access_token }: { access_token: string }) => {
@@ -39,10 +39,19 @@ function fixture(options: { readonly writer?: () => Promise<unknown> } = {}) {
   const note = { kind: 'note', text: BODY, visibility: 'only_me', label: 'PVT fixture readiness', received_at: checked_at, version: '1', ref: `note:ctx_${'a'.repeat(64)}`,
     citation: { kind: 'source_revision', source_id: `source:${'d'.repeat(64)}`, revision_id: 'revision-1', source_sha256: canonicalSha256('source'), representation_sha256: canonicalSha256('representation'), anchor_sha256: canonicalSha256('anchor') },
   };
+  // A second note the search finds once the record snapshot has advanced (a restarted Ask's second attempt).
+  const later = { ...note, label: 'PVT sign-off', ref: `note:ctx_${'b'.repeat(64)}`, citation: { ...note.citation, source_id: `source:${'e'.repeat(64)}`, anchor_sha256: canonicalSha256('later anchor') } };
+  let attempt = 0;
+  let restartAt: number | undefined;
   const check = () => { if (revoked) throw new AuthorityOperationError('unauthorized', 'Source access revoked'); return { checked_at }; };
+  // The access check that re-reads a release for the `restartAt`th time sees the record snapshot advance, once.
+  const revalidate = () => {
+    if (restartAt !== undefined && --restartAt === 0) { attempt = 1; throw new PersonRecordSearchSnapshotChangedV1(); }
+    return check();
+  };
   const originals = {
-    deskAuthorize: vi.fn(check), revalidateDeskRelease: vi.fn(check),
-    deskSearch: vi.fn(() => ({ items: [note], truncated: false, receipt: canonicalSha256('note release'),
+    deskAuthorize: vi.fn(check), revalidateDeskRelease: vi.fn(revalidate),
+    deskSearch: vi.fn(() => ({ items: attempt === 0 ? [note] : [note, later], truncated: false, receipt: canonicalSha256('note release'),
       release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, authorization_revision: 0, released_atoms: [] },
     })),
   };
@@ -50,8 +59,8 @@ function fixture(options: { readonly writer?: () => Promise<unknown> } = {}) {
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: string[] }[]; evidence?: { id: string }[] };
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
-      if (options.writer !== undefined) return options.writer();
-      return { sentences: [{ text: 'The PVT fixture is ready and Manufacturing approved it.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+      const written = () => ({ sentences: [{ text: 'The PVT fixture is ready and Manufacturing approved it.', evidence: [prompt.evidence![0]!.id] }], not_found: [] });
+      return options.writer === undefined ? written() : options.writer(attempt, written);
     }
     const id = prompt.last_results?.[0]?.results?.[0];
     return { parts: [{ question: prompt.question, needs: [{ need: 'PVT fixture readiness', status: id === undefined ? 'open' : 'found', evidence: id === undefined ? [] : [id] }], notes: 'private planner note' }],
@@ -65,9 +74,12 @@ function fixture(options: { readonly writer?: () => Promise<unknown> } = {}) {
     audit: { forRequest: () => ({ append: (entry: AgenticAskAuditEntryV1) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('live release') }) },
   } as unknown as CreatePersonLiveAnswerRouteOptionsV1;
   return {
-    note, generate, audits, authenticateAccess,
+    note, later, generate, audits, authenticateAccess,
+    /** The `call`th release re-read by an access check sees the record snapshot advance, and the Ask restarts. */
+    restartAtCheck(call: number) { restartAt = call; },
     v5: createPersonLiveAnswerRouteV1(options_, 6), v4: createPersonLiveAnswerRouteV1(options_, 5),
-    revokeAtFinalCheck() { originals.revalidateDeskRelease.mockImplementation(() => { if (generate.mock.calls.some(([input]) => (input.schema.properties as Record<string, unknown>).sentences !== undefined)) revoked = true; return check(); }); },
+    /** Access is revoked once `writers` answer writers have run, so that attempt's final check refuses it. */
+    revokeAtFinalCheck(writers = 1) { originals.revalidateDeskRelease.mockImplementation(() => { if (generate.mock.calls.filter(([input]) => (input.schema.properties as Record<string, unknown>).sentences !== undefined).length >= writers) revoked = true; return revalidate(); }); },
   };
 }
 
@@ -204,5 +216,90 @@ describe('Ask progress over HTTP', () => {
     expect(f.audits[0]).toMatchObject({ outcome: 'cancelled', named_citation_digests: [canonicalSha256(readItem.items[0]!.citation)], response_sha256: null });
     // The writer was the last model call; nothing ran after the disconnect.
     expect(f.generate).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('Ask progress across a restarted Ask', () => {
+  /** The first attempt's audit record is written; the check after it sees the record snapshot advance. */
+  const AFTER_AUDIT = 4;
+  /** The check before the first attempt's writer, after it named the note: it stops before any audit write. */
+  const BEFORE_WRITER = 2;
+  const sources = [{ kind: 'meetings' }, { kind: 'documents' }];
+  const named = (item: ReturnType<typeof fixture>['note']) => expect.objectContaining({ citation: { ...item.citation, label: item.label }, kind: 'note', label: item.label, visibility: 'only_me', ref: item.ref });
+  const digestOf = (item: ReturnType<typeof fixture>['note']) => canonicalSha256({ ...item.citation, label: item.label });
+  /** The restarted attempt finds the note again and a later one: it names only the later one. */
+  const restarted = [
+    { type: 'stage', stage: 'searching' },
+    { type: 'searched', sources, found: 2 },
+    { type: 'stage', stage: 'reading', pending: 1 },
+  ] as const;
+
+  it('keeps one stream across both attempts, names each item once, and audits each name in the record of the attempt that sent it', async () => {
+    const f = fixture();
+    f.restartAtCheck(AFTER_AUDIT);
+    const events = decode(await (await ask(await origin(f))).text());
+    expect(events.slice(0, -1)).toEqual([
+      { type: 'stage', stage: 'searching' },
+      { type: 'searched', sources, found: 1 },
+      { type: 'stage', stage: 'reading', pending: 1 },
+      { type: 'read', items: [named(f.note)] },
+      { type: 'stage', stage: 'writing' },
+      { type: 'stage', stage: 'checking_access' },
+      ...restarted,
+      { type: 'read', items: [named(f.later)] },
+      { type: 'stage', stage: 'writing' },
+      { type: 'stage', stage: 'checking_access' },
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: 'answer' });
+    // The first attempt's record, written before its snapshot advanced, holds its name; the released attempt's holds only its own.
+    expect(f.audits).toEqual([
+      expect.objectContaining({ outcome: 'answered', named_citation_digests: [digestOf(f.note)] }),
+      expect.objectContaining({ outcome: 'answered', named_citation_digests: [digestOf(f.later)] }),
+    ]);
+    expect(f.generate).toHaveBeenCalledTimes(6);
+  });
+
+  it("sends only the released attempt's receipt: what it read, the names it sent, and the time since the request started", async () => {
+    // The first attempt's writer takes a while; the second attempt alone is far quicker.
+    const f = fixture({ writer: async (attempt, written) => { if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 250)); return written(); } });
+    f.restartAtCheck(AFTER_AUDIT);
+    const terminal = decode(await (await ask(await origin(f))).text()).at(-1)!;
+    if (terminal.type !== 'answer') throw new Error('expected the answer event');
+    // It read the note again, so it counts it, but the first attempt named it.
+    expect(terminal.receipt).toMatchObject({ looked_through: 2, rows: [{ type: 'searched', sources, found: 2 }, { type: 'read', items: [named(f.later)] }] });
+    expect(terminal.receipt.rows).toHaveLength(2);
+    expect(terminal.receipt.elapsed_ms).toBeGreaterThanOrEqual(250);
+  });
+
+  it('ends a restarted Ask whose final attempt is refused with one error event and no receipt', async () => {
+    const f = fixture();
+    f.restartAtCheck(AFTER_AUDIT);
+    f.revokeAtFinalCheck(2);
+    const events = decode(await (await ask(await origin(f))).text());
+    expect(events.at(-1)).toEqual({ type: 'error', status: 401, error: { code: 'unauthorized', message: 'request failed' } });
+    expect(events.at(-2)).toEqual({ type: 'stage', stage: 'checking_access' });
+    expect(events.filter(event => event.type === 'read')).toEqual([{ type: 'read', items: [named(f.note)] }, { type: 'read', items: [named(f.later)] }]);
+    expect(events.some(event => event.type === 'answer')).toBe(false);
+    // The refused attempt writes no request record; the first attempt's record stands.
+    expect(f.audits).toEqual([expect.objectContaining({ outcome: 'answered', named_citation_digests: [digestOf(f.note)] })]);
+  });
+
+  it('writes no request record for an attempt stopped before its audit write, and still never names its items again', async () => {
+    const f = fixture();
+    f.restartAtCheck(BEFORE_WRITER);
+    const events = decode(await (await ask(await origin(f))).text());
+    expect(events.slice(0, -1)).toEqual([
+      { type: 'stage', stage: 'searching' },
+      { type: 'searched', sources, found: 1 },
+      { type: 'stage', stage: 'reading', pending: 1 },
+      { type: 'read', items: [named(f.note)] },
+      { type: 'stage', stage: 'writing' },
+      ...restarted,
+      { type: 'read', items: [named(f.later)] },
+      { type: 'stage', stage: 'writing' },
+      { type: 'stage', stage: 'checking_access' },
+    ]);
+    // Like any failed run (ADR-0039), the stopped attempt leaves its name to the desk's release audit.
+    expect(f.audits).toEqual([expect.objectContaining({ outcome: 'answered', named_citation_digests: [digestOf(f.later)] })]);
   });
 });

@@ -11,7 +11,7 @@ import {
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import { AGENTIC_ASK_DEADLINE_MS_V1, createAgenticAskV3, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { createAgenticAskProgressRecorderV1 } from "../../src/answer-composition/agentic-ask-progress-recorder-v1.js";
+import { createAgenticAskProgressRecorderV1, createAgenticAskProgressRequestV1 } from "../../src/answer-composition/agentic-ask-progress-recorder-v1.js";
 import { citationOfAgenticEvidenceItemV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
@@ -276,6 +276,24 @@ describe("agentic Ask progress (ADR-0039)", () => {
     ]);
     expect(receipt).toMatchObject({ looked_through: 1, rows: [{ type: "searched", sources: every, found: 1 }, { type: "read", items: [named(launch)] }] });
   });
+
+  it("names nothing an earlier attempt of the request named, audits each attempt's own names, and times the receipt from the request's start", async () => {
+    let clock = 1_000;
+    const request = createAgenticAskProgressRequestV1(() => clock);
+    const first = fixture();
+    await first.ask.answerWithReceipt({ question: "When is launch?", on_progress: first.sink, request });
+    clock += 5_000;
+    // The restarted attempt reads the same two items on the same stream.
+    const second = fixture();
+    const { receipt } = await second.ask.answerWithReceipt({ question: "When is launch?", on_progress: second.sink, request });
+    expect(second.events.filter(event => event.type === "read")).toEqual([]);
+    // Each step still reads, with no count of names that will not come.
+    expect(second.events.filter(event => event.type === "stage" && event.stage === "reading")).toEqual([{ type: "stage", stage: "reading" }, { type: "stage", stage: "reading" }]);
+    expect(first.audit).toEqual([expect.objectContaining({ outcome: "answered", named_citation_digests: [digest(launch), digest(prd)] })]);
+    expect(second.audit).toEqual([expect.objectContaining({ outcome: "answered", named_citation_digests: [] })]);
+    // The receipt is this attempt's own: what it read, none of the first attempt's names, and the request's time.
+    expect(receipt).toEqual({ looked_through: 2, elapsed_ms: 5_000, rows: [{ type: "searched", sources: every, found: 4 }] });
+  });
 });
 
 describe("agentic Ask progress recorder", () => {
@@ -375,5 +393,27 @@ describe("agentic Ask progress recorder", () => {
     settled.research.given([launch]);
     expect(events).toHaveLength(1);
     expect(settled.named_citation_digests()).toEqual([]);
+  });
+
+  it("shares one request's names across its attempts: none named twice, all within the bound, each attempt's digests its own", () => {
+    const request = createAgenticAskProgressRequestV1();
+    const events: PersonAskProgressStepEventV1[] = [];
+    const attempt = () => createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal, named: request.named });
+    const items = many(120);
+    const first = attempt();
+    first.research.given(items.slice(0, 90));
+    const second = attempt();
+    second.research.before_check(items.slice(80, 95));
+    second.research.given(items.slice(80, 120));
+    const reads = events.filter(event => event.type === "read").flatMap(event => event.items);
+    expect(reads.map(item => item.label)).toEqual(items.slice(0, PERSON_ASK_PROGRESS_NAMED_MAX_V1).map(item => item.label));
+    expect(events.filter(event => event.type === "stage")).toEqual([{ type: "stage", stage: "reading", pending: 5 }]);
+    expect(first.named_citation_digests()).toEqual(items.slice(0, 90).map(digest));
+    expect(second.named_citation_digests()).toEqual(items.slice(90, 100).map(digest));
+    expect(request.named.size).toBe(PERSON_ASK_PROGRESS_NAMED_MAX_V1);
+    // The second attempt read 40, ten of which the first had named; its receipt lists only its own names.
+    const receipt = second.receipt(request.elapsed());
+    expect(receipt.looked_through).toBe(40);
+    expect(receipt.rows.flatMap(row => row.type === "read" ? row.items : []).map(item => item.label)).toEqual(items.slice(90, 100).map(item => item.label));
   });
 });

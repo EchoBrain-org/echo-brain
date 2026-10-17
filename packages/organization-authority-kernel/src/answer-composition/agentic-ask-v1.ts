@@ -34,7 +34,7 @@ import {
   object,
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
-import type { AgenticAskAnswerWithReceiptV1, AgenticAskProgressInputV1, AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
+import type { AgenticAskAnswerWithReceiptV1, AgenticAskProgressInputV1, AgenticAskProgressRequestV1, AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
 import { createAgenticAskProgressRecorderV1 } from "./agentic-ask-progress-recorder-v1.js";
 import type { AgenticRendererV1, AgenticRenderOutputV1 } from "./agentic-renderer-v1.js";
 import { createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
@@ -50,7 +50,8 @@ import {
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
 export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
-export type { AgenticAskAnswerWithReceiptV1, AgenticAskProgressInputV1, AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
+export type { AgenticAskAnswerWithReceiptV1, AgenticAskProgressInputV1, AgenticAskProgressRequestV1, AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
+export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-recorder-v1.js";
 
 /** Request-wide model-call budget, including retries and repairs. */
 export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
@@ -106,6 +107,8 @@ export interface AgenticResearchInputV1 {
   readonly signal?: AbortSignal;
   /** A streamed Ask's progress sink (ADR-0039); a run without one names nothing and audits no names. */
   readonly on_progress?: AgenticAskProgressSinkV1;
+  /** With `on_progress`: the streamed request this run is one attempt of. */
+  readonly progress_request?: AgenticAskProgressRequestV1;
 }
 
 /** A task brief's run with its trigger definition's renderer, which receives the trigger's own input. */
@@ -311,7 +314,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       });
       let terminalAudited = false;
       // A streamed Ask's record of what it searched and named (ADR-0039); it stops sending once the request's signal aborts.
-      const progress = input.on_progress === undefined ? undefined : createAgenticAskProgressRecorderV1({ sink: input.on_progress, sources: researchSources, signal: activeSignal });
+      const progress = input.on_progress === undefined ? undefined : createAgenticAskProgressRecorderV1({ sink: input.on_progress, sources: researchSources, signal: activeSignal,
+        ...(input.progress_request === undefined ? {} : { named: input.progress_request.named }) });
       let selectedTicketCount = 0; let ticketContextCount = 0; let ticketCitationCount = 0;
       const scope = scopeText(options.desk.scope);
 
@@ -430,7 +434,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         clearTimeout(deadlineTimer);
         ticketCitationCount = response.citations.filter(value => value.citation.kind === "ticket").length;
         // Only a released answer has a receipt, rebuilt from the run's own record after every check passed.
-        const receipt = progress?.receipt(now() - startedAt);
+        // Timed from the request's start, before its first attempt, when the run is one attempt of a request.
+        const receipt = progress?.receipt(input.progress_request?.elapsed() ?? now() - startedAt);
         return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence, ...(receipt === undefined ? {} : { receipt }) });
       } catch (error) {
         clearTimeout(deadlineTimer);
@@ -465,7 +470,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
      */
     async answerWithReceipt(input: AgenticAskProgressInputV1): Promise<AgenticAskAnswerWithReceiptV1> {
       if (responseVersion !== 6 || typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");
-      const output = await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal), on_progress: input.on_progress });
+      const output = await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal), on_progress: input.on_progress,
+        ...(input.request === undefined ? {} : { progress_request: input.request }) });
       return Object.freeze({ response: output.response as PersonAnswerResponseV6, receipt: output.receipt! });
     },
     /** Ask plus its research result and writer input, for the research evaluation. */

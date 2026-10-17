@@ -17,7 +17,7 @@ import {
   type PersonAskReceiptV1,
 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
-import type { AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
+import type { AgenticAskProgressRequestV1, AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
 import { citationOfAgenticEvidenceItemV1 } from "./agentic-evidence-bundle-v1.js";
 
 /**
@@ -48,9 +48,9 @@ export interface AgenticAskProgressRecorderV1 {
   readonly research: AgenticResearchProgressReporterV1;
   /** The runner's own stages: the answer writer, then the final check and audit. */
   stage(stage: "writing" | "checking_access"): void;
-  /** `canonicalSha256` of each named item's citation, in naming order: the request audit's commitments. */
+  /** `canonicalSha256` of each item this run named, in naming order: its audit record's commitments. */
   named_citation_digests(): readonly Sha256Digest[];
-  /** Built only after the release step passed, from this record. */
+  /** Built only after the release step passed, from this run's record. */
   receipt(elapsed_ms: number): PersonAskReceiptV1;
   /** The run settled: nothing is sent after this. */
   settle(): void;
@@ -78,6 +78,12 @@ function progressSource(source: AgenticAskProgressCatalogSourceV1): PersonAskPro
 }
 
 function bounded(value: number): number { return Math.min(PERSON_ASK_PROGRESS_COUNT_MAX_V1, Math.max(0, value)); }
+
+/** A streamed request, started now: each attempt of it is given the same one. */
+export function createAgenticAskProgressRequestV1(now: () => number = () => performance.now()): AgenticAskProgressRequestV1 {
+  const startedAt = now();
+  return Object.freeze({ named: new Set<string>(), elapsed: () => now() - startedAt });
+}
 
 /** Identity of one released item across reads: its citation's canonical bytes, as the receipt's validator compares them. */
 function itemKey(item: EvidenceDeskItemV2): string { return canonicalJson(item.citation); }
@@ -107,6 +113,12 @@ export function createAgenticAskProgressRecorderV1(options: {
   /** The request's catalog, in catalog order. */
   readonly sources: readonly AgenticAskProgressCatalogSourceV1[];
   readonly signal: AbortSignal;
+  /**
+   * What earlier attempts of this request named (`AgenticAskProgressRequestV1.named`):
+   * none of it is named again, and it counts toward the named bound. Shared, so each item
+   * this run names is added to it.
+   */
+  readonly named?: Set<string>;
 }): AgenticAskProgressRecorderV1 {
   const { sink, signal } = options;
   const sourcesById = new Map(options.sources.map(source => [source.source_id, progressSource(source)]));
@@ -118,7 +130,8 @@ export function createAgenticAskProgressRecorderV1(options: {
   /** Items research read in full (looked through), and the ones it named. */
   const readKeys = new Set<string>();
   const named: PersonAskProgressItemV1[] = [];
-  const namedKeys = new Set<string>();
+  /** Every item the request named, an earlier attempt's included: each is named once, and the bound counts them all. */
+  const namedKeys = options.named ?? new Set<string>();
   /** The searched and read rows sent, in order: the receipt's source. */
   const rows: PersonAskReceiptRowV1[] = [];
   let batch: { readonly sources: Map<string, PersonAskProgressSourceV1>; found: number } | undefined;
@@ -169,7 +182,8 @@ export function createAgenticAskProgressRecorderV1(options: {
     before_check(items: readonly EvidenceDeskItemV2[]) {
       // A call given nothing in full (the first step's plan) reads nothing: no stage, so it is never said.
       if (items.length === 0) return;
-      const fresh = new Set(items.map(itemKey).filter(key => !readKeys.has(key)));
+      // Counts only items whose names can follow: an earlier attempt's names are not sent again.
+      const fresh = new Set(items.map(itemKey).filter(key => !readKeys.has(key) && !namedKeys.has(key)));
       stage("reading", fresh.size);
     },
     given(items: readonly EvidenceDeskItemV2[]) {
@@ -180,7 +194,8 @@ export function createAgenticAskProgressRecorderV1(options: {
         const key = itemKey(item);
         if (readKeys.has(key)) continue;
         readKeys.add(key);
-        if (namedKeys.size + fresh.length >= PERSON_ASK_PROGRESS_NAMED_MAX_V1) continue;
+        // Read in this run either way; an earlier attempt's name is never sent twice.
+        if (namedKeys.has(key) || namedKeys.size + fresh.length >= PERSON_ASK_PROGRESS_NAMED_MAX_V1) continue;
         // The answer citation's projection: kind, label, visibility and the open ref. One that fails it is read, never named.
         try { fresh.push({ key, item: validatePersonAnswerCitationV6(citationOfAgenticEvidenceItemV1(item)) }); } catch { continue; }
       }

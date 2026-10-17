@@ -1,5 +1,5 @@
 import { withPersonAskSnapshotRetryV1 } from './person-ask-snapshot-retry-v1.js';
-import { AgenticAskDeadlineErrorV1, createAgenticAskV2, createAgenticAskV3, type AgenticAskAnswerWithReceiptV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { AgenticAskDeadlineErrorV1, createAgenticAskProgressRequestV1, createAgenticAskV2, createAgenticAskV3, type AgenticAskAnswerWithReceiptV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { PersonAnswerResponseV5, PersonAnswerResponseV6 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
@@ -77,6 +77,8 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
   async function run(input: Input): Promise<PersonAnswerResponseV5 | PersonAnswerResponseV6>;
   async function run(input: Input, progress: Progress): Promise<AgenticAskAnswerWithReceiptV1>;
   async function run(input: Input, progress?: Progress) {
+    // A streamed request spans every attempt a snapshot restart runs: one stream, each item named once, timed from here.
+    const streamed = progress === undefined ? undefined : { on_progress: progress.on_progress, request: createAgenticAskProgressRequestV1() };
     const scope = scopeOf(input.request);
     input.signal?.throwIfAborted();
     const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
@@ -100,7 +102,8 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
           const askOptions = { ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
             ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
           };
-          if (progress !== undefined) return createAgenticAskV3(askOptions).answerWithReceipt({ question: input.request.question, signal, on_progress: progress.on_progress });
+          // Each attempt audits what it named; only the released attempt's receipt is returned.
+          if (streamed !== undefined) return createAgenticAskV3(askOptions).answerWithReceipt({ question: input.request.question, signal, ...streamed });
           const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
           return create(askOptions).answer({ question: input.request.question, signal });
         });
