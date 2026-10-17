@@ -63,11 +63,11 @@ describe('agentic Ask concurrent reads', () => {
     await expect(pending).resolves.toMatchObject({ outcome: 'answered' });
 
     expect(search).toHaveBeenCalledTimes(2);
-    const next = JSON.parse(inputs[1]!.user_prompt) as { last_results: { query?: string; note?: string; results?: { id: string }[] }[] };
-    expect(next.last_results.map(value => value.query)).toEqual(['alpha', 'alpha', 'beta']);
+    const next = JSON.parse(inputs[1]!.user_prompt) as { last_results: { args: { query?: string }; note?: string; results?: string[] }[] };
+    expect(next.last_results.map(value => value.args.query)).toEqual(['alpha', 'alpha', 'beta']);
     expect(next.last_results[1]!.note).toContain('already searched');
-    expect(next.last_results[0]!.results![0]!.id).toBe('E1');
-    expect(next.last_results[2]!.results![0]!.id).toBe('E2');
+    expect(next.last_results[0]!.results).toEqual(['E1']);
+    expect(next.last_results[2]!.results).toEqual(['E2']);
     expect(observations).toContainEqual(expect.objectContaining({ kind: 'lifecycle', stage: 'research', event: 'succeeded', data: expect.objectContaining({ research: expect.objectContaining({ cost: expect.objectContaining({ desk_ms: 50 }) }) }) }));
   });
 

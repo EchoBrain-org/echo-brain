@@ -8,7 +8,7 @@ import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskOpenCitat
 import { SEARCH_ONLY_STEP_PROMPT, STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
-import { need, part, record, researchHarness as harness, result, step } from "./fixtures/agentic-scenarios.js";
+import { listed, need, part, record, researchHarness as harness, result, step } from "./fixtures/agentic-scenarios.js";
 import { deferred } from "./fixtures/deferred.js";
 
 /**
@@ -129,7 +129,7 @@ describe("research loop: open", () => {
     const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], {}, "report") });
     expect(open).not.toHaveBeenCalled();
     expect(h.prompt(0).opened).toEqual([expect.objectContaining({ id: "E1", text: therm.text })]);
-    expect(h.prompt(1).last_results).toEqual([{ tool: "open", id: "E1", note: "already open; its full text is in your scratchpad" }]);
+    expect(h.prompt(1).last_results).toEqual([{ tool: "open", args: { id: "E1" }, note: "already open; its full text is in your scratchpad" }]);
     // Re-opening adds nothing, so two such steps stop research.
     expect(h.generate).toHaveBeenCalledTimes(2);
     expect(view.stop).toEqual({ reason: "no_progress", completed: false });
@@ -148,8 +148,8 @@ describe("research loop: open", () => {
     ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), search: async () => result([listedRow]), open });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(open).toHaveBeenCalledTimes(1);
-    expect(h.prompt(2).last_results).toEqual([expect.objectContaining({ tool: "open", id: "E2", opened: ["E2"] })]);
-    expect(h.prompt(3).last_results).toEqual([{ tool: "open", id: "E2", note: "already open; its full text is in your scratchpad" }]);
+    expect(h.prompt(2).last_results).toEqual([{ tool: "open", args: { id: "E2" }, opened: ["E2"] }]);
+    expect(h.prompt(3).last_results).toEqual([{ tool: "open", args: { id: "E2" }, note: "already open; its full text is in your scratchpad" }]);
     expect(view.stop).toEqual({ reason: "finished", completed: true });
   });
 });
@@ -408,6 +408,67 @@ describe("research loop: search only (a record in no project)", () => {
     const h = harness([], { openCitation: vi.fn(async () => result([approved])) });
     await expect(h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation], { list: "no" as never }) })).rejects.toThrow("research goal is invalid");
     expect(h.port.openCitation).not.toHaveBeenCalled();
+  });
+});
+
+describe("research loop: prompt layout", () => {
+  const first = record("first", "Approved: the display shows two decimals.");
+  const second = record("second", "Approved: the firmware formats the reading.");
+  const openCitation = async (input: EvidenceDeskOpenCitationInputV2) => result([input.citation === first.citation ? first : second]);
+  const task = brief(`Find what ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)} affect.`, [first.citation, second.citation]);
+
+  it("sends a stable head, then the evidence, then what changes every step", async () => {
+    const h = harness([reads("open", [{ tool: "search", args: { query: "display" } }]), affects("not_found"), affects("not_found")], { openCitation });
+    await h.research.research({ trigger: "approved_record", brief: task });
+    expect(Object.keys(h.prompt(0))).toEqual(["task", "today", "scope", "source_catalog", "opened", "seen", "step", "steps_left", "plan", "inventories", "last_results", "searches_done"]);
+  });
+
+  it("repeats each step's head and evidence as the next step's prefix, never re-sorting what it read (F5)", async () => {
+    // Step 1 cites E1 and its search re-finds E2: the opened bodies used to be re-sorted cited-then-recent.
+    const h = harness([
+      step([part("What do E1 and E2 affect?", [need("what E1 affects", "found", ["E1"]), need("what E2 affects", "open")])], [{ tool: "search", args: { query: "display" } }]),
+      step([part("What do E1 and E2 affect?", [need("what E2 affects", "open")])], [{ tool: "search", args: { query: "firmware" } }]),
+      step([part("What do E1 and E2 affect?", [need("what E2 affects", "found", ["E3"])])], [{ tool: "finish", args: {} }]),
+    ], {
+      openCitation,
+      search: async input => result(input.query === "display" ? [second, record("panel", "The panel spec shows one decimal.")] : [record("driver", "The driver rounds to one decimal.")]),
+    });
+    await h.research.research({ trigger: "approved_record", brief: task });
+    // Everything up to the end of a step's seen entries.
+    const evidence = (index: number) => { const prompt = h.inputs[index]!.user_prompt; return prompt.slice(0, prompt.indexOf('],"', prompt.indexOf('"seen":['))); };
+    for (const index of [0, 1, 2]) expect(h.prompt(index).opened).toEqual([expect.objectContaining({ id: "E1" }), expect.objectContaining({ id: "E2" })]);
+    expect(h.inputs[1]!.user_prompt.startsWith(evidence(0))).toBe(true);
+    expect(h.inputs[2]!.user_prompt.startsWith(evidence(1))).toBe(true);
+    expect((h.prompt(2).seen as readonly { readonly id: string }[]).map(entry => entry.id)).toEqual(["E3", "E4"]);
+  });
+
+  it("names what each read returned by id in rank order, with item details only in opened and seen (F6)", async () => {
+    const panel = record("panel", "The panel spec shows one decimal.");
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "display" } }, { tool: "open", args: { id: "E2" } }]),
+      affects("not_found"), affects("not_found"),
+    ], { openCitation, search: async () => result([panel, second], { truncated: true }) });
+    await h.research.research({ trigger: "approved_record", brief: task });
+    expect(h.prompt(1).last_results).toEqual([
+      { tool: "search", args: { query: "display" }, results: ["E3", "E2"], truncated: true },
+      { tool: "open", args: { id: "E2" }, note: "already open; its full text is in your scratchpad" },
+    ]);
+    expect(h.prompt(1).seen).toEqual([expect.objectContaining({ id: "E3", title: panel.label, text: panel.text, full: true })]);
+  });
+
+  it("keeps what the latest reads returned when the scratchpad is full, and leaves out the newest others", async () => {
+    const many = Array.from({ length: 310 }, (_, index) => listed(`row-${index}`));
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "rows" } }]),
+      reads("open", [{ tool: "search", args: { query: "more rows" } }]),
+      affects("not_found"),
+    ], { openCitation: async () => result([first]), search: async input => result(input.query === "rows" ? many : [listed("late-1"), listed("late-2")]) });
+    await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [first.citation]) });
+    const ids = (index: number) => (h.prompt(index).seen as readonly { readonly id: string }[]).map(entry => entry.id);
+    // At most 300 entries: the first search's newest rows are left out, then the second search's two rows are kept.
+    expect(ids(1)).toEqual(Array.from({ length: 300 }, (_, index) => `E${index + 2}`));
+    expect(ids(2)).toEqual([...Array.from({ length: 298 }, (_, index) => `E${index + 2}`), "E312", "E313"]);
+    expect(h.prompt(2).last_results).toEqual([{ tool: "search", args: { query: "more rows" }, results: ["E312", "E313"] }]);
   });
 });
 

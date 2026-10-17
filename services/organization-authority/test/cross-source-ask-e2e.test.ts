@@ -149,7 +149,7 @@ it('closes already opened connectors if a later registered connector fails to st
 const DOCUMENT_TEXT = 'Launchscope document: the rollout starts with the pilot group.';
 const PRIVATE_DOCUMENT_TEXT = 'Launchscope private document DENIED-DOCUMENT-8137.';
 type PromptItem = { readonly id: string; readonly text?: string; readonly title?: string; readonly full?: boolean };
-type Prompt = { readonly question: string; readonly step?: number; readonly last_results?: readonly { readonly results?: readonly PromptItem[] }[]; readonly opened?: readonly PromptItem[]; readonly seen?: readonly PromptItem[]; readonly evidence?: readonly PromptItem[] };
+type Prompt = { readonly question: string; readonly step?: number; readonly last_results?: readonly { readonly results?: readonly string[] }[]; readonly opened?: readonly PromptItem[]; readonly seen?: readonly PromptItem[]; readonly evidence?: readonly PromptItem[] };
 
 async function allSourceFixture() {
   const f = await fixture();
@@ -180,7 +180,9 @@ async function allSourceFixture() {
       beforeAnswerReturn?.();
       return { sentences: (prompt.evidence ?? []).map(item => ({ text: item.text!, evidence: [item.id] })), not_found: [] };
     }
-    const hits = prompt.opened?.length ? [...prompt.opened, ...(prompt.seen ?? [])] : prompt.last_results?.flatMap(result => result.results ?? []) ?? [];
+    // A result names its items by id; their details are in seen.
+    const returned = new Set(prompt.last_results?.flatMap(result => result.results ?? []));
+    const hits = prompt.opened?.length ? [...prompt.opened, ...(prompt.seen ?? [])] : (prompt.seen ?? []).filter(item => returned.has(item.id));
     if (hits.length > 0) {
       const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-live-evidence-release-audit-v1%'").all() as { body_json: string }[];
       // Every provider passage has crossed the real durable release boundary before the next model call.

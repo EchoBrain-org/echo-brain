@@ -176,7 +176,8 @@ describe('Agentic Ask V2 ticket release', () => {
     expect(answer.parts[0]?.statements[0]).toMatchObject({ citation_indexes: [0], private: true });
     expect(f.desk.list).toHaveBeenCalledWith(expect.objectContaining({ source: 'ticket', limit: 50 }));
     const metadataPrompt = JSON.parse(f.inputs[1]!.user_prompt);
-    expect(metadataPrompt.last_results[0].items).toEqual([expect.objectContaining({ id: 'E1', source: 'ticket', title: metadata.label }), expect.objectContaining({ id: 'E2', source: 'ticket', title: uncitedMetadata.label })]);
+    expect(metadataPrompt.last_results[0].items).toEqual(['E1', 'E2']);
+    expect(metadataPrompt.seen).toEqual([expect.objectContaining({ id: 'E1', source: 'ticket', title: metadata.label }), expect.objectContaining({ id: 'E2', source: 'ticket', title: uncitedMetadata.label })]);
     for (const input of f.inputs) {
       expect(input.user_prompt).not.toContain('request-private-ticket');
       expect(input.user_prompt).not.toContain('atlassian.net');

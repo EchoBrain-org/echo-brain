@@ -57,7 +57,9 @@ function stepResponse(userPrompt) {
   if (typeof question !== "string") throw new Error("deterministic agent did not receive a question");
   const part = (status, evidence = []) => ({ question, needs: [{ need: "the answer", status, evidence }], notes: "" });
   const lastResults = Array.isArray(prompt.last_results) ? prompt.last_results : [];
-  const seen = lastResults.flatMap((result) => Array.isArray(record(result)?.results) ? result.results : []);
+  // A search result names its hits by id; their details and text are in seen.
+  const returned = new Set(lastResults.flatMap((result) => Array.isArray(record(result)?.results) ? result.results : []));
+  const seen = (Array.isArray(prompt.seen) ? prompt.seen : []).filter((item) => returned.has(record(item)?.id));
   const full = seen.find((item) => record(item)?.full === true && typeof item.id === "string");
   if (full !== undefined) return Object.freeze({ parts: [part("found", [full.id])], actions: [{ tool: "finish", args: {} }] });
   if (prompt.step === 1) {

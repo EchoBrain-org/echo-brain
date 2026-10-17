@@ -12,7 +12,7 @@ test("deterministic agent searches, then completes a bounded inventory before re
   const port = createCoreDeterministicStructuredGenerationPort();
   const first = await step(port, { question: "What decision governs the active checkpoint?", step: 1, last_results: [] });
   assert.deepEqual(first.actions, [{ tool: "search", args: { query: "what decision governs the active checkpoint" } }]);
-  const found = await step(port, { question: "What decision governs the active checkpoint?", step: 2, last_results: [{ tool: "search", results: [{ id: "E1", full: true }] }] });
+  const found = await step(port, { question: "What decision governs the active checkpoint?", step: 2, seen: [{ id: "E1", full: true }], last_results: [{ tool: "search", results: ["E1"] }] });
   assert.deepEqual(found.actions, [{ tool: "finish", args: {} }]);
   assert.deepEqual(found.parts[0].needs[0], { need: "the answer", status: "found", evidence: ["E1"] });
   const absentSearch = await step(port, { question: "What decision governs the active checkpoint?", step: 2, last_results: [{ tool: "search", results: [] }] });

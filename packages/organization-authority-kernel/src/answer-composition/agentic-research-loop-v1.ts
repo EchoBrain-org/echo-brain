@@ -386,7 +386,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   /** The source selector the models see for an item. */
   const selectorOf = (item: EvidenceDeskItemV2): string => item.source_id === undefined ? evidenceDeskSourceV2(item) : sourcesById.get(item.source_id)?.selector ?? item.source_id;
-  // Tool results carry discovery metadata. Bodies appear once, in the budgeted scratchpad.
+  // The scratchpad describes each item once, with its body; a tool result names items by id only (lastResult).
   const describe = (entry: Entry): Record<string, unknown> => describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item });
   /** Released source projections for automatic starting/preload reads, before short ids are assigned. */
   const releasedView = (result: EvidenceDeskResultV2): Record<string, unknown> => ({
@@ -534,6 +534,22 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     };
     return admit === undefined ? apply() : admit(apply);
   };
+  /**
+   * A read's result as the next step sees it in last_results, and as its tool_response records it: the call, what it
+   * returned by id in rank order, and its page state, notes and errors. Item descriptors and bodies are in opened and
+   * seen, never repeated here.
+   */
+  const lastResult = (action: StepAction, value: ToolResult): ToolResult => {
+    const ids = (key: "results" | "items") => (value[key] as readonly Record<string, unknown>[]).map(row => row.id);
+    return Object.freeze({
+      tool: action.tool, args: action.args,
+      ...(Array.isArray(value.opened) ? { opened: value.opened } : {}),
+      ...(Array.isArray(value.results) ? { results: ids("results") } : {}), ...(Array.isArray(value.items) ? { items: ids("items") } : {}),
+      ...(typeof value.more === "boolean" ? { more: value.more } : {}), ...(value.truncated === true ? { truncated: true } : {}),
+      ...(typeof value.notice === "string" ? { notice: value.notice } : {}), ...(typeof value.note === "string" ? { note: value.note } : {}),
+      ...(typeof value.error === "string" ? { error: value.error } : {}),
+    });
+  };
   let toolCalls = 0;
   const run = async (action: StepAction, admit?: OrderedAdmission, signal?: AbortSignal): Promise<ToolResult> => {
     // Only planner-selected reads enter this function; finish has no tool result.
@@ -542,7 +558,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     return withCoreRuntimeDiagnosticToolV1(identity, async () => {
     observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: action.args });
     try {
-      const result = await (tool === 'search' ? search(action.args, admit, signal) : tool === 'open' ? open(action.args, admit, signal) : list(action.args, admit, signal));
+      const result = lastResult(action, await (tool === 'search' ? search(action.args, admit, signal) : tool === 'open' ? open(action.args, admit, signal) : list(action.args, admit, signal)));
       observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result });
       return result;
     } catch (error) {
@@ -686,22 +702,25 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const citable = (short: string): boolean => entryOf(short)?.full === true;
   const citedShorts = () => new Set(plan.flatMap(part => part.needs.flatMap(need => need.evidence)).filter(citable));
   let researchPromptEntries: readonly Entry[] = [];
-  /** Exact released bodies first when opened or packet-sized; previews are always explicitly incomplete. */
-  const scratchpad = (budget: number) => {
-    const cited = citedShorts();
-    const citedThenRecent = (left: Entry, right: Entry) => Number(cited.has(right.short)) - Number(cited.has(left.short)) || right.touched - left.touched;
-    const openedEntries = [...entries.values()].filter(entry => entry.opened && entry.item.text !== undefined).sort(citedThenRecent);
-    const shown: Record<string, unknown>[] = []; const shownIds = new Set<string>(); const read: Entry[] = []; let used = 0;
-    for (const entry of openedEntries) {
-      const value = { ...describe(entry), text: entry.item.text };
-      const cost = bytes(JSON.stringify(value)) + 1;
+  /**
+   * The scratchpad: opened bodies, then every other entry, each in E-id order and never re-sorted between steps, so a
+   * step's prompt repeats the evidence of the step before as its prefix (prompt caching). Exact released bodies when
+   * opened or packet-sized; previews are always explicitly incomplete. When the budget binds, what the latest reads
+   * returned is kept first (last_results names it only by id), then entries in id order: the newest others are left out.
+   */
+  const scratchpad = (budget: number, latest: ReadonlySet<string>) => {
+    // Entries are never removed, so their insertion order is id order.
+    const keptFirst = (list: readonly Entry[]) => [...list.filter(entry => latest.has(entry.short)), ...list.filter(entry => !latest.has(entry.short))];
+    const idOrder = (left: Entry, right: Entry) => Number(left.short.slice(1)) - Number(right.short.slice(1));
+    const all = [...entries.values()];
+    const shown: Entry[] = []; const shownIds = new Set<string>(); let used = 0;
+    for (const entry of keptFirst(all.filter(entry => entry.opened && entry.item.text !== undefined))) {
+      const cost = bytes(JSON.stringify({ ...describe(entry), text: entry.item.text })) + 1;
       if (used + cost > budget) continue;
-      used += cost; shownIds.add(entry.short);
-      shown.push(value); read.push(entry);
+      used += cost; shownIds.add(entry.short); shown.push(entry);
     }
-    const seen: Record<string, unknown>[] = [];
-    const rest = [...entries.values()].filter(entry => !shownIds.has(entry.short)).sort(citedThenRecent);
-    for (const entry of rest) {
+    const seen: { readonly entry: Entry; readonly value: Record<string, unknown> }[] = [];
+    for (const entry of keptFirst(all.filter(entry => !shownIds.has(entry.short)))) {
       if (seen.length >= MAX_SEEN_ENTRIES) break;
       const text = entry.item.text;
       let value: Record<string, unknown> = text !== undefined && bytes(text) <= PASSAGE_BYTES
@@ -713,11 +732,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         cost = bytes(JSON.stringify(value)) + 1;
       }
       if (used + cost > budget) continue;
-      if (value.full === true) read.push(entry);
-      used += cost; seen.push(value);
+      used += cost; seen.push({ entry, value });
     }
-    seen.sort((left, right) => Number(String(left.id).slice(1)) - Number(String(right.id).slice(1)));
-    return { opened: shown, seen, read };
+    shown.sort(idOrder); seen.sort((left, right) => idOrder(left.entry, right.entry));
+    return {
+      opened: shown.map(entry => ({ ...describe(entry), text: entry.item.text })), seen: seen.map(({ value }) => value),
+      read: [...shown, ...seen.filter(({ value }) => value.full === true).map(({ entry }) => entry)],
+    };
   };
   // ---- stop state ------------------------------------------------------
   let researchIncomplete = true;
@@ -730,7 +751,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** Starting citations the brief marked `report` that could not be read. */
   const unreadableStarting: unknown[] = [];
   const roundView = (tool: string, args: StepArgs, value: ToolResult | undefined): AgenticResearchActionV1 => {
-    const listed = (key: string) => Array.isArray(value?.[key]) ? (value![key] as readonly Record<string, unknown>[]).map(row => String(row.id)) : [];
+    const listed = (key: string) => Array.isArray(value?.[key]) ? (value![key] as readonly unknown[]).map(String) : [];
     const opened = Array.isArray(value?.opened) ? (value!.opened as readonly string[]) : [];
     return Object.freeze({ tool, args: Object.freeze({ ...args }), result: Object.freeze({
       items: [...listed("results"), ...listed("items")], opened: [...opened],
@@ -845,7 +866,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     }
 
     // ---- research loop --------------------------------------------------
-    let results: ToolResult[] = [];
+    /** What the last step's reads returned, as the next step sees it, and the ids of the items they returned. */
+    let results: readonly ToolResult[] = [];
+    let latest: ReadonlySet<string> = new Set();
     let idleSteps = 0;
     const stepTimeout = () => Math.min(STEP_TIMEOUT_MS, remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
     while (steps < budget.max_rounds) {
@@ -853,10 +876,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const roundStartedAt = now();
       // Leave room for the answer call and its possible repair.
       if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || gate.stats().calls + 2 >= budget.max_model_calls) { researchStop = 'budget'; break; }
-      const header = { ...goalFields(), ...context, scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: budget.max_rounds - steps - 1, plan: planView(true), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
-      const pad = scratchpad(researchBudget - bytes(JSON.stringify({ ...header, opened: [], seen: [] })));
+      // A stable head, then the evidence, which only grows, then what changes every step: each step's prompt repeats the
+      // last one's head and evidence as its prefix, so the provider can serve that prefix from its cache. JSON keeps this
+      // key order through the gate and the provider adapter.
+      const head = { ...goalFields(), ...context, scope, source_catalog: sourceCatalog };
+      const tail = { step: steps + 1, steps_left: budget.max_rounds - steps - 1, plan: planView(true), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
+      const pad = scratchpad(researchBudget - bytes(JSON.stringify({ ...head, opened: [], seen: [], ...tail })), latest);
       researchPromptEntries = pad.read;
-      const user = { ...header, opened: pad.opened, seen: pad.seen };
+      const user = { ...head, opened: pad.opened, seen: pad.seen, ...tail };
       const openIds = [...entries.values()].map(entry => entry.short);
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
       const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable);
@@ -930,8 +957,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
       const before = hadCitableEvidence ? evidenceNovelty : retrievalProgress;
       const entriesBefore = entries.size;
-      results = [...await runReads(reads)];
-      recordRound(roundStartedAt, reads.map((action, index) => roundView(action.tool, action.args, results[index])));
+      results = await runReads(reads);
+      const actions = reads.map((action, index) => roundView(action.tool, action.args, results[index]));
+      recordRound(roundStartedAt, actions);
+      latest = new Set(actions.flatMap(action => [...action.result.opened, ...action.result.items]));
       const catalogIsExhaustivelyEmpty = entries.size === 0 && sourceCatalog.length > 0 && sourceCatalog.every(source => {
         const normalized = readSource(source.source);
         return normalized !== undefined && exhaustivelyEmptySources.has(normalized);

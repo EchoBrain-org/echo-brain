@@ -57,8 +57,8 @@ function captureFixture() {
   };
   const replies: unknown[] = [];
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
-    const id = prompt.last_results?.[0]?.results?.[0]?.id;
+    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: string[] }[]; evidence?: { id: string }[] };
+    const id = prompt.last_results?.[0]?.results?.[0];
     const reply = (input.schema.properties as Record<string, unknown>).sentences !== undefined
       ? { sentences: [{ text: 'The PVT fixture is ready and Manufacturing approved it.', evidence: [prompt.evidence![0]!.id] }], not_found: [] }
       : { parts: [{ question: prompt.question, needs: [{ need: 'PVT fixture readiness', status: id === undefined ? 'open' : 'found', evidence: id === undefined ? [] : [id] }], notes: '' }], actions: id === undefined ? [{ tool: 'search', args: { query: 'PVT fixture' } }] : [{ tool: 'finish', args: {} }] };

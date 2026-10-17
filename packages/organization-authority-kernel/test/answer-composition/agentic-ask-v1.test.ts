@@ -144,8 +144,8 @@ describe("agentic Ask: research loop", () => {
     expect(new Set(calls.map(call => call.since)).size).toBe(1);
     expect(script.inputs.every(input => JSON.parse(input.user_prompt).today === '2026-10-05')).toBe(true);
     expect(calls.map(call => [call.source, call.cursor])).toEqual([['meeting', undefined], ['document', undefined], ['meeting', 'next-page']]);
-    expect(script.prompt(1).last_results.map((value: { items: { id: string; title: string }[] }) => value.items.map(entry => [entry.id, entry.title])))
-      .toEqual([[['E1', 'Meeting first']], [['E2', 'Meeting document']], [['E3', 'Meeting second']]]);
+    expect(script.prompt(1).last_results.map((value: { items: string[] }) => value.items)).toEqual([['E1'], ['E2'], ['E3']]);
+    expect(script.prompt(1).seen.map((entry: { id: string; title: string }) => [entry.id, entry.title])).toEqual([['E1', 'Meeting first'], ['E2', 'Meeting document'], ['E3', 'Meeting second']]);
   });
 
   it('admits complete multiline search packets without an extra open or duplicate prompt bodies', async () => {
@@ -157,8 +157,8 @@ describe("agentic Ask: research loop", () => {
       (input: StructuredGenerationInput) => {
         const prompt = JSON.parse(input.user_prompt);
         expect(prompt.seen).toEqual([expect.objectContaining({ id: 'E1', text, full: true })]);
-        expect(prompt.last_results[0].results[0]).not.toHaveProperty('text');
-        expect(prompt.last_results[0].results[0]).not.toHaveProperty('preview');
+        // The result names the hit by id; its body is only in seen.
+        expect(prompt.last_results[0].results).toEqual(['E1']);
         expect(input.user_prompt.split(JSON.stringify(text)).length - 1).toBe(1);
         return finish([found(['E1'])]);
       },
@@ -177,12 +177,15 @@ describe("agentic Ask: research loop", () => {
       (input: StructuredGenerationInput) => {
         const prompt = JSON.parse(input.user_prompt);
         expect(Buffer.byteLength(input.user_prompt)).toBeLessThanOrEqual(agenticAskContextBudgetBytesV1(4_096, input.system_prompt, input.max_output_tokens));
-        expect(prompt.seen.some((entry: { id: string; full?: boolean }) => entry.id === 'E1' && entry.full === true)).toBe(false);
-        return finish([found(['E1'])]);
+        // Entries are kept in id order, so the budget leaves out the newest packets first.
+        const ids = prompt.seen.map((entry: { id: string }) => entry.id);
+        expect(ids).toEqual(Array.from({ length: ids.length }, (_, index) => `E${index + 1}`));
+        expect(prompt.seen.some((entry: { id: string; full?: boolean }) => entry.id === 'E8' && entry.full === true)).toBe(false);
+        return finish([found(['E8'])]);
       },
       (input: StructuredGenerationInput) => {
         expect(JSON.parse(input.user_prompt).validation_error).toContain('cites no item whose full text you have read');
-        return finish([found(['E1'])]);
+        return finish([found(['E8'])]);
       },
       answer([], ['launch date']),
     ]);
@@ -320,7 +323,8 @@ describe("agentic Ask: research loop", () => {
     ]);
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: "Summarize this project" });
     expect(evidence.list).toHaveBeenCalledWith(expect.objectContaining({ source: "document", limit: 50 }));
-    expect(script.prompt(1).last_results[0]).toMatchObject({ tool: "list", source: "document", items: [{ id: "E1", source: "document", title: "Atlas plan.md" }], more: false });
+    expect(script.prompt(1).last_results[0]).toEqual({ tool: "list", args: { source: "documents" }, items: ["E1"], more: false });
+    expect(script.prompt(1).seen[0]).toMatchObject({ id: "E1", source: "document", title: "Atlas plan.md" });
     expect(script.prompt(2).opened[0]).toMatchObject({ id: "E1", text: passage.text });
     expect(evidence.open).toHaveBeenCalledWith(expect.objectContaining({ item: listed.id }));
     expect(result.outcome).toBe("answered");
@@ -365,10 +369,12 @@ describe("agentic Ask: research loop", () => {
     ]);
     await ask({ desk: evidence, model: script.model }).answer({ question: "What does Jules own?" });
     const [byStatus, byOwner] = script.prompt(1).last_results;
+    const seen = new Map(script.prompt(1).seen.map((entry: { id: string }) => [entry.id, entry]));
+    const owners = (ids: readonly string[]) => ids.map(id => (seen.get(id) as { attributes: { owner: string } }).attributes.owner);
     // An action with no confirmed owner says so; it is never filled in from what it mentions.
-    expect(byStatus.items.map((item: { attributes: { owner: string } }) => item.attributes.owner)).toEqual(["Jules", "Colin", "none recorded"]);
+    expect(owners(byStatus.items)).toEqual(["Jules", "Colin", "none recorded"]);
     expect(byStatus.note).toContain("do not record open or done");
-    expect(byOwner.items.map((item: { attributes: { owner: string } }) => item.attributes.owner)).toEqual(["Jules", "Jules"]);
+    expect(owners(byOwner.items)).toEqual(["Jules", "Jules"]);
     expect(evidence.list).toHaveBeenLastCalledWith(expect.objectContaining({ source: "meeting", kinds: ["action"] }));
   });
 
@@ -573,7 +579,9 @@ describe("agentic Ask: research loop", () => {
     const script = scripted([
       step([{}], [search("launch")]),
       (input: StructuredGenerationInput) => {
-        const hit = JSON.parse(input.user_prompt).last_results[0].results[0];
+        const prompt = JSON.parse(input.user_prompt);
+        expect(prompt.last_results[0].results).toEqual(["E1"]);
+        const hit = prompt.seen.find((entry: { id: string }) => entry.id === "E1");
         expect(hit).toMatchObject({ id: "E1", title: metadata.label });
         expect(hit).not.toHaveProperty("preview");
         return step([{}], [open(hit.id)]);
