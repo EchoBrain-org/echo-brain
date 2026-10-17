@@ -143,6 +143,20 @@ test("an unclaimed capture is retained for inspection without retrying a busy tr
   assert.equal(existsSync(join(out, "result.json")), false);
 });
 
+test("a start the Authority holds pending says to capture again later, since resuming that capture can never succeed", async () => {
+  const out = outDir(); const run_id = "run_00000000-0000-4000-8000-000000000001"; let starts = 0;
+  const client = {
+    async diagnostics(request) { return request.operation === "prepare" ? prepared() : { ...captured(), status: "prepared", trace: undefined }; },
+    async runs() { starts += 1; return { state: "pending" }; },
+  };
+  const held = new RegExp(`run ${run_id} is held pending until the Authority's search index catches up.*no product execution claimed capture ${captureId}.*fresh --out`, "u");
+  await assert.rejects(runTrace({ run: true, "trigger-run-id": run_id, out }, { client, poll_ms: 0 }), error => held.test(error.message) && !/Resume only|do not repeat/u.test(error.message));
+  assert.equal(starts, 1);
+  assert.equal(read(out, "last-status.json").status, "prepared");
+  // Resuming the same directory reads the saved start answer and says the same, without starting anything.
+  await assert.rejects(runTrace({ "capture-id": captureId, out }, { client: { ...client, async runs() { throw new Error("must not start a run"); } }, poll_ms: 0 }), held);
+});
+
 test("read failure preserves the known capture and sanitized failure without repeating execution", async () => {
   const out = outDir(); let asks = 0;
   const client = {

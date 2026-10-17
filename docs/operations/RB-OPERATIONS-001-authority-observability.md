@@ -294,6 +294,10 @@ payload capture is selected separately through authenticated Person diagnostics:
 prepare an `ask` or exact `trigger_run` target, then supply its one-use
 `capture_id` on the ordinary Ask request or existing run `start`. This does not
 approve a meeting, change the research brief, or change the product response.
+A `start` that answers `pending` was held, impact run or sweep, while the
+search index catches up with the record log: it claimed neither the run nor the
+capture, which nothing will claim now, so prepare a new capture and start again
+shortly.
 The same shared observer records model-port inputs, exposed structured replies,
 tool inputs/results, automatic starting reads and lifecycle outcomes. These are
 observable decisions, not hidden model reasoning or provider HTTP credentials.

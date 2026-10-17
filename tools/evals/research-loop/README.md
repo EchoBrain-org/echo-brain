@@ -212,7 +212,11 @@ npm run eval:research-loop -- trace --run --trigger-run-id run_… --out ~/.loca
 ```
 
 This prepares a capture bound to that run and calls the ordinary `runs:start`
-operation once. It does not approve a meeting or retry a failed run.
+operation once. It does not approve a meeting or retry a failed run. While the
+Authority's search index has not caught up with the record log, as just after
+an approval, `start` holds the run `pending` and claims nothing, so no
+execution will ever claim that capture; `trace` says so. Start it again
+shortly with a new capture and a fresh `--out`.
 
 An existing completed export is never overwritten. Keep all trace files
 outside the repository as private source content; output directories are
