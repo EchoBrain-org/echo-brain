@@ -123,6 +123,38 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     expect(calls('ask.cancel')).toHaveLength(0);
   });
 
+  it('Open on a cited decision goes to its meeting\'s page with that item lit, read on until it shows', async () => {
+    // The cited decision is the meeting's second. The reader's record has no atom ids, and its first page holds only the first decision.
+    const first = { text: 'Hold monthly plans.', excerpts: [] };
+    const cited = { text: 'Ship it.', excerpts: [] };
+    const page = (items: readonly object[]) => ({ ...record, decisions: { items, more: false } });
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.record': () => ok(page([{ ...first, atom_id: sha('9') }, { ...cited, atom_id: sha('1') }])),
+      'open.ref': params => ok(params.cursor === undefined ? { kind: 'meeting', record: page([first]), next_cursor: 'page-2' } : { kind: 'meeting', record: page([cited]), next_cursor: null }),
+    }, () => ({ active: [project(1, 30, { name: 'Apollo' })], archived: [] })));
+    const { store, release } = await asking();
+    vi.advanceTimersByTime(3_000);
+    release(ok(answer()));
+    await flush();
+    store.chooseSource(0);
+    await flush();
+    store.openFullPage();
+    await flush();
+    expect(store.getState().ask).toBeNull();
+    // Read on to the page that holds it, and lit where the pane lit it.
+    expect(calls('open.ref').map(params => params.cursor)).toEqual([undefined, 'page-2']);
+    expect(store.getState().reader).toMatchObject({ ref: { kind: 'meeting', id: sha('2') }, cited: [{ section: 'decisions', index: 1 }], recordNext: null });
+    expect(store.getState().reader?.record?.decisions.items.map(item => item.text)).toEqual(['Hold monthly plans.', 'Ship it.']);
+
+    // The same meeting opened from a list lights nothing.
+    store.closeReader();
+    await store.openMine();
+    await store.openListItem({ ref: { kind: 'meeting', id: sha('2') } } as Parameters<typeof store.openListItem>[0]);
+    await flush();
+    expect(store.getState().reader?.ref).toEqual({ kind: 'meeting', id: sha('2') });
+    expect(store.getState().reader?.cited).toBeUndefined();
+  });
+
   it('a passage is read under the Ask\'s own scope, a transcript opens its meeting, and a ticket opens only in its app', async () => {
     const store = await startStore();
     const release = held.hold('ask.run');

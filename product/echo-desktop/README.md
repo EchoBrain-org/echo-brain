@@ -22,7 +22,8 @@ working: a meeting's decision, action or rationale opens its meeting with that
 item lit; a note, document or imported meeting its cited passages; a
 transcript its meeting; a Jira ticket, Confluence page or Slack message its
 "Open in …". Once the answer has come, **Open** goes to the item's own page in
-the reader (leaving Ask, so it is hidden while Ask works).
+the reader (leaving Ask, so it is hidden while Ask works); a meeting opens
+there scrolled to the items the pane lit, lit too.
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 

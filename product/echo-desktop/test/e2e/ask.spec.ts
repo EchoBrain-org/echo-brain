@@ -481,8 +481,14 @@ test('a quick Ask shows nothing more, and its source opens the cited decision li
   await expect(pane.locator('.record-item.on')).toContainText('Ship Apollo with annual plans first.');
   await pane.getByTestId('source-open').click();
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
-  await expect(page.getByTestId('reader').locator('h1')).toHaveText('Tuesday sync');
-  await expect(page.getByTestId('reader').getByTestId('record-decisions')).toContainText('Ship Apollo with annual plans first.');
+  const reader = page.getByTestId('reader');
+  await expect(reader.locator('h1')).toHaveText('Tuesday sync');
+  // Its page lights the very decision the pane lit, the meeting's second, though the page's record carries no atom ids.
+  const decisions = reader.getByTestId('record-decisions').locator('.record-item');
+  await expect(decisions).toHaveCount(2);
+  await expect(decisions.nth(1)).toHaveClass(/\bon\b/);
+  await expect(reader.locator('.record-item.on')).toHaveCount(1);
+  await expect(reader.locator('.record-item.on')).toContainText('Ship Apollo with annual plans first.');
   expect(opens()).toEqual([`meeting:${RECORD}`]);
 });
 

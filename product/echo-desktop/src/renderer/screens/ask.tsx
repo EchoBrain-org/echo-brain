@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { Answer, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
-import { documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
+import { answerSentences, documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { openerOf, sourceKey } from '../openers.js';
@@ -11,8 +11,8 @@ import {
 } from '../progress.js';
 import {
   answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject, fullPageOffered,
-  matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
-  submitBar, widenScope, type AskTurn, type PaneTarget, type Read, type SourcesState, type State,
+  litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
+  submitBar, widenScope, type AskTurn, type PaneTarget, type Read, type RecordSectionKey, type SourcesState, type State,
 } from '../store.js';
 import { Check, Chevron, Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
 
@@ -119,17 +119,6 @@ export const UNTITLED = 'Untitled meeting';
 /** A source's first citation stands for it: its kind, its label, its record or its Slack message. */
 function firstSource(state: State, group: SourceGroup): AnswerSource {
   return answerSources(state)[group.indexes[0]!]!;
-}
-
-/** Every sentence of an answer, by the id the pane knows it by. */
-function sentences(answer: Answer): [string, AnswerStatement][] {
-  return [
-    ...(answer.direct ? [['direct', answer.direct] as [string, AnswerStatement]] : []),
-    ...answer.parts.flatMap((part, p) => [
-      ...part.statements.map((statement, i) => [`${p}.${i}`, statement] as [string, AnswerStatement]),
-      ...(part.records ?? []).map((statement, i) => [`${p}.r${i}`, statement] as [string, AnswerStatement]),
-    ]),
-  ];
 }
 
 /** A source's number after a sentence: it opens the pane on that source, for that sentence. */
@@ -462,20 +451,31 @@ const VISIBILITY: Record<ApprovedRecord['visibility'], string> = {
   organization: 'Visible to active organization members', project: 'Visible to project members', approver: 'Only the approver',
 };
 
+/** Whether an item of a record is lit: by its section, its place there, and the item. */
+export type LitItem = (section: RecordSectionKey, index: number, item: RecordItem) => boolean;
+
+/** The items an answer or a named item cites, by atom id: as the pane lights them. */
+function byAtom(atoms: ReadonlySet<string>): LitItem {
+  return (_section, _index, item) => item.atom_id !== undefined && atoms.has(item.atom_id);
+}
+
 /**
  * MEETING · APPROVED RECORD: who approved it, who was there, who can read it,
  * and what was approved. In the source pane, and in the reader, whose own
- * head names it and who can read it (`headed` false). In the pane, the items
- * an answer or a named item cites are lit (`lit`, by atom id), the first one
- * scrolled into view.
+ * head names it and who can read it (`headed` false). The items an answer or
+ * a named item cites are lit (`lit`): in the pane by atom id, in the reader
+ * by their place. The first is scrolled into view once it shows.
  */
-export function RecordDetail({ record, headed = true, lit }: { record: ApprovedRecord; headed?: boolean; lit?: ReadonlySet<string> }) {
+export function RecordDetail({ record, headed = true, lit }: { record: ApprovedRecord; headed?: boolean; lit?: LitItem }) {
   const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];
   const detail = useRef<HTMLDivElement>(null);
-  const first = SECTIONS.flatMap(([key]) => record[key].items).find(item => item.atom_id !== undefined && lit?.has(item.atom_id))?.atom_id;
+  const on = (section: RecordSectionKey, index: number, item: RecordItem) => lit?.(section, index, item) === true;
+  const found = SECTIONS.flatMap(([key]) => record[key].items.map((item, index) => [key, index, item] as const)).find(([key, index, item]) => on(key, index, item));
+  // Which item is first lit, so a later page read under it never scrolls back.
+  const first = found === undefined ? undefined : `${found[0]}:${found[1]}:${found[2].atom_id ?? ''}`;
   useLayoutEffect(() => {
     if (first !== undefined) detail.current?.querySelector('[data-cited="true"]')?.scrollIntoView({ block: 'center' });
-  }, [record, first]);
+  }, [first]);
   return (
     <div class="source-detail selectable" data-testid="record" ref={detail}>
       {headed && <h2>{record.title ?? UNTITLED}</h2>}
@@ -491,7 +491,7 @@ export function RecordDetail({ record, headed = true, lit }: { record: ApprovedR
         return (
           <div key={key} class="record-section" data-testid={`record-${key}`}>
             <div class="section-label">{heading}</div>
-            {section.items.map((item, index) => <Item key={index} item={item} on={item.atom_id !== undefined && lit?.has(item.atom_id) === true} />)}
+            {section.items.map((item, index) => <Item key={index} item={item} on={on(key, index, item)} />)}
             {section.more && <div class="record-item">Additional approved {kind} items are not shown.</div>}
           </div>
         );
@@ -536,7 +536,7 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
   const count = places.length;
   const meta = target.group ? originalMeta(source, target.group, 'passages cited') : documentName(source.label).version ?? '';
   const answer = state.ask?.shown?.answer;
-  const focused = target.group && answer ? sentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
+  const focused = target.group && answer ? answerSentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
   const lit = places.filter(index => focused.includes(index));
   const light = lit.length > 0 && lit.length < count;
   const all = places.map(index => reads[index] ?? { loading: true } as const);
@@ -580,20 +580,6 @@ function ReadRecord<T>({ read, children }: { read: Read<T> | undefined; children
   return <>{children(read.value)}</>;
 }
 
-/**
- * The atoms a record source cites, to light: a named item's own; a numbered
- * source's that the chosen sentence cites, or all of them when a row opened it.
- */
-function litAtoms(state: State, target: PaneTarget): ReadonlySet<string> {
-  const atoms = (sources: readonly AnswerSource[]) => new Set(sources.flatMap(source => source.kind === 'record' ? [source.atom_id] : []));
-  const answer = state.ask?.shown?.answer;
-  if (!target.group || !answer) return atoms(target.sources);
-  const focused = sentences(answer).find(([id]) => id === state.sources?.focus)?.[1].citation_indexes ?? [];
-  const cited = target.group.indexes.filter(index => focused.includes(index));
-  const all = answerSources(state);
-  return atoms(cited.length > 0 ? cited.map(index => all[index]!) : target.sources);
-}
-
 /** What the pane's head calls an item: its kind, or a live tool's name and kind. */
 function paneHeading(source: AnswerSource, state: State): string {
   if (source.kind === 'record') return 'Meeting · Approved record';
@@ -616,7 +602,7 @@ export function SourcePane({ state }: { state: State }) {
   const opener = openerOf(source);
   let body;
   if (source.kind === 'record') {
-    body = <ReadRecord read={sources.records[source.record.record_sha256]}>{record => <RecordDetail record={record} lit={litAtoms(state, target)} />}</ReadRecord>;
+    body = <ReadRecord read={sources.records[source.record.record_sha256]}>{record => <RecordDetail record={record} lit={byAtom(litAtoms(state, target))} />}</ReadRecord>;
   } else if (opener.pane === 'meeting' && opener.meeting !== undefined) {
     body = (
       <ReadRecord read={sources.meetings[opener.meeting]}>{meeting => <>

@@ -2,13 +2,18 @@ import type { ApprovedRecord, Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState,
+  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, type CitedItem, type ReaderState,
   type State,
 } from '../store.js';
-import { RecordDetail, UNTITLED } from './ask.js';
+import { RecordDetail, UNTITLED, type LitItem } from './ask.js';
 import { ChangeLine, changeShownInPlace, within } from './change.js';
 import { Chevron, Ellipsis } from './icons.js';
 import { FollowUpsLabel, meetingFollowUps } from './impact-card.js';
+
+/** The items Ask cited, by their place in the meeting: the reader's record carries no atom ids. */
+function litPlaces(cited: readonly CitedItem[]): LitItem {
+  return (section, index) => cited.some(item => item.section === section && item.index === index);
+}
 
 /** Who can read it, when that is not a project's members: the words Capture uses. */
 function readersWord(audience: Visibility | undefined): string | null {
@@ -144,7 +149,7 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
           ))}
         </div>
       ))}
-      {record && <RecordDetail record={record} headed={false} />}
+      {record && <RecordDetail record={record} headed={false} lit={reader.cited && litPlaces(reader.cited)} />}
       {record && reader.recordNext && (
         <button type="button" class="link-button more" data-testid="reader-more" disabled={reader.loading} onClick={moreRecord}>More</button>
       )}
