@@ -393,9 +393,10 @@ section 6) goes through the same launch path and observation as an impact
 run. Each attempt is its own background `research_run` operation with trigger
 `sweep`, the hashed run ID, a hashed event ID (the sweep's own event
 reference; there is no approval) and a unique attempt ID. Its output link
-names the stored counts by verdict; a sweep has no card, so no later card read
-follows it. Capture a sweep as any queued run: an exact `trigger_run` target
-and its `capture_id` on `start`. The capture records the same lifecycle
+names the stored result, the counts by verdict and the ECHO ids of the items it
+could not read; a sweep has no card, so no later card read follows it. Capture
+a sweep as any queued run: an exact `trigger_run` target and its `capture_id`
+on `start`. The capture records the same lifecycle
 outcomes as an impact run's: trigger started, persistence succeeded (or
 skipped when the attempt no longer owned the run), and application succeeded
 or failed. A sweep that finds no item left to check reads nothing and binds no

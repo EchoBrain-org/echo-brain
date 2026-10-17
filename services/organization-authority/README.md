@@ -430,7 +430,10 @@ the approver. A stored run keeps pointers and ECHO's own judgments only, and
 every view re-releases the items through a fresh desk
 ([ADR-0032](../../docs/decisions/ADR-0032-stored-trigger-runs.md)). A
 finished check writes, in the same transaction, one shared open item per
-affected item (never the meeting's own record) and one per action the approved
+affected item a model found `conflicts` or `needs_updating` (a `confirms` row
+and every row of the fallback card no model assessed make none, and the
+meeting's own record or the transcript its approver shared is never one) and
+one per action the approved
 meeting decided (kind `action`, at most 20, the first in the brief that have
 text; its line is the action's text and its owner the one the approver
 confirmed, matched to the one active member with the same display name,
@@ -447,7 +450,7 @@ operations:
 | Operation | What it does |
 | --- | --- |
 | `list` | The caller's own runs, newest first, at most 100: up to the 20 newest sweeps, and impact runs for the rest. A running run whose lease has lapsed is listed as pending. |
-| `start` | Claims a pending run (or one whose lease expired) and runs it as its actor. A person has one live run, and a sweep waits while one of their impact runs is pending or running; a start that must wait answers `busy`, as does any start while four runs are already running in this Authority process. A run that hits `unauthorized` while its actor's membership is still active (for example, after a token rotation) goes back to pending without counting an attempt; once the membership is revoked it fails as `no_access`. |
+| `start` | Claims a pending run (or one whose lease expired) and runs it as its actor. While the search index has not caught up with the record log (an impact run's decision is not yet searchable, or a sweep would read ECHO records through it), a pending run is held instead: `start` answers `pending` with no claim, attempt or trace, and the desktop starts it again at its next look. A person has one live run, and a sweep waits while one of their impact runs is pending or running; a start that must wait answers `busy`, as does any start while four runs are already running in this Authority process. A run that hits `unauthorized` while its actor's membership is still active (for example, after a token rotation) goes back to pending without counting an attempt; once the membership is revoked it fails as `no_access`. |
 | `retry` | Puts the caller's failed impact run back to pending. A failed sweep stays failed; the next sweep replaces it. |
 | `view` | A finished impact run's card, for its approver and anyone who can read its decision, rebuilt with the viewer's access. A sweep has no card (`not_found`). |
 | `home` | What waits on the caller: Send rows, the open items to update or check, the counts under Home, and `sweep_due`. With `read: "rows"`, the same answer with no live read (every item `not_read`) and `sweep_due` always false, without starting a sweep. Its items (at most 20) come newest first by handoff time (the latest of when it was sent, its owner set, or its state set by a reopen), with changed items breaking ties. Desktop notifications come from the change check (ADR-0036) and a rows-only read of `items` `involved`, independent of this limit. |
@@ -477,18 +480,30 @@ the organization's items. Reviews that cannot be read just now count as none,
 and the other areas still answer.
 
 A sweep acts as the person who asked, with their access, and stores only
-verdicts. It covers items on a Jira ticket, a page, or an ECHO record or
-document. Items on a Slack message are left out, and the sweep trigger refuses
-a Slack message citation: no reader in ECHO can open one yet, so a sweep could
-only record it unreadable. At start it takes up to 20 of the items the caller
-still sees, never checked first, then the oldest last check. It names the
-decision to research only when the caller can read the decision. Its run keeps
-the counts by verdict. Each item it judged keeps that verdict as its shared last
-check, replaced only by a newer one, and only when the person still sees the
-item as the sweep finishes. A sweep never changes an item's state.
+verdicts and which items it could not read. It covers items on a Jira ticket
+or a page in a tool the caller has connected (a live source a desk binds is for
+that tool and the caller's link to it is live, read locally, never from the
+provider), or on an ECHO record or document. Items on a Slack message are left
+out, and the sweep trigger refuses a Slack message citation: no reader in ECHO
+can open one yet, so a sweep could only record it unreadable. At start it takes
+up to 20 of the items the caller still sees, never checked first, then the
+oldest last check; an item one of their sweeps that finished in the last day
+could not read goes after all the others. It names the decision to research
+only when the caller can read the decision. It runs no planner: research
+re-reads each finding's items in full and the sweep renderer's one judge call
+decides the verdicts. Its run keeps the counts by verdict and the ECHO ids of
+the items it could not read. Each item it judged keeps that verdict as its
+shared last check, replaced only by a newer one, and only when the person still
+sees the item as the sweep finishes. An `unreadable` verdict never replaces a
+judged one (`landed`, `still_open` or `changed`) from anyone: it is recorded
+only while the item has no judged check. A judged verdict replaces an
+`unreadable` one whenever that was made; since a last check only moves
+forward, one that replaces a later unreadable check is stamped 1 ms after it.
+A sweep never changes an item's state.
 `sweep_due` is true when the caller has an open item they sent or own, of a
-kind a sweep covers, that was last checked over 24 hours ago or never; no
-sweep of theirs is running; and they asked for no sweep in the last hour. A
+kind a sweep covers, that was last checked over 24 hours ago or never and that
+none of their sweeps that finished in the last day found unreadable; no sweep
+of theirs is running; and they asked for no sweep in the last hour. A
 sweep left pending for longer than that does not block it; asking again for
 its scope returns that run. The hour limits only `sweep_due`; `sweep` itself,
 as the desktop's Check now asks for it, is never limited.

@@ -346,4 +346,6 @@ One commit per phase. The golden replay and `npm run check` pass after each.
   withholds a line that fails a screen without a repair, and a `landed` or
   `changed` verdict must cite one of the finding's own items
   ([open items and Home v1](2026-10-08-open-items-and-home-v1.md), section
-  6).
+  6). A sweep run now keeps the ECHO ids of the items it could not read
+  beside its counts by verdict, still no line, and an `unreadable` verdict
+  never replaces an item's judged last check.

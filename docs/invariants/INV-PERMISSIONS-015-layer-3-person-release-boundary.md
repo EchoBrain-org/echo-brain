@@ -151,8 +151,9 @@ ADR-0033 applies the same rule to open items. A row keeps pointers, ECHO's own
 from outside ECHO. Every item read opens the item again through a fresh desk as
 the viewer, and only a viewer who can open it live gets its title, text or
 current details. Who sees a row and who may act on it comes from one access
-policy. A sweep acts as the person who asked and stores only verdicts. It
-names a decision in what it hands research only when the policy shows that
+policy. A sweep acts as the person who asked and stores only verdicts and
+the ECHO ids of the items it could not read, never words read from outside
+ECHO. It names a decision in what it hands research only when the policy shows that
 person the decision, and records a verdict only on an item that person still
 sees as the sweep finishes. That check runs just before the finishing
 transaction, not inside it: access another process revokes in that instant is
