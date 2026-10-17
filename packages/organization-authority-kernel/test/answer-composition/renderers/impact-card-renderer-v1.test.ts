@@ -382,6 +382,18 @@ describe("impact card renderer", () => {
       expect(swapped.inputs).toHaveLength(2);
     });
 
+    it("lets what the record expects of an item quote the record, never the item it describes", async () => {
+      // "expected" is in the record's own terms, and is stored and shown to whoever sees the open item.
+      const fromRecord = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: CANARY }], [{ ...affected("E4", "THERM-48 asks for a rerun of the six DVT test bars.", "needs_updating"), expected: "verify owner approval of a staged meeting" }])] });
+      const kept = await fromRecord.render();
+      expect(fromRecord.inputs).toHaveLength(1);
+      expect(kept.result.affected).toMatchObject([{ relation: "needs_updating", expected: "verify owner approval of a staged meeting" }]);
+      const fromItem = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: CANARY }], [{ ...affected("E3", "THERM-47 asks for fix-owner links.", "conflicts"), expected: "fix-owner links" }]), reply([{ id: "E1", text: CANARY }])] });
+      await fromItem.render();
+      expect(fromItem.inputs).toHaveLength(2);
+      expect(fromItem.inputs[1]!.system_prompt).toContain('The line "fix-owner links" says "owner".');
+    });
+
     // A quote carries a word of the line's own on each side of a screened word, so common words around it never excuse a claim.
     const BENCH = "THERM-49: Update the display firmware. Bench slot will be assigned to whoever is free. Nobody is responsible for the bench yet. Waiting on the owner to confirm the candidate. Change the label colour later.";
     it.each([

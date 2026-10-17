@@ -175,8 +175,11 @@ export function screenImpactLineV1(text: string, sources: readonly string[]): Im
   return match === undefined ? null : Object.freeze({ screen: "ownership" as const, words: match[0] });
 }
 
-/** Where a decided line or an affected item's lines may quote from: the record item's text, or the item's title and text. */
-type QuoteSources = (id: string, part: "decided" | "affected") => readonly string[];
+/**
+ * Where a line may quote from: a decided line its record item's text; what an item says now, and its milestone, the item's title
+ * and text; what the record expects of an item, in the record's own terms, the record's text.
+ */
+type QuoteSources = (id: string, part: "decided" | "affected" | "expected") => readonly string[];
 
 /**
  * A usable reply, normalized. A line telling someone to edit a tool, or saying who owns something, that it does not quote from
@@ -199,11 +202,13 @@ function parseCard(value: unknown, sourcesOf: QuoteSources): Draft {
     return [{ id, says_now: saysNow, relation, ...(expected.length > 0 ? { expected } : {}), ...(isPersonImpactCardDateV1(date) && milestone.length > 0 ? { date_at_risk: { date, milestone } } : {}) }];
   });
   // The free text a model writes: decided lines, what items say now, what the record expects of them, milestones. The relation is a closed value.
-  // A decided line may quote its record item's text; an affected item's lines may quote the item's title and text.
+  // A decided line may quote its record item's text, what the record expects the record's text, and an item's other lines its title and text.
   const lines = [
     ...decided.map(entry => ({ text: entry.text, sources: sourcesOf(entry.id, "decided") })),
-    ...affected.flatMap(entry => [entry.says_now, ...(entry.expected === undefined ? [] : [entry.expected]), ...(entry.date_at_risk === undefined ? [] : [entry.date_at_risk.milestone])]
-      .map(text => ({ text, sources: sourcesOf(entry.id, "affected") }))),
+    ...affected.flatMap(entry => [
+      ...[entry.says_now, ...(entry.date_at_risk === undefined ? [] : [entry.date_at_risk.milestone])].map(text => ({ text, sources: sourcesOf(entry.id, "affected") })),
+      ...(entry.expected === undefined ? [] : [{ text: entry.expected, sources: sourcesOf(entry.id, "expected") }]),
+    ]),
   ];
   const failures = lines.flatMap(({ text, sources }) => { const failure = screenImpactLineV1(text, sources); return failure === null ? [] : [{ ...failure, text }]; });
   const failure = failures.find(entry => entry.screen === "edit") ?? failures[0];
@@ -292,11 +297,13 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
     ])].filter(fits);
     input.on_context?.(Object.freeze([...record, ...items].map(entry => entry.short)));
     const shown = new Map([...record, ...items].map(entry => [entry.short, entry]));
-    // A decided line quotes its record item's text; an affected item's lines quote the item's title and text. An id the model was not shown quotes nothing.
+    // A decided line quotes its record item's text; what the record expects of an item quotes the record (it is stored, and shown
+    // to whoever sees the open item); an item's other lines quote its title and text. An id the model was not shown quotes nothing.
+    const textOf = (entry: Entry) => (entry.item.text === undefined ? [] : [entry.item.text]);
     const sourcesOf: QuoteSources = (id, part) => {
       const entry = shown.get(id);
       if (entry === undefined || inRecord(entry) !== (part === "decided")) return [];
-      return [...(part === "decided" ? [] : [entry.item.label]), ...(entry.item.text === undefined ? [] : [entry.item.text])];
+      return part === "decided" ? textOf(entry) : part === "expected" ? record.flatMap(textOf) : [entry.item.label, ...textOf(entry)];
     };
 
     const written = record.length === 0 ? null : await callRendererModelV1(input, RENDER_CALL, IMPACT_CARD_PROMPT, { task, record: record.map(view), items: items.map(view) }, IMPACT_CARD_SCHEMA, value => parseCard(value, sourcesOf));
