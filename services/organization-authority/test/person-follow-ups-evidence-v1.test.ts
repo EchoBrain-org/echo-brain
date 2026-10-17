@@ -260,6 +260,25 @@ describe('follow-ups as an Ask source: checks and audit (ADR-0040, ADR-0038)', (
     await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 
+  it('refuses at the check a release that carried its decision once the asker no longer reads it, though they still own the follow-up', async () => {
+    const f = await sentFixture();
+    const { desk } = askDesk(f, 'mina');
+    // Her own follow-up alone, released with its decision.
+    const listed = await list(desk, { owner: 'me' });
+    expect(listed.items.map(item => item.id)).toEqual([`follow_up_${f.ticket.item_id}`]);
+    expect(listed.items[0]!.text).toContain('Decision: Pilot planning');
+    await desk.revalidate({ mode: 'incremental' });
+    // Mina leaves project A: the ticket is still hers, so its row stays visible, but she no longer reads the decision it carried.
+    leaveProject(f, 'mina');
+    await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+    // The control: the same follow-up released without its decision passes the same check.
+    const after = askDesk(f, 'mina').desk;
+    const own = await list(after, { owner: 'me' });
+    expect(own.items.map(item => item.id)).toEqual([`follow_up_${f.ticket.item_id}`]);
+    expect(own.items[0]!.text).not.toContain('Decision:');
+    await expect(after.revalidate({})).resolves.toBeDefined();
+  });
+
   it('refuses at the check a follow-up its owner can no longer see, though it carried no decision', async () => {
     const f = await sentFixture({ ticketOwner: 'okafor' });
     const { desk } = askDesk(f, 'okafor');

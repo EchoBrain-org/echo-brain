@@ -151,7 +151,7 @@ type StepPrompt = Prompt & { readonly asked_by?: string; readonly last_results?:
  * `probes` steps, opens the first follow-up the owner list returned, and
  * finishes on it. The writer states one sentence from it.
  */
-function myOpenTasks(probes: readonly (readonly unknown[])[] = []) {
+function myOpenTasks(probes: readonly (readonly unknown[])[] = [], options: { readonly onAnswer?: () => void } = {}) {
   const steps: StepPrompt[] = [];
   const writer: string[] = [];
   let mine: string | undefined;
@@ -159,6 +159,7 @@ function myOpenTasks(probes: readonly (readonly unknown[])[] = []) {
     const prompt = JSON.parse(input.user_prompt) as StepPrompt & { readonly evidence?: readonly { readonly id: string }[] };
     if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
       writer.push(input.user_prompt);
+      options.onAnswer?.();
       return { sentences: [{ text: 'Your open follow-up is on the launch ticket.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
     }
     steps.push(prompt);
@@ -217,6 +218,18 @@ describe('"What are my open tasks?" through the real Authority composition (ADR-
     expect(releases.map(release => [release.operation, release.items.map(item => item.item_id)])).toEqual([['list', [f.ticket.item_id]], ['open', [f.ticket.item_id]]]);
     expect(new Set(releases.map(release => release.principal_id))).toEqual(new Set([f.people.mina.principal_id]));
     expect(auditBodies(f).find(body => body.kind === 'echo-person-agentic-ask-audit-v1')).toMatchObject({ outcome: 'answered' });
+  });
+
+  it('refuses the answer when the asker stops reading the decision their own follow-up carried', async () => {
+    const f = await sentFixture();
+    // Mina leaves project A while the answer is written: the ticket is still hers, but the decision released with it is not.
+    const planner = myOpenTasks([], { onAnswer: () => leaveProject(f, 'mina') });
+    await expect(myTasksRoute(f, planner.model).ask({ access_token: 'mina', request: { schema_version: 3, question: 'What are my open tasks?' } }))
+      .rejects.toMatchObject({ code: 'stale_access_state' });
+    // Only her own follow-up was released, each time with its decision.
+    expect(new Set(followUpReleases(f).flatMap(release => release.items.map(item => item.item_id)))).toEqual(new Set([f.ticket.item_id]));
+    expect((JSON.parse(planner.writer[0]!) as { evidence: { text: string }[] }).evidence[0]!.text).toContain('Decision: Pilot planning');
+    expect(auditBodies(f).filter(body => body.kind === 'echo-person-agentic-ask-audit-v1' && body.outcome === 'answered')).toEqual([]);
   });
 
   it('never shows the asker a follow-up they cannot see: not by owner, by an unfiltered list, or by its words', async () => {
