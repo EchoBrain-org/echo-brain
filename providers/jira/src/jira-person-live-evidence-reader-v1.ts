@@ -410,7 +410,8 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         // Pages run newest first: once a page's oldest issue predates since, no later page can match.
         const oldest = page.selected.at(-1);
         const oldestDay = evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
-        const token = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since ? undefined : page.token;
+        const passedSince = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since;
+        const token = passedSince ? undefined : page.token;
         await verifyConnection(input.signal);
         const items = remember(selected);
         let next_cursor: string | undefined;
@@ -421,7 +422,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         }
         // Jira's last page can be exactly full (ADR-0041): its end is confirmed only when the page held fewer issues than
         // asked for, or when the newest-first order passed since. Counted before ECHO's own date filter.
-        const page_full = token === undefined && page.token === undefined && page.selected.length >= maximum;
+        const page_full = !passedSince && page.token === undefined && page.selected.length >= maximum;
         // Only a next page means more items exist. A summary cut to its label bound is one row's title, never a sign that
         // the list did not reach its end (ADR-0041).
         return Object.freeze({ items, truncated: token !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full });

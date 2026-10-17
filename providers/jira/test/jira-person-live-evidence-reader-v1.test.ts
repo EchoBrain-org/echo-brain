@@ -159,6 +159,9 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(dated).toMatchObject({ truncated: false, page_full: false });
     expect(dated).not.toHaveProperty('next_cursor');
     expect(dated.items).toHaveLength(24);
+    // So does an exactly full last page: its oldest issue predates since, so no later issue can match.
+    f.state.pages = [page(ids)];
+    expect(await source.list({ limit: 50, since: '2026-10-03' })).toMatchObject({ truncated: false, page_full: false });
     // The audit never records it.
     expect(JSON.stringify(f.releases)).not.toContain('page_full');
   });
