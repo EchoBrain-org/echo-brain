@@ -7,6 +7,7 @@ import {
   type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1,
 } from '../../src/shared/core-runtime-observation-v1.js';
 import { createJourneyTelemetryEventV1 } from '../../src/shared/journey-telemetry-v1.js';
+import { STRUCTURED_GENERATION_FAILURE_CLASSES_V1 } from '../../src/answer-composition/structured-generation-v1.js';
 
 const payload = () => ({ kind: 'tool_response' as const, tool_call_id: 1, round: 1, tool: 'open' as const, result: { text: 'private released text', results: [{ id: 'E2' }] } });
 const vocabulary = { providers: [], models: [], triggers: ['ask', 'approved_record', 'future_trigger'] };
@@ -129,6 +130,20 @@ describe('shared selected-run diagnostics', () => {
     expect(getter).not.toHaveBeenCalled();
     expect(events).toEqual([expect.objectContaining({ kind: 'capture_error', error_kind: 'snapshot_failed', operation_id: expect.any(String), span_id: expect.any(String) })]);
     expect(coreRuntimeDiagnosticErrorKindV1(new Proxy({}, { get() { throw new Error('private getter'); } }))).toBe('other');
+  });
+
+  it('names each structured-generation failure class, a timeout among them, and the Authority index lag', () => {
+    const failed = (failure_class: unknown) => Object.assign(new Error('private provider text'), { diagnostic: { failure_class, http_status: 504, finish_reason: null } });
+    for (const failure_class of STRUCTURED_GENERATION_FAILURE_CLASSES_V1) expect(coreRuntimeDiagnosticErrorKindV1(failed(failure_class))).toBe(failure_class);
+    expect(coreRuntimeDiagnosticErrorKindV1(failed('adapter_timeout'))).toBe('adapter_timeout');
+    expect(coreRuntimeDiagnosticErrorKindV1(failed('adapter_unknown'))).toBe('other');
+    expect(coreRuntimeDiagnosticErrorKindV1(failed('unavailable'))).toBe('other');
+    // A cancelled or out-of-time call stays aborted or deadline, whatever its adapter said.
+    expect(coreRuntimeDiagnosticErrorKindV1(Object.assign(new DOMException('stopped', 'AbortError'), { diagnostic: { failure_class: 'adapter_timeout' } }))).toBe('aborted');
+    // The readable-search index behind the record log is a wait, not the outage its `unavailable` code would say.
+    const lag = Object.assign(new Error('an exact-head readable-search generation is not available'), { name: 'PersonRecordSearchIndexLagV1', code: 'unavailable' });
+    expect(coreRuntimeDiagnosticErrorKindV1(lag)).toBe('index_lag');
+    expect(coreRuntimeDiagnosticErrorKindV1(Object.assign(new Error('an exact-head readable-search generation is not available'), { code: 'unavailable' }))).toBe('unavailable');
   });
 
   it('keeps correlation finite and opaque through the journey contract', async () => {

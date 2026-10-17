@@ -1,5 +1,12 @@
+/**
+ * The structured-generation port's failure classes (answer-composition/structured-generation-v1.ts), each its own error
+ * kind, so a model timeout is not `other`. Listed here because this shared layer cannot import that port.
+ */
+const GENERATION_FAILURE_KINDS = Object.freeze(['adapter_timeout', 'adapter_transport', 'adapter_http', 'adapter_provider_error',
+  'adapter_finish', 'adapter_refusal', 'adapter_response', 'adapter_json'] as const);
 /** Payloads are delivered only to a selected run's private sink, never to operational metadata. */
-export type CoreRuntimeDiagnosticErrorKindV1 = 'aborted' | 'deadline' | 'invalid_output' | 'unavailable' | 'unauthorized' | 'not_found' | 'stale_access_state' | 'rate_limited' | 'other';
+export type CoreRuntimeDiagnosticErrorKindV1 = 'aborted' | 'deadline' | 'invalid_output' | 'unavailable' | 'unauthorized' | 'not_found' | 'stale_access_state' | 'rate_limited'
+  | (typeof GENERATION_FAILURE_KINDS)[number] | 'index_lag' | 'other';
 type ModelIdentity = { readonly call_id: number; readonly role: 'step' | 'answer' | 'extraction' };
 type ToolIdentity = { readonly tool_call_id: number; readonly round: number; readonly tool: 'search' | 'open' | 'list' | 'finish' };
 /** Shared diagnostic projections remain independent of any particular model port or workflow. */
@@ -79,7 +86,12 @@ export function coreRuntimeDiagnosticErrorKindV1(error: unknown): CoreRuntimeDia
   try {
     if (error instanceof Error && error.name === 'AbortError') return 'aborted';
     if (error instanceof Error && error.name === 'AgenticAskDeadlineErrorV1') return 'deadline';
-    const code = typeof error === 'object' && error !== null ? (error as { readonly code?: unknown }).code : undefined;
+    // The Authority's readable-search index has not caught up with the record log: a wait, not the outage its code says.
+    if (error instanceof Error && error.name === 'PersonRecordSearchIndexLagV1') return 'index_lag';
+    const value = typeof error === 'object' && error !== null ? error as { readonly code?: unknown; readonly diagnostic?: { readonly failure_class?: unknown } } : undefined;
+    const failure = GENERATION_FAILURE_KINDS.find(kind => kind === value?.diagnostic?.failure_class);
+    if (failure !== undefined) return failure;
+    const code = value?.code;
     if (code === 'invalid_output' || code === 'unavailable' || code === 'unauthorized' || code === 'not_found' || code === 'stale_access_state' || code === 'rate_limited') return code;
   } catch { /* Exotic thrown values are not allowed to alter the failure path. */ }
   return 'other';

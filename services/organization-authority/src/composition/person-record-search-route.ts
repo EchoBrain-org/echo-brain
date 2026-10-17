@@ -85,9 +85,9 @@ interface ActiveGenerationRow {
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
 const EVIDENCE_DESK_MAX_ITEM_UTF8_BYTES_V1 = 3_072;
 
-/** Only an observed head/pointer lag may put the request in originals-only mode. */
+/** Only an observed head/pointer lag may put the request in originals-only mode. Diagnostics name it `index_lag` by its name. */
 export class PersonRecordSearchIndexLagV1 extends AuthorityOperationError {
-  constructor() { super("unavailable", "an exact-head readable-search generation is not available"); }
+  constructor() { super("unavailable", "an exact-head readable-search generation is not available"); this.name = "PersonRecordSearchIndexLagV1"; }
 }
 
 /**

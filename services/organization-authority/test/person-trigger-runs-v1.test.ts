@@ -5,7 +5,7 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authori
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SqliteImpactItemsV1 } from '../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqliteOpenItemPeopleV1 } from '../src/adapters/persistence/sqlite/open-item-people-v1.js';
-import { observeCoreRuntimeV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { observeCoreRuntimeV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from '../../../tests/support/telemetry-fixture-vocabulary-v1.js';
 
@@ -207,6 +207,17 @@ describe('durable approved-record trigger runs', () => {
     // A finished run answers as it is, lag or not.
     lags = true;
     await expect(start()).resolves.toEqual({ state: 'done' });
+  });
+
+  it('names index lag met inside an attempt index_lag, not unavailable, in its diagnostics', async () => {
+    const f = await fixture({ anchor: () => { throw new PersonRecordSearchIndexLagV1(); } });
+    const events: CoreRuntimeDiagnosticObservationV1[] = [];
+    // The runtime's exporter (LangSmith) is what a detached run inherits.
+    await observeCoreRuntimeV1('http_request', () => f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }),
+      { diagnostic_exporter: () => event => { events.push(event); } });
+    await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'pending', attempts: 0 });
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'lifecycle', stage: 'application', event: 'failed', error_kind: 'index_lag' }));
   });
 
   it('reads the meeting\'s actions as the approver before research, and fails as no_access when they cannot read them', async () => {
