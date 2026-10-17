@@ -28,11 +28,11 @@ card, and an approved meeting's reader shows its Impact line. Text below that
 names V12, the meetings sheet or approver-only views describes this design as
 written.
 
-Implementation note, 2026-10-16: `start` of a pending impact run first checks
-whether the readable search index has caught up with its record. While it
-lags, `start` answers `pending` with no claim, attempt or trace, and the
-desktop starts it again at its next look, every 5 seconds; a lag found inside
-an attempt still sends the run back to `pending` without counting it. A
+Implementation note, 2026-10-16: `start` of a pending run, impact or sweep,
+first checks whether the readable search index has caught up with the record
+log. While it lags, `start` answers `pending` with no claim, attempt or trace,
+and the desktop starts it again at its next look, every 5 seconds; a lag found
+inside an attempt still sends the run back to `pending` without counting it. A
 record in no single project is researched by search only, never by listing
 inventories. A card with no usable draft (`not_assessed`) now lists the
 record's decisions and actions under "What was decided", and its rows make no

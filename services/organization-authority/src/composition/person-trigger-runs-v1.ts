@@ -38,7 +38,7 @@ type RunOutput = { readonly result: object; readonly writes?: () => (transaction
 export interface CreatePersonTriggerRunsV1Options {
   readonly runs: SqliteTriggerRunsV1;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
-  /** `recordIndexLags` holds an impact run unclaimed while the index lags; without it a start claims as before and the anchor refuses. */
+  /** `recordIndexLags` holds a pending run (impact or sweep) unclaimed while the index lags; without it a start claims as before and the anchor refuses. */
   readonly records: PersonRecordAnchorV1 & PersonRecordActionsV1 & PersonRecordProjectsV1 & PersonReadableDecisionsV1 & Partial<PersonRecordIndexReadinessV1>;
   /** The open items: a finished impact run writes the items it found, and a finished sweep its checks, in the run's finishing transaction. */
   readonly items: Pick<SqliteImpactItemsV1, 'insertForRun' | 'involving' | 'forRecords' | 'read' | 'recordCheck'>;
@@ -229,10 +229,12 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     },
     async start(input: Parameters<PersonTriggerRunsHttpApplicationV1['start']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);
-      // An impact run is enqueued with its approval, before the search index publishes the record. While the index lags, its
-      // anchor would refuse it before any model call: it stays pending, with no claim, attempt or trace, until a later start.
+      // An impact run is enqueued with its approval, before the search index publishes the record; a sweep anchors its findings'
+      // decisions and reads ECHO records through the same index. While the index lags, the anchor refuses either before any
+      // model call (and a desk would read ECHO records as unreadable): the run stays pending, with no claim, attempt or trace,
+      // until a later start.
       const queued = options.runs.read(actor, input.request.run_id);
-      if (queued?.trigger === 'approved_record' && triggerRunStateAtV1(queued, now().toISOString()) === 'pending' && options.records.recordIndexLags?.() === true) {
+      if (queued !== undefined && triggerRunStateAtV1(queued, now().toISOString()) === 'pending' && options.records.recordIndexLags?.() === true) {
         return Object.freeze({ state: 'pending' as const });
       }
       const claim = options.runs.claim(actor, input.request.run_id, lease, () => controllers.size < maxRunning);

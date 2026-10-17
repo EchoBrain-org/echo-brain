@@ -678,14 +678,15 @@ one at a time, under Part 1's polling backoff. A pending sweep may be one put
 back after a timed-out or rate-limited attempt, one whose attempt stopped
 (listed as `pending`, section 7), or one Check now queued; it is started like
 an impact run. A start answered `busy` is tried again later and never shown as
-an error. An impact start the Authority holds `pending` while its search index
-has not caught up with the decision is started again at the next look, every 5
-seconds, not after a failure's backoff. When `home` says `sweep_due` and no
-run is waiting or going, the desktop asks for one new `mine` sweep and starts
-it: at most one new sweep request per Home load, spent only when the request
-is made. A failed runs read, or a failed read of what a check found, never
-skips the start or the request; its failure only lengthens the wait before the
-next look. When a sweep ends, Home is read again to show what it found.
+an error. A start the Authority holds `pending` while its search index has not
+caught up (an impact check's decision is not searchable yet, or a sweep would
+read records through it) is started again at the next look, every 5 seconds,
+not after a failure's backoff. When `home` says `sweep_due` and no run is
+waiting or going, the desktop asks for one new `mine` sweep and starts it: at
+most one new sweep request per Home load, spent only when the request is made.
+A failed runs read, or a failed read of what a check found, never skips the
+start or the request; its failure only lengthens the wait before the next
+look. When a sweep ends, Home is read again to show what it found.
 
 ## 9. Delivery
 
