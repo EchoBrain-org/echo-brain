@@ -1,5 +1,5 @@
 import type {
-  PersonAnswerRequestV3,
+  PersonAskTimeContextV1, PersonAnswerRequestV3,
   PersonAnswerResponseV4,
   PersonEvidenceDeskResponseV1,
   PersonEvidenceOpenRequestV1,
@@ -11,7 +11,7 @@ export interface PersonAnswerV3HttpApplication {
   ask(input: {
     readonly access_token: string;
     readonly request: PersonAnswerRequestV3;
-    readonly signal?: AbortSignal;
+    readonly time_context?: PersonAskTimeContextV1; readonly signal?: AbortSignal;
   }): Promise<PersonAnswerResponseV4>;
   searchEvidence(input: {
     readonly access_token: string;

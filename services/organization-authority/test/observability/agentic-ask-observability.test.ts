@@ -22,7 +22,7 @@ afterEach(() => { for (const database of databases.splice(0)) database.close(); 
 async function flush() { for (let i = 0; i < 16; i++) await Promise.resolve(); }
 
 type Listing = { id: string };
-type Prompt = { question: string; step?: number; last_results?: { tool: string; items?: Listing[] }[]; opened?: Listing[]; evidence?: Listing[] };
+type Prompt = { question: string; step?: number; last_results?: { tool: string; items?: string[] }[]; opened?: Listing[]; evidence?: Listing[] };
 type Line = Record<string, any>;
 
 /**
@@ -72,7 +72,7 @@ function fixture() {
         const part = (status: string, evidence: string[] = []) => ({ question: prompt.question, needs: [{ need: "launch window", status, evidence }], notes: "" });
         const listed = prompt.last_results?.find(result => result.tool === "list")?.items ?? [];
         reply = (prompt.opened ?? []).length > 0 ? { parts: [part("found", prompt.opened!.map(item => item.id))], actions: [{ tool: "finish", args: {} }] }
-          : listed.length > 0 ? { parts: [part("open")], actions: [{ tool: "open", args: { id: listed[0]!.id } }] }
+          : listed.length > 0 ? { parts: [part("open")], actions: [{ tool: "open", args: { id: listed[0]! } }] }
           : { parts: [part("open")], actions: [{ tool: "list", args: { source: "documents" } }] };
       }
       return new Response(JSON.stringify({ id: `gen-${randomUUID()}`, choices: [{ finish_reason: "stop", message: { content: JSON.stringify(reply) } }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, prompt_tokens_details: { cached_tokens: 10 }, completion_tokens_details: { reasoning_tokens: 5 } } }), { status: 200 });

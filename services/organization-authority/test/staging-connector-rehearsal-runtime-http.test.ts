@@ -61,12 +61,12 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
   const selected = selection();
   let jiraAskEnabled = false;
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; source_catalog?: { tool_id?: string }[]; last_results?: { results?: { id: string }[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
+    const prompt = JSON.parse(input.user_prompt) as { question: string; source_catalog?: { tool_id?: string }[]; last_results?: { results?: string[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
     if (!prompt.source_catalog?.some(source => source.tool_id === 'jira')) return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
     const opened = prompt.opened?.[0]?.id;
     if (opened !== undefined) return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [opened] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
-    const hit = prompt.last_results?.[0]?.results?.[0]?.id;
+    const hit = prompt.last_results?.[0]?.results?.[0];
     return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }],
       actions: [hit === undefined ? { tool: 'search', args: { query: 'ship', source: 'tickets' } } : { tool: 'open', args: { id: hit } }] };
   });
@@ -128,10 +128,10 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     expect(JSON.stringify(proof.body)).not.toContain(text);
     const jiraReads = seams.jiraFetch.mock.calls.slice(jiraStart);
     expect(jiraReads).toHaveLength(25);
-    expect(jiraReads.filter(([input]) => String(input).includes('/issue/10001'))).toHaveLength(2);
-    const rechecks = jiraReads.filter(([input]) => String(input).includes('/issue/bulkfetch'));
-    expect(rechecks).toHaveLength(1);
-    expect(JSON.parse(String(rechecks[0]![1]?.body)).issueIdsOrKeys).toEqual(['10001']);
+    expect(jiraReads.filter(([input]) => String(input).includes('/issue/10001'))).toHaveLength(1);
+    // The listed page's current read, then the release recheck.
+    const bulkReads = jiraReads.filter(([input]) => String(input).includes('/issue/bulkfetch'));
+    expect(bulkReads.map(([, init]) => JSON.parse(String(init?.body)).issueIdsOrKeys)).toEqual([['10001'], ['10001']]);
     const searches = jiraReads.filter(([input]) => String(input).includes('/search/jql'));
     expect(searches).toHaveLength(1);
     expect(JSON.parse(String(searches[0]![1]?.body))).toMatchObject({ jql: 'project = 10000 ORDER BY created DESC, id DESC', maxResults: 1 });

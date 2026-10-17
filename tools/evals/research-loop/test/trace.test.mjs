@@ -9,7 +9,8 @@ const captureId = "cap_00000000-0000-4000-8000-000000000001";
 const projectId = "prj_00000000-0000-4000-8000-000000000002";
 const outDir = () => mkdtempSync(join(tmpdir(), "echo-private-research-trace-"));
 const read = (out, file) => JSON.parse(readFileSync(join(out, file), "utf8"));
-const prompt = { last_results: [{ tool: "open", id: "E1", opened: ["E1"], results: [{ id: "E2", title: "Fixture readiness" }] }], opened: [{ id: "E1", text: "Gate\nReadiness depends on fixtures." }] };
+// The research loop's compact last_results: ids only; details live in opened and seen.
+const prompt = { opened: [{ id: "E1", text: "Gate\nReadiness depends on fixtures." }], seen: [{ id: "E2", title: "Fixture readiness" }], last_results: [{ tool: "open", args: { id: "E1" }, opened: ["E1"], items: ["E2"] }] };
 const trace = () => ({ schema_version: 1, kind: "echo-agentic-research-trace-v1", complete: true, dropped_events: 0, events: [
   { sequence: 1, kind: "tool_request", tool_call_id: 1, round: 1, tool: "open", args: { id: "E1" } },
   { sequence: 2, kind: "tool_response", tool_call_id: 1, round: 1, tool: "open", result: prompt.last_results[0] },
@@ -140,6 +141,20 @@ test("an unclaimed capture is retained for inspection without retrying a busy tr
   assert.equal(starts, 1);
   assert.equal(read(out, "last-status.json").status, "prepared");
   assert.equal(existsSync(join(out, "result.json")), false);
+});
+
+test("a start the Authority holds pending says to capture again later, since resuming that capture can never succeed", async () => {
+  const out = outDir(); const run_id = "run_00000000-0000-4000-8000-000000000001"; let starts = 0;
+  const client = {
+    async diagnostics(request) { return request.operation === "prepare" ? prepared() : { ...captured(), status: "prepared", trace: undefined }; },
+    async runs() { starts += 1; return { state: "pending" }; },
+  };
+  const held = new RegExp(`run ${run_id} is held pending until the Authority's search index catches up.*no product execution claimed capture ${captureId}.*fresh --out`, "u");
+  await assert.rejects(runTrace({ run: true, "trigger-run-id": run_id, out }, { client, poll_ms: 0 }), error => held.test(error.message) && !/Resume only|do not repeat/u.test(error.message));
+  assert.equal(starts, 1);
+  assert.equal(read(out, "last-status.json").status, "prepared");
+  // Resuming the same directory reads the saved start answer and says the same, without starting anything.
+  await assert.rejects(runTrace({ "capture-id": captureId, out }, { client: { ...client, async runs() { throw new Error("must not start a run"); } }, poll_ms: 0 }), held);
 });
 
 test("read failure preserves the known capture and sanitized failure without repeating execution", async () => {

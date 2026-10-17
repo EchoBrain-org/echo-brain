@@ -115,6 +115,12 @@ describe('shared lifecycle diagnostic events', () => {
     expect(validatePersonDiagnosticTraceV1({ ...trace, events }).events).toEqual(events);
   });
 
+  it('accepts the model failure classes and index lag as lifecycle error kinds', () => {
+    const kinds = ['adapter_timeout', 'adapter_transport', 'adapter_http', 'adapter_provider_error', 'adapter_finish', 'adapter_refusal', 'adapter_response', 'adapter_json', 'index_lag'];
+    const events = kinds.map((error_kind, index) => ({ kind: 'lifecycle', sequence: index + 1, stage: 'application', event: 'failed', error_kind }));
+    expect(validatePersonDiagnosticTraceV1({ ...trace, events }).events).toEqual(events);
+  });
+
   it('rejects unknown lifecycle stages, phases, error kinds, and non-record data', () => {
     const event = { kind: 'lifecycle', sequence: 1, stage: 'research', event: 'started' };
     for (const changes of [{ stage: 'database' }, { event: 'pending' }, { error_kind: 'secret error text' }, { data: [] }, { data: null }, { kind: 'capture_error' }]) {

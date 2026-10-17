@@ -31,6 +31,16 @@ export interface AgenticBriefV1 {
   readonly options: {
     /** If the readable scope is small, open it all before round one (when the deployment allows it). */
     readonly small_scope_preload: boolean;
+    /**
+     * False: research reads the starting evidence and stops, finished, with no planner step; what it read in full counts as
+     * read. A sweep checks its items and searches for nothing more. Only a task with starting items can run without one.
+     */
+    readonly planner?: boolean;
+    /**
+     * False: research has no list tool, only search and open, and is never told of list-only source options. An approved
+     * record in no project reads everything its approver can read: it searches the record's own terms, never whole inventories.
+     */
+    readonly list?: boolean;
   };
 }
 

@@ -81,11 +81,53 @@ describe("OpenRouter structured generation", () => {
     expect(JSON.parse(request?.body as string)).toMatchObject({
       stream: false,
       max_tokens: 300,
+      temperature: 0,
       response_format: { type: "json_schema", json_schema: {
         name: "echo_layer4", strict: true, schema: structuredRequest.schema,
       } },
-      provider: { require_parameters: true, data_collection: "deny", sort: "throughput" },
     });
+    // No measured bad hosts for this model: nothing is ignored and no order is pinned.
+    expect(JSON.parse(request?.body as string).provider).toEqual({ require_parameters: true, data_collection: "deny", sort: "throughput" });
+    expect(request?.headers).toMatchObject({ "x-openrouter-metadata": "enabled" });
+  });
+
+  it("ignores the hosts measured to garble DeepSeek V3.2, at temperature 0, without pinning an order", async () => {
+    const bodies: unknown[] = [];
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(init!.body as string));
+        return new Response(JSON.stringify({ choices: [{ message: { content: '{"queries":[]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+    await adapter.generate({ ...structuredRequest, model: "deepseek/deepseek-v3.2" });
+    expect(bodies[0]).toMatchObject({ model: "deepseek/deepseek-v3.2", temperature: 0 });
+    expect((bodies[0] as { provider: unknown }).provider).toEqual({
+      require_parameters: true, data_collection: "deny", sort: "throughput", ignore: ["friendli", "atlas-cloud"],
+    });
+  });
+
+  it.each([
+    ["the selected endpoint in routing metadata", { openrouter_metadata: { endpoints: { total: 2, available: [
+      { provider: "SiliconFlow", model: "deepseek/deepseek-v3.2", selected: false },
+      { provider: "Friendli", model: "deepseek/deepseek-v3.2", selected: true },
+    ] } }, provider: "DeepInfra" }, "Friendli"],
+    ["the top-level provider name", { provider: "DeepInfra" }, "DeepInfra"],
+    ["an unlisted name, as other", { provider: "SOURCESECRET79a3067" }, "other"],
+    ["nothing, as null", {}, null],
+  ] as const)("records the upstream host from %s and the generation id", async (_label, routing, upstream) => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-observation",
+      fetch_impl: (async () => new Response(JSON.stringify({
+        id: "gen-1790820122-fbcrJhMV9hV6DelT6StD", ...routing,
+        choices: [{ finish_reason: "stop", message: { content: '{"queries":[]}' } }],
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+    const result = await observed(adapter);
+    expect(result).toMatchObject({ value: { queries: [] }, upstream_provider: upstream, generation_id: "gen-1790820122-fbcrJhMV9hV6DelT6StD" });
+    expect(JSON.stringify(result)).not.toContain("SOURCESECRET79a3067");
   });
 
   it("returns only safe successful generation metadata alongside the parsed value", async () => {
@@ -137,6 +179,8 @@ describe("OpenRouter structured generation", () => {
       },
       finish_reason: "stop",
       provider_latency_ms: 25,
+      upstream_provider: null,
+      generation_id: null,
     });
     expect(nowMs).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(result)).not.toContain(
@@ -184,6 +228,8 @@ describe("OpenRouter structured generation", () => {
       },
       finish_reason: null,
       provider_latency_ms: expect.any(Number),
+      upstream_provider: null,
+      generation_id: null,
     });
   });
 
@@ -211,6 +257,8 @@ describe("OpenRouter structured generation", () => {
       },
       finish_reason: null,
       provider_latency_ms: expect.any(Number),
+      upstream_provider: null,
+      generation_id: null,
     });
   });
 
@@ -299,6 +347,8 @@ describe("OpenRouter structured generation", () => {
         reasoning_tokens: 5,
       },
       provider_latency_ms: expect.any(Number),
+      upstream_provider: "other",
+      generation_id: "gen-abcdefgh12345678",
     });
     expect(JSON.stringify(error)).not.toContain("private generated content");
   });
@@ -322,6 +372,7 @@ describe("OpenRouter structured generation", () => {
 
     expect(error.diagnostic.adapter_request_id).toBeNull();
     expect(error.diagnostic.adapter_id).toBe("openrouter");
+    expect(error.generation_observation).toMatchObject({ upstream_provider: "other", generation_id: null });
     expect(JSON.stringify(error)).not.toContain("QUESTIONTOKEN79a3067");
     expect(JSON.stringify(error)).not.toContain("SOURCESECRET79a3067");
   });

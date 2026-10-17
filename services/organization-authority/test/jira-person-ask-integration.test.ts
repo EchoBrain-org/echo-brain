@@ -32,7 +32,6 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   // Wrong key normalization or phrase semantics must produce an empty provider
   // result, not the fixture ticket that used to hide every query error.
   const matchingQueries = new Set([
-    'key = "ECHO-1" ORDER BY created DESC, id DESC',
     'text ~ "\\\"Friday\\\"" AND text ~ "\\\"ship\\\"" ORDER BY created DESC, id DESC',
     'project = 10000 AND (text ~ "\\\"ship\\\"") ORDER BY created DESC, id DESC',
   ]);
@@ -46,14 +45,14 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   const verifySlack = vi.fn(async () => ({ team_id: 'TFIXTURE', enterprise_id: null, bot_user_id: 'UBOTFIXTURE', bot_id: 'BFIXTURE', app_id: 'AFIXTURE', granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, verification_evidence_sha256: canonicalSha256({ fixture: 'slack-identity' }) }));
   const audit = openAuthorityDatabase(join(state, 'authority.sqlite'), { fileMustExist: true });
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; scope: string; source_catalog: { source: string; tool_id?: string }[]; last_results?: { results?: { id: string }[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
+    const prompt = JSON.parse(input.user_prompt) as { question: string; scope: string; source_catalog: { source: string; tool_id?: string }[]; last_results?: { results?: string[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
     if (!prompt.source_catalog.some(source => source.source === 'tickets' && source.tool_id === 'jira')) {
       if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [], not_found: ['Jira status is unavailable.'] };
       return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: prompt.last_results?.length ? 'not_found' : 'open', evidence: [] }], notes: '' }],
         actions: [{ tool: prompt.last_results?.length ? 'finish' : 'list', args: prompt.last_results?.length ? {} : { source: 'documents' } }] };
     }
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
-    const hit = prompt.opened?.[0]?.id ?? prompt.last_results?.[0]?.results?.[0]?.id;
+    const hit = prompt.opened?.[0]?.id ?? prompt.last_results?.[0]?.results?.[0];
     if (hit !== undefined) {
       const releases = audit.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-live-evidence-release-audit-v1%'").all();
       expect(releases.length).toBeGreaterThan(0); // Metadata and body each cross the durable release audit before the model.
@@ -103,8 +102,10 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(await tools(employee)).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'unlinked', external_subject_id: null })]));
     telemetry.length = 0;
     const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should ECHO-1 ship?' }); expect(response.status).toBe(200);
-    const exactSearch = jiraFetch.mock.calls.find(([url]) => String(url).endsWith('/search/jql'))!;
-    expect(JSON.parse(exactSearch[1]!.body as string).jql).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
+    // A named key is read exactly through the bulk issue read, not JQL.
+    expect(jiraFetch.mock.calls.filter(([url]) => String(url).endsWith('/search/jql'))).toEqual([]);
+    const exactSearch = jiraFetch.mock.calls.find(([url]) => String(url).endsWith('/issue/bulkfetch'))!;
+    expect(JSON.parse(exactSearch[1]!.body as string).issueIdsOrKeys).toEqual(['ECHO-1']);
     const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
     expect(() => validatePersonAnswerResponseV4(response.body)).toThrow();

@@ -42,3 +42,10 @@ the offline recovery verifier refuses an unqualified Confluence grant sidecar.
 Follow the [operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
 for a release and real-account qualification. Synthetic tests do not establish
 that an account has connected or a release has been deployed.
+
+Date-bounded search and list select `created` or `updated` (the current page
+version's timestamp, the default). CQL discovery uses coarse bounds because
+its dates use the provider account's time zone; current page metadata is then
+filtered exactly in the request's time zone (UTC when absent). Missing dates
+are excluded rather than inferred. This reads current page versions, not a
+historical activity log. Keyword searches can combine text with date bounds.

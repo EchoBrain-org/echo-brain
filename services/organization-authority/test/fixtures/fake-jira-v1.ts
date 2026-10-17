@@ -49,7 +49,7 @@ export function fakeJiraCloudFetchV1(options: { readonly matches_jql?: (jql: str
     if (url.pathname.endsWith('/issue/bulkfetch')) {
       expect(init?.method).toBe('POST');
       const { issueIdsOrKeys } = JSON.parse(String(init?.body)) as { issueIdsOrKeys: string[] };
-      return Response.json({ issues: issueIdsOrKeys.includes(issue.id) ? [issue] : [], issueErrors: [] });
+      return Response.json({ issues: issueIdsOrKeys.some(value => value === issue.id || value === issue.key) ? [issue] : [], issueErrors: [] });
     }
     throw new Error(`unexpected Jira endpoint ${url.pathname}`);
   });

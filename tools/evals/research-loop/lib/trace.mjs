@@ -109,6 +109,16 @@ function failureReceipt(error) {
     message: "The request failed or its response was lost. The product operation was not retried." };
 }
 
+/**
+ * The run a saved start left held: the Authority answers `pending`, with no claim, while its search index has not caught up, so
+ * nothing will ever claim this capture. Null for any other request or answer.
+ */
+function heldStartRun(out) {
+  if (!existsSync(join(out, "execution-request.json")) || !existsSync(join(out, "product-response.json"))) return null;
+  const execution = readJson(join(out, "execution-request.json"));
+  return execution?.operation === "start" && readJson(join(out, "product-response.json"))?.state === "pending" ? execution.run_id : null;
+}
+
 function selection(args) {
   const resume = args["capture-id"];
   if (resume !== undefined) {
@@ -176,7 +186,12 @@ export async function runTrace(args, { client, get_client, poll_ms = 2_000, sour
       return { ...summary, out };
     }
     writePrivateJson(out, "last-status.json", result);
-    if (result.status === "prepared") throw new Error(`Capture ${id} was prepared but no product execution claimed it. Saved its receipt; do not repeat the product request. Resume only with trace ${resumeFlag} ${id} --out ${out}.`);
+    if (result.status === "prepared") {
+      const held = heldStartRun(out);
+      // Nothing ran, so starting again is safe; this capture will only expire.
+      if (held !== null) throw new Error(`Trigger run ${held} is held pending until the Authority's search index catches up (as just after an approval), so no product execution claimed capture ${id}, and none will. Start it again shortly with a new capture: trace --run --trigger-run-id ${held} and a fresh --out.`);
+      throw new Error(`Capture ${id} was prepared but no product execution claimed it. Saved its receipt; do not repeat the product request. Resume only with trace ${resumeFlag} ${id} --out ${out}.`);
+    }
     if (result.status !== "running") throw new Error("The server returned an unknown diagnostic status.");
     if (Date.now() > deadline) throw new Error(`Capture ${id} is still running; resume with trace ${resumeFlag} ${id} --out ${out}. Do not start it again.`);
   }

@@ -57,6 +57,21 @@ describe('thin live ticket dispatcher', () => {
       expect(f.page.assertCurrent).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
+  it('passes an incremental check to both base fences and every source, and keeps each final grant check', async () => {
+    const f = mixedFixture();
+    const desk = deskWith(f.base, f.ticket, undefined, undefined, f.page);
+    await desk.revalidate({ mode: 'incremental' });
+    expect(vi.mocked(f.base.revalidate).mock.calls.map(([input]) => input.mode)).toEqual(['incremental', 'incremental']);
+    expect(f.ticket.revalidate).toHaveBeenCalledWith({ mode: 'incremental' });
+    expect(f.page.revalidate).toHaveBeenCalledWith({ mode: 'incremental' });
+    expect(f.ticket.assertCurrent).toHaveBeenCalledTimes(1);
+    expect(f.page.assertCurrent).toHaveBeenCalledTimes(1);
+    await desk.revalidate({});
+    expect(vi.mocked(f.base.revalidate).mock.calls.slice(2).map(([input]) => input.mode)).toEqual([undefined, undefined]);
+    // A failed provider check fails the incremental check exactly as it fails a full one.
+    vi.mocked(f.page.revalidate).mockRejectedValueOnce(new AuthorityOperationError('unauthorized', 'Live evidence operation could not be completed'));
+    await expect(desk.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unauthorized' });
+  });
   it('describes only the live sources bound for this request using provider-neutral source kinds', () => {
     const f = mixedFixture();
     const ticket = { ...f.ticket, tool_id: 'issue-fixture' };
@@ -116,6 +131,51 @@ describe('thin live ticket dispatcher', () => {
     expect(f.ticket.search).toHaveBeenCalledTimes(1);
     expect(f.slack.search).toHaveBeenCalledTimes(1);
   });
+  it.each(['unavailable', 'rate_limited'] as const)('degrades one %s live source in a search across sources to a coverage notice', async code => {
+    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
+    const events: CoreRuntimeObservationV1[] = [];
+    vi.mocked(f.ticket.search).mockRejectedValueOnce(new AuthorityOperationError(code, 'private provider failure'));
+    const result = await observeCoreRuntimeV1('ask_request', () => desk.search({ query: 'launch', limit: 4 }), { observer: event => { events.push(event); } });
+    expect(result.items.map(item => item.id)).toEqual(['local-1', 'slack-1', 'local-2', 'slack-2']);
+    expect(result.notice).toBe('Live tickets could not be searched just now, so these results leave them out.');
+    expect(result.receipt_digests).toEqual([receipt('local'), receipt('slack')]);
+    expect(JSON.stringify(result)).not.toContain('private provider failure');
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'evidence_search', event: 'failed', evidence_source: 'ticket' })]));
+    // Items from the sources that answered stay openable.
+    await desk.open({ item: 'slack-1' });
+    expect(f.slack.open).toHaveBeenCalledTimes(1);
+  });
+  it('degrades a failing live source while ECHO alone answers, and joins each source\'s notice', async () => {
+    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, undefined, undefined, f.page);
+    vi.mocked(f.ticket.list).mockRejectedValueOnce(new AuthorityOperationError('unavailable', 'Fixture outage'));
+    vi.mocked(f.page.list).mockRejectedValueOnce(new AuthorityOperationError('rate_limited', 'Fixture limit'));
+    const result = await desk.search({ limit: 4 });
+    expect(result.items.map(item => item.id)).toEqual(['local-1', 'local-2']);
+    expect(result.notice).toBe('Live tickets could not be searched just now, so these results leave them out. Live pages could not be searched just now, so these results leave them out.');
+  });
+  it.each([
+    ['a chosen source', { query: 'launch', source: 'ticket' }],
+    ['the only source a kind filter leaves', { query: 'launch', kinds: ['ticket'] }],
+  ] as const)('keeps a transient failure of %s as the result', async (_label, request) => {
+    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
+    vi.mocked(f.ticket.search).mockRejectedValueOnce(new AuthorityOperationError('unavailable', 'Fixture outage'));
+    await expect(desk.search(request)).rejects.toMatchObject({ code: 'unavailable' });
+  });
+  it.each([
+    ['stale access', new AuthorityOperationError('stale_access_state', 'Fixture grant changed')],
+    ['invalid output', new AuthorityOperationError('invalid_output', 'Fixture malformed page')],
+    ['cancellation', new DOMException('Fixture cancelled', 'AbortError')],
+  ] as const)('still fails a search across sources on %s', async (_label, failure) => {
+    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
+    vi.mocked(f.slack.search).mockRejectedValueOnce(failure);
+    await expect(desk.search({ query: 'launch' })).rejects.toBe(failure);
+  });
+  it('fails a search across sources whose local half fails, even while a live source is degraded', async () => {
+    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
+    vi.mocked(f.ticket.search).mockRejectedValueOnce(new AuthorityOperationError('unavailable', 'Fixture outage'));
+    vi.mocked(f.base.search).mockRejectedValueOnce(new AuthorityOperationError('unavailable', 'Fixture local failure'));
+    await expect(desk.search({ query: 'launch' })).rejects.toMatchObject({ message: 'Fixture local failure' });
+  });
   it('observes actual list and open calls once without changing provider routing or results', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
     const events: CoreRuntimeObservationV1[] = [];
@@ -146,6 +206,13 @@ describe('thin live ticket dispatcher', () => {
     expect(f.slack.list).toHaveBeenCalledWith({ container: 'launch', since: '2026-10-01', until: '2026-10-02', limit: 4, cursor: 'request-owned-cursor', signal: undefined });
     await expect(desk.list({ source: 'slack', channel: 'launch', kinds: ['ticket'] })).rejects.toMatchObject({ code: 'unauthorized' });
     expect(f.base.list).not.toHaveBeenCalled(); expect(f.ticket.list).not.toHaveBeenCalled();
+  });
+  it('passes the research loop\'s 50-item list fetch through to a live reader, which applies its own cap', async () => {
+    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
+    await desk.list({ source: 'ticket', limit: 50 });
+    await desk.list({ source: 'ticket' });
+    await desk.search({ kinds: ['ticket'], limit: 50 });
+    expect(vi.mocked(f.ticket.list).mock.calls.map(([input]) => input.limit)).toEqual([50, 20, 50]);
   });
   it('opens only request-issued handles through their original source', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);

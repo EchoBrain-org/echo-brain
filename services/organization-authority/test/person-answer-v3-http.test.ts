@@ -44,6 +44,20 @@ async function server(input: { readonly application?: PersonAnswerV3HttpApplicat
 }
 
 describe("Agentic Ask HTTP capability gate", () => {
+  it('passes validated optional client time headers to Ask without changing the request body', async () => {
+    const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'fixture'); });
+    const value = await server({ live_application: { ask } });
+    const body = { schema_version: 3, question: 'What happened yesterday?' };
+    try {
+      const headers = { authorization: 'Bearer token', 'content-type': 'application/json', 'x-echo-client-now': '2026-10-17T04:30:00.000Z', 'x-echo-time-zone': 'America/Los_Angeles' };
+      await fetch(`${value.url}${PERSON_ANSWER_PATH_V5}`, { method: 'POST', headers, body: JSON.stringify(body) });
+      expect(ask).toHaveBeenCalledWith(expect.objectContaining({ request: body, time_context: { now: headers['x-echo-client-now'], time_zone: headers['x-echo-time-zone'] } }));
+      const bad = await fetch(`${value.url}${PERSON_ANSWER_PATH_V5}`, { method: 'POST', headers: { ...headers, 'x-echo-time-zone': 'Not/AZone' }, body: JSON.stringify(body) });
+      expect(bad.status).toBe(400);
+      expect(ask).toHaveBeenCalledTimes(1);
+    } finally { await value.close(); }
+  });
+
   it('marks matched V5 provider errors so clients cannot mistake them for an unsupported route', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'Provider resource unavailable'); });
     const value = await server({ live_application: { ask } });
@@ -166,11 +180,11 @@ function mineFixture() {
   const records = { initializeDesk: vi.fn((_input: object) => { throw new PersonRecordSearchIndexLagV1(); }) };
   // Searches once, finishes on what it found, and cites it.
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
+    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: string[] }[]; evidence?: { id: string }[] };
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
       return { sentences: [{ text: "You decided to launch on Tuesday.", evidence: [prompt.evidence![0]!.id] }], not_found: [] };
     }
-    const hit = prompt.last_results?.[0]?.results?.[0]?.id;
+    const hit = prompt.last_results?.[0]?.results?.[0];
     return hit === undefined
       ? { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "launch" } }] }
       : { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "found", evidence: [hit] }], notes: "" }], actions: [{ tool: "finish", args: {} }] };

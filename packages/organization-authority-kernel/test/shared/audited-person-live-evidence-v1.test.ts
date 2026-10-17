@@ -159,6 +159,52 @@ describe('shared audited live evidence source V1', () => {
     await expect(source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
   });
 
+  it('checks incrementally only citations released since the last successful check, with the grant and provider connection every time', async () => {
+    const first = ticket('First ticket', 'ECHO-1'); const second = ticket('Second ticket', 'ECHO-2');
+    const f = fixture('tickets', page([first]));
+    const source = f.make();
+    await source.search({ query: 'first' });
+    f.events.length = 0;
+    await source.revalidate({ mode: 'incremental' });
+    expect(f.reader.revalidate).toHaveBeenLastCalledWith({ citations: [first.citation], mode: 'incremental' });
+    // Nothing new: the reader still checks its connection, with no item to re-read.
+    await source.revalidate({ mode: 'incremental' });
+    expect(f.reader.revalidate).toHaveBeenLastCalledWith({ citations: [], mode: 'incremental' });
+    expect(f.events).toEqual(['grant-check', 'provider-check', 'grant-check', 'grant-check', 'provider-check', 'grant-check']);
+    f.select(page([second]));
+    await source.search({ query: 'second' });
+    // A failed check leaves its items pending, and fails exactly like a full check.
+    vi.mocked(f.reader.revalidate).mockRejectedValueOnce(new AuthorityOperationError('unauthorized', 'Ticket is now hidden'));
+    await expect(source.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unauthorized', message: 'Live evidence operation could not be completed' });
+    await source.revalidate({ mode: 'incremental' });
+    expect(f.reader.revalidate).toHaveBeenLastCalledWith({ citations: [second.citation], mode: 'incremental' });
+    // A full check always carries every released citation.
+    await source.revalidate({});
+    expect(f.reader.revalidate).toHaveBeenLastCalledWith({ citations: [first.citation, second.citation] });
+    // A lost local grant fails an incremental check before any provider read.
+    vi.mocked(f.reader.revalidate).mockClear();
+    f.authorization.assertCurrent.mockImplementationOnce(() => { throw new AuthorityOperationError('stale_access_state', 'private grant state'); });
+    await expect(source.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'stale_access_state' });
+    expect(f.reader.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('keeps a citation released during an incremental check pending for the next one', async () => {
+    const first = ticket('First ticket', 'ECHO-1'); const second = ticket('Second ticket', 'ECHO-2');
+    const f = fixture('tickets', page([first]));
+    const source = f.make();
+    await source.search({ query: 'first' });
+    let finish!: () => void;
+    vi.mocked(f.reader.revalidate).mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+    const checking = source.revalidate({ mode: 'incremental' });
+    await vi.waitFor(() => expect(f.reader.revalidate).toHaveBeenCalledTimes(1));
+    f.select(page([second]));
+    await source.search({ query: 'second' });
+    finish();
+    await checking;
+    await source.revalidate({ mode: 'incremental' });
+    expect(f.reader.revalidate).toHaveBeenLastCalledWith({ citations: [second.citation], mode: 'incremental' });
+  });
+
   it('releases a bounded adapter notice with evidence without retaining it in the audit', async () => {
     const f = fixture('tickets', page([ticket()], undefined, 'Some live content could not be represented as text.'));
     const result = await f.make().search({ query: 'ship' });

@@ -1,7 +1,7 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type { PersonAnswerResponseV4 } from "@echo-brain/organization-api";
 import type { StructuredGenerationUsageV1 } from "./structured-generation-v1.js";
-import { raceAbort, type AgenticAskGenerationObservationV1, type AgenticModelGateStatsV1 } from "./agentic-model-gate-v1.js";
+import { raceAbort, revalidateWithTransientRetryV1, type AgenticAskGenerationObservationV1, type AgenticModelGateStatsV1 } from "./agentic-model-gate-v1.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 
 /**
@@ -107,8 +107,9 @@ export async function releaseAgenticResultV1<R>(options: ReleaseAgenticResultV1O
   const { desk, signal, assert_live: assertLive } = options;
   // 1. Final access check: the person can still see everything the result cites.
   assertLive();
-  const fenced = await observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'before_audit' },
-    () => raceAbort(signal, desk.revalidate({ signal })), value => ({ checked_at: value.checked_at }));
+  // A transient failure of either check is retried once (the same full check).
+  const fenced = await revalidateWithTransientRetryV1(() => observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'before_audit' },
+    () => raceAbort(signal, desk.revalidate({ signal })), value => ({ checked_at: value.checked_at })), { signal, assert_live: assertLive });
   options.on_checked(fenced.checked_at);
   // 2. One content-free audit record for the whole request.
   await observeAgenticLifecycleV1('audit', 'research_audit', { outcome: options.outcome },
@@ -119,8 +120,8 @@ export async function releaseAgenticResultV1<R>(options: ReleaseAgenticResultV1O
   // started on an already-stopped request.
   if (options.fence_after_audit) {
     assertLive();
-    const released = await observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'after_audit' },
-      () => raceAbort(signal, desk.revalidate({ signal })), value => ({ checked_at: value.checked_at }));
+    const released = await revalidateWithTransientRetryV1(() => observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'after_audit' },
+      () => raceAbort(signal, desk.revalidate({ signal })), value => ({ checked_at: value.checked_at })), { signal, assert_live: assertLive });
     options.on_checked(released.checked_at);
   }
   // An abort that races the terminal audit still suppresses publication.

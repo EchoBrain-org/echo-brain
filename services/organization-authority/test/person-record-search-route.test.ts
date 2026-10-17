@@ -1302,6 +1302,24 @@ describe("Person Layer 2 route: an approved record's anchor (runs store v1)", ()
     } finally { w.close(); }
   });
 
+  it("says index lag exactly when the anchor would, reading no record and auditing nothing", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      expect(route.recordIndexLags()).toBe(false);
+      const digest = await w.approve({ name: "r8", approval_id: "apr_r8", projects: [SHARED], final_approver: EMP_A, issued_at: T(8) });
+      const before = auditCount(w.authority);
+      expect(route.recordIndexLags()).toBe(true);
+      expect(() => route.recordAnchor({ access_token: "emp_a", record_sha256: digest })).toThrow(PersonRecordSearchIndexLagV1);
+      expect(auditCount(w.authority)).toBe(before);
+      w.rebuild();
+      expect(route.recordIndexLags()).toBe(false);
+      expect(route.recordAnchor({ access_token: "emp_a", record_sha256: digest })).toMatchObject({ kind: "approved_record", record_sha256: digest });
+      // A generation of another retrieval contract is unavailable, not lag: the run's own anchor answers that.
+      expect(w.route({ retrieval_contract_sha256: canonicalSha256("another contract") }).recordIndexLags()).toBe(false);
+    } finally { w.close(); }
+  });
+
   it("answers not_found, indexed or not, to a reader who cannot see the record", async () => {
     const w = await meetingWorld();
     try {

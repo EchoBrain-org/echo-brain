@@ -14,7 +14,7 @@ import type { SqlitePersonAgenticAskAuditV1 } from '../adapters/persistence/sqli
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import { matchImpactOwnersV1, type ImpactOwnerCandidateV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
 import {
-  PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordProjectsV1,
+  PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordIndexReadinessV1, type PersonRecordProjectsV1,
 } from './person-record-search-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
@@ -38,7 +38,8 @@ type RunOutput = { readonly result: object; readonly writes?: () => (transaction
 export interface CreatePersonTriggerRunsV1Options {
   readonly runs: SqliteTriggerRunsV1;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
-  readonly records: PersonRecordAnchorV1 & PersonRecordActionsV1 & PersonRecordProjectsV1 & PersonReadableDecisionsV1;
+  /** `recordIndexLags` holds a pending run (impact or sweep) unclaimed while the index lags; without it a start claims as before and the anchor refuses. */
+  readonly records: PersonRecordAnchorV1 & PersonRecordActionsV1 & PersonRecordProjectsV1 & PersonReadableDecisionsV1 & Partial<PersonRecordIndexReadinessV1>;
   /** The open items: a finished impact run writes the items it found, and a finished sweep its checks, in the run's finishing transaction. */
   readonly items: Pick<SqliteImpactItemsV1, 'insertForRun' | 'involving' | 'forRecords' | 'read' | 'recordCheck'>;
   /** ECHO's member directory: exact owner matches, and the facts the open-items policy weighs for a sweep. */
@@ -83,16 +84,16 @@ function unavailable(error: unknown): boolean {
 type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_match'> & ImpactOwnerCandidateV1;
 /**
  * The open items a finished run makes (open items and Home v1, section 3;
- * follow-ups thread v1). From the card: one per affected item that conflicts,
- * needs updating or was not assessed, never one that confirms, never the
- * meeting's own record, and one per item however often the card cites it.
- * The card's owner name comes from the item's own details. Then one per
- * action the approved meeting decided, in brief order: it needs doing, its
- * expected line is the action's own text on one line of at most 120
- * characters, and its owner name is the one the approver confirmed. An
- * action with no printable text makes none and takes no place under the cap:
- * at most `PERSON_RUN_MEETING_ACTIONS_MAX_V1` actions with a line, the first
- * ones (the rest stay in the record only).
+ * follow-ups thread v1). From the card: one per affected item that conflicts
+ * or needs updating, never one that confirms or was not assessed, never the
+ * meeting's own record or its own transcript, and one per item however often
+ * the card cites it. The card's owner name comes from the item's own
+ * details. Then one per action the approved meeting decided, in brief
+ * order: it needs doing, its expected line is the action's own text on one
+ * line of at most 120 characters, and its owner name is the one the approver
+ * confirmed. An action with no printable text makes none and takes no place
+ * under the cap: at most `PERSON_RUN_MEETING_ACTIONS_MAX_V1` actions with a
+ * line, the first ones (the rest stay in the record only).
  */
 function itemCandidates(record_sha256: Sha256Digest, card: PersonImpactCardV1, stored: StoredImpactCardV1, actions: readonly PersonRecordActionV1[]): readonly ItemCandidateV1[] {
   const seen = new Set<Sha256Digest>();
@@ -103,15 +104,18 @@ function itemCandidates(record_sha256: Sha256Digest, card: PersonImpactCardV1, s
     return item_key;
   };
   const affected = card.affected.flatMap((row, index): ItemCandidateV1[] => {
-    if (row.relation === 'confirms') return [];
-    const pointer = card.citations[row.citation_index]!.citation as unknown as Readonly<Record<string, unknown>>;
-    // The meeting is never a follow-up of itself: its own actions are.
+    // A row no model assessed is only possibly affected, and one that confirms needs nothing: neither is a follow-up.
+    const { relation } = row;
+    if (relation === undefined || relation === 'confirms') return [];
+    const cited = card.citations[row.citation_index]!;
+    const pointer = cited.citation as unknown as Readonly<Record<string, unknown>>;
+    // The meeting is never a follow-up of itself, nor is the transcript its approver shared: its own actions are.
     if (pointer.kind === 'approved_record' && pointer.record_sha256 === record_sha256) return [];
+    if (pointer.kind === 'source_revision' && cited.ref === `transcript:${record_sha256}`) return [];
     const item_key = fresh(pointer);
     if (item_key === undefined) return [];
-    const relation = row.relation ?? null;
-    // The stored phrase: screened against outside titles. Only an assessed item carries one.
-    const expected = relation === null ? undefined : stored.affected[index]?.expected;
+    // The stored phrase: screened against outside titles.
+    const expected = stored.affected[index]?.expected;
     return [{ item_key, pointer, relation, expected: expected ?? null, ...(row.owner === undefined ? {} : { owner_name: row.owner }) }];
   });
   const decided = actions
@@ -148,10 +152,11 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     // The meeting's own actions, read as the approver before any model call (`recordAnchor` has already refused a record they
     // cannot read, which fails the run as no_access).
     const actions = options.records.recordActions({ access_token: token, record_sha256 });
-    const run = await research(scopeFor(options.records, token, record_sha256));
+    const scope = scopeFor(options.records, token, record_sha256);
+    const run = await research(scope);
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
     const event = definition.parseEvent({ record: anchor });
-    const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event), renderer: definition.renderer!, trigger_input: event, signal });
+    const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, scope), renderer: definition.renderer!, trigger_input: event, signal });
     const card = validatePersonImpactCardV1(output.rendered);
     const outsideLabels = output.research.items
       .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
@@ -224,6 +229,14 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     },
     async start(input: Parameters<PersonTriggerRunsHttpApplicationV1['start']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);
+      // An impact run is enqueued with its approval, before the search index publishes the record; a sweep anchors its findings'
+      // decisions and reads ECHO records through the same index. While the index lags, the anchor refuses either before any
+      // model call (and a desk would read ECHO records as unreadable): the run stays pending, with no claim, attempt or trace,
+      // until a later start.
+      const queued = options.runs.read(actor, input.request.run_id);
+      if (queued !== undefined && triggerRunStateAtV1(queued, now().toISOString()) === 'pending' && options.records.recordIndexLags?.() === true) {
+        return Object.freeze({ state: 'pending' as const });
+      }
       const claim = options.runs.claim(actor, input.request.run_id, lease, () => controllers.size < maxRunning);
       if (claim.kind !== 'claimed') { if (claim.kind === 'not_found') throw new AuthorityOperationError('not_found', 'run is not available'); return Object.freeze({ state: claim.kind }); }
       const row = options.runs.read(actor, input.request.run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');

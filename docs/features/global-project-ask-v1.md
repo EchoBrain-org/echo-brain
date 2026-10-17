@@ -196,3 +196,44 @@ Focused proof and complete repository checks belong to the PR head. Live
 qualification must exercise separate people, exact installed artifacts,
 project/private isolation, document citations, and revocation before calling
 the candidate accepted.
+
+## Temporal research
+
+Ask gives the LLM a captured client instant and time zone. The model resolves
+absolute and relative expressions, including "yesterday" and event-relative
+phrases, into structured inclusive `since`/`until` calendar dates. It must find
+a referenced event before resolving a date relative to that event. Code
+validates and executes the selected bounds; it does not parse the person's
+natural-language question.
+
+Both keyword `search` and keyword-free `list` carry date bounds. An explicit
+`date_field` selects the meaning and requires a source for keyword search:
+
+| Source | Date fields | Default |
+| --- | --- | --- |
+| Approved meeting records | `occurred`, action `due` | `occurred` |
+| Imported meeting notes and approved shared transcripts | `occurred` | `occurred` |
+| Saved notes and uploaded documents | `received` | `received` |
+| Jira tickets | `created`, `updated`, `due` | `created` |
+| Confluence pages | `created`, `updated` | `updated` |
+
+Timestamps are compared in the request's time zone; date-only deadlines and
+all-day events retain their stated date. The evidence carries named source
+timestamps separately from display dates. Unknown dates do not become capture
+dates. Date filters narrow reader-admitted records before result caps; original
+note/document inventories filter capture dates before SQL limits. Provider
+queries use coarse date bounds to accommodate the provider account's zone,
+then filter the current permission-checked values exactly in the client's
+zone. Empty filtered provider pages may still have a continuation.
+
+A meeting inventory includes readable imported notes and explicitly shared
+transcripts as well as approved records. Transcript permission and Mine-scope
+exclusion remain unchanged. Every metadata release remains audited and fenced.
+
+An upload date is not an event date inside a document, a due date is not a
+completion date, and the current revision's update timestamp is not a complete
+change history. The model may search a date quoted in content as a keyword
+when that is what the question asks. Unsupported date fields are refused;
+missing dates and truncated inventories limit what an empty result proves.
+Live natural-language qualification remains part of staging, separate from
+scripted-model transport and retrieval tests.

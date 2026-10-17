@@ -144,8 +144,8 @@ describe("agentic Ask: research loop", () => {
     expect(new Set(calls.map(call => call.since)).size).toBe(1);
     expect(script.inputs.every(input => JSON.parse(input.user_prompt).today === '2026-10-05')).toBe(true);
     expect(calls.map(call => [call.source, call.cursor])).toEqual([['meeting', undefined], ['document', undefined], ['meeting', 'next-page']]);
-    expect(script.prompt(1).last_results.map((value: { items: { id: string; title: string }[] }) => value.items.map(entry => [entry.id, entry.title])))
-      .toEqual([[['E1', 'Meeting first']], [['E2', 'Meeting document']], [['E3', 'Meeting second']]]);
+    expect(script.prompt(1).last_results.map((value: { items: string[] }) => value.items)).toEqual([['E1'], ['E2'], ['E3']]);
+    expect(script.prompt(1).seen.map((entry: { id: string; title: string }) => [entry.id, entry.title])).toEqual([['E1', 'Meeting first'], ['E2', 'Meeting document'], ['E3', 'Meeting second']]);
   });
 
   it('admits complete multiline search packets without an extra open or duplicate prompt bodies', async () => {
@@ -157,8 +157,8 @@ describe("agentic Ask: research loop", () => {
       (input: StructuredGenerationInput) => {
         const prompt = JSON.parse(input.user_prompt);
         expect(prompt.seen).toEqual([expect.objectContaining({ id: 'E1', text, full: true })]);
-        expect(prompt.last_results[0].results[0]).not.toHaveProperty('text');
-        expect(prompt.last_results[0].results[0]).not.toHaveProperty('preview');
+        // The result names the hit by id; its body is only in seen.
+        expect(prompt.last_results[0].results).toEqual(['E1']);
         expect(input.user_prompt.split(JSON.stringify(text)).length - 1).toBe(1);
         return finish([found(['E1'])]);
       },
@@ -177,12 +177,15 @@ describe("agentic Ask: research loop", () => {
       (input: StructuredGenerationInput) => {
         const prompt = JSON.parse(input.user_prompt);
         expect(Buffer.byteLength(input.user_prompt)).toBeLessThanOrEqual(agenticAskContextBudgetBytesV1(4_096, input.system_prompt, input.max_output_tokens));
-        expect(prompt.seen.some((entry: { id: string; full?: boolean }) => entry.id === 'E1' && entry.full === true)).toBe(false);
-        return finish([found(['E1'])]);
+        // Entries are kept in id order, so the budget leaves out the newest packets first.
+        const ids = prompt.seen.map((entry: { id: string }) => entry.id);
+        expect(ids).toEqual(Array.from({ length: ids.length }, (_, index) => `E${index + 1}`));
+        expect(prompt.seen.some((entry: { id: string; full?: boolean }) => entry.id === 'E8' && entry.full === true)).toBe(false);
+        return finish([found(['E8'])]);
       },
       (input: StructuredGenerationInput) => {
         expect(JSON.parse(input.user_prompt).validation_error).toContain('cites no item whose full text you have read');
-        return finish([found(['E1'])]);
+        return finish([found(['E8'])]);
       },
       answer([], ['launch date']),
     ]);
@@ -256,7 +259,7 @@ describe("agentic Ask: research loop", () => {
     ]);
     await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
     expect(evidence.search).toHaveBeenCalledTimes(2);
-    expect(evidence.search).toHaveBeenNthCalledWith(1, expect.objectContaining({ query: 'launch date', kinds: ['imported_meeting', 'decision', 'action', 'rationale'] }));
+    expect(evidence.search).toHaveBeenNthCalledWith(1, expect.objectContaining({ query: 'launch date', kinds: ['imported_meeting', 'decision', 'action', 'rationale', 'note'] }));
     expect(evidence.search).toHaveBeenNthCalledWith(2, expect.objectContaining({ query: 'launch date', kinds: ['note', 'document_passage'] }));
   });
 
@@ -305,7 +308,7 @@ describe("agentic Ask: research loop", () => {
       expect(input.user_prompt).not.toContain(launch.citation.kind === "approved_record" ? launch.citation.atom_id : "");
     }
     expect(script.prompt(1).seen[0]).toMatchObject({ id: "E1", source: "meeting", text: "Launch is approved for Tuesday.", full: true });
-    expect(script.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ need: "launch date", status: "open", evidence: [] }] }]);
+    expect(script.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "open", evidence: [] }] }]);
   });
 
   it("lists a keyword-free source, opens an item, and cites its full text", async () => {
@@ -320,7 +323,8 @@ describe("agentic Ask: research loop", () => {
     ]);
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: "Summarize this project" });
     expect(evidence.list).toHaveBeenCalledWith(expect.objectContaining({ source: "document", limit: 50 }));
-    expect(script.prompt(1).last_results[0]).toMatchObject({ tool: "list", source: "document", items: [{ id: "E1", source: "document", title: "Atlas plan.md" }], more: false });
+    expect(script.prompt(1).last_results[0]).toEqual({ tool: "list", args: { source: "documents" }, items: ["E1"], more: false });
+    expect(script.prompt(1).seen[0]).toMatchObject({ id: "E1", source: "document", title: "Atlas plan.md" });
     expect(script.prompt(2).opened[0]).toMatchObject({ id: "E1", text: passage.text });
     expect(evidence.open).toHaveBeenCalledWith(expect.objectContaining({ item: listed.id }));
     expect(result.outcome).toBe("answered");
@@ -365,10 +369,12 @@ describe("agentic Ask: research loop", () => {
     ]);
     await ask({ desk: evidence, model: script.model }).answer({ question: "What does Jules own?" });
     const [byStatus, byOwner] = script.prompt(1).last_results;
+    const seen = new Map(script.prompt(1).seen.map((entry: { id: string }) => [entry.id, entry]));
+    const owners = (ids: readonly string[]) => ids.map(id => (seen.get(id) as { attributes: { owner: string } }).attributes.owner);
     // An action with no confirmed owner says so; it is never filled in from what it mentions.
-    expect(byStatus.items.map((item: { attributes: { owner: string } }) => item.attributes.owner)).toEqual(["Jules", "Colin", "none recorded"]);
+    expect(owners(byStatus.items)).toEqual(["Jules", "Colin", "none recorded"]);
     expect(byStatus.note).toContain("do not record open or done");
-    expect(byOwner.items.map((item: { attributes: { owner: string } }) => item.attributes.owner)).toEqual(["Jules", "Jules"]);
+    expect(owners(byOwner.items)).toEqual(["Jules", "Jules"]);
     expect(evidence.list).toHaveBeenLastCalledWith(expect.objectContaining({ source: "meeting", kinds: ["action"] }));
   });
 
@@ -561,7 +567,7 @@ describe("agentic Ask: research loop", () => {
       answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }], ["launch owner"]),
     ]);
     const result = await ask({ desk: desk({ search: () => [launch] }), model: script.model }).answer({ question: "When is launch and who owns it?" });
-    expect(script.prompt(2).validation_error).toContain("need \"launch owner\" is still open");
+    expect(script.prompt(2).validation_error).toContain("need N2 \"launch owner\" is still open");
     expect(script.prompt(2).plan[0].needs.map((need: { need: string }) => need.need)).toEqual(["launch date", "launch owner"]);
     expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "I couldn't complete the search. Please try again. Missing context: launch owner." }] });
   });
@@ -573,7 +579,9 @@ describe("agentic Ask: research loop", () => {
     const script = scripted([
       step([{}], [search("launch")]),
       (input: StructuredGenerationInput) => {
-        const hit = JSON.parse(input.user_prompt).last_results[0].results[0];
+        const prompt = JSON.parse(input.user_prompt);
+        expect(prompt.last_results[0].results).toEqual(["E1"]);
+        const hit = prompt.seen.find((entry: { id: string }) => entry.id === "E1");
         expect(hit).toMatchObject({ id: "E1", title: metadata.label });
         expect(hit).not.toHaveProperty("preview");
         return step([{}], [open(hit.id)]);
@@ -594,7 +602,7 @@ describe("agentic Ask: research loop", () => {
       step([{}], [{ tool: "list", args: { source: "meetings" } }]),
       step([{}], [{ tool: "open", args: { query: "E1" } }]),
       (input: StructuredGenerationInput) => {
-        expect(input.system_prompt).toContain("open requires args.id");
+        expect(JSON.parse(input.user_prompt).validation_error).toContain("open requires args.id");
         expect(JSON.parse(input.user_prompt).last_results[0].tool).toBe("list");
         return step([{}], [open("E1")]);
       },
@@ -622,7 +630,7 @@ describe("agentic Ask: research loop", () => {
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: d, model: script.model, audit }).answer({ question: 'When is launch?' });
     expect(result.outcome).toBe('answered');
-    expect(script.inputs[1]!.system_prompt).toContain('no items have been discovered');
+    expect(script.prompt(1).validation_error).toContain('no items have been discovered');
     expect(script.prompt(1).step).toBe(1);
     expect(JSON.stringify(script.inputs[0]!.schema)).not.toContain('"tool":{"type":"string","enum":["open"]}');
     expect(JSON.stringify(script.inputs[2]!.schema)).toContain('"enum":["E1"]');
@@ -864,8 +872,12 @@ describe("agentic Ask: research loop", () => {
     ]);
     const audit: AgenticAskAuditEntryV1[] = [];
     await ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" });
-    expect(script.inputs[1]!.system_prompt).toContain("Your previous reply could not be used: \"parts\" must be an array (got keys \"answer_parts\")");
+    // The system prompt is unchanged; the reason and the shape request end the user prompt.
+    expect(script.inputs[1]!.system_prompt).toBe(script.inputs[0]!.system_prompt);
     expect(script.inputs[1]!.system_prompt).toContain("{\"parts\":[{\"question\"");
+    const repair = JSON.parse(script.inputs[1]!.user_prompt) as Record<string, unknown>;
+    expect(Object.keys(repair).at(-1)).toBe("validation_error");
+    expect(repair.validation_error).toBe("Your previous reply could not be used: \"parts\" must be an array (got keys \"answer_parts\"). Reply again with only the JSON object, in exactly the shape your instructions show.");
     expect(audit[0]).toMatchObject({ repairs: 1, model_calls: 4 });
   });
 
@@ -959,6 +971,19 @@ describe("agentic Ask: research loop", () => {
         for (const ref of [meeting.ref, passage.ref, document_id]) expect(prompt).not.toContain(ref);
       }
     }
+  });
+
+  it('gives the LLM client-local now and executes its date selection without parsing the question', async () => {
+    const evidence = desk({ search: () => [item('dated')] });
+    const script = scripted([
+      step([{}], [{ tool: 'search', args: { query: 'launch', source: 'meetings', since: '2026-10-15', until: '2026-10-15', date_field: 'occurred' } }]),
+      finish([found(['E1'])]), answer([{ text: 'The launch was discussed.', evidence: ['E1'] }]),
+    ]);
+    await createAgenticAskV1({ desk: evidence, model: script.model, generation, audit: { append: () => undefined },
+      time_context: { now: '2026-10-17T04:30:00.000Z', time_zone: 'America/Los_Angeles' },
+    }).answer({ question: 'Remind me what happened yesterday about launch.' });
+    for (const input of script.inputs) expect(JSON.parse(input.user_prompt)).toMatchObject({ today: '2026-10-16', now: '2026-10-17T04:30:00.000Z', time_zone: 'America/Los_Angeles', time_reference: 'client' });
+    expect(evidence.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'launch', since: '2026-10-15', until: '2026-10-15', date_field: 'occurred', time_zone: 'America/Los_Angeles' }));
   });
 
   it("tells every call who is asking and today's date, and no audit keeps the name", async () => {
@@ -1162,14 +1187,16 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const launch = item("a");
     const evidence = desk({ search: () => [launch], open: () => [launch], revalidate: async () => {
       checks += 1;
-      if (checks === 3) clock += 10_000.25;
+      // Steps of 10 s leave the third step room to start; its permission check then takes 30 s, which still leaves the 12.5 s
+      // the step needs after the longest step call so far.
+      if (checks === 3) clock += 30_000.25;
       if (checks === 4) clock += 15_000.25;
       return { checked_at: checked };
     } });
     const timeouts: number[] = [];
     const script = scripted([
-      () => { clock += 20_000; return step([{}], [search("launch")]); },
-      () => { clock += 20_000; return step([{}], [open("E1")]); },
+      () => { clock += 10_000; return step([{}], [search("launch")]); },
+      () => { clock += 10_000; return step([{}], [open("E1")]); },
       (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); clock += 10_000; return finish([found(["E1"])]); },
       (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); return answer([{ text: "Tuesday.", evidence: ["E1"] }]); },
     ]);
@@ -1246,8 +1273,9 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const evidence = desk({ search: () => [launch], open: () => [launch] });
     const audit: AgenticAskAuditEntryV1[] = [];
     const script = scripted([
-      () => { clock += 20_000.25; return step([{}], [search("launch")]); },
-      () => { clock += 20_000.125; return step([{}], [open("E1")]); },
+      // The third step starts with less than a whole step's time, but more than it needs after 19.5 s steps.
+      () => { clock += 19_000.25; return step([{}], [search("launch")]); },
+      () => { clock += 19_500.125; return step([{}], [open("E1")]); },
       () => { clock += 21_000.25; return finish([found(["E1"])]); },
       answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
     ]);

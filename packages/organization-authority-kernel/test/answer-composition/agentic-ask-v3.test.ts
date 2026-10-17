@@ -72,7 +72,8 @@ describe('Agentic Ask V3 live pages', () => {
     expect(desk.open).toHaveBeenNthCalledWith(1, expect.objectContaining({ item: start.id }));
     expect(desk.open).toHaveBeenNthCalledWith(2, expect.objectContaining({ item: next.id }));
     const afterFirstOpen = JSON.parse(prompts[2]!);
-    expect(afterFirstOpen.last_results.at(-1)).toMatchObject({ tool: 'open', opened: ['E2'], results: [expect.objectContaining({ id: 'E3', title: next.label })] });
+    expect(afterFirstOpen.last_results.at(-1)).toMatchObject({ tool: 'open', opened: ['E2'], results: ['E3'] });
+    expect(afterFirstOpen.seen).toContainEqual(expect.objectContaining({ id: 'E3', title: next.label }));
   });
 });
 
@@ -145,7 +146,7 @@ it('concurrently reads same-kind registered sources and admits exact passages wi
     expect.objectContaining({ id: 'E1', source: 'handbook', text: firstItem.text, full: true }),
     expect.objectContaining({ id: 'E2', source: 'runbooks', text: secondItem.text, full: true }),
   ]);
-  expect(research.last_results.every((result: { results: Record<string, unknown>[] }) => result.results.every(item => !('text' in item) && !('preview' in item)))).toBe(true);
+  expect(research.last_results.every((result: { results: unknown[] }) => result.results.every(id => typeof id === 'string'))).toBe(true);
   expect(desk.open).not.toHaveBeenCalled();
   expect(capture).not.toHaveBeenCalled();
 });

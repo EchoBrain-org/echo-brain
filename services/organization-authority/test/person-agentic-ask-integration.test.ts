@@ -23,7 +23,7 @@ type Listing = { id: string; title?: string; text?: string };
 type Prompt = {
   question?: string;
   step?: number;
-  last_results?: { tool: string; items?: Listing[]; results?: Listing[] }[];
+  last_results?: { tool: string; items?: string[]; results?: string[] }[];
   opened?: Listing[];
   plan?: { part?: number; question: string }[];
   evidence?: Listing[];
@@ -80,7 +80,7 @@ function fixture(options: { readonly small_scope_shortcut?: boolean; readonly me
     const part = (status: string, evidence: string[] = []) => ({ question: prompt.question!, needs: [{ need: "project summary", status, evidence }], notes: "" });
     if ((prompt.opened ?? []).length > 0) return { parts: [part("found", prompt.opened!.map(item => item.id))], actions: [{ tool: "finish", args: {} }] };
     const listed = prompt.last_results?.find(result => result.tool === "list")?.items ?? [];
-    if (listed.length > 0) return { parts: [part("open")], actions: [{ tool: "open", args: { id: listed[0]!.id } }] };
+    if (listed.length > 0) return { parts: [part("open")], actions: [{ tool: "open", args: { id: listed[0]! } }] };
     if (prompt.step === 1) return { parts: [part("open")], actions: [{ tool: "list", args: { source: "documents" } }] };
     return { parts: [part("not_found")], actions: [{ tool: "finish", args: {} }] };
   } };
@@ -160,6 +160,8 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(f.originals.read({ access_token: "owner", scope: answer.scope, citation }).atom.text).toBe("Atlas plan.md\nThe launch window is October.");
     const opened = await f.route.openEvidence({ access_token: "owner", request: { schema_version: 1, citation, project_id: PROJECT_ALPHA } });
     expect(opened.items[0]!.text).toBe("Atlas plan.md\nThe launch window is October.");
+    expect(opened.items[0]).not.toHaveProperty("dates");
+    expect(opened.items[0]).not.toHaveProperty("date_kind");
     const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
     expect(body.response_sha256).toBe(canonicalSha256(answer)); expect(body.principal_id).toBe(OWNER.principal_id);
     expect(body).toMatchObject({ model_calls: 4, rounds: 3 }); expect(auditRow(f.database)!.body_json).not.toContain("October");
@@ -293,10 +295,10 @@ describe("Agentic Ask V5 combined request-local sources", () => {
         const ids = prompt.evidence!.map(item => item.id);
         return { sentences: [{ text: "The meeting, work item and plan all place EVT on Tuesday.", evidence: ids }], not_found: [] };
       }
-      const listed = prompt.last_results?.find(result => result.tool === "search")?.items ?? [];
+      const listed = prompt.last_results?.find(result => result.tool === "search")?.results ?? [];
       return listed.length === 0
         ? { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "open", evidence: [] }] }], actions: [{ tool: "search", args: { query: "EVT Tuesday" } }] }
-        : { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "found", evidence: listed.map(item => item.id) }] }], actions: [{ tool: "finish", args: {} }] };
+        : { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "found", evidence: [...listed] }] }], actions: [{ tool: "finish", args: {} }] };
     } };
     const route = liveRoute(f, model, [{ ...LEGACY_TICKET_CONNECTOR_V1, application: { source: async () => ticketSource } }, { ...LEGACY_PAGE_CONNECTOR_V1, application: { source: async () => pageSource } }]);
     const answer = await route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } });

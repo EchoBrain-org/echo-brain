@@ -50,6 +50,9 @@ describe('impact card', () => {
   it('accepts an assessed card and a card whose items are not yet assessed', () => {
     expect(validatePersonImpactCardV1(assessed)).toEqual(assessed);
     expect(validatePersonImpactCardV1(notAssessed)).toEqual(notAssessed);
+    // What was decided needs no model: a card not yet assessed may still say it, in the record's own words.
+    const decided = { ...notAssessed, decided: [{ text: 'Show two decimals.', citation_index: 2 }], citations: [ticketCitation, pageCitation, recordCitation] };
+    expect(validatePersonImpactCardV1(decided)).toEqual(decided);
     expect(Object.isFrozen(validatePersonImpactCardV1(assessed))).toBe(true);
   });
 
@@ -105,7 +108,7 @@ describe('impact card', () => {
       ['assessed without a relation', affectedWith(assessed, 1, { citation_index: 2, says_now: 'The PRD specifies one decimal.' })],
       ['not assessed with a relation', affectedWith(notAssessed, 1, { citation_index: 1, says_now: 'PRD: Display', relation: 'confirms' })],
       ['not assessed with a date', affectedWith(notAssessed, 1, { citation_index: 1, says_now: 'PRD: Display', date_at_risk: { date: '2026-10-15', milestone: 'DVT gate' } })],
-      ['not assessed with decisions', { ...notAssessed, decided: [{ text: 'Show two decimals.', citation_index: 1 }] }],
+      ['not assessed with a decided item also affected', { ...notAssessed, decided: [{ text: 'Show two decimals.', citation_index: 1 }] }],
       ['too many decisions', { ...assessed, decided: Array.from({ length: limits.decided + 1 }, (_, index) => ({ text: `Decision ${index}.`, citation_index: 0 })) }],
       ['too many notes', { ...assessed, unconfirmed: Array.from({ length: limits.unconfirmed + 1 }, (_, index) => `Note ${index}.`) }],
       ['repeated note', { ...assessed, unconfirmed: ['Note.', 'Note.'] }],

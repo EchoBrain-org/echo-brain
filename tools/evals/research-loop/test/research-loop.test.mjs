@@ -314,6 +314,41 @@ test("each Sweep verdict names its own finding, in the findings' order, since sw
   assert.ok(problems({ verdicts: sweep.verdicts.map((verdict, index) => (index === 1 ? { ...verdict, finding: "TC-D-06 is open." } : verdict)) }).some(problem => problem.includes("in the findings' order")), "a verdict naming another finding");
 });
 
+test("a Sweep case names no planner needs or gaps: a sweep has no planner to ask for or report them (R77)", () => {
+  const sweep = dataset.cases.find(entry => entry.id === "sweep-two-decimal-propagation");
+  const problems = changed => datasetProblems({ ...dataset, cases: [{ ...sweep, ...changed }] });
+  assert.ok(problems({ expected_needs: ["current SW-22b text"] }).some(problem => problem.includes("no planner")), "expected needs");
+  assert.ok(problems({ gaps: ["a confirmed delivery date"] }).some(problem => problem.includes("no planner")), "gaps");
+});
+
+test("a planner-less sweep is not graded on planner needs, handed items or plan gaps, so they never count as zero", () => {
+  const testCase = caseById("sweep-two-decimal-propagation");
+  // As a sweep's research returns them (R77): the starting items read in full, no plan, so nothing is cited by one.
+  const items = propagationItems().map(item => ({ ...item, preloaded: true, cited_by_plan: false }));
+  const run = completedRun(testCase, items, undefined, sweepResult(items, [
+    { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
+    { verdict: "still_open", line: "TC-D-06 still expects one decimal.", cites: [1] },
+    { verdict: "changed", line: "PRD-D01 now names three decimals, not two.", cites: [2] },
+  ]));
+  run.result.research = { ...run.result.research, plan: [], rounds: [] };
+  const judge = parseJudge(testCase, { needs: testCase.expected_needs.map(expected => ({ expected, covered: false })), invented_needs: [],
+    parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })),
+    gaps: testCase.gaps.map(gap => ({ gap, reported: false })), must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false,
+    verdicts: testCase.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" });
+  const scores = runScores({ checks: codeChecks(testCase, run, dataset), judge });
+  const notApplicable = entry => [entry.planner_needs_covered, entry.planner_invented_needs, entry.tools_handed, entry.noise_handed, entry.distractors_handed, entry.research_gaps_reported];
+  assert.deepEqual(notApplicable(scores), [null, null, null, null, null, undefined]);
+  assert.deepEqual([scores.tools_found, scores.tools_read, scores.complete_and_supported], [1, 1, true]);
+  // A failed sweep scores zero on what a sweep does, and nothing on what it never does.
+  const failed = runScores({ checks: codeChecks(testCase, { trial: 2, budget: testCase.budget, outcome: "failed", error: { code: "unavailable" } }, dataset), judge: null });
+  assert.deepEqual([failed.tools_found, failed.research_established, failed.planner_needs_covered, failed.tools_handed], [0, 0, undefined, undefined]);
+  // So the case's averages, and the cross-case planner averages, leave sweeps out.
+  const report = aggregate([{ checks: codeChecks(testCase, run, dataset), judge }, { checks: codeChecks(testCase, { trial: 2, budget: testCase.budget, outcome: "failed", error: { code: "unavailable" } }, dataset), judge: null }]);
+  assert.deepEqual(notApplicable(report.cases[0]).slice(0, 5), [null, null, null, null, null]);
+  assert.deepEqual([report.summary.planner_needs_covered, report.summary.tools_handed], [null, null]);
+  assert.match(markdownReport({ split: "development", state: "S1", world: "therm", graded_at: "2026-10-16" }, report), /A sweep has no planner/u);
+});
+
 test("a completed run without its rendered result still has its research scanned for restricted leaks", () => {
   // Research returned the restricted M6 decision, and a ticket whose text names the restricted supplier.
   const items = [ticket("THERM-18", { id: "E1", text: "Corvane signed off the rounding." }), record("M6", "decision", "E2")];
@@ -434,13 +469,14 @@ test("the judge sees the card as the answer, and its gap checks count for the ca
   const judged = { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [], parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })),
     gaps: testCase.gaps.map(gap => ({ gap, reported: true })), must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: [], notes: "" };
   const scores = runScores({ checks: codeChecks(testCase, run, dataset), judge: parseJudge(testCase, judged) });
-  assert.deepEqual([scores.card_gaps_reported, scores.gaps_reported, scores.research_gaps_reported], [1, null, null]);
+  assert.deepEqual([scores.card_gaps_reported, scores.gaps_reported], [1, null]);
   const sweep = caseById("sweep-bug-412-and-gate");
   const sweepJudge = { ...judged, parts: sweep.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })), needs: sweep.expected_needs.map(expected => ({ expected, covered: true })),
     gaps: sweep.gaps.map(gap => ({ gap, reported: false })), must_not: sweep.must_not.map(rule => ({ rule, violated: false })), verdicts: sweep.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })) };
   const sweepRendered = sweepResult([ticket("THERM-46")], [{ verdict: "still_open", line: "BUG-412 is still open.", cites: [0] }, ...[1, 2].map(() => ({ verdict: null, line: "Not assessed." })), { verdict: "unreadable", line: "ECHO could not read this item." }]);
   const sweepScores = runScores({ checks: codeChecks(sweep, completedRun(sweep, [ticket("THERM-46")], undefined, sweepRendered), dataset), judge: parseJudge(sweep, sweepJudge) });
-  assert.deepEqual([sweepScores.research_gaps_reported, sweepScores.gaps_reported, sweepScores.card_gaps_reported], [0, null, null]);
+  // A sweep names no gaps (it has no plan to report them in), so none of its gap measures is known.
+  assert.deepEqual([sweepScores.gaps_reported, sweepScores.card_gaps_reported, "research_gaps_reported" in sweepScores], [null, null, false]);
 });
 
 test("the judge sees a sweep result as per-finding verdicts with one line each, never as a card", () => {

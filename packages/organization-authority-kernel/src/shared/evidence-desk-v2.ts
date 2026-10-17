@@ -56,11 +56,11 @@ export function liveSourceDescriptorV2(source: EvidenceDeskLiveSourceV2): Person
 }
 
 /** The source of an item, from its kind. */
-export function evidenceDeskSourceV2(item: { readonly kind: EvidenceDeskKindV2; readonly source_id?: string }): EvidenceDeskSourceV2 {
+export function evidenceDeskSourceV2(item: { readonly kind: EvidenceDeskKindV2; readonly source_id?: string; readonly ref?: string }): EvidenceDeskSourceV2 {
   if (item.source_id !== undefined) return item.source_id;
   if (item.kind === 'ticket') return 'ticket';
   if (item.kind === 'page') return 'page';
-  return evidenceDeskSourceV1({ kind: item.kind });
+  return evidenceDeskSourceV1(item as { kind: EvidenceDeskKindV1; ref?: string });
 }
 
 export interface EvidenceDeskItemV2 extends Omit<EvidenceDeskItemV1, 'citation' | 'kind'> {
@@ -85,7 +85,7 @@ export interface EvidenceDeskPortV2 extends Omit<EvidenceDeskPortV1, 'search' | 
   readonly ticket_available?: boolean;
   /** Connected live sources let research choose without provider implementation details. */
   readonly live_sources?: readonly EvidenceDeskLiveSourceV2[];
-  search(input: Omit<EvidenceDeskSearchInputV1, 'kinds'> & { readonly source?: string; readonly kinds?: readonly EvidenceDeskKindV2[] }): Promise<EvidenceDeskResultV2>;
+  search(input: Omit<EvidenceDeskSearchInputV1, 'kinds' | 'source'> & { readonly source?: string; readonly kinds?: readonly EvidenceDeskKindV2[] }): Promise<EvidenceDeskResultV2>;
   open(input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV2>;
   list(input: EvidenceDeskListInputV2): Promise<EvidenceDeskResultV2>;
   /**

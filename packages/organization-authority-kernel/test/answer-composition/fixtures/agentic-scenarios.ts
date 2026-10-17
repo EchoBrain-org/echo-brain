@@ -152,7 +152,8 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
   },
   budget_stop_with_slow_clock: {
     version: 4, question: "Is the DVT build on track?",
-    model_call_ms: 20_000,
+    // 18 s steps: the fourth step would have 9 s, less than 1.25 times the longest step, so research stops for budget.
+    model_call_ms: 18_000,
     desk: () => ({
       scope: { kind: "global" }, live_sources: [],
       search: async (input: { readonly query?: string }) => result([record(`hit-${input.query ?? "none"}`)]),

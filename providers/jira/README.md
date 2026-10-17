@@ -65,8 +65,10 @@ is no retained verification result: each caller still checks its local binding
 and cancellation, and post-read checks cannot reuse a pre-read result.
 
 Jira checks Browse Projects, issue security and app access policy under the
-current user. Search results may lag, so every selected ticket is fetched by
-its immutable numeric issue id before release. Search and list release only
+current user. Search results may lag, so every selected ticket is read again by
+its immutable numeric issue id before release: one bulk issue read per page,
+which applies current permissions, and an exact read for any hit it omits, so a
+hidden or deleted hit still stops the page. Search and list release only
 summaries (title, status, owner and due date); open fetches a selected ticket's
 body through its request-owned handle. List resolves a project by id
 or key through Jira, and verifies the returned tickets belong to that project.
@@ -125,24 +127,42 @@ token refresh to the same immutable ECHO grant.
 request in `createAuditedPersonLiveEvidenceSourceV1`, because the reader alone
 is not a Layer 3 release endpoint.
 
-Search matches all supplied literal keywords independently (or an exact issue
-key, case-insensitively), never caller-authored JQL. It accepts at most 32
-distinct keywords and preserves identifier punctuation through the Ask protocol. The
-provider compiles each keyword to an escaped literal text clause and joins
-them with `AND`; it does not require the words to form one adjacent phrase.
+Search matches all supplied literal keywords independently, never
+caller-authored JQL. It accepts at most 32 distinct keywords and preserves
+identifier punctuation through the Ask protocol. The provider compiles each
+keyword to an escaped literal text clause and joins them with `AND`; it does
+not require the words to form one adjacent phrase. Issue keys among the
+keywords (case-insensitive, ignoring surrounding punctuation, at most the
+result limit) also match that ticket exactly, ahead of text matches, so a
+query means `key in (...) OR` every keyword; a query of only keys is a key
+lookup. Keys are read through the bulk issue read, not JQL, because Jira
+refuses a whole JQL query that names one missing or hidden key; such a key is
+simply no match. When nothing matches, there are at least two keywords and
+one to six of them are words rather than keys, the search retries once with
+every keyword but one word (an `OR` of each word dropped in turn; a plain `OR`
+for two words). A named key stays in every clause, so a key nothing matched
+narrows the retry to tickets that mention it; with one word, the retry is the
+key's own clause.
 Ask can select `source: "tickets"` for a targeted search, or omit the source to
 search all available evidence. Every selection keeps the current Person and
 project boundary. Open accepts only a handle minted by that reader. List
 accepts a Jira project key/id, or no project for the caller's visible inventory.
-Dates are inclusive UTC **creation** days, applied after exact reads; JQL date
-literals use the Jira account's timezone. A filtered page can be empty with an
-advancing continuation. This is a live walk, not a pinned Jira snapshot.
+Search and list accept inclusive calendar bounds and `date_field` of `created`
+(the default), `updated`, or `due`. Timestamps use the request's time zone (UTC
+when absent); date-only deadlines keep their calendar date. JQL literals use
+the provider account's zone, so discovery bounds include a margin and exact
+filtering runs on the current permission-checked values. The client-zone path
+uses two days of margin to cover differences between client and provider zones.
+A filtered page can be empty with an advancing continuation; lists sort by the
+selected field and stop once the oldest value precedes `since`. Keyword
+searches retain date filters on the relaxed retry and exact-key lookup.
+This is a live walk, not a pinned Jira snapshot.
 Repeated issue ids or continuation tokens within a walk fail closed. There is
 no search continuation in the shared contract.
 
 To stay inside the shared 64 KiB result bound, search pages contain at most
-5 ticket summaries and list pages at most 20, also respecting the requested limit
-(1-50). Labels are NFC and at most 256 UTF-8 bytes; text is NFC and at most
+5 ticket summaries and list pages at most 25, also respecting the requested limit
+(1-50). Twenty-five worst-case summaries fit the bound; fifty would not. Labels are NFC and at most 256 UTF-8 bytes; text is NFC and at most
 3,072 bytes, cut at code-point boundaries before hashing. `truncated` reports
 provider continuation or shortened text/labels. Inventory omits text and uses
 SHA-256 of the empty string. Numeric issue ids are stable citation identities;
@@ -169,7 +189,7 @@ and metadata are never fetched. Unsupported nodes (including media and
 data-backed cards), malformed fields and control bytes
 fail closed. Comments, attachments, custom fields, email addresses and user ids
 are not released. Null description, assignee and due date are supported.
-Optional metadata is limited to assignee display name, status and due date.
+Optional metadata includes assignee display name, status, due date, creation and current update timestamps.
 
 Each direct request has a 15-second timeout and a 1 MiB streamed JSON-body
 limit. There are no retries. HTTP 401/403 deny access, 404 refuses the exact
@@ -213,9 +233,13 @@ organization, grant or site selector in model arguments or connection commands.
    Every release commits current Person/grant, ticket coordinates and exact
    released-text digest and normalized-value digest (including inventory metadata)
    to the immutable Authority read-decision table before
-   reaching a model. Revalidation includes inventory, earlier revisions and
-   evidence omitted from the answer, before every subsequent model call and
-   after the terminal audit. The desk rechecks its local snapshot after Jira I/O.
+   reaching a model. Before every subsequent model call, revalidation rechecks
+   the evidence released since the previous successful check, plus the session,
+   grant and connection; before and after the terminal audit it rechecks all
+   released evidence, including inventory, earlier revisions and evidence
+   omitted from the answer
+   ([ADR-0038](../../docs/decisions/ADR-0038-incremental-access-check-before-model-calls.md)).
+   The desk rechecks its local snapshot after Jira I/O.
 4. V5 citations open the adapter-verified Jira permalink directly. The
    desktop's global and project Ask call `person ask --live`
    (`POST /v5/person/ask`, strict V6 response with Jira tickets and Confluence

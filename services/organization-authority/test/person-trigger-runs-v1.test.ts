@@ -5,7 +5,7 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authori
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SqliteImpactItemsV1 } from '../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqliteOpenItemPeopleV1 } from '../src/adapters/persistence/sqlite/open-item-people-v1.js';
-import { observeCoreRuntimeV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { observeCoreRuntimeV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from '../../../tests/support/telemetry-fixture-vocabulary-v1.js';
 
@@ -25,7 +25,7 @@ const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'c
 const card = { decided: [{ text: 'Approved display decision.', citation_index: 0 }], affected: [{ citation_index: 1, says_now: 'ignored', relation: 'conflicts' as const }], unconfirmed: [], people: [], status: 'assessed' as const,
   citations: [{ citation: record, kind: 'decision' as const, label: 'Approved display', visibility: 'team' as const }, { citation: ticket, kind: 'ticket' as const, label: 'Kestrel cooling fan drift 0xC0FFEE', visibility: 'only_me' as const }] };
 
-async function fixture(options: { readonly anchor?: () => typeof record; readonly actions?: () => readonly PersonRecordActionV1[]; readonly render?: (input: { readonly signal?: AbortSignal }) => Promise<unknown>; readonly rotated?: () => boolean } = {}) {
+async function fixture(options: { readonly anchor?: () => typeof record; readonly actions?: () => readonly PersonRecordActionV1[]; readonly render?: (input: { readonly signal?: AbortSignal }) => Promise<unknown>; readonly rotated?: () => boolean; readonly indexLags?: () => boolean } = {}) {
   let now = new Date('2026-10-07T10:00:00.000Z');
   const f = await approvalCoreFixture(); const runs = new SqliteTriggerRunsV1(f.db, () => now);
   f.core.decide('desktop', f.approve(), () => f.session);
@@ -46,7 +46,7 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
     record_sha256s.map(sha => [sha, { approval_id: f.approvalId, record_sha256: sha, title: 'Approved display', approved_at: now.toISOString(), project_ids: [] }] as const));
   const diagnostics = createPersonDiagnosticsV1({ sessions: { authenticateAccess: ({ access_token }) => auth(access_token) } });
   captures.push(diagnostics);
-  const create = (serviceRuns: SqliteTriggerRunsV1 = runs, max_running?: number) => createPersonTriggerRunsV1({ ...(max_running === undefined ? {} : { max_running }), runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordActions: () => (options.actions ?? (() => []))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [] }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
+  const create = (serviceRuns: SqliteTriggerRunsV1 = runs, max_running?: number) => createPersonTriggerRunsV1({ ...(max_running === undefined ? {} : { max_running }), runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordActions: () => (options.actions ?? (() => []))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [], ...(options.indexLags === undefined ? {} : { recordIndexLags: options.indexLags }) }, bindDesk: bindDesk as never, audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
     items: new SqliteImpactItemsV1(f.db, () => now), people: new SqliteOpenItemPeopleV1(f.db) });
   const app = create();
   const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'));
@@ -62,7 +62,7 @@ describe('durable approved-record trigger runs', () => {
     const trigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
     expect(f.renderInputs[0]).toMatchObject({
       trigger: 'approved_record', trigger_input: { record }, renderer: trigger.renderer,
-      brief: { starting: [{ citation: record, if_unreadable: 'fail' }], budget: trigger.brief(trigger.parseEvent({ record })).budget },
+      brief: { starting: [{ citation: record, if_unreadable: 'fail' }], budget: trigger.brief(trigger.parseEvent({ record }), { kind: 'global' }).budget },
     });
     expect(f.runs.read(f.person, f.row.run_id)!.result_json).not.toContain('0xC0FFEE');
     await expect(f.app.start({ access_token: 'other', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });
@@ -180,6 +180,46 @@ describe('durable approved-record trigger runs', () => {
     expect(lost.runs.read(lost.person, lost.row.run_id)).toMatchObject({ state: 'failed', error_code: 'no_access' });
   });
 
+  it('answers pending while the search index lags, claiming, tracing and spending nothing, and starts once it has caught up', async () => {
+    let lags = true;
+    const f = await fixture({ indexLags: () => lags });
+    const events: CoreRuntimeObservationV1[] = [];
+    const capture = await f.diagnostics.prepare({ access_token: 'approver', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id: f.row.run_id } } });
+    const start = (capture_id?: typeof capture.capture_id) => observeCoreRuntimeV1('http_request', () => f.app.start({ access_token: 'approver',
+      request: { schema_version: 1, operation: 'start', run_id: f.row.run_id, ...(capture_id === undefined ? {} : { capture_id }) } }), { observer: event => { events.push(event); } });
+    const claim = vi.spyOn(f.runs, 'claim');
+    await expect(start()).resolves.toEqual({ state: 'pending' });
+    await expect(start(capture.capture_id)).resolves.toEqual({ state: 'pending' });
+    expect(claim).not.toHaveBeenCalled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'pending', attempts: 0, lease_token: null, error_code: null });
+    expect(f.bindDesk).not.toHaveBeenCalled(); expect(f.research).not.toHaveBeenCalled();
+    expect(events.some(event => event.phase === 'research_run')).toBe(false);
+    // The capture is not spent on a start that started nothing.
+    await expect(f.diagnostics.read({ access_token: 'approver', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } })).resolves.toMatchObject({ status: 'prepared' });
+    // Another person's start is refused as before, telling them nothing of the index.
+    await expect(f.app.start({ access_token: 'other', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });
+    lags = false;
+    await expect(start(capture.capture_id)).resolves.toEqual({ state: 'running' });
+    await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'done', attempts: 0 });
+    expect(events.filter(event => event.phase === 'research_run' && event.event === 'started')).toHaveLength(1);
+    await expect(f.diagnostics.read({ access_token: 'approver', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } })).resolves.toMatchObject({ status: 'completed' });
+    // A finished run answers as it is, lag or not.
+    lags = true;
+    await expect(start()).resolves.toEqual({ state: 'done' });
+  });
+
+  it('names index lag met inside an attempt index_lag, not unavailable, in its diagnostics', async () => {
+    const f = await fixture({ anchor: () => { throw new PersonRecordSearchIndexLagV1(); } });
+    const events: CoreRuntimeDiagnosticObservationV1[] = [];
+    // The runtime's exporter (LangSmith) is what a detached run inherits.
+    await observeCoreRuntimeV1('http_request', () => f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }),
+      { diagnostic_exporter: () => event => { events.push(event); } });
+    await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'pending', attempts: 0 });
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'lifecycle', stage: 'application', event: 'failed', error_kind: 'index_lag' }));
+  });
+
   it('reads the meeting\'s actions as the approver before research, and fails as no_access when they cannot read them', async () => {
     const f = await fixture({ actions: () => { throw new AuthorityOperationError('not_found', 'record evidence is not available'); } });
     await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } });
@@ -291,12 +331,28 @@ describe('open items written when an impact check finishes', () => {
     expect(f.items.forRun(f.runId).find(item => item.pointer.kind === 'approved_record')).toMatchObject({ owner_membership_id: f.membership('rafael'), owner_match: 'name' });
   });
 
-  it('writes an item for each not-assessed row, with no relation or expected phrase', async () => {
-    const f = await openItemsFixture({ assessed: false });
+  it('writes no item for a row no model assessed: a card not assessed makes only the meeting\'s own actions follow-ups', async () => {
+    const f = await openItemsFixture({ assessed: false, meetingActions: [{ signal_id: 'act-1', text: 'Send the pilot plan', owner: null }] });
     await f.finishImpactRun();
-    const items = f.items.forRun(f.runId);
-    expect(items).toHaveLength(2);
-    expect(items.map(item => [item.relation, item.expected])).toEqual([[null, null], [null, null]]);
+    expect(f.runs.read(f.person, f.runId)!.state).toBe('done');
+    expect(f.items.forRun(f.runId).map(item => item.pointer.kind)).toEqual(['meeting_action']);
+  });
+
+  it('never makes a follow-up of the transcript the approved meeting shared, and keeps another meeting\'s transcript', async () => {
+    const transcript = (record_sha256: string, anchor: string) => ({
+      citation: { kind: 'source_revision' as const, source_id: `source:${'a'.repeat(64)}`, revision_id: `rev-${anchor}`, source_sha256: canonicalSha256('source'),
+        representation_sha256: canonicalSha256('representation'), anchor_sha256: canonicalSha256(anchor) },
+      kind: 'note' as const, label: 'Transcript', visibility: 'only_me' as const, ref: `transcript:${record_sha256}`,
+    });
+    let own = '';
+    const f = await fixture({ render: async () => ({ ...card,
+      affected: [...card.affected, { citation_index: 2, says_now: 'The meeting said so.', relation: 'needs_updating' as const }, { citation_index: 3, says_now: 'An earlier meeting said otherwise.', relation: 'conflicts' as const }],
+      citations: [...card.citations, transcript(own, 'own'), transcript(canonicalSha256('another record'), 'other')] }) });
+    own = f.row.record_sha256!;
+    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)!.state).toBe('done');
+    const pointers = (f.db.prepare('SELECT pointer_json FROM authority_impact_items_v1 WHERE run_id=?').pluck().all(f.row.run_id) as string[]).map(value => JSON.parse(value) as { kind: string; revision_id?: string });
+    expect(pointers.map(pointer => [pointer.kind, pointer.revision_id ?? null]).sort()).toEqual([['source_revision', 'rev-other'], ['ticket', null]]);
   });
 
   it('keeps one item per item key and gives the approver every ticket when the assignee read fails', async () => {

@@ -174,6 +174,22 @@ function meteredReads(database: Database.Database, maximumBytes: number) {
 }
 
 describe("adversarial original-context retrieval", () => {
+  it('filters document and note capture dates in the client zone and keeps meeting scope separate', async () => {
+    const f = fixture();
+    f.upload('Launch plan', 'launch marker');
+    f.upload('Private launch', 'launch marker', { audience: { kind: 'only_me' } });
+    await f.admitLegacyTeamNote('Launch note', 'launch marker');
+    const base = { access_token: 'member', scope: { kind: 'global' as const }, source: 'document' as const, since: '2026-09-22', until: '2026-09-22', time_zone: 'Asia/Shanghai', date_field: 'received' as const };
+    const inventory = f.retrieval.deskSearch(base);
+    expect(inventory.items.map(item => item.label).sort()).toEqual(['Launch note', 'Launch-plan.md']);
+    expect(f.retrieval.deskSearch({ ...base, time_zone: 'America/Los_Angeles' }).items).toEqual([]);
+    const searched = f.retrieval.deskSearch({ ...base, query: 'launch' });
+    expect(searched.items).toHaveLength(2);
+    expect(searched.items.every(item => item.dates?.received?.startsWith('2026-09-21'))).toBe(true);
+    expect(f.retrieval.deskSearch({ ...base, source: 'meeting', date_field: 'occurred' }).items).toEqual([]);
+    expect(() => f.retrieval.revalidateDeskRelease({ access_token: 'member', release: searched })).not.toThrow();
+  });
+
   it("supplies SCOUT evidence for all seven recorded questions using real upload, extraction and scoped retrieval", async () => {
     const f = fixture();
     const worker = new PersonDocumentProcessingV1(f.repository);
@@ -379,7 +395,7 @@ describe("adversarial original-context retrieval", () => {
       provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-transcript-1", canonical_revision: "revision-1", observed_at: PROJECT_CONTEXT_NOW, normalizer_version: "1" },
       capture: { state: "complete" as const, components: [{ kind: "transcript" as const, state: "available" as const }] },
       participants: [{ id: "omar", display_name: "Omar\u200b  Haddad\n", identities: [{ kind: "email" as const, value: "omar@example.test" }] }, { id: "unnamed" }], artifacts: [],
-      title: "Pricing sync",
+      title: "Pricing sync", time: { actual_start_at: "2026-10-17T01:00:00.000Z", timezone: "America/Los_Angeles" },
       content: [
         { id: "transcript-1", kind: "transcript" as const, text: "approved transcript marker: I will send the revised quote by Friday", speaker_participant_id: "omar" },
         { id: "transcript-2", kind: "transcript" as const, text: "Thanks.", speaker_participant_id: "unnamed" },
@@ -420,6 +436,12 @@ describe("adversarial original-context retrieval", () => {
       } as const;
     }
     const citation = { kind: "approved_meeting_transcript" as const, approval_id: "apr_transcript_fixture", ...source };
+    const dateFilter = { access_token: 'member', scope: { kind: 'global' as const }, source: 'meeting' as const, since: '2026-10-16', until: '2026-10-16', time_zone: 'America/Los_Angeles' };
+    expect(retrieval.deskSearch(dateFilter).items).toEqual([expect.objectContaining({ ref: `transcript:${transcriptGrant().record_sha256}`, dates: { occurred: '2026-10-17T01:00:00.000Z' } })]);
+    expect(retrieval.deskSearch({ ...dateFilter, query: 'quote' }).items).toHaveLength(1);
+    expect(retrieval.deskSearch({ ...dateFilter, source: 'document', date_field: 'received' }).items).toEqual([]);
+    expect(retrieval.deskSearch({ ...dateFilter, time_zone: 'UTC' }).items).toEqual([]);
+
     // ADR-0017 amendment: a transcript shared at approval is Ask evidence
     // under its grant, cited by exact revision and a packet anchor.
     // Each turn is led by its speaker's display name, so "who will send the

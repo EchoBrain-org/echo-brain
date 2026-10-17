@@ -25,7 +25,7 @@ export interface AgenticEvidenceBundleItemV1 {
   readonly source: string;
   /** The released desk item: desk id, receipt, ref, visibility. Server only. */
   readonly item: EvidenceDeskItemV2;
-  /** The research model saw its complete released text. */
+  /** Research read its complete released text: a planner step was shown it, or, with no planner, it was starting evidence read in full. */
   readonly full: boolean;
   readonly opened: boolean;
   /** Loaded before round 1: starting evidence or the small-scope preload. */
@@ -85,6 +85,7 @@ export function describeAgenticEvidenceItemV1(entry: { readonly short: string; r
   return {
     id: entry.short, source: entry.source, kind: entry.item.kind, title: entry.item.label,
     provenance: { kind: entry.item.citation.kind, ...(entry.item.citation.kind === 'page' ? { version: entry.item.citation.version } : {}) },
+    ...(entry.item.dates === undefined ? {} : { dates: entry.item.dates }),
     ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at, date_kind: entry.item.date_kind ?? 'unspecified' }),
     ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
   };
@@ -101,7 +102,8 @@ export function trimAgenticEvidenceBundleV1(bundle: AgenticEvidenceBundleV1): Ag
     const attributes = attributesOf(entry.item);
     return Object.freeze({
       id: entry.short, source: entry.source, kind: entry.item.kind, title: entry.item.label, citation: entry.item.citation,
-      ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at, date_kind: entry.item.date_kind ?? "unspecified" }),
+      ...(entry.item.dates === undefined ? {} : { dates: entry.item.dates }),
+    ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at, date_kind: entry.item.date_kind ?? "unspecified" }),
       ...(attributes === undefined ? {} : { attributes: attributes as Readonly<Record<string, string>> }),
       ...(entry.item.text === undefined ? {} : { text: entry.item.text }),
       read_in_full: entry.full, opened: entry.opened, preloaded: entry.preloaded, cited_by_plan: entry.cited_by_plan,

@@ -1,6 +1,5 @@
 import {
   validatePersonEvidenceDeskResponseV1,
-  type PersonAnswerRequestV3,
   type PersonAnswerResponseV4,
   type PersonEvidenceDeskResponseV1,
   type PersonEvidenceOpenRequestV1,
@@ -84,8 +83,9 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
     schema_version: 1,
     kind: "echo-person-evidence-desk-v1",
     scope: desk.scope,
-    // The desk contract carries no ref; only Ask citations do (ADR-0024).
-    items: result.items.map(({ ref: _ref, ...item }) => item),
+    // Preserve the public desk contract: named dates are internal research
+    // metadata, and only Ask citations carry ref (ADR-0024).
+    items: result.items.map(({ ref: _ref, dates: _dates, date_kind: _dateKind, ...item }) => item),
     truncated: result.truncated,
     ...(result.notice === undefined ? {} : { notice: result.notice }),
   });
@@ -94,7 +94,7 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
 /** Composition-only V3 entry point: every operation gets a new request-bound desk. */
 export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOptions): PersonAnswerV3HttpApplication {
   return Object.freeze({
-    async ask(input: { readonly access_token: string; readonly request: PersonAnswerRequestV3; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4> {
+    async ask(input: Parameters<PersonAnswerV3HttpApplication["ask"]>[0]): Promise<PersonAnswerResponseV4> {
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       const requestId = `ask_${randomUUID()}`;
       const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
@@ -108,6 +108,7 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
           const asker = askerOf(options, authorization);
           return createAgenticAskV1({
             ...(asker === undefined ? {} : { asker }),
+            ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
             desk, model: options.model, generation: options.generation,
             audit: options.audit.forRequest({
               authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,

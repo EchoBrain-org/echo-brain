@@ -1,3 +1,4 @@
+import { evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeCountsV1, type CoreRuntimePhaseV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -12,6 +13,7 @@ import {
   type EvidenceDeskListInputV1,
   type EvidenceDeskOpenInputV1,
   type EvidenceDeskScopeV1,
+  type EvidenceDeskRevalidateInputV1,
 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
 import type { PersonAnswerCitationV3, PersonOpenRefV1 } from "@echo-brain/organization-api";
 import type {
@@ -37,7 +39,7 @@ export interface CreatePersonEvidenceDeskV1Options {
 
 /**
  * Observability only: what one desk call returned, by source. A shared
- * transcript counts as a document item; the originals adapter adds
+ * transcript counts as a meeting item; the originals adapter adds
  * transcript_items for that subset. Never text, ids or labels.
  */
 function deskCounts(items: readonly EvidenceDeskItemV1[]): CoreRuntimeCountsV1 {
@@ -136,6 +138,8 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
 } {
   const stored = new Map<string, Stored>();
   const originalReleases: OriginalContextDeskReleaseV1[] = [];
+  /** How many of `originalReleases` a successful check of this desk has covered. */
+  let checkedOriginalReleases = 0;
   const recordReleases: PersonRecordSearchBatchReleaseV1[] = [];
   let pointer: PersonRecordSearchReleasePointerV1 | undefined;
   let recordsUnavailableAtStart = false;
@@ -159,6 +163,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       ...(value.text === undefined ? {} : { text: value.text }), label: value.label,
       visibility: value.visibility, receipt_sha256: release.receipt,
       ...(value.ref === undefined ? {} : { ref: value.ref }),
+      ...(value.dates === undefined ? {} : { dates: value.dates }),
     }), { original: release }));
   };
   const records = (result: ReturnType<PersonEvidenceDeskRecordsV1["searchBatch"]>, includeText = true): readonly EvidenceDeskItemV1[] => {
@@ -169,15 +174,15 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (result.desk_items === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
     return result.desk_items.map((value) => {
       const citation = recordCitation(value);
-      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, visibility: value.visibility, ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonOpenRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
+      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonOpenRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
     });
   };
-  const searchRecords = (query: string, kinds?: readonly EvidenceDeskKindV1[]): readonly EvidenceDeskItemV1[] => {
+  const searchRecords = (query: string, kinds?: readonly EvidenceDeskKindV1[], dates: EvidenceDateFilterV1 = {}): readonly EvidenceDeskItemV1[] => {
     if (recordsUnavailableAtStart) return [];
     try {
       const recordKinds = recordKindsOf(kinds);
       if (recordKinds !== undefined && recordKinds.length === 0) return [];
-      return records(options.records.searchBatch({ access_token: options.access_token, queries: [query], limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }));
+      return records(options.records.searchBatch({ ...dates, access_token: options.access_token, queries: [query], limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }));
     } catch (error) {
       if (pointer === undefined && unavailableAtStart(error)) { recordsUnavailableAtStart = true; return []; }
       throw error;
@@ -217,7 +222,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (input.query === undefined) {
       latestRecordTruncated = false;
       const sourceKinds = sourceKindsOf(input.kinds);
-      const released = options.originals.deskSearch({
+      const released = options.originals.deskSearch({ ...evidenceDateFilterV1(input), ...(input.source === "meeting" || input.source === "document" ? { source: input.source } : {}),
         access_token: options.access_token,
         scope: options.scope,
         limit,
@@ -226,39 +231,28 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       });
       const beforeRecords = recordReleases.length;
       const recordKinds = recordKindsOf(input.kinds);
-      const recordInventory = recordsUnavailableAtStart ? [] : records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
+      const recordInventory = recordsUnavailableAtStart || input.source === "document" ? [] : records(options.records.listDeskBatch({ ...evidenceDateFilterV1(input), access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
       const items = balanced(originals(released), recordInventory).filter((item) => input.kinds === undefined || input.kinds.includes(item.kind));
       return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
     }
     latestRecordTruncated = false;
     const sourceKinds = sourceKindsOf(input.kinds);
-    const released = options.originals.deskSearch({ access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
+    const released = options.originals.deskSearch({ ...evidenceDateFilterV1(input), ...(input.source === "meeting" || input.source === "document" ? { source: input.source } : {}), access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
     const beforeRecords = recordReleases.length;
-    const echoItems = [originals(released), searchRecords(input.query, input.kinds)].map((list) => list.filter((item) => input.kinds === undefined || input.kinds.includes(item.kind)));
+    const echoItems = [originals(released), input.source === "document" ? [] : searchRecords(input.query, input.kinds, evidenceDateFilterV1(input))].map((list) => list.filter((item) => input.kinds === undefined || input.kinds.includes(item.kind)));
     const items = balanced(echoItems[0]!, echoItems[1]!);
     return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
   };
   const list = async (input: EvidenceDeskListInputV1): Promise<EvidenceDeskResultV1> => {
+    validateEvidenceDateFilterV1(input);
     input.signal?.throwIfAborted();
     initialize();
     const limit = Math.min(50, Math.max(1, input.limit ?? 50));
     // This desk reads no Slack. A live Slack source, when one is bound, is a separate desk source.
     if (input.source === "slack") return result([], false, []);
-    // Meetings and documents: the existing inventory reads, one source each. Items carry no text.
-    if (input.source === "meeting") {
-      if (recordsUnavailableAtStart) return result([], false, []);
-      const recordKinds = recordKindsOf(input.kinds);
-      if (recordKinds !== undefined && recordKinds.length === 0) return result([], false, []);
-      latestRecordTruncated = false;
-      const beforeRecords = recordReleases.length;
-      const items = records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
-      return result(items.slice(0, limit), latestRecordTruncated || items.length > limit, recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256));
-    }
-    const sourceKinds = sourceKindsOf(input.kinds);
-    if (sourceKinds !== undefined && sourceKinds.length === 0) return result([], false, []);
-    const released = options.originals.deskSearch({ access_token: options.access_token, scope: options.scope, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
-    const items = originals(released);
-    return result(items.slice(0, limit), released.truncated || items.length > limit, [released.receipt]);
+    const kinds = input.kinds ?? (input.source === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : ['note', 'document_passage'] as const);
+    const page = await search({ ...evidenceDateFilterV1(input), source: input.source, kinds, limit, ...(input.signal === undefined ? {} : { signal: input.signal }) });
+    return page;
   };
   const open = async (input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
@@ -286,11 +280,20 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     const release = options.originals.deskOpen({ access_token: options.access_token, scope: options.scope, citation: input.citation, ...(input.neighbours === undefined ? {} : { neighbours: input.neighbours }) });
     return result(originals(release), release.truncated, [release.receipt]);
   };
-  const revalidate = async (input: { readonly signal?: AbortSignal }) => {
+  const revalidate = async (input: EvidenceDeskRevalidateInputV1) => {
     input.signal?.throwIfAborted();
     let checkedAt: string | undefined = initialize();
-    for (const release of originalReleases) checkedAt = options.originals.revalidateDeskRelease({ access_token: options.access_token, release }).checked_at;
+    // An incremental check (ADR-0038) re-reads the items of original releases
+    // made since this desk's last successful check; earlier ones keep only
+    // their session, scope and authorization pins. Record releases re-read no
+    // items either way, so each one's session, grant and snapshot pin runs on
+    // every check. The check is synchronous: no release can land during it.
+    const incremental = input.mode === "incremental";
+    originalReleases.forEach((release, index) => {
+      checkedAt = options.originals.revalidateDeskRelease({ access_token: options.access_token, release, ...(incremental && index < checkedOriginalReleases ? { items_checked: true as const } : {}) }).checked_at;
+    });
     for (const release of recordReleases) checkedAt = options.records.revalidateBatchRelease({ access_token: options.access_token, release }).checked_at;
+    checkedOriginalReleases = originalReleases.length;
     return Object.freeze({ checked_at: checkedAt });
   };
   return Object.freeze({
@@ -299,6 +302,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     open: (input: EvidenceDeskOpenInputV1) => observedDeskCall("evidence_open", () => open(input)),
     list: (input: EvidenceDeskListInputV1) => observedDeskCall("evidence_list", () => list(input)),
     openCitation: (input: Parameters<typeof openCitation>[0]) => observedDeskCall("evidence_open", () => openCitation(input)),
-    revalidate: (input: { readonly signal?: AbortSignal }) => observeCoreRuntimeV1("evidence_revalidate", () => revalidate(input)),
+    revalidate: (input: EvidenceDeskRevalidateInputV1) => observeCoreRuntimeV1("evidence_revalidate", () => revalidate(input)),
   });
 }

@@ -1,6 +1,6 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type {
-  PersonAnswerResponseV5,
+  PersonAskTimeContextV1, PersonAnswerResponseV5,
   PersonAnswerResponseV6,
   PersonAnswerResponseV4,
 } from "@echo-brain/organization-api";
@@ -17,6 +17,7 @@ import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
   AgenticAskOutputErrorV1,
+  SEARCH_ONLY_STEP_PROMPT,
   STEP_PROMPT,
   TASK_RULE_PROMPT,
 } from "./agentic-ask-v1-model-protocol.js";
@@ -83,6 +84,8 @@ export interface CreateAgenticAskV1Options {
   readonly now_ms?: () => number;
   /** Today's date (YYYY-MM-DD) for relative `list` dates; tests pin it. */
   readonly today?: () => string;
+  /** Captured once by the calling client, used only to interpret temporal questions. */
+  readonly time_context?: PersonAskTimeContextV1;
   /** When the whole readable scope is small, open it all before step 1. */
   readonly small_scope_shortcut?: boolean;
   /**
@@ -119,6 +122,10 @@ function questionText(value: unknown): string | null {
 function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
   const { goal, starting } = brief;
   if (!Array.isArray(starting) || !starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report"))) return null;
+  // With no planner research only reads its starting items: a question, or a task with none, would read nothing.
+  const { planner, list } = object(brief.options) ?? {};
+  if (planner !== undefined && (typeof planner !== "boolean" || (!planner && (goal.kind === "question" || starting.length === 0)))) return null;
+  if (list !== undefined && typeof list !== "boolean") return null;
   if (goal.kind === "question") return questionText(goal.question) === null ? null : brief;
   const data = goal.data === undefined ? [] : goal.data;
   if (goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0 || !Array.isArray(data) || !data.every(value => typeof value === "string")) return null;
@@ -187,7 +194,13 @@ export function createAgenticAskV3(options: CreateAgenticAskV2Options) {
 function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersion: 4 | 5 | 6) {
   const tickets = responseVersion >= 5;
   const now = options.now_ms ?? (() => performance.now());
-  const today = options.today ?? (() => new Date().toISOString().slice(0, 10));
+  const temporal = options.time_context;
+  const today = options.today ?? (() => {
+    if (temporal === undefined) return new Date().toISOString().slice(0, 10);
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: temporal.time_zone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(temporal.now));
+    const part = (kind: string) => parts.find(value => value.type === kind)!.value;
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  });
   const askedBy = askerName(options.asker);
   const liveCatalog: AgenticResearchSourceV1[] = (options.desk.live_sources ?? []).flatMap(value => {
     const descriptor = liveSourceDescriptorV2(value);
@@ -197,7 +210,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     return [{ ...descriptor, kinds: [descriptor.kind] }];
   });
   const researchSources: readonly AgenticResearchSourceV1[] = Object.freeze([
-    { source_id: 'meeting', selector: 'meetings', kinds: ['imported_meeting', 'decision', 'action', 'rationale'], description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.' },
+    { source_id: 'meeting', selector: 'meetings', kinds: ['imported_meeting', 'decision', 'action', 'rationale', 'note'], description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.' },
     { source_id: 'document', selector: 'documents', kinds: ['note', 'document_passage'], description: 'Uploaded document passages and notes.' },
     ...liveCatalog,
   ]);
@@ -218,14 +231,21 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   };
   const catalog: AgenticResearchCatalogV1 = Object.freeze({ entries: sourceCatalog, by_id: sourcesById, resolve: readSource });
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
-  const context = (day: string) => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: day });
-  const liveGuidance = "Live sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only search/list discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.";
-  const stepPrompt = liveCatalog.length === 0 ? STEP_PROMPT : `${STEP_PROMPT}\n\n${liveGuidance}`;
-  const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance}`;
-  const stepBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, stepPrompt, OUTPUT_TOKENS.step);
-  /** Every task-form goal adds the one shared task rule; Ask's question keeps its prompt exactly. */
-  const taskPrompt = `${stepPrompt}\n\n${TASK_RULE_PROMPT}`;
-  const taskBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, taskPrompt, OUTPUT_TOKENS.step);
+  const context = (day: string) => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: day, ...(temporal === undefined ? { time_zone: "UTC", time_reference: "server" } : { now: temporal.now, time_zone: temporal.time_zone, time_reference: "client" }) });
+  const liveGuidance = (list: boolean) => `Live sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only ${list ? "search/list" : "search"} discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.`;
+  const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance(true)}`;
+  /**
+   * The research step's prompts and the scratchpad bytes beside each: Ask's question keeps its prompt exactly, every
+   * task-form goal adds the one shared task rule, and a search-only brief (no list) has its own step prompt.
+   */
+  const researchPrompts = (list: boolean) => {
+    const base = list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT;
+    const step = liveCatalog.length === 0 ? base : `${base}\n\n${liveGuidance(list)}`;
+    const task = `${step}\n\n${TASK_RULE_PROMPT}`;
+    const budget = (prompt: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, OUTPUT_TOKENS.step);
+    return Object.freeze({ step, step_budget: budget(step), task, task_budget: budget(task) });
+  };
+  const prompts = Object.freeze({ list: researchPrompts(true), search_only: researchPrompts(false) });
   /** What a renderer's user prompt may fill beside its system prompt. */
   const promptBudget = (system: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, OUTPUT_TOKENS.answer);
   /**
@@ -289,9 +309,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       };
 
       // ---- research: the loop owns its state; the runner reads its progress and its bundle ----
+      const stepPrompts = brief.options.list === false ? prompts.search_only : prompts.list;
       const loop = createAgenticResearchLoopV1({
-        desk, brief: { ...brief, options: { small_scope_preload: options.small_scope_shortcut === true && brief.options.small_scope_preload } },
-        prompt: researchOnly ? taskPrompt : stepPrompt, prompt_budget: researchOnly ? taskBudget : stepBudget, step_span: "ask_planner",
+        desk, brief: { ...brief, options: { ...brief.options, small_scope_preload: options.small_scope_shortcut === true && brief.options.small_scope_preload } },
+        prompt: researchOnly ? stepPrompts.task : stepPrompts.step, prompt_budget: researchOnly ? stepPrompts.task_budget : stepPrompts.step_budget, step_span: "ask_planner",
         context: context(requestDay), scope, catalog,
         now, remaining, signal: activeSignal, assert_live: assertLive,
         observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
@@ -332,6 +353,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           ...(bundle.stop.admission === undefined ? {} : { research_admission: bundle.stop.admission }),
           counts: { released_atom_count: bundle.items.length },
         });
+        /** Ticket items among short ids: what a renderer was shown, and what its result cites. */
+        const ticketsAmong = (shorts: readonly string[]) => shorts.filter(short => bundle.items.find(item => item.short === short)?.item.citation.kind === "ticket").length;
         if (researchOnly) {
           // A task brief: its trigger's renderer, which reads only the bundle, or research only.
           // Either result goes through the shared release step.
@@ -341,7 +364,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           const output = render === undefined ? researchOnlyOutput(bundle, researched) : await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'rendered' }, () => render.renderer.render({
             bundle, trigger_input: render.trigger_input, gate, signal: activeSignal, prompt_budget: promptBudget,
             remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
-            on_context: ids => { selectedEvidence = ids; },
+            // Counted as renderer context only once its model call starts (its span), as Ask's writer is.
+            on_context: ids => { selectedEvidence = ids; selectedTicketCount = ticketsAmong(ids); },
           }), value => ({ output_kind: 'rendered', selected_evidence: selectedEvidence, fallback_count: value.fallbacks, outcome: value.outcome, result: value.result }));
           writerFallbacks += output.fallbacks;
           annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
@@ -352,6 +376,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           });
           annotateCoreRuntimeV1({ result: output.outcome, counts: { citation_count: output.cited.length } });
           clearTimeout(deadlineTimer);
+          ticketCitationCount = ticketsAmong(output.cited);
           return Object.freeze({ ...(render === undefined ? {} : { rendered: released }), research: researched, writer_evidence: Object.freeze([]) });
         }
 
@@ -363,7 +388,6 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           response_version: responseVersion, answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
         });
-        const ticketsAmong = (shorts: readonly string[]) => shorts.filter(short => bundle.items.find(item => item.short === short)?.item.citation.kind === "ticket").length;
         let selectedEvidence: readonly string[] = [];
         const rendered = await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'answer' }, () => writer.render({
           bundle, trigger_input: { question: goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,

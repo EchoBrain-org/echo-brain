@@ -1,3 +1,4 @@
+import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type { PersonMeetingTranscriptCitationV1, PersonOpenRefV1 } from "@echo-brain/organization-api";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
@@ -134,6 +135,7 @@ export type OriginalContextDeskKindV1 = "note" | "document_passage" | "imported_
 export type OriginalContextDeskVisibilityV1 = "only_me" | "team" | "project" | "projects";
 
 export interface OriginalContextDeskItemV1 {
+  readonly dates?: EvidenceDatesV1;
   readonly citation: OriginalContextCitationV1;
   readonly kind: OriginalContextDeskKindV1;
   readonly text?: string;
@@ -158,7 +160,8 @@ export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalC
     readonly access_token: string;
     readonly scope: PersonAskScopeV2;
   }): { readonly checked_at: string };
-  deskSearch(input: {
+  deskSearch(input: EvidenceDateFilterV1 & {
+    readonly source?: "meeting" | "document";
     readonly access_token: string;
     readonly scope: PersonAskScopeV2;
     readonly query?: string;
@@ -176,6 +179,13 @@ export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalC
   revalidateDeskRelease(input: {
     readonly access_token: string;
     readonly release: OriginalContextDeskReleaseV1;
+    /**
+     * The request's desk already checked this release's items (an incremental
+     * check, ADR-0038): recheck only the session, identity, scope and
+     * authorization pins, not each item. An implementation may ignore it and
+     * check everything.
+     */
+    readonly items_checked?: true;
   }): { readonly checked_at: string };
 }
 

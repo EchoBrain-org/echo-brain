@@ -195,6 +195,12 @@ export interface PersonImpactStageV1 {
 
 export interface PersonRunsResultsV1 {
   list: { readonly runs: readonly PersonRunV1[] };
+  /**
+   * `running` while an attempt is going, this call's or an earlier one's. `pending` when nothing started and the run stays
+   * queued: a run is held, unclaimed, while the search index has not caught up (an impact run's decision is not yet searchable,
+   * or a sweep would anchor its decisions and read ECHO records through it). Holding costs the Authority a few reads,
+   * so start it again at the next look; unlike `busy`, it is no reason to wait longer.
+   */
   start: { readonly state: 'pending' | 'running' | 'busy' | 'done' | 'failed' };
   retry: { readonly state: 'pending' };
   view: { readonly card: PersonImpactCardV1; readonly checked_at: string; readonly hidden: number };

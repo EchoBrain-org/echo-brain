@@ -26,6 +26,23 @@ export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
 export const PERSON_EVIDENCE_OPEN_PATH_V1 = '/v3/person/evidence/open';
 export const PERSON_CAPABILITIES_PATH_V1 = '/v3/person/capabilities';
 
+/** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
+export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
+export const PERSON_ASK_TIME_ZONE_HEADER_V1 = 'x-echo-time-zone';
+export interface PersonAskTimeContextV1 {
+  readonly now: string;
+  readonly time_zone: string;
+}
+/** Query interpretation only. Client time never controls access, expiry, audits or deadlines. */
+export function validatePersonAskTimeContextV1(now: unknown, timeZone: unknown): PersonAskTimeContextV1 | undefined {
+  if (now === undefined && timeZone === undefined) return undefined;
+  if (typeof now !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(now) || !Number.isFinite(Date.parse(now)) || new Date(now).toISOString() !== now ||
+      typeof timeZone !== 'string' || timeZone.length > 100 || !/^[A-Za-z0-9_+\-/]+$/.test(timeZone)) fail('Ask time context is invalid');
+  try { new Intl.DateTimeFormat('en', { timeZone }).format(new Date(now)); }
+  catch { fail('Ask time zone is invalid'); }
+  return Object.freeze({ now, time_zone: timeZone });
+}
+
 export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 64 * 1024;
 export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 3 * 1024;
 export const PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 = 64 * 1024;

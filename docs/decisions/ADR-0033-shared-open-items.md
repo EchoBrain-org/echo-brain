@@ -123,3 +123,31 @@ Details the decision text does not spell out:
 - Items on a Slack message are not swept and never make a sweep due: no
   reader in ECHO can open a Slack message citation yet, so a sweep could only
   record them unreadable.
+
+## Implementation note, 2026-10-16
+
+The research fixes the founder approved on 2026-10-16 change these details
+of the decision and the note above, as
+[open items and Home v1](../product/2026-10-08-open-items-and-home-v1.md)
+now specifies (rulings R77–R82). The choices themselves stand.
+
+- A row no model assessed (the impact card's fallback) is only possibly
+  affected and makes no item (R82). `authority_impact_items_v1` gets rows for
+  `conflicts` and `needs_updating` items only, never for the meeting's own
+  record or the transcript its approver shared. A row made earlier from a
+  card that was not assessed keeps its empty relation.
+- "Newest wins" holds among judged verdicts. `unreadable` never replaces
+  `landed`, `still_open` or `changed`, from anyone, and a judged verdict
+  replaces an `unreadable` one whenever that was made (R79). Since the
+  database lets a last check only move forward, a judged check that replaces
+  a later unreadable one is stamped 1 ms after it.
+- A sweep run stores its counts by verdict and the ECHO ids of the items it
+  could not read, so Home does not ask the same person to sweep them again
+  within the day; still no line, title or citation.
+- A sweep covers a ticket or a page only in a tool its caller has connected
+  (R78), and runs no planner (R77). It puts an item one of the caller's
+  sweeps of the last day could not read after all the others, and Home waits
+  a day from that sweep before such an item makes a sweep due again.
+- While the search index lags the record log, `start` holds a pending impact
+  run or sweep: it answers `pending` with no claim, attempt or trace
+  ([runs store and impact card v1](../product/2026-10-07-runs-store-and-impact-card-v1.md)).

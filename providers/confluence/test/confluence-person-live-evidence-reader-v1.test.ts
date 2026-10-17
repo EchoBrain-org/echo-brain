@@ -117,6 +117,39 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(JSON.stringify(f.audits)).not.toContain('Gate readiness evidence.');
   });
 
+  it('keeps fencing a long background run past 160 requests: checks and revalidation do not spend the content cap', async () => {
+    const f = await fixture({ pages: Array.from({ length: 15 }, (_, index) => page({ id: String(100 + index),
+      document: document('Gate readiness evidence. '.repeat(270)) })) });
+    const found = await f.source.list({ limit: 20 });
+    const opened = await f.source.open({ item: found.items[0]!.id });
+    expect(opened.items).toHaveLength(3);
+    // A 48-call budget fences before every model call and twice at release.
+    for (let fence = 0; fence < 50; fence += 1) await f.source.revalidate({});
+    f.state.searchIds = ['101'];
+    await expect(f.source.search({ query: 'gate readiness' })).resolves.toMatchObject({ items: [{ kind: 'page' }] });
+    expect(f.calls.length).toBeGreaterThan(300);
+  });
+
+  it('still caps content reads at 160 per request', async () => {
+    const f = await fixture();
+    // Each unmapped search is one CQL request plus one exact metadata read.
+    for (let search = 0; search < 80; search += 1) await f.source.search({ query: `gate ${search}` });
+    await expect(f.source.search({ query: 'one more' })).rejects.toMatchObject({ code: 'unavailable' });
+    expect(f.calls.filter(call => call.path === '/rest/api/search' || call.path.startsWith('/api/v2/pages/'))).toHaveLength(160);
+    // Fences still run: a revalidation of everything released so far succeeds.
+    await expect(f.source.revalidate({})).resolves.toBeUndefined();
+  });
+
+  it('stops a runaway loop at a hard bound of 2048 requests, fences included', async () => {
+    const f = await fixture();
+    let failure: unknown;
+    for (let fence = 0; fence < 600 && failure === undefined; fence += 1) {
+      try { await f.source.revalidate({}); } catch (error) { failure = error; }
+    }
+    expect(failure).toMatchObject({ code: 'unavailable' });
+    expect(f.calls.length).toBe(2048);
+  });
+
   it('lists, searches, opens, and revalidates a mapped page with the minimal granular resource grant', async () => {
     const f = await fixture({ selected: ['42'], scopes: ['read:page:confluence', 'read:space:confluence', 'read:content-details:confluence'] });
     const listed = await f.source.list({ limit: 20 });
@@ -221,6 +254,59 @@ describe('Confluence live reader through the audited evidence source', () => {
     await f.source.revalidate({});
     expect(f.bodyCalls()).toHaveLength(before + 1);
     expect(JSON.stringify(f.audits)).not.toContain('EVT decision');
+  });
+
+  it('re-reads only newly released pages and sections in an incremental check and verifies the connection once, after them', async () => {
+    const f = await fixture({ pages: [page(), page({ id: '124' })] });
+    const verify = ['/oauth/token/accessible-resources', '/rest/api/user/current'];
+    const reads = () => f.calls.map(call => call.query.has('id') ? `bulk:${call.query.get('id')}` : call.query.get('body-format') === 'atlas_doc_format' ? `body:${call.path}` : call.path);
+    const listed = await f.source.list({});
+    f.calls.length = 0; await f.source.revalidate({ mode: 'incremental' });
+    expect(reads()).toEqual(['bulk:123,124', ...verify]);
+    // A repair with no new evidence re-reads nothing and still verifies the account and site.
+    f.calls.length = 0; await f.source.revalidate({ mode: 'incremental' });
+    expect(reads()).toEqual(verify);
+    await f.source.open({ item: listed.items[0]!.id });
+    f.calls.length = 0; await f.source.revalidate({ mode: 'incremental' });
+    expect(reads()).toEqual(['body:/api/v2/pages/123', ...verify]);
+    // The full check re-reads every released page and its opened body between two verifications.
+    f.calls.length = 0; await f.source.revalidate({});
+    expect(reads()).toEqual([...verify, 'bulk:124', 'body:/api/v2/pages/123', ...verify]);
+    // An already-checked page hidden mid-run is not re-read before the next
+    // model call (ADR-0038), but the full release check refuses it.
+    f.state.denied.add('/api/v2/pages/124');
+    await expect(f.source.revalidate({ mode: 'incremental' })).resolves.toBeUndefined();
+    await expect(f.source.revalidate({})).rejects.toMatchObject({ code: 'not_found' });
+    f.state.denied.clear(); f.state.account = 'different-account';
+    await expect(f.source.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it('runs an incremental check of newly released pages through the fences, so a spent content cap never blocks it', async () => {
+    const f = await fixture({ pages: [page(), page({ id: '124' })] });
+    const verify = ['/oauth/token/accessible-resources', '/rest/api/user/current'];
+    const reads = () => f.calls.map(call => call.query.has('id') ? `bulk:${call.query.get('id')}` : call.query.get('body-format') === 'atlas_doc_format' ? `body:${call.path}` : call.path);
+    // Pages 123 and 124 are listed and checked.
+    const listed = await f.source.list({});
+    await f.source.revalidate({ mode: 'incremental' });
+    // New since that check: an opened section of 123, and page 125, created later, which searches release.
+    await f.source.open({ item: listed.items[0]!.id });
+    f.state.pages.set('125', page({ id: '125' }));
+    f.state.searchIds = ['125'];
+    let spent: unknown;
+    for (let search = 0; search < 100 && spent === undefined; search += 1) {
+      try { await f.source.search({ query: `gate ${search}` }); } catch (error) { spent = error; }
+    }
+    // Content reads (list, search, open and their exact reads) are capped at 160 per request.
+    expect(spent).toMatchObject({ code: 'unavailable' });
+    expect(f.calls.filter(call => call.path === '/rest/api/search' || (/^\/api\/v2\/pages(\/\d+)?$/.test(call.path) && !call.query.has('id')))).toHaveLength(160);
+    // The check before the next model call re-reads exactly the new page and the opened body, then verifies the connection:
+    // every request is fence traffic, so it succeeds although the content cap is spent.
+    f.calls.length = 0;
+    await expect(f.source.revalidate({ mode: 'incremental' })).resolves.toBeUndefined();
+    expect(reads()).toEqual(['bulk:125', 'body:/api/v2/pages/123', ...verify]);
+    // And so does the full check at release; the fences did not hand content reads back.
+    await expect(f.source.revalidate({})).resolves.toBeUndefined();
+    await expect(f.source.search({ query: 'after the checks' })).rejects.toMatchObject({ code: 'unavailable' });
   });
 
   it('revalidates every released metadata page in bounded batches regardless of response order', async () => {
@@ -418,11 +504,22 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(Buffer.byteLength(opened.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
   });
 
+  it('filters a keyword search by the current revision timestamp in the client zone', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ createdAt: '2026-10-17T01:00:00Z' })] });
+    const dates = { since: '2026-10-16', until: '2026-10-16', date_field: 'updated' as const, time_zone: 'America/Los_Angeles' };
+    const result = await f.source.search({ query: 'gate', ...dates });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.dates).toEqual({ updated: '2026-10-17T01:00:00.000Z' });
+    expect((await f.source.search({ query: 'gate', ...dates, time_zone: 'UTC' })).items).toEqual([]);
+    expect(f.calls.filter(call => call.path === '/rest/api/search')[0]!.query.get('cql')).toContain('text ~ "gate"');
+    await f.source.revalidate({});
+  });
+
   it('uses scoped CQL for date-filtered discovery, with an inclusive final day', async () => {
     const f = await fixture({ selected: ['42'] });
     await f.source.list({ since: '2026-10-01', until: '2026-10-05' });
     const query = f.calls.find(call => call.path === '/rest/api/search')!.query;
-    expect(query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-10-01" AND lastmodified < "2026-10-06"');
+    expect(query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-09-29" AND lastmodified < "2026-10-08"');
     expect(f.bodyCalls()).toEqual([]);
   });
 

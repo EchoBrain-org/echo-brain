@@ -48,7 +48,7 @@ export interface PersonImpactCardV1 {
   readonly unconfirmed: readonly string[];
   /** Owners of affected items, each once. */
   readonly people: readonly PersonImpactPersonV1[];
-  /** `not_assessed`: no model wrote it; the affected items are possibly affected, not yet assessed. */
+  /** `not_assessed`: no model wrote it; what was decided is the record's own text, and the affected items are possibly affected, not yet assessed. */
   readonly status: 'assessed' | 'not_assessed';
   readonly citations: readonly PersonAnswerCitationV6[];
 }
@@ -123,8 +123,8 @@ export function validatePersonImpactCardV1(value: unknown): PersonImpactCardV1 {
     return Object.freeze({ name: line(entry.name, 'Impact card person name', limits.name_chars), items: Object.freeze(list(entry.items, 'Impact card person items', limits.affected).map(item => index(item, 'Impact card person item'))) });
   });
 
-  // Only a model's assessment carries relations, dates and decisions.
-  if (affected.some(entry => (entry.relation !== undefined) !== assessed) || (!assessed && (decided.length > 0 || affected.some(entry => entry.date_at_risk !== undefined)))) fail('Impact card status is inconsistent');
+  // Only a model's assessment carries relations and dates. What was decided may be the record's own text on either card.
+  if (affected.some(entry => (entry.relation !== undefined) !== assessed) || (!assessed && affected.some(entry => entry.date_at_risk !== undefined))) fail('Impact card status is inconsistent');
   // What the record requires is said only of an item it conflicts with or changes.
   if (affected.some(entry => entry.expected !== undefined && entry.relation !== 'conflicts' && entry.relation !== 'needs_updating')) fail('Impact card expected is only for an item that conflicts or needs updating');
   const affectedIndexes = affected.map(entry => entry.citation_index);

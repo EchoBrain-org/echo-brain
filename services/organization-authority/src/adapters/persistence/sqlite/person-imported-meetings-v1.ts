@@ -1,3 +1,4 @@
+import { meetingEvidenceDatesV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import type Database from 'better-sqlite3';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { canonicalSourceContentV1, sourceContentSha256V1, sourceItemIdV1, assertCanonicalMeetingDocument, type MeetingDocument } from '@echo-brain/organization-processing/core';
@@ -7,6 +8,7 @@ import type { PersonAskScopeV2 } from '../../../application/ports/person-origina
 import { personOriginalGrantedProjectIdsV1 } from './person-original-access-v1.js';
 
 export interface ImportedMeetingTextV1 {
+  readonly dates: EvidenceDatesV1;
   readonly api_version: 0; readonly context_id: `cap_${string}`; readonly title: string; readonly text: string;
   /** `project` when any project was suggested for the meeting; `project_ids` lists the suggested projects the reader currently belongs to. */
   readonly received_at: string; readonly visibility: 'only_me' | 'project'; readonly project_ids: readonly string[];
@@ -61,7 +63,7 @@ export class SqlitePersonImportedMeetingsV1 {
       if (sourceItemIdV1(meeting.provenance.source, row.external_id) !== row.source_id || meeting.provenance.external_id !== row.external_id || meeting.provenance.canonical_revision !== row.revision_id || !/^source:[a-f0-9]{64}$/.test(row.source_id)) invalid();
       const text = importedMeetingTextV1(meeting);
       const suggestions = JSON.parse(row.suggested_json) as string[];
-      return { api_version: 0, context_id: row.context_id, title: `Imported meeting (unapproved): ${meeting.title ?? 'Untitled'}`, text,
+      return { dates: meetingEvidenceDatesV1(meeting.time), api_version: 0, context_id: row.context_id, title: `Imported meeting (unapproved): ${meeting.title ?? 'Untitled'}`, text,
         received_at: row.captured_at, visibility: suggestions.length === 0 ? 'only_me' : 'project', project_ids: suggestions.filter(project => grants.includes(project)),
         source_id: row.source_id, revision_id: row.revision_id, source_sha256: `sha256:${row.revision_sha256}`, representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text }),
         source_content_sha256: row.content_sha256, manifest_json: row.manifest_json, source_content_json: row.content_json, lexical_score: 0 };

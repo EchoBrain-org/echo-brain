@@ -802,6 +802,9 @@ describe("Person client", () => {
         const path = new URL(String(input)).pathname;
         if (path !== '/v3/person/ask') throw new Error(`unexpected path ${path}`);
         expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'What changed?' });
+        const headers = new Headers(init?.headers);
+        expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+        expect(Math.abs(Date.now() - Date.parse(headers.get('x-echo-client-now')!))).toBeLessThan(5_000);
         return json({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
           citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
           direct: { text: 'The launch date moved.', citation_indexes: [0], private: false },

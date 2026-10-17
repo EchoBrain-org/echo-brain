@@ -112,9 +112,9 @@ describe('request-owned research trace', () => {
     expect(responses.map(event => event.tool_call_id)).toEqual([1, 2, 3]);
     expect(h.prompt(1).last_results).toEqual(responses.slice(0, 2).map(event => event.result));
     expect(h.prompt(1).last_results).toEqual([
-      expect.objectContaining({ query: 'slow', results: [expect.objectContaining({ id: 'E1', title: first.label })] }),
-      expect.objectContaining({ query: 'fast', results: [expect.objectContaining({ id: 'E2', title: second.label })] }),
+      { tool: 'search', args: { query: 'slow' }, results: ['E1'] }, { tool: 'search', args: { query: 'fast' }, results: ['E2'] },
     ]);
+    expect(h.prompt(1).seen).toEqual([expect.objectContaining({ id: 'E1', title: first.label }), expect.objectContaining({ id: 'E2', title: second.label })]);
   });
 
   it('keeps observer mutation and exceptions out of the model input, parsing and answer', async () => {

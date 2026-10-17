@@ -65,7 +65,11 @@ review their evidence. A release that ships ADR-0024 has no compatible
 transition; follow its
 [release note](../../deploy/release/README.md#prepare-the-transition-before-staging)
 for the update window, the desktop updates and the added list and open
-checks. After the canary meeting's approval and
+checks. A release that ships the 2026-10-16 research fixes (ADR-0037,
+ADR-0038) is the reverse: older Person clients reject its run views and
+diagnostics, so the operator seats get the candidate client before `stage`
+([release note](../../deploy/release/README.md#prepare-the-transition-before-staging)).
+After the canary meeting's approval and
 candidate-client checks, a human makes the final decision on the exact release.
 Only then may the operator promote the server and publish the signed feed using
 their existing, separate commands. A staged candidate never implies permission

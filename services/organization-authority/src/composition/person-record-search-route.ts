@@ -1,3 +1,4 @@
+import { matchesEvidenceDateV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
   canonicalJson,
@@ -85,9 +86,9 @@ interface ActiveGenerationRow {
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
 const EVIDENCE_DESK_MAX_ITEM_UTF8_BYTES_V1 = 3_072;
 
-/** Only an observed head/pointer lag may put the request in originals-only mode. */
+/** Only an observed head/pointer lag may put the request in originals-only mode. Diagnostics name it `index_lag` by its name. */
 export class PersonRecordSearchIndexLagV1 extends AuthorityOperationError {
-  constructor() { super("unavailable", "an exact-head readable-search generation is not available"); }
+  constructor() { super("unavailable", "an exact-head readable-search generation is not available"); this.name = "PersonRecordSearchIndexLagV1"; }
 }
 
 /**
@@ -117,7 +118,7 @@ export type ExpandReadableSearchRelatedAtomsV1 = (
  * bearer remains server-side while every query runs under one reader tuple
  * and one exact snapshot.
  */
-export interface PersonRecordSearchBatchInputV1 {
+export interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
   readonly access_token: string;
   readonly queries: readonly string[];
   /** Authority-checked project scope; association never replaces audience. */
@@ -187,6 +188,8 @@ export interface PersonRecordDeskItemV1 {
   readonly label: string;
   readonly visibility: "team" | "project" | "projects" | "approver_only";
   readonly attributes?: Readonly<{ owner?: string; due_at?: string; status?: string }>;
+  readonly occurred_at?: string;
+  readonly dates?: EvidenceDatesV1;
 }
 
 export interface PersonRecordSearchBatchApplicationV1 {
@@ -213,7 +216,7 @@ export interface PersonEvidenceDeskRecordsV1 extends Pick<
     readonly release: PersonRecordSearchBatchReleaseV1;
     readonly anchor: Pick<ReadableSearchResultItemV1, "atom_id" | "record_sha256" | "record_position" | "envelope_sha256" | "atom_order" | "audience_project_count" | "item_kind" | "text" | "policy_id">;
   }): PersonRecordSearchBatchResultV1;
-  listDeskBatch(input: {
+  listDeskBatch(input: EvidenceDateFilterV1 & {
     readonly access_token: string;
     readonly project_id?: string;
     readonly mine?: true;
@@ -257,6 +260,18 @@ export interface PersonRecordAnchorV1 {
    * the run then opens the record through its own desk.
    */
   recordAnchor(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): Extract<PersonAnswerCitationV3, { readonly kind: "approved_record" }>;
+}
+
+/** Whether an approved record's run can start yet (runs store v1, section 3). */
+export interface PersonRecordIndexReadinessV1 {
+  /**
+   * True while the active readable-search generation is a verified lag
+   * behind the record log: exactly when `recordAnchor` answers
+   * `PersonRecordSearchIndexLagV1`, whatever the record. Organization-wide
+   * and content-free: it reads no record as a person, audits nothing and
+   * says nothing of any one record.
+   */
+  recordIndexLags(): boolean;
 }
 
 /** One action an approved meeting decided, as an impact run makes it into an open item (follow-ups thread v1). ECHO data only. */
@@ -315,6 +330,7 @@ export type PersonRecordSearchRouteV1 =
     PersonMeetingItemsPortV1 &
     PersonRecordProjectsV1 &
     PersonRecordAnchorV1 &
+    PersonRecordIndexReadinessV1 &
     PersonRecordActionsV1 &
     PersonReadableDecisionsV1 &
     PersonReadableDecisionProjectsV1;
@@ -395,6 +411,20 @@ function isVerifiedIndexLag(
   if (pointer.record_head_position >= head.position || pointer.record_head_position < 0) return false;
   const row = record.prepare("SELECT record_sha256 FROM organization_record_log WHERE position=?").get(pointer.record_head_position) as { readonly record_sha256: Sha256Digest } | undefined;
   return row !== undefined && row.record_sha256 === pointer.record_head_hash;
+}
+
+/**
+ * The anchor's index-lag test on its own (`recordAnchor`): no active
+ * generation, or one a verified lag behind the record log head. A generation
+ * of another organization or contract is not lag; the anchor answers it as
+ * unavailable.
+ */
+export function personRecordSearchIndexLagsV1(
+  options: Pick<CreatePersonRecordSearchRouteV1Options, "authority" | "record" | "organization_id" | "retrieval_contract_sha256">,
+): boolean {
+  const head = recordHead(options.record);
+  const pointer = activeGeneration(options.authority);
+  return pointer === null || (!sameHead(pointer, head) && isVerifiedIndexLag(options.record, pointer, head, options));
 }
 
 function samePointer(
@@ -536,7 +566,11 @@ function deskItems(record: Database.Database, items: readonly ReadableSearchResu
     if (signal === undefined || signal.kind !== item.item_kind || indexedText !== item.text) metadataUnavailable();
     const attributes = signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) } : undefined;
     const visibility = recordVisibility(item.policy_id, item.audience_project_count);
-    return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), visibility, ...(attributes === undefined || Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
+    const time = brief.meeting.time;
+    const stamp = time?.actual_start_at ?? time?.scheduled_start_at ?? time?.actual_end_at ?? time?.scheduled_end_at;
+    const occurred_at = meetingDateV1(time);
+    const dates = { ...(stamp === undefined ? {} : { occurred: time?.all_day ? stamp.slice(0, 10) : stamp }), ...(signal.kind === 'action' && signal.due_at !== null ? { due: signal.due_at } : {}) };
+    return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), visibility, ...(occurred_at === undefined ? {} : { occurred_at }), ...(Object.keys(dates).length === 0 ? {} : { dates: Object.freeze(dates) }), ...(attributes === undefined || Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
   }));
 }
 
@@ -835,6 +869,32 @@ export function createPersonRecordSearchRouteV1(
       .sort());
   }
 
+  /** Filter reader-admitted immutable meeting times before the retrieval limit. */
+  function datedRecordSet(input: EvidenceDateFilterV1, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, mine: readonly Sha256Digest[] | undefined, projectId?: string): readonly Sha256Digest[] | undefined {
+    validateEvidenceDateFilterV1(input, ['occurred', 'due']);
+    if (input.since === undefined && input.until === undefined) return mine;
+    return generationRecords(authorization, projects, pointer, projectId).filter(record => {
+      if (mine !== undefined && !mine.includes(record.record_sha256)) return false;
+      const brief = approvedRecord(record.record_position, record.record_sha256, record.envelope_sha256).brief;
+      if (input.date_field === 'due') return brief.actions.some(action => matchesEvidenceDateV1({ due: action.due_at ?? undefined }, input, 'due'));
+      const time = brief.meeting.time;
+      const stamp = time?.actual_start_at ?? time?.scheduled_start_at ?? time?.actual_end_at ?? time?.scheduled_end_at;
+      const occurred = time?.all_day ? stamp?.slice(0, 10) : stamp;
+      return matchesEvidenceDateV1({ occurred }, { ...input, time_zone: input.time_zone ?? time?.timezone ?? 'UTC' }, 'occurred');
+    }).map(record => record.record_sha256).sort();
+  }
+
+  function dueAtomOrders(input: EvidenceDateFilterV1, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, records: readonly Sha256Digest[] | undefined, projectId?: string): ReadonlyMap<Sha256Digest, ReadonlySet<number>> | undefined {
+    if (input.date_field !== 'due' || (input.since === undefined && input.until === undefined)) return undefined;
+    const selected = new Map<Sha256Digest, ReadonlySet<number>>();
+    for (const record of generationRecords(authorization, projects, pointer, projectId)) {
+      if (records !== undefined && !records.includes(record.record_sha256)) continue;
+      const brief = approvedRecord(record.record_position, record.record_sha256, record.envelope_sha256).brief;
+      selected.set(record.record_sha256, new Set(brief.actions.flatMap((action, index) => matchesEvidenceDateV1({ due: action.due_at ?? undefined }, input, 'due') ? [brief.decisions.length + index] : [])));
+    }
+    return selected;
+  }
+
   /** Receipt times of admitted records: cached, else one batched read bound to both digests. */
   function addedAtOf(records: readonly ReadableSearchGenerationRecordV1[]): ReadonlyMap<Sha256Digest, string> {
     const result = new Map<Sha256Digest, string>();
@@ -995,7 +1055,7 @@ export function createPersonRecordSearchRouteV1(
     if (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer)) {
       unavailable();
     }
-    const mine = input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined;
+    const mine = datedRecordSet(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
     const results = readGeneration(() => input.queries.map((query) =>
       search({
         state_directory: options.state_directory,
@@ -1003,6 +1063,7 @@ export function createPersonRecordSearchRouteV1(
         reader: readerOf(authorization, projects),
         ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
         ...(mine === undefined ? {} : { record_sha256s: mine }),
+        atom_orders: dueAtomOrders(input, authorization, projects, pointer, mine, input.project_id),
         query,
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
@@ -1153,7 +1214,7 @@ export function createPersonRecordSearchRouteV1(
       // warmed generation can actually be opened. Any later error is terminal.
       return this.listDeskBatch({ access_token: input.access_token, ...(input.project_id === undefined ? {} : { project_id: input.project_id }), ...(input.mine === true ? { mine: true as const } : {}), limit: 1 });
     },
-    listDeskBatch(input: {
+    listDeskBatch(input: EvidenceDateFilterV1 & {
       readonly access_token: string;
       readonly project_id?: string;
       readonly mine?: true;
@@ -1170,13 +1231,14 @@ export function createPersonRecordSearchRouteV1(
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
       if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head) || (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer))) unavailable();
-      const mine = input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined;
+      const mine = datedRecordSet(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
       const inventory = readGeneration(() => listReadableSearchGenerationV1({
         state_directory: options.state_directory,
         active_generation: activeGenerationAt(pointer),
         reader: readerOf(authorization, projects),
         ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit,
         ...(mine === undefined ? {} : { record_sha256s: mine }),
+        atom_orders: dueAtomOrders(input, authorization, projects, pointer, mine, input.project_id),
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
       }));
       assertGeneration(inventory, pointer);
@@ -1390,6 +1452,9 @@ export function createPersonRecordSearchRouteV1(
       const released = options.sessions.authenticateAccess({ access_token: input.access_token });
       if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
       return Object.freeze({ kind: "approved_record" as const, atom_id: first.atom_id, record_sha256: first.record_sha256, policy_id: first.policy_id });
+    },
+    recordIndexLags(): boolean {
+      return personRecordSearchIndexLagsV1(options);
     },
     recordActions(input: Parameters<PersonRecordActionsV1["recordActions"]>[0]): ReturnType<PersonRecordActionsV1["recordActions"]> {
       // Admitted as openMeeting admits a record; then the approved record itself, read as open reads it.

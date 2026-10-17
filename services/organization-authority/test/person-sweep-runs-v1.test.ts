@@ -7,6 +7,7 @@ import type { SweepTriggerInputV1 } from '@echo-brain/organization-authority-ker
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
+import { createPersonOpenItemsV1 } from '../src/composition/person-open-items-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { createPersonTriggerRunsV1 } from '../src/composition/person-trigger-runs-v1.js';
 import { sentFixture, type FixturePerson, type OpenItemsFixtureOptionsV1 } from './fixtures/open-items.js';
@@ -17,10 +18,12 @@ afterEach(() => { for (const capture of captures.splice(0)) capture.close(); });
 type Verdict = PersonSweepVerdictV1 | null;
 type SweepScope = { readonly scope: 'mine' } | { readonly scope: 'record' | 'project'; readonly id: string };
 type DeskScope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
+/** A finding's own item, as research is given it: a ticket names its Jira id. */
+type ItemPointer = { readonly kind: string; readonly ticket_id?: string };
 const HOUR = 3_600_000;
 const MINE = { scope: 'mine' } as const;
 const NOTHING = { state: 'nothing_to_check' } as const;
-const ZERO = { schema_version: 1, landed: 0, still_open: 0, changed: 0, unreadable: 0, not_assessed: 0 };
+const ZERO = { schema_version: 1, landed: 0, still_open: 0, changed: 0, unreadable: 0, not_assessed: 0, unreadable_items: [] };
 
 function runOf(result: PersonRunsResultsV1['sweep']): string {
   if (!('run_id' in result)) throw new Error('expected a sweep run');
@@ -37,11 +40,11 @@ function runOf(result: PersonRunsResultsV1['sweep']): string {
  * can change the world while a sweep is in flight.
  */
 async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owner?: FixturePerson;
-  readonly verdicts?: Partial<Record<string, Verdict>> | ((kind: string, desk: DeskScope) => Verdict) } = {}) {
+  readonly verdicts?: Partial<Record<string, Verdict>> | ((kind: string, desk: DeskScope, pointer: ItemPointer) => Verdict) } = {}) {
   const f = await sentFixture(options);
   const given = options.verdicts ?? {};
-  const verdictOf = (kind: string): Verdict => (typeof given === 'function'
-    ? given(kind, (f.bindDesk.mock.calls.at(-1)![2] as unknown as { readonly scope: DeskScope }).scope) : given[kind] ?? null);
+  const verdictOf = (pointer: ItemPointer): Verdict => (typeof given === 'function'
+    ? given(pointer.kind, (f.bindDesk.mock.calls.at(-1)![2] as unknown as { readonly scope: DeskScope }).scope, pointer) : given[pointer.kind] ?? null);
   /** Each sweep's findings, as its research was given them. */
   const findings: SweepTriggerInputV1['findings'][] = [];
   let release!: () => void;
@@ -52,8 +55,8 @@ async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owne
     await gate;
     const citations: unknown[] = [];
     const results = input.findings.map((finding, finding_index) => {
-      const pointer = finding.citations[0] as { readonly kind: string };
-      const verdict = verdictOf(pointer.kind);
+      const pointer = finding.citations[0] as ItemPointer;
+      const verdict = verdictOf(pointer);
       if (verdict === null || verdict === 'unreadable') return { finding_index, verdict, line: verdict === null ? 'Not assessed.' : 'ECHO could not read this item.', citation_indexes: [] };
       const kind = pointer.kind === 'approved_record' ? 'action' : pointer.kind === 'source_revision' ? 'document_passage' : pointer.kind;
       citations.push({ citation: pointer, kind, label: `Now ${f.outsideText}`, visibility: 'only_me' });
@@ -193,6 +196,47 @@ describe('sweep runs record a shared last check', () => {
     f.advance(HOUR - 1);
     expect(await f.sweepDue('ari')).toBe(false);                 // within the hour of the newest sweep
     f.advance(1);
+    expect(await f.sweepDue('ari')).toBe(true);
+  });
+
+  it('waits a day from a sweep of the caller\'s that could not read an item whose judged check it left standing', async () => {
+    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'unreadable' } });
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    // Mina read the ticket and judged it; a day on, Ari's desk no longer can (the ticket was deleted, or his Jira access changed).
+    f.check(f.ticket.item_id, 'still_open', 'mina');
+    f.advance(25 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(true);
+    const { run_id } = await f.queueAndStart('ari');
+    await f.settled(run_id);
+    // Mina's verdict stays the last check, and Ari's run keeps which item he could not read.
+    expect(f.items.read(f.ticket.item_id)!.check).toMatchObject({ verdict: 'still_open', by: f.membership('mina') });
+    expect(f.counts(run_id)).toEqual({ ...ZERO, unreadable: 1, unreadable_items: [f.ticket.item_id] });
+    // The last check is over a day old, but asking Ari again every hour would not let him read the ticket: not due for a day.
+    f.advance(2 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(false);
+    expect(await f.sweepDue('mina')).toBe(true);                 // she reads it, and her own sweep may judge it again
+    f.advance(22 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(false);                 // a day after his sweep, not later
+    f.advance(1);
+    expect(await f.sweepDue('ari')).toBe(true);
+  });
+
+  it('waits that day from when the sweep finished, though it was asked for days before', async () => {
+    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'unreadable' } });
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    f.check(f.ticket.item_id, 'still_open', 'mina');
+    f.advance(25 * HOUR);
+    // Asked for on Friday; the desktop closed before it started, and it starts on Monday.
+    const run_id = runOf(await f.sweep('ari', MINE));
+    f.advance(64 * HOUR);
+    const before = f.findings.length;
+    expect(await f.start('ari', run_id)).toEqual({ state: 'running' });
+    await vi.waitFor(() => expect(f.findings.length).toBeGreaterThan(before));
+    await f.settled(run_id);
+    expect(f.counts(run_id)).toEqual({ ...ZERO, unreadable: 1, unreadable_items: [f.ticket.item_id] });
+    // The sweep is days old, but its unreadable ticket waits a day from now: no second sweep is asked for at once.
+    expect(await f.sweepDue('ari')).toBe(false);
+    f.advance(24 * HOUR + 1);
     expect(await f.sweepDue('ari')).toBe(true);
   });
 
@@ -365,6 +409,37 @@ describe('what a sweep checks and how', () => {
     expect(unchecked()).toEqual([]);
   });
 
+  it('takes last the items one of the caller\'s sweeps of the last day could not read, so they never hold the twenty places', async () => {
+    // Twenty more tickets Ari's desk can no longer read (deleted, or his Jira access changed); the first ticket and the action it reads.
+    const lost = new Set(Array.from({ length: 20 }, (_, index) => String(20_000 + index)));
+    const f = await sweepFixture({ owner: 'mina', verdicts: (kind, _desk, pointer) => (kind === 'ticket' && lost.has(pointer.ticket_id!) ? 'unreadable' : 'still_open') });
+    const tickets = Array.from(lost, ticket_id => ({ ...f.card.pointers.ticket, ticket_id }));
+    f.db.transaction(() => f.items.insertForRun(f.db, f.runs.readUnfenced(f.runId)!, tickets.map(pointer => ({ item_key: impactItemKeyV1(pointer)!, pointer,
+      relation: 'needs_updating' as const, expected: 'launch next week', owner_membership_id: f.membership('mina'), owner_match: 'approver' as const }))))();
+    const unsent = f.items.forRun(f.runId).filter(row => row.state === 'unsent');
+    expect(f.items.send({ run_id: f.runId, by: f.membership('ari'), command_id: 'send-more', choices: unsent.map(row => ({ item_id: row.item_id, include: true })) })).toMatchObject({ sent: 20 });
+    // Mina judged the twenty first, and the first ticket and the action a second later: the twenty are checked longest ago.
+    for (const row of f.items.forRun(f.runId).filter(row => row.pointer.kind === 'ticket' && lost.has((row.pointer as ItemPointer).ticket_id!))) f.check(row.item_id, 'still_open', 'mina');
+    f.advance(1_000);
+    for (const item of [f.ticket, f.action]) f.check(item.item_id, 'still_open', 'mina');
+    const minas = [f.ticket, f.action].map(item => f.items.read(item.item_id)!.check!.at);
+    f.advance(25 * HOUR);
+    const swept = () => f.findings.at(-1)!.map(finding => finding.citations[0] as ItemPointer);
+    const first = await f.queueAndStart('ari');
+    await f.settled(first.run_id);
+    expect(swept().every(pointer => lost.has(pointer.ticket_id!))).toBe(true);
+    expect(f.counts(first.run_id)).toMatchObject({ unreadable: 20 });
+    // Mina's judged checks stand, so the twenty stay the oldest; the next sweep takes the first ticket and the action first all the same.
+    f.advance(HOUR);
+    const checkedAt = f.clock().toISOString();
+    const next = await f.queueAndStart('ari');
+    await f.settled(next.run_id);
+    expect(swept().slice(0, 2).map(pointer => pointer.kind).sort()).toEqual(['approved_record', 'ticket']);
+    expect(swept().slice(0, 2).flatMap(pointer => (pointer.kind === 'ticket' ? [pointer.ticket_id] : []))).toEqual([f.card.pointers.ticket.ticket_id]);
+    expect([f.ticket, f.action].map(item => f.items.read(item.item_id)!.check!.at)).toEqual([checkedAt, checkedAt]);
+    expect(minas.every(at => at < checkedAt)).toBe(true);
+  });
+
   it('never sweeps an item on a Slack message, which never makes a sweep due: no desk reads one yet (R62)', async () => {
     const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'still_open', approved_record: 'still_open', slack_message: 'landed' } });
     // A Slack message the impact check found, sent to Mina.
@@ -397,6 +472,48 @@ describe('what a sweep checks and how', () => {
       expect(await f.sweep('ari', scope)).toEqual(NOTHING);
       expect(await f.sweep('mina', scope)).toEqual(NOTHING);
     }
+  });
+});
+
+describe('sweeps and the tools a viewer has connected', () => {
+  const kinds = (findings: SweepTriggerInputV1['findings']) => findings.map(finding => (finding.citations[0] as { readonly kind: string }).kind).sort();
+
+  it('takes an item in an outside tool only for a viewer who has connected that tool, and only such an item makes a sweep due', async () => {
+    // Ari approved both items and has connected no tool; Mina owns both and has connected Jira.
+    const f = await sweepFixture({ owner: 'mina', connected: { ari: [], mina: ['jira'] }, verdicts: { ticket: 'still_open', approved_record: 'still_open' } });
+    expect(await f.sweepDue('ari')).toBe(true);                  // the ECHO record was never checked
+    const ari = await f.queueAndStart('ari');
+    await f.settled(ari.run_id);
+    // Ari's desk could never read the ticket: his sweep takes the record alone, and the ticket's last check stays empty.
+    expect(kinds(f.findings.at(-1)!)).toEqual(['approved_record']);
+    expect(f.verdicts()).toEqual([null, 'still_open']);
+    f.advance(2 * HOUR);
+    // The ticket, never checked, makes a sweep due only for the viewer who connected Jira.
+    expect(await f.sweepDue('ari')).toBe(false);
+    expect(await f.sweepDue('mina')).toBe(true);
+    const mina = await f.queueAndStart('mina');
+    await f.settled(mina.run_id);
+    expect(kinds(f.findings.at(-1)!)).toEqual(['approved_record', 'ticket']);
+    expect(f.verdicts()).toEqual(['still_open', 'still_open']);
+    // With only the ticket open, Ari has nothing to check, in any scope; Mina still does.
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    for (const scope of [MINE, { scope: 'record', id: f.record }, { scope: 'project', id: f.projectA }] as const) expect(await f.sweep('ari', scope)).toEqual(NOTHING);
+    expect(runOf(await f.sweep('mina', MINE))).toMatch(/^run_/);
+  });
+
+  it('connects no tool whose link cannot be read, or whose source keeps none, and reports only a failed read', async () => {
+    const f = await sweepFixture({ owner: 'mina' });
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    const sweepWith = (live_sources: typeof f.openItemsOptions.live_sources) => createPersonOpenItemsV1({ ...f.openItemsOptions, live_sources })
+      .sweep({ access_token: 'mina', request: { schema_version: 1, operation: 'sweep', scope: 'mine' } });
+    const failing = f.openItemsOptions.live_sources.map(source => ({ ...source, tools: async () => { throw new AuthorityOperationError('unavailable', 'link store is busy'); } }));
+    expect(await sweepWith(failing)).toEqual(NOTHING);
+    expect(f.liveFailures).toEqual([{ kind: 'open_items_live_read', reason: 'connection', code: 'unavailable' }, { kind: 'open_items_live_read', reason: 'connection', code: 'unavailable' }]);
+    const keepsNone = f.openItemsOptions.live_sources.map(({ tools: _tools, ...source }) => source);
+    expect(await sweepWith(keepsNone)).toEqual(NOTHING);
+    expect(await sweepWith([])).toEqual(NOTHING);
+    expect(f.liveFailures).toHaveLength(2);
+    expect(runOf(await sweepWith(f.openItemsOptions.live_sources))).toMatch(/^run_/);
   });
 });
 
@@ -537,5 +654,29 @@ describe('sweeps on the runs API', () => {
     vi.spyOn(f.records, 'recordAnchor').mockImplementationOnce(() => { throw new AuthorityOperationError('not_found', 'record evidence is not available'); });
     expect(await attempt(() => undefined)).toMatchObject({ state: 'failed', error_code: 'no_access' });
     expect(f.verdicts()).toEqual([null, null]);
+  });
+
+  it('holds a sweep pending while the search index lags, as an impact check, claiming and tracing nothing, and starts it once it caught up', async () => {
+    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'landed', approved_record: 'landed' } });
+    let lags = true;
+    const runsApp = createPersonTriggerRunsV1({ runs: f.runs, sessions: f.openItemsOptions.sessions, records: { ...f.records, recordIndexLags: () => lags },
+      items: f.items, people: f.directory, bindDesk: f.bindDesk as never, audit: {} as never, bind_options: f.openItemsOptions.bind_options as never,
+      research: f.research as never, lease_ms: 60_000, now: f.clock, live_sources: f.openItemsOptions.live_sources });
+    const start = (run_id: string) => runsApp.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id } });
+    const run_id = runOf(await f.sweep('ari', MINE));
+    const claim = vi.spyOn(f.runs, 'claim');
+    const anchor = vi.spyOn(f.records, 'recordAnchor');
+    const binds = f.bindDesk.mock.calls.length;
+    await expect(start(run_id)).resolves.toEqual({ state: 'pending' });
+    expect(claim).not.toHaveBeenCalled(); expect(anchor).not.toHaveBeenCalled();
+    expect(f.bindDesk.mock.calls.length).toBe(binds);
+    expect(f.runs.readUnfenced(run_id)).toMatchObject({ state: 'pending', attempts: 0, lease_token: null });
+    // Another person's start is refused as before, and learns nothing of the index.
+    await expect(runsApp.start({ access_token: 'mina', request: { schema_version: 1, operation: 'start', run_id } })).rejects.toMatchObject({ code: 'not_found' });
+    lags = false;
+    await expect(start(run_id)).resolves.toEqual({ state: 'running' });
+    await f.settled(run_id);
+    expect(f.runs.readUnfenced(run_id)).toMatchObject({ state: 'done', attempts: 0 });
+    expect(f.verdicts()).toEqual(['landed', 'landed']);
   });
 });
