@@ -241,9 +241,14 @@ export function ownerWords(item: OpenItemView, me: string | null | undefined): s
   return item.owner.membership_id === me ? 'You' : firstName(item.owner.name);
 }
 
-/** A follow-up's one qualifier where an answer cites it: its owner and status, "Mara · Open". */
+/** Not sent, and ECHO found no owner, so it fell back to its approver: every surface says "Pick owner", never the approver's name. */
+export function ownerUnmatched(item: OpenItemView): boolean {
+  return item.owner.match === 'approver' && item.state === 'unsent';
+}
+
+/** A follow-up's one qualifier where an answer cites it: its owner and status, "Mara · Open"; "Pick owner · Not sent" while nobody owns it. */
 export function ownerAndStatus(item: OpenItemView, me: string | null | undefined): string {
-  return `${ownerWords(item, me)} · ${STAGES[item.state]}`;
+  return `${ownerUnmatched(item) ? 'Pick owner' : ownerWords(item, me)} · ${STAGES[item.state]}`;
 }
 
 /** A follow-ups list's current work, read and shown first: not sent yet, or open. */

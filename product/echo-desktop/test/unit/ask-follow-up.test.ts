@@ -142,6 +142,23 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     expect(text(source)).not.toMatch(/follow-up/iu);
   });
 
+  it('says "Pick owner", as Home does, beside Ask and on its source row while it is not sent and nobody was matched as its owner', async () => {
+    // ECHO matched no owner, so it fell back to the approver; Home says "Pick owner", never the approver's name.
+    const fallback: OpenItemView = { ...row(), owner: { ...mina, match: 'approver' }, state: 'unsent', sent_at: null };
+    reads = [() => ok(fallback), () => ok(fallback), () => ok(fallback)];
+    const { store, release, pane, thread } = await asking();
+    release(ok({ ...answer, receipt: undefined }));
+    await flush();
+    expect(text(byTestId(thread(), 'source-row'))).toBe('1Ship the launch checklistPick owner · Not sent');
+    store.chooseSource(0);
+    await flush();
+    const [owner] = byTestId(pane(), 'pane-follow-up-owner');
+    expect(text(owner)).toBe('Pick owner');
+    expect(text(owner)).not.toContain('Mina');
+    expect(elements(owner).some(node => node.props.class === 'faint')).toBe(true);
+    expect(text(byTestId(pane(), 'pane-follow-up-status'))).toBe('Not sent');
+  });
+
   it('says why a follow-up could not be read, and reads it again on Try again', async () => {
     // The background read for its row fails, and so does the pane's read when its source is chosen.
     reads = [() => fail('unavailable', { retryable: true }), () => fail('unavailable', { retryable: true })];

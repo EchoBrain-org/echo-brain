@@ -5,7 +5,7 @@ import { askText, queryTerms } from '../../shared/query.js';
 import { answerSentences, documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
-import { checkWords, ownerAndStatus, ownerWords, STAGES } from '../needs.js';
+import { checkWords, ownerAndStatus, ownerUnmatched, ownerWords, STAGES } from '../needs.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
   announceAfter, announcement, duration, foundBefore, liveRows, namedPlaces, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
@@ -638,7 +638,7 @@ function FollowUpSource({ state, source, item }: { state: State; source: Extract
     <div class="source-detail selectable" data-testid="pane-follow-up">
       <h2>{source.label}</h2>
       <dl class="fields">
-        <dt>Owner</dt><dd data-testid="pane-follow-up-owner">{ownerWords(item, state.status?.account?.membership_id)}</dd>
+        <dt>Owner</dt><dd data-testid="pane-follow-up-owner">{ownerUnmatched(item) ? <span class="faint">Pick owner</span> : ownerWords(item, state.status?.account?.membership_id)}</dd>
         <dt>Status</dt><dd data-testid="pane-follow-up-status">{STAGES[item.state]}</dd>
       </dl>
       {checked && <div class="meta" data-testid="pane-follow-up-check">{checked}</div>}

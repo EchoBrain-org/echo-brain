@@ -5,7 +5,7 @@ import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
   ACTIVE_STATES, checkWords, CLOSED_STATES, followUpCount, itemGroups, itemHistory, itemKind, itemNames, itemTitle, joined, liveFacts, matchesNow, monthDay,
-  ownerWords, reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
+  ownerUnmatched, ownerWords, reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
 } from '../needs.js';
 import {
   awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps, openImpactSource,
@@ -63,7 +63,7 @@ function useSaidFocus(shown: Said | null, said: { current: HTMLElement | null })
  */
 function Owner({ state, busy, picking, item, name }: { state: State; busy: boolean; picking: boolean; item: OpenItemView; name: string }) {
   const me = state.status?.account?.membership_id;
-  const unmatched = item.owner.match === 'approver' && item.state === 'unsent';
+  const unmatched = ownerUnmatched(item);
   const label = ownerWords(item, me);
   if (!item.can.assign) {
     return <span class="owner-slot">{unmatched ? <span class="faint">Pick owner</span> : <Chip person={item.owner} label={label} />}</span>;

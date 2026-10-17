@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
   actionCount, activeTotal, checkWords, followUpCount, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemNames, itemNeeds, itemTitle, itemWhy,
-  liveFacts, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
+  liveFacts, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerUnmatched, ownerWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
@@ -111,6 +111,17 @@ describe('one status vocabulary (F7)', () => {
     expect(ownerAndStatus(item({ state: 'done' }), person.membership_id)).toBe('You · Done');
     expect(ownerAndStatus(item({ owner: { ...OKAFOR, match: 'name' }, state: 'not_relevant' }), null)).toBe('S. Okafor · Dismissed');
     expect(ownerWords(item(), undefined)).toBe('Mina');
+  });
+
+  it('says "Pick owner" for a follow-up not sent whose owner ECHO fell back to its approver, as Home does (ADR-0040)', () => {
+    const fallback = item({ owner: { ...person, match: 'approver' }, state: 'unsent', sent_at: null });
+    expect(ownerUnmatched(fallback)).toBe(true);
+    // To its approver too: nobody has picked an owner yet.
+    expect([ownerAndStatus(fallback, 'mem_someone-else'), ownerAndStatus(fallback, person.membership_id)]).toEqual(['Pick owner · Not sent', 'Pick owner · Not sent']);
+    // Once sent, the approver kept it: they own it.
+    expect(ownerUnmatched(item({ owner: { ...person, match: 'approver' }, state: 'open' }))).toBe(false);
+    expect(ownerAndStatus(item({ owner: { ...person, match: 'approver' }, state: 'open' }), person.membership_id)).toBe('You · Open');
+    expect(ownerUnmatched(item({ state: 'unsent' }))).toBe(false);
   });
 
   it('totals not sent and open as follow-ups, never as "open", whatever the last check found', () => {
