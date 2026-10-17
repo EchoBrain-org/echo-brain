@@ -101,7 +101,9 @@ How an answer could cite one:
   attributes; the rest is text. Visibility follows the decision (`team`,
   `project`, `projects` or `approver_only`, as its policy and projects give)
   when the asker reads it, and is `only_me` when they see the item only as
-  its owner. Never released: the approver, other members, who checked, the
+  its owner. A release whose title or due date was read live is no wider than
+  that read: it takes the narrower of the two, so a title from the asker's
+  own Jira read is `only_me`, as the ticket itself is. Never released: the approver, other members, who checked, the
   relation, run ids, item keys, pointers, `says_now`, or any count of rows
   the asker cannot see (ADR-0012).
 - **Answer.** The V7 answer (`echo-clean-person-answer-v7`) on the additive
