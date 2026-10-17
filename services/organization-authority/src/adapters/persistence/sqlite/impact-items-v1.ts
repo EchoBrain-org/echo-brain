@@ -258,7 +258,9 @@ export class SqliteImpactItemsV1 {
    * one whenever it was made: someone who could read the item outranks someone who could not, whichever sweep started first. An
    * unreadable check is recorded only while no one's judged check exists, over nothing or an older unreadable one. A last check
    * only moves forward, so a judged check that started before the unreadable one it replaces carries the time just after it.
-   * False when the item keeps its check.
+   * The row keeps no other time, so that stamp also orders it against later judged checks: one that read the item after it did but
+   * before the stamp is refused, and the item keeps a verdict read minutes earlier (three sweeps racing on one item). Comparing
+   * judged checks by their own read times needs a column of its own. False when the item keeps its check.
    */
   recordCheck(transaction: Database.Database, input: { readonly item_id: string; readonly verdict: ImpactItemVerdictV1; readonly by: string; readonly at: string; readonly run_id: string }): boolean {
     if (!transaction.inTransaction) throw new Error('An open item check is recorded inside the sweep finishing transaction');

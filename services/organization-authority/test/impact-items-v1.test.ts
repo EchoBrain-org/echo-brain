@@ -301,7 +301,8 @@ describe('SQLite open items v1', () => {
     expect(record(unreadable, 'unreadable', unreadable.mina, '2026-10-08T09:00:00.000Z')).toBe(false);
     expect(record(unreadable, 'unreadable', unreadable.mina, '2026-10-08T09:30:00.000Z')).toBe(true);
     expect(unreadable.items.read(unreadable.itemId)!.check).toMatchObject({ verdict: 'unreadable', by: unreadable.mina, at: '2026-10-08T09:30:00.000Z' });
-    // A judged check older than another judged one is still refused.
+    // A judged check is ordered against the stamp a judged check carries, not its read time: Ari's still_open, read at 10:15,
+    // after Mina's 10:00 read, is refused, because her check carries 10:30:00.001 (the row keeps no other time).
     expect(record(unreadableFirst, 'still_open', ARI, '2026-10-08T10:15:00.000Z')).toBe(false);
   });
 
