@@ -1,5 +1,5 @@
 import type { ComponentChildren } from 'preact';
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { Answer, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import { answerSentences, documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
@@ -271,6 +271,9 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
   );
 }
 
+/** How near its bottom the thread counts as read to the end: a new row of the Ask on its way follows it there. */
+const FOLLOW_PX = 40;
+
 /**
  * The Ask thread: earlier answers collapsed at the top, the current answer,
  * then a question on its way or one that failed. Newest at the bottom.
@@ -278,21 +281,31 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
 export function AskView({ state }: { state: State }) {
   const thread = state.ask!;
   const scroller = useRef<HTMLElement>(null);
-  // A new question, answer or failure scrolls to the bottom, and so does a new row of the question on its way.
-  const progress = thread.asking?.progress;
-  useLayoutEffect(() => {
-    if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
-  }, [thread.seq, thread.shown, thread.asking === null, thread.failed, progress?.rows.length, (progress?.pending ?? 0) > 0]);
+  // Whether the person was at the bottom when they last scrolled, or the thread last took them there.
+  const atBottom = useRef(true);
+  const toBottom = () => {
+    const view = scroller.current;
+    if (view) view.scrollTop = view.scrollHeight;
+    atBottom.current = true;
+  };
+  // A new question, answer or failure scrolls to the bottom.
+  useLayoutEffect(toBottom, [thread.seq, thread.shown, thread.asking === null, thread.failed]);
+  // A row of the question on its way only when the person is there: one who scrolled up to read stays put.
+  const follow = useCallback(() => { if (atBottom.current) toBottom(); }, []);
+  const onScroll = () => {
+    const view = scroller.current;
+    if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
+  };
   const { asking, failed } = thread;
   return (
-    <section class="ask" data-testid="ask-view" aria-live="polite" ref={scroller}>
+    <section class="ask" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
       {earlierTurns(thread).map(turn => <EarlierTurn key={turn.id} turn={turn} />)}
       {thread.shown && <CurrentAnswer key={thread.shown.id} state={state} turn={thread.shown} />}
       {asking && (
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>
           <div class="asked">{asking.scopeName}</div>
-          <Asking state={state} progress={asking.progress} />
+          <Asking state={state} progress={asking.progress} follow={follow} />
         </div>
       )}
       {failed && (
@@ -333,7 +346,7 @@ function useAnnouncement(text: string): string {
  * section is a live region: the line, its timer and its rows are kept out of
  * it, and a screen reader hears the stage at most every few seconds instead.
  */
-function Asking({ state, progress }: { state: State; progress: AskProgress }) {
+function Asking({ state, progress, follow }: { state: State; progress: AskProgress; follow: () => void }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), TICK_MS);
@@ -343,6 +356,8 @@ function Asking({ state, progress }: { state: State; progress: AskProgress }) {
   // A quick Ask shows nothing more than it always did.
   const live = elapsed >= PROGRESS_AFTER_MS;
   const rows = live ? liveRows(progress) : [];
+  // Rows coming into view, and each new one, are followed by a person at the bottom; nothing before they show.
+  useLayoutEffect(() => { if (live) follow(); }, [live, progress.rows.length, progress.pending > 0, follow]);
   // Heard at once, as the line always was; then the stage, once it shows, at most every few seconds.
   const heard = useAnnouncement(live ? announcement(progress) || 'Thinking…' : 'Thinking…');
   return <>

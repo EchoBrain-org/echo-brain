@@ -580,7 +580,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * documents and Jira, its four reads, then, once the test lets it answer
    * (`release-ask`), the writer, the final check and the answer with its
    * receipt. `ask-progress-quick` answers at once; `ask-progress-fails` ends
-   * with an error event instead. A cancelled Ask ends the stream.
+   * with an error event instead. A cancelled Ask ends the stream. Once a
+   * test writes `more-steps`, an Ask still waiting searches Jira once more.
    */
   const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined): Response => {
     const items = progressItems();
@@ -593,8 +594,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       for (const step of [{ type: 'stage', stage: 'searching' }, searched, { type: 'stage', stage: 'reading', pending: items.length }, { type: 'read', items }]) {
         yield api.formatPersonAskProgressEventV1(step);
       }
+      let more = false;
       while (mode !== 'ask-progress-quick' && !existsSync(join(home, 'release-ask'))) {
         if (cancelled || signal?.aborted) return;
+        if (!more && existsSync(join(home, 'more-steps'))) {
+          more = true;
+          yield api.formatPersonAskProgressEventV1({ type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira' }], found: 0 });
+          continue;
+        }
         await new Promise(resolveLater => setTimeout(resolveLater, 25));
       }
       yield api.formatPersonAskProgressEventV1({ type: 'stage', stage: 'writing' });

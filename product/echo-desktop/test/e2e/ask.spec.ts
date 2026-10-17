@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 import { captureOpenExternal } from './native.js';
@@ -471,6 +471,40 @@ test('a long Ask shows what it looks through, names that open beside it while it
   await pane.getByTestId('source-open').click();
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
   await expect(page.getByTestId('reader-text')).toHaveText('Apollo moves to usage-based pricing tiers from October.');
+});
+
+test('a new row follows a person at the bottom of Ask, and never pulls one who scrolled up back down', async () => {
+  run = await launch('ask-progress');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  await expect(progressSteps(page)).toHaveCount(2, { timeout: 10_000 });
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  // A follow-up that waits again, under an earlier answer tall enough to scroll.
+  rmSync(join(run.home, 'release-ask'));
+  await page.getByTestId('ask-field').fill('And the pricing page?');
+  await page.getByTestId('ask-field').press('Enter');
+  await page.getByTestId('earlier-turn').evaluate(element => { (element as HTMLElement).style.minHeight = '2000px'; });
+  const view = page.getByTestId('ask-view');
+  const fromBottom = () => view.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
+  await expect(progressSteps(page)).toHaveCount(2, { timeout: 10_000 });
+  expect(await view.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(1_000);
+  // At the bottom, the rows that came into view are followed.
+  await expect.poll(fromBottom).toBeLessThan(2);
+
+  // Scrolled up to read the earlier answer, a new row leaves the view where the person put it.
+  await view.evaluate(element => { element.scrollTop = 0; });
+  await expect.poll(() => view.evaluate(element => element.scrollTop)).toBe(0);
+  writeFileSync(join(run.home, 'more-steps'), '');
+  await expect(progressSteps(page)).toHaveCount(3);
+  await expect(progressSteps(page).last()).toHaveText('Searched Jira · nothing new');
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await view.evaluate(element => element.scrollTop)).toBe(0);
+
+  // The answer itself still brings the view down to it.
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await expect(page.getByTestId('asking')).toHaveCount(0);
+  await expect.poll(fromBottom).toBeLessThan(2);
 });
 
 test('a quick Ask shows nothing more, and its source opens the cited decision lit in its meeting, then the meeting\'s page', async () => {
