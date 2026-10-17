@@ -302,7 +302,14 @@ route, header, database table or client changes.
   already supported" becomes "Stop as soon as every requested fact is
   supported; a question about which items exist is supported only by a complete
   list." Ask's writer prompt gets the list rules above. Task prompts do not
-  change.
+  change. Built: rule 4 says one thing for which items exist: cite the list
+  by its id once `more` is false; a complete list supports all its items, and
+  one that cannot be read to its end supports "at least" its count. The stop
+  rule reads "Stop as soon as every requested fact is supported; for which
+  items exist, that is once each list you cite has more false." Ask's search
+  and open descriptions say a list's members need no open for which items
+  exist or their row facts, since "open metadata-only items before relying on
+  them" sent the trace's planner to open pages to confirm creation dates.
 
 ### Evaluation (addition 7)
 

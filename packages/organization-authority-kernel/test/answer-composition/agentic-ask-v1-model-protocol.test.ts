@@ -108,18 +108,25 @@ describe("agentic Ask model protocol parity", () => {
     expect(ASK_STEP_PROMPT.split("\n")[0]).toContain("then your plan, lists, last_results");
     expect(STEP_PROMPT.split("\n")[0]).toContain("then your plan, inventories, last_results");
     // Addition 6: early stopping never applies to which items exist, and no list is left unread to save pages.
-    expect(rule(ASK_STEP_PROMPT, 4)).toContain("A question about which or how many items exist is supported only by a complete list: cite the list's id, never some of its items.");
-    expect(rule(ASK_STEP_PROMPT, 4)).toContain("cite it anyway; the answer will say \"at least\" its count");
-    expect(rule(ASK_STEP_PROMPT, 4).endsWith("Stop as soon as every requested fact is supported; a question about which items exist is supported only by a complete list.")).toBe(true);
+    // One rule for which items exist: cite the list by id once it cannot be read further; complete means all, otherwise at least.
+    expect(rule(ASK_STEP_PROMPT, 4)).toContain("A question about which or how many items exist is supported by a list cited by its id, never by some of its items, once more is false: a complete list supports all its items, and one that cannot be read to its end (complete is false) supports \"at least\" its count.");
+    expect(rule(ASK_STEP_PROMPT, 4)).not.toContain("supported only by a complete list");
+    expect(rule(ASK_STEP_PROMPT, 4).endsWith("Stop as soon as every requested fact is supported; for which items exist, that is once each list you cite has more false.")).toBe(true);
+    // Ask's tools never send research to open list members only to confirm their row facts.
+    const line = (prompt: string, start: string) => prompt.split("\n").find(value => value.startsWith(start))!;
+    expect(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("Open those items before relying on what they say; a list's members need no open for which items exist, or for their title, dates, status and owner.");
+    expect(line(ASK_STEP_PROMPT, "  When to use: before relying on")).toContain("never to confirm a list member's title, dates, status or owner");
+    expect(line(STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("no body means metadata only. Open those items before relying on them.");
     expect(rule(ASK_SEARCH_ONLY_STEP_PROMPT, 4).endsWith("then open the candidates. Stop as soon as every requested fact is supported.")).toBe(true);
     for (const prompt of [ASK_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) {
       expect(prompt).not.toContain("You may stop early");
       expect(prompt).not.toContain("instead of paging through it");
     }
     for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain("You may stop early when the facts the question asks for are already supported.");
-    // Only rules 3 and 4 and the opening line differ; everything else is the same text.
+    // Only the opening line, rules 3 and 4, and what search returns and when to open differ; everything else is the same text.
     const differing = (left: string, right: string) => left.split("\n").flatMap((line, index) => line === right.split("\n")[index] ? [] : [index]);
-    expect(differing(ASK_STEP_PROMPT, STEP_PROMPT)).toEqual([0, 5, 6]);
+    const lines = ASK_STEP_PROMPT.split("\n");
+    expect(differing(ASK_STEP_PROMPT, STEP_PROMPT)).toEqual([0, 5, 6, lines.indexOf(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")), lines.indexOf(line(ASK_STEP_PROMPT, "  When to use: before relying on"))]);
     expect(differing(ASK_SEARCH_ONLY_STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT)).toEqual([6]);
   });
 
