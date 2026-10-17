@@ -139,6 +139,19 @@ describe("research loop: list", () => {
     expect(h.generate).toHaveBeenCalledTimes(3);
     expect(view.stop).toEqual({ reason: "no_progress", completed: false });
   });
+
+  it("never calls a repeat of an unavailable or cut-short inventory listed in full", async () => {
+    const action = record("action", "Mara will publish the dashboard.", { kind: "action", attributes: { owner: "Mara Quinn" } });
+    const list = vi.fn(async (input: EvidenceDeskListInputV2) => input.source === "jira" ? result([], { notice: "Tickets are temporarily unavailable." }) : result([action], { truncated: true }));
+    const again = reads("open", [{ tool: "list", args: { source: "tickets" } }, { tool: "list", args: { source: "meetings" } }]);
+    const h = harness([again, again, again], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list });
+    await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(h.prompt(2).last_results).toEqual([
+      expect.objectContaining({ tool: "list", items: [], more: false, note: "already listed; this source was unavailable, so its list is incomplete; use search" }),
+      expect.objectContaining({ tool: "list", items: [], more: false, note: "already listed; nothing more to list; more items exist than list can show; use search" }),
+    ]);
+  });
 });
 
 describe("research loop: open", () => {
