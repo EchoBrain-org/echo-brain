@@ -1,4 +1,5 @@
-import { matchesEvidenceDateV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import { EvidenceDeskSnapshotChangedV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
+import { MISSING_EVENT_DATE_NOTICE_V1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
   canonicalJson,
@@ -91,6 +92,11 @@ export class PersonRecordSearchIndexLagV1 extends AuthorityOperationError {
   constructor() { super("unavailable", "an exact-head readable-search generation is not available"); this.name = "PersonRecordSearchIndexLagV1"; }
 }
 
+/** A newer committed record head invalidated this request's evidence; a fresh request may retry. */
+export class PersonRecordSearchSnapshotChangedV1 extends EvidenceDeskSnapshotChangedV1 {
+  constructor() { super(); this.name = "PersonRecordSearchSnapshotChangedV1"; }
+}
+
 /**
  * The Layer 2 related-atom reader is injected here so the Authority boundary
  * remains independently testable while the disposable relationship plane is
@@ -172,6 +178,7 @@ export interface PersonRecordSearchBatchResultV1 {
   readonly release: PersonRecordSearchBatchReleaseV1;
   /** Private desk projection of immutable V4 meeting metadata. */
   readonly desk_items?: readonly PersonRecordDeskItemV1[];
+  readonly notice?: string;
   readonly truncated?: boolean;
 }
 
@@ -870,18 +877,26 @@ export function createPersonRecordSearchRouteV1(
   }
 
   /** Filter reader-admitted immutable meeting times before the retrieval limit. */
-  function datedRecordSet(input: EvidenceDateFilterV1, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, mine: readonly Sha256Digest[] | undefined, projectId?: string): readonly Sha256Digest[] | undefined {
+  function datedRecordSet(input: EvidenceDateFilterV1, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, mine: readonly Sha256Digest[] | undefined, projectId?: string): { readonly records: readonly Sha256Digest[] | undefined; readonly notice?: string } {
     validateEvidenceDateFilterV1(input, ['occurred', 'due']);
-    if (input.since === undefined && input.until === undefined) return mine;
-    return generationRecords(authorization, projects, pointer, projectId).filter(record => {
+    if (input.since === undefined && input.until === undefined) return { records: mine };
+    let missing = false;
+    const records = generationRecords(authorization, projects, pointer, projectId).filter(record => {
       if (mine !== undefined && !mine.includes(record.record_sha256)) return false;
       const brief = approvedRecord(record.record_position, record.record_sha256, record.envelope_sha256).brief;
-      if (input.date_field === 'due') return brief.actions.some(action => matchesEvidenceDateV1({ due: action.due_at ?? undefined }, input, 'due'));
+      if (input.date_field === 'due') {
+        missing ||= brief.actions.some(action => action.due_at === null);
+        return brief.actions.some(action => matchesEvidenceDateV1({ due: action.due_at ?? undefined }, input, 'due'));
+      }
       const time = brief.meeting.time;
       const stamp = time?.actual_start_at ?? time?.scheduled_start_at ?? time?.actual_end_at ?? time?.scheduled_end_at;
       const occurred = time?.all_day ? stamp?.slice(0, 10) : stamp;
+      missing ||= occurred === undefined;
       return matchesEvidenceDateV1({ occurred }, { ...input, time_zone: input.time_zone ?? time?.timezone ?? 'UTC' }, 'occurred');
     }).map(record => record.record_sha256).sort();
+    return { records, ...(missing ? { notice: input.date_field === 'due'
+      ? "Some accessible actions have no recorded due date and were excluded from this date search."
+      : MISSING_EVENT_DATE_NOTICE_V1 } : {}) };
   }
 
   function dueAtomOrders(input: EvidenceDateFilterV1, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, records: readonly Sha256Digest[] | undefined, projectId?: string): ReadonlyMap<Sha256Digest, ReadonlySet<number>> | undefined {
@@ -1026,6 +1041,16 @@ export function createPersonRecordSearchRouteV1(
     if (authorization.organization_id !== options.organization_id) personDenied();
   }
 
+  function assertCurrentSnapshot(previous: ActiveGenerationRow): void {
+    const pointer = activeGeneration(options.authority);
+    const head = recordHead(options.record);
+    if (samePointer(previous, pointer) && sameHead(previous, head)) return;
+    if (isVerifiedIndexLag(options.record, previous, head, options) && pointer !== null &&
+      pointer.organization_id === options.organization_id && pointer.retrieval_contract_sha256 === options.retrieval_contract_sha256 &&
+      (sameHead(pointer, head) || isVerifiedIndexLag(options.record, pointer, head, options))) throw new PersonRecordSearchSnapshotChangedV1();
+    unavailable();
+  }
+
   function searchBatch(
     input: PersonRecordSearchBatchInputV1,
   ): PersonRecordSearchBatchResultV1 {
@@ -1055,7 +1080,8 @@ export function createPersonRecordSearchRouteV1(
     if (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer)) {
       unavailable();
     }
-    const mine = datedRecordSet(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
+    const dated = datedRecordSet(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
+    const mine = dated.records;
     const results = readGeneration(() => input.queries.map((query) =>
       search({
         state_directory: options.state_directory,
@@ -1117,6 +1143,7 @@ export function createPersonRecordSearchRouteV1(
     return Object.freeze({
       response,
       release,
+      ...(dated.notice === undefined ? {} : { notice: dated.notice }),
       ...(deskProjection === undefined ? {} : { desk_items: deskProjection }),
       truncated: results.some((result) => result.truncated === true) ||
         (deskSourceItems !== undefined && deskSourceItems.length !== items.length),
@@ -1167,7 +1194,8 @@ export function createPersonRecordSearchRouteV1(
     assertGeneration(related, input.pointer);
     const items = [resolvedAnchor, ...related.items.filter((item) => item.record_sha256 === resolvedAnchor.record_sha256)].slice(0, 10);
     const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-    if (!samePersonReleaseAuthorizationV1(input.current, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== input.projects.grants_sha256 || !samePointer(input.pointer, activeGeneration(options.authority)) || !sameHead(input.pointer, recordHead(options.record))) personDenied();
+    if (!samePersonReleaseAuthorizationV1(input.current, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== input.projects.grants_sha256) personDenied();
+    assertCurrentSnapshot(input.pointer);
     const deskSourceItems = boundedDeskItems(items);
     const response = asResponse({ items: deskSourceItems });
     const projection = deskItems(options.record, deskSourceItems, options.record_input_codecs);
@@ -1231,7 +1259,8 @@ export function createPersonRecordSearchRouteV1(
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
       if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head) || (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer))) unavailable();
-      const mine = datedRecordSet(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
+      const dated = datedRecordSet(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
+      const mine = dated.records;
       const inventory = readGeneration(() => listReadableSearchGenerationV1({
         state_directory: options.state_directory,
         active_generation: activeGenerationAt(pointer),
@@ -1243,7 +1272,8 @@ export function createPersonRecordSearchRouteV1(
       }));
       assertGeneration(inventory, pointer);
       const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) personDenied();
+      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256) personDenied();
+      assertCurrentSnapshot(pointer);
       const deskSourceItems = boundedDeskItems(inventory.items);
       const response = asResponse({ items: deskSourceItems });
       const projection = deskItems(options.record, deskSourceItems, options.record_input_codecs);
@@ -1251,7 +1281,7 @@ export function createPersonRecordSearchRouteV1(
         initial_authorization: releaseAuthorization(authorization),
         current: released, pointer, projects, scope: input, response, desk_items: projection,
       });
-      return Object.freeze({ response, release, desk_items: projection, truncated: inventory.truncated === true || deskSourceItems.length !== inventory.items.length });
+      return Object.freeze({ response, release, desk_items: projection, ...(dated.notice === undefined ? {} : { notice: dated.notice }), truncated: inventory.truncated === true || deskSourceItems.length !== inventory.items.length });
     },
     openDeskCitation(input: {
       readonly access_token: string;
@@ -1274,7 +1304,8 @@ export function createPersonRecordSearchRouteV1(
       const anchor = found.items[0];
       if (anchor === undefined || anchor.record_sha256 !== input.record_sha256 || anchor.policy_id !== input.policy_id) throw new AuthorityOperationError("not_found", "record evidence is not available");
       const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) personDenied();
+      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256) personDenied();
+      assertCurrentSnapshot(pointer);
       // Resolving a citation is an internal lookup, not a content release.
       // `finalizeDeskOpen` performs the sole audit after the expanded packet
       // and its metadata have passed the final Person and snapshot fence.
@@ -1529,28 +1560,16 @@ export function createPersonRecordSearchRouteV1(
       const current = options.sessions.authenticateAccess({
         access_token: input.access_token,
       });
-      const pointer = activeGeneration(options.authority);
-      const head = recordHead(options.record);
       if (
         captureRecordProjectsV1(options.capture_projects, current, input.release.project_id).grants_sha256 !== input.release.project_authorization?.grants_sha256 ||
-        !samePersonReleaseAuthorizationV1(
-          current,
-          input.release.initial_authorization,
-        ) ||
-        !samePersonReleaseAuthorizationV1(
-          current,
-          input.release.current_authorization,
-        ) ||
-        current.organization_id !== options.organization_id ||
-        pointer === null ||
-        pointer.organization_id !== options.organization_id ||
-        pointer.retrieval_contract_sha256 !==
-          options.retrieval_contract_sha256 ||
-        !matchesReleasePointer(pointer, input.release.active_pointer) ||
-        !sameHead(pointer, head)
-      ) {
-        personDenied();
-      }
+        !samePersonReleaseAuthorizationV1(current, input.release.initial_authorization) ||
+        !samePersonReleaseAuthorizationV1(current, input.release.current_authorization) ||
+        current.organization_id !== options.organization_id
+      ) personDenied();
+      const previous = input.release.active_pointer;
+      assertCurrentSnapshot({ organization_id: options.organization_id, generation_id: previous.generation_id,
+        manifest_sha256: previous.manifest_sha256, retrieval_contract_sha256: previous.retrieval_contract_sha256,
+        record_head_position: previous.record_head.position, record_head_hash: previous.record_head.record_sha256 });
       return releaseAuthorization(current);
     },
   });

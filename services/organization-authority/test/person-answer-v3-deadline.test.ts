@@ -1,3 +1,4 @@
+import { PersonRecordSearchSnapshotChangedV1 } from "../src/composition/person-record-search-route.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AGENTIC_ASK_DEADLINE_MS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -9,7 +10,7 @@ import { createPersonEvidenceDeskV1 } from "../src/composition/person-evidence-d
 
 vi.mock("../src/composition/person-evidence-desk-v1.js", () => ({ createPersonEvidenceDeskV1: vi.fn() }));
 
-afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
 
 function fixture() {
   const revalidate = vi.fn<EvidenceDeskPortV1["revalidate"]>(() => new Promise(() => {}));
@@ -51,6 +52,20 @@ describe("Agentic Ask deadline at the Person route boundary", () => {
     expect(f.events.filter(event => event.stage === "research_run" && event.event !== "started")).toEqual([
       expect.objectContaining({ event: "failed", result: "timeout" }),
     ]);
+  });
+
+  it('creates a fresh evidence desk when the record snapshot advances', async () => {
+    const f = fixture();
+    f.revalidate.mockRejectedValueOnce(new PersonRecordSearchSnapshotChangedV1());
+    const stopped = new Error('second desk fixture');
+    const second = { scope: { kind: 'global' as const }, search: vi.fn(), open: vi.fn(), list: vi.fn(), revalidate: vi.fn().mockRejectedValue(stopped) };
+    const first = vi.mocked(createPersonEvidenceDeskV1).getMockImplementation()!({} as never);
+    vi.mocked(createPersonEvidenceDeskV1).mockReturnValueOnce(first).mockReturnValueOnce(second as never);
+    await expect(f.ask()).rejects.toBe(stopped);
+    expect(createPersonEvidenceDeskV1).toHaveBeenCalledTimes(2);
+    expect(f.revalidate).toHaveBeenCalledTimes(1);
+    expect(second.revalidate).toHaveBeenCalledTimes(1);
+    expect(f.generate).not.toHaveBeenCalled();
   });
 
   it("keeps an unknown failure terminal without converting it to unavailable", async () => {

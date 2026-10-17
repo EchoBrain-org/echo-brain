@@ -1,5 +1,11 @@
+import { AuthorityOperationError } from "../domain/errors.js";
 import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "./temporal-query-v1.js";
 import type { PersonAnswerEvidenceCitationV4, PersonAnswerScopeV3, PersonOpenRefV1 } from '@echo-brain/organization-api';
+
+/** A pinned evidence snapshot advanced; rechecking the old snapshot cannot recover it. */
+export class EvidenceDeskSnapshotChangedV1 extends AuthorityOperationError {
+  constructor() { super("unavailable", "meeting records changed during the search; please try again"); this.name = "EvidenceDeskSnapshotChangedV1"; }
+}
 
 /** Read-only evidence desk contract bound to one authenticated Person request. */
 export type EvidenceDeskKindV1 = 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';

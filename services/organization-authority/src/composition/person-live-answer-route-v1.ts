@@ -1,3 +1,4 @@
+import { withPersonAskSnapshotRetryV1 } from './person-ask-snapshot-retry-v1.js';
 import { AgenticAskDeadlineErrorV1, createAgenticAskV2, createAgenticAskV3 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
@@ -84,15 +85,17 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
       });
       if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
       try {
-        return await observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, async () => {
-          const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, context);
-          capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
-          const asker = askerOf(options, authorization);
-          const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
-          return create({ ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
-          }).answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-        });
+        return await withPersonAskSnapshotRetryV1({ signal: input.signal, capture: capture !== undefined, run: async signal => {
+          return await observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, async () => {
+            const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, signal }, context);
+            capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
+            const asker = askerOf(options, authorization);
+            const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
+            return create({ ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+              ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+            }).answer({ question: input.request.question, signal });
+          });
+        } });
       } catch (error) {
         if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) throw new AuthorityOperationError('unavailable', 'Ask deadline exhausted');
         throw error;

@@ -137,7 +137,7 @@ async function fixture(options: { readonly active?: boolean; readonly corrupt?: 
     ...(options.corrupt ? { search_generation: () => { throw new Error('corrupt readable index'); } } : {}),
   });
   const makeDesk = () => createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: route });
-  return { authority, route, recordAtom, makeDesk, revoke: () => { revoked = true; } };
+  return { authority, record, route, recordAtom, makeDesk, revoke: () => { revoked = true; } };
 }
 
 describe('Person evidence desk over the real approved-record route', () => {
@@ -213,7 +213,17 @@ describe('Person evidence desk over the real approved-record route', () => {
     const driftedDesk = drifted.makeDesk();
     await driftedDesk.search({ query: 'Decision', limit: 10 });
     drifted.authority.prepare('UPDATE authority_readable_search_active_generation SET manifest_sha256=? WHERE singleton=1').run(digest('drift'));
-    await expect(driftedDesk.revalidate({})).rejects.toThrow('person authentication failed');
+    await expect(driftedDesk.revalidate({})).rejects.toMatchObject({ code: 'unavailable' });
+  });
+
+  it('reports a verified appended head as a snapshot change, but access revocation still wins', async () => {
+    const value = await fixture();
+    const desk = value.makeDesk();
+    await desk.search({ query: 'Decision' });
+    await new OrganizationRecordAppenderV4(value.record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, approval_id: 'approval-2' }));
+    await expect(desk.revalidate({})).rejects.toMatchObject({ name: 'PersonRecordSearchSnapshotChangedV1', code: 'unavailable' });
+    value.revoke();
+    await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
   });
 
   it('re-reads only original releases made since its last check in an incremental check, while session and record pins run every time', async () => {
@@ -247,7 +257,7 @@ describe('Person evidence desk over the real approved-record route', () => {
     expect(deskAuthorize.mock.calls.length).toBeGreaterThanOrEqual(5);
     // The record snapshot pin is checked on an incremental check too.
     value.authority.prepare('UPDATE authority_readable_search_active_generation SET manifest_sha256=? WHERE singleton=1').run(digest('drift'));
-    await expect(desk.revalidate({ mode: 'incremental' })).rejects.toThrow('person authentication failed');
+    await expect(desk.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unavailable' });
   });
 
   it('does not turn a valid release witness into authority for a forged atom anchor', async () => {
@@ -393,8 +403,21 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
     expect(page.items).toHaveLength(1);
     expect(page.items[0]).toMatchObject({ citation: { record_sha256: w.digest('r1') }, occurred_at: '2026-08-31', date_kind: 'occurred' });
     expect((await desk.list({ source: 'meeting', since: '2026-09-02', until: '2026-09-02' })).items).toEqual([]);
-    expect((await desk.list({ source: 'meeting', since: '2026-10-16', until: '2026-10-16' })).items).toEqual([]);
+    const emptyDate = await desk.list({ source: 'meeting', since: '2026-10-16', until: '2026-10-16' });
+    expect(emptyDate.items).toEqual([]);
+    expect(emptyDate.notice).toContain('missing recorded event dates');
+    expect((await desk.search({ source: 'meeting', query: 'Decision', since: '2026-10-16', until: '2026-10-16' })).notice).toContain('missing recorded event dates');
+    expect((await desk.list({ source: 'meeting' })).notice).toBeUndefined();
     await desk.revalidate({});
+  });
+
+  it('does not disclose missing dates in records outside the caller scope', async () => {
+    const w = await meetingWorld();
+    closers.push(w.close);
+    for (const [access_token, scope] of [['emp_a', { kind: 'mine' as const }]] as const) {
+      const desk = createPersonEvidenceDeskV1({ access_token, scope, originals: emptyOriginals(), records: w.route() });
+      expect((await desk.list({ source: 'meeting', since: '2026-10-16', until: '2026-10-16' })).notice).toBeUndefined();
+    }
   });
 
   it('passes mine, never a project, to every record call, and returns only the caller\'s own approvals', async () => {

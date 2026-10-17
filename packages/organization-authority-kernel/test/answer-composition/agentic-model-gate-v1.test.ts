@@ -1,3 +1,4 @@
+import { EvidenceDeskSnapshotChangedV1 } from "../../src/shared/evidence-desk-v1.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskPostRevalidationNoTimeErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
@@ -95,6 +96,14 @@ describe("agentic model gate", () => {
     const { gate, trace } = harness({ desk_revalidate: async () => { throw new AuthorityOperationError(code, "Live evidence operation could not be completed"); } });
     await expect(gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toMatchObject({ code });
     expect(trace).toEqual(["revalidate"]);
+  });
+
+  it('does not recheck an invalidated snapshot as a transient provider failure', async () => {
+    const changed = new EvidenceDeskSnapshotChangedV1();
+    const { gate, trace } = harness({ desk_revalidate: async () => { throw changed; } });
+    await expect(gate.call(STEP, 'system', {}, schema, () => 20_000)).rejects.toBe(changed);
+    expect(trace.filter(value => value === 'revalidate')).toHaveLength(1);
+    expect(gate.stats().calls).toBe(0);
   });
 
   it("does not retry a transient pre-call check without time for the pause, or once the request stops", async () => {

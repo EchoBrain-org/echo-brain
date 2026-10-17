@@ -1,3 +1,4 @@
+import { EvidenceDeskSnapshotChangedV1 } from "../shared/evidence-desk-v1.js";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import {
@@ -204,6 +205,7 @@ export async function revalidateWithTransientRetryV1<T>(check: () => Promise<T>,
 }): Promise<T> {
   try { return await check(); }
   catch (error) {
+    if (error instanceof EvidenceDeskSnapshotChangedV1) throw error;
     const transient = error instanceof AuthorityOperationError && (error.code === "unavailable" || error.code === "rate_limited");
     if (!transient || options.signal.aborted || (options.remaining !== undefined && options.remaining() <= AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1)) throw error;
     await abortablePause(AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, options.signal);

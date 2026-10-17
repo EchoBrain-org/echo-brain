@@ -147,6 +147,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   let initializationFailure: unknown;
   let initializationReceipts: Sha256Digest[] = [];
   let latestRecordTruncated = false;
+  const readNotices = new Set<string>();
 
   const save = (item: EvidenceDeskItemV1, release: Omit<Stored, "item">): EvidenceDeskItemV1 => {
     const existing = stored.get(item.id);
@@ -158,6 +159,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   };
   const originals = (release: OriginalContextDeskReleaseV1): readonly EvidenceDeskItemV1[] => {
     originalReleases.push(release);
+    if (release.notice !== undefined) readNotices.add(release.notice);
     return release.items.map((value) => save(Object.freeze({
       id: itemId(sourceCitation(value)), citation: sourceCitation(value), kind: value.kind,
       ...(value.text === undefined ? {} : { text: value.text }), label: value.label,
@@ -168,6 +170,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   };
   const records = (result: ReturnType<PersonEvidenceDeskRecordsV1["searchBatch"]>, includeText = true): readonly EvidenceDeskItemV1[] => {
     latestRecordTruncated ||= result.truncated === true;
+    if (result.notice !== undefined) readNotices.add(result.notice);
     pointer ??= result.release.active_pointer;
     if (pointer.generation_id !== result.release.active_pointer.generation_id || pointer.manifest_sha256 !== result.release.active_pointer.manifest_sha256 || pointer.record_head.position !== result.release.active_pointer.record_head.position || pointer.record_head.record_sha256 !== result.release.active_pointer.record_head.record_sha256) throw new AuthorityOperationError("unavailable", "record evidence snapshot changed");
     recordReleases.push(result.release);
@@ -209,7 +212,10 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const result = (items: readonly EvidenceDeskItemV1[], truncated: boolean, receipts: readonly Sha256Digest[]): EvidenceDeskResultV1 => {
     const all = [...new Set([...initializationReceipts, ...receipts])];
     initializationReceipts = [];
-    return Object.freeze({ items: Object.freeze(items), truncated, receipt_digests: Object.freeze(all), ...(recordsUnavailableAtStart ? { notice: "Meeting records were unavailable when this request began." } : {}) });
+    if (recordsUnavailableAtStart) readNotices.add("Meeting records were unavailable when this request began.");
+    const notices = [...readNotices];
+    readNotices.clear();
+    return Object.freeze({ items: Object.freeze(items), truncated, receipt_digests: Object.freeze(all), ...(notices.length > 0 ? { notice: notices.join(" ") } : {}) });
   };
   const search = async (input: EvidenceDeskSearchInputV1): Promise<EvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
