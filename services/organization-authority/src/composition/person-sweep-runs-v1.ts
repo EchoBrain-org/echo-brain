@@ -115,7 +115,7 @@ export async function sweepOpenItemsV1(input: {
 }): Promise<{ readonly result: SweepCountsV1; readonly writes?: () => (transaction: Database.Database) => void }> {
   const { sources, viewer, run } = input;
   if (run.scope === null) throw new Error('A sweep run has a scope');
-  const context = sweepScopeOpenItemsV1(sources, viewer, run.scope);
+  const context = await sweepScopeOpenItemsV1(sources, viewer, run.scope);
   const checked = [...context.assessed].sort(longestUncheckedFirst).slice(0, PERSON_SWEEP_RESULT_LIMITS_V1.findings);
   // Every item closed, or went out of the caller's sight, since the sweep was asked for.
   if (checked.length === 0) {

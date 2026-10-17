@@ -7,6 +7,7 @@ import type { SweepTriggerInputV1 } from '@echo-brain/organization-authority-ker
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
+import { createPersonOpenItemsV1 } from '../src/composition/person-open-items-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { createPersonTriggerRunsV1 } from '../src/composition/person-trigger-runs-v1.js';
 import { sentFixture, type FixturePerson, type OpenItemsFixtureOptionsV1 } from './fixtures/open-items.js';
@@ -397,6 +398,48 @@ describe('what a sweep checks and how', () => {
       expect(await f.sweep('ari', scope)).toEqual(NOTHING);
       expect(await f.sweep('mina', scope)).toEqual(NOTHING);
     }
+  });
+});
+
+describe('sweeps and the tools a viewer has connected', () => {
+  const kinds = (findings: SweepTriggerInputV1['findings']) => findings.map(finding => (finding.citations[0] as { readonly kind: string }).kind).sort();
+
+  it('takes an item in an outside tool only for a viewer who has connected that tool, and only such an item makes a sweep due', async () => {
+    // Ari approved both items and has connected no tool; Mina owns both and has connected Jira.
+    const f = await sweepFixture({ owner: 'mina', connected: { ari: [], mina: ['jira'] }, verdicts: { ticket: 'still_open', approved_record: 'still_open' } });
+    expect(await f.sweepDue('ari')).toBe(true);                  // the ECHO record was never checked
+    const ari = await f.queueAndStart('ari');
+    await f.settled(ari.run_id);
+    // Ari's desk could never read the ticket: his sweep takes the record alone, and the ticket's last check stays empty.
+    expect(kinds(f.findings.at(-1)!)).toEqual(['approved_record']);
+    expect(f.verdicts()).toEqual([null, 'still_open']);
+    f.advance(2 * HOUR);
+    // The ticket, never checked, makes a sweep due only for the viewer who connected Jira.
+    expect(await f.sweepDue('ari')).toBe(false);
+    expect(await f.sweepDue('mina')).toBe(true);
+    const mina = await f.queueAndStart('mina');
+    await f.settled(mina.run_id);
+    expect(kinds(f.findings.at(-1)!)).toEqual(['approved_record', 'ticket']);
+    expect(f.verdicts()).toEqual(['still_open', 'still_open']);
+    // With only the ticket open, Ari has nothing to check, in any scope; Mina still does.
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    for (const scope of [MINE, { scope: 'record', id: f.record }, { scope: 'project', id: f.projectA }] as const) expect(await f.sweep('ari', scope)).toEqual(NOTHING);
+    expect(runOf(await f.sweep('mina', MINE))).toMatch(/^run_/);
+  });
+
+  it('connects no tool whose link cannot be read, or whose source keeps none, and reports only a failed read', async () => {
+    const f = await sweepFixture({ owner: 'mina' });
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    const sweepWith = (live_sources: typeof f.openItemsOptions.live_sources) => createPersonOpenItemsV1({ ...f.openItemsOptions, live_sources })
+      .sweep({ access_token: 'mina', request: { schema_version: 1, operation: 'sweep', scope: 'mine' } });
+    const failing = f.openItemsOptions.live_sources.map(source => ({ ...source, tools: async () => { throw new AuthorityOperationError('unavailable', 'link store is busy'); } }));
+    expect(await sweepWith(failing)).toEqual(NOTHING);
+    expect(f.liveFailures).toEqual([{ kind: 'open_items_live_read', reason: 'connection', code: 'unavailable' }, { kind: 'open_items_live_read', reason: 'connection', code: 'unavailable' }]);
+    const keepsNone = f.openItemsOptions.live_sources.map(({ tools: _tools, ...source }) => source);
+    expect(await sweepWith(keepsNone)).toEqual(NOTHING);
+    expect(await sweepWith([])).toEqual(NOTHING);
+    expect(f.liveFailures).toHaveLength(2);
+    expect(runOf(await sweepWith(f.openItemsOptions.live_sources))).toMatch(/^run_/);
   });
 });
 

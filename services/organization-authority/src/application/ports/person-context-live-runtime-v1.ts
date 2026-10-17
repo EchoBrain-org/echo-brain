@@ -36,4 +36,6 @@ export interface OpenedPersonLiveConnectorV1 extends Omit<OpenedPersonContextLiv
 }
 export interface PersonLiveConnectorSourceV1 extends Omit<PersonLiveConnectorDefinitionV1, 'open'> {
   readonly application: PersonContextLiveApplicationV1<PersonLiveEvidenceCitationV1>;
+  /** The person's link to this connector's tool, read locally with no provider call; absent for a connector that keeps none. */
+  readonly tools?: OpenedPersonLiveConnectorV1['tools'];
 }

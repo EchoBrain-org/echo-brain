@@ -61,7 +61,6 @@ export interface CreatePersonOpenItemsV1Options extends OpenItemSourcesV1 {
   /** Kept injectable for focused service tests, as the runs service keeps it. */
   readonly bindDesk: typeof bindPersonLiveEvidenceDeskV1;
   readonly bind_options: CreatePersonLiveAnswerRouteOptionsV1;
-  readonly live_sources?: CreatePersonLiveAnswerRouteOptionsV1['live_sources'];
   /** The clock Home tells a stale check and a recent sweep by, and a stage a lapsed lease. */
   readonly now?: () => Date;
 }
@@ -71,18 +70,24 @@ export interface OpenItemSourcesV1 {
   readonly items: Pick<SqliteImpactItemsV1, 'involving' | 'forRecords'>;
   readonly people: Pick<SqliteOpenItemPeopleV1, 'people' | 'leadsAny'>;
   readonly records: PersonReadableDecisionsV1;
+  /**
+   * The live sources a desk binds. A live read opens items through them, and a sweep takes an item in an outside tool only when
+   * the viewer's link to that tool's source is live. Without them, no ticket or page is swept.
+   */
+  readonly live_sources?: CreatePersonLiveAnswerRouteOptionsV1['live_sources'];
   /** Where a failed live read, or a stored card whose first line cannot be read, is reported; one line of JSON on standard error by default. */
   readonly on_live_failure?: (event: OpenItemsLiveFailureV1) => void;
 }
 /**
- * A live read that failed for a reason other than the viewer's access, or a
- * stored card whose first line could not be read. Content-free by
- * construction: no id, title, pointer or outside word, only where it failed
- * and the error's code (`error` for anything that is not an Authority error).
+ * A live read that failed for a reason other than the viewer's access, a
+ * stored card whose first line could not be read, or a tool link that could
+ * not be read. Content-free by construction: no id, title, pointer or outside
+ * word, only where it failed and the error's code (`error` for anything that
+ * is not an Authority error).
  */
 export interface OpenItemsLiveFailureV1 {
   readonly kind: 'open_items_live_read';
-  readonly reason: 'bind' | 'open' | 'fence' | 'first_line';
+  readonly reason: 'bind' | 'open' | 'fence' | 'first_line' | 'connection';
   readonly code: string;
 }
 export type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign' | 'sweep'>;
@@ -358,14 +363,44 @@ export function visiblePersonalOpenItemsV1<D extends DecisionProjects = PersonRe
   }
 }
 
+/** An item in an outside tool, which a desk reads through that tool's live source: `kind:tool_id`, else undefined. */
+function outsideToolOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefined {
+  const { kind, tool_id: toolId } = row.pointer;
+  return (kind === 'ticket' || kind === 'page') && typeof toolId === 'string' ? `${kind}:${toolId}` : undefined;
+}
+/**
+ * The outside tools the viewer has connected, as `kind:tool_id`: each live source a desk binds (one of a known tool) whose tool
+ * the viewer linked. A local read of their link, never a provider call. A source that keeps no link state connects nothing, and
+ * a link that cannot be read is reported and connects nothing.
+ */
+async function connectedToolsV1(sources: Pick<OpenItemSourcesV1, 'live_sources' | 'on_live_failure'>, viewer: Viewer): Promise<ReadonlySet<string>> {
+  const connected = new Set<string>();
+  for (const source of (sources.live_sources ?? []).filter(value => value.minimum_response_version <= 6)) {
+    const { kind, tool_id: toolId } = source.descriptor;
+    if (toolId === undefined || source.tools === undefined) continue;
+    try {
+      const tools = await source.tools(viewer.token);
+      if (tools.some(tool => tool.tool_id === toolId && tool.availability === 'enabled' && tool.personal_status === 'linked')) connected.add(`${kind}:${toolId}`);
+    } catch (error) { reportLiveFailure(sources, 'connection', errorCodeV1(error)); }
+  }
+  return connected;
+}
+/** The tools a sweep of these rows could read: read only when one of them is in an outside tool. */
+function connectedToolsFor(sources: Pick<OpenItemSourcesV1, 'live_sources' | 'on_live_failure'>, viewer: Viewer, rows: readonly Pick<ImpactItemRowV1, 'pointer'>[]): Promise<ReadonlySet<string>> {
+  return rows.some(row => outsideToolOf(row) !== undefined) ? connectedToolsV1(sources, viewer) : Promise.resolve(new Set());
+}
 /**
  * A sweep re-reads an item through its pointer, as a finding's citation the
- * sweep trigger takes: a ticket, a page, an ECHO record or document, and no
- * Slack message today. An item on any other pointer, a meeting action
- * included, is never swept, so it never makes a sweep due either.
+ * sweep trigger takes: a ticket or a page in a tool the viewer has connected,
+ * an ECHO record or document, and no Slack message today. An item on any
+ * other pointer, a meeting action included, is never swept, so it never makes
+ * a sweep due either.
  */
-function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
-  // No Slack message: no desk can read a Slack citation yet, so a swept one would always be recorded unreadable (R62).
+function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>, connected: ReadonlySet<string>): boolean {
+  // A desk without the item's tool, or no Slack message (no desk can read a Slack citation yet), would always record it
+  // unreadable (R62).
+  const tool = outsideToolOf(row);
+  if (tool !== undefined && !connected.has(tool)) return false;
   try {
     SWEEP_TRIGGER.parseEvent({ findings: [{ finding: 'An open item', expected: 'the approved decision', citations: [row.pointer] }] });
     return true;
@@ -376,11 +411,12 @@ function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
 }
 /**
  * The open items a sweep of `scope` rechecks for this viewer (section 6):
- * open, shown to the viewer by the policy, and on a pointer a sweep re-reads.
- * `mine` is what they sent or own; a decision's or a project's are its items
- * the viewer sees, as `items` shows them. `assessed` holds those items only.
+ * open, shown to the viewer by the policy, and on a pointer a sweep re-reads
+ * with the tools they have connected. `mine` is what they sent or own; a
+ * decision's or a project's are its items the viewer sees, as `items` shows
+ * them. `assessed` holds those items only.
  */
-export function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer, scope: TriggerRunScopeV1): Context {
+export async function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer, scope: TriggerRunScopeV1): Promise<Context> {
   let rows: readonly ImpactItemRowV1[];
   switch (scope.kind) {
     case 'mine':
@@ -393,7 +429,8 @@ export function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: Viewer
     default:
       rows = sources.items.forRecords(sources.records.projectRecords({ access_token: viewer.token, project_id: scope.project_id, limit: PROJECT_RECORDS_MAX }), { states: ['open'], limit: SCOPE_ROWS_MAX });
   }
-  const context = assessOpenItemsV1(sources, viewer, rows.filter(sweepTakesItem));
+  const connected = await connectedToolsFor(sources, viewer, rows);
+  const context = assessOpenItemsV1(sources, viewer, rows.filter(row => sweepTakesItem(row, connected)));
   return { ...context, assessed: context.assessed.filter(entry => entry.access.see_row) };
 }
 
@@ -576,7 +613,9 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // after a change check must never start a sweep.
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
-      const stale = !rowsOnly && theirs.some(entry => (entry.row.check === null || entry.row.check.at < dayAgo) && sweepTakesItem(entry.row));
+      const unchecked = rowsOnly ? [] : theirs.filter(entry => entry.row.check === null || entry.row.check.at < dayAgo).map(entry => entry.row);
+      const connected = await connectedToolsFor(options, viewer, unchecked);
+      const stale = unchecked.some(row => sweepTakesItem(row, connected));
       const newest = stale ? options.runs.newestSweep(actor) : undefined;
       const sweep_due = stale && (newest === undefined || newest.created_at <= new Date(time - HOUR_MS).toISOString()) && options.runs.runningSweep(actor) === undefined;
       return checked('home', {
@@ -747,7 +786,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const scope: TriggerRunScopeV1 = request.scope === 'mine' ? { kind: 'mine' }
         : request.scope === 'record' ? { kind: 'record', record_sha256: request.id as Sha256Digest } : { kind: 'project', project_id: request.id! };
       // A scope with nothing the caller can see to check queues nothing, and says nothing of whether its record or project exists.
-      if (sweepScopeOpenItemsV1(options, viewer, scope).assessed.length === 0) return checked('sweep', { state: 'nothing_to_check' });
+      if ((await sweepScopeOpenItemsV1(options, viewer, scope)).assessed.length === 0) return checked('sweep', { state: 'nothing_to_check' });
       // The caller's waiting or running sweep of the same scope, else a new one; the desktop starts it after any pending impact check.
       return checked('sweep', { run_id: options.runs.enqueueSweep(actorOf(viewer), scope).run_id });
     },
