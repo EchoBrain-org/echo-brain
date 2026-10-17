@@ -311,6 +311,72 @@ describe('Ask progress from the Authority through the Person client to the deskt
     } finally { await f.close(); }
   });
 
+  it('cites and names a follow-up on /v6, opens it beside the running Ask with its owner and status, and after the answer opens its item page (ADR-0040)', async () => {
+    const { f, store, views, progress, openerOf, account, lines, refused, runs, audits } = await app();
+    const EXPECTED = 'Send the Launchscope checklist to the pilot group';
+    const DECIDED = 'Launchscope rolls out to the pilot group first.';
+    const item_id = f.followUp(EXPECTED);
+    try {
+      // While the Authority is inside the writer's model call, the follow-up Ask named opens beside it, read as Home reads it.
+      let whileAsking: { row?: Json; offered?: boolean; error?: unknown } = {};
+      f.beforeAnswerReturn(async () => {
+        try {
+          await vi.waitFor(() => expect(store.getState().ask?.asking?.progress.stage).toBe('writing'), { timeout: 10_000, interval: 10 });
+          const named = store.getState().ask!.asking!.progress.rows.flatMap(row => row.items ?? []).find(item => item.kind === 'follow_up')!;
+          expect(named).toEqual({ kind: 'follow_up', label: EXPECTED, item_id });
+          store.openNamed([named]);
+          await vi.waitFor(() => expect(store.getState().sources?.followUps[item_id]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
+          whileAsking = { row: store.getState().sources!.followUps[item_id]!.value as unknown as Json, offered: store.fullPageOffered() };
+        } catch (error) { whileAsking = { error }; }
+      });
+      await store.ask(QUESTION, { kind: 'global' });
+      expect(whileAsking.error).toBeUndefined();
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
+      expect(refused).not.toHaveBeenCalled();
+
+      // --- The Authority and the client: the follow-up was searched, named once its check passed, cited, and audited. ---
+      const steps = stepsOf(lines.slice(0, -1));
+      const final = validatePersonAskProgressResultLineV2(JSON.parse(lines.at(-1)!));
+      expect(final.result.schema_version).toBe(7);
+      const followUp = expect.objectContaining({ citation: { kind: 'follow_up', item_id }, kind: 'follow_up', label: EXPECTED, ref: `follow_up:${item_id}` });
+      const searched = steps.filter(step => step.type === 'searched');
+      expect(searched).toEqual([{ type: 'searched', sources: SEARCHED_V2, found: expect.any(Number) }]);
+      const named = steps.flatMap(step => step.type === 'read' ? step.items : []);
+      expect(named.filter(item => item.kind === 'follow_up')).toEqual([followUp]);
+      expect(searched[0]!.type === 'searched' && searched[0]!.found).toBe(named.length);
+      expect(final.result.citations).toContainEqual(followUp);
+      const receiptNamed = final.receipt!.rows.flatMap(row => row.type === 'read' ? row.items : []);
+      expect(receiptNamed.map(commitment)).toEqual(named.map(commitment));
+      expect(receiptNamed).toContainEqual(followUp);
+      const [audit] = audits();
+      expect(audit).toMatchObject({ outcome: 'answered', named_citation_digests: named.map(commitment) });
+      expect(audit!.named_citation_digests).toContain(canonicalSha256({ kind: 'follow_up', item_id }));
+      // While it ran, nothing the follow-up's row or decision says left the Authority: only its citation projection.
+      for (const line of lines.slice(0, -1)) {
+        for (const secret of [DECIDED, 'Owner:', 'Expected:', 'still_open', NOTE]) expect(line).not.toContain(secret);
+        const keys = keysOf(JSON.parse(line));
+        for (const key of [...NEVER_KEYS, 'owner', 'status', 'check', 'decision', 'expected']) expect(keys.has(key), `${key} in ${line}`).toBe(false);
+      }
+
+      // --- The page: the follow-up opened beside Ask while it ran, without Open; the answer's source opens its item page. ---
+      expect(whileAsking.row).toMatchObject({ item_id, state: 'open', expected: EXPECTED, owner: { membership_id: account.membership_id } });
+      expect(whileAsking.offered).toBe(false);
+      const shown = store.getState().ask!.shown!;
+      const source = { kind: 'follow_up', label: EXPECTED, item_id };
+      expect(shown.answer.sources).toContainEqual(source);
+      expect(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).sources).toContainEqual(source);
+      expect(openerOf(source as Source)).toEqual({ pane: 'follow_up', page: { kind: 'follow_up', item_id } });
+      expect(progress.searchedWords(shown.receipt!.rows[0]!)).toBe(`Searched meetings, documents, Jira, Slack and follow-ups · ${named.length} found`);
+      // The audited answer names it, so the pane stays on it, and now offers Open: its item page, read again.
+      expect(store.fullPageOffered()).toBe(true);
+      store.openFullPage();
+      expect(store.getState().ask).toBeNull();
+      expect(store.followUpShown()).toMatchObject({ kind: 'item', item_id });
+      await vi.waitFor(() => expect(store.followUpShown()?.item).toMatchObject({ item_id, state: 'open' }), { timeout: 10_000, interval: 10 });
+    } finally { await f.close(); }
+  });
+
   it('stops at Cancel: the Authority cancels the Ask and audits what was named, and the page keeps nothing', async () => {
     const { f, store, lines, notices, runs, audits } = await app();
     // The writer answers only once the proof is over: only the cancelled request ends the Ask.

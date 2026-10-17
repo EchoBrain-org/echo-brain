@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { expect, vi } from 'vitest';
-import { sha256Digest } from '@echo-brain/federation-protocol';
+import { canonicalJson, canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
+import type Database from 'better-sqlite3';
+import { derivedAtomIdentity } from '@echo-brain/organization-record/application/atom-identity';
+import { storableImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { liveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
@@ -12,6 +15,8 @@ import { openJiraPersonLiveRuntimeV1 } from '../../src/composition/jira-person-l
 import { LEGACY_TICKET_CONNECTOR_V1 } from '../../src/composition/person-live-connector-registry-v1.js';
 import { createPersonDocumentApplicationV1 } from '../../src/application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../../src/adapters/persistence/sqlite/document-v1.js';
+import { SqliteImpactItemsV1 } from '../../src/adapters/persistence/sqlite/impact-items-v1.js';
+import { SqliteTriggerRunsV1 } from '../../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { ownerGenesis, port, signInHttpSession, syntheticOidcProvider } from './owner-session.js';
 import { crossSourceLiveFixture, JIRA_TEXT, SLACK_TEXT } from './cross-source-live-fixture.js';
 import { seedCrossSourceRecords } from './cross-source-record-fixture.js';
@@ -130,7 +135,45 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
   expect(connect.status).toBe(201); live.jira.finish();
   expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connect.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
   const ask = () => post('/v4/person/ask', { schema_version: 3, question: 'Combine the Launchscope approved meeting, document, Jira ticket, and Slack message.' });
-  return { ...f, seeded, database: database as CrossSourceAuthorityDatabaseV1, live, prompts, generate, post, ask, origin, session,
+  /**
+   * One open follow-up (ADR-0033) on the approved Launchscope meeting, as its
+   * impact check finds it and the owner, who approved the meeting, sends it to
+   * themselves: one of the meeting's own actions, whose title is `expected`.
+   * Ask finds it by those words, which ECHO holds, and reads nothing live for it.
+   */
+  const followUp = (expected: string): string => {
+    const db = database as unknown as Database.Database;
+    const runs = new SqliteTriggerRunsV1(db);
+    const items = new SqliteImpactItemsV1(db);
+    const owner = { organization_id: f.initialized.organization_id, principal_id: f.initialized.owner_principal_id, membership_id: f.initialized.owner_membership_id };
+    const record_sha256 = seeded.approved_record_sha256;
+    if (runs.impactRunsFor([record_sha256]).length === 0) {
+      // These records are appended without the approval core, so no published approval stands behind the impact check's run.
+      // Its guard is lifted for this one insert and restored, unchanged, before the transaction commits.
+      const guard = 'authority_trigger_run_approved_record_v1';
+      db.transaction(() => {
+        const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?").pluck().get(guard) as string;
+        db.exec(`DROP TRIGGER ${guard}`);
+        runs.enqueueApprovedRecord(db, { approval_id: 'cross-source-public', record_sha256, reviewer: owner, decided_at: new Date().toISOString() });
+        db.exec(sql);
+      })();
+    }
+    const run = runs.impactRunsFor([record_sha256])[0]!;
+    const claim = runs.claim(owner, run.run_id, 60_000);
+    if (claim.kind !== 'claimed') throw new Error(`The impact check was not claimed: ${claim.kind}`);
+    const decision = { citation: { kind: 'approved_record' as const, atom_id: derivedAtomIdentity(record_sha256, 'd1') as Sha256Digest, record_sha256, policy_id: 'organization-member-readable-person-v2' as const },
+      kind: 'decision' as const, label: 'Launchscope', visibility: 'team' as const };
+    const card = storableImpactCardV1({ status: 'assessed', decided: [{ text: 'Launchscope rolls out to the pilot group first.', citation_index: 0 }], affected: [], unconfirmed: [], people: [], citations: [decision] }, []);
+    const pointer = { kind: 'meeting_action', record_sha256, signal_id: 'a1' };
+    const finished = runs.finish(run.run_id, claim.lease_token, { json: canonicalJson(card), sha256: canonicalSha256(card) }, transaction => items.insertForRun(transaction, run, [{
+      item_key: canonicalSha256(pointer), pointer, relation: 'needs_updating', expected, owner_membership_id: owner.membership_id, owner_match: 'name',
+    }]));
+    if (!finished) throw new Error('The impact check did not finish');
+    const [item] = items.forRun(run.run_id);
+    expect(items.send({ run_id: run.run_id, by: owner.membership_id, command_id: 'send-follow-up', choices: [{ item_id: item!.item_id, include: true }] })).toMatchObject({ kind: 'sent', sent: 1 });
+    return item!.item_id;
+  };
+  return { ...f, seeded, database: database as CrossSourceAuthorityDatabaseV1, live, prompts, generate, post, ask, origin, session, followUp,
     beforeAnswerReturn(callback: () => void | Promise<void>) { beforeAnswerReturn = callback; },
     async close() { await runtime.close(); database.close(); } };
 }
