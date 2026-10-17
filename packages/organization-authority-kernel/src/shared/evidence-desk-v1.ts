@@ -118,8 +118,9 @@ export interface EvidenceDeskRevalidateInputV1 {
  * `revalidate` checks every item released so far, including inventory metadata
  * and the evidence about to be sent to the next model call, plus that snapshot.
  * An `incremental` check narrows "every item" to items released since the
- * last successful check of this desk instance; that state is never shared
- * across requests.
+ * last successful check of this desk instance, so an item an earlier check
+ * covered is not re-read when it first reaches a later prompt; that state is
+ * never shared across requests.
  */
 export interface EvidenceDeskPortV1 {
   readonly scope: EvidenceDeskScopeV1;

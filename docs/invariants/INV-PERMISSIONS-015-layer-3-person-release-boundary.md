@@ -90,12 +90,15 @@ request. The desk pins the record
 snapshot or fixes an explicitly original-only mode when the index starts
 behind. Every desk release is audited before bytes leave Layer 3. Before each
 model call, repairs included, recheck every item and metadata released since
-the previous check, which covers all new model input, together with the
-session, membership tenure, grants, each live connection and the snapshot pin
+the previous successful check, together with the session, membership tenure,
+grants, each live connection and the snapshot pin
 ([ADR-0038](../decisions/ADR-0038-incremental-access-check-before-model-calls.md)).
-Before the final response, recheck all released items and metadata. An item
-that passed a check may stay in model input for the rest of that request; it
-reaches a response only through the final check. Malformed output permits one
+An item is checked at the first check after its release, not when it reaches a
+prompt. An item that passed an earlier check is not re-read before later model
+calls in that request, so an item revoked after that check may still enter
+model input for the first time, or stay in it, until the request ends. Before
+the final response, recheck all released items and metadata; only that check
+keeps such an item out of a response. Malformed output permits one
 repair within the hard budget and then a deterministic cited-evidence fallback. Unknown or
 out-of-part citations never establish support. Authorization, audit, snapshot
 and cancellation failures release no answer.
@@ -104,8 +107,8 @@ ADR-0026 extends this boundary to Jira live evidence on `POST /v4/person/ask`.
 The provider reads as the authenticated Person's current Jira grant. Audits commit
 only coordinates, digests and authorization commitments before releasing evidence;
 tool bodies and metadata remain request-local and never enter Layer 1 or Layer 2.
-Every later model call rechecks the evidence released since the previous check,
-the membership tenure, session, grant and connection; the final response
+Every later model call rechecks the evidence released since the previous
+successful check, the membership tenure, session, grant and connection; the final response
 rechecks all released evidence (ADR-0038). Disconnect, replacement consent, lost
 membership, changed permissions, audit failure or cancellation releases no answer.
 Project Jira reads MUST use a lead-configured mapping and the asker's own current

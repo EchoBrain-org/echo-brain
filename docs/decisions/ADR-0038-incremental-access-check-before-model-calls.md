@@ -61,8 +61,11 @@ Option 3.
 
 - **Before each model call**, including a repair, the gate asks the desk for
   an incremental check. Every layer re-reads only the releases and items it
-  made since its own last successful check: items about to enter a prompt for
-  the first time are always among them. The same check still verifies, on
+  made since its own last successful check. An item is checked at the first
+  check after its release, not when it reaches a prompt: the research loop
+  shows an opened body only when it fits that step's scratchpad budget, and the
+  writer chooses its own context, so an item can first enter a prompt several
+  calls after the check that covered it. The same check still verifies, on
   every call, the session, membership tenure, ECHO grants and authorization
   revision, each live connection's binding, account and site, and the record
   snapshot pin. A live connection is verified once, after the new reads,
@@ -83,7 +86,8 @@ Option 3.
 **Security trade-off.** An item that passed a check stays in the request's
 working set for the rest of that run. If the person loses access to that one
 item mid-run, without losing their session, membership, grant or connection,
-later model calls in the same run may still see it. The final check refuses
+later model calls in the same run may still see it, including a call in which
+it enters a prompt for the first time. The final check refuses
 the answer, so nothing built on it is released. This exposes the item only to
 the model, inside the same request and Person scope the item was released
 under. ADR-0019's per-call check prevented this exposure; the founder accepted
