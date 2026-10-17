@@ -278,6 +278,34 @@ describe('SQLite open items v1', () => {
     expect(() => f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'landed', by: f.mina, at: '2026-10-08T12:00Z', run_id: f.sweepRunId }))()).toThrow();
   });
 
+  it('never lets an unreadable check replace a judged one, whichever finishes first, and keeps checks moving forward', async () => {
+    const record = (f: Awaited<ReturnType<typeof sentItemFixture>>, verdict: 'still_open' | 'unreadable', by: string, at: string) =>
+      f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict, by, at, run_id: f.sweepRunId }))();
+    // Mina's sweep, which reads the ticket, started first; Ari's, whose desk cannot read it, started later and finishes first.
+    const unreadableFirst = await sentItemFixture();
+    expect(record(unreadableFirst, 'unreadable', ARI, '2026-10-08T10:30:00.000Z')).toBe(true);
+    expect(record(unreadableFirst, 'still_open', unreadableFirst.mina, '2026-10-08T10:00:00.000Z')).toBe(true);
+    // The judged check replaces the unreadable one, stamped just after it: a last check never moves back.
+    expect(unreadableFirst.items.read(unreadableFirst.itemId)!.check).toEqual({ verdict: 'still_open', by: unreadableFirst.mina, at: '2026-10-08T10:30:00.001Z', run_id: unreadableFirst.sweepRunId });
+    expect(record(unreadableFirst, 'unreadable', ARI, '2026-10-08T11:00:00.000Z')).toBe(false);
+    expect(unreadableFirst.items.read(unreadableFirst.itemId)!.check).toMatchObject({ verdict: 'still_open', by: unreadableFirst.mina });
+    // The judged check finishes first: no later unreadable check replaces it, Ari's own or anyone's.
+    const judgedFirst = await sentItemFixture();
+    expect(record(judgedFirst, 'still_open', judgedFirst.mina, '2026-10-08T10:00:00.000Z')).toBe(true);
+    expect(record(judgedFirst, 'unreadable', ARI, '2026-10-08T10:30:00.000Z')).toBe(false);
+    expect(record(judgedFirst, 'unreadable', judgedFirst.mina, '2026-10-09T10:00:00.000Z')).toBe(false);
+    expect(judgedFirst.items.read(judgedFirst.itemId)!.check).toEqual({ verdict: 'still_open', by: judgedFirst.mina, at: '2026-10-08T10:00:00.000Z', run_id: judgedFirst.sweepRunId });
+    // With no judged check, a newer unreadable check replaces an older one, and never an equal or newer one.
+    const unreadable = await sentItemFixture();
+    expect(record(unreadable, 'unreadable', ARI, '2026-10-08T09:00:00.000Z')).toBe(true);
+    expect(record(unreadable, 'unreadable', unreadable.mina, '2026-10-08T09:00:00.000Z')).toBe(false);
+    expect(record(unreadable, 'unreadable', unreadable.mina, '2026-10-08T09:30:00.000Z')).toBe(true);
+    expect(unreadable.items.read(unreadable.itemId)!.check).toMatchObject({ verdict: 'unreadable', by: unreadable.mina, at: '2026-10-08T09:30:00.000Z' });
+    // A judged check is ordered against the stamp a judged check carries, not its read time: Ari's still_open, read at 10:15,
+    // after Mina's 10:00 read, is refused, because her check carries 10:30:00.001 (the row keeps no other time).
+    expect(record(unreadableFirst, 'still_open', ARI, '2026-10-08T10:15:00.000Z')).toBe(false);
+  });
+
   it('finds items by person and by record', async () => {
     const f = await sentItemFixture();
     const org = f.owner.organization_id;

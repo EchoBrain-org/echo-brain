@@ -7,7 +7,9 @@ import { expect, vi } from 'vitest';
 import { SqliteImpactItemsV1, type ImpactItemVerdictV1 } from '../../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqliteOpenItemPeopleV1 } from '../../src/adapters/persistence/sqlite/open-item-people-v1.js';
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../../src/adapters/persistence/sqlite/trigger-runs-v1.js';
+import type { PersonLiveConnectorSourceV1 } from '../../src/application/ports/person-context-live-runtime-v1.js';
 import type { TicketOwnerAccountsV1 } from '../../src/application/ports/ticket-owner-accounts-v1.js';
+import { CONFLUENCE_LIVE_CONNECTOR_V1, JIRA_LIVE_CONNECTOR_V1 } from '../../src/composition/person-live-connector-registry-v1.js';
 import { createPersonOpenItemsV1, type OpenItemsLiveFailureV1 } from '../../src/composition/person-open-items-v1.js';
 import type { PersonReadableDecisionProjectsV1, PersonReadableDecisionsV1, PersonRecordActionV1 } from '../../src/composition/person-record-search-route.js';
 import { createPersonTriggerRunsV1 } from '../../src/composition/person-trigger-runs-v1.js';
@@ -59,6 +61,8 @@ export interface OpenItemsFixtureOptionsV1 {
   readonly ownRecordAffected?: boolean;
   /** A temp-file database, so a peer handle (`peer()`) can hold a lock on the same Authority. */
   readonly file?: boolean;
+  /** The tools each person has connected, as their live sources' link says; everyone has connected Jira and Confluence by default. */
+  readonly connected?: Partial<Record<FixturePerson, readonly ('jira' | 'confluence')[]>>;
 }
 
 /** One impact card as the renderer returns it, with a copy of the ticket at another text hash when asked. */
@@ -233,11 +237,21 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   };
   const bind_options = { authority_id: 'authority', state_lineage_id: 'lineage' } as never;
   const clock = () => now;
+  /** Jira and Confluence as the live sources a desk binds: the fake desk never asks them for a source, only for each person's link. */
+  const live_sources: readonly PersonLiveConnectorSourceV1[] = [JIRA_LIVE_CONNECTOR_V1, CONFLUENCE_LIVE_CONNECTOR_V1].map(connector => ({
+    ...connector, application: { source: async () => undefined },
+    tools: async (access_token: string) => {
+      const toolId = connector.descriptor.tool_id;
+      const linked = (options.connected?.[token(access_token)] ?? ['jira', 'confluence']).includes(toolId);
+      return [{ tool_id: toolId, display_name: toolId, availability: 'enabled' as const, personal_status: linked ? 'linked' as const : 'unlinked' as const,
+        external_scope_id: linked ? CLOUD : null, external_subject_id: linked ? `acct-${access_token}` : null, organization_setup: null }];
+    },
+  }));
   const runsApp = createPersonTriggerRunsV1({ runs, sessions, records, bindDesk: bindDesk as never, audit: {} as never, bind_options, research: research as never,
-    items, people: directory, owners, lease_ms: 60_000, now: clock });
+    items, people: directory, owners, lease_ms: 60_000, now: clock, live_sources });
   const liveFailures: OpenItemsLiveFailureV1[] = [];
   /** The open-items service's options, so a test can build it again with one of them changed. */
-  const openItemsOptions = { sessions, runs, items, people: directory, records, bindDesk: bindDesk as never, bind_options, now: clock,
+  const openItemsOptions = { sessions, runs, items, people: directory, records, bindDesk: bindDesk as never, bind_options, now: clock, live_sources,
     on_live_failure: options.on_live_failure ?? ((event: OpenItemsLiveFailureV1) => { liveFailures.push(event); }) };
   const openItemsApp = createPersonOpenItemsV1(openItemsOptions);
   /** Every response passes the API's own result validator, as the desktop's client would apply it. */

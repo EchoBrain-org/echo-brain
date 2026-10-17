@@ -253,14 +253,34 @@ export class SqliteImpactItemsV1 {
     });
   }
 
-  /** In the sweep's finishing transaction. False when the item holds an equal or newer check. */
+  /**
+   * In the sweep's finishing transaction. A judged check (landed, still open, changed) replaces an older check, and an unreadable
+   * one whenever it was made: someone who could read the item outranks someone who could not, whichever sweep started first. An
+   * unreadable check is recorded only while no one's judged check exists, over nothing or an older unreadable one. A last check
+   * only moves forward, so a judged check that started before the unreadable one it replaces carries the time just after it.
+   * The row keeps no other time, so that stamp also orders it against later judged checks: one that read the item after it did but
+   * before the stamp is refused, and the item keeps a verdict read minutes earlier (three sweeps racing on one item). Comparing
+   * judged checks by their own read times needs a column of its own. False when the item keeps its check.
+   */
   recordCheck(transaction: Database.Database, input: { readonly item_id: string; readonly verdict: ImpactItemVerdictV1; readonly by: string; readonly at: string; readonly run_id: string }): boolean {
     if (!transaction.inTransaction) throw new Error('An open item check is recorded inside the sweep finishing transaction');
     // Checks are ordered as strings, so only the canonical ISO form keeps string order equal to time order.
     if (typeof input.at !== 'string' || Number.isNaN(Date.parse(input.at)) || new Date(input.at).toISOString() !== input.at) throw new TypeError('Open item check time is invalid');
+    const current = transaction.prepare('SELECT checked_verdict, checked_at FROM authority_impact_items_v1 WHERE item_id=?').get(input.item_id) as
+      Pick<StoredItemV1, 'checked_verdict' | 'checked_at'> | undefined;
+    if (current === undefined) return false;
+    let at = input.at;
+    if (current.checked_verdict !== null && current.checked_at !== null) {
+      const judged = input.verdict !== 'unreadable';
+      if (!judged && current.checked_verdict !== 'unreadable') return false;
+      if (current.checked_at >= input.at) {
+        if (!judged || current.checked_verdict !== 'unreadable') return false;
+        at = new Date(Date.parse(current.checked_at) + 1).toISOString();
+      }
+    }
     return transaction.prepare(`UPDATE authority_impact_items_v1 SET checked_verdict=?, checked_by=?, checked_at=?, checked_run_id=?, updated_at=?
       WHERE item_id=? AND (checked_at IS NULL OR checked_at < ?)`).run(
-      input.verdict, input.by, input.at, input.run_id, this.timestamp(), input.item_id, input.at).changes === 1;
+      input.verdict, input.by, at, input.run_id, this.timestamp(), input.item_id, at).changes === 1;
   }
 
   private timestamp(): string {

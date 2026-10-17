@@ -10,7 +10,7 @@ import {
 import type { createAgenticResearchV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
-import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
+import { SWEEP_APPROVED_DECISION_V1, SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
 import type { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { TriggerRunRowV1, TriggerRunScopeV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import {
@@ -26,15 +26,22 @@ import type { PersonRecordAnchorV1 } from './person-record-search-route.js';
  * takes up to 20 of the items they see in its scope, the never-checked first,
  * then those checked longest ago. Each becomes a finding with the item first
  * and, for a decision reader only, the decision after it (R33). The run stores
- * the counts by verdict; each item keeps only its verdict as the shared last
- * check, replaced only by a newer one, and only on an item the caller still
- * sees as the run finishes. A sweep never changes an item's state.
+ * the counts by verdict and the ids of the items it could not read; each item
+ * keeps only its verdict as the shared last
+ * check, replaced only by a newer one (and an unreadable one never replaces
+ * anyone's judged verdict), and only on an item the caller still sees as the
+ * run finishes. A sweep never changes an item's state.
  */
 
-/** What a finished sweep stores: how many of its findings had each verdict, nothing else. */
+/**
+ * What a finished sweep stores: how many of its findings had each verdict, and the ECHO ids of the items it could not read, so
+ * Home does not ask the same person to sweep them again within the day (an unreadable check never replaces someone else's judged
+ * one, so their last check can stay old). Nothing else: no line, title or citation.
+ */
 export interface SweepCountsV1 {
   readonly schema_version: 1;
   readonly landed: number; readonly still_open: number; readonly changed: number; readonly unreadable: number; readonly not_assessed: number;
+  readonly unreadable_items: readonly string[];
 }
 /** Where a sweep reads its items and their decisions, and writes its checks. */
 export interface PersonSweepSourcesV1 extends OpenItemSourcesV1 {
@@ -53,8 +60,6 @@ const KIND_WORDS: Readonly<Record<PersonOpenItemKindV1, string>> = Object.freeze
   // A meeting action is never swept (the sweep trigger refuses its pointer); its word only completes the map.
   action: 'meeting action', ticket: 'Jira ticket', page: 'page', slack_message: 'Slack message', record: 'ECHO record', document: 'ECHO document',
 });
-/** What a finding expects of an item with no phrase of its own, for a caller not shown the decision's first line. */
-const APPROVED_DECISION = 'the approved decision';
 
 function ascending(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -63,9 +68,12 @@ function ascending(left: string, right: string): number {
 function longestUncheckedFirst(left: AssessedOpenItemV1, right: AssessedOpenItemV1): number {
   return ascending(left.row.check?.at ?? '', right.row.check?.at ?? '') || ascending(left.row.created_at, right.row.created_at) || ascending(left.row.item_id, right.row.item_id);
 }
-function countsOf(findings: readonly Pick<PersonSweepFindingResultV1, 'verdict'>[]): SweepCountsV1 {
+function countsOf(findings: readonly Pick<PersonSweepFindingResultV1, 'finding_index' | 'verdict'>[], checked: readonly AssessedOpenItemV1[]): SweepCountsV1 {
   const count = (verdict: PersonSweepFindingResultV1['verdict']) => findings.filter(entry => entry.verdict === verdict).length;
-  return Object.freeze({ schema_version: 1 as const, landed: count('landed'), still_open: count('still_open'), changed: count('changed'), unreadable: count('unreadable'), not_assessed: count(null) });
+  return Object.freeze({
+    schema_version: 1 as const, landed: count('landed'), still_open: count('still_open'), changed: count('changed'), unreadable: count('unreadable'), not_assessed: count(null),
+    unreadable_items: Object.freeze(findings.flatMap(entry => (entry.verdict === 'unreadable' ? [checked[entry.finding_index]!.row.item_id] : []))),
+  });
 }
 
 /**
@@ -116,12 +124,12 @@ export async function sweepOpenItemsV1(input: {
 }): Promise<{ readonly result: SweepCountsV1; readonly writes?: () => (transaction: Database.Database) => void }> {
   const { sources, viewer, run } = input;
   if (run.scope === null) throw new Error('A sweep run has a scope');
-  const context = sweepScopeOpenItemsV1(sources, viewer, run.scope);
+  const context = await sweepScopeOpenItemsV1(sources, viewer, run.scope);
   const checked = [...context.assessed].sort(longestUncheckedFirst).slice(0, PERSON_SWEEP_RESULT_LIMITS_V1.findings);
   // Every item closed, or went out of the caller's sight, since the sweep was asked for.
   if (checked.length === 0) {
     input.fenceSession();
-    return { result: countsOf([]) };
+    return { result: countsOf([], []) };
   }
 
   const decisionPart = openItemDecisionPartsV1(sources, context);
@@ -134,11 +142,13 @@ export async function sweepOpenItemsV1(input: {
     const { row } = entry;
     const decision = decisionPart(entry);
     const item = `${RELATION_WORDS[row.relation ?? 'not_assessed']} ${KIND_WORDS[openItemKindV1(row.pointer)]}`;
-    // A short phrase, as an item's own `expected` is.
+    // A short phrase, as an item's own `expected` is: else the first line its impact card decided, for a decision reader. Else the
+    // renderer shows the judge the decision's own current text in place of the placeholder (a caller not shown the decision has no
+    // decision citation, so it stays the placeholder).
     const firstLine = decision?.first_line == null ? '' : impactCardLineV1(decision.first_line, LIMITS.expected_chars);
     return {
       finding: decision === undefined ? item : `${item} from ${decision.title}`,
-      expected: row.expected ?? (firstLine || APPROVED_DECISION),
+      expected: row.expected ?? (firstLine || SWEEP_APPROVED_DECISION_V1),
       // The item first: the renderer judges a finding against its own items. The decision after it is context.
       citations: decision === undefined ? [row.pointer] : [row.pointer, anchorOf(row.record_sha256)],
     };
@@ -151,7 +161,7 @@ export async function sweepOpenItemsV1(input: {
   const result = validatePersonSweepResultV1(output.rendered, findings.length);
 
   return {
-    result: countsOf(result.findings),
+    result: countsOf(result.findings, checked),
     // Who sees what is asked again as the run finishes, in the same synchronous step as its transaction. It cannot run inside
     // it: the record check behind it reads the person's project grants in a transaction of its own, which never nests.
     writes: () => {

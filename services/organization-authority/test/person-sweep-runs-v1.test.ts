@@ -7,6 +7,7 @@ import type { SweepTriggerInputV1 } from '@echo-brain/organization-authority-ker
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
+import { createPersonOpenItemsV1 } from '../src/composition/person-open-items-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { createPersonTriggerRunsV1 } from '../src/composition/person-trigger-runs-v1.js';
 import { sentFixture, type FixturePerson, type OpenItemsFixtureOptionsV1 } from './fixtures/open-items.js';
@@ -20,7 +21,7 @@ type DeskScope = { readonly kind: 'global' } | { readonly kind: 'project'; reado
 const HOUR = 3_600_000;
 const MINE = { scope: 'mine' } as const;
 const NOTHING = { state: 'nothing_to_check' } as const;
-const ZERO = { schema_version: 1, landed: 0, still_open: 0, changed: 0, unreadable: 0, not_assessed: 0 };
+const ZERO = { schema_version: 1, landed: 0, still_open: 0, changed: 0, unreadable: 0, not_assessed: 0, unreadable_items: [] };
 
 function runOf(result: PersonRunsResultsV1['sweep']): string {
   if (!('run_id' in result)) throw new Error('expected a sweep run');
@@ -192,6 +193,28 @@ describe('sweep runs record a shared last check', () => {
     expect(await f.sweepDue('ari')).toBe(false);
     f.advance(HOUR - 1);
     expect(await f.sweepDue('ari')).toBe(false);                 // within the hour of the newest sweep
+    f.advance(1);
+    expect(await f.sweepDue('ari')).toBe(true);
+  });
+
+  it('waits a day from a sweep of the caller\'s that could not read an item whose judged check it left standing', async () => {
+    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'unreadable' } });
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    // Mina read the ticket and judged it; a day on, Ari's desk no longer can (the ticket was deleted, or his Jira access changed).
+    f.check(f.ticket.item_id, 'still_open', 'mina');
+    f.advance(25 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(true);
+    const { run_id } = await f.queueAndStart('ari');
+    await f.settled(run_id);
+    // Mina's verdict stays the last check, and Ari's run keeps which item he could not read.
+    expect(f.items.read(f.ticket.item_id)!.check).toMatchObject({ verdict: 'still_open', by: f.membership('mina') });
+    expect(f.counts(run_id)).toEqual({ ...ZERO, unreadable: 1, unreadable_items: [f.ticket.item_id] });
+    // The last check is over a day old, but asking Ari again every hour would not let him read the ticket: not due for a day.
+    f.advance(2 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(false);
+    expect(await f.sweepDue('mina')).toBe(true);                 // she reads it, and her own sweep may judge it again
+    f.advance(22 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(false);                 // a day after his sweep, not later
     f.advance(1);
     expect(await f.sweepDue('ari')).toBe(true);
   });
@@ -397,6 +420,48 @@ describe('what a sweep checks and how', () => {
       expect(await f.sweep('ari', scope)).toEqual(NOTHING);
       expect(await f.sweep('mina', scope)).toEqual(NOTHING);
     }
+  });
+});
+
+describe('sweeps and the tools a viewer has connected', () => {
+  const kinds = (findings: SweepTriggerInputV1['findings']) => findings.map(finding => (finding.citations[0] as { readonly kind: string }).kind).sort();
+
+  it('takes an item in an outside tool only for a viewer who has connected that tool, and only such an item makes a sweep due', async () => {
+    // Ari approved both items and has connected no tool; Mina owns both and has connected Jira.
+    const f = await sweepFixture({ owner: 'mina', connected: { ari: [], mina: ['jira'] }, verdicts: { ticket: 'still_open', approved_record: 'still_open' } });
+    expect(await f.sweepDue('ari')).toBe(true);                  // the ECHO record was never checked
+    const ari = await f.queueAndStart('ari');
+    await f.settled(ari.run_id);
+    // Ari's desk could never read the ticket: his sweep takes the record alone, and the ticket's last check stays empty.
+    expect(kinds(f.findings.at(-1)!)).toEqual(['approved_record']);
+    expect(f.verdicts()).toEqual([null, 'still_open']);
+    f.advance(2 * HOUR);
+    // The ticket, never checked, makes a sweep due only for the viewer who connected Jira.
+    expect(await f.sweepDue('ari')).toBe(false);
+    expect(await f.sweepDue('mina')).toBe(true);
+    const mina = await f.queueAndStart('mina');
+    await f.settled(mina.run_id);
+    expect(kinds(f.findings.at(-1)!)).toEqual(['approved_record', 'ticket']);
+    expect(f.verdicts()).toEqual(['still_open', 'still_open']);
+    // With only the ticket open, Ari has nothing to check, in any scope; Mina still does.
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    for (const scope of [MINE, { scope: 'record', id: f.record }, { scope: 'project', id: f.projectA }] as const) expect(await f.sweep('ari', scope)).toEqual(NOTHING);
+    expect(runOf(await f.sweep('mina', MINE))).toMatch(/^run_/);
+  });
+
+  it('connects no tool whose link cannot be read, or whose source keeps none, and reports only a failed read', async () => {
+    const f = await sweepFixture({ owner: 'mina' });
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    const sweepWith = (live_sources: typeof f.openItemsOptions.live_sources) => createPersonOpenItemsV1({ ...f.openItemsOptions, live_sources })
+      .sweep({ access_token: 'mina', request: { schema_version: 1, operation: 'sweep', scope: 'mine' } });
+    const failing = f.openItemsOptions.live_sources.map(source => ({ ...source, tools: async () => { throw new AuthorityOperationError('unavailable', 'link store is busy'); } }));
+    expect(await sweepWith(failing)).toEqual(NOTHING);
+    expect(f.liveFailures).toEqual([{ kind: 'open_items_live_read', reason: 'connection', code: 'unavailable' }, { kind: 'open_items_live_read', reason: 'connection', code: 'unavailable' }]);
+    const keepsNone = f.openItemsOptions.live_sources.map(({ tools: _tools, ...source }) => source);
+    expect(await sweepWith(keepsNone)).toEqual(NOTHING);
+    expect(await sweepWith([])).toEqual(NOTHING);
+    expect(f.liveFailures).toHaveLength(2);
+    expect(runOf(await sweepWith(f.openItemsOptions.live_sources))).toMatch(/^run_/);
   });
 });
 
