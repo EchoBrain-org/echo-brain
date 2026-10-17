@@ -225,6 +225,22 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     second(ok(answer()));
   });
 
+  it('keeps a named item in the pane after the answer only when the audited answer names it', async () => {
+    const { store, step, release } = await asking();
+    step({ type: 'read', items: [decision, note] });
+    store.openNamed([note]);
+    await flush();
+    expect(store.paneTarget()?.sources).toEqual([note]);
+    // The answer releases without the note, in its receipt or its sources: the pane closes on it.
+    vi.advanceTimersByTime(3_000);
+    release(ok({ ...answer(), receipt: { ...receipt, rows: [{ type: 'read', items: [decision] }] } }));
+    await flush();
+    expect(store.getState().ask?.shown?.question).toBe('What did we agree?');
+    expect(store.getState().sources?.named).toBeNull();
+    expect(store.getState().sources?.evidence).toBeNull();
+    expect(store.paneTarget()).toBeNull();
+  });
+
   it('closes when another app comes in front', async () => {
     const { store } = await asking();
     store.openNamed([decision]);

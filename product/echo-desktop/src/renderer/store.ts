@@ -13,7 +13,7 @@ import type {
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, sameExpect } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { answerSentences, sourceGroups, type SourceGroup } from './answer.js';
-import { openerOf } from './openers.js';
+import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
@@ -3326,7 +3326,12 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
   const took = Date.now() - started;
   const receipt = result.value.receipt !== undefined && took >= PROGRESS_AFTER_MS ? result.value.receipt : undefined;
   set({ ask: { ...current, earlier, previous: null, shown: { id: mine, ...asked, answer: result.value, ...(receipt === undefined ? {} : { receipt, took }) }, asking: null } });
-  startSources(true);
+  startSources(answerNames(result.value));
+}
+
+/** The items the audited answer names: its receipt's reads, and its sources. */
+function answerNames(answer: Answer): ReadonlySet<string> {
+  return new Set([...(answer.receipt?.rows ?? []).flatMap(row => row.type === 'read' ? row.items : []), ...answer.sources].map(sourceKey));
 }
 
 /**
@@ -3488,13 +3493,18 @@ function emptySources(): SourcesState {
 /**
  * An answer came on screen: its sources start unread, the pane closed, and
  * its approved records are read one after another, so each chip can name its
- * meeting. Answered (`keep`), an item a live row opened stays in the pane,
- * with what was read for it.
+ * meeting. Answered, the items a live row opened stay in the pane, with what
+ * was read for them, but only those the audited answer names (`keep`): a
+ * name cleared while Ask worked lasts only for that run.
  */
-function startSources(keep = false): void {
+function startSources(keep: ReadonlySet<string> | null = null): void {
   const sources = state.sources;
-  if (keep && sources?.named) {
-    set({ sources: { ...sources, open: null, focus: null } });
+  const named = keep === null ? [] : sources?.named?.filter(item => keep.has(sourceKey(item))) ?? [];
+  if (sources && named.length > 0) {
+    const same = named.length === sources.named!.length;
+    // With fewer passages, their places change: they are read again.
+    set({ sources: { ...sources, open: null, focus: null, named, ...(same ? {} : { evidence: null }) } });
+    if (!same) readPane(sources.gen, named[0]!);
     void readRecords(sources.gen);
     return;
   }
