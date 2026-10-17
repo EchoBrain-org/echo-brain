@@ -172,7 +172,9 @@ founder accepted it with the design.
 - A `: keep-alive` comment is sent after about 10 s without an event.
 - The one terminal event, `answer` or `error`, comes last, and nothing
   follows it. An error after the stream has started carries the status and
-  body the JSON response would have had.
+  body the JSON response would have had. The request's `http_request` span
+  records that status as its `http_status`, since the wire status is `200`
+  ([RB-OPERATIONS-001](../operations/RB-OPERATIONS-001-authority-observability.md)).
 - A disconnect still aborts the request's signal and so cancels the Ask, and
   nothing more is written. The 90-second research deadline is unchanged.
 

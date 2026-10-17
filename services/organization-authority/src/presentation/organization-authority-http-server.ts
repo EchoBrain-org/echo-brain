@@ -518,6 +518,13 @@ function personCancellablePost<Application, Request>(
 }
 
 /**
+ * The status a streamed Ask's terminal error event carried, by its response.
+ * Once the stream starts the HTTP status is 200, so the request's span
+ * records this one instead, as the JSON route's failure would (ADR-0039).
+ */
+const streamedFailureStatus = new WeakMap<ServerResponse, number>();
+
+/**
  * `POST /v5/person/ask`. A client that sends the progress header gets the
  * same Ask as server-sent events (ADR-0039), once the request authenticated
  * and validated; before that, and for every other client, the response is
@@ -544,7 +551,11 @@ function personAskV5Post(application: PersonAnswerV5HttpApplication | undefined)
       // Before the stream starts, the server's ordinary JSON error.
       if (stream === undefined) throw error;
       if (disconnect.signal.aborted) stream.close();
-      else { const { status, code } = failureOf(error); stream.end({ type: "error", status, error: { code, message: "request failed" } }); }
+      else {
+        const { status, code } = failureOf(error);
+        streamedFailureStatus.set(response, status);
+        stream.end({ type: "error", status, error: { code, message: "request failed" } });
+      }
     } finally { disconnect.dispose(); }
   };
 }
@@ -1207,7 +1218,7 @@ export function createOrganizationAuthorityHttpServer(
     } finally {
       if (responseFinished !== undefined) await responseFinished;
       activeHttp -= 1;
-      annotateCoreRuntimeV1({ counts: { http_status: response.statusCode, active_http: activeHttp } });
+      annotateCoreRuntimeV1({ counts: { http_status: streamedFailureStatus.get(response) ?? response.statusCode, active_http: activeHttp } });
     }
   }, options.core_runtime_observation));
   server.requestTimeout = PERSON_DOCUMENT_TRANSFER_DEADLINE_MS;

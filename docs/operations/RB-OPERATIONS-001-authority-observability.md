@@ -794,6 +794,13 @@ do not add separate live-source spans. Older releases have no Jira fields;
 their absence is not evidence that Jira was skipped or returned no data.
 Requests that fail before the Ask loop starts have no ticket summary counters.
 
+A streamed `/v5/person/ask` (`x-echo-ask-progress: 1`, ADR-0039) always
+answers HTTP `200` once its stream starts; a later failure is its terminal
+`error` event. Its terminal `http_request` span records that event's status
+as `http_status`, the status the JSON route would have returned, so a filter
+on `http_status` finds streamed failures as it finds JSON ones. A streamed
+Ask the client disconnected records `200` with no answer.
+
 In Logs Insights, select the Authority log group and a bounded incident window.
 Replace the example journey ID with the request's ID. Parse `@message` explicitly
 so nested diagnostic fields do not depend on automatic field discovery:

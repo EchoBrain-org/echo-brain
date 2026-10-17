@@ -13,6 +13,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
+import type { CoreRuntimeObservationV1, CoreRuntimeObserverV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 
 /**
  * Ask progress over HTTP (ADR-0039): the real V5 route and evidence desk
@@ -70,9 +71,9 @@ function fixture(options: { readonly writer?: () => Promise<unknown> } = {}) {
   };
 }
 
-async function origin(f: ReturnType<typeof fixture>) {
+async function origin(f: ReturnType<typeof fixture>, observer?: CoreRuntimeObserverV1) {
   const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-    person_answer_v5: f.v5, person_answer_v4: f.v4 });
+    person_answer_v5: f.v5, person_answer_v4: f.v4, ...(observer === undefined ? {} : { core_runtime_observation: { observer } }) });
   servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
   return `http://127.0.0.1:${address.port}`;
@@ -163,7 +164,8 @@ describe('Ask progress over HTTP', () => {
   it('ends a stream that already started with one error event carrying the JSON status, and sends no receipt', async () => {
     const f = fixture();
     f.revokeAtFinalCheck();
-    const base = await origin(f);
+    const observed: CoreRuntimeObservationV1[] = [];
+    const base = await origin(f, event => { observed.push(event); });
     const response = await ask(base);
     expect(response.status).toBe(200);
     expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('5');
@@ -173,6 +175,8 @@ describe('Ask progress over HTTP', () => {
     expect(events.some(event => event.type === 'answer')).toBe(false);
     // A refused final check writes no request record.
     expect(f.audits).toEqual([]);
+    // The request's span records the status the error event carries, as the JSON route's failure would: the wire's 200 says nothing.
+    await vi.waitFor(() => expect(observed.filter(event => event.phase === 'http_request' && event.event !== 'started').map(event => event.counts.http_status)).toEqual([401]));
   });
 
   it('cancels the Ask when the client disconnects mid-stream, and audits what was named on the cancelled witness', async () => {
