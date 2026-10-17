@@ -1,6 +1,7 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type { PersonAnswerCitationV7 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../shared/evidence-desk-v2.js";
+import type { AgenticListEvidenceV1 } from "./agentic-list-evidence-v1.js";
 import type { AgenticAskGenerationObservationV1 } from "./agentic-model-gate-v1.js";
 import type {
   AgenticResearchBudgetV1,
@@ -49,6 +50,11 @@ export interface AgenticEvidenceBundleV1 {
   readonly plan: readonly AgenticResearchPartV1[];
   /** Every item research came across, in short-id order. */
   readonly items: readonly AgenticEvidenceBundleItemV1[];
+  /**
+   * Ask only (a question goal, ADR-0041): every list research read, in list-id order. Members are short ids of
+   * `items`. Absent for a task goal, whose renderers read `coverage.inventories` as before.
+   */
+  readonly lists?: readonly AgenticListEvidenceV1[];
   /** Starting citations the brief marked `report` that could not be read, in brief order. Nothing the desk refused is in `items`. */
   readonly unreadable_starting: readonly unknown[];
   readonly rounds: readonly AgenticResearchRoundV1[];
@@ -111,7 +117,8 @@ export function trimAgenticEvidenceBundleV1(bundle: AgenticEvidenceBundleV1): Ag
   });
   return Object.freeze({
     schema_version: 1 as const, kind: "echo-agentic-research-result-v1" as const, trigger: bundle.trigger, goal: bundle.goal, budget: bundle.budget,
-    plan: bundle.plan, items: Object.freeze(items), ...(bundle.unreadable_starting.length === 0 ? {} : { unreadable_starting: bundle.unreadable_starting }), rounds: bundle.rounds,
+    plan: bundle.plan, items: Object.freeze(items), ...(bundle.lists === undefined ? {} : { lists: bundle.lists }),
+    ...(bundle.unreadable_starting.length === 0 ? {} : { unreadable_starting: bundle.unreadable_starting }), rounds: bundle.rounds,
     coverage: bundle.coverage, stop: bundle.stop, cost: bundle.cost,
   });
 }

@@ -216,6 +216,21 @@ describe('shared audited live evidence source V1', () => {
     }
   });
 
+  it('passes a list page_full through, keeps it out of the audit, and refuses it on any other read (ADR-0041)', async () => {
+    const full = (value: unknown) => ({ ...page([ticket()]), page_full: value }) as PersonLiveEvidencePageV1<PersonTicketCitationV1>;
+    const f = fixture('tickets', full(true));
+    expect((await f.make().list({ container: 'ECHO' })).page_full).toBe(true);
+    expect(JSON.stringify(f.releases)).not.toContain('page_full');
+    f.select(full(false));
+    expect((await f.make().list({ container: 'ECHO' })).page_full).toBe(false);
+    f.select(page([ticket()]));
+    expect(await f.make().list({ container: 'ECHO' })).not.toHaveProperty('page_full');
+    f.select(full(true));
+    await expect(f.make().search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+    f.select(full('yes'));
+    await expect(f.make().list({ container: 'ECHO' })).rejects.toMatchObject({ code: 'invalid_output' });
+  });
+
   it('commits empty releases without exposing the query or provider cursor and scopes continuations to their list', async () => {
     const f = fixture('tickets', page<PersonTicketCitationV1>([], 'private-provider-cursor'));
     const source = f.make();

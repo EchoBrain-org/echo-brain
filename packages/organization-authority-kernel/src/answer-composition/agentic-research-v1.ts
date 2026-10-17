@@ -1,3 +1,5 @@
+import type { AgenticListEvidenceV1 } from "./agentic-list-evidence-v1.js";
+
 /**
  * The research loop's types, separate from any one consumer (research loop
  * evaluation v1). Every trigger hands the loop a brief (agentic-brief-v1.ts);
@@ -39,6 +41,7 @@ export type AgenticResearchStopReasonV1 = "finished" | "empty_catalog" | "no_pro
 /** A content-free reason a planner call was not admitted after its access fence. */
 export type AgenticResearchAdmissionV1 = "post_revalidation_no_time";
 
+/** `evidence` holds item ids (`E4`) and, for Ask, list ids (`L1`, ADR-0041). */
 export interface AgenticResearchNeedV1 { readonly need: string; readonly status: "open" | "found" | "not_found"; readonly evidence: readonly string[] }
 export interface AgenticResearchPartV1 { readonly part: number; readonly question: string; readonly notes: string; readonly needs: readonly AgenticResearchNeedV1[] }
 
@@ -99,6 +102,8 @@ export interface AgenticResearchResultV1 {
   readonly budget: AgenticResearchBudgetV1;
   readonly plan: readonly AgenticResearchPartV1[];
   readonly items: readonly AgenticResearchItemV1[];
+  /** Ask only (ADR-0041): every list research read, unchanged from the bundle; absent for a task goal. */
+  readonly lists?: readonly AgenticListEvidenceV1[];
   /** Starting citations the brief marked `report` that could not be read; present only when there are any. */
   readonly unreadable_starting?: readonly unknown[];
   readonly rounds: readonly AgenticResearchRoundV1[];

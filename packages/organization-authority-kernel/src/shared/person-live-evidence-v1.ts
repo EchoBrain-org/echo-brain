@@ -44,6 +44,8 @@ export interface PersonLiveEvidencePageV1<C extends PersonLiveEvidenceCitationV1
   readonly next_cursor?: string;
   /** Bounded adapter-authored availability or representation notice, never a raw provider error. */
   readonly notice?: string;
+  /** List only: the raw vendor page, before the adapter's own filtering, held its full page size (ADR-0041). */
+  readonly page_full?: boolean;
 }
 
 export interface PersonLiveEvidenceListInputV1 extends EvidenceDateFilterV1 {
@@ -120,6 +122,8 @@ export interface PersonLiveEvidenceResultV1<C extends PersonLiveEvidenceCitation
   readonly next_cursor?: string;
   /** A bounded reader notice released with the request result but never written to the audit. */
   readonly notice?: string;
+  /** List only: the reader's `page_full`, passed through unchanged. */
+  readonly page_full?: boolean;
 }
 
 /** Internal source seam for the V2 evidence desk dispatcher; the V1 desk and Ask V4 schemas still accept only their existing kinds. */

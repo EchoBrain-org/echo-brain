@@ -70,6 +70,11 @@ export interface EvidenceDeskResultV1 {
   readonly notice?: string;
   /** Opaque continuation for `list`; absent when nothing more exists. */
   readonly next_cursor?: string;
+  /**
+   * `list` only: the source's raw page held its full page size. With no `next_cursor` the list's end is unverified
+   * (ADR-0041). A desk that confirmed its end, for example by reading one row past its limit, says false.
+   */
+  readonly page_full?: boolean;
 }
 
 export interface EvidenceDeskSearchInputV1 extends EvidenceDateFilterV1 {
