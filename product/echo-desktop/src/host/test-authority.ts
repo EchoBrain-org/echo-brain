@@ -52,6 +52,10 @@ interface Contract {
   validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string; mine?: true };
   validatePersonRunsRequestV1(value: unknown): RunsRequest;
   validatePersonRunsResultV1(operation: string, value: unknown): unknown;
+  /** Ask progress V1 (ADR-0039): the opt-in header, and one event as its stream frame. */
+  PERSON_ASK_PROGRESS_HEADER_V1: string;
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V1: string;
+  formatPersonAskProgressEventV1(event: unknown): string;
 }
 
 /** A runs request, as the contract's validator returns it. */
@@ -538,6 +542,84 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }));
   });
 
+  // Ask progress (ADR-0039). The fixture answer's meeting is Tuesday sync, whose decision d1 an answer cites by its atom id.
+  const TUESDAY = desktop.record.record_sha256;
+  const atomOf = (signal: string) => sha(JSON.stringify({ kind: 'echo-organization-record-atom', record_hash: TUESDAY, signal_id: signal }));
+  if (mode.startsWith('ask-progress')) {
+    // The meeting opens by its ref too: from a transcript, and on its own page. The decision Ask cites is its second.
+    const brief = desktop.record.brief as unknown as { decisions: Record<string, unknown>[]; actions: { text: string }[]; rationales: { text: string }[] };
+    brief.decisions.unshift({ id: 'd0', kind: 'decision', status: 'decided', text: 'Keep monthly plans until November.', evidence: [] });
+    meetings.push({
+      record_sha256: TUESDAY, title: 'Tuesday sync', added_at: '2026-09-15T18:00:00.000Z', meeting_date: '2026-09-15', visibility: 'team', project_ids: [],
+      approver: 'mem_33333333-3333-4333-8333-333333333333', started_at: '2026-09-15T17:00:00.000Z', timezone: 'America/Los_Angeles',
+      participants: ['Maya Chen', 'Ari'], approved_by: 'Maya Chen',
+      atoms: [...brief.decisions.map(item => ({ kind: 'decision' as const, text: String(item.text) })), ...brief.actions.map(item => ({ kind: 'action' as const, text: item.text })),
+        ...brief.rationales.map(item => ({ kind: 'rationale' as const, text: item.text }))],
+    });
+  }
+  /**
+   * What the Ask reads, each as a citation: Tuesday sync's decision, a note's
+   * passage, Tuesday sync's transcript, a Jira ticket, and Tuesday sync's
+   * other decision.
+   */
+  const progressItems = () => {
+    const [record, passage] = desktop.answer.citations as { citation: Record<string, unknown>; label: string; visibility: string }[];
+    return [
+      { citation: { ...record!.citation, atom_id: atomOf('d1') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
+      { ...passage!, kind: 'note', ref: `note:${desktop.notes[0]!.context_id}` },
+      { citation: { kind: 'source_revision', source_id: `source:${'a'.repeat(64)}`, revision_id: 'rev-t', source_sha256: sha('transcript'),
+        representation_sha256: sha('transcript text'), anchor_sha256: sha('transcript anchor') }, kind: 'note', label: 'Tuesday sync transcript', visibility: 'team',
+        ref: `transcript:${TUESDAY}` },
+      { kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: { kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD,
+        ticket_id: '10007', permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: sha('ECHO-7: Jira launch') } },
+      { citation: { ...record!.citation, atom_id: atomOf('d0') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
+    ];
+  };
+  /**
+   * A streamed Ask, framed by the contract itself: a search of meetings,
+   * documents and Jira, its four reads, then, once the test lets it answer
+   * (`release-ask`), the writer, the final check and the answer with its
+   * receipt. `ask-progress-quick` answers at once; `ask-progress-fails` ends
+   * with an error event instead. A cancelled Ask ends the stream. Once a
+   * test writes `more-steps`, an Ask still waiting searches Jira once more.
+   */
+  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined): Response => {
+    const items = progressItems();
+    const searched = { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
+    const [part] = desktop.answer.parts as Record<string, unknown>[];
+    const response = { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
+    const encoder = new TextEncoder();
+    let cancelled = false;
+    const frames = (async function* () {
+      for (const step of [{ type: 'stage', stage: 'searching' }, searched, { type: 'stage', stage: 'reading', pending: items.length }, { type: 'read', items }]) {
+        yield api.formatPersonAskProgressEventV1(step);
+      }
+      let more = false;
+      while (mode !== 'ask-progress-quick' && !existsSync(join(home, 'release-ask'))) {
+        if (cancelled || signal?.aborted) return;
+        if (!more && existsSync(join(home, 'more-steps'))) {
+          more = true;
+          yield api.formatPersonAskProgressEventV1({ type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira' }], found: 0 });
+          continue;
+        }
+        await new Promise(resolveLater => setTimeout(resolveLater, 25));
+      }
+      yield api.formatPersonAskProgressEventV1({ type: 'stage', stage: 'writing' });
+      yield api.formatPersonAskProgressEventV1({ type: 'stage', stage: 'checking_access' });
+      yield api.formatPersonAskProgressEventV1(mode === 'ask-progress-fails'
+        ? { type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } }
+        : { type: 'answer', response, receipt: { looked_through: items.length, elapsed_ms: 48_000, rows: [searched, { type: 'read', items }] } });
+    })();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const next = await frames.next();
+        if (next.done) controller.close(); else controller.enqueue(encoder.encode(next.value));
+      },
+      cancel() { cancelled = true; },
+    });
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-echo-person-ask-route': '5' } });
+  };
+
   // Open items. Ari's own check of Pilot planning finds two once it is done;
   // in the owner modes Mina has sent Ari items of hers already.
   const ARI = { membership_id: session.membership_id, name: 'Ari' };
@@ -813,7 +895,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const metadata = new Headers(init?.headers).get('x-echo-document-metadata');
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown>
       : metadata ? JSON.parse(Buffer.from(metadata, 'base64url').toString('utf8')) as Record<string, unknown> : undefined;
-    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body })}\n`);
+    // An Ask that asked for its progress says so (ADR-0039).
+    const progress = new Headers(init?.headers).get('x-echo-ask-progress');
+    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body, ...(progress === null ? {} : { progress }) })}\n`);
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
 
@@ -1598,6 +1682,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const tickets = path === '/v4/person/ask';
       const live = path === '/v5/person/ask';
       const answer = { ...desktop.answer, ...(live ? { schema_version: 6, kind: 'echo-clean-person-answer-v6' } : tickets ? { schema_version: 5, kind: 'echo-clean-person-answer-v5' } : {}) };
+      // Ask progress: a client that asks for it gets the Ask's steps as they happen, then its answer and receipt.
+      const api = await contract();
+      if (mode.startsWith('ask-progress') && live && new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1) === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V1) {
+        return progressStream(api, question, scope, init?.signal ?? undefined);
+      }
       if (mode === 'ask-ticket') {
         const included = (tickets || live) && (scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null));
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',

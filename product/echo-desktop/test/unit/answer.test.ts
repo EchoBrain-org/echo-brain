@@ -8,7 +8,7 @@ const original = (source: string, anchor: string, label = 'SCOUT-Hardware-Review
   ref: { source_id: `source:${source.repeat(64)}`, revision_id: 'rev-1', source_sha256: digest('2'), representation_sha256: digest('3'), anchor_sha256: digest(anchor) },
 });
 const record = (digit: string): AnswerSource => ({
-  kind: 'record', label: 'Approved record 1', record: { record_sha256: digest(digit), policy_id: 'organization-member-readable-person-v2' },
+  kind: 'record', label: 'Approved record 1', record: { record_sha256: digest(digit), policy_id: 'organization-member-readable-person-v2' }, atom_id: digest('a'),
 });
 const slack = (ts: string): AnswerSource => ({ kind: 'slack', tool_id: 'slack', label: '#launch · Maya', permalink: `https://acme.slack.com/archives/C01ABCDEF/p${ts}` });
 

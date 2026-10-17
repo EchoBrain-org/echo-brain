@@ -36,6 +36,13 @@ export interface AgenticAskAuditEntryV1 {
   readonly generations: readonly AgenticAskGenerationObservationV1[];
   readonly generation_usage: { readonly input_tokens: number | null; readonly output_tokens: number | null; readonly total_tokens: number | null };
   readonly finish_reason_counts: Readonly<Record<string, number>>;
+  /**
+   * Present exactly when the request streamed progress (ADR-0039), on a
+   * release and on a cancelled or timed-out witness alike: `canonicalSha256`
+   * of each named item's citation, in the order the items were first named,
+   * each once; empty when nothing was named. Commitments only, never labels.
+   */
+  readonly named_citation_digests?: readonly Sha256Digest[];
 }
 
 export interface AgenticAskAuditPortV1 {
@@ -57,6 +64,8 @@ export interface AgenticAuditContextV1 {
   readonly receipts: readonly Sha256Digest[];
   readonly rounds: number;
   readonly fallbacks: number;
+  /** A streamed request's named items (ADR-0039), copied into the record; absent when the request did not stream. */
+  readonly named_citation_digests?: readonly Sha256Digest[];
 }
 
 export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 {
@@ -98,6 +107,7 @@ function auditEntry(context: AgenticAuditContextV1, outcome: AgenticAskAuditEntr
     generations: Object.freeze([...generations]),
     generation_usage: Object.freeze({ input_tokens: aggregate("input_tokens"), output_tokens: aggregate("output_tokens"), total_tokens: aggregate("total_tokens") }),
     finish_reason_counts: Object.freeze(finishReasonCounts),
+    ...(context.named_citation_digests === undefined ? {} : { named_citation_digests: Object.freeze([...context.named_citation_digests]) }),
   });
 }
 

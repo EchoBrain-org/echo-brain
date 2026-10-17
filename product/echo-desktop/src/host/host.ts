@@ -7,10 +7,11 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
+import { askArgv, askProgressLines, askRecordArgv, askSourceArgv, askStreams } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
   abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
@@ -249,13 +250,13 @@ function sameAccount(current: AppStatus | null, expect: Expect): boolean {
 /** Runs a command for the account the renderer is showing, never another. */
 async function forAccount<T>(
   method: HostMethodName, expect: Expect, argv: readonly string[], view: (stdout: string) => T, requestId?: string, abortSignal?: AbortSignal,
-  write = WRITE_METHODS.has(method),
+  write = WRITE_METHODS.has(method), onLine?: (line: string) => void,
 ): Promise<Result<T>> {
   if (!sameAccount(await status(), expect)) return code('account_changed', write, requestId);
   if (write && requestId !== undefined) inFlight.add(requestId);
   let run: CliRun;
   try {
-    run = await cli(argv, undefined, abortSignal === undefined ? {} : { abort_signal: abortSignal });
+    run = await cli(argv, onLine, abortSignal === undefined ? {} : { abort_signal: abortSignal });
   } finally {
     if (write && requestId !== undefined) inFlight.delete(requestId);
   }
@@ -332,19 +333,6 @@ function audienceArgs(audience: Audience | undefined, projectIds: unknown): stri
     }
     default: return null;
   }
-}
-
-/** Ask's scope: one project, only what you added, or all you may read. */
-function askScopeArgs(scope: AskScope): string[] {
-  return scope.kind === 'project' ? [option('project', scope.project_id)] : scope.kind === 'mine' ? ['--mine'] : [];
-}
-
-/**
- * Where a cited original is read: in the project asked, or else under all you
- * may read. What you added is a part of that, so a mine answer's sources read there.
- */
-function sourceScopeArgs(scope: AskScope): string[] {
-  return scope.kind === 'project' ? [option('project', scope.project_id)] : [];
 }
 
 /** A list's scope: what you added, or one project. Never all you may read: the app lists only these. Null for anything else. */
@@ -619,29 +607,27 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
         stdout => abandonView(lastJson(stdout), request_id));
     }
     case 'ask.run': {
-      const { expect, question, scope } = params as Params<'ask.run'>;
+      const { expect, question, scope, cancel_id } = params as Params<'ask.run'>;
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      // Mine reads only retained context and must also work on older Authorities.
-      return forAccount(method, expect, ['ask', option('question', text), ...(scope.kind === 'mine' ? [] : ['--live']), ...askScopeArgs(scope)],
-        stdout => answerView(lastJson(stdout), scope), undefined, abortSignal);
+      // A live Ask's steps reach the page as they are printed; Mine never streams (ask.ts).
+      const progress = askStreams(scope) && abortSignal !== undefined
+        ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
+          () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
+        : undefined;
+      return forAccount(method, expect, askArgv(text, scope, expect), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
     }
     case 'ask.cancel':
       return ok(null);
     case 'ask.source': {
       const { expect, scope, ref } = params as Params<'ask.source'>;
-      return forAccount(method, expect, [
-        'ask-source', option('source-id', ref.source_id), option('revision-id', ref.revision_id),
-        option('source-sha256', ref.source_sha256), option('representation-sha256', ref.representation_sha256),
-        option('anchor-sha256', ref.anchor_sha256), ...(ref.document_id ? [option('document-id', ref.document_id)] : []), ...sourceScopeArgs(scope),
-      ], stdout => evidenceView(lastJson(stdout)));
+      return forAccount(method, expect, askSourceArgv(ref, scope), stdout => evidenceView(lastJson(stdout)));
     }
     case 'ask.record': {
       const { expect, record } = params as Params<'ask.record'>;
       if (!isRecordRef(record)) return code('invalid_request');
       const asked = { record_sha256: record.record_sha256, policy_id: record.policy_id };
-      return forAccount(method, expect, ['records', option('record-sha256', asked.record_sha256)],
-        stdout => recordView(lastJson(stdout), asked));
+      return forAccount(method, expect, askRecordArgv(asked), stdout => recordView(lastJson(stdout), asked));
     }
     case 'search.run': {
       const { expect, query, scope } = params as Params<'search.run'>;

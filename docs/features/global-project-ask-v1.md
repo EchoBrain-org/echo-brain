@@ -164,7 +164,7 @@ schema 3), beside the approved-record-only `/v1/person/ask`. Both were retired
 by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md). The default CLI Ask,
 and the desktop's Mine Ask, use `POST /v3/person/ask` with V4 answers, and the
 scope rules here still apply to every route. The CLI accepts
-`person ask --question <text> [--project <project-id> | --mine] [--tickets | --live]`;
+`person ask --question <text> [--project <project-id> | --mine] [--tickets | --live [--progress [--expected-membership-id <id> --expected-authority <origin>]]]`;
 `--project` and `--mine` are exclusive, as are `--tickets` and `--live`. The
 client does not silently downgrade a project or mine request to global Ask.
 
@@ -179,7 +179,12 @@ unmapped projects exclude live tools. The desktop uses `--live` for every
 question outside Mine. An older Authority without the `/v5` route gets the
 ticket-capable fallback, `POST /v4/person/ask` with V5 answers; permission
 failures never fall back. `person ask --tickets` keeps that `/v4` route for
-compatibility. See [Person client architecture](../architecture/person-client-architecture.md)
+compatibility. `--live --progress` streams Ask's progress
+([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)): one JSON line per step before the final
+line, which adds the answer's receipt. An Authority that does not stream
+gets today's output. The desktop pins the streamed Ask to the account it
+shows (`--expected-membership-id` and `--expected-authority`): a client
+signed in as another asks nothing and prints no step. See [Person client architecture](../architecture/person-client-architecture.md)
 for the client side.
 
 Cited original evidence is read through `POST /v2/person/ask/source` or

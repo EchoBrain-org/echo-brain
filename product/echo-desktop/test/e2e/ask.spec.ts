@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 import { captureOpenExternal } from './native.js';
@@ -397,4 +397,169 @@ test('Copy answer copies the answer and says so, and main takes no more than an 
   expect(await copied()).toBe('We agreed to ship Apollo with annual plans first.');
   // Counted in characters: 12,000 that each take two UTF-16 units still fit.
   expect((await write('𝄞'.repeat(12_000))).ok).toBe(true);
+});
+
+// Ask progress and internal links v1 (ADR-0039). The fixture streams a search
+// of meetings, documents and Jira and five reads (two of Tuesday sync's
+// decisions), then waits for `release-ask`.
+const opens = () => run.calls().filter(call => call.path === '/v1/person/open').map(call => call.body?.ref);
+const progressSteps = (page: Page) => page.getByTestId('ask-steps').getByTestId('ask-step');
+
+test('a long Ask shows what it looks through, names that open beside it while it keeps working, then a receipt', async () => {
+  run = await launch('ask-progress');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  const asking = page.getByTestId('asking');
+  // The first seconds look as Ask always did.
+  await expect(asking).toContainText('Thinking…');
+  await expect(page.getByTestId('ask-steps')).toHaveCount(0);
+  await expect.poll(() => run.calls().filter(call => call.path === '/v5/person/ask').map(call => call.progress)).toEqual(['1']);
+
+  // Then one live line, the stage now, and the rows: source kinds, never the words searched, and the items read, +N.
+  // A place is named once, counting its items: the names and +N account for all five.
+  await expect(progressSteps(page)).toHaveText([
+    'Searched meetings, documents and Jira · 3 found', 'Reading Tuesday sync ×2, Apollo update, Tuesday sync transcript +1',
+  ], { timeout: 10_000 });
+  await expect(page.getByTestId('ask-steps').getByTestId('ask-step-name').nth(0)).toHaveAccessibleName('Tuesday sync, 2 items');
+  await expect(page.getByTestId('ask-stage')).toHaveText('Reading');
+  // The timer is not read out; a screen reader hears the stage instead.
+  await expect(asking.locator('[aria-hidden="true"]')).toHaveText(/^\d+s$/);
+  await expect(page.getByTestId('ask-announcement')).toHaveText('Reading');
+  await expect(page.getByTestId('ask-view').locator('[aria-live="off"]')).toHaveCount(1);
+
+  // A name opens beside Ask, and Ask keeps working: both decisions it stands for lit in their meeting, and no Open yet.
+  const names = page.getByTestId('ask-steps').getByTestId('ask-step-name');
+  await names.nth(0).click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane).toContainText('Meeting · Approved record');
+  await expect(pane.locator('.record-item.on')).toHaveText([/Keep monthly plans until November\./, /Ship Apollo with annual plans first\./]);
+  await expect(names.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(pane.getByTestId('source-open')).toHaveCount(0);
+  await expect(asking).toBeVisible();
+  // The transcript opens its meeting.
+  await names.nth(2).click();
+  await expect(pane).toContainText('Meeting · Transcript');
+  await expect(pane.locator('h2')).toHaveText('Tuesday sync');
+  expect(opens()).toEqual([`meeting:${RECORD}`]);
+  await expect(asking).toBeVisible();
+
+  // The answer: the rows fold into one receipt above it, and the pane, still on the meeting, offers Open.
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  await expect(asking).toHaveCount(0);
+  const receipt = page.getByTestId('ask-receipt');
+  // Its time is the wait the page timed, never the fixture Authority's 48 s of research.
+  await expect(receipt).toHaveText(/^Looked through 5 items · \d+s$/);
+  await expect(receipt).not.toHaveText(/48s/);
+  await expect(receipt).toHaveAttribute('aria-expanded', 'false');
+  await expect(pane).toContainText('Meeting · Transcript');
+  await expect(pane.getByTestId('source-open')).toBeVisible();
+
+  // Opened, the receipt lists every search and read, each name opening beside the answer.
+  await receipt.click();
+  const rows = page.getByTestId('receipt-rows').getByTestId('ask-step');
+  await expect(rows).toHaveText(['Searched meetings, documents and Jira · 3 found', 'Read Tuesday sync ×2, Apollo update, Tuesday sync transcript, ECHO-7 · Jira launch']);
+  const named = page.getByTestId('receipt-rows').getByTestId('ask-step-name');
+  // A ticket opens only in Jira: it has no page here.
+  await named.nth(3).click();
+  await expect(pane).toContainText('Jira · Ticket');
+  await expect(pane.getByTestId('open-ticket-source')).toBeVisible();
+  await expect(pane.getByTestId('source-open')).toHaveCount(0);
+  // A note's cited passage, then its own page in place of Ask.
+  await named.nth(1).click();
+  await expect(pane.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
+  await pane.getByTestId('source-open').click();
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+  await expect(page.getByTestId('reader-text')).toHaveText('Apollo moves to usage-based pricing tiers from October.');
+});
+
+test('a new row follows a person at the bottom of Ask, and never pulls one who scrolled up back down', async () => {
+  run = await launch('ask-progress');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  await expect(progressSteps(page)).toHaveCount(2, { timeout: 10_000 });
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  // A follow-up that waits again, under an earlier answer tall enough to scroll.
+  rmSync(join(run.home, 'release-ask'));
+  await page.getByTestId('ask-field').fill('And the pricing page?');
+  await page.getByTestId('ask-field').press('Enter');
+  await page.getByTestId('earlier-turn').evaluate(element => { (element as HTMLElement).style.minHeight = '2000px'; });
+  const view = page.getByTestId('ask-view');
+  const fromBottom = () => view.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
+  await expect(progressSteps(page)).toHaveCount(2, { timeout: 10_000 });
+  expect(await view.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(1_000);
+  // At the bottom, the rows that came into view are followed.
+  await expect.poll(fromBottom).toBeLessThan(2);
+
+  // Scrolled up to read the earlier answer, a new row leaves the view where the person put it.
+  await view.evaluate(element => { element.scrollTop = 0; });
+  await expect.poll(() => view.evaluate(element => element.scrollTop)).toBe(0);
+  writeFileSync(join(run.home, 'more-steps'), '');
+  await expect(progressSteps(page)).toHaveCount(3);
+  await expect(progressSteps(page).last()).toHaveText('Searched Jira · nothing new');
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await view.evaluate(element => element.scrollTop)).toBe(0);
+
+  // The answer itself still brings the view down to it.
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await expect(page.getByTestId('asking')).toHaveCount(0);
+  await expect.poll(fromBottom).toBeLessThan(2);
+});
+
+test('a quick Ask shows nothing more, and its source opens the cited decision lit in its meeting, then the meeting\'s page', async () => {
+  run = await launch('ask-progress-quick');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  await expect(page.getByTestId('ask-receipt')).toHaveCount(0);
+  await page.getByTestId('source-row').nth(0).click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane.locator('.record-item.on')).toHaveCount(1);
+  await expect(pane.locator('.record-item.on')).toContainText('Ship Apollo with annual plans first.');
+  // Lit by more than colour: a screen reader hears which item is cited, and only that one.
+  await expect(pane.locator('.record-item.on')).toHaveText(/^Cited: Ship Apollo with annual plans first\./);
+  await expect(pane.getByTestId('record').getByText('Cited:')).toHaveCount(1);
+  await pane.getByTestId('source-open').click();
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+  const reader = page.getByTestId('reader');
+  await expect(reader.locator('h1')).toHaveText('Tuesday sync');
+  // Its page lights the very decision the pane lit, the meeting's second, though the page's record carries no atom ids.
+  const decisions = reader.getByTestId('record-decisions').locator('.record-item');
+  await expect(decisions).toHaveCount(2);
+  await expect(decisions.nth(1)).toHaveClass(/\bon\b/);
+  await expect(reader.locator('.record-item.on')).toHaveCount(1);
+  await expect(reader.locator('.record-item.on')).toHaveText(/^Cited: Ship Apollo with annual plans first\./);
+  expect(opens()).toEqual([`meeting:${RECORD}`]);
+});
+
+test('Cancel while Ask works removes what it named, and the pane with it', async () => {
+  run = await launch('ask-progress');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  await expect(progressSteps(page)).toHaveCount(2, { timeout: 10_000 });
+  await page.getByTestId('ask-steps').getByTestId('ask-step-name').nth(1).click();
+  await expect(page.getByTestId('source-pane').getByTestId('evidence-text')).toHaveText('We agreed to ship.');
+  await page.getByTestId('ask-cancel').click();
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+  await expect(page.getByTestId('source-pane')).toHaveCount(0);
+  // Its answer would come now; nothing of it shows.
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await page.evaluate(() => (window as unknown as { echo: { rpc(method: string, params: object): Promise<unknown> } }).echo.rpc('app.status', {}));
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+});
+
+test('an Ask that ends without an answer removes its rows and anything they opened, and leaves no receipt', async () => {
+  run = await launch('ask-progress-fails');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  await expect(progressSteps(page)).toHaveCount(2, { timeout: 10_000 });
+  await page.getByTestId('ask-steps').getByTestId('ask-step-name').nth(0).click();
+  await expect(page.getByTestId('source-pane')).toBeVisible();
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await expect(page.getByTestId('ask-error')).toHaveText('ECHO is unavailable right now. Try again.');
+  await expect(page.getByTestId('ask-steps')).toHaveCount(0);
+  await expect(page.getByTestId('ask-receipt')).toHaveCount(0);
+  await expect(page.getByTestId('source-pane')).toHaveCount(0);
+  await expect(page.getByTestId('ask-retry')).toBeVisible();
 });

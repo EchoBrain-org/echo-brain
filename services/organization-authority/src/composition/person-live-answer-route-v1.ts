@@ -1,5 +1,6 @@
 import { withPersonAskSnapshotRetryV1 } from './person-ask-snapshot-retry-v1.js';
-import { AgenticAskDeadlineErrorV1, createAgenticAskV2, createAgenticAskV3 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { AgenticAskDeadlineErrorV1, createAgenticAskProgressRequestV1, createAgenticAskV2, createAgenticAskV3, type AgenticAskAnswerWithReceiptV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import type { PersonAnswerResponseV5, PersonAnswerResponseV6 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { randomUUID } from 'node:crypto';
@@ -70,36 +71,51 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
 /** One authenticated request pipeline; version adapters only select compatible evidence/output. */
 export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 5 | 6) {
   const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= response_version);
+  type Input = Parameters<PersonAnswerV5HttpApplication['ask']>[0];
+  type Progress = Pick<Parameters<NonNullable<PersonAnswerV5HttpApplication['askWithProgress']>>[0], 'on_start' | 'on_progress'>;
+  /** A streamed V6 Ask (ADR-0039) also reports when it starts and what it does; every other request is unchanged. */
+  async function run(input: Input): Promise<PersonAnswerResponseV5 | PersonAnswerResponseV6>;
+  async function run(input: Input, progress: Progress): Promise<AgenticAskAnswerWithReceiptV1>;
+  async function run(input: Input, progress?: Progress) {
+    // A streamed request spans every attempt a snapshot restart runs: one stream, each item named once, timed from here.
+    const streamed = progress === undefined ? undefined : { on_progress: progress.on_progress, request: createAgenticAskProgressRequestV1() };
+    const scope = scopeOf(input.request);
+    input.signal?.throwIfAborted();
+    const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+    const context = {
+      authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
+      principal_id: authorization.principal_id, membership_id: authorization.membership_id,
+      session_family_id: authorization.session_family_id, request_id: `ask_${randomUUID()}`,
+    };
+    const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
+      access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'ask' },
+    });
+    if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
+    // Authenticated and validated: anything that fails from here on fails inside the stream.
+    progress?.on_start();
+    try {
+      return await withPersonAskSnapshotRetryV1({ signal: input.signal, capture: capture !== undefined, run: async signal => {
+        return await observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, async () => {
+          const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, signal }, context);
+          capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
+          const asker = askerOf(options, authorization);
+          const askOptions = { ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+          };
+          // Each attempt audits what it named; only the released attempt's receipt is returned.
+          if (streamed !== undefined) return createAgenticAskV3(askOptions).answerWithReceipt({ question: input.request.question, signal, ...streamed });
+          const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
+          return create(askOptions).answer({ question: input.request.question, signal });
+        });
+      } });
+    } catch (error) {
+      if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) throw new AuthorityOperationError('unavailable', 'Ask deadline exhausted');
+      throw error;
+    }
+  }
   return Object.freeze({
-    async ask(input: Parameters<PersonAnswerV5HttpApplication['ask']>[0]) {
-      const scope = scopeOf(input.request);
-      input.signal?.throwIfAborted();
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      const context = {
-        authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
-        principal_id: authorization.principal_id, membership_id: authorization.membership_id,
-        session_family_id: authorization.session_family_id, request_id: `ask_${randomUUID()}`,
-      };
-      const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
-        access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'ask' },
-      });
-      if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
-      try {
-        return await withPersonAskSnapshotRetryV1({ signal: input.signal, capture: capture !== undefined, run: async signal => {
-          return await observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, async () => {
-            const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, signal }, context);
-            capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
-            const asker = askerOf(options, authorization);
-            const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
-            return create({ ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-              ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
-            }).answer({ question: input.request.question, signal });
-          });
-        } });
-      } catch (error) {
-        if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) throw new AuthorityOperationError('unavailable', 'Ask deadline exhausted');
-        throw error;
-      }
-    },
+    ask: (input: Input) => run(input),
+    // Only the V6 route streams: /v4 and the older routes never do.
+    ...(response_version === 6 ? { askWithProgress: (input: Parameters<NonNullable<PersonAnswerV5HttpApplication['askWithProgress']>>[0]) => run(input, input) } : {}),
   });
 }
