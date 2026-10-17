@@ -83,16 +83,16 @@ function unavailable(error: unknown): boolean {
 type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_match'> & ImpactOwnerCandidateV1;
 /**
  * The open items a finished run makes (open items and Home v1, section 3;
- * follow-ups thread v1). From the card: one per affected item that conflicts,
- * needs updating or was not assessed, never one that confirms, never the
- * meeting's own record, and one per item however often the card cites it.
- * The card's owner name comes from the item's own details. Then one per
- * action the approved meeting decided, in brief order: it needs doing, its
- * expected line is the action's own text on one line of at most 120
- * characters, and its owner name is the one the approver confirmed. An
- * action with no printable text makes none and takes no place under the cap:
- * at most `PERSON_RUN_MEETING_ACTIONS_MAX_V1` actions with a line, the first
- * ones (the rest stay in the record only).
+ * follow-ups thread v1). From the card: one per affected item that conflicts
+ * or needs updating, never one that confirms or was not assessed, never the
+ * meeting's own record or its own transcript, and one per item however often
+ * the card cites it. The card's owner name comes from the item's own
+ * details. Then one per action the approved meeting decided, in brief
+ * order: it needs doing, its expected line is the action's own text on one
+ * line of at most 120 characters, and its owner name is the one the approver
+ * confirmed. An action with no printable text makes none and takes no place
+ * under the cap: at most `PERSON_RUN_MEETING_ACTIONS_MAX_V1` actions with a
+ * line, the first ones (the rest stay in the record only).
  */
 function itemCandidates(record_sha256: Sha256Digest, card: PersonImpactCardV1, stored: StoredImpactCardV1, actions: readonly PersonRecordActionV1[]): readonly ItemCandidateV1[] {
   const seen = new Set<Sha256Digest>();
@@ -103,15 +103,18 @@ function itemCandidates(record_sha256: Sha256Digest, card: PersonImpactCardV1, s
     return item_key;
   };
   const affected = card.affected.flatMap((row, index): ItemCandidateV1[] => {
-    if (row.relation === 'confirms') return [];
-    const pointer = card.citations[row.citation_index]!.citation as unknown as Readonly<Record<string, unknown>>;
-    // The meeting is never a follow-up of itself: its own actions are.
+    // A row no model assessed is only possibly affected, and one that confirms needs nothing: neither is a follow-up.
+    const { relation } = row;
+    if (relation === undefined || relation === 'confirms') return [];
+    const cited = card.citations[row.citation_index]!;
+    const pointer = cited.citation as unknown as Readonly<Record<string, unknown>>;
+    // The meeting is never a follow-up of itself, nor is the transcript its approver shared: its own actions are.
     if (pointer.kind === 'approved_record' && pointer.record_sha256 === record_sha256) return [];
+    if (pointer.kind === 'source_revision' && cited.ref === `transcript:${record_sha256}`) return [];
     const item_key = fresh(pointer);
     if (item_key === undefined) return [];
-    const relation = row.relation ?? null;
-    // The stored phrase: screened against outside titles. Only an assessed item carries one.
-    const expected = relation === null ? undefined : stored.affected[index]?.expected;
+    // The stored phrase: screened against outside titles.
+    const expected = stored.affected[index]?.expected;
     return [{ item_key, pointer, relation, expected: expected ?? null, ...(row.owner === undefined ? {} : { owner_name: row.owner }) }];
   });
   const decided = actions
