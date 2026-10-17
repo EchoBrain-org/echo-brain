@@ -722,29 +722,46 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** The research phase: optional preload, then the loop until a stop rule fires. */
   const research = async (gate: AgenticModelGateV1): Promise<void> => {
     // ---- starting evidence: read fresh through the access-checked desk ----
+    // The reads run together and are registered in brief order, so ids, receipts and failures are those of reading one at a
+    // time: a failure that stops research stops only the reads after it, and the first failure in brief order is the one thrown.
+    type StartingRead = { readonly opened: EvidenceDeskResultV2; readonly readable: readonly EvidenceDeskItemV2[]; readonly anchor: EvidenceDeskItemV2 | undefined } | { readonly unreadable: true };
+    assertLive();
+    const stopReads = brief.starting.map(() => new AbortController());
+    const settled = await Promise.allSettled(brief.starting.map(async ({ citation, if_unreadable: ifUnreadable }, index): Promise<StartingRead> => {
+      const signal = AbortSignal.any([activeSignal, stopReads[index]!.signal]);
+      try {
+        const opened = await observeAgenticLifecycleV1('starting_read', 'research_starting_read', { index: index + 1, citation, if_unreadable: ifUnreadable }, async () => {
+          if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
+          return raceAbort(signal, desk.openCitation({ citation, signal }));
+        }, releasedView);
+        const readable = opened.items.filter(item => item.text !== undefined);
+        const anchor = readable.find(item => citationIdentity(item.citation) === citationIdentity(citation)) ?? readable[0];
+        // Fail closed unless the brief asked to report it: research never runs without evidence its brief names.
+        if (anchor === undefined && ifUnreadable !== "report") throw new AuthorityOperationError("not_found", "Starting evidence is not available");
+        return { opened, readable, anchor };
+      } catch (error) {
+        // A deleted or now-hidden item is news to a brief that asked to hear about it; nothing else about it is known.
+        if (ifUnreadable === "report" && unreadableRefusal(error)) return { unreadable: true };
+        for (const stop of stopReads.slice(index + 1)) stop.abort();
+        throw error;
+      }
+    }));
+    const failed = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+    if (failed !== undefined) throw failed.reason;
     // Each starting item's id, in brief order; null when it could not be read.
     const startingIds: (string | null)[] = [];
-    for (const { citation, if_unreadable: ifUnreadable } of brief.starting) {
-      assertLive();
-      let opened: EvidenceDeskResultV2;
-      try { opened = await observeAgenticLifecycleV1('starting_read', 'research_starting_read', { index: startingIds.length + 1, citation, if_unreadable: ifUnreadable }, async () => {
-        if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
-        return raceAbort(activeSignal, desk.openCitation({ citation, signal: activeSignal }));
-      }, releasedView); }
-      catch (error) {
-        // A deleted or now-hidden item is news to a brief that asked to hear about it; nothing else about it is known.
-        if (ifUnreadable !== "report" || !unreadableRefusal(error)) throw error;
+    for (const [index, outcome] of settled.entries()) {
+      const read = (outcome as PromiseFulfilledResult<StartingRead>).value;
+      const { citation } = brief.starting[index]!;
+      if ("unreadable" in read) {
         cover('open', undefined);
         unreadableStarting.push(citation); startingIds.push(null);
         continue;
       }
+      const { opened, readable, anchor } = read;
       observe(opened);
-      const readable = opened.items.filter(item => item.text !== undefined);
-      const anchor = readable.find(item => citationIdentity(item.citation) === citationIdentity(citation)) ?? readable[0];
       cover('open', anchor === undefined ? undefined : evidenceDeskSourceV2(anchor), opened);
       if (anchor === undefined) {
-        // Fail closed unless the brief asked to report it: research never runs without evidence its brief names.
-        if (ifUnreadable !== "report") throw new AuthorityOperationError("not_found", "Starting evidence is not available");
         for (const item of opened.items) register(item);
         unreadableStarting.push(citation); startingIds.push(null);
         continue;

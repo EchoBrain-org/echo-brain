@@ -2,8 +2,10 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
-import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
+import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskOpenCitationInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
+import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { need, part, record, researchHarness as harness, result, step } from "./fixtures/agentic-scenarios.js";
+import { deferred } from "./fixtures/deferred.js";
 
 /**
  * The research loop's own rules, through the research core: when a finish is
@@ -31,6 +33,8 @@ const brief = (task: string, starting: readonly unknown[], options: Partial<Agen
 });
 const affects = (status: string) => step([part("What does E1 affect?", [need("tickets the record affects", status)])], status === "open" ? [] : [{ tool: "finish", args: {} }]);
 const reads = (status: string, actions: readonly { tool: string; args: Record<string, string> }[]) => ({ ...affects(status), actions });
+/** A finish that cites what research read in full. */
+const found = (...evidence: readonly string[]) => step([part("Recheck", [need("current state", "found", evidence)])], [{ tool: "finish", args: {} }]);
 
 describe("research loop: finishing with nothing found", () => {
   const approved = record("canary", "Approved: staging must verify owner approval of a staged meeting.");
@@ -179,5 +183,69 @@ describe("research loop: progress", () => {
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(h.generate).toHaveBeenCalledTimes(2);
     expect(view.stop).toEqual({ reason: "no_progress", completed: false });
+  });
+});
+
+describe("research loop: starting evidence", () => {
+  const items = ["THERM-48", "THERM-46", "THERM-47"].map(key => ticket(key, `${key}: firmware formats one decimal.`));
+  const keyOf = (input: EvidenceDeskOpenCitationInputV2) => (input.citation as { readonly ticket_id: string }).ticket_id;
+
+  it("opens every starting item at once and registers them in brief order, whatever order they arrive in", async () => {
+    const pending = new Map(items.map(item => [(item.citation as { readonly ticket_id: string }).ticket_id, deferred<EvidenceDeskResultV2>()]));
+    const openCitation = vi.fn((input: EvidenceDeskOpenCitationInputV2) => pending.get(keyOf(input))!.promise);
+    const h = harness([found("E1", "E2", "E3")], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const run = h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report") });
+    await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(3));
+    for (const item of [...items].reverse()) pending.get((item.citation as { readonly ticket_id: string }).ticket_id)!.resolve(result([item]));
+    const view = await run;
+    expect(h.prompt(0).task).toBe("Recheck E1, E2 and E3.");
+    expect(view.items.map(item => [item.id, item.title])).toEqual([["E1", items[0]!.label], ["E2", items[1]!.label], ["E3", items[2]!.label]]);
+  });
+
+  it("gives each starting item its own context budget", async () => {
+    const context = (key: string, index: number) => ticket(`${key}-CTX-${index}`, `${key} context ${index}: ${"x".repeat(10 * 1024)}`);
+    const openCitation = vi.fn(async (input: EvidenceDeskOpenCitationInputV2) => {
+      const anchor = items.find(item => (item.citation as { readonly ticket_id: string }).ticket_id === keyOf(input))!;
+      return result([anchor, ...[1, 2, 3].map(index => context(anchor.label.slice(0, 8), index))]);
+    });
+    const h = harness([found("E1", "E4")], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, items.slice(0, 2).map(item => item.citation), {}, "report") });
+    // An anchor and the two 10 KB passages that fit its 24 KB, for each item; the third passage of each is left out.
+    expect(h.prompt(0).task).toBe("Recheck E1 and E4.");
+    expect(view.items.map(item => item.title)).toEqual([items[0]!.label, "THERM-48-CTX-1: Unrelated work", "THERM-48-CTX-2: Unrelated work", items[1]!.label, "THERM-46-CTX-1: Unrelated work", "THERM-46-CTX-2: Unrelated work"]);
+  });
+
+  it("stops the reads after a starting read that fails in a way that cannot be reported, and research with it", async () => {
+    const signals = new Map<string, AbortSignal>();
+    let whenFirstReturned: readonly boolean[] = [];
+    const openCitation = vi.fn(async (input: EvidenceDeskOpenCitationInputV2) => {
+      signals.set(keyOf(input), input.signal!);
+      // The item before the failure is still read, as it would be one at a time; the one after it is stopped.
+      if (keyOf(input) === "48") {
+        await new Promise(resolve => setTimeout(resolve, 5));
+        whenFirstReturned = [input.signal!.aborted, signals.get("47")!.aborted];
+        return result([items[0]!]);
+      }
+      if (keyOf(input) === "46") throw new AuthorityOperationError("unavailable", "Source is down");
+      return new Promise<EvidenceDeskResultV2>(() => undefined);
+    });
+    const h = harness([], { live_sources: [JIRA], ticket_available: true, openCitation });
+    await expect(h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report") }))
+      .rejects.toMatchObject({ code: "unavailable" });
+    expect(openCitation).toHaveBeenCalledTimes(3);
+    expect(whenFirstReturned).toEqual([false, true]);
+    expect(h.generate).not.toHaveBeenCalled();
+  });
+
+  it("fails with the first failure in brief order, as reading one at a time would", async () => {
+    const openCitation = vi.fn(async (input: EvidenceDeskOpenCitationInputV2) => {
+      if (keyOf(input) === "48") { await new Promise(resolve => setTimeout(resolve, 5)); throw new AuthorityOperationError("not_found", "Evidence item is not available"); }
+      throw new AuthorityOperationError("unavailable", "Source is down");
+    });
+    const h = harness([], { live_sources: [JIRA], ticket_available: true, openCitation });
+    // The first item fails after the second, and its brief asked to fail on it.
+    await expect(h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)} affect.`, items.slice(0, 2).map(item => item.citation)) }))
+      .rejects.toMatchObject({ code: "not_found" });
+    expect(h.generate).not.toHaveBeenCalled();
   });
 });
