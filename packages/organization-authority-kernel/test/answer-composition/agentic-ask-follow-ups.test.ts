@@ -1,5 +1,8 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validatePersonAnswerResponseV7, validatePersonFollowUpEvidenceV1, type PersonFollowUpEvidenceV1 } from '@echo-brain/organization-api';
+import {
+  validatePersonAnswerResponseV7, validatePersonAskProgressStepEventV2, validatePersonAskReceiptV2, validatePersonFollowUpEvidenceV1, type PersonAskProgressStepEventV2,
+  type PersonFollowUpEvidenceV1,
+} from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV3, createAgenticAskV4 } from '../../src/answer-composition/agentic-ask-v1.js';
 import { ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, STEP_PROMPT, followUpsStepGuidance } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
@@ -151,6 +154,30 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     await createAgenticAskV4({ desk, model: run.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
     expect(desk.list).toHaveBeenCalledWith(expect.objectContaining({ source: 'follow_ups' }));
     expect(desk.search).toHaveBeenCalledWith(expect.objectContaining({ source: 'follow_ups', query: 'THERM-48', kinds: ['follow_up'] }));
+  });
+
+  it('streams a V7 Ask in progress V2: its search names follow-ups, and its reads and receipt name each follow-up it read (ADR-0039)', async () => {
+    const run = scripted([
+      step('open', [{ tool: 'list', args: { source: 'follow_ups', owner: 'Mara Lind', status: 'open' } }]),
+      step('found', [{ tool: 'finish', args: {} }], ['E1']),
+      { sentences: [{ text: 'You own the open fan curve follow-up.', evidence: ['E1'] }], not_found: [] },
+    ]);
+    const audits: Record<string, unknown>[] = [];
+    const events: PersonAskProgressStepEventV2[] = [];
+    const { response, receipt } = await createAgenticAskV4({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: run.model, audit: { append: entry => { audits.push(entry as never); } }, generation, asker })
+      .answerWithReceipt({ question, on_progress: event => { events.push(event); } });
+    const named = [fanCurve, thresholds].map(item => ({ citation: item.citation, kind: 'follow_up', label: item.label, visibility: 'team', ref: item.ref }));
+    for (const event of events) expect(validatePersonAskProgressStepEventV2(event)).toEqual(event);
+    expect(events.filter(event => event.type !== 'stage')).toEqual([
+      { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 2 },
+      { type: 'read', items: named },
+    ]);
+    // Nothing a follow-up's text holds (its owner, decision or check) travels in a step: only its citation projection.
+    expect(JSON.stringify(events)).not.toContain('Mara');
+    expect(JSON.stringify(events)).not.toContain(decision.first_line);
+    expect(validatePersonAnswerResponseV7(response).citations).toEqual([named[0]]);
+    expect(validatePersonAskReceiptV2(receipt)).toEqual({ looked_through: 2, elapsed_ms: receipt.elapsed_ms, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 2 }, { type: 'read', items: named }] });
+    expect(audits.at(-1)).toMatchObject({ named_citation_digests: [fanCurve, thresholds].map(item => canonicalSha256(item.citation)) });
   });
 
   it('describes and cites a follow-up as its own kind, with the ref that opens its item page', () => {

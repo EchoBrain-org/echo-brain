@@ -4,10 +4,14 @@ import {
   PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1,
   PERSON_ASK_RECEIPT_MAX_BYTES_V1,
   validatePersonAnswerCitationV6,
+  validatePersonAnswerCitationV7,
   validatePersonAnswerResponseV6,
   validatePersonAskProgressStepEventV1,
+  validatePersonAskProgressStepEventV2,
   validatePersonAskReceiptV1,
+  validatePersonAskReceiptV2,
   type PersonAskProgressStepEventV1,
+  type PersonAskProgressStepEventV2,
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import { AGENTIC_ASK_DEADLINE_MS_V1, createAgenticAskV3, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
@@ -393,6 +397,45 @@ describe("agentic Ask progress recorder", () => {
     settled.research.given([launch]);
     expect(events).toHaveLength(1);
     expect(settled.named_citation_digests()).toEqual([]);
+  });
+
+  it("names follow-ups only in progress V2 (ADR-0040): a V1 run reads one but never names it or its source", () => {
+    const withFollowUps = [...sources, { source_id: "follow_ups", kinds: ["follow_up"] }];
+    const followUp: EvidenceDeskItemV2 = Object.freeze<EvidenceDeskItemV2>({
+      id: "desk_follow_up", kind: "follow_up", text: `Owner: Mara Lind. ${CANARY.body}`, label: "Ship fan curve v2", visibility: "team",
+      citation: { kind: "follow_up", item_id: "itm_fan-curve-2" }, receipt_sha256: canonicalSha256("follow-up receipt"), ref: "follow_up:itm_fan-curve-2",
+    });
+    const run = (recorder: ReturnType<typeof createAgenticAskProgressRecorderV1>) => {
+      recorder.research.reads(true);
+      recorder.research.returned("search", undefined, [followUp, launch]);
+      recorder.research.reads_done();
+      recorder.research.before_check([followUp, launch]);
+      recorder.research.given([followUp, launch]);
+      return recorder.receipt(42);
+    };
+
+    const v2: PersonAskProgressStepEventV2[] = [];
+    const v2Receipt = run(createAgenticAskProgressRecorderV1({ sink: event => { v2.push(event); }, version: 2, sources: withFollowUps, signal: new AbortController().signal }));
+    const asV7 = (item: EvidenceDeskItemV2) => validatePersonAnswerCitationV7(citationOfAgenticEvidenceItemV1(item));
+    expect(v2).toEqual([
+      { type: "stage", stage: "searching" },
+      { type: "searched", sources: [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }, { kind: "slack" }, { kind: "follow_ups" }], found: 2 },
+      { type: "stage", stage: "reading", pending: 2 },
+      { type: "read", items: [asV7(followUp), asV7(launch)] },
+    ]);
+    for (const event of v2) expect(validatePersonAskProgressStepEventV2(event)).toEqual(event);
+    expect(validatePersonAskReceiptV2(v2Receipt)).toEqual(v2Receipt);
+    expect(v2Receipt.rows.at(-1)).toEqual({ type: "read", items: [asV7(followUp), asV7(launch)] });
+    expect(JSON.stringify(v2)).not.toContain(CANARY.body);
+
+    // The V6 answer's stream: the follow-up counts as read, but neither it nor its source kind is ever named.
+    const v1: PersonAskProgressStepEventV1[] = [];
+    const v1Receipt = run(createAgenticAskProgressRecorderV1({ sink: event => { v1.push(event); }, sources: withFollowUps, signal: new AbortController().signal }));
+    for (const event of v1) expect(validatePersonAskProgressStepEventV1(event)).toEqual(event);
+    expect(JSON.stringify(v1)).not.toContain("follow_up");
+    expect(v1.filter(event => event.type === "read")).toEqual([{ type: "read", items: [named(launch)] }]);
+    expect(validatePersonAskReceiptV1(v1Receipt)).toEqual(v1Receipt);
+    expect(v1Receipt.looked_through).toBe(2);
   });
 
   it("shares one request's names across its attempts: none named twice, all within the bound, each attempt's digests its own", () => {
