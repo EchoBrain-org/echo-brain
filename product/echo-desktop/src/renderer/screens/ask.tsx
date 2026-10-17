@@ -7,7 +7,7 @@ import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, duration, liveRows, namedPlaces, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
+  announceAfter, announcement, duration, foundBefore, liveRows, namedPlaces, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
   type NamedPlace,
 } from '../progress.js';
 import {
@@ -367,14 +367,14 @@ function Mark({ done }: { done: boolean }) {
   return done ? <span class="mark"><Check /></span> : <span class="mark" aria-hidden="true"><i /></span>;
 }
 
-/** A search: its source kinds, never the words searched, and what it found. */
-function SearchedStep({ state, row }: { state: State; row: AskSearched }) {
-  return <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">{searchedWords(row, state.tools?.items)}</span></li>;
+/** A search: its source kinds, never the words searched, and what it found (`earlier`: a search before it found something). */
+function SearchedStep({ state, row, earlier }: { state: State; row: AskSearched; earlier: boolean }) {
+  return <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">{searchedWords(row, state.tools?.items, earlier)}</span></li>;
 }
 
 /** One live row: a search, a read with its names (the first few, then +N), or how many are being read. */
 function LiveStep({ state, row }: { state: State; row: LiveRow }) {
-  if (row.type === 'searched') return <SearchedStep state={state} row={row.row} />;
+  if (row.type === 'searched') return <SearchedStep state={state} row={row.row} earlier={row.earlier} />;
   if (row.type === 'pending') {
     return (
       <li class="ask-step" data-testid="ask-step"><Mark done={false} />
@@ -429,7 +429,7 @@ function Receipt({ state, receipt, took }: { state: State; receipt: AskReceipt; 
       </button>
       {open && (
         <ul class="ask-steps" data-testid="receipt-rows">
-          {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} />
+          {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} earlier={foundBefore(receipt.rows, index)} />
             : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
           {unnamed > 0 && <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">and {unnamed} more not listed</span></li>}
         </ul>

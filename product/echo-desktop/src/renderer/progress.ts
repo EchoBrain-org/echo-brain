@@ -59,9 +59,12 @@ export function withStep(progress: AskProgress, step: AskStep): AskProgress {
   };
 }
 
-/** A live row: a search or a read, done or still going, or the items being read whose names have not come. */
+/**
+ * A live row: a search (and whether one before it found anything) or a read,
+ * done or still going, or the items being read whose names have not come.
+ */
 export type LiveRow =
-  | { readonly type: 'searched'; readonly row: AskSearched }
+  | { readonly type: 'searched'; readonly row: AskSearched; readonly earlier: boolean }
   | { readonly type: 'read'; readonly row: AskRead; readonly done: boolean }
   | { readonly type: 'pending'; readonly count: number; readonly more: boolean };
 
@@ -71,10 +74,15 @@ export type LiveRow =
  */
 export function liveRows(progress: AskProgress): LiveRow[] {
   const reading = progress.stage === 'reading';
-  const rows: LiveRow[] = progress.rows.map((row, index) => row.type === 'searched' ? { type: 'searched', row }
+  const rows: LiveRow[] = progress.rows.map((row, index) => row.type === 'searched' ? { type: 'searched', row, earlier: foundBefore(progress.rows, index) }
     : { type: 'read', row, done: !(reading && progress.pending === 0 && index === progress.rows.length - 1) });
   if (reading && progress.pending > 0) rows.push({ type: 'pending', count: progress.pending, more: progress.rows.some(row => row.type === 'read') });
   return rows.slice(-LIVE_ROWS);
+}
+
+/** Whether a search before `index` among `rows` found anything. */
+export function foundBefore(rows: readonly (AskSearched | AskRead)[], index: number): boolean {
+  return rows.slice(0, index).some(row => row.type === 'searched' && row.found > 0);
 }
 
 const VERBS: Record<AskStage, string> = { searching: 'Searching', reading: 'Reading', checking_access: 'Checking access', writing: 'Writing' };
@@ -96,9 +104,14 @@ export function sourceWords(source: AskSearchedSource, tools?: readonly Connecte
     source.tool_id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }
 
-/** "Searched meetings and Jira · 22 found": source kinds, never the words searched. */
-export function searchedWords(row: AskSearched, tools?: readonly ConnectedTool[] | null): string {
-  return `Searched ${listWords(row.sources.map(source => sourceWords(source, tools)))} · ${row.found === 0 ? 'nothing new' : `${row.found} found`}`;
+/**
+ * "Searched meetings and Jira · 22 found": source kinds, never the words
+ * searched. An empty search found nothing, or, once one before it found
+ * items (`earlier`), nothing new.
+ */
+export function searchedWords(row: AskSearched, tools?: readonly ConnectedTool[] | null, earlier = false): string {
+  const found = row.found > 0 ? `${row.found} found` : earlier ? 'nothing new' : 'nothing found';
+  return `Searched ${listWords(row.sources.map(source => sourceWords(source, tools)))} · ${found}`;
 }
 
 /** A place Ask read, as one name: the first of its items read stands for it, and all of its items read go with it. */

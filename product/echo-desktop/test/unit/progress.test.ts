@@ -48,7 +48,7 @@ describe('the live line and its rows', () => {
       { type: 'read', items: [decision('1')] },
     );
     expect(liveRows(reading)).toEqual([
-      { type: 'searched', row: reading.rows[0] },
+      { type: 'searched', row: reading.rows[0], earlier: false },
       { type: 'read', row: reading.rows[1], done: true },
       { type: 'pending', count: 1, more: true },
     ]);
@@ -58,6 +58,17 @@ describe('the live line and its rows', () => {
     expect(liveRows(writing).at(-1)).toMatchObject({ type: 'read', done: true });
     // Before any name: "Reading 3 items".
     expect(liveRows(steps({ type: 'stage', stage: 'reading', pending: 3 }))).toEqual([{ type: 'pending', count: 3, more: false }]);
+  });
+
+  it('know whether an earlier search found anything, so an empty one says nothing found or nothing new', () => {
+    const empty = steps({ type: 'searched', sources: [{ kind: 'meetings' }], found: 0 }, { type: 'read', items: [decision('1')] },
+      { type: 'searched', sources: [{ kind: 'documents' }], found: 0 });
+    expect(liveRows(empty).filter(row => row.type === 'searched')).toEqual([
+      { type: 'searched', row: empty.rows[0], earlier: false }, { type: 'searched', row: empty.rows[2], earlier: false },
+    ]);
+    const found = steps({ type: 'searched', sources: [{ kind: 'meetings' }], found: 2 }, { type: 'read', items: [decision('1')] },
+      { type: 'searched', sources: [{ kind: 'documents' }], found: 0 });
+    expect(liveRows(found).at(-1)).toEqual({ type: 'searched', row: found.rows[2], earlier: true });
   });
 
   it('keep three rows: the oldest fold away', () => {
@@ -72,7 +83,9 @@ describe('the live line and its rows', () => {
   it('name sources as a person says them, never the words searched, and the first names of a read with +N', () => {
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'slack' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 }))
       .toBe('Searched meetings, Slack and Jira · 22 found');
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 })).toBe('Searched Knowledge Base · nothing new');
+    // Nothing at all, or, after an earlier search found items, nothing those had not.
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 })).toBe('Searched Knowledge Base · nothing found');
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 }, null, true)).toBe('Searched Knowledge Base · nothing new');
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'confluence' }], found: 1 }, [{ tool_id: 'confluence', name: 'Wiki', status: 'linked' }]))
       .toBe('Searched Wiki · 1 found');
     expect(listWords(['meetings', 'documents'])).toBe('meetings and documents');
