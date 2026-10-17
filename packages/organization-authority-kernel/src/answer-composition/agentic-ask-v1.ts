@@ -13,15 +13,17 @@ import {
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
 import type { EvidenceDeskPortV1 } from "../shared/evidence-desk-v1.js";
-import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 } from "../shared/follow-up-evidence-v1.js";
+import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1, FOLLOW_UPS_SOURCE_ID_V1 } from "../shared/follow-up-evidence-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
   AgenticAskOutputErrorV1,
+  FOLLOW_UPS_ANSWER_GUIDANCE,
   SEARCH_ONLY_STEP_PROMPT,
   STEP_PROMPT,
   TASK_RULE_PROMPT,
+  followUpsStepGuidance,
 } from "./agentic-ask-v1-model-protocol.js";
 import { agenticTaskSlotsFitV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
@@ -169,6 +171,8 @@ const LIST_SOURCES: Readonly<Record<string, EvidenceDeskSourceV2>> = Object.free
   slack: "slack", messages: "slack", message: "slack",
   ticket: "ticket", tickets: "ticket",
   page: "page", pages: "page", knowledge: "page", wiki: "page",
+  follow_up: FOLLOW_UPS_SOURCE_ID_V1, "follow-up": FOLLOW_UPS_SOURCE_ID_V1, "follow-ups": FOLLOW_UPS_SOURCE_ID_V1, "follow ups": FOLLOW_UPS_SOURCE_ID_V1,
+  followup: FOLLOW_UPS_SOURCE_ID_V1, followups: FOLLOW_UPS_SOURCE_ID_V1, open_items: FOLLOW_UPS_SOURCE_ID_V1, "open-items": FOLLOW_UPS_SOURCE_ID_V1, "open items": FOLLOW_UPS_SOURCE_ID_V1,
 });
 
 export interface CreateAgenticAskV2Options extends Omit<CreateAgenticAskV1Options, 'desk'> { readonly desk: EvidenceDeskPortV2 }
@@ -241,14 +245,18 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
   const context = (day: string) => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: day, ...(temporal === undefined ? { time_zone: "UTC", time_reference: "server" } : { now: temporal.now, time_zone: temporal.time_zone, time_reference: "client" }) });
   const liveGuidance = (list: boolean) => `Live sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only ${list ? "search/list" : "search"} discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.`;
-  const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance(true)}`;
+  // Follow-ups are ECHO's own items with their own guidance; the live guidance is for connected tools (ADR-0040).
+  const toolSources = liveCatalog.filter(source => !source.kinds.includes(FOLLOW_UP_EVIDENCE_KIND_V1));
+  const followUps = toolSources.length !== liveCatalog.length;
+  const guided = (base: string, live: string, followUp: string) => [base, ...(toolSources.length === 0 ? [] : [live]), ...(followUps ? [followUp] : [])].join("\n\n");
+  const answerPrompt = guided(ANSWER_PROMPT, liveGuidance(true), FOLLOW_UPS_ANSWER_GUIDANCE);
   /**
    * The research step's prompts and the scratchpad bytes beside each: Ask's question keeps its prompt exactly, every
    * task-form goal adds the one shared task rule, and a search-only brief (no list) has its own step prompt.
    */
   const researchPrompts = (list: boolean) => {
     const base = list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT;
-    const step = liveCatalog.length === 0 ? base : `${base}\n\n${liveGuidance(list)}`;
+    const step = guided(base, liveGuidance(list), followUpsStepGuidance(list));
     const task = `${step}\n\n${TASK_RULE_PROMPT}`;
     const budget = (prompt: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, OUTPUT_TOKENS.step);
     return Object.freeze({ step, step_budget: budget(step), task, task_budget: budget(task) });

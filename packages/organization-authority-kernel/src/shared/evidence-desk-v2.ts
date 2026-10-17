@@ -9,7 +9,7 @@ import {
   type EvidenceDeskResultV1,
   type EvidenceDeskSearchInputV1,
 } from './evidence-desk-v1.js';
-import type { FollowUpListStatusV1, FollowUpsSourceDescriptorV1 } from './follow-up-evidence-v1.js';
+import { FOLLOW_UPS_SOURCE_ID_V1, type FollowUpListStatusV1, type FollowUpsSourceDescriptorV1 } from './follow-up-evidence-v1.js';
 
 /** The V1 desk plus request-only live work items and knowledge-page sections, and ECHO's shared follow-ups (ADR-0040). */
 export type EvidenceDeskKindV2 = EvidenceDeskKindV1 | 'ticket' | 'page' | 'follow_up';
@@ -67,6 +67,7 @@ export function evidenceDeskSourceV2(item: { readonly kind: EvidenceDeskKindV2; 
   if (item.source_id !== undefined) return item.source_id;
   if (item.kind === 'ticket') return 'ticket';
   if (item.kind === 'page') return 'page';
+  if (item.kind === 'follow_up') return FOLLOW_UPS_SOURCE_ID_V1;
   return evidenceDeskSourceV1(item as { kind: EvidenceDeskKindV1; ref?: string });
 }
 
