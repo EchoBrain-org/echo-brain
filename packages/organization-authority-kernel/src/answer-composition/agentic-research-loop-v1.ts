@@ -357,6 +357,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const lists = new Map<string, ListState>();
   /** Items whose latest open was truncated or carried a notice. */
   const limitedOpens = new Set<string>();
+  /**
+   * Items whose own read already returned all an open of them can: the anchor of a planner open, and a starting item
+   * other than a document or transcript passage. A neighbour an open admitted, or a starting passage (read without its
+   * neighbours), opens to the passages around it.
+   */
+  const anchorsRead = new Set<string>();
   let touch = 0;
 
   const observe = (result: EvidenceDeskResultV2) => {
@@ -437,10 +443,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const raw = args.id ?? "";
     const entry = entryOf(raw) ?? entryByTitle(raw);
     if (entry === undefined) return { tool: "open", args, error: "unknown id; pass an id such as E4 from your scratchpad" };
-    // Like a repeated search: an item already open whose full text was in the scratchpad the planner just read is not
-    // read again (the access check before every model call already covers it), and adds nothing new. An item a truncated
-    // or noticed open returned is still read again: only a clean open of it resolves that limit.
-    if (entry.opened && researchPromptEntries.includes(entry) && !limitedOpens.has(entry.item.id)) return { tool: "open", id: entry.short, note: "already open; its full text is in your scratchpad" };
+    // Like a repeated search: an item already read around whose full text was in the scratchpad the planner just read is
+    // not read again (the access check before every model call already covers it), and adds nothing new. An item a
+    // truncated or noticed open returned is still read again: only a clean open of it resolves that limit.
+    if (anchorsRead.has(entry.item.id) && researchPromptEntries.includes(entry) && !limitedOpens.has(entry.item.id)) return { tool: "open", id: entry.short, note: "already open; its full text is in your scratchpad" };
     let result: EvidenceDeskResultV2;
     try { result = await raceAbort(signal, desk.open({ item: entry.item.id, neighbours: OPEN_NEIGHBOURS, signal })); }
     catch (error) {
@@ -464,6 +470,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         admitted.push(opened);
         if (result.truncated || result.notice !== undefined) limitedOpens.add(item.id); else limitedOpens.delete(item.id);
       }
+      if (anchor !== undefined) anchorsRead.add(anchor.id);
       // Open may also release continuation metadata. Register it beside
       // the bounded text, without treating the continuation as read evidence.
       const metadata = result.items
@@ -843,6 +850,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         const entry = register(item); entry.opened = true; entry.preloaded = true; used += bytes(item.text);
         if (item === anchor) startingIds.push(entry.short);
       }
+      if (anchor.citation.kind !== "source_revision") anchorsRead.add(anchor.id);
       for (const item of opened.items.filter(value => value.text === undefined)) register(item);
     }
     if (brief.goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(brief.goal.task, startingIds, brief.goal.data) });

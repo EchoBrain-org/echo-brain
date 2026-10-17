@@ -157,6 +157,55 @@ describe("research loop: open", () => {
   });
 });
 
+describe("research loop: open walks a document", () => {
+  /** Passage `n` of one document, as the desk releases it: a search hit without text, or opened with its text. */
+  const passage = (n: number, text?: string): EvidenceDeskItemV2 => Object.freeze({
+    id: `passage_${n}`, kind: "document_passage", label: "PRD: thermal display",
+    citation: {
+      kind: "source_revision", source_id: `source:${canonicalSha256({ prd: true }).slice(7)}`, revision_id: "revision-1", document_id: "doc_prd",
+      source_sha256: canonicalSha256({ prd: "source" }), representation_sha256: canonicalSha256({ prd: "representation" }), anchor_sha256: canonicalSha256({ prd: n }),
+    },
+    ...(text === undefined ? {} : { text }), visibility: "team", receipt_sha256: canonicalSha256({ passage: n, text: text ?? null }),
+  } satisfies EvidenceDeskItemV2);
+  const body = (n: number) => passage(n, `Passage ${n} of the thermal display PRD.`);
+  /** The desk opens a passage with the passage before and after it. */
+  const around = (input: { readonly item: string }) => {
+    const n = Number(input.item.slice(8));
+    return result([body(n), ...[n - 1, n + 1].filter(value => value > 0).map(body)]);
+  };
+  const approved = record("display", "Approved: the display shows two decimals.");
+
+  it("opens a neighbour an earlier open admitted, to read the passage beyond it", async () => {
+    const open = vi.fn(async (input: { readonly item: string }) => around(input));
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "display decimals" } }]),
+      reads("open", [{ tool: "open", args: { id: "E2" } }]), // passage 5, with 4 and 6 as E3 and E4
+      reads("open", [{ tool: "open", args: { id: "E4" } }]), // passage 6, to reach 7
+      reads("open", [{ tool: "open", args: { id: "E2" } }]), // passage 5 again: answered from the scratchpad
+      step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E5"])])], [{ tool: "finish", args: {} }]),
+    ], { openCitation: async () => result([approved]), search: async () => result([passage(5)]), open });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(open.mock.calls.map(([input]) => input.item)).toEqual(["passage_5", "passage_6"]);
+    expect(view.rounds.slice(1, 4).map(round => round.actions[0]!.result)).toEqual([
+      expect.objectContaining({ opened: ["E2", "E3", "E4"] }), expect.objectContaining({ opened: ["E4", "E2", "E5"] }),
+      expect.objectContaining({ opened: [], note: "already open; its full text is in your scratchpad" }),
+    ]);
+    expect(view.items.find(item => item.id === "E5")).toMatchObject({ text: "Passage 7 of the thermal display PRD.", cited_by_plan: true });
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+  });
+
+  it("opens a starting passage, which a starting read reads without its neighbours", async () => {
+    const open = vi.fn(async (input: { readonly item: string }) => around(input));
+    const h = harness([
+      reads("open", [{ tool: "open", args: { id: "E1" } }]),
+      step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
+    ], { openCitation: async () => result([body(5)]), open });
+    await h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [passage(5).citation]) });
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(h.prompt(1).last_results).toEqual([{ tool: "open", args: { id: "E1" }, opened: ["E1", "E2", "E3"] }]);
+  });
+});
+
 describe("research loop: open after a limited open", () => {
   it("still re-reads an item whose open was truncated or carried a notice, so a clean open can resolve it", async () => {
     const approved = record("display", "Approved: the display shows two decimals.");
