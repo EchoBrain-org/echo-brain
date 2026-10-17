@@ -162,6 +162,7 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     expect(titles(await list(desk, { owner: '@Mina patel' }))).toEqual([`ECHO-12 ${f.outsideText}`]);
     expect(titles(await list(desk, { owner: 'Ari' }))).toEqual(['Thermostat rollout plan']);
     expect((await list(desk, { owner: 'Dana' })).items).toEqual([]);
+    expect((await list(desk, { owner: 'Pat' })).items).toEqual([]);                  // a part of "Patel" is not her name
     expect(titles(await list(desk, { status: 'open' }))).toHaveLength(2);
     expect((await list(desk, { status: 'done' })).items).toEqual([]);
     await setState(f, 'mina', f.ticket.item_id, 'done');

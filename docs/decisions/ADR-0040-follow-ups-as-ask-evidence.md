@@ -83,10 +83,10 @@ How an answer could cite one:
   which can hold a title. A hit matched only by its ticket key is released
   only if the live read opened it: Home shows the key only with the opened
   item. A search returns at most 5 hits; only hits are read live.
-- **List** takes an owner (every word of a name, ignoring case) and a status
-  (`open` or `done`), applied before anything is released or read live. A
-  page holds at most 10 rows. Date filters are refused: a follow-up has no
-  date of its own.
+- **List** takes an owner (each word a whole word of the name, ignoring
+  case) and a status (`open` or `done`), applied before anything is released
+  or read live. A page holds at most 10 rows. Date filters are refused: a
+  follow-up has no date of its own.
 - **Live reads go through the request's own desk.** A follow-up's tool item
   is opened with the same bound tool source the rest of the Ask uses. Each
   read is that tool's audited live release, counts toward that tool's

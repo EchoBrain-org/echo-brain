@@ -55,11 +55,16 @@ describe('Follow-ups as Ask evidence (ADR-0040)', () => {
     expect(owned.attributes).not.toHaveProperty('due_at');
   });
 
-  it('filters owner by every word of a name and status by state', () => {
+  it('filters owner by every whole word of a name and status by state', () => {
     expect(followUpOwnerMatchesV1('Mara Lind', 'mara')).toBe(true);
     expect(followUpOwnerMatchesV1('Mara Lind', '@Lind mara')).toBe(true);
     expect(followUpOwnerMatchesV1('Mara Lind', 'Dana')).toBe(false);
     expect(followUpOwnerMatchesV1('Mara Lind', ' @ ')).toBe(false);
+    // Whole words only: a filter word inside another name is not that name.
+    expect(followUpOwnerMatchesV1('Maria Gomez', 'Ari')).toBe(false);
+    expect(followUpOwnerMatchesV1('Jordan Ellis', 'Dan')).toBe(false);
+    expect(followUpOwnerMatchesV1('Wei Lin', 'Li Wei')).toBe(false);
+    expect(followUpOwnerMatchesV1('S. Okafor', 'okafor')).toBe(true);
     expect(followUpInStatusV1('open', 'open')).toBe(true);
     expect(followUpInStatusV1('done', 'done')).toBe(true);
     for (const state of ['unsent', 'not_relevant'] as const) for (const status of ['open', 'done'] as const) expect(followUpInStatusV1(state, status)).toBe(false);

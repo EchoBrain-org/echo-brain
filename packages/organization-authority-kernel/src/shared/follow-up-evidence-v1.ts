@@ -94,13 +94,18 @@ export function followUpInStatusV1(state: PersonOpenItemStateV1, status: FollowU
   return state === status;
 }
 
+/** A name's whole Unicode words, lower case, as follow-up search reads ECHO-held text. */
+function nameWords(value: string): readonly string[] {
+  return value.normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
 /**
  * Whether an owner filter names this owner: case-insensitive, a leading `@`
- * ignored, and every word of the filter inside the owner's display name, as
- * the research loop matches a meeting action's owner.
+ * ignored, and every word of the filter one whole word of the owner's display
+ * name, so "Ari" never names "Maria Gomez".
  */
 export function followUpOwnerMatchesV1(owner: string, filter: string): boolean {
-  const recorded = owner.normalize('NFC').toLowerCase();
-  const wanted = filter.normalize('NFC').trim().replace(/^@/u, '').trim().toLowerCase().split(/\s+/u).filter(Boolean);
-  return wanted.length > 0 && wanted.every(part => recorded.includes(part));
+  const recorded = new Set(nameWords(owner));
+  const wanted = nameWords(filter.trim().replace(/^@/u, ''));
+  return wanted.length > 0 && wanted.every(word => recorded.has(word));
 }
