@@ -363,7 +363,7 @@ describe("sweep renderer", () => {
     const run = alone({ replies: [edit, REPLY] });
     const rendered = await run.render();
     expect(run.inputs).toHaveLength(2);
-    expect(run.inputs[1]!.system_prompt).toContain("never what to change");
+    expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain("never what to change");
     expect(rendered.result).toEqual((await alone({ replies: [REPLY] }).render()).result);
     expect(JSON.stringify(rendered.result)).not.toContain("Update THERM-46");
   });
@@ -378,7 +378,7 @@ describe("sweep renderer", () => {
     const run = alone({ replies: [screened, screened] });
     const rendered = await run.render();
     expect(run.inputs).toHaveLength(2);
-    expect(run.inputs[1]!.system_prompt).toContain(reason);
+    expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain(reason);
     expect(rendered.result).toMatchObject({ status: "assessed", findings: [
       { finding_index: 0, verdict: "landed", line: "ECHO withheld this line.", citation_indexes: [0] },
       { finding_index: 1, verdict: "still_open", line: "The PRD display section still specifies one decimal.", citation_indexes: [1, 2] },
@@ -404,7 +404,7 @@ describe("sweep renderer", () => {
     const run = alone({ replies: [reply, REPLY] });
     const rendered = await run.render();
     expect(run.inputs).toHaveLength(2);
-    expect(run.inputs[1]!.system_prompt).toContain(reason);
+    expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain(reason);
     expect(rendered.result).toEqual((await alone({ replies: [REPLY] }).render()).result);
     const twice = await alone({ replies: [reply, reply] }).render();
     expect(twice).toMatchObject({ fallbacks: 1, result: { status: "not_assessed", citations: [] } });

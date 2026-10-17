@@ -9,7 +9,7 @@ import {
   type StructuredGenerationUsageV1,
 } from "./structured-generation-v1.js";
 import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
-import { AgenticAskOutputErrorV1, cleanLine, repairPrompt } from "./agentic-ask-v1-model-protocol.js";
+import { AgenticAskOutputErrorV1, cleanLine, repairInstruction } from "./agentic-ask-v1-model-protocol.js";
 import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 
@@ -270,12 +270,15 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     const minimum = role === "step" ? AGENTIC_ASK_MIN_STEP_MS_V1 : AGENTIC_ASK_MIN_ANSWER_MS_V1;
     if (timeout() < minimum || calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("no time left to repair", "fallback");
     // A repair observes the rejected proposal and concrete validation
-    // failure. These are ephemeral model inputs, never audit content.
+    // failure. These are ephemeral model inputs, never audit content. They
+    // go last: the system prompt and the rest of the user prompt stay
+    // byte-identical, so the rejected call's cached prefix is reused.
     const repairUser = reason === null ? user : {
-      ...object(user), validation_error: reason,
+      ...object(user),
       ...(rejected === undefined ? {} : { rejected_response: cleanLine(JSON.stringify(rejected), 4_000) }),
+      validation_error: repairInstruction(reason),
     };
-    return parse(await call(model_call, reason === null ? system : repairPrompt(system, reason), repairUser, schema, timeout, true));
+    return parse(await call(model_call, system, repairUser, schema, timeout, true));
   };
   return Object.freeze({
     call, withRepair,

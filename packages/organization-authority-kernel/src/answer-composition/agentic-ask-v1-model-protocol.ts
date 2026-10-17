@@ -369,9 +369,12 @@ export const ANSWER_PROMPT = [
   "{\"sentences\":[{\"text\":\"<sentence>\",\"evidence\":[\"E1\"]}],\"not_found\":[]}",
 ].join("\n");
 
-/** The repair prompt names the concrete problem and repeats the required shape. */
-export function repairPrompt(system: string, reason: string): string {
-  return `${system}\n\nYour previous reply could not be used: ${reason}. Reply again with only the JSON object, in exactly the shape shown above.`;
+/**
+ * A repair names the concrete problem and asks for the required shape again. It goes last in the repair's user content,
+ * never into the system prompt, so the repair repeats the rejected call's prompt as its prefix (prompt caching).
+ */
+export function repairInstruction(reason: string): string {
+  return `Your previous reply could not be used: ${reason}. Reply again with only the JSON object, in exactly the shape your instructions show.`;
 }
 
 /**

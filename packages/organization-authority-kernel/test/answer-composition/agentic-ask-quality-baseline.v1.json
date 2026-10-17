@@ -17,19 +17,19 @@
   },
   "repair_after_invalid_step": {
     "calls": 4,
-    "prompt_sha256": "sha256:25c86d3a4af5c25de7566d80f77c4be36c7be754686149070232817defaf3a74",
+    "prompt_sha256": "sha256:7f0b33fb284681e8fd213d604d04b69ef274319d4460449a328f6394fed06a3c",
     "response_sha256": "sha256:d376799d4d6aee842402c6eab7f4eddd599c6cfd489d27f4aa6cbbe81ea54049",
-    "model_inputs_sha256": "sha256:fc5a778f5fd258df70ffce0095acd34a2d78ff1ae29a150f1b34fbd064eb9a13",
+    "model_inputs_sha256": "sha256:f3425aa3ecd23880b7c4c125b06562df0ff2ab7e8f50fa903d495eca1fb1caca",
     "outcome": "answered",
-    "audit_sha256": "sha256:f022a53453aeb22d89310fde88348f846e991272cfcd1d00778f4bf5294ca657"
+    "audit_sha256": "sha256:291e75b16b21d2f505616d741f1973ef8eca76fd328df0dfd86502dfda54d75a"
   },
   "writer_fallback_to_records": {
     "calls": 4,
-    "prompt_sha256": "sha256:2d1d60f1932b8b8f4993115f618637adc63c8c9db65ccc4288a5aabcbf498fac",
+    "prompt_sha256": "sha256:e7e293e3996c90de8e83b4d5fde79bce55873eac0f5738f58e8a4f6faa985233",
     "response_sha256": "sha256:67d974f71cc072dddeb6c857c57e6cee90257872b28b4ed8f24622fa4276ccd5",
-    "model_inputs_sha256": "sha256:8fed773dfa39a0fc5bc03cdb2c604e629191fcbb4484b81670b09fe8e56605cc",
+    "model_inputs_sha256": "sha256:170037328346a11555a680e8d845921bf5141f6bb9b349ebc61961ce5e6454f9",
     "outcome": "partial",
-    "audit_sha256": "sha256:f8effa839dea524d456fa1240ee3b81e28d41f4530643af1a076cc57ff1f22a8"
+    "audit_sha256": "sha256:681c5830b98b5d63010eaa7fe3d166fae47fecbc8da6925014ce94bc29bdeaf6"
   },
   "no_progress_stop": {
     "calls": 3,
@@ -65,11 +65,11 @@
   },
   "unusable_step_stop": {
     "calls": 2,
-    "prompt_sha256": "sha256:990d57cb1ddc83aad46eecb63820b4ea9d9ba3ebc0315a04c73bcee653322e65",
+    "prompt_sha256": "sha256:98720d84b5fbebf40fc42bd149074117eeb1930a9b07dd06cb041f877db86c91",
     "response_sha256": "sha256:a43239faf9399f4027dda89e15d7c6f375609a7e6dc7856a0b20c63b95df2d3a",
-    "model_inputs_sha256": "sha256:680b3dec68fc8298f4347e9505e40da66a08ae893cf533c26b62d869ef7174b8",
+    "model_inputs_sha256": "sha256:0395ed6160ed3ed451e4958d4ccf36d83aca60bd4a733058c4e8faafb385ee74",
     "outcome": "partial",
-    "audit_sha256": "sha256:936d20ab171e4194cf5ff83ac60cbbf833ab9067e4ca397b28bbbf86a4ee5c67"
+    "audit_sha256": "sha256:cdf9b79ddb3570ebb389332c9bc01ef6a105bcaff1df68a58c564400077c0035"
   },
   "step_limit_stop": {
     "calls": 11,

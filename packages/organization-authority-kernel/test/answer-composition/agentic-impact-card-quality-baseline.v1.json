@@ -244,12 +244,12 @@
   },
   "fallback_after_two_bad_replies": {
     "calls": 5,
-    "prompt_sha256": "sha256:0080a4f1c93a868a7f49f2a009766270cd8b92cb125234e56de2b4ee8db2be9a",
+    "prompt_sha256": "sha256:f9fb30e9a0072a28a33ade4c4a6899dc860ce14669e409e2dc4f65ba01cb9a88",
     "answer_sha256": "sha256:b85054662fef3e6f23cd4237b2477252cf1eb19ac1117234233a5d58c1efdd64",
     "response_sha256": "sha256:977b0d7d7c610172143ce8b43cd7f51163c20c5ce2dbfd43505ea66f3993ac95",
-    "model_inputs_sha256": "sha256:f28c49897a63988bd067264e6b626770b0cb5c21cc0eb4d17ef8477171af5d73",
+    "model_inputs_sha256": "sha256:f04013ef226881193da7c100c973933f68e3cf580cc1f10e9f3e46ec23aafaee",
     "outcome": "partial",
-    "audit_sha256": "sha256:c443c3ec784841d04b0b63f5d6394f9afc5c2bc6b9315567f75ac28a5b64d8e8",
+    "audit_sha256": "sha256:b090f8c429ab181a43ca11bdd54038312ef96af1d76e0774f42c9dfbfbd46a11",
     "card": {
       "decided": [],
       "affected": [
@@ -326,12 +326,12 @@
   },
   "edit_instruction_repaired": {
     "calls": 5,
-    "prompt_sha256": "sha256:12100ab76d8b846e15c856784e7d1fab3ae5c590e92a7a017b592f9bd834b517",
+    "prompt_sha256": "sha256:878f92a1da91662f2cf600a868e5e0f8c3bb663757a9baa0e23c2f4309ff6029",
     "answer_sha256": "sha256:db9b589b99afdf4498a2079ccb085e63f3e56aab776d0cce1ce3f32431ac8fee",
     "response_sha256": "sha256:ffdf10a5b3fc2870f388f82efa378d03e663314d0c3a135d871668631400b0a3",
-    "model_inputs_sha256": "sha256:5fdf3dc8d31246e9c107005dc5b56be93ba791ae42894460fd8a67fa2287e691",
+    "model_inputs_sha256": "sha256:752815ada6c7d823630640a5ed5eeed393cb39dc9084889607d4259ce6be247a",
     "outcome": "answered",
-    "audit_sha256": "sha256:1acda64d43869250452bc86c7c0d9b6c6780dbbe422512b301959df80fba7978",
+    "audit_sha256": "sha256:c6d8be8f713067dac7c1164852682be9e2b1e1c349898e39c94cda9e3de5ef4a",
     "card": {
       "decided": [
         {

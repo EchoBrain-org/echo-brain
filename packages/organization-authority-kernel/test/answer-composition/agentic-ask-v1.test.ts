@@ -594,7 +594,7 @@ describe("agentic Ask: research loop", () => {
       step([{}], [{ tool: "list", args: { source: "meetings" } }]),
       step([{}], [{ tool: "open", args: { query: "E1" } }]),
       (input: StructuredGenerationInput) => {
-        expect(input.system_prompt).toContain("open requires args.id");
+        expect(JSON.parse(input.user_prompt).validation_error).toContain("open requires args.id");
         expect(JSON.parse(input.user_prompt).last_results[0].tool).toBe("list");
         return step([{}], [open("E1")]);
       },
@@ -622,7 +622,7 @@ describe("agentic Ask: research loop", () => {
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: d, model: script.model, audit }).answer({ question: 'When is launch?' });
     expect(result.outcome).toBe('answered');
-    expect(script.inputs[1]!.system_prompt).toContain('no items have been discovered');
+    expect(script.prompt(1).validation_error).toContain('no items have been discovered');
     expect(script.prompt(1).step).toBe(1);
     expect(JSON.stringify(script.inputs[0]!.schema)).not.toContain('"tool":{"type":"string","enum":["open"]}');
     expect(JSON.stringify(script.inputs[2]!.schema)).toContain('"enum":["E1"]');
@@ -864,8 +864,12 @@ describe("agentic Ask: research loop", () => {
     ]);
     const audit: AgenticAskAuditEntryV1[] = [];
     await ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" });
-    expect(script.inputs[1]!.system_prompt).toContain("Your previous reply could not be used: \"parts\" must be an array (got keys \"answer_parts\")");
+    // The system prompt is unchanged; the reason and the shape request end the user prompt.
+    expect(script.inputs[1]!.system_prompt).toBe(script.inputs[0]!.system_prompt);
     expect(script.inputs[1]!.system_prompt).toContain("{\"parts\":[{\"question\"");
+    const repair = JSON.parse(script.inputs[1]!.user_prompt) as Record<string, unknown>;
+    expect(Object.keys(repair).at(-1)).toBe("validation_error");
+    expect(repair.validation_error).toBe("Your previous reply could not be used: \"parts\" must be an array (got keys \"answer_parts\"). Reply again with only the JSON object, in exactly the shape your instructions show.");
     expect(audit[0]).toMatchObject({ repairs: 1, model_calls: 4 });
   });
 
