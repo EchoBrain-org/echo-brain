@@ -242,9 +242,12 @@ organization, grant or site selector in model arguments or connection commands.
    The desk rechecks its local snapshot after Jira I/O.
 4. V5 citations open the adapter-verified Jira permalink directly. The
    desktop's global and project Ask call `person ask --live`
-   (`POST /v5/person/ask`, strict V6 response with Jira tickets and Confluence
-   pages); they fall back to the V5 ticket route (`/v4/person/ask`) only when
-   an older Authority has no `/v5` route. The desktop validates V4, V5 and V6
+   (`POST /v6/person/ask`, strict V7 response with Jira tickets, Confluence
+   pages and ECHO's follow-ups,
+   [ADR-0040](../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md));
+   they fall back to `/v5/person/ask` (strict V6, no follow-ups) and then to
+   the V5 ticket route (`/v4/person/ask`), each only when an older Authority
+   answers 404 without the route header. The desktop validates V4 to V7
    answers, with a safe direct-link opener. `--tickets` is kept for
    compatibility, and `person ask` with neither flag retains strict V4 behavior.
 5. `echo-brain person tools disconnect --tool jira` calls

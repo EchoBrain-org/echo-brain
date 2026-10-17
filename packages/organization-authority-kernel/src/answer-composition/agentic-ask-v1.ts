@@ -2,8 +2,9 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type {
   PersonAskTimeContextV1, PersonAnswerResponseV5,
   PersonAnswerResponseV6,
+  PersonAnswerResponseV7,
   PersonAnswerResponseV4,
-  PersonAskReceiptV1,
+  PersonAskReceiptV2,
 } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import type { StructuredGenerationPort } from "./structured-generation-v1.js";
@@ -13,14 +14,17 @@ import {
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
 import type { EvidenceDeskPortV1 } from "../shared/evidence-desk-v1.js";
+import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1, FOLLOW_UPS_SOURCE_ID_V1 } from "../shared/follow-up-evidence-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
   AgenticAskOutputErrorV1,
+  FOLLOW_UPS_ANSWER_GUIDANCE,
   SEARCH_ONLY_STEP_PROMPT,
   STEP_PROMPT,
   TASK_RULE_PROMPT,
+  followUpsStepGuidance,
 } from "./agentic-ask-v1-model-protocol.js";
 import { agenticTaskSlotsFitV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
@@ -34,7 +38,10 @@ import {
   object,
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
-import type { AgenticAskAnswerWithReceiptV1, AgenticAskProgressInputV1, AgenticAskProgressRequestV1, AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
+import type {
+  AgenticAskAnswerWithReceiptV1, AgenticAskAnswerWithReceiptV2, AgenticAskProgressInputV1, AgenticAskProgressInputV2, AgenticAskProgressRequestV1, AgenticAskProgressSinkV1,
+  AgenticAskProgressSinkV2,
+} from "./agentic-ask-progress-v1.js";
 import { createAgenticAskProgressRecorderV1 } from "./agentic-ask-progress-recorder-v1.js";
 import type { AgenticRendererV1, AgenticRenderOutputV1 } from "./agentic-renderer-v1.js";
 import { createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
@@ -50,7 +57,10 @@ import {
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
 export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
-export type { AgenticAskAnswerWithReceiptV1, AgenticAskProgressInputV1, AgenticAskProgressRequestV1, AgenticAskProgressSinkV1 } from "./agentic-ask-progress-v1.js";
+export type {
+  AgenticAskAnswerWithReceiptV1, AgenticAskAnswerWithReceiptV2, AgenticAskProgressInputV1, AgenticAskProgressInputV2, AgenticAskProgressRequestV1, AgenticAskProgressSinkV1,
+  AgenticAskProgressSinkV2,
+} from "./agentic-ask-progress-v1.js";
 export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-recorder-v1.js";
 
 /** Request-wide model-call budget, including retries and repairs. */
@@ -105,8 +115,11 @@ export interface AgenticResearchInputV1 {
   readonly trigger: string;
   readonly brief: AgenticBriefV1;
   readonly signal?: AbortSignal;
-  /** A streamed Ask's progress sink (ADR-0039); a run without one names nothing and audits no names. */
-  readonly on_progress?: AgenticAskProgressSinkV1;
+  /**
+   * A streamed Ask's progress sink (ADR-0039); a run without one names nothing and audits no names.
+   * A V6 run sends it only V1 events, a V7 run V2 events (ADR-0040).
+   */
+  readonly on_progress?: AgenticAskProgressSinkV1 | AgenticAskProgressSinkV2;
   /** With `on_progress`: the streamed request this run is one attempt of. */
   readonly progress_request?: AgenticAskProgressRequestV1;
 }
@@ -176,6 +189,8 @@ const LIST_SOURCES: Readonly<Record<string, EvidenceDeskSourceV2>> = Object.free
   slack: "slack", messages: "slack", message: "slack",
   ticket: "ticket", tickets: "ticket",
   page: "page", pages: "page", knowledge: "page", wiki: "page",
+  follow_up: FOLLOW_UPS_SOURCE_ID_V1, "follow-up": FOLLOW_UPS_SOURCE_ID_V1, "follow-ups": FOLLOW_UPS_SOURCE_ID_V1, "follow ups": FOLLOW_UPS_SOURCE_ID_V1,
+  followup: FOLLOW_UPS_SOURCE_ID_V1, followups: FOLLOW_UPS_SOURCE_ID_V1, open_items: FOLLOW_UPS_SOURCE_ID_V1, "open-items": FOLLOW_UPS_SOURCE_ID_V1, "open items": FOLLOW_UPS_SOURCE_ID_V1,
 });
 
 export interface CreateAgenticAskV2Options extends Omit<CreateAgenticAskV1Options, 'desk'> { readonly desk: EvidenceDeskPortV2 }
@@ -206,7 +221,17 @@ export function createAgenticAskV3(options: CreateAgenticAskV2Options) {
     answerWithReceipt(input: AgenticAskProgressInputV1): Promise<AgenticAskAnswerWithReceiptV1>;
   };
 }
-function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersion: 4 | 5 | 6) {
+/**
+ * V4 core: V7 answers, the first that may read and cite follow-ups (ADR-0040).
+ * `answerWithReceipt` streams its progress in V2, whose reads may name follow-ups.
+ */
+export function createAgenticAskV4(options: CreateAgenticAskV2Options) {
+  return createAgenticAskCore(options, 7) as unknown as {
+    answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV7>;
+    answerWithReceipt(input: AgenticAskProgressInputV2): Promise<AgenticAskAnswerWithReceiptV2>;
+  };
+}
+function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersion: 4 | 5 | 6 | 7) {
   const tickets = responseVersion >= 5;
   const now = options.now_ms ?? (() => performance.now());
   const temporal = options.time_context;
@@ -221,7 +246,9 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     const descriptor = liveSourceDescriptorV2(value);
     // Citation compatibility belongs to the response version, never a provider name.
     if (descriptor.kind === 'ticket' && (!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine')) return [];
-    if (descriptor.kind === 'page' && (responseVersion !== 6 || options.desk.scope.kind === 'mine')) return [];
+    if (descriptor.kind === 'page' && (responseVersion < 6 || options.desk.scope.kind === 'mine')) return [];
+    // Follow-ups are cited only from V7, and Mine reads only what the asker added (ADR-0040).
+    if (descriptor.kind === FOLLOW_UP_EVIDENCE_KIND_V1 && (responseVersion < FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 || options.desk.scope.kind === 'mine')) return [];
     return [{ ...descriptor, kinds: [descriptor.kind] }];
   });
   const researchSources: readonly AgenticResearchSourceV1[] = Object.freeze([
@@ -248,14 +275,18 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
   const context = (day: string) => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: day, ...(temporal === undefined ? { time_zone: "UTC", time_reference: "server" } : { now: temporal.now, time_zone: temporal.time_zone, time_reference: "client" }) });
   const liveGuidance = (list: boolean) => `Live sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only ${list ? "search/list" : "search"} discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.`;
-  const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance(true)}`;
+  // Follow-ups are ECHO's own items with their own guidance; the live guidance is for connected tools (ADR-0040).
+  const toolSources = liveCatalog.filter(source => !source.kinds.includes(FOLLOW_UP_EVIDENCE_KIND_V1));
+  const followUps = toolSources.length !== liveCatalog.length;
+  const guided = (base: string, live: string, followUp: string) => [base, ...(toolSources.length === 0 ? [] : [live]), ...(followUps ? [followUp] : [])].join("\n\n");
+  const answerPrompt = guided(ANSWER_PROMPT, liveGuidance(true), FOLLOW_UPS_ANSWER_GUIDANCE);
   /**
    * The research step's prompts and the scratchpad bytes beside each: Ask's question keeps its prompt exactly, every
    * task-form goal adds the one shared task rule, and a search-only brief (no list) has its own step prompt.
    */
   const researchPrompts = (list: boolean) => {
     const base = list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT;
-    const step = liveCatalog.length === 0 ? base : `${base}\n\n${liveGuidance(list)}`;
+    const step = guided(base, liveGuidance(list), followUpsStepGuidance(list));
     const task = `${step}\n\n${TASK_RULE_PROMPT}`;
     const budget = (prompt: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, OUTPUT_TOKENS.step);
     return Object.freeze({ step, step_budget: budget(step), task, task_budget: budget(task) });
@@ -268,7 +299,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
    * access fences, audit), the research loop, then a renderer (Ask's for a
    * question, the trigger's own for a task, or none) and the shared release step.
    */
-  type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6; readonly rendered?: unknown; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[]; readonly receipt?: PersonAskReceiptV1 };
+  type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7; readonly rendered?: unknown; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[]; readonly receipt?: PersonAskReceiptV2 };
   const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">): Promise<RequestOutput> => withoutCoreRuntimeContentV1(() => observeAgenticLifecycleV1<RequestOutput>('run', undefined, { trigger: input.trigger }, async () => {
       const brief = await observeAgenticLifecycleV1('brief', 'research_brief', { trigger: input.trigger, brief: input.brief, scope: options.desk.scope }, async () => {
         const selected = runnableBrief(input.brief);
@@ -314,7 +345,9 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       });
       let terminalAudited = false;
       // A streamed Ask's record of what it searched and named (ADR-0039); it stops sending once the request's signal aborts.
-      const progress = input.on_progress === undefined ? undefined : createAgenticAskProgressRecorderV1({ sink: input.on_progress, sources: researchSources, signal: activeSignal,
+      // The V7 answer streams progress V2, so its reads may name follow-ups; the V6 answer streams V1, which never does.
+      const progress = input.on_progress === undefined ? undefined : createAgenticAskProgressRecorderV1({
+        sink: input.on_progress as AgenticAskProgressSinkV2, version: responseVersion === 7 ? 2 : 1, sources: researchSources, signal: activeSignal,
         ...(input.progress_request === undefined ? {} : { named: input.progress_request.named }) });
       let selectedTicketCount = 0; let ticketContextCount = 0; let ticketCitationCount = 0;
       const scope = scopeText(options.desk.scope);
@@ -466,13 +499,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     },
     /**
      * Ask with its progress sent to `on_progress` while it runs, and the receipt
-     * built after release (ADR-0039). Only the V6 core streams.
+     * built after release (ADR-0039). Only the V6 core (progress V1) and the V7
+     * core (progress V2, ADR-0040) stream.
      */
-    async answerWithReceipt(input: AgenticAskProgressInputV1): Promise<AgenticAskAnswerWithReceiptV1> {
-      if (responseVersion !== 6 || typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");
+    async answerWithReceipt(input: AgenticAskProgressInputV1 | AgenticAskProgressInputV2): Promise<AgenticAskAnswerWithReceiptV1 | AgenticAskAnswerWithReceiptV2> {
+      if ((responseVersion !== 6 && responseVersion !== 7) || typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");
       const output = await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal), on_progress: input.on_progress,
         ...(input.request === undefined ? {} : { progress_request: input.request }) });
-      return Object.freeze({ response: output.response as PersonAnswerResponseV6, receipt: output.receipt! });
+      return Object.freeze({ response: output.response as PersonAnswerResponseV6 | PersonAnswerResponseV7, receipt: output.receipt! }) as AgenticAskAnswerWithReceiptV1 | AgenticAskAnswerWithReceiptV2;
     },
     /** Ask plus its research result and writer input, for the research evaluation. */
     async answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }) {

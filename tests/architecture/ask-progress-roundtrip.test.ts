@@ -3,8 +3,8 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  validatePersonAskProgressLineV1, validatePersonAskProgressResultLineV1,
-  type PersonAnswerCitationV6, type PersonAskProgressStepEventV1, type PersonAskReceiptV1,
+  validatePersonAskProgressLineV1, validatePersonAskProgressLineV2, validatePersonAskProgressResultLineV2, validatePersonRunsRequestV1, validatePersonRunsResultV1,
+  type PersonAnswerCitationV7, type PersonAskProgressStepEventV2, type PersonAskReceiptV2,
 } from '@echo-brain/organization-api';
 import { derivedAtomIdentity } from '@echo-brain/organization-record/application/atom-identity';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
@@ -20,6 +20,9 @@ import { JIRA_TEXT, SLACK_TEXT } from '../../services/organization-authority/tes
 // desktop host runs it; the host's own line reader turns the printed lines
 // into page notices; and the desktop's store takes them, then the answer, and
 // opens what Ask named. A change on any of the three sides meets the others.
+// The client streams the V7 answer on /v6 (progress V2, ADR-0040), whose Ask
+// may cite a follow-up, and falls back to V1 on /v5 for an Authority without
+// /v6, as an older one answers.
 //
 // The desktop's modules are loaded by path, as approval-proposal-roundtrip
 // loads the Authority's: the root typecheck never reads the app (its DOM and
@@ -37,7 +40,7 @@ type Json = Record<string, unknown>;
 type Scope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'mine' };
 type Expect = { readonly authority: string; readonly membership_id: string };
 interface CliRun { readonly exit: number; readonly stdout: string; readonly stderr: string; readonly overflow: boolean }
-type Source = Json & { readonly kind: 'record' | 'original' | 'transcript' | 'ticket' | 'page' | 'slack'; readonly label: string };
+type Source = Json & { readonly kind: 'record' | 'original' | 'transcript' | 'follow_up' | 'ticket' | 'page' | 'slack'; readonly label: string };
 interface Row { readonly type: 'searched' | 'read'; readonly sources?: readonly Json[]; readonly found?: number; readonly items?: readonly Source[] }
 interface Progress { readonly started: number; readonly stage: string | null; readonly pending: number; readonly rows: readonly Row[] }
 interface Receipt { readonly looked_through: number; readonly elapsed_ms: number; readonly rows: readonly Row[] }
@@ -49,13 +52,19 @@ interface Store {
   cancelAsk(): void;
   openNamed(items: readonly Source[]): void;
   fullPageOffered(): boolean;
+  openFullPage(): void;
+  followUpShown(): { kind: string; item_id?: string; item?: Json | null } | null;
   getState(): {
     ask: { asking: { progress: Progress } | null; shown: { answer: { sources: readonly Source[]; receipt?: Receipt }; receipt?: Receipt; took?: number } | null; failed: unknown } | null;
     sources: { records: Record<string, { loading: boolean; value?: { decisions: { items: { atom_id?: string; text: string }[] } } }>;
-      evidence: { reads: Record<number, { loading: boolean; value?: { text: string } }> } | null } | null;
+      evidence: { reads: Record<number, { loading: boolean; value?: { text: string } }> } | null;
+      followUps: Record<string, { loading: boolean; value?: { item_id: string; state: string; owner: { membership_id: string; name: string }; expected: string | null } }> } | null;
   };
 }
-interface Views { answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json; atomId(record: string, signal: string): string }
+interface Views {
+  answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json; atomId(record: string, signal: string): string;
+  openItemView(item: unknown): Json;
+}
 interface ProgressView {
   PROGRESS_AFTER_MS: number; liveRows(progress: Progress): { type: string; row?: Row; done?: boolean }[]; stageWords(progress: Progress): string;
   searchedWords(row: Row): string; rowNames(items: readonly Source[]): { names: readonly { source: Source; items: readonly Source[] }[]; more: number }; receiptWords(receipt: Receipt, took: number): string;
@@ -65,7 +74,7 @@ const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) await P
 const QUESTION = 'Combine the Launchscope approved meeting, document, Jira ticket, and Slack message.';
 const NOTE = 'Private planner note: weigh the Jira review against Slack.';
 const ASK_AUDIT = "SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-agentic-ask-audit-v1%'";
-const commitment = (item: PersonAnswerCitationV6) => canonicalSha256(item.citation);
+const commitment = (item: PersonAnswerCitationV7) => canonicalSha256(item.citation);
 
 /** Every object key anywhere in a value. */
 function keysOf(value: unknown, into = new Set<string>()): Set<string> {
@@ -89,7 +98,7 @@ afterEach(() => {
  * client command the host would, through the host's own views and line
  * reader, and every step the reader posts goes to the page's store.
  */
-async function app() {
+async function app(options: { readonly older?: boolean } = {}) {
   const f = await allSourceAskFixture(roots, { notes: NOTE });
   const [{ runCli, lastJson }, ask, views, { askText }, progress, { openerOf }] = await Promise.all([
     desktop<{ runCli(cli: unknown, argv: readonly string[], dependencies: Json, onLine?: (line: string) => void): Promise<CliRun>; lastJson(text: string): unknown }>('host/cli.ts'),
@@ -107,9 +116,15 @@ async function app() {
   const home = join(roots[0]!, 'person-home');
   mkdirSync(home, { mode: 0o700 });
   new PersonSessionStore(home).install(AUTHORITY, f.initialized.authority_id, f.session);
+  const asked: string[] = [];
   const loopback: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     expect(url.origin).toBe(AUTHORITY);
+    if (url.pathname.endsWith('/person/ask')) asked.push(url.pathname);
+    // An Authority from before /v6 has no such route: a 404 without the route header.
+    if (options.older === true && url.pathname === '/v6/person/ask') {
+      return new Response(JSON.stringify({ error: { code: 'not_found', message: 'request failed' } }), { status: 404, headers: { 'content-type': 'application/json; charset=utf-8' } });
+    }
     return fetch(`${f.origin}${url.pathname}${url.search}`, init);
   };
   const client = { home_directory: home, fetch: loopback };
@@ -147,6 +162,12 @@ async function app() {
     if (method === 'ask.cancel') { asks.get(params.cancel_id as string)?.abort(); return ok(null); }
     if (method === 'ask.record') return viewed(await runCli(runPersonClientCli, ask.askRecordArgv(params.record as Json), client), raw => views.recordView(raw, params.record as Json));
     if (method === 'ask.source') return viewed(await runCli(runPersonClientCli, ask.askSourceArgv(params.ref as Json, params.scope as Scope), client), views.evidenceView);
+    // A follow-up's row, as the host reads one: the runs command, its result validated, the item as the page has it.
+    if (method === 'runs' && (params.request as Json).operation === 'item') {
+      const request = validatePersonRunsRequestV1(params.request);
+      return viewed(await runCli(runPersonClientCli, ['runs', `--request=${JSON.stringify(request)}`], client),
+        raw => views.openItemView((validatePersonRunsResultV1('item', (raw as { result: unknown }).result) as { item: unknown }).item));
+    }
     return quiet(method, account);
   });
 
@@ -156,17 +177,24 @@ async function app() {
   await store.refreshStatus();
   await flush();
   const audits = () => (f.database.prepare(ASK_AUDIT).all() as { body_json: string }[]).map(row => JSON.parse(row.body_json) as Json);
-  return { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits };
+  return { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits, asked };
 }
 
 /** The steps the client printed before its last line. */
-function stepsOf(lines: readonly string[]): PersonAskProgressStepEventV1[] {
-  return lines.map(line => validatePersonAskProgressLineV1(JSON.parse(line)).progress);
+function stepsOf(lines: readonly string[]): PersonAskProgressStepEventV2[] {
+  return lines.map(line => validatePersonAskProgressLineV2(JSON.parse(line)).progress);
 }
 
+/** The catalog's sources, as a step names them: follow-ups only on /v6, which alone reads them (ADR-0040). */
+const SEARCHED_V1 = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'slack' }];
+const SEARCHED_V2 = [...SEARCHED_V1, { kind: 'follow_ups' }];
+
 describe('Ask progress from the Authority through the Person client to the desktop page', () => {
-  it('streams each step to the page while the Authority works, then folds into the audited receipt, and opens what it named', async () => {
-    const { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits } = await app();
+  it.each([
+    { route: '/v6', older: false, schema: 7, sources: SEARCHED_V2, words: 'meetings, documents, Jira, Slack and follow-ups' },
+    { route: '/v5', older: true, schema: 6, sources: SEARCHED_V1, words: 'meetings, documents, Jira and Slack' },
+  ])('streams each step to the page while the Authority works on $route, then folds into the audited receipt, and opens what it named', async ({ route, older, schema, sources, words }) => {
+    const { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits, asked } = await app({ older });
     try {
       // The desktop's atom ids are the Authority's own.
       expect(views.atomId(f.seeded.approved_record_sha256, 'd1')).toBe(derivedAtomIdentity(f.seeded.approved_record_sha256, 'd1'));
@@ -185,12 +213,16 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(runs).toHaveLength(1);
       expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
 
-      // --- The client: every step, in order, then the one final line. ---
+      // --- The client: every step, in order, then the one final line, from the newest route this Authority has. ---
+      expect(asked).toEqual(older ? ['/v6/person/ask', '/v5/person/ask'] : ['/v6/person/ask']);
+      expect(asked.at(-1)).toBe(`${route}/person/ask`);
       const steps = stepsOf(lines.slice(0, -1));
-      const final = validatePersonAskProgressResultLineV1(JSON.parse(lines.at(-1)!));
-      expect(final.result.schema_version).toBe(6);
+      // A /v5 stream is V1 throughout: a V1 client reads every step of it.
+      if (older) for (const line of lines.slice(0, -1)) validatePersonAskProgressLineV1(JSON.parse(line));
+      const final = validatePersonAskProgressResultLineV2(JSON.parse(lines.at(-1)!));
+      expect(final.result.schema_version).toBe(schema);
       expect(final.receipt).toBeDefined();
-      const receipt = final.receipt as PersonAskReceiptV1;
+      const receipt = final.receipt as PersonAskReceiptV2;
       // Everything up to the writer's stage reached the page while the Authority was still writing.
       const writerAt = steps.findIndex(step => step.type === 'stage' && step.stage === 'writing');
       expect(writerAt).toBeGreaterThan(0);
@@ -200,9 +232,9 @@ describe('Ask progress from the Authority through the Person client to the deskt
       // Research searches, then reads what it found (no stage before its first search); then the writer; the final check comes last.
       expect(stages.slice(0, 2)).toEqual(['searching', 'reading']);
       expect(steps.slice(writerAt)).toEqual([{ type: 'stage', stage: 'writing' }, { type: 'stage', stage: 'checking_access' }]);
-      const searched = steps.filter((step): step is Extract<PersonAskProgressStepEventV1, { type: 'searched' }> => step.type === 'searched');
+      const searched = steps.filter((step): step is Extract<PersonAskProgressStepEventV2, { type: 'searched' }> => step.type === 'searched');
       expect(searched).toHaveLength(1);
-      expect(searched[0]!.sources).toEqual([{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'slack' }]);
+      expect(searched[0]!.sources).toEqual(sources);
       const named = steps.flatMap(step => step.type === 'read' ? step.items : []);
       // Each read follows the reading count that announced it.
       steps.forEach((step, at) => {
@@ -245,7 +277,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(progress.stageWords(live)).toBe('Writing');
       expect(live.pending).toBe(0);
       expect(progress.liveRows(live).map(row => [row.type, row.done])).toEqual([['searched', undefined], ['read', true]]);
-      expect(progress.searchedWords(live.rows[0]!)).toBe(`Searched meetings, documents, Jira and Slack · ${named.length} found`);
+      expect(progress.searchedWords(live.rows[0]!)).toBe(`Searched ${words} · ${named.length} found`);
       const read = live.rows[1]!.items!;
       expect(read).toHaveLength(named.length);
       expect(new Set(read.map(item => item.kind))).toEqual(new Set(['record', 'original', 'ticket', 'slack']));
@@ -276,6 +308,72 @@ describe('Ask progress from the Authority through the Person client to the deskt
       store.openNamed([document]);
       await vi.waitFor(() => expect(store.getState().sources?.evidence?.reads[0]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
       expect(store.getState().sources!.evidence!.reads[0]!.value!.text).toContain(DOCUMENT_TEXT);
+    } finally { await f.close(); }
+  });
+
+  it('cites and names a follow-up on /v6, opens it beside the running Ask with its owner and status, and after the answer opens its item page (ADR-0040)', async () => {
+    const { f, store, views, progress, openerOf, account, lines, refused, runs, audits } = await app();
+    const EXPECTED = 'Send the Launchscope checklist to the pilot group';
+    const DECIDED = 'Launchscope rolls out to the pilot group first.';
+    const item_id = f.followUp(EXPECTED);
+    try {
+      // While the Authority is inside the writer's model call, the follow-up Ask named opens beside it, read as Home reads it.
+      let whileAsking: { row?: Json; offered?: boolean; error?: unknown } = {};
+      f.beforeAnswerReturn(async () => {
+        try {
+          await vi.waitFor(() => expect(store.getState().ask?.asking?.progress.stage).toBe('writing'), { timeout: 10_000, interval: 10 });
+          const named = store.getState().ask!.asking!.progress.rows.flatMap(row => row.items ?? []).find(item => item.kind === 'follow_up')!;
+          expect(named).toEqual({ kind: 'follow_up', label: EXPECTED, item_id });
+          store.openNamed([named]);
+          await vi.waitFor(() => expect(store.getState().sources?.followUps[item_id]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
+          whileAsking = { row: store.getState().sources!.followUps[item_id]!.value as unknown as Json, offered: store.fullPageOffered() };
+        } catch (error) { whileAsking = { error }; }
+      });
+      await store.ask(QUESTION, { kind: 'global' });
+      expect(whileAsking.error).toBeUndefined();
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
+      expect(refused).not.toHaveBeenCalled();
+
+      // --- The Authority and the client: the follow-up was searched, named once its check passed, cited, and audited. ---
+      const steps = stepsOf(lines.slice(0, -1));
+      const final = validatePersonAskProgressResultLineV2(JSON.parse(lines.at(-1)!));
+      expect(final.result.schema_version).toBe(7);
+      const followUp = expect.objectContaining({ citation: { kind: 'follow_up', item_id }, kind: 'follow_up', label: EXPECTED, ref: `follow_up:${item_id}` });
+      const searched = steps.filter(step => step.type === 'searched');
+      expect(searched).toEqual([{ type: 'searched', sources: SEARCHED_V2, found: expect.any(Number) }]);
+      const named = steps.flatMap(step => step.type === 'read' ? step.items : []);
+      expect(named.filter(item => item.kind === 'follow_up')).toEqual([followUp]);
+      expect(searched[0]!.type === 'searched' && searched[0]!.found).toBe(named.length);
+      expect(final.result.citations).toContainEqual(followUp);
+      const receiptNamed = final.receipt!.rows.flatMap(row => row.type === 'read' ? row.items : []);
+      expect(receiptNamed.map(commitment)).toEqual(named.map(commitment));
+      expect(receiptNamed).toContainEqual(followUp);
+      const [audit] = audits();
+      expect(audit).toMatchObject({ outcome: 'answered', named_citation_digests: named.map(commitment) });
+      expect(audit!.named_citation_digests).toContain(canonicalSha256({ kind: 'follow_up', item_id }));
+      // While it ran, nothing the follow-up's row or decision says left the Authority: only its citation projection.
+      for (const line of lines.slice(0, -1)) {
+        for (const secret of [DECIDED, 'Owner:', 'Expected:', 'still_open', NOTE]) expect(line).not.toContain(secret);
+        const keys = keysOf(JSON.parse(line));
+        for (const key of [...NEVER_KEYS, 'owner', 'status', 'check', 'decision', 'expected']) expect(keys.has(key), `${key} in ${line}`).toBe(false);
+      }
+
+      // --- The page: the follow-up opened beside Ask while it ran, without Open; the answer's source opens its item page. ---
+      expect(whileAsking.row).toMatchObject({ item_id, state: 'open', expected: EXPECTED, owner: { membership_id: account.membership_id } });
+      expect(whileAsking.offered).toBe(false);
+      const shown = store.getState().ask!.shown!;
+      const source = { kind: 'follow_up', label: EXPECTED, item_id };
+      expect(shown.answer.sources).toContainEqual(source);
+      expect(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).sources).toContainEqual(source);
+      expect(openerOf(source as Source)).toEqual({ pane: 'follow_up', page: { kind: 'follow_up', item_id } });
+      expect(progress.searchedWords(shown.receipt!.rows[0]!)).toBe(`Searched meetings, documents, Jira, Slack and follow-ups · ${named.length} found`);
+      // The audited answer names it, so the pane stays on it, and now offers Open: its item page, read again.
+      expect(store.fullPageOffered()).toBe(true);
+      store.openFullPage();
+      expect(store.getState().ask).toBeNull();
+      expect(store.followUpShown()).toMatchObject({ kind: 'item', item_id });
+      await vi.waitFor(() => expect(store.followUpShown()?.item).toMatchObject({ item_id, state: 'open' }), { timeout: 10_000, interval: 10 });
     } finally { await f.close(); }
   });
 

@@ -141,6 +141,10 @@
       "types": "./dist/shared/evidence-desk-v2.d.ts",
       "import": "./dist/shared/evidence-desk-v2.js"
     },
+    "./shared/follow-up-evidence-v1": {
+      "types": "./dist/shared/follow-up-evidence-v1.d.ts",
+      "import": "./dist/shared/follow-up-evidence-v1.js"
+    },
     "./shared/temporal-query-v1": {
       "types": "./dist/shared/temporal-query-v1.d.ts",
       "import": "./dist/shared/temporal-query-v1.js"

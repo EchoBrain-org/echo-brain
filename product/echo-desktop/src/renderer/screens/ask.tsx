@@ -1,10 +1,11 @@
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { Answer, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
+import type { Answer, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, OpenItemView, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import { answerSentences, documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
+import { checkWords, ownerAndStatus } from '../needs.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
   announceAfter, announcement, duration, foundBefore, liveRows, namedPlaces, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
@@ -15,7 +16,7 @@ import {
   litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
   submitBar, widenScope, type AskTurn, type PaneTarget, type Read, type RecordSectionKey, type SourcesState, type State,
 } from '../store.js';
-import { Check, Chevron, Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
+import { Check, Chevron, Close, Doc, Hash, Lock, Meeting, Plus, Ticks, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -193,7 +194,13 @@ function originalMeta(source: Extract<AnswerSource, { kind: 'original' }>, group
 }
 
 function KindIcon({ kind }: { kind: SourceGroup['kind'] }) {
-  return kind === 'record' || kind === 'transcript' ? <Meeting /> : kind === 'slack' ? <Hash /> : <Doc />;
+  return kind === 'record' || kind === 'transcript' ? <Meeting /> : kind === 'slack' ? <Hash /> : kind === 'follow_up' ? <Ticks /> : <Doc />;
+}
+
+/** A follow-up's row as read now, once it is: its owner and status ("Mara · Open"), nothing while it is read or when it could not be. */
+function followUpRow(state: State, source: Extract<AnswerSource, { kind: 'follow_up' }>): OpenItemView | null {
+  const read = state.sources?.followUps[source.item_id];
+  return read !== undefined && !read.loading && 'value' in read ? read.value : null;
 }
 
 /** One row per source, numbered as the sentences cite it. The one the pane shows is lit. */
@@ -205,7 +212,9 @@ function SourceList({ state }: { state: State }) {
     <div class="source-list" data-testid="source-list">
       {groups.map((group, index) => {
         const source = firstSource(state, group);
-        const meta = source.kind === 'original' ? originalMeta(source, group, 'passages') : '';
+        // One short qualifier only where it helps: a document's version and passages, a follow-up's owner and status.
+        const row = source.kind === 'follow_up' ? followUpRow(state, source) : null;
+        const meta = source.kind === 'original' ? originalMeta(source, group, 'passages') : row ? ownerAndStatus(row, state.status?.account?.membership_id) : '';
         return (
           <button type="button" key={index} class={`source-row${open === index ? ' on' : ''}`} data-testid="source-row" aria-pressed={open === index}
             title={source.kind === 'original' ? source.label : undefined} onClick={() => chooseSource(index)}>
@@ -283,15 +292,22 @@ export function AskView({ state }: { state: State }) {
   const scroller = useRef<HTMLElement>(null);
   // Whether the person was at the bottom when they last scrolled, or the thread last took them there.
   const atBottom = useRef(true);
+  // Where the thread last put the view: the scroll event that records a person's scroll can arrive after a new row.
+  const placedAt = useRef<number | null>(null);
   const toBottom = () => {
     const view = scroller.current;
-    if (view) view.scrollTop = view.scrollHeight;
+    if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
     atBottom.current = true;
   };
   // A new question, answer or failure scrolls to the bottom.
   useLayoutEffect(toBottom, [thread.seq, thread.shown, thread.asking === null, thread.failed]);
-  // A row of the question on its way only when the person is there: one who scrolled up to read stays put.
-  const follow = useCallback(() => { if (atBottom.current) toBottom(); }, []);
+  // A row of the question on its way only when the person is there: one who scrolled up to read stays put, even before
+  // their scroll event has arrived, because the view is no longer where the thread left it.
+  const follow = useCallback(() => {
+    const view = scroller.current;
+    if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) atBottom.current = false;
+    if (atBottom.current) toBottom();
+  }, []);
   const onScroll = () => {
     const view = scroller.current;
     if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
@@ -614,14 +630,32 @@ function paneHeading(source: AnswerSource, state: State): string {
   if (source.kind === 'record') return 'Meeting · Approved record';
   if (source.kind === 'transcript') return 'Meeting · Transcript';
   if (source.kind === 'original') return 'Original source';
+  if (source.kind === 'follow_up') return 'Follow-up';
   return `${externalSourceProvider(source, state.tools?.items)} · ${source.kind === 'slack' ? 'Message' : source.kind === 'ticket' ? 'Ticket' : 'Page'}`;
+}
+
+/**
+ * A follow-up beside Ask (ADR-0040): its title as the answer cites it, then,
+ * in its source row's own words and with no labels, who owns it and its
+ * status ("Mina · Open"), and its latest check, as Home reads its row now.
+ * Its item page, with everything else, is Open, once the answer came.
+ */
+function FollowUpSource({ state, source, item }: { state: State; source: Extract<AnswerSource, { kind: 'follow_up' }>; item: OpenItemView }) {
+  const checked = checkWords(item.check);
+  return (
+    <div class="source-detail selectable" data-testid="pane-follow-up">
+      <h2>{source.label}</h2>
+      <div class="meta" data-testid="pane-follow-up-meta">{ownerAndStatus(item, state.status?.account?.membership_id)}</div>
+      {checked && <div class="meta" data-testid="pane-follow-up-check">{checked}</div>}
+    </div>
+  );
 }
 
 /**
  * Beside Ask: one of the answer's sources, or an item Ask named, opened by
  * its kind (openers.ts): a meeting's approved record with the cited items lit,
- * a transcript's meeting, an original's cited passages, or Open in its own
- * app. Once the answer came, Open goes to the item's own page.
+ * a transcript's meeting, an original's cited passages, a follow-up, or Open
+ * in its own app. Once the answer came, Open goes to the item's own page.
  */
 export function SourcePane({ state }: { state: State }) {
   const sources = state.sources!;
@@ -643,6 +677,8 @@ export function SourcePane({ state }: { state: State }) {
     body = <ExternalSource key={`${source.tool_id}:${source.permalink}`} source={source} provider={externalSourceProvider(source, state.tools?.items)} />;
   } else if (source.kind === 'original') {
     body = <OriginalSource state={state} target={target} source={source} />;
+  } else if (source.kind === 'follow_up') {
+    body = <ReadRecord read={sources.followUps[source.item_id]}>{item => <FollowUpSource state={state} source={source} item={item} />}</ReadRecord>;
   }
   return (
     <aside class="source-pane" data-testid="source-pane" aria-label="Source">

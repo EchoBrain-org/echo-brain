@@ -68,7 +68,18 @@ How to carry it:
 
 Option 2, carried by A. The wire contract is
 `packages/organization-api/src/person-ask-progress-v1.ts`, and the kernel
-interface is `agentic-ask-progress-v1.ts` beside the Ask run.
+interface is `agentic-ask-progress-v1.ts` beside the Ask run. Each route
+streams one progress version for its one answer version:
+
+| Route | Answer | Header value | Progress |
+|---|---|---|---|
+| `POST /v5/person/ask` | V6 | `1` | V1 (`person-ask-progress-v1.ts`) |
+| `POST /v6/person/ask` | V7 ([ADR-0040](ADR-0040-follow-ups-as-ask-evidence.md)) | `2` | V2 (`person-ask-progress-v2.ts`) |
+
+Progress V2 is V1 with two additions only: a searched row may name
+`follow_ups`, and a named item is a V7 citation, so it may be a follow-up
+with the ref that opens its item page. Everything else below holds for both
+versions; the two share one codec (`person-ask-progress-codec.ts`).
 
 **What may leave the Authority while Ask runs.** Every event is built from
 what ECHO ran, never from model output:
@@ -88,8 +99,9 @@ what ECHO ran, never from model output:
   text the research model is given for the first time: an opened item, a
   search hit shown in full, or a starting item. Metadata-only rows, related
   references and neighbours an open admitted are not named. Each name is the
-  projection an answer citation uses (`PersonAnswerCitationV6`: citation
-  coordinates, kind, label, visibility and the open ref). The label is the
+  projection an answer citation uses (`PersonAnswerCitationV6` on `/v5`,
+  `PersonAnswerCitationV7` on `/v6`: citation coordinates, kind, label,
+  visibility and the open ref). The label is the
   one the answer's source list would show. At most 100 items are named in a
   run.
 
@@ -113,8 +125,9 @@ diagnostics observer, which would replace a person's capture sink and copy
 full prompts. What the sink throws is ignored, and nothing is emitted after
 the run settles.
 
-**The receipt.** The final event carries the released V6 answer, byte for
-byte the response today's JSON route returns, together with a receipt. The
+**The receipt.** The final event carries the released answer (V6 on `/v5`,
+V7 on `/v6`), byte for byte the response the same route returns as JSON,
+together with a receipt. The
 receipt is built after the release step has passed: the full final check,
 the audit write, and the check after the audit. It comes from the run's own
 record and holds:
@@ -183,14 +196,15 @@ founder accepted it with the design.
 **Transport.**
 
 - The route is `POST /v5/person/ask` with the request header
-  `x-echo-ask-progress: 1`. Any other value, or no header, gets today's JSON
-  response.
+  `x-echo-ask-progress: 1`, or `POST /v6/person/ask` with
+  `x-echo-ask-progress: 2`. On either route any other value, the other
+  route's included, or no header, gets that route's JSON response.
 - The Authority starts the stream only after the request is authenticated
   and validated. Failures before that remain ordinary JSON errors.
 - The streamed response is `200` with `content-type: text/event-stream;
   charset=utf-8`, `cache-control: no-store`, and the route header
-  `x-echo-person-ask-route: 5`. An error inside the stream therefore never
-  triggers the `/v4` fallback.
+  `x-echo-person-ask-route: 5` (`6` on `/v6`). An error inside the stream
+  therefore never triggers a fallback to an older route.
 - Each event is exactly one `data: <JSON>` line followed by a blank line.
   There are no `event`, `id` or `retry` fields.
 - A `: keep-alive` comment is sent after about 10 s without an event.
@@ -203,9 +217,12 @@ founder accepted it with the design.
   nothing more is written. The 90-second research deadline is unchanged.
 
 The person client prints progress only for `person ask --live --progress`.
-Each step event becomes its own `{ok: true, progress}` line, and the final
-line keeps today's `{ok: true, result}` with `receipt` added when the
-Authority streamed. Without the flag, output is unchanged.
+It asks `/v6` first, then `/v5` (see Compatibility). Each step event becomes
+its own `{ok: true, progress}` line, validated as V2, which every V1 step
+also is. The final line keeps today's `{ok: true, result}` with `receipt`
+added when the Authority streamed: the V7 answer with its V2 receipt from
+`/v6`, or the V6 answer with its V1 receipt from `/v5`. Without the flag,
+output is unchanged.
 
 Caddy 2.10.2 (`deploy/organization-authority/Caddyfile.clean-v1.ec2`)
 flushes a `text/event-stream` response immediately, whatever its
@@ -221,14 +238,18 @@ screen.
 - **Old clients** never send the header and get exactly today's responses.
 - **A new client on an older Authority** gets JSON. It shows no progress, and
   its CLI prints today's final line without a receipt.
-- **An Authority without `/v5`** answers 404 without the route header. The
-  client then falls back to `/v4` without progress.
-- **The V6 answer and its validators are unchanged.** The receipt travels
-  only in the answer event and in the `--progress` final line.
+- **An Authority without `/v6`** answers 404 without the route header. The
+  client then asks `/v5` with header value `1` and streams V1. An Authority
+  without `/v5` either answers that way too, and the client falls back to
+  `/v4` without progress.
+- **The V6 answer, the V7 answer and their validators are unchanged.** The
+  receipt travels only in the answer event and in the `--progress` final line.
 - **Ship order.** Either order works; the design deploys the Authority first.
-- **New kinds.** Adding a kind of item or source, such as follow-ups as an Ask
-  source, is a new header value with its own validators, and a v1 client
-  keeps receiving v1 events.
+- **New kinds.** Adding a kind of item or source is a new header value with
+  its own validators, and a client of an earlier version keeps receiving its
+  own events. Follow-ups were the first: `x-echo-ask-progress: 2` on `/v6`
+  streams progress V2, and `/v5` keeps streaming V1, which never names a
+  follow-up.
 
 This record delivers the progress streaming that RFC-0002 deferred. It
 updates ADR-0038's statement of who an already-checked item is exposed to,
@@ -244,10 +265,14 @@ unchanged. Rollback is a code revert. Rows written meanwhile stay readable,
 and clients fall back to JSON because the Authority no longer streams.
 
 The shared validators and stream framing are tested in
-`packages/organization-api/test/person-ask-progress-v1.test.ts`. The tests
-cover exact keys, the closed stage, source and status sets, the bounds, the
-receipt's merge and coverage rules, chunked decoding, and the fail-closed
-cases. The negative disclosure tests are:
+`packages/organization-api/test/person-ask-progress-v1.test.ts`, and progress
+V2 in `person-ask-progress-v2.test.ts` beside it. The tests cover exact keys,
+the closed stage, source and status sets, the bounds, the receipt's merge and
+coverage rules, chunked decoding, and the fail-closed cases; for V2, that a
+V1 validator refuses every follow-up and a V2 validator reads every V1 event.
+The `/v6` stream is tested over HTTP in
+`services/organization-authority/test/person-ask-progress-v6-http.test.ts`.
+The negative disclosure tests are:
 
 - **A revoked item is never named after a check has seen the revocation:**
   `packages/organization-authority-kernel/test/answer-composition/agentic-ask-progress-v1.test.ts`.
@@ -278,11 +303,13 @@ cases. The negative disclosure tests are:
 
 The round trip runs the real Authority runtime, the real Person client with
 `--progress`, the desktop host's own command builder, line reader and views,
-and the desktop's store in one process. Step lines reach the page while the
-Authority is still inside the writer's model call. The receipt names exactly
-what was named. The audit lists the same citation commitments in the same
-order. A named decision opens its meeting with that item lit, and a named
-document opens its cited passage. The desktop's own end-to-end proof, against
+and the desktop's store in one process, on `/v6` and, for an Authority
+without it, on `/v5`. Step lines reach the page while the Authority is still
+inside the writer's model call. The receipt names exactly what was named.
+The audit lists the same citation commitments in the same order. A named
+decision opens its meeting with that item lit, a named document opens its
+cited passage, and a named follow-up opens beside the running Ask and, once
+the answer came, its item page. The desktop's own end-to-end proof, against
 its fixture Authority, is `product/echo-desktop/test/e2e/ask.spec.ts`.
 
 Staging delivery through Cloudflare and Caddy is a manual operator check

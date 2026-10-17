@@ -398,3 +398,22 @@ export function repairInstruction(reason: string): string {
  * this prompt. Ask asks a question and never sees it.
  */
 export const TASK_RULE_PROMPT = "There is no question from a person; the task below replaces it.";
+
+/**
+ * What the research step is told about ECHO's follow-ups (ADR-0040), only when
+ * its source catalog lists them, so a prompt without them is unchanged.
+ * Without list (a search-only brief) it names no list tool.
+ */
+export function followUpsStepGuidance(list: boolean): string { return [
+  "Follow-ups (source \"follow_ups\") are ECHO's shared follow-ups of approved decisions: each is what one decision asked of one ticket, page, record or meeting action. A follow-up's attributes give its owner, its status (open, done, not sent yet, or not relevant) and any due date; its text says what it is on, what the decision expects, ECHO's latest check and the decision.",
+  list
+    ? "- For what a person has to do, owns or is waiting on (\"my open tasks\", \"what is Mara working on\"), list follow_ups with \"owner\" set to their name (asked_by for \"I\" and \"my\"), and \"status\": \"open\" when the question is about open work."
+    : "- For what a person has to do, owns or is waiting on (\"my open tasks\"), search follow_ups for their name (asked_by for \"I\" and \"my\").",
+  "- For who owns a piece of work, search follow_ups for its ticket key (such as THERM-48) unchanged, or for the decision's words.",
+  "- Follow-up search matches only the decision's title and first line, the expected change, a ticket key and the owner's name, never words inside a ticket or page: search the ticket or page source for those.",
+  "- A follow-up's status is ECHO's state of the follow-up, not the status of the ticket or page it is on; when the question asks for that, read the ticket or page itself.",
+  "- follow_ups take no since, until or date_field.",
+].join("\n"); }
+
+/** What the answer writer is told about follow-ups, only when the source catalog lists them (ADR-0040). */
+export const FOLLOW_UPS_ANSWER_GUIDANCE = "Follow-ups (provenance.kind \"follow_up\") are ECHO's shared follow-ups of approved decisions. A follow-up's \"owner\" is the person it is assigned to: the asker's tasks include the follow-ups they own. Its \"status\" is ECHO's state of the follow-up: open, done, not sent yet (not yet sent to its owner) or not relevant; it is not the linked ticket's or page's own status. \"Latest check\" is ECHO's latest check of whether the expected change landed, on that date. Name a follow-up by its title, and keep its owner, status and due date with it.";

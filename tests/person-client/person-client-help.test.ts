@@ -30,6 +30,8 @@ describe("Person client help", () => {
     [["status", "--help"], "echo-brain person status"],
     [["logout", "--help"], "echo-brain person logout"],
     [["ask", "--help"], "echo-brain person ask --question <text> [--project <project-id> | --mine]"],
+    // A follow-up's ref is not one person open reads: its item page is the runs item read.
+    [["ask", "--help"], `except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}'`],
     [["open", "--help"], "usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]"],
     [["evidence", "search", "--help"], "echo-brain person evidence search [--query <text>]"],
     [["evidence", "open", "--help"], "echo-brain person evidence open --item <citation-json>"],

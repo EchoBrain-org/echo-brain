@@ -152,7 +152,8 @@ function transcriptCitation(grant: ApprovedMeetingTranscriptGrantV1): PersonMeet
 
 // Closed English function words only. No domain synonyms, stemming, or semantic
 // expansion: project IDs, negation, numbers and subject words remain intact.
-const QUERY_FUNCTION_WORDS = new Set([
+// Ask's follow-ups (ADR-0040) drop the same words from a search.
+export const PERSON_QUERY_FUNCTION_WORDS_V1: ReadonlySet<string> = new Set([
   "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
   "do", "does", "did", "can", "could", "should", "would", "will",
   "what", "which", "who", "whom", "whose", "where", "when", "why", "how",
@@ -176,7 +177,7 @@ function queryTerms(query: string): readonly string[] {
   if (terms.length === 0 || terms.length > 32) {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
-  return terms.filter(term => !QUERY_FUNCTION_WORDS.has(term) || acronyms.has(term));
+  return terms.filter(term => !PERSON_QUERY_FUNCTION_WORDS_V1.has(term) || acronyms.has(term));
 }
 
 function packets(title: string, body: string): readonly string[] {

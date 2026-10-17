@@ -309,6 +309,8 @@ export interface PersonRecordActionsV1 {
 export interface PersonReadableDecisionV1 {
   readonly approval_id: string; readonly record_sha256: Sha256Digest; readonly title: string;
   readonly approved_at: string; readonly project_ids: readonly ProjectIdV1[];
+  /** Who the record is shared with, as a desk citation of it says (its policy and audience); Ask's follow-ups carry it (ADR-0040). */
+  readonly visibility: "team" | "project" | "projects" | "approver_only";
 }
 
 /** Which decisions an open item's viewer can read (open items and Home v1, section 4). */
@@ -981,6 +983,15 @@ export function createPersonRecordSearchRouteV1(
     return { readable, associations: recordAssociations(readable.map((row) => ({ record_position: row.position, record_sha256: row.record_sha256 })), projects.project_ids) };
   }
 
+  /** An admitted record's visibility: its policy, and for project members how many projects its audience names (never the reader's). */
+  function readableVisibility(position: number, recordSha256: Sha256Digest, policyId: string): PersonReadableDecisionV1["visibility"] {
+    const audience = policyId !== "project-members-readable-person-v1" ? 0 : (options.record.prepare(`SELECT COUNT(DISTINCT project_id) AS count
+      FROM organization_record_project_members_readable_person_record_fact
+      WHERE record_position = ? AND record_sha256 = ? AND authority_id = ? AND organization_id = ? AND state_lineage_id = ?`)
+      .get(position, recordSha256, options.authority_id, options.organization_id, options.state_lineage_id) as { readonly count: number }).count;
+    return recordVisibility(policyId as ReadableSearchResultItemV1["policy_id"], audience);
+  }
+
   /** The Layer 1 exact read with current grants: the only admission for open. */
   function admittedRecord(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, recordSha256: Sha256Digest) {
     return readableRecord(authorization, projects, recordSha256) ?? itemNotFound();
@@ -1514,6 +1525,7 @@ export function createPersonRecordSearchRouteV1(
           title: boundedTextV1(record.brief.meeting.title, PERSON_LIST_TEXT_MAX_BYTES_V1) ?? "Approved meeting",
           approved_at: record.added_at,
           project_ids: Object.freeze([...(associations.get(row.record_sha256) ?? [])]),
+          visibility: readableVisibility(row.position, row.record_sha256, record.policy_id),
         }));
       }
       return found;

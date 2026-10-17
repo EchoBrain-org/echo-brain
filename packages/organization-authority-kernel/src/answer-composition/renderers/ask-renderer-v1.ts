@@ -5,6 +5,7 @@ import type {
   PersonAnswerResponseV4,
   PersonAnswerResponseV5,
   PersonAnswerResponseV6,
+  PersonAnswerResponseV7,
 } from "@echo-brain/organization-api";
 import { answerSchema, cleanId, cleanLine, parseAnswer, partQuestion } from "../agentic-ask-v1-model-protocol.js";
 import { compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
@@ -29,7 +30,7 @@ const LIMITED_COVERAGE_GAP = "Some source coverage was incomplete, so relevant c
 const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
 
 type Entry = AgenticEvidenceBundleItemV1;
-type AskResponse = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6;
+type AskResponse = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7;
 
 export interface AskRendererInputV1 {
   readonly question: string;
@@ -41,8 +42,8 @@ export interface AskRenderedV1 {
 }
 
 export interface CreateAskRendererV1Options {
-  /** 4 (V1 core), 5 (V2) or 6 (V3 and the research core). */
-  readonly response_version: 4 | 5 | 6;
+  /** 4 (V1 core), 5 (V2), 6 (V3 and the research core) or 7 (V4: follow-ups, ADR-0040). */
+  readonly response_version: 4 | 5 | 6 | 7;
   /** The writer's system prompt, with the live-source guidance when live sources are available. */
   readonly answer_prompt: string;
   /** The sources research could read, as the research model saw them. */
@@ -188,7 +189,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       ];
       const outcome = !anyEvidence ? (incomplete ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
       const result = Object.freeze({
-        schema_version: responseVersion, kind: responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
+        schema_version: responseVersion, kind: responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
         parts: Object.freeze([Object.freeze({
           question, status: draft.status,
           statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
@@ -198,7 +199,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV1(entry.item)) : []),
         ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
       });
-      const validated: AskResponse = responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
+      const validated: AskResponse = responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
       return Object.freeze({
         result: Object.freeze({ response: validated, writer_evidence: writerEvidence }),
         // `used` is in first-citation order, and fitting the byte bound drops

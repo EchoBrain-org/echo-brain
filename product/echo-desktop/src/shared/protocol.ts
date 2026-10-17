@@ -207,8 +207,9 @@ export interface RecordRef {
 
 /**
  * What an answer is based on, or an item Ask named while it worked: an
- * approved record's item, an original's passage, a transcript's passage, or
- * live evidence. Each kind opens through one opener (renderer/openers.ts).
+ * approved record's item, an original's passage, a transcript's passage, a
+ * follow-up, or live evidence. Each kind opens through one opener
+ * (renderer/openers.ts).
  */
 export interface ExternalAnswerSource {
   readonly kind: 'slack' | 'ticket' | 'page';
@@ -223,6 +224,11 @@ export type AnswerSource =
   | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef; readonly item?: ItemRef }
   /** A shared transcript's passage. It opens as its meeting (`meeting`, the record digest): there is no transcript reader. */
   | { readonly kind: 'transcript'; readonly label: string; readonly ref: SourceRef; readonly meeting: string }
+  /**
+   * One of ECHO's shared follow-ups (ADR-0040), by its item id: it opens its
+   * item page, where its owner, status and check are read again as Home shows them.
+   */
+  | { readonly kind: 'follow_up'; readonly label: string; readonly item_id: string }
   | ExternalAnswerSource;
 
 /**
@@ -231,8 +237,8 @@ export type AnswerSource =
  * answer being written.
  */
 export type AskStage = 'searching' | 'reading' | 'checking_access' | 'writing';
-/** A kind of source a step searched: meetings, documents or Slack, or a live tool's tickets or pages, by the tool's id. */
-export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'slack' } | { readonly kind: 'tickets' | 'pages'; readonly tool_id: string };
+/** A kind of source a step searched: meetings, documents, follow-ups or Slack, or a live tool's tickets or pages, by the tool's id. */
+export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'follow_ups' | 'slack' } | { readonly kind: 'tickets' | 'pages'; readonly tool_id: string };
 /** One step's searches: the source kinds, and how many items they returned that no earlier read had. */
 export interface AskSearched {
   readonly type: 'searched';

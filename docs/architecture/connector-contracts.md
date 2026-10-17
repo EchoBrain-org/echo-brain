@@ -205,8 +205,9 @@ and ticket fixtures; they do not call either service.
 
 Ticket evidence reaches Ask through Evidence Desk V2 and `PersonAnswerResponseV5`
 at `POST /v4/person/ask`, and live page evidence through `PersonAnswerResponseV6`
-at `POST /v5/person/ask`, both with the durable live-read audit. The Authority
-mounts both routes whenever an answer model is bound; ticket or page evidence
+at `POST /v5/person/ask` and `PersonAnswerResponseV7` at `POST /v6/person/ask`
+(which also reads ECHO's follow-ups, ADR-0040), all with the durable live-read
+audit. The Authority mounts these routes whenever an answer model is bound; ticket or page evidence
 appears only when the matching Jira or Confluence live runtime is selected.
 [ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted
 and [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md) is

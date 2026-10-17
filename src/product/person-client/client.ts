@@ -35,12 +35,13 @@ import {
   type PersonAnswer,
   type PersonAnswerV5,
   type PersonAnswerV6,
+  type PersonAnswerV7,
   type PersonEvidenceDeskV1,
   type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
   type PersonAskSourceEvidenceV1,
-  type PersonAskProgressSinkV1,
-  type PersonLiveAnswerV1,
+  type PersonAskProgressSinkV2,
+  type PersonLiveAnswerV2,
   type PersonListV1,
   type PersonMeetingTranscriptReadV1,
   type PersonOpenV1,
@@ -215,7 +216,7 @@ function sameAccount(current: StoredPersonClientSessionV1, stored: StoredPersonC
     current.session.session_family_id === stored.session.session_family_id;
 }
 
-/** Only an Authority with no V5 route answers 404 without the route header; any other failure never falls back. */
+/** Only an Authority with no V6 (or V5) route answers 404 without the route header; any other failure never falls back. */
 function withoutLiveAskRoute(error: unknown): boolean {
   return error instanceof PersonAuthorityClientError && error.status === 404 && error.code === 'not_found' && !error.routeMatched;
 }
@@ -697,10 +698,17 @@ export class PersonClient {
     return this.withReadSession((authority, token) => authority.askV4(token, question, scope, signal, captureId));
   }
 
-  /** Uses all request-advertised live evidence sources. Falls back only when an older Authority has no V5 route. */
-  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV6 | PersonAnswerV5> {
+  /**
+   * Uses all request-advertised live evidence sources and, from `/v6`, ECHO's
+   * shared follow-ups (ADR-0040). It falls back from `/v6` to `/v5`, and then
+   * to `/v4`, only when an older Authority has no such route. A capture also
+   * reads on `/v5`, never on `/v4`.
+   */
+  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5> {
     validateAskInput(question, scope);
     return this.withReadSession(async (authority, token) => {
+      try { return await authority.askV6(token, question, scope, signal, captureId); }
+      catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
       try { return await authority.askV5(token, question, scope, signal, captureId); }
       catch (error) {
         if (captureId !== undefined || !withoutLiveAskRoute(error)) throw error;
@@ -712,8 +720,9 @@ export class PersonClient {
   /**
    * `askWithLiveSources` with Ask progress (ADR-0039): each step event reaches
    * `onProgress` as it arrives, and the answer carries its receipt only when
-   * the Authority streamed. An older Authority's JSON answer, and the V4
-   * fallback, come back without progress or a receipt.
+   * the Authority streamed: V2 on `/v6`, whose steps may name follow-ups, or
+   * V1 on `/v5`. An older Authority's JSON answer, and the V4 fallback, come
+   * back without progress or a receipt.
    *
    * A step is passed on only while the account that asked is the signed-in
    * one. Another account stops the Ask at once. A step that arrives while no
@@ -727,7 +736,7 @@ export class PersonClient {
    * anything is sent, so no step of that account reaches the caller.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV1, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {}): Promise<PersonLiveAnswerV1> {
+    onProgress: PersonAskProgressSinkV2, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {}): Promise<PersonLiveAnswerV2> {
     validateAskInput(question, scope);
     const stored = await this.accessSession();
     if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
@@ -736,7 +745,7 @@ export class PersonClient {
     }
     const authority = this.authority(stored.authority_origin);
     const token = stored.session.access_token;
-    const forward: PersonAskProgressSinkV1 = event => {
+    const forward: PersonAskProgressSinkV2 = event => {
       let current: StoredPersonClientSessionV1;
       try { current = this.store.read(); } catch (error) {
         if (error instanceof PersonClientSessionUnavailableError) return;
@@ -745,13 +754,14 @@ export class PersonClient {
       if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
       onProgress(event);
     };
-    let answer: PersonLiveAnswerV1;
-    try {
-      answer = await authority.askV5WithProgress(token, question, scope, signal, forward);
-    } catch (error) {
-      if (!withoutLiveAskRoute(error)) throw error;
-      answer = Object.freeze({ result: await authority.askV4(token, question, scope, signal) });
-    }
+    // `/v6` streams progress V2 (ADR-0040); an Authority without it streams V1 on `/v5`, and one without that answers `/v4` with no progress.
+    const answer = await (async (): Promise<PersonLiveAnswerV2> => {
+      try { return await authority.askV6WithProgress(token, question, scope, signal, forward); }
+      catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
+      try { return await authority.askV5WithProgress(token, question, scope, signal, forward); }
+      catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
+      return Object.freeze({ result: await authority.askV4(token, question, scope, signal) });
+    })();
     this.assertCurrentSession(stored);
     return answer;
   }

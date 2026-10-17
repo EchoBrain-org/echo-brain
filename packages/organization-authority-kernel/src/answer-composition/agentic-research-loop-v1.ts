@@ -10,6 +10,7 @@ import {
   type EvidenceDeskResultV2,
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
+import { FOLLOW_UP_EVIDENCE_KIND_V1 } from "../shared/follow-up-evidence-v1.js";
 import {
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
@@ -205,7 +206,7 @@ function inventoryMore(state: ListState): boolean { return state.shown < state.i
 /** Identity of a cited object independent of the version or text released this time. */
 function citationIdentity(value: unknown): string {
   const citation = object(value) ?? {};
-  const pick = ["kind", "tool_id", "atom_id", "ticket_id", "page_id", "document_id", "upload_id", "transcript_id", "channel_id", "message_ts"].filter(key => typeof citation[key] === "string");
+  const pick = ["kind", "tool_id", "atom_id", "item_id", "ticket_id", "page_id", "document_id", "upload_id", "transcript_id", "channel_id", "message_ts"].filter(key => typeof citation[key] === "string");
   return JSON.stringify(pick.map(key => [key, citation[key]]));
 }
 /** Desk refusals a model can cause (a stale id, an invalid request) become tool results, not failures. */
@@ -281,6 +282,12 @@ function listDate(value: string, today: string): string | null {
   base.setUTCDate(base.getUTCDate() - amount * unit);
   return isoDay(base);
 }
+/** Follow-ups take owner and status at the desk, before anything is released or read live (ADR-0040). */
+function followUpSource(source: AgenticResearchSourceV1 | undefined): boolean {
+  return source !== undefined && source.kinds.length === 1 && source.kinds[0] === FOLLOW_UP_EVIDENCE_KIND_V1;
+}
+/** A follow-up has no date of its own, so a dated read of follow-ups is refused before the desk. */
+function followUpDatesError(selector: string): string { return `${selector} have no dates; omit since, until and date_field`; }
 type ListArgs = EvidenceDateFilterV1 & { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
 /** One inventory per normalized selection: notes never start another, and owner matching ignores case. */
 function listKey({ notes: _notes, status, owner, ...request }: ListArgs): string {
@@ -290,6 +297,9 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
   const source = readSource(raw.source);
   if (source === undefined) return { error: `source must be ${[...sources.values()].map(value => value.selector).join(", ")}` };
   const descriptor = sources.get(source)!;
+  const followUps = followUpSource(descriptor);
+  // owner and status filter meeting actions here, after each page, and follow-ups at the desk.
+  const filterable = [...sources.values()].some(followUpSource) ? "meeting actions and follow-ups" : "meeting actions";
   const notes: string[] = [];
   let kinds: EvidenceDeskKindV2[] | undefined;
   if (raw.kind !== undefined) {
@@ -301,16 +311,16 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
   let status: "open" | "done" | undefined;
   if (raw.status !== undefined) {
     const group = statusGroup(raw.status);
-    if (source !== "meeting") notes.push("status applies to meeting actions only; ignored");
+    if (source !== "meeting" && !followUps) notes.push(`status applies to ${filterable} only; ignored`);
     else if (group === null) return { error: "status must be \"open\" or \"done\"" };
-    else { status = group; kinds ??= ["action"]; }
+    else { status = group; if (!followUps) kinds ??= ["action"]; }
   }
   let owner: string | undefined;
   if (raw.owner !== undefined) {
     const name = raw.owner.trim().replace(/^@/u, "").trim();
-    if (source !== "meeting") notes.push("owner applies to meeting actions only; ignored");
+    if (source !== "meeting" && !followUps) notes.push(`owner applies to ${filterable} only; ignored`);
     else if (name.length === 0 || name.length > 80) return { error: "owner must be a person's name such as \"Dana\"" };
-    else { owner = name; kinds ??= ["action"]; }
+    else { owner = name; if (!followUps) kinds ??= ["action"]; }
   }
   let channel: string | undefined;
   if (raw.channel !== undefined) {
@@ -320,6 +330,7 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
     else channel = name;
   }
   if (descriptor.requires_channel && channel === undefined) return { error: `${descriptor.selector} needs a channel, such as ${JSON.stringify({ source: descriptor.selector, channel: "hw-dvt" })}` };
+  if (followUps && (raw.since !== undefined || raw.until !== undefined || raw.date_field !== undefined)) return { error: followUpDatesError(descriptor.selector) };
   const since = raw.since === undefined ? undefined : listDate(raw.since, today);
   const until = raw.until === undefined ? undefined : listDate(raw.until, today);
   if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21 or an age like 7d or 2w" };
@@ -434,6 +445,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const source = readSource(args.source);
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
     if (args.date_field !== undefined && source === undefined) return { tool: 'search', args, error: 'Choose a source when selecting date_field; sources support different date meanings' };
+    if (source !== undefined && followUpSource(sourcesById.get(source)) && (args.since !== undefined || args.until !== undefined || args.date_field !== undefined)) return { tool: 'search', args, error: followUpDatesError(sourcesById.get(source)!.selector) };
     const dates = { ...(args.since === undefined ? {} : { since: listDate(args.since, requestDay) ?? args.since }), ...(args.until === undefined ? {} : { until: listDate(args.until, requestDay) ?? args.until }), ...(args.date_field === undefined ? {} : { date_field: args.date_field as EvidenceDateFieldV1 }), ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }) };
     try { validateEvidenceDateFilterV1(dates); } catch (error) { return { tool: 'search', args, error: error instanceof Error ? error.message : 'Invalid date filter' }; }
     const fingerprint = JSON.stringify({ query: query.toLowerCase(), source: source ?? null, ...dates });
@@ -517,7 +529,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource);
     if ("error" in normalized) return { tool: "list", args, error: normalized.error };
     const { notes, status, owner, ...selection } = normalized;
-    const request = { ...selection, ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }) };
+    // Follow-ups are filtered by the desk, before anything is released; meeting actions are filtered here, after each page.
+    const deskFilters = followUpSource(sourcesById.get(selection.source));
+    const request = {
+      ...selection, ...(deskFilters && status !== undefined ? { status } : {}), ...(deskFilters && owner !== undefined ? { owner } : {}),
+      ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }),
+    };
     const key = listKey(normalized);
     let state = lists.get(key);
     if (state === undefined) {
@@ -559,8 +576,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           const recorded = item.attributes?.owner?.toLowerCase();
           return recorded !== undefined && wanted.every(part => recorded.includes(part));
         };
-        currentState.items.push(...result.items.filter(item => (status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item))));
-        if (status !== undefined && result.items.some(item => item.attributes?.status === undefined)) currentState.note = "some items do not record open or done; they are included";
+        currentState.items.push(...result.items.filter(item => deskFilters || ((status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item)))));
+        if (!deskFilters && status !== undefined && result.items.some(item => item.attributes?.status === undefined)) currentState.note = "some items do not record open or done; they are included";
         if (owner !== undefined && currentState.items.length === 0 && result.items.length > 0) currentState.note = `no listed item records ${owner} as owner; owners shown are exact names from the records`;
       }
 

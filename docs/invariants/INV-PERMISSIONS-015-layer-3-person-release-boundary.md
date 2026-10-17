@@ -28,9 +28,10 @@ decision_ids:
   - ADR-0036
   - ADR-0038
   - ADR-0039
+  - ADR-0040
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -106,8 +107,10 @@ and cancellation failures release no answer.
 
 [ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)
 adds one release path before the final response. A `POST /v5/person/ask`
-request that sends `x-echo-ask-progress: 1` receives progress events while
-it runs. Before the answer, an event may carry only:
+request that sends `x-echo-ask-progress: 1`, or a `POST /v6/person/ask`
+request that sends `x-echo-ask-progress: 2` (progress V2, whose names may be
+follow-ups, ADR-0040), receives progress events while it runs. Before the
+answer, an event may carry only:
 
 - the stage;
 - the source kinds a research step searched, from the request's own catalog,
@@ -190,6 +193,28 @@ person the decision, and records a verdict only on an item that person still
 sees as the sweep finishes. That check runs just before the finishing
 transaction, not inside it: access another process revokes in that instant is
 not seen, a known gap of open items and Home v1.
+
+[ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md) adds open
+items to Ask, as follow-ups, on V7 answers, served by the additive
+`POST /v6/person/ask`, which streams them under the ADR-0039 rules above in
+progress V2: a follow-up is named only after the access check before the call
+that reads it, by its citation projection alone, whose label is its title (ECHO's
+`expected` phrase when nothing was read live for it). The follow-ups source decides what it releases
+with the same open-items policy and assessment path as the runs API's `items`,
+so the asker gets exactly what that policy shows them, and nothing in Mine, in
+trigger research or in V4 to V6 answers. Its search matches only words ECHO
+holds and the policy shows the asker: the decision's title and first line, the
+`expected` phrase, the owner's name and a ticket key, the key only when the
+item was opened live. Outside titles and due dates come only from a live open
+in that request, through the request's own tool source, so they are that
+tool's audited releases and its checks recheck them; a search across sources
+reads none live. Every follow-up release is audited before its bytes leave
+Layer 3 with item ids and digests only. Each check before a model call puts
+the follow-ups released since the last check through the policy again, and the
+release check puts all of them through it; one the asker can no longer see
+refuses the answer. Its negative disclosure tests are
+`services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`
+and `person-follow-ups-ask-integration.test.ts`.
 
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
 Both original and approved-record citations bind the exact released evidence.

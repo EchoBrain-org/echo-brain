@@ -1,4 +1,4 @@
-import type { PersonAnswerEvidenceCitationV6 } from '@echo-brain/organization-api';
+import type { PersonAnswerEvidenceCitationV7, PersonAnswerOpenRefV7 } from '@echo-brain/organization-api';
 import {
   evidenceDeskSourceV1,
   type EvidenceDeskItemV1,
@@ -9,9 +9,10 @@ import {
   type EvidenceDeskResultV1,
   type EvidenceDeskSearchInputV1,
 } from './evidence-desk-v1.js';
+import { FOLLOW_UPS_SOURCE_ID_V1, type FollowUpListStatusV1, type FollowUpsSourceDescriptorV1 } from './follow-up-evidence-v1.js';
 
-/** The V1 desk plus request-only live work items and knowledge-page sections. */
-export type EvidenceDeskKindV2 = EvidenceDeskKindV1 | 'ticket' | 'page';
+/** The V1 desk plus request-only live work items and knowledge-page sections, and ECHO's shared follow-ups (ADR-0040). */
+export type EvidenceDeskKindV2 = EvidenceDeskKindV1 | 'ticket' | 'page' | 'follow_up';
 /** Meeting records/documents live in Echo; these additions are read live. */
 export type EvidenceDeskSourceV2 = string;
 export type EvidenceDeskLiveSourceKindV2 = 'slack' | 'ticket' | 'page';
@@ -37,10 +38,16 @@ export interface PersonLiveSourceDescriptorV2 {
   readonly requires_channel?: boolean;
   readonly default_since_days?: number;
 }
-export type EvidenceDeskLiveSourceV2 = PersonLiveSourceDescriptorV2 | LegacyEvidenceDeskLiveSourceV2;
+/**
+ * A request-bound source a desk advertises: a connected tool, or ECHO's
+ * follow-ups (ADR-0040), which have no tool of their own.
+ */
+export type EvidenceDeskLiveSourceV2 = PersonLiveSourceDescriptorV2 | FollowUpsSourceDescriptorV1 | LegacyEvidenceDeskLiveSourceV2;
 
 /** Translation for older desks only; registration and execution use the descriptor contract. */
-export function liveSourceDescriptorV2(source: EvidenceDeskLiveSourceV2): PersonLiveSourceDescriptorV2 {
+export function liveSourceDescriptorV2(source: PersonLiveSourceDescriptorV2 | LegacyEvidenceDeskLiveSourceV2): PersonLiveSourceDescriptorV2;
+export function liveSourceDescriptorV2(source: EvidenceDeskLiveSourceV2): PersonLiveSourceDescriptorV2 | FollowUpsSourceDescriptorV1;
+export function liveSourceDescriptorV2(source: EvidenceDeskLiveSourceV2): PersonLiveSourceDescriptorV2 | FollowUpsSourceDescriptorV1 {
   if ('source_id' in source) return source;
   const defaults: Record<EvidenceDeskLiveSourceKindV2, Omit<PersonLiveSourceDescriptorV2, 'source_id'>> = {
     ticket: { kind: 'ticket', selector: 'tickets', description: 'Live work items: discover summaries, then open selected items for their current body and state.', metadata_only_list: true },
@@ -60,12 +67,15 @@ export function evidenceDeskSourceV2(item: { readonly kind: EvidenceDeskKindV2; 
   if (item.source_id !== undefined) return item.source_id;
   if (item.kind === 'ticket') return 'ticket';
   if (item.kind === 'page') return 'page';
+  if (item.kind === 'follow_up') return FOLLOW_UPS_SOURCE_ID_V1;
   return evidenceDeskSourceV1(item as { kind: EvidenceDeskKindV1; ref?: string });
 }
 
-export interface EvidenceDeskItemV2 extends Omit<EvidenceDeskItemV1, 'citation' | 'kind'> {
-  readonly citation: PersonAnswerEvidenceCitationV6;
+export interface EvidenceDeskItemV2 extends Omit<EvidenceDeskItemV1, 'citation' | 'kind' | 'ref'> {
+  readonly citation: PersonAnswerEvidenceCitationV7;
   readonly kind: EvidenceDeskKindV2;
+  /** Server-owned ref for person open, or a follow-up's item page. Never shown to a model. */
+  readonly ref?: PersonAnswerOpenRefV7;
   /** Request-local owner, attached by the dispatcher and never part of a citation. */
   readonly source_id?: string;
 }
@@ -78,6 +88,14 @@ export interface EvidenceDeskResultV2 extends Omit<EvidenceDeskResultV1, 'items'
 export interface EvidenceDeskListInputV2 extends Omit<EvidenceDeskListInputV1, 'source' | 'kinds'> {
   readonly source: EvidenceDeskSourceV2;
   readonly kinds?: readonly EvidenceDeskKindV2[];
+  /**
+   * Follow-ups only (ADR-0040), applied before anything is released or read
+   * live: the owner's display name, matched as `followUpOwnerMatchesV1`
+   * matches it, and a status group (`open`: the item is open; `done`: it is
+   * done). The research loop sends them to no other source.
+   */
+  readonly owner?: string;
+  readonly status?: FollowUpListStatusV1;
 }
 
 export interface EvidenceDeskPortV2 extends Omit<EvidenceDeskPortV1, 'search' | 'open' | 'list' | 'live_sources'> {

@@ -1136,12 +1136,12 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
       const found = route.readableDecisions({ access_token: "emp_a", record_sha256s: [w.digest("r4"), w.digest("r1"), w.digest("r3"), w.digest("r6"), canonicalSha256("missing"), w.digest("r4"), "sha256:nope" as Sha256Digest] });
       // r6 is in a project emp_a left; a missing or malformed digest is the same miss.
       expect([...found.keys()].sort()).toEqual([w.digest("r1"), w.digest("r3"), w.digest("r4")].sort());
-      expect(found.get(w.digest("r4"))).toEqual({ approval_id: "apr_r4", record_sha256: w.digest("r4"), title: "Pricing review", approved_at: expect.any(String), project_ids: [SHARED] });
-      expect(found.get(w.digest("r1"))).toMatchObject({ approval_id: "apr_r1", title: "Weekly sync", project_ids: [] });
-      // r3 is also in a project emp_a never joined; that project's id never leaves the route.
-      expect(found.get(w.digest("r3"))!.project_ids).toEqual([SHARED]);
+      expect(found.get(w.digest("r4"))).toEqual({ approval_id: "apr_r4", record_sha256: w.digest("r4"), title: "Pricing review", approved_at: expect.any(String), project_ids: [SHARED], visibility: "project" });
+      expect(found.get(w.digest("r1"))).toMatchObject({ approval_id: "apr_r1", title: "Weekly sync", project_ids: [], visibility: "team" });
+      // r3 is also in a project emp_a never joined; that project's id never leaves the route, though its audience counts both.
+      expect(found.get(w.digest("r3"))).toMatchObject({ project_ids: [SHARED], visibility: "projects" });
       // A meeting with no title reads as the person list names it.
-      expect(route.readableDecisions({ access_token: "owner", record_sha256s: [w.digest("r2")] }).get(w.digest("r2"))).toMatchObject({ title: "Approved meeting", project_ids: [] });
+      expect(route.readableDecisions({ access_token: "owner", record_sha256s: [w.digest("r2")] }).get(w.digest("r2"))).toMatchObject({ title: "Approved meeting", project_ids: [], visibility: "approver_only" });
       expect(route.readableDecisions({ access_token: "emp_c", record_sha256s: [w.digest("r4"), w.digest("r2")] }).size).toBe(0);
       expect(route.readableDecisions({ access_token: "emp_a", record_sha256s: [] }).size).toBe(0);
       expect(() => route.readableDecisions({ access_token: "nobody", record_sha256s: [w.digest("r4")] })).toThrow(expect.objectContaining({ code: "unauthorized" }));

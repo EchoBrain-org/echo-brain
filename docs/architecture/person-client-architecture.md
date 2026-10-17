@@ -139,10 +139,13 @@ not claim that the employee is currently online or has a live device session.
 Ask uses the agentic routes ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md));
 the earlier `/v1` and `/v2/person/ask` routes are retired. The default CLI Ask and
 desktop Mine Ask use `/v3/person/ask` with V4 answers. Desktop global and project Ask
-selects `person ask --live`, using `/v5/person/ask` with V6 answers so the
+selects `person ask --live`, using `/v6/person/ask` with V7 answers so the
 person's connected Jira and Confluence accounts can contribute live evidence
-when the Authority configures those sources; an older Authority without that
-route gets `/v4/person/ask` with V5 answers. Ticket and page citations open
+when the Authority configures those sources, and ECHO's shared follow-ups too
+([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)). An older
+Authority without `/v6` gets `/v5/person/ask` with V6 answers, and one
+without `/v5` either `/v4/person/ask` with V5 answers; only a 404 without the
+route header falls back. A cited follow-up opens its item page. Ticket and page citations open
 directly in Jira or Confluence; they are not retained originals. Project leads configure one Jira project from the project settings menu;
 the server validates it and bounds each project Ask to that stable Jira project ID
 under the asker’s own connection. Unmapped projects never fall back to global Jira.
@@ -154,13 +157,15 @@ unapproved evidence. The source-card behavior below describes approved
 records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
-`person ask --live --progress` asks `/v5/person/ask` to stream its progress
-([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) by sending `x-echo-ask-progress: 1`.
+`person ask --live --progress` asks `/v6/person/ask` to stream its progress
+([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) in progress V2 by sending `x-echo-ask-progress: 2`, and,
+on an Authority without `/v6`, `/v5/person/ask` in V1 with `x-echo-ask-progress: 1`.
 
 - **Reading the stream.** The client reads the server-sent events with the
-  shared decoder in `@echo-brain/organization-api`.
+  shared decoder of the route's version in `@echo-brain/organization-api`.
 - **Output.** It prints each stage, searched or read event as its own
-  `{"ok": true, "progress": …}` line. The final line keeps today's
+  `{"ok": true, "progress": …}` line, valid as V2 (every V1 step is one); on
+  `/v6` a read may name a follow-up. The final line keeps today's
   `{"ok": true, "result": …}` and adds the answer's `receipt`.
 - **Errors.** An error after the stream started becomes the same client
   error the JSON error response would have produced.
@@ -292,7 +297,10 @@ person who runs them; an agent has no membership of its own
   come on a later page. A first page with no items and that notice is not the
   end: follow its cursor later. A later page that could only wait answers 503
   `unavailable`; retry the same cursor later.
-- `person open --ref <ref>` reads one row or one Ask citation's `ref`.
+- `person open --ref <ref>` reads one row or one Ask citation's `ref`,
+  except a follow-up's `follow_up:<item_id>`, which `person runs` reads with
+  operation `item` and that `item_id`
+  ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)).
   Documents, meetings and transcripts page with `--cursor` and the same ref. A
   meeting's first page carries `transcript_ref` when its transcript was shared
   with the reader. Anything the person cannot read is `not_found`.

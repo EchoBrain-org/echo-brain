@@ -151,3 +151,13 @@ now specifies (rulings R77–R82). The choices themselves stand.
 - While the search index lags the record log, `start` holds a pending impact
   run or sweep: it answers `pending` with no claim, attempt or trace
   ([runs store and impact card v1](../product/2026-10-07-runs-store-and-impact-card-v1.md)).
+
+## Implementation note, 2026-10-16: follow-ups in Ask
+
+[ADR-0040](ADR-0040-follow-ups-as-ask-evidence.md) makes these rows an Ask
+source on V7 answers. It reads them through this record's access policy and
+the same assessment and live-read path as `items`, so a person sees in Ask
+exactly the follow-ups, decisions and outside words that `items` shows them.
+It adds no table, column or state and never changes an item. Ask matches words
+only in what ECHO holds, and reads an outside title live only for the rows it
+returns.

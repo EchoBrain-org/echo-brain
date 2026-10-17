@@ -2,7 +2,9 @@ import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 }
 import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validatePersonPageCitationV1 } from './person-page-citation-v1.js';
 import type { PersonAnswerCitationV5, PersonAnswerResponseV5 } from './person-answer-v5.js';
-import type { PersonAnswerCitationV6, PersonAnswerEvidenceCitationV6, PersonAnswerResponseV6, PersonEvidenceKindV3 } from './person-answer-v6.js';
+import type { PersonAnswerCitationV6, PersonAnswerResponseV6 } from './person-answer-v6.js';
+import type { PersonAnswerCitationV7, PersonAnswerEvidenceCitationV7, PersonAnswerOpenRefV7, PersonAnswerResponseV7, PersonEvidenceKindV4 } from './person-answer-v7.js';
+import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { validatePersonDocumentIdV1 } from './person-documents-v1.js';
 import { validatePersonQueryText } from './person-query.js';
@@ -218,10 +220,11 @@ function slackCitation(input: Record<string, unknown>): PersonSlackMessageCitati
   });
 }
 
-function evidenceCitation(value: unknown, version: 4 | 5 | 6 = 4): PersonAnswerEvidenceCitationV6 {
+function evidenceCitation(value: unknown, version: 4 | 5 | 6 | 7 = 4): PersonAnswerEvidenceCitationV7 {
   const input = object(value, 'Ask citation');
   if (version >= 5 && input.kind === 'ticket') return validatePersonTicketCitationV1(input);
-  if (version === 6 && input.kind === 'page') return validatePersonPageCitationV1(input);
+  if (version >= 6 && input.kind === 'page') return validatePersonPageCitationV1(input);
+  if (version === 7 && input.kind === 'follow_up') return validatePersonFollowUpCitationV1(input);
   return input.kind === 'slack_message' ? slackCitation(input) : citation(input);
 }
 
@@ -254,7 +257,8 @@ function citation(value: unknown): PersonAnswerCitationV3 {
   fail('Ask citation kind is invalid');
 }
 
-function citationKey(value: PersonAnswerEvidenceCitationV6): string {
+function citationKey(value: PersonAnswerEvidenceCitationV7): string {
+  if (value.kind === 'follow_up') return `follow_up:${value.item_id}`;
   if (value.kind === 'page') return `page:${value.tool_id}:${value.external_scope_id}:${value.page_id}:${value.section_id}:${value.version}`;
   if (value.kind === 'ticket') return `ticket:${value.tool_id}:${value.external_scope_id}:${value.ticket_id}`;
   if (value.kind === 'slack_message') return `slack_message:${value.team_id}:${value.channel_id}:${value.message_ts}`;
@@ -263,8 +267,9 @@ function citationKey(value: PersonAnswerEvidenceCitationV6): string {
     : `source_revision:${value.source_id}:${value.revision_id}:${value.representation_sha256}:${value.anchor_sha256}`;
 }
 
-function evidenceKind(value: unknown, label: string, version: 4 | 5 | 6 = 4): asserts value is PersonEvidenceKindV3 {
-  if (version === 6 && value === 'page') return;
+function evidenceKind(value: unknown, label: string, version: 4 | 5 | 6 | 7 = 4): asserts value is PersonEvidenceKindV4 {
+  if (version === 7 && value === 'follow_up') return;
+  if (version >= 6 && value === 'page') return;
   if (version >= 5 && value === 'ticket') return;
   if (!['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'].includes(value as string)) fail(`${label} is invalid`);
 }
@@ -273,7 +278,7 @@ function visibility(value: unknown, label: string): asserts value is PersonEvide
   if (!['only_me', 'team', 'project', 'projects', 'approver_only'].includes(value as string)) fail(`${label} is invalid`);
 }
 
-function statement(value: unknown, citations: readonly (PersonAnswerCitationV5 | PersonAnswerCitationV6)[], label: string, fallback = false): PersonAnswerStatementV4 {
+function statement(value: unknown, citations: readonly (PersonAnswerCitationV5 | PersonAnswerCitationV6 | PersonAnswerCitationV7)[], label: string, fallback = false): PersonAnswerStatementV4 {
   const input = object(value, label);
   assertExactKeys(input, ['text', 'citation_indexes', 'private'], label);
   if (fallback) evidenceText(input.text, `${label} text`, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
@@ -289,8 +294,10 @@ function statement(value: unknown, citations: readonly (PersonAnswerCitationV5 |
   return Object.freeze({ text: input.text as string, citation_indexes: Object.freeze(indexes), private: input.private });
 }
 
-/** A citation's ref names the item it cites: its record, its document, or its note or shared transcript. */
-function citationRefConsistent(cited: PersonAnswerEvidenceCitationV6, ref: PersonOpenRefV1): boolean {
+/** A citation's ref names the item it cites: its record, its document, its note or shared transcript, or its follow-up. */
+function citationRefConsistent(cited: PersonAnswerEvidenceCitationV7, ref: PersonAnswerOpenRefV7): boolean {
+  if (cited.kind === 'follow_up') return ref === `follow_up:${cited.item_id}`;
+  if (ref.startsWith('follow_up:')) return false;
   if (cited.kind === 'approved_record') return ref === `meeting:${cited.record_sha256}`;
   if (cited.kind === 'source_revision') {
     return cited.document_id === undefined
@@ -300,7 +307,7 @@ function citationRefConsistent(cited: PersonAnswerEvidenceCitationV6, ref: Perso
   return false;
 }
 
-function answerCitation(value: unknown, version: 4 | 5 | 6 = 4): PersonAnswerCitationV6 {
+function answerCitation(value: unknown, version: 4 | 5 | 6 | 7 = 4): PersonAnswerCitationV7 {
   const input = object(value, 'Ask response citation');
   assertExactKeys(input, ['citation', 'kind', 'label', 'visibility', ...(Object.hasOwn(input, 'ref') ? ['ref'] : [])], 'Ask response citation');
   evidenceKind(input.kind, 'Ask response citation kind', version);
@@ -310,12 +317,17 @@ function answerCitation(value: unknown, version: 4 | 5 | 6 = 4): PersonAnswerCit
   if ((cited.kind === 'ticket') !== (input.kind === 'ticket')) fail('Ticket citation kind is inconsistent');
   if ((cited.kind === 'page') !== (input.kind === 'page')) fail('Page citation kind is inconsistent');
   if ((cited.kind === 'slack_message') !== (input.kind === 'slack_message')) fail('Ask response citation kind is inconsistent');
-  const ref = Object.hasOwn(input, 'ref') ? validatePersonOpenRefV1(input.ref, 'Ask response citation ref') : undefined;
+  if ((cited.kind === 'follow_up') !== (input.kind === 'follow_up')) fail('Follow-up citation kind is inconsistent');
+  const ref: PersonAnswerOpenRefV7 | undefined = !Object.hasOwn(input, 'ref') ? undefined
+    : version === 7 && typeof input.ref === 'string' && input.ref.startsWith('follow_up:') ? validatePersonFollowUpRefV1(input.ref, 'Ask response citation ref')
+      : validatePersonOpenRefV1(input.ref, 'Ask response citation ref');
+  // A follow-up always opens its item page.
+  if (cited.kind === 'follow_up' && ref === undefined) fail('Follow-up citation ref is missing');
   if (ref !== undefined && !citationRefConsistent(cited, ref)) fail('Ask response citation ref is inconsistent');
   return Object.freeze({ citation: cited, kind: input.kind, label: input.label as string, visibility: input.visibility, ...(ref === undefined ? {} : { ref }) });
 }
 
-function part(value: unknown, citations: readonly (PersonAnswerCitationV5 | PersonAnswerCitationV6)[]): PersonAnswerPartV4 {
+function part(value: unknown, citations: readonly (PersonAnswerCitationV5 | PersonAnswerCitationV6 | PersonAnswerCitationV7)[]): PersonAnswerPartV4 {
   const input = object(value, 'Ask response part');
   assertExactKeys(input, ['question', 'status', 'statements', ...(Object.hasOwn(input, 'gap') ? ['gap'] : []), ...(Object.hasOwn(input, 'records') ? ['records'] : [])], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
@@ -370,11 +382,14 @@ export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerReque
 }
 
 /** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items too. */
-export function validatePersonAnswerCitationV6(value: unknown): PersonAnswerCitationV6 { return answerCitation(value, 6); }
+export function validatePersonAnswerCitationV6(value: unknown): PersonAnswerCitationV6 { return answerCitation(value, 6) as PersonAnswerCitationV6; }
+/** One V7 response citation: a V6 citation, or a follow-up with its follow-up ref (ADR-0040). */
+export function validatePersonAnswerCitationV7(value: unknown): PersonAnswerCitationV7 { return answerCitation(value, 7); }
 export function validatePersonAnswerResponseV4(value: unknown): PersonAnswerResponseV4 { return answerResponse(value, 4) as PersonAnswerResponseV4; }
 export function validatePersonAnswerResponseV5(value: unknown): PersonAnswerResponseV5 { return answerResponse(value, 5) as PersonAnswerResponseV5; }
 export function validatePersonAnswerResponseV6(value: unknown): PersonAnswerResponseV6 { return answerResponse(value, 6) as PersonAnswerResponseV6; }
-function answerResponse(value: unknown, version: 4 | 5 | 6) {
+export function validatePersonAnswerResponseV7(value: unknown): PersonAnswerResponseV7 { return answerResponse(value, 7) as PersonAnswerResponseV7; }
+function answerResponse(value: unknown, version: 4 | 5 | 6 | 7) {
   const input = object(value, 'Ask response');
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'assumption') ? ['assumption'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : [])], 'Ask response');
   if (input.schema_version !== version || input.kind !== `echo-clean-person-answer-v${version}` || !['answered', 'partial', 'not_found', 'off_scope'].includes(input.outcome as string) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || input.parts.length < 1 || input.parts.length > 5) fail('Ask response is invalid');

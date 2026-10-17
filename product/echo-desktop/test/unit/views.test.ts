@@ -765,7 +765,60 @@ describe('Ask progress lines and the receipt (ADR-0039)', () => {
     // Fewer looked through than it names, neighbours not merged, an item named twice.
     for (const bad of [{ ...receipt, looked_through: 0 }, { ...receipt, rows: [receipt.rows[1], receipt.rows[1]] },
       { ...receipt, rows: [{ type: 'read', items: [named, named] }] }]) {
-      expect(() => askReceiptView(bad)).toThrow(ViewError);
+      expect(() => askReceiptView(bad, 1)).toThrow(ViewError);
     }
+  });
+});
+
+// A follow-up as the V7 answer and Ask progress V2 cite it (ADR-0040).
+const followUp = { citation: { kind: 'follow_up', item_id: 'itm_launch-1' }, kind: 'follow_up', label: 'Ship the launch checklist', visibility: 'team', ref: 'follow_up:itm_launch-1' };
+const v7 = (citations: unknown[]) => ({ ...v6(citations), schema_version: 7, kind: 'echo-clean-person-answer-v7' });
+const followUpSource = { kind: 'follow_up', label: 'Ship the launch checklist', item_id: 'itm_launch-1' };
+
+describe('follow-ups in a V7 answer and its progress (ADR-0040)', () => {
+  it('reads a V7 answer whose source is a follow-up, by its item id alone, beside the kinds V6 cites', () => {
+    const answer = answerView({ ok: true, result: v7([followUp, named, ticket]) }, { kind: 'global' });
+    expect(answer.sources).toEqual([followUpSource,
+      { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') },
+      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' }]);
+    expect(JSON.stringify(answer)).not.toContain('follow_up:');
+  });
+
+  it('refuses a follow-up outside V7, without its own ref, or one that names another item', () => {
+    expect(() => answerView({ ok: true, result: v6([followUp]) }, { kind: 'global' })).toThrow(ViewError);
+    const { ref: _ref, ...unopened } = followUp;
+    for (const citation of [
+      unopened,
+      { ...followUp, ref: 'follow_up:itm_other-1' },
+      { ...followUp, ref: `meeting:${sha('2')}` },
+      { ...followUp, kind: 'decision' },
+      { ...followUp, citation: { kind: 'follow_up', item_id: '../itm' }, ref: 'follow_up:../itm' },
+      { ...named, ref: 'follow_up:itm_launch-1' },
+    ]) expect(() => answerView({ ok: true, result: v7([citation]) }, { kind: 'global' })).toThrow(ViewError);
+  });
+
+  it('carries a step that searched follow-ups or read one, and refuses one that says more', () => {
+    expect(askStepView({ ok: true, progress: { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 9 } }))
+      .toEqual({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 9 });
+    expect(askStepView({ ok: true, progress: { type: 'read', items: [followUp, named] } })).toEqual({ type: 'read', items: [followUpSource,
+      { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') }] });
+    for (const progress of [
+      { type: 'read', items: [{ ...followUp, owner: 'Mara' }] },
+      { type: 'read', items: [{ ...followUp, citation: { ...followUp.citation, status: 'open' } }] },
+      { type: 'searched', sources: [{ kind: 'follow_ups', tool_id: 'jira' }], found: 1 },
+    ]) expect(() => askStepView({ ok: true, progress })).toThrow(ViewError);
+  });
+
+  it('keeps a V7 answer\'s V2 receipt, which may name follow-ups, and a V6 answer\'s receipt only as V1', () => {
+    const receipt = { looked_through: 2, elapsed_ms: 31_000, rows: [
+      { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 3 }, { type: 'read', items: [followUp, named] },
+    ] };
+    expect(answerView({ ok: true, result: v7([followUp]), receipt }, { kind: 'global' }).receipt).toEqual({ looked_through: 2, elapsed_ms: 31_000, rows: [
+      { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 3 },
+      { type: 'read', items: [followUpSource, { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') }] },
+    ] });
+    expect(() => answerView({ ok: true, result: v6([named]), receipt }, { kind: 'global' })).toThrow(ViewError);
+    expect(() => askReceiptView(receipt, 1)).toThrow(ViewError);
+    expect(askReceiptView(receipt, 2).looked_through).toBe(2);
   });
 });

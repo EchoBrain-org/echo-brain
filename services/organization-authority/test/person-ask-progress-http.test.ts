@@ -2,10 +2,10 @@ import { once } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V3, PERSON_ANSWER_PATH_V4, PERSON_ANSWER_PATH_V5, PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1,
-  createPersonAskProgressDecoderV1, validatePersonAnswerResponseV6,
-  type PersonAskProgressEventV1,
+  PERSON_ANSWER_PATH_V3, PERSON_ANSWER_PATH_V4, PERSON_ANSWER_PATH_V5, PERSON_ANSWER_PATH_V6, PERSON_ANSWER_ROUTE_HEADER_V5,
+  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
+  createPersonAskProgressDecoderV1, createPersonAskProgressDecoderV2, validatePersonAnswerResponseV6,
+  type PersonAskProgressEventV1, type PersonAskProgressEventV2,
 } from '@echo-brain/organization-api';
 import type { AgenticAskAuditEntryV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -77,7 +77,7 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
     note, later, generate, audits, authenticateAccess,
     /** The `call`th release re-read by an access check sees the record snapshot advance, and the Ask restarts. */
     restartAtCheck(call: number) { restartAt = call; },
-    v5: createPersonLiveAnswerRouteV1(options_, 6), v4: createPersonLiveAnswerRouteV1(options_, 5),
+    v6: createPersonLiveAnswerRouteV1(options_, 7), v5: createPersonLiveAnswerRouteV1(options_, 6), v4: createPersonLiveAnswerRouteV1(options_, 5),
     /** Access is revoked once `writers` answer writers have run, so that attempt's final check refuses it. */
     revokeAtFinalCheck(writers = 1) { originals.revalidateDeskRelease.mockImplementation(() => { if (generate.mock.calls.filter(([input]) => (input.schema.properties as Record<string, unknown>).sentences !== undefined).length >= writers) revoked = true; return revalidate(); }); },
   };
@@ -85,7 +85,7 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
 
 async function origin(f: ReturnType<typeof fixture>, observer?: CoreRuntimeObserverV1) {
   const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-    person_answer_v5: f.v5, person_answer_v4: f.v4, ...(observer === undefined ? {} : { core_runtime_observation: { observer } }) });
+    person_answer_v6: f.v6, person_answer_v5: f.v5, person_answer_v4: f.v4, ...(observer === undefined ? {} : { core_runtime_observation: { observer } }) });
   servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
   return `http://127.0.0.1:${address.port}`;
@@ -99,6 +99,12 @@ const ask = (base: string, input: { readonly path?: string; readonly progress?: 
 });
 function decode(text: string): readonly PersonAskProgressEventV1[] {
   const decoder = createPersonAskProgressDecoderV1();
+  const events = [...decoder.push(text)];
+  decoder.end();
+  return events;
+}
+function decodeV2(text: string): readonly PersonAskProgressEventV2[] {
+  const decoder = createPersonAskProgressDecoderV2();
   const events = [...decoder.push(text)];
   decoder.end();
   return events;
@@ -219,7 +225,14 @@ describe('Ask progress over HTTP', () => {
   });
 });
 
-describe('Ask progress across a restarted Ask', () => {
+// The V6 Ask on /v5 streams progress V1; the V7 Ask on /v6 streams V2 inside the same snapshot-retry wrapper (ADR-0040).
+describe.each([
+  { route: '/v5', streamed: (base: string) => ask(base).then(async response => decode(await response.text()) as readonly (PersonAskProgressEventV1 | PersonAskProgressEventV2)[]) },
+  { route: '/v6', streamed: (base: string) => ask(base, { path: PERSON_ANSWER_PATH_V6, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V2 }).then(async response => {
+    expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('6');
+    return decodeV2(await response.text());
+  }) },
+])('Ask progress across a restarted Ask on $route', ({ streamed }) => {
   /** The first attempt's audit record is written; the check after it sees the record snapshot advance. */
   const AFTER_AUDIT = 4;
   /** The check before the first attempt's writer, after it named the note: it stops before any audit write. */
@@ -237,7 +250,7 @@ describe('Ask progress across a restarted Ask', () => {
   it('keeps one stream across both attempts, names each item once, and audits each name in the record of the attempt that sent it', async () => {
     const f = fixture();
     f.restartAtCheck(AFTER_AUDIT);
-    const events = decode(await (await ask(await origin(f))).text());
+    const events = await streamed(await origin(f));
     expect(events.slice(0, -1)).toEqual([
       { type: 'stage', stage: 'searching' },
       { type: 'searched', sources, found: 1 },
@@ -263,7 +276,7 @@ describe('Ask progress across a restarted Ask', () => {
     // The first attempt's writer takes a while; the second attempt alone is far quicker.
     const f = fixture({ writer: async (attempt, written) => { if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 250)); return written(); } });
     f.restartAtCheck(AFTER_AUDIT);
-    const terminal = decode(await (await ask(await origin(f))).text()).at(-1)!;
+    const terminal = (await streamed(await origin(f))).at(-1)!;
     if (terminal.type !== 'answer') throw new Error('expected the answer event');
     // It read the note again, so it counts it, but the first attempt named it.
     expect(terminal.receipt).toMatchObject({ looked_through: 2, rows: [{ type: 'searched', sources, found: 2 }, { type: 'read', items: [named(f.later)] }] });
@@ -275,7 +288,7 @@ describe('Ask progress across a restarted Ask', () => {
     const f = fixture();
     f.restartAtCheck(AFTER_AUDIT);
     f.revokeAtFinalCheck(2);
-    const events = decode(await (await ask(await origin(f))).text());
+    const events = await streamed(await origin(f));
     expect(events.at(-1)).toEqual({ type: 'error', status: 401, error: { code: 'unauthorized', message: 'request failed' } });
     expect(events.at(-2)).toEqual({ type: 'stage', stage: 'checking_access' });
     expect(events.filter(event => event.type === 'read')).toEqual([{ type: 'read', items: [named(f.note)] }, { type: 'read', items: [named(f.later)] }]);
@@ -287,7 +300,7 @@ describe('Ask progress across a restarted Ask', () => {
   it('writes no request record for an attempt stopped before its audit write, and still never names its items again', async () => {
     const f = fixture();
     f.restartAtCheck(BEFORE_WRITER);
-    const events = decode(await (await ask(await origin(f))).text());
+    const events = await streamed(await origin(f));
     expect(events.slice(0, -1)).toEqual([
       { type: 'stage', stage: 'searching' },
       { type: 'searched', sources, found: 1 },

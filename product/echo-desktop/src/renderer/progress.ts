@@ -97,9 +97,9 @@ export function listWords(words: readonly string[]): string {
   return words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
 }
 
-/** A searched source as a person says it: a tool by its own name, once its list is read. */
+/** A searched source as a person says it: a tool by its own name, once its list is read; ECHO's follow-ups as "follow-ups". */
 export function sourceWords(source: AskSearchedSource, tools?: readonly ConnectedTool[] | null): string {
-  if (!('tool_id' in source)) return source.kind === 'slack' ? 'Slack' : source.kind;
+  if (!('tool_id' in source)) return source.kind === 'slack' ? 'Slack' : source.kind === 'follow_ups' ? 'follow-ups' : source.kind;
   return tools?.find(tool => tool.tool_id === source.tool_id)?.name ??
     source.tool_id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }

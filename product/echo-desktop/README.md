@@ -9,8 +9,8 @@ shows ticket citations that open directly in Jira. Project Ask includes Jira onl
 
 While a global or project Ask works (ADR-0039), one line says what it is
 doing (Searching, Reading, Checking access, Writing) beside its timer and
-Cancel. Under it, at most three rows say what it searched ("Searched meetings
-and Jira · 22 found", source kinds, never the words searched) and what it read
+Cancel. Under it, at most three rows say what it searched ("Searched meetings,
+follow-ups and Jira · 22 found", source kinds, never the words searched) and what it read
 ("Read Tuesday sync ×3, ECHO-48 +2": a place once, with how many of its items,
 and "+N" more items), each item named only after ECHO checked you may open it. The first three seconds look as they always did, and an Authority
 that sends no steps keeps "Thinking…". When the answer comes, the rows fold
@@ -20,10 +20,14 @@ the Authority audited. Cancel, a timeout or a refused answer removes them all.
 Every name, and every source of an answer, opens beside Ask, which keeps
 working: a meeting's decision, action or rationale opens its meeting with that
 item lit; a note, document or imported meeting its cited passages; a
-transcript its meeting; a Jira ticket, Confluence page or Slack message its
-"Open in …". Once the answer has come, **Open** goes to the item's own page in
-the reader (leaving Ask, so it is hidden while Ask works); a meeting opens
-there scrolled to the items the pane lit, lit too.
+transcript its meeting; a follow-up its title, owner, status and latest check
+(ADR-0040); a Jira ticket, Confluence page or Slack message its
+"Open in …". Once the answer has come, **Open** goes to the item's own page
+(leaving Ask, so it is hidden while Ask works): the reader, where a meeting
+opens scrolled to the items the pane lit, lit too, or a follow-up's item page.
+A follow-up's source row says only who owns it and its status ("Mara ·
+Open"). Ask reads follow-ups only from an Authority that serves `/v6`; an older
+one answers on `/v5` without them.
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 
