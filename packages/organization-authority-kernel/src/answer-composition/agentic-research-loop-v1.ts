@@ -23,6 +23,7 @@ import {
   type Step,
   type StepAction,
   type StepArgs,
+  type StepNeed,
   type StepPart,
   type StepSource,
 } from "./agentic-ask-v1-model-protocol.js";
@@ -683,19 +684,31 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (parts.length === 0) return next;
     if (next.length === 0) return parts.map(newPart);
     const updated = new Set<NeedState>();
+    const byId = (need: StepNeed) => (need.id === undefined ? undefined : next.flatMap(value => value.needs).find(value => value.id === need.id));
+    const settle = (match: NeedState, need: StepNeed) => {
+      if (updated.has(match)) return;
+      updated.add(match); match.status = need.status; match.evidence = need.evidence;
+    };
     for (const [index, part] of parts.entries()) {
       const existing = next[index];
-      if (existing === undefined) { next.push(newPart(part)); continue; }
+      if (existing === undefined) {
+        // A need named by the id of one already planned is that need, settled where it was planned; only the rest are new.
+        // A part made only of planned needs adds no part (it would get an open need for its question, refusing the finish).
+        const fresh = part.needs.filter(need => {
+          const match = byId(need);
+          if (match !== undefined) settle(match, need);
+          return match === undefined;
+        });
+        if (part.needs.length === 0 || fresh.length > 0) next.push(newPart({ ...part, needs: fresh }));
+        continue;
+      }
       if (part.notes.length > 0) existing.notes = part.notes;
       for (const need of part.needs) {
         // The same need by its id, in whichever part, or else by its wording in this part (005d7876: a reworded need
         // with no id left the original open, so a correct finish was refused). The first proposal for a need wins.
-        const match = (need.id === undefined ? undefined : next.flatMap(value => value.needs).find(value => value.id === need.id))
-          ?? existing.needs.find(value => needKey(value.need) === needKey(need.need));
-        if (match !== undefined) {
-          if (updated.has(match)) continue;
-          updated.add(match); match.status = need.status; match.evidence = need.evidence;
-        } else if (existing.needs.length < AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) existing.needs.push(newNeed(need.need, need.status, need.evidence));
+        const match = byId(need) ?? existing.needs.find(value => needKey(value.need) === needKey(need.need));
+        if (match !== undefined) settle(match, need);
+        else if (existing.needs.length < AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) existing.needs.push(newNeed(need.need, need.status, need.evidence));
       }
     }
     return next;

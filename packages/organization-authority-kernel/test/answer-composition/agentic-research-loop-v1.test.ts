@@ -692,6 +692,28 @@ describe("research loop: need ids", () => {
     // A finish that leaves N3 open is refused by its id.
     expect(view.rounds[2]!.rejected[0]).toContain('part 1 need N3 "owner\'s team" is still open');
   });
+
+  it("settles a need its id names in a part the step adds, where it was planned, and adds only the new needs", async () => {
+    const h = harness([
+      step([part("When and who?", [need("launch date", "open"), need("launch owner", "open")])], [{ tool: "search", args: { query: "launch" } }]),
+      // A new second part carries N2, planned in part 1, and one need that is new.
+      step([
+        part("When and who?", [withId("N1", need("launch date", "found", ["E1"]))]),
+        part("Who owns launch?", [withId("N2", need("launch owner", "found", ["E2"])), need("owner's team", "open")]),
+      ], [{ tool: "search", args: { query: "launch team" } }]),
+      // A part made only of planned needs adds no part: the finish is accepted.
+      step([part("When and who?", []), part("Who owns launch?", [withId("N3", need("owner's team", "found", ["E2"]))]), part("Owner?", [withId("N2", need("launch owner", "found", ["E2"]))])],
+        [{ tool: "finish", args: {} }]),
+    ], { search: async () => result([record("date", "Launch is approved for Tuesday."), record("owner", "Mara owns the launch for the platform team.")]) });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief("Find the launch date and owner.", []) });
+    expect(h.prompt(2).plan).toEqual([
+      { part: 1, question: "When and who?", notes: "", needs: [{ id: "N1", need: "launch date", status: "found", evidence: ["E1"] }, { id: "N2", need: "launch owner", status: "found", evidence: ["E2"] }] },
+      { part: 2, question: "Who owns launch?", notes: "", needs: [{ id: "N3", need: "owner's team", status: "open", evidence: [] }] },
+    ]);
+    expect(view.rounds.map(round => round.rejected)).toEqual([[], [], []]);
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+    expect(view.plan.map(value => value.question)).toEqual(["When and who?", "Who owns launch?"]);
+  });
 });
 
 describe("research loop: step time", () => {
