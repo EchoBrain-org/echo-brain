@@ -188,7 +188,10 @@ route, header, database table or client changes.
   through an open that was not truncated and carried no notice. A sentence that
   claims content across a list cites the list. When fewer than all members were
   checked, code adds "(k of N checked so far)" to that sentence and the part is
-  partial.
+  partial. Built: a member's row is checked through the open of that row, whose
+  bodies may have new ids, once research read every body it returned. Code
+  adds the note to a sentence that cites a list beside text the writer read; a
+  sentence citing a list with rows only states list facts.
 
 ### The writer and the answer
 
@@ -198,7 +201,10 @@ route, header, database table or client changes.
   `read_at`, whether the plan cites it, and up to 100 members
   (`AgenticWriterListMemberV1`: id, kind, title, dates, status, owner, due
   date, checked). Members never carry text; `members_omitted` counts any
-  members past 100. This changes the documented rule that items without text
+  members past 100. Built: the rows take at most half of the writer's prompt
+  room; a smaller context window halves how many members of each list it
+  shows, never how many lists, and code still names members from every row.
+  This changes the documented rule that items without text
   never reach the writer, for list members only. Related references and
   continuation metadata still never reach it.
 - **The writer says which lists answer the question**
@@ -255,7 +261,15 @@ route, header, database table or client changes.
   The writer has one repair in total, as today; a failed check uses it if it
   is still unused and the request has time and model calls left. If the
   repaired answer still fails, or no repair can run, code writes that list's
-  full statement and keeps the writer's sentences.
+  full statement and keeps the writer's sentences. Built: a sentence that
+  cites only rows of a list code wrote this way is dropped, since it restated
+  part of that list (the October 4 answer's "the pages are A, B, C, D" beside
+  all eight names would contradict them). A first reply that fails only the
+  check stays the writer's answer when the repair's reply is unusable.
+- **One citation per cited object.** The response refuses duplicate
+  citations, and a listed ticket's row and its opened body cite the same
+  ticket. Code gives them one citation, in first-citation order, so a list
+  statement and a writer's sentence about the same ticket share it.
 - **No usable writer reply.** When research found a need on a list but the
   writer gives no usable reply, code still writes that list's statement and the
   part is partial. For that case only, this replaces the fallback to three

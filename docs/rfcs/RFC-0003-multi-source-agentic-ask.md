@@ -317,8 +317,11 @@ Ask's writer as rows without text.
 
 The research scratchpad and finish check are unchanged: research may mark a
 need `found` only with evidence whose full text it read. The writer may cite
-any item whose full text is in its own prompt. Desk receipts, revalidation
-before model calls, and the final permission check still cover these items.
+any item whose full text is in its own prompt. (For Ask,
+[ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md) also lets
+it cite a list member's row it sees, and code names a list's members.) Desk
+receipts, revalidation before model calls, and the final permission check
+still cover these items.
 Adding search hits to the writer's input does not add them to the
 records-only fallback: its eligibility remains limited to evidence research
 read in full, with the existing citation-based selection rules preserved.
@@ -329,7 +332,9 @@ sentences. This is the V4 bound on statements per part, raised from five: in
 the first smoke run a five-sentence cap made the writer list facts that
 research had found as "not found". The prompt asks for 2 to 6 sentences
 usually, and up to 10 when the question asks several things. Code removes
-evidence ids that leak into sentence text.
+evidence ids that leak into sentence text. (Ask's writer also returns `lists`,
+the lists whose members code names first:
+[ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md).)
 
 **What code does with it.**
 
