@@ -131,6 +131,36 @@ A release that ships [ADR-0024](../../docs/decisions/ADR-0024-person-list-open-a
 - There is no joint rollback after promotion or feed publication; recovery is
   a reviewed forward fix or compatible recovery release (see ADR-0024).
 
+A release that ships the research fixes of 2026-10-16
+([ADR-0037](../../docs/decisions/ADR-0037-openrouter-routing-for-research-calls.md),
+[ADR-0038](../../docs/decisions/ADR-0038-incremental-access-check-before-model-calls.md)
+and open items rulings R77–R82) needs its Person client first, the reverse of
+ADR-0024. Two checks in `packages/organization-api` were widened, and a client
+built before them rejects what the new Authority sends:
+
+- An impact card that fell back to `not_assessed` now carries the record's
+  decided lines. An older client fails it as "Impact card status is
+  inconsistent": `person runs` `view` fails, and a research-loop evaluation
+  from an older checkout records that run as an error, graded as failed.
+- A diagnostic capture's lifecycle event now names a failure from the model
+  adapter (timeout, transport, HTTP and the like) `adapter_*`, and an index
+  lag `index_lag`. An older client rejects the whole capture read that holds
+  one, and once the 60-second reread window lapses the trace is lost.
+- So, before `stage`, install the exact candidate Person client (the offline
+  installation the lane uses for candidate-client checks) on every seat that
+  reads run views or diagnostics, and run `eval:research-loop`, its `trace`
+  and other `tools/evals` from a checkout at the candidate's source. The new
+  client is safe against the older Authority: it accepts the older cards and
+  error kinds, and a `pending` start. Other command-line seats fail those two
+  reads until they update from the published feed; name them in the
+  compatibility plan. Desktops of any build are unaffected: they never request
+  a card `view` or diagnostics, and already accept a `pending` start.
+- Prefer a forward fix to a rollback. An Authority older than this change,
+  including the prior release restored by the staged-candidate rollback,
+  cannot read a stored `not_assessed` card that has decided lines: its `view`
+  answers `unavailable`, and that decision's open items lose its first line
+  until a build with this change runs again.
+
 ### Qualify and review the exact release once
 
 Use the [automated current-host lane](#automated-current-host-staging-lane) to
