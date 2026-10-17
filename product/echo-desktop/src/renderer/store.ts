@@ -96,6 +96,12 @@ export interface SourcesState {
   /** Meetings read by their ref for a transcript the pane shows, by record digest: the first page, and whether more follows. */
   meetings: Readonly<Record<string, Read<{ record: ApprovedRecord; more: boolean }>>>;
   /**
+   * Follow-ups an answer cites or Ask named (ADR-0040), by item id: each its
+   * row as Home reads it now (rows only), for the pane's owner, status and
+   * check and a source row's "owner · status".
+   */
+  followUps: Readonly<Record<string, Read<OpenItemView>>>;
+  /**
    * The cited passages of the original the pane shows, by citation (a named
    * place's by their order in it, `group` null); read each time it is chosen.
    */
@@ -3468,13 +3474,21 @@ export function citedItems(record: ApprovedRecord, atoms: ReadonlySet<string>): 
 /**
  * Open: the pane's item on its own page, in place of Ask. A meeting opens on
  * the items the pane lit, found in the record the pane read; with that record
- * not read, it opens at its top.
+ * not read, it opens at its top. A follow-up opens its item page, with the
+ * row the pane read while it reads it again.
  */
 export function openFullPage(): void {
   const target = paneTarget();
   const source = target?.sources[0];
   const page = source === undefined ? null : openerOf(source).page;
   if (!target || page === null || state.concealed || !fullPageOffered()) return;
+  if (page.kind === 'follow_up') {
+    const read = state.sources?.followUps[page.item_id];
+    const shown = read !== undefined && !read.loading && 'value' in read ? read.value : null;
+    closeAsk();
+    void openFollowUp(page.item_id, shown);
+    return;
+  }
   const scope = state.ask?.shown?.answer.scope;
   const read = source?.kind === 'record' ? state.sources?.records[source.record.record_sha256] : undefined;
   const cited = read !== undefined && !read.loading && 'value' in read ? citedItems(read.value, litAtoms(state, target)) : [];
@@ -3487,7 +3501,7 @@ export function openFullPage(): void {
 
 /** Nothing open in the pane, nothing read for it yet. */
 function emptySources(): SourcesState {
-  return { gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, evidence: null };
+  return { gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, followUps: {}, evidence: null };
 }
 
 /**
@@ -3517,12 +3531,33 @@ function sourcesAt(gen: number): SourcesState | null {
   return state.sources?.gen === gen && !state.concealed ? state.sources : null;
 }
 
+/** Its approved records, and its follow-ups' rows (each source row's "owner · status"), read one after another. */
 async function readRecords(gen: number): Promise<void> {
   for (const source of answerSources()) {
     const sources = sourcesAt(gen);
     if (!sources) return;
     if (source.kind === 'record' && !sources.records[source.record.record_sha256]) await readRecord(gen, source.record, true);
+    if (source.kind === 'follow_up' && !sources.followUps[source.item_id]) await readFollowUpRow(gen, source.item_id);
   }
+}
+
+/**
+ * A follow-up's row, as Home reads it now (rows only, ADR-0033): who owns it,
+ * its status and its latest check. One the account can no longer see says
+ * so; an account that is gone ends everything, as every read's does.
+ */
+async function readFollowUpRow(gen: number, item_id: string): Promise<void> {
+  const account = expect();
+  if (!account || !sourcesAt(gen)) return;
+  const patch = (read: Read<OpenItemView>) => {
+    const sources = sourcesAt(gen);
+    if (sources) set({ sources: { ...sources, followUps: { ...sources.followUps, [item_id]: read } } });
+  };
+  patch({ loading: true });
+  const read = await readOne(account, item_id);
+  // Replies for another answer, another account, or that land while another app is in front, are dropped.
+  if (!sameAccount(account)) return;
+  patch('item' in read ? { loading: false, value: read.item } : { loading: false, failure: read.failure });
 }
 
 /** One approved record. A read the person did not ask for fails quietly, unless the account is gone. */
@@ -3565,6 +3600,7 @@ function readPane(gen: number, source: AnswerSource): void {
   if (opener.pane === 'passages') void readEvidence(gen);
   else if (source.kind === 'record' && stale(sources.records[source.record.record_sha256])) void readRecord(gen, source.record, false);
   else if (opener.pane === 'meeting' && opener.meeting !== undefined && stale(sources.meetings[opener.meeting])) void readMeeting(gen, opener.meeting);
+  else if (source.kind === 'follow_up' && stale(sources.followUps[source.item_id])) void readFollowUpRow(gen, source.item_id);
 }
 
 /**
@@ -3655,7 +3691,7 @@ export function retryEvidence(): void {
   if (sources && paneTarget()) void readEvidence(sources.gen);
 }
 
-/** Try again, on an approved record, or a transcript's meeting, that could not be read. */
+/** Try again, on an approved record, a transcript's meeting, or a follow-up, that could not be read. */
 export function retryRecord(): void {
   const sources = state.sources;
   const source = paneTarget()?.sources[0];
@@ -3663,6 +3699,7 @@ export function retryRecord(): void {
   const opener = openerOf(source);
   if (source.kind === 'record') void readRecord(sources.gen, source.record, false);
   else if (opener.pane === 'meeting' && opener.meeting !== undefined) void readMeeting(sources.gen, opener.meeting);
+  else if (source.kind === 'follow_up') void readFollowUpRow(sources.gen, source.item_id);
 }
 
 // ---- the bar: live search -------------------------------------------------------
@@ -4183,7 +4220,7 @@ function conceal(): void {
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
   set({
-    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, evidence: null } } : {}),
+    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, followUps: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
     ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });

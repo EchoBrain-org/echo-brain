@@ -83,6 +83,9 @@ describe('the live line and its rows', () => {
   it('name sources as a person says them, never the words searched, and the first names of a read with +N', () => {
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'slack' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 }))
       .toBe('Searched meetings, Slack and Jira · 22 found');
+    // ECHO's follow-ups (ADR-0040) are a kind of source like meetings: never a tool, never a label.
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }, { kind: 'tickets', tool_id: 'jira' }], found: 9 }))
+      .toBe('Searched meetings, follow-ups and Jira · 9 found');
     // Nothing at all, or, after an earlier search found items, nothing those had not.
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 })).toBe('Searched Knowledge Base · nothing found');
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 }, null, true)).toBe('Searched Knowledge Base · nothing new');

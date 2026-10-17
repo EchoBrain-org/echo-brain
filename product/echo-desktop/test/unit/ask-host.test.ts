@@ -57,6 +57,22 @@ describe('the progress lines of an Ask', () => {
     ]);
   });
 
+  it('post a /v6 step that searched follow-ups or read one, as the page opens it (ADR-0040)', () => {
+    const posted: AskProgressNotice[] = [];
+    const refused = vi.fn();
+    const read = askProgressLines(CANCEL, EXPECT, new AbortController().signal, notice => posted.push(notice), refused);
+    const followUp = { citation: { kind: 'follow_up', item_id: 'itm_launch-1' }, kind: 'follow_up', label: 'Ship the launch checklist', visibility: 'team', ref: 'follow_up:itm_launch-1' };
+    read(line({ ok: true, progress: { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 } }));
+    read(line({ ok: true, progress: { type: 'read', items: [followUp] } }));
+    // Nothing a follow-up's row holds travels in a step.
+    read(line({ ok: true, progress: { type: 'read', items: [{ ...followUp, owner: 'Mina Patel' }] } }));
+    expect(refused).toHaveBeenCalledTimes(1);
+    expect(posted.map(notice => notice.step)).toEqual([
+      { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 },
+      { type: 'read', items: [{ kind: 'follow_up', label: 'Ship the launch checklist', item_id: 'itm_launch-1' }] },
+    ]);
+  });
+
   it('post nothing once the Ask was cancelled or timed out', () => {
     const posted: AskProgressNotice[] = [];
     const abort = new AbortController();

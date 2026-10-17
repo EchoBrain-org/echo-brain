@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
   actionCount, activeTotal, checkWords, followUpCount, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemNames, itemNeeds, itemTitle, itemWhy,
-  liveFacts, matchesNow, meetingSuffix, monthDay, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
+  liveFacts, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
@@ -104,6 +104,13 @@ describe('one status vocabulary (F7)', () => {
     expect(stateCounts({ unsent: 4, open: 1, done: 2, not_relevant: 1 })).toBe('1 open · 4 not sent · 2 done · 1 dismissed');
     expect(stateCounts({ unsent: 2, open: 0, done: 0, not_relevant: 0 })).toBe('2 not sent');
     expect(stateCounts({ unsent: 0, open: 0, done: 0, not_relevant: 0 })).toBe('');
+  });
+
+  it('says a follow-up an answer cites as its owner and status: "Mina · Open", "You · Done" (ADR-0040)', () => {
+    expect(ownerAndStatus(item(), 'mem_someone-else')).toBe('Mina · Open');
+    expect(ownerAndStatus(item({ state: 'done' }), person.membership_id)).toBe('You · Done');
+    expect(ownerAndStatus(item({ owner: { ...OKAFOR, match: 'name' }, state: 'not_relevant' }), null)).toBe('S. Okafor · Dismissed');
+    expect(ownerWords(item(), undefined)).toBe('Mina');
   });
 
   it('totals not sent and open as follow-ups, never as "open", whatever the last check found', () => {

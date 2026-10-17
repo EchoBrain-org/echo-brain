@@ -9,8 +9,8 @@ import type {
 } from '../shared/protocol.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  validatePersonAskProgressLineV1, validatePersonAskReceiptV1, type PersonAskProgressLineV1, type PersonAskReceiptRowV1, type PersonAskReceiptV1, type PersonOpenItemV1,
-  type PersonRunsResultsV1,
+  validatePersonAskProgressLineV2, validatePersonAskReceiptV1, validatePersonAskReceiptV2, type PersonAskProgressLineV2, type PersonAskReceiptRowV2, type PersonAskReceiptV2,
+  type PersonOpenItemV1, type PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
 
@@ -371,10 +371,12 @@ export function isRecordRef(value: unknown): value is RecordRef {
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const value = object(unwrap(raw));
+  // V7 (`/v6`, ADR-0040) is V6 that may also cite follow-ups.
+  const followUps = value.schema_version === 7 && value.kind === 'echo-clean-person-answer-v7';
   const tickets = value.schema_version === 5 && value.kind === 'echo-clean-person-answer-v5';
-  const pages = value.schema_version === 6 && value.kind === 'echo-clean-person-answer-v6';
+  const pages = followUps || (value.schema_version === 6 && value.kind === 'echo-clean-person-answer-v6');
   if (!tickets && !pages && (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4')) throw new ViewError();
-  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`, tickets || pages, pages));
+  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`, tickets || pages, pages, followUps));
   const direct = value.direct === undefined ? undefined : v4Statement(value.direct, sources.length);
   const parts = list(value.parts).map(part => v4Part(part, sources.length));
   if (parts.length === 0) throw new ViewError();
@@ -382,10 +384,10 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   if (outcome !== 'answered' && outcome !== 'partial' && outcome !== 'not_found' && outcome !== 'off_scope') throw new ViewError();
   const assumption = optionalText(value.assumption);
   const notice = optionalText(value.notice);
-  // A receipt comes only with a streamed answer, which is always V6 (ADR-0039).
+  // A receipt comes only with a streamed answer: V7 with a V2 receipt from `/v6`, V6 with a V1 receipt from `/v5` (ADR-0039).
   const printed = object(raw);
   if (Object.hasOwn(printed, 'receipt') && !pages) throw new ViewError();
-  const receipt = Object.hasOwn(printed, 'receipt') ? askReceiptView(printed.receipt) : undefined;
+  const receipt = Object.hasOwn(printed, 'receipt') ? askReceiptView(printed.receipt, followUps ? 2 : 1) : undefined;
   // One part answers the question itself, so its question is not repeated.
   const single = parts.length === 1;
   const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
@@ -398,31 +400,34 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
 /** A name Ask shows while it works, or in its receipt, is a citation as an answer's: it opens the same way. */
 const NAMED = 'Item';
 
-function askRow(row: PersonAskReceiptRowV1): AskSearched | AskRead {
+function askRow(row: PersonAskReceiptRowV2): AskSearched | AskRead {
   return row.type === 'searched'
     ? { type: 'searched', sources: row.sources.map(source => 'tool_id' in source ? { kind: source.kind, tool_id: source.tool_id } : { kind: source.kind }), found: row.found }
-    : { type: 'read', items: row.items.map(item => v4Source(item, NAMED, true, true)) };
+    : { type: 'read', items: row.items.map(item => v4Source(item, NAMED, true, true, true)) };
 }
 
 /**
  * The receipt of a streamed Ask, as the contract has it: built by the
- * Authority from what passed its final check. Anything else is refused.
+ * Authority from what passed its final check, in the progress version of the
+ * answer it came with (V2, which may name follow-ups, with a V7 answer).
+ * Anything else is refused.
  */
-export function askReceiptView(raw: unknown): AskReceipt {
-  let receipt: PersonAskReceiptV1;
-  try { receipt = validatePersonAskReceiptV1(raw); } catch { throw new ViewError(); }
+export function askReceiptView(raw: unknown, version: 1 | 2): AskReceipt {
+  let receipt: PersonAskReceiptV2;
+  try { receipt = version === 2 ? validatePersonAskReceiptV2(raw) : validatePersonAskReceiptV1(raw); } catch { throw new ViewError(); }
   return { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) };
 }
 
 /**
  * One line `person ask --live --progress` printed before its answer: a step
- * of the Ask, as the contract has it (ADR-0039). Only the stage, a search's
- * source kinds and count, and the items just read cross, each item as an
- * answer's citation does. Anything else is refused.
+ * of the Ask, as the contract has it (ADR-0039; V2, ADR-0040, which a V1 step
+ * is too). Only the stage, a search's source kinds and count, and the items
+ * just read cross, each item as an answer's citation does, a follow-up
+ * included. Anything else is refused.
  */
 export function askStepView(raw: unknown): AskStep {
-  let line: PersonAskProgressLineV1;
-  try { line = validatePersonAskProgressLineV1(raw); } catch { throw new ViewError(); }
+  let line: PersonAskProgressLineV2;
+  try { line = validatePersonAskProgressLineV2(raw); } catch { throw new ViewError(); }
   const step = line.progress;
   if (step.type !== 'stage') return askRow(step);
   return { type: 'stage', stage: step.stage, ...(step.pending === undefined ? {} : { pending: step.pending }) };
@@ -456,10 +461,19 @@ function originalSource(citation: Json, label: string, ref: string | undefined):
   return { kind: 'original', label, ref: passage, item: { kind: opens.slice(0, at) as ItemRef['kind'], id: opens.slice(at + 1) } };
 }
 
-function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = false): AnswerSource {
+/** A follow-up's item id, as the runs API names it. */
+const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
+
+function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = false, followUps = false): AnswerSource {
   const item = object(raw);
   const citation = object(item.citation);
   const label = text(item.label);
+  // A follow-up (V7 only, ADR-0040) always carries the ref that opens its item page, and nothing else does.
+  if (citation.kind === 'follow_up' || item.kind === 'follow_up') {
+    const id = citation.item_id;
+    if (!followUps || citation.kind !== 'follow_up' || item.kind !== 'follow_up' || typeof id !== 'string' || !ITEM_ID.test(id) || item.ref !== `follow_up:${id}`) throw new ViewError();
+    return { kind: 'follow_up', label: label || fallback, item_id: id };
+  }
   const ref = openRef(item.ref);
   if (citation.kind === 'approved_record') {
     const record = { record_sha256: citation.record_sha256, policy_id: citation.policy_id };
