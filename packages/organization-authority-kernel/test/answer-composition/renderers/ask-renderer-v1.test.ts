@@ -225,6 +225,31 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered).toMatchObject({ outcome: "answered", cited: ids(1, 9), result: { writer_evidence: ["E9", ...ids(1, 8)] } });
   });
 
+  it("never takes a list id cited beside rows only as using the list: the subset is sent back, then code writes the list", async () => {
+    // The October 4 replay's hole: the writer names 4 of 8 and cites the list id beside their rows.
+    const subset = { lists: [], sentences: [{ text: "The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", evidence: ["L1", ...ids(1, 4)] }], not_found: [] };
+    const run = alone({ bundle: listBundle(8, 0, [list("L1", ids(1, 8))], ["L1"]), replies: [subset, subset], version: 6 });
+    const rendered = await run.render("Which tickets were created on October 4?");
+    expect(run.trace.filter(step => step === "generate")).toHaveLength(2);
+    expect(run.prompt(1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists"');
+    // Code names all 8 and drops the sentence that restated 4 of them.
+    expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: eight, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
+    expect(rendered).toMatchObject({ outcome: "answered", cited: ids(1, 8) });
+  });
+
+  it("says 'at least' for a list not read to a confirmed end even when the writer cites its id beside one row", async () => {
+    const count = { lists: [], sentences: [{ text: "25 tickets were created on October 4, 2026.", evidence: ["L1", "E1"] }], not_found: [] };
+    const run = alone({ bundle: listBundle(25, 0, [list("L1", ids(1, 25), { unverified_end: true })], ["L1"]), replies: [count, count], version: 6 });
+    const rendered = await run.render("Which tickets were created on October 4?");
+    expect(run.trace.filter(step => step === "generate")).toHaveLength(2);
+    expect(rendered.result.response.parts[0]).toEqual({
+      question: "Which tickets were created on October 4?", status: "partial",
+      statements: [{ text: `At least 25 tickets created on October 4, 2026: ${names(1, 25).join("; ")}.`, citation_indexes: Array.from({ length: 25 }, (_, index) => index), private: true }],
+      gap: "The list of tickets could not be read to its end, so more may exist.",
+    });
+    expect(rendered.outcome).toBe("partial");
+  });
+
   it("accepts a list's rows cited in full or by one, without the list", async () => {
     for (const evidence of [ids(1, 3), ["E2"]]) {
       const run = alone({ bundle: listBundle(3, 1, [list("L1", ids(1, 3))], ["E4"]), replies: [{ sentences: [{ text: "Those are in progress.", evidence }], not_found: [] }], version: 6 });

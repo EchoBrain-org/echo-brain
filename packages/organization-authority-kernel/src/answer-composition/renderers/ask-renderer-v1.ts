@@ -244,7 +244,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
 
       // ---- code's check of the lists (ADR-0041) -----------------------------
       const keptSentences = (answer: Answer) => answer.sentences.filter(sentence => sentence.evidence.some(short => allowed.has(short)));
-      const usesList = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id) || keptSentences(answer).some(sentence => sentence.evidence.includes(id));
+      /**
+       * The answer uses a list when it names it in "lists", or when a sentence claims content across it: the list's id
+       * beside text the writer read. A list id beside rows only, or beside nothing, never stands in for the statement
+       * code writes, so "the pages are A, B, C and D" citing L1 and four rows is still a subset.
+       */
+      const usesList = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id) ||
+        keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short)));
       /** Lists the answer should use but does not: one the plan rests on, or one it cites some, not all, members of by their rows. */
       const listProblems = (answer: Answer): readonly { readonly id: AgenticListIdV1; readonly reason: string }[] => writerLists.flatMap(list => {
         if (list.count === 0 || usesList(answer, list.id)) return [];
