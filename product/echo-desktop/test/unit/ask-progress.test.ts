@@ -83,7 +83,7 @@ describe('the steps of the Ask on its way', () => {
   it('cancelled, takes no step more, and Ask closes with what it named', async () => {
     const { store, step } = await asking();
     step({ type: 'read', items: [decision] });
-    store.openNamed(decision);
+    store.openNamed([decision]);
     store.cancelAsk();
     step({ type: 'read', items: [note] });
     expect(store.getState().ask).toBeNull();
@@ -96,7 +96,7 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
   it('a decision opens its meeting, lit; Open waits for the answer and then goes to the meeting\'s page', async () => {
     const { store, step, release } = await asking();
     step({ type: 'read', items: [decision] });
-    store.openNamed(decision);
+    store.openNamed([decision]);
     await flush();
     expect(store.paneTarget()).toEqual({ sources: [decision], group: null, number: null });
     expect(calls('ask.record')).toEqual([{ expect: EXPECT, record: decision.kind === 'record' ? decision.record : null }]);
@@ -155,23 +155,41 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     expect(store.getState().reader?.cited).toBeUndefined();
   });
 
+  it('a name of a place lights every item of it Ask read, and shows every passage', async () => {
+    const other: AnswerSource = { ...decision, atom_id: sha('9') } as AnswerSource;
+    const passage: AnswerSource = { ...note, ref: { ...coordinates, anchor_sha256: sha('a') } } as AnswerSource;
+    const { store } = await asking();
+    store.openNamed([decision, other]);
+    await flush();
+    const target = store.paneTarget()!;
+    expect(target.sources).toEqual([decision, other]);
+    expect([...store.litAtoms(store.getState(), target)]).toEqual([sha('1'), sha('9')]);
+    // One read of their meeting serves both.
+    expect(calls('ask.record')).toHaveLength(1);
+
+    store.openNamed([note, passage]);
+    await flush();
+    expect(calls('ask.source').map(params => (params.ref as { anchor_sha256: string }).anchor_sha256)).toEqual([sha('6'), sha('a')]);
+    expect(store.getState().sources?.evidence).toMatchObject({ group: null, reads: { 0: { loading: false }, 1: { loading: false } } });
+  });
+
   it('a passage is read under the Ask\'s own scope, a transcript opens its meeting, and a ticket opens only in its app', async () => {
     const store = await startStore();
     const release = held.hold('ask.run');
     void store.ask('What did we agree?', { kind: 'project', project_id: project(1, 30).project_id });
     await flush();
-    store.openNamed(note);
+    store.openNamed([note]);
     await flush();
     expect(calls('ask.source')).toEqual([{ expect: EXPECT, scope: { kind: 'project', project_id: project(1, 30).project_id }, ref: coordinates }]);
     expect(store.getState().sources?.evidence).toMatchObject({ group: null, reads: { 0: { loading: false, value: { text: 'We agreed to ship.' } } } });
 
-    store.openNamed(transcript);
+    store.openNamed([transcript]);
     await flush();
     expect(calls('open.ref')).toEqual([{ expect: EXPECT, ref: { kind: 'meeting', id: sha('2') } }]);
     expect(store.getState().sources?.meetings[sha('2')]).toMatchObject({ loading: false, value: { record: { title: 'Tuesday sync' }, more: false } });
     expect(store.getState().sources?.evidence).toBeNull();
 
-    store.openNamed(ticket);
+    store.openNamed([ticket]);
     expect(await store.openExternalSource(ticket as Extract<AnswerSource, { kind: 'ticket' }>)).toBe(true);
     expect(calls('source.openExternal')).toEqual([{ kind: 'ticket', permalink: ticket.kind === 'ticket' ? ticket.permalink : '' }]);
     release(ok(answer()));
@@ -183,7 +201,7 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
   it('closes with no answer: a refusal, a timeout or a cancel removes what the Ask named', async () => {
     const { store, step, release } = await asking();
     step({ type: 'read', items: [decision] });
-    store.openNamed(decision);
+    store.openNamed([decision]);
     release(fail('unavailable', { retryable: true }));
     await flush();
     expect(store.getState().ask?.failed?.failure.code).toBe('unavailable');
@@ -199,19 +217,19 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     const second = held.hold('ask.run');
     void store.ask('Second?');
     await flush();
-    store.openNamed(note);
+    store.openNamed([note]);
     store.cancelAsk();
     expect(store.getState().ask?.shown?.question).toBe('First?');
-    expect(store.getState().sources?.item).toBeNull();
+    expect(store.getState().sources?.named).toBeNull();
     expect(store.paneTarget()).toBeNull();
     second(ok(answer()));
   });
 
   it('closes when another app comes in front', async () => {
     const { store } = await asking();
-    store.openNamed(decision);
+    store.openNamed([decision]);
     store.windowState({ onScreen: true, front: false });
-    expect(store.getState().sources?.item).toBeNull();
+    expect(store.getState().sources?.named).toBeNull();
     expect(store.paneTarget()).toBeNull();
   });
 });

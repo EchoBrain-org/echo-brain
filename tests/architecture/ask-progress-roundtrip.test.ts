@@ -47,7 +47,7 @@ interface Store {
   ask(question: string, scope?: Scope): Promise<void>;
   askProgress(notice: Notice): void;
   cancelAsk(): void;
-  openNamed(source: Source): void;
+  openNamed(items: readonly Source[]): void;
   fullPageOffered(): boolean;
   getState(): {
     ask: { asking: { progress: Progress } | null; shown: { answer: { sources: readonly Source[]; receipt?: Receipt }; receipt?: Receipt } | null; failed: unknown } | null;
@@ -58,7 +58,7 @@ interface Store {
 interface Views { answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json; atomId(record: string, signal: string): string }
 interface ProgressView {
   PROGRESS_AFTER_MS: number; liveRows(progress: Progress): { type: string; row?: Row; done?: boolean }[]; stageWords(progress: Progress): string;
-  searchedWords(row: Row): string; rowNames(items: readonly Source[]): { names: readonly { source: Source; count: number }[]; more: number }; receiptWords(receipt: Receipt): string;
+  searchedWords(row: Row): string; rowNames(items: readonly Source[]): { names: readonly { source: Source; items: readonly Source[] }[]; more: number }; receiptWords(receipt: Receipt): string;
 }
 const ok = (value: unknown) => ({ ok: true, value });
 const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) await Promise.resolve(); };
@@ -250,7 +250,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(read).toHaveLength(named.length);
       expect(new Set(read.map(item => item.kind))).toEqual(new Set(['record', 'original', 'ticket', 'slack']));
       // "Read launchscope.md, #launchscope, Approved meeting +2": three names, each one place read once, the rest as +N.
-      expect(progress.rowNames(read)).toEqual({ names: read.slice(0, 3).map(source => ({ source, count: 1 })), more: named.length - 3 });
+      expect(progress.rowNames(read)).toEqual({ names: read.slice(0, 3).map(source => ({ source, items: [source] })), more: named.length - 3 });
 
       // --- The page with the answer: the rows folded into the receipt, its names opening the exact item. ---
       const shown = store.getState().ask!.shown!;
@@ -267,13 +267,13 @@ describe('Ask progress from the Authority through the Person client to the deskt
       for (const external of pageNamed.filter(item => item.kind === 'ticket' || item.kind === 'slack')) expect(openerOf(external)).toEqual({ pane: 'external', page: null });
 
       // A named decision opens its meeting with that very item lit: its atom id is one of the record's items as the desktop reads them.
-      store.openNamed(decision);
+      store.openNamed([decision]);
       await vi.waitFor(() => expect(store.getState().sources?.records[f.seeded.approved_record_sha256]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
       const record = store.getState().sources!.records[f.seeded.approved_record_sha256]!.value!;
       expect(record.decisions.items.map(item => item.atom_id)).toContain(decision.atom_id);
       expect(store.fullPageOffered()).toBe(true);
       // A named document opens its cited passage, read where the Ask was asked.
-      store.openNamed(document);
+      store.openNamed([document]);
       await vi.waitFor(() => expect(store.getState().sources?.evidence?.reads[0]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
       expect(store.getState().sources!.evidence!.reads[0]!.value!.text).toContain(DOCUMENT_TEXT);
     } finally { await f.close(); }

@@ -11,8 +11,8 @@ const decision = (atom: string, label = 'Tuesday sync'): AnswerSource =>
 const ticket = (key: string): AnswerSource => ({ kind: 'ticket', tool_id: 'jira', label: key, permalink: `https://example.atlassian.net/browse/${key}` });
 const passage = (anchor: string, label = 'Launch plan.md'): AnswerSource => ({ kind: 'original', label, ref: {
   source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha(anchor) } });
-/** A place's name as a row shows it: its first item read, and how many of its items were read. */
-const place = (source: AnswerSource, count = 1) => ({ source, count });
+/** A place's name as a row shows it: its first item read stands for it, and all of its items read go with it. */
+const place = (...items: AnswerSource[]) => ({ source: items[0]!, items });
 
 const steps = (...events: Parameters<typeof withStep>[1][]): AskProgress => events.reduce(withStep, startProgress(0));
 
@@ -92,13 +92,13 @@ describe('the live line and its rows', () => {
     expect(progress.rows).toEqual([{ type: 'read', items: [decision('1'), decision('2'), page, ticket('THERM-48'), page] }]);
     expect(progress.pending).toBe(0);
     const [row] = progress.rows;
-    expect(namedPlaces(row?.type === 'read' ? row.items : [])).toEqual([place(decision('1'), 2), place(page, 2), place(ticket('THERM-48'))]);
+    expect(namedPlaces(row?.type === 'read' ? row.items : [])).toEqual([place(decision('1'), decision('2')), place(page, page), place(ticket('THERM-48'))]);
     // "+N" counts items too: three decisions shown as one name, then one ticket, and two more tickets.
     expect(rowNames([decision('1'), decision('2'), decision('3'), ticket('THERM-48'), ticket('THERM-46'), ticket('THERM-44')], 2))
-      .toEqual({ names: [place(decision('1'), 3), place(ticket('THERM-48'))], more: 2 });
+      .toEqual({ names: [place(decision('1'), decision('2'), decision('3')), place(ticket('THERM-48'))], more: 2 });
     // Reading 7 items of two places: the names account for all seven.
     const seven = [decision('1'), decision('2'), decision('3'), decision('4'), passage('6'), passage('7'), passage('8')];
-    expect(rowNames(seven)).toEqual({ names: [place(decision('1'), 4), place(passage('6'), 3)], more: 0 });
+    expect(rowNames(seven)).toEqual({ names: [place(...seven.slice(0, 4)), place(...seven.slice(4))], more: 0 });
   });
 });
 
@@ -118,11 +118,11 @@ describe('the receipt', () => {
     const read = [decision('1'), decision('2'), decision('3'), decision('4'), passage('6'), passage('7'), passage('8'), ticket('THERM-48'), ticket('THERM-46')];
     const shown: AskReceipt = { looked_through: 9, elapsed_ms: 31_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 9 }, { type: 'read', items: read }] };
     expect(receiptWords(shown)).toBe('Looked through 9 items · 31s');
-    expect(namedPlaces(read)).toEqual([place(decision('1'), 4), place(passage('6'), 3), place(ticket('THERM-48')), place(ticket('THERM-46'))]);
+    expect(namedPlaces(read)).toEqual([place(...read.slice(0, 4)), place(...read.slice(4, 7)), place(ticket('THERM-48')), place(ticket('THERM-46'))]);
     expect(receiptUnnamed(shown)).toBe(0);
     // Past its bound of names, the rest are counted, not named.
     const bounded = { ...shown, looked_through: 14 };
-    expect(namedPlaces(read).reduce((total, named) => total + named.count, 0) + receiptUnnamed(bounded)).toBe(14);
+    expect(namedPlaces(read).reduce((total, named) => total + named.items.length, 0) + receiptUnnamed(bounded)).toBe(14);
   });
 });
 

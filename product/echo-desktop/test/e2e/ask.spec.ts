@@ -427,13 +427,12 @@ test('a long Ask shows what it looks through, names that open beside it while it
   await expect(page.getByTestId('ask-announcement')).toHaveText('Reading');
   await expect(page.getByTestId('ask-view').locator('[aria-live="off"]')).toHaveCount(1);
 
-  // A name opens beside Ask, and Ask keeps working: the decision lit in its meeting, and no Open yet.
+  // A name opens beside Ask, and Ask keeps working: both decisions it stands for lit in their meeting, and no Open yet.
   const names = page.getByTestId('ask-steps').getByTestId('ask-step-name');
   await names.nth(0).click();
   const pane = page.getByTestId('source-pane');
   await expect(pane).toContainText('Meeting · Approved record');
-  await expect(pane.locator('.record-item.on')).toHaveCount(1);
-  await expect(pane.locator('.record-item.on')).toContainText('Ship Apollo with annual plans first.');
+  await expect(pane.locator('.record-item.on')).toHaveText(['Keep monthly plans until November.', /^Ship Apollo with annual plans first\./]);
   await expect(names.nth(0)).toHaveAttribute('aria-pressed', 'true');
   await expect(pane.getByTestId('source-open')).toHaveCount(0);
   await expect(asking).toBeVisible();

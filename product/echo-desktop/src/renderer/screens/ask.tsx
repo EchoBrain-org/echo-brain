@@ -12,7 +12,7 @@ import {
 } from '../progress.js';
 import {
   answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject, fullPageOffered,
-  litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
+  litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
   submitBar, widenScope, type AskTurn, type PaneTarget, type Read, type RecordSectionKey, type SourcesState, type State,
 } from '../store.js';
 import { Check, Chevron, Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
@@ -395,17 +395,21 @@ function namedLabel(source: AnswerSource): string {
 }
 
 /**
- * Names, each opening its place beside Ask, with how many of its items were
- * read when more than one ("Tuesday sync ×4"). The one the pane shows is lit.
+ * Names, each opening its place beside Ask with every item of it the name
+ * stands for, and how many when more than one ("Tuesday sync ×4"). The one
+ * the pane shows is lit: its first item read, which stays as a live row's
+ * place reads more.
  */
 function Names({ state, places }: { state: State; places: readonly NamedPlace[] }) {
-  const shown = state.sources?.item ? sourceKey(state.sources.item) : null;
-  return <>{places.map(({ source, count }, index) => {
+  const first = state.sources?.named?.[0];
+  const shown = first ? sourceKey(first) : null;
+  return <>{places.map(({ source, items }, index) => {
     const on = shown === sourceKey(source);
     const label = namedLabel(source);
+    const count = items.length;
     return <span key={sourceKey(source)}>{index > 0 && ', '}
       <button type="button" class={`step-name${on ? ' on' : ''}`} data-testid="ask-step-name" aria-pressed={on}
-        aria-label={count > 1 ? `${label}, ${count} items` : undefined} onClick={() => openNamed(source)}>
+        aria-label={count > 1 ? `${label}, ${count} items` : undefined} onClick={() => openNamed(items)}>
         {label}{count > 1 && <span class="count"> ×{count}</span>}</button></span>;
   })}</>;
 }
@@ -533,12 +537,12 @@ export function Passage({ text, label }: { text: string; label: string }) {
 /**
  * An original's cited passages, each its verified evidence at most 2,000
  * characters. A sentence's number lights the passages it cites, when it cites
- * only some of them. A named item's is its one passage.
+ * only some of them. A named place's are the passages its name stands for.
  */
 function OriginalSource({ state, target, source }: { state: State; target: PaneTarget; source: Extract<AnswerSource, { kind: 'original' }> }) {
   const sources = state.sources!;
   const reads = sources.evidence?.group === target.number ? sources.evidence.reads : {};
-  const places = target.group?.indexes ?? [0];
+  const places = paneCitations(target);
   const count = places.length;
   const meta = target.group ? originalMeta(source, target.group, 'passages cited') : documentName(source.label).version ?? '';
   const answer = state.ask?.shown?.answer;

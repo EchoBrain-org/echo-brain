@@ -78,14 +78,15 @@ export type Read<T> =
 export interface SourcesState {
   /** Which start this is: a read for an earlier one is dropped. */
   gen: number;
-  /** The source the pane shows, by its number in the answer less one; null while it shows a named item, or is closed. */
+  /** The source the pane shows, by its number in the answer less one; null while it shows a named place, or is closed. */
   open: number | null;
   /**
-   * An item Ask named, in a live row or its receipt, that the pane shows in
-   * place of a numbered source. Named while Ask works, it goes if the Ask
-   * gets no answer.
+   * The items of one place Ask named, in a live row or its receipt, that the
+   * pane shows in place of a numbered source: all of them lit, or all their
+   * passages, the first standing for the place. Named while Ask works, they
+   * go if the Ask gets no answer.
    */
-  item: AnswerSource | null;
+  named: readonly AnswerSource[] | null;
   /** The sentence whose number opened the pane: "direct", or its part and place ("0.2", "0.r1" for a passage found); null when a row did. */
   focus: string | null;
   /** Approved records read for this answer, by digest. */
@@ -93,8 +94,8 @@ export interface SourcesState {
   /** Meetings read by their ref for a transcript the pane shows, by record digest: the first page, and whether more follows. */
   meetings: Readonly<Record<string, Read<{ record: ApprovedRecord; more: boolean }>>>;
   /**
-   * The cited passages of the original the pane shows, by citation (the
-   * named item's is 0, `group` null); read each time it is chosen.
+   * The cited passages of the original the pane shows, by citation (a named
+   * place's by their order in it, `group` null); read each time it is chosen.
    */
   evidence: { seq: number; group: number | null; reads: Readonly<Record<number, Read<SourceEvidence>>> } | null;
 }
@@ -3400,20 +3401,25 @@ export function answerGroups(current: State = state): SourceGroup[] {
   return sourceGroups(answerSources(current));
 }
 
-/** What the pane shows: one of the answer's numbered sources, or an item Ask named. */
+/** What the pane shows: one of the answer's numbered sources, or a place Ask named. */
 export interface PaneTarget {
-  /** Its citations, in the answer's order; a named item's is itself alone. */
+  /** Its citations, in the answer's order; a named place's, the items its name stands for. */
   readonly sources: readonly AnswerSource[];
-  /** A numbered source's group and number less one; null for a named item. */
+  /** A numbered source's group and number less one; null for a named place. */
   readonly group: SourceGroup | null;
   readonly number: number | null;
+}
+
+/** Where the pane's citations are: a numbered source's places in the answer, a named place's order in it. */
+export function paneCitations(target: PaneTarget): readonly number[] {
+  return target.group?.indexes ?? target.sources.map((_, at) => at);
 }
 
 /** The pane's item, or null while it is closed. */
 export function paneTarget(current: State = state): PaneTarget | null {
   const sources = current.sources;
   if (!sources || current.ask === null) return null;
-  if (sources.item) return { sources: [sources.item], group: null, number: null };
+  if (sources.named) return { sources: sources.named, group: null, number: null };
   const group = sources.open === null ? undefined : answerGroups(current)[sources.open];
   if (!group) return null;
   const all = answerSources(current);
@@ -3431,8 +3437,9 @@ export function fullPageOffered(current: State = state): boolean {
 }
 
 /**
- * The atoms a record source cites, to light: a named item's own; a numbered
- * source's that the chosen sentence cites, or all of them when a row opened it.
+ * The atoms a record source cites, to light: all a named place stands for; a
+ * numbered source's that the chosen sentence cites, or all of them when a row
+ * opened it.
  */
 export function litAtoms(current: State, target: PaneTarget): ReadonlySet<string> {
   const atoms = (sources: readonly AnswerSource[]) => new Set(sources.flatMap(source => source.kind === 'record' ? [source.atom_id] : []));
@@ -3472,7 +3479,7 @@ export function openFullPage(): void {
 
 /** Nothing open in the pane, nothing read for it yet. */
 function emptySources(): SourcesState {
-  return { gen: ++seq, open: null, focus: null, item: null, records: {}, meetings: {}, evidence: null };
+  return { gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, evidence: null };
 }
 
 /**
@@ -3483,7 +3490,7 @@ function emptySources(): SourcesState {
  */
 function startSources(keep = false): void {
   const sources = state.sources;
-  if (keep && sources?.item) {
+  if (keep && sources?.named) {
     set({ sources: { ...sources, open: null, focus: null } });
     void readRecords(sources.gen);
     return;
@@ -3556,18 +3563,20 @@ export function chooseSource(group: number, focus: string | null = null): void {
   const chosen = answerGroups()[group];
   const source = chosen ? answerSources()[chosen.indexes[0]!] : undefined;
   if (!sources || !source) return;
-  set({ sources: { ...sources, open: group, focus, item: null, evidence: null } });
+  set({ sources: { ...sources, open: group, focus, named: null, evidence: null } });
   readPane(sources.gen, source);
 }
 
 /**
- * A name in a live row or the receipt: the pane opens on that item beside
- * Ask, which keeps running, read unless it already was.
+ * A name in a live row or the receipt: the pane opens on that place beside
+ * Ask, which keeps running, with every item of it the name stands for, read
+ * unless it already was.
  */
-export function openNamed(source: AnswerSource): void {
+export function openNamed(items: readonly AnswerSource[]): void {
   const sources = state.sources;
-  if (!sources || !state.ask || state.concealed) return;
-  set({ sources: { ...sources, open: null, focus: null, item: source, evidence: null } });
+  const [source] = items;
+  if (!sources || !source || !state.ask || state.concealed) return;
+  set({ sources: { ...sources, open: null, focus: null, named: items, evidence: null } });
   readPane(sources.gen, source);
 }
 
@@ -3579,7 +3588,7 @@ export async function openExternalSource(source: ExternalAnswerSource): Promise<
 /** × on the pane: it closes, and forgets the passages it read. */
 export function closeSources(): void {
   const sources = state.sources;
-  if (sources) set({ sources: { ...sources, open: null, focus: null, item: null, evidence: null } });
+  if (sources) set({ sources: { ...sources, open: null, focus: null, named: null, evidence: null } });
 }
 
 /** Passages read at once: each is its own client call. */
@@ -3594,7 +3603,7 @@ function paneScope(): AskScope | null {
 /**
  * The cited passages of the original the pane shows, each a verified evidence
  * packet, read in order each time it is chosen: a numbered source's by their
- * place in the answer, a named item's as 0.
+ * place in the answer, a named place's by their order in it.
  */
 async function readEvidence(gen: number): Promise<void> {
   const account = expect();
@@ -3602,7 +3611,7 @@ async function readEvidence(gen: number): Promise<void> {
   const scope = paneScope();
   const sources = sourcesAt(gen);
   if (!account || !target || !scope || !sources) return;
-  const places = target.group?.indexes ?? [0];
+  const places = paneCitations(target);
   const passages = places.flatMap((place, at) => {
     const source = target.sources[at];
     return source?.kind === 'original' ? [[place, source.ref] as const] : [];
@@ -4161,7 +4170,7 @@ function conceal(): void {
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
   set({
-    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, item: null, records: {}, meetings: {}, evidence: null } } : {}),
+    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
     ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });

@@ -101,33 +101,33 @@ export function searchedWords(row: AskSearched, tools?: readonly ConnectedTool[]
   return `Searched ${listWords(row.sources.map(source => sourceWords(source, tools)))} · ${row.found === 0 ? 'nothing new' : `${row.found} found`}`;
 }
 
-/** A place Ask read, as one name: the first of its items read stands for it, and how many of its items were read. */
+/** A place Ask read, as one name: the first of its items read stands for it, and all of its items read go with it. */
 export interface NamedPlace {
   readonly source: AnswerSource;
-  readonly count: number;
+  readonly items: readonly AnswerSource[];
 }
 
 /**
  * Names as a person reads them: one per place, as an answer's sources are
  * grouped. Two decisions of one meeting, or two sections of one page, carry
- * the same name and open the same place: one name, counting both, so the
- * names account for every item read.
+ * the same name and open the same place: one name for both, which counts and
+ * opens both, so the names account for every item read.
  */
 export function namedPlaces(items: readonly AnswerSource[]): NamedPlace[] {
-  const places = new Map<string, { source: AnswerSource; count: number }>();
+  const places = new Map<string, AnswerSource[]>();
   for (const item of items) {
     const key = groupKey(item);
     const place = places.get(key);
-    if (place) place.count += 1;
-    else places.set(key, { source: item, count: 1 });
+    if (place) place.push(item);
+    else places.set(key, [item]);
   }
-  return [...places.values()];
+  return [...places.values()].map(read => ({ source: read[0]!, items: read }));
 }
 
 /** A read row's names: the first ROW_NAMES places, and how many more items, so "+N" counts what "Reading N items" did. */
 export function rowNames(items: readonly AnswerSource[], shown = ROW_NAMES): { names: readonly NamedPlace[]; more: number } {
   const names = namedPlaces(items).slice(0, shown);
-  return { names, more: items.length - names.reduce((total, place) => total + place.count, 0) };
+  return { names, more: items.length - names.reduce((total, place) => total + place.items.length, 0) };
 }
 
 /** "48s", "1m 12s". */
