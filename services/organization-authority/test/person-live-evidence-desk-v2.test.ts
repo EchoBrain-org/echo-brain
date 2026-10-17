@@ -292,14 +292,18 @@ describe('thin live ticket dispatcher', () => {
     expect(() => deskWith(f.base, f.ticket, undefined, 'another-project')).toThrow(AuthorityOperationError);
     expect(() => deskWith(f.base, f.ticket, mixedFixture().slack, scope.project_id)).toThrow(AuthorityOperationError);
   });
-  it('refuses owner or status a source cannot apply (ADR-0041)', async () => {
+  it('passes a list page\'s exactly-full flag through, and refuses owner or status a source cannot apply (ADR-0041)', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
+    vi.mocked(f.ticket.list).mockResolvedValueOnce({ items: f.tickets, truncated: false, receipt_digests: [receipt('jira')], page_full: true });
+    expect(await desk.list({ source: 'ticket', limit: 50 })).toMatchObject({ truncated: false, page_full: true });
+    vi.mocked(f.base.list).mockResolvedValueOnce({ ...empty, page_full: false });
+    expect(await desk.list({ source: 'meeting', limit: 50 })).toMatchObject({ page_full: false });
     for (const filter of [{ owner: 'Dana' }, { status: 'open' as const }]) {
       for (const source of ['ticket', 'slack', 'meeting', 'document']) {
         await expect(desk.list({ source, ...filter, ...(source === 'slack' ? { channel: 'launch' } : {}) })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source cannot be filtered by owner or status' });
       }
     }
-    expect(f.ticket.list).not.toHaveBeenCalled(); expect(f.base.list).not.toHaveBeenCalled(); expect(f.slack.list).not.toHaveBeenCalled();
+    expect(f.ticket.list).toHaveBeenCalledOnce(); expect(f.base.list).toHaveBeenCalledOnce(); expect(f.slack.list).not.toHaveBeenCalled();
   });
   it('does not forward live cursors or project/container selectors into other desk sources', async () => {
     const f = fixture(); const desk = deskWith(f.base, f.ticket);

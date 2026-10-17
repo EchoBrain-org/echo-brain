@@ -242,6 +242,8 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     const second = await list(paged, { cursor: first.next_cursor });
     expect(second.items).toHaveLength(7);
     expect(second).not.toHaveProperty('next_cursor');
+    // This source holds every matching follow-up, so no page leaves its list's end unverified (ADR-0041).
+    expect([first.page_full, second.page_full]).toEqual([false, false]);
     expect(new Set([...first.items, ...second.items].map(item => item.id)).size).toBe(17);
     await expect(list(paged, { cursor: first.next_cursor, owner: 'me' })).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(list(paged, { cursor: 'follow_ups_99' })).rejects.toMatchObject({ code: 'invalid_request' });

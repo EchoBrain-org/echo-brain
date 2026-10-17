@@ -419,7 +419,10 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
           next_cursor = `jira_cursor_${randomUUID()}`;
           cursors.set(next_cursor, { selection, token, projectId: project?.id, tokens: page.tokens, ids: page.ids });
         }
-        return Object.freeze({ items, truncated: token !== undefined || selected.some(item => item.truncated), ...(next_cursor === undefined ? {} : { next_cursor }) });
+        // Jira's last page can be exactly full (ADR-0041): its end is confirmed only when the page held fewer issues than
+        // asked for, or when the newest-first order passed since. Counted before ECHO's own date filter.
+        const page_full = token === undefined && page.token === undefined && page.selected.length >= maximum;
+        return Object.freeze({ items, truncated: token !== undefined || selected.some(item => item.truncated), ...(next_cursor === undefined ? {} : { next_cursor }), page_full });
       }, input.signal);
     },
     async revalidate(input): Promise<void> {

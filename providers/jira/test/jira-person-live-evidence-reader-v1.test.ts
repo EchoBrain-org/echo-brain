@@ -134,6 +134,28 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.audit.record).toHaveBeenCalledTimes(1);
   });
 
+  it('says when a last page was exactly full, so its end is unverified, and never when the end is confirmed (ADR-0041)', async () => {
+    const f = fixture();
+    const ids = Array.from({ length: 25 }, (_, index) => String(10025 - index));
+    for (const id of ids) f.state.tickets.set(id, withFields({ created: '2026-10-04T12:00:00Z' }, ticket(id)));
+    // isLast with all 25 asked for, isLast with fewer, and a page with a next token.
+    f.state.pages = [page(ids), page(ids.slice(0, 24)), page(ids, 'next')];
+    const { source } = await f.make();
+    expect(await source.list({ limit: 50 })).toMatchObject({ truncated: false, page_full: true });
+    expect(await source.list({ limit: 50 })).toMatchObject({ truncated: false, page_full: false });
+    const continued = await source.list({ limit: 50 });
+    expect(continued).toMatchObject({ truncated: true, page_full: false, next_cursor: expect.any(String) });
+    // Newest first, a full page whose oldest issue predates since confirms the end without its token.
+    for (const id of ids.slice(-1)) f.state.tickets.set(id, withFields({ created: '2026-10-01T12:00:00Z' }, ticket(id)));
+    f.state.pages = [page(ids, 'next')];
+    const dated = await source.list({ limit: 50, since: '2026-10-03' });
+    expect(dated).toMatchObject({ truncated: false, page_full: false });
+    expect(dated).not.toHaveProperty('next_cursor');
+    expect(dated.items).toHaveLength(24);
+    // The audit never records it.
+    expect(JSON.stringify(f.releases)).not.toContain('page_full');
+  });
+
   it('keeps a full list page of worst-case metadata inside the shared result bound', async () => {
     const f = fixture();
     const ids = Array.from({ length: 30 }, (_, index) => String(10030 - index));

@@ -258,7 +258,8 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (input.source === "slack") return result([], false, []);
     const kinds = input.kinds ?? (input.source === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : ['note', 'document_passage'] as const);
     const page = await search({ ...evidenceDateFilterV1(input), source: input.source, kinds, limit, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-    return page;
+    // The inventory reads one row past its limit and says truncated when more exist, so its end is confirmed (ADR-0041).
+    return Object.freeze({ ...page, page_full: false });
   };
   const open = async (input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();

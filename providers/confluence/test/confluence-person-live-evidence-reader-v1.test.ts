@@ -150,6 +150,17 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.length).toBe(2048);
   });
 
+  it('says when a last list page was exactly full, so its end is unverified (ADR-0041)', async () => {
+    const f = await fixture({ pages: Array.from({ length: 20 }, (_, index) => page({ id: String(100 + index) })) });
+    expect(await f.source.list({ limit: 20 })).toMatchObject({ truncated: false, page_full: true });
+    f.state.pages.delete('119');
+    expect(await f.source.list({ limit: 20 })).toMatchObject({ truncated: false, page_full: false });
+    // A next link says more exist; the page is then continued, not unverified.
+    f.state.list = () => ({ results: [...f.state.pages.values()].map(value => metadata(value)), _links: { next: `/wiki/api/v2/pages?cursor=more&limit=20` } });
+    expect(await f.source.list({ limit: 20 })).toMatchObject({ truncated: true, page_full: false, next_cursor: expect.any(String) });
+    expect(JSON.stringify(f.audits)).not.toContain('page_full');
+  });
+
   it('lists, searches, opens, and revalidates a mapped page with the minimal granular resource grant', async () => {
     const f = await fixture({ selected: ['42'], scopes: ['read:page:confluence', 'read:space:confluence', 'read:content-details:confluence'] });
     const listed = await f.source.list({ limit: 20 });

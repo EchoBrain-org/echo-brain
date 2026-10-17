@@ -367,6 +367,8 @@ describe('Person evidence desk: one source at a time', () => {
     const listed = await value.makeDesk().list({ source: 'meeting', kinds: ['decision'] });
     expect(listed.items).toEqual([expect.objectContaining({ kind: 'decision', label: 'Approved meeting' })]);
     expect(listed.items[0]).not.toHaveProperty('text');
+    // The inventory reads one row past its limit and says truncated when more exist, so its end is confirmed (ADR-0041).
+    expect(listed).toMatchObject({ truncated: false, page_full: false });
   });
 
   it('reads no Slack: a Slack-only search or list returns nothing, with no Slack receipt', async () => {
