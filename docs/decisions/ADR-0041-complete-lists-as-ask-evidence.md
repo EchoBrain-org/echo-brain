@@ -26,9 +26,10 @@ The founder approved this design ("two kinds of support") on 2026-10-17,
 with the seven additions from that day's completeness research, to clear a
 held release finding on candidate `c15cd0f`. The names, bounds and wording
 below are build calls within that design. Acceptance does not mean the change
-is built, deployed or qualified. Code paths are relative to
-`packages/organization-authority-kernel/src/answer-composition/` unless shown
-otherwise, at `reviewed_ref`.
+is built, deployed or qualified. Code paths are at `reviewed_ref`, relative to
+`packages/organization-authority-kernel/src/answer-composition/` (tests to
+`packages/organization-authority-kernel/test/answer-composition/`) unless
+shown in full.
 
 ## Context and options
 
@@ -107,8 +108,8 @@ route, header, database table or client changes.
   - `filter_applied`: for each field the model asked for, `applied`; or
     `partial` (applied only to members that record the field, the others kept,
     as meeting-action status works today); or `ignored` (the source cannot
-    apply it, so the list is wider than asked). A field is `ignored` exactly
-    when it is absent from `filter`.
+    apply it, so the list is wider than asked). A field named here is
+    `ignored` exactly when it is absent from `filter`.
   - `members`: the E-ids of the rows the list released, after ECHO's own
     owner and status filter, in the source's order, each once.
   - `shown`: how many members were in the prompt of a research step admitted
@@ -229,12 +230,17 @@ route, header, database table or client changes.
   list is not limited to that owner." A source that cannot apply a requested
   date field refuses the read. It never answers empty and never substitutes
   another field.
+- **A list id in a sentence** adds no citation of its own: the sentence cites
+  the members or texts it also names, and a sentence left with no citation is
+  dropped, as today.
 - **Code checks the answer.** For each list the writer saw, the answer goes
   back to the writer once, with the reason, if either:
-  - the plan found a need on the list, but the answer does not use it (no
-    `lists` entry for it and no sentence citing it); or
-  - the answer cites two or more of the list's member rows, but not all, and
-    does not use the list.
+  - the plan found a need on the list (that need's support includes it), but
+    the answer does not use it: no `lists` entry for it and no kept sentence
+    citing it; or
+  - the answer cites two or more of the list's members by their rows (members
+    whose text the writer was not given), but not all of them, and does not
+    use the list.
 
   The writer has one repair in total, as today; a failed check uses it if it
   is still unused and the request has time and model calls left. If the
@@ -244,10 +250,12 @@ route, header, database table or client changes.
   writer gives no usable reply, code still writes that list's statement and the
   part is partial. For that case only, this replaces the fallback to three
   released records ([ADR-0022](ADR-0022-agentic-ask-only.md)).
-- **Prompts (addition 6).** Ask's research step gets its own wording of rule
-  4. It names `lists`, and says that a question about which or how many items
-  exist is supported only by a complete list, cited by its id, never by some
-  of its items. "You may stop early when the facts the question asks for are
+- **Prompts (addition 6).** Ask's research step gets its own wording of rules
+  3 and 4. Rule 3 accepts a list's id as support for which items exist. Rule 4
+  names `lists`, and says that a question about which or how many items exist
+  is supported only by a complete list, cited by its id, never by some of its
+  items, and that a list which cannot be read to its end is cited anyway, for
+  "at least N". "You may stop early when the facts the question asks for are
   already supported" becomes "Stop as soon as every requested fact is
   supported; a question about which items exist is supported only by a complete
   list." Ask's writer prompt gets the list rules above. Task prompts do not
@@ -269,6 +277,138 @@ its receipts, the release fence, the 90 s deadline, the limits of 10 rounds,
 24 model calls and 4 actions per step, and the response bounds are all
 unchanged. Progress events ([ADR-0039](ADR-0039-ask-progress-names-after-the-access-check.md))
 are unchanged: a list row is not read in full, so progress does not name it.
+
+## Retirements
+
+Each rule below was checked against the code at `reviewed_ref`, the October 4
+trace and the research. A rule is retired only where that evidence shows it
+fails, and each retirement names what replaces it. "Kept" says why a candidate
+stays. The safety rules (access checks, audit, release fence and caps) were
+not candidates.
+
+1. **"Any one cited item read" as the only support for a found need.**
+   Retired for Ask needs with list support; kept as the rule for content.
+   - Where: `agentic-ask-research-state-v1.ts:37`
+     (`need.evidence.some(citable)`), with `citable` at
+     `agentic-research-loop-v1.ts:779`.
+   - Evidence: in the October 4 trace, round 3's finish cited the 8 rows and
+     11 sections (cut to the first 12 ids), and the check accepted it because
+     one cited section had been read; the answer named 4 of 8. The research calls this shape the "one good
+     document" trap ([Corrective RAG](https://arxiv.org/html/2401.15884)), and
+     finds that partial context makes models answer confidently instead of
+     declining
+     ([sufficient context](https://research.google/blog/deeper-insights-into-retrieval-augmented-generation-the-role-of-sufficient-context/)).
+     Nothing shows the rule failing for a content need, which one supporting
+     text answers.
+   - Replacement: `agenticNeedSupportV1` and the finish check above. A need
+     with list support is checked against its lists ("keep reading the list").
+     A need without one keeps "at least one cited item read in full". Task
+     goals keep line 37 unchanged.
+2. **Items without text never reach the writer.** Retired for list members
+   in Ask.
+   - Where: `renderers/ask-renderer-v1.ts:115-127` (the writer gets cited
+     items read in full, other items read in full, then items with released
+     text); RFC-0003, "Evidence the writer reads" ("Inventory entries without
+     text remain excluded"); the
+     [research-loop evaluation design](../product/2026-10-06-research-loop-eval-v1.md)
+     ("Items without released text never reach the writer").
+   - Evidence: the trace's writer got E9 to E19, the sections of 4 pages, and
+     none of the rows E1 to E8, and it wrote 4 names. Seeing the rows would
+     not be enough on its own: given the right passages, writers still leave
+     items out ([QAMPARI](https://arxiv.org/abs/2205.12665): 47.5% found;
+     [DeepAmbigQA](https://arxiv.org/html/2511.01323): 71% recall at 93%
+     precision).
+   - Replacement: the writer's list view (rows only, never text) and the
+     code-written list statement. Related references and continuation
+     metadata (`agentic-research-loop-v1.ts:518-522`) still never reach the
+     writer.
+3. **A list kept only as a count.** Retired for Ask; kept for task goals.
+   - Where: `agentic-research-loop-v1.ts:760-763` (`inventoryView`: args and
+     counts, no id or members), `:1110` (the bundle drops `args`), and
+     `renderers/ask-renderer-v1.ts:107-109` ("Filters ... are intentionally
+     excluded").
+   - Evidence: the writer saw `{source: pages, shown_count: 8, more: false}`,
+     with no names and no filter. The planner had no id to cite, so its
+     correct round-2 finish could only cite rows, and the check refused it. In
+     the research, a complete list is only as good as its filter, so products
+     that get lists right show the filter
+     ([Snowflake](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst),
+     [Weaviate](https://weaviate.io/blog/query-agent)).
+   - Replacement: `lists` in the step view and the writer view, each with its
+     id, members and filter. `coverage.inventories` stays in the bundle,
+     because `renderers/impact-card-renderer-v1.ts:261` reads it.
+4. **The not-found guards on lists.** Kept; nothing replaces them.
+   - Where: `blockingInventories` (`agentic-research-loop-v1.ts:764-776`) and
+     its use at `:1022-1029`; the not-found rule
+     (`agentic-ask-research-state-v1.ts:38-44`); exhaustively empty sources
+     (`agentic-research-loop-v1.ts:589` and `:1075-1083`).
+   - Evidence: these guard a claim that a content fact is absent, which list
+     evidence does not cover. A list says which items exist, not that none of
+     them says something. The failing run had no not-found need, so the trace
+     shows nothing against them. Their tests protect real cases: a listed
+     source's unread pages keep blocking while its search did not complete
+     (`agentic-research-loop-v1.test.ts:83`); a complete unfiltered list
+     covers its filtered ones (`:101`); rows alone need an open before absence
+     (`agentic-ask-v1.test.ts:501`). The only redundant part is the
+     model-facing `inventories` field, retired in item 3.
+5. **"You may stop early when the facts the question asks for are already
+   supported."** Reworded for Ask; kept for task goals.
+   - Where: `agentic-ask-v1-model-protocol.ts:286-287`. The same rule 4 tells
+     the planner to search a `metadata_only_list` source "instead of paging
+     through it".
+   - Evidence: in the research, stopping too early is the main failure on list
+     questions ([DeepSearchQA](https://arxiv.org/html/2601.20975v1)), and on
+     [WideSearch](https://arxiv.org/html/2508.07999) agents abandon the search
+     after a first failed attempt. The trace does not show this line causing
+     the failure: the planner's round-2 finish was right. But the line gives
+     no way to tell a set from a single fact, and the paging sentence tells
+     the planner not to read a list to its end, which a "which" question
+     needs.
+   - Replacement: Ask's own rule 4 (addition 6). The not-found advice about
+     `metadata_only_list` sources stays, for facts about content.
+6. **RFC-0003's "A second finish is accepted".** Corrected; the code never
+   did this.
+   - Where: RFC-0003's finish check (lines 257-258 before this record).
+   - Evidence: the repair's reply goes through the same check
+     (`agentic-model-gate-v1.ts:304-327`), and a second refused finish ends
+     research as `unusable_step`, not completed
+     (`agentic-research-loop-v1.ts:1036-1051`), as the test at
+     `agentic-research-loop-v1.test.ts:83-99` expects.
+   - Replacement: the corrected RFC text. The code does not change.
+7. **A list page is never progress once research has read some text.**
+   Retired for Ask.
+   - Where: `agentic-research-loop-v1.ts:405-422` (a row without text is not
+     new evidence) and `:1066-1089` (once any item is read in full, only new
+     evidence is progress, and 2 or 3 idle steps stop research as
+     `no_progress`).
+   - Evidence: code only. Reading a list to its end now matters, and a list of
+     rows without text that needs more than three list-only steps after any
+     text was read stops before its end.
+   - Replacement: for a question goal, a list page that adds members counts as
+     progress.
+8. **A date filter a source cannot apply, answered as empty.** Retired
+   (addition 3).
+   - Where:
+     `services/organization-authority/src/adapters/persistence/sqlite/person-original-context-retrieval-v1.ts:42`:
+     a document read with a `date_field` other than `received` adds `AND 0`.
+   - Evidence: code only. Such a list would be empty and complete, and so
+     would say that nothing exists when its filter was never applied.
+   - Replacement: the source refuses the read and names the date fields it
+     supports, as the Jira, Confluence and record readers already do.
+
+**Considered and kept:**
+
+- The 4-action cap (`agentic-ask-v1-model-protocol.ts:15`): raising it only
+  moves the failure from 8 items to 9 or 13.
+- The 12-id evidence cap (`agentic-ask-v1-model-protocol.ts:19` and
+  `:142-148`): it cut the trace's round-3 finish from 19 ids to 12, but a list
+  need now cites a single list id.
+- The 300-entry scratchpad cap (`agentic-research-loop-v1.ts:92`): it bounds
+  how many members research can be shown, so a longer list is honestly
+  incomplete.
+- No new stop signal: no model-judged sufficiency, confidence score or
+  "nothing new" completion signal is added. The research found that each
+  would have accepted 4 of 8.
 
 ## Migration, rollback, and evidence
 
