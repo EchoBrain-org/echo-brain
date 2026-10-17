@@ -11,7 +11,7 @@ executed; see the plan's
 [As built](../superpowers/plans/2026-10-08-open-items-and-home.md#as-built)
 section. Every section but Rulings describes what was built, including the
 rulings made during execution that change behavior. Updated 2026-10-16 for
-the research ROI fixes the founder approved that day (R77–R81): sweeps skip
+the research ROI fixes the founder approved that day (R77–R82): sweeps skip
 the planner, take only items in tools the caller has connected, never let
 `unreadable` replace a judged verdict, ground `landed` and `changed` in the
 finding's own items and withhold a screened line without a repair; an
@@ -717,9 +717,10 @@ separate pull request. The plan's As built section records the split.
 
 ## Acceptance
 
-- An impact run's finish writes exactly one item per `conflicts`,
-  `needs_updating` or not-assessed row, none for `confirms`, all `unsent`, in
-  the card's transaction.
+- An impact run's finish writes exactly one item per `conflicts` or
+  `needs_updating` row, none for `confirms` or not-assessed rows, none for the
+  meeting's own record or transcript, all `unsent`, in the card's
+  transaction.
 - A Jira assignee whose account a member connected is matched to that member;
   a unique exact name on an ECHO action is matched; anything else falls to the
   approver. Two members with the same name match no one.
@@ -856,7 +857,7 @@ Rulings made while executing the plan are listed in the plan's
 [As built](../superpowers/plans/2026-10-08-open-items-and-home.md#as-built)
 section, not here; those that change behavior are folded into the sections
 above. The exceptions are those of 2026-10-09 (R63–R76) and of 2026-10-16
-(R77–R81), which are listed at the end of this section too.
+(R77–R82), which are listed at the end of this section too.
 
 Made with the founder on 2026-10-08:
 
@@ -893,7 +894,7 @@ text; ECHO never edits outside tools.
 Made while writing:
 
 12. `confirms` rows make no item; not-assessed rows do, with no `expected`
-    line.
+    line. (Superseded 2026-10-16 by R82: not-assessed rows make no item.)
 13. Leaving is handled at read time: owner gone → approver; both gone →
     project leads, who act by reassigning.
 14. `expected` is written from the decision, never from the item, so the
@@ -982,3 +983,6 @@ Made while building the fixes the founder approved that day:
 - R81. A sweep line that fails a screen is withheld without a repair: lines
   are never stored, and in the traces a screen repair regenerated and
   flipped every verdict.
+- R82. A row no model assessed makes no open item: the fallback card's rows
+  are only possibly affected. This replaces the not-assessed half of
+  ruling 12.
