@@ -295,11 +295,13 @@ export function agenticWriterListMemberV1(entry: { readonly short: string; reado
 /**
  * A list for the writer. `members` are every member's rows in list order; the
  * checked count covers all of them, and the writer sees the first
- * AGENTIC_LIST_WRITER_MEMBERS_MAX_V1.
+ * `max_members` (at most AGENTIC_LIST_WRITER_MEMBERS_MAX_V1; fewer when the
+ * writer's prompt has less room).
  */
-export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], cited_by_plan: boolean): AgenticWriterListV1 {
+export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], cited_by_plan: boolean, max_members: number = AGENTIC_LIST_WRITER_MEMBERS_MAX_V1): AgenticWriterListV1 {
   if (members.length !== list.members.length || members.some((member, index) => member.id !== list.members[index])) invalid("writer members must be the list's members, in order");
-  const shown = members.slice(0, AGENTIC_LIST_WRITER_MEMBERS_MAX_V1);
+  if (!Number.isSafeInteger(max_members) || max_members < 0) invalid("max_members must be a whole, non-negative count");
+  const shown = members.slice(0, Math.min(max_members, AGENTIC_LIST_WRITER_MEMBERS_MAX_V1));
   return Object.freeze({
     id: list.id, source: list.source, filter: list.filter, filter_applied: list.filter_applied, complete: list.complete,
     count: list.members.length, checked: members.filter(member => member.checked).length, read_at: list.read_at, cited_by_plan,
@@ -337,4 +339,153 @@ export function agenticListNameSharesV1(selected: readonly number[], budget: num
     }
   }
   return Object.freeze(shares);
+}
+
+// ---- the statement code writes ----------------------------------------
+
+/** UTF-8 bytes of one code-written statement: the response's statement bound. */
+export const AGENTIC_LIST_STATEMENT_BYTES_V1 = 4 * 1024;
+
+const MONTHS = Object.freeze(["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]);
+const CALENDAR_DAY = /^(\d{4})-(\d{2})-(\d{2})$/u;
+/** "2026-10-04" as "October 4, 2026"; any other value unchanged. */
+export function agenticCalendarDayV1(value: string): string {
+  const match = CALENDAR_DAY.exec(value);
+  const month = match === null ? undefined : MONTHS[Number(match[2]) - 1];
+  return match === null || month === undefined ? value : `${month} ${Number(match[3])}, ${match[1]}`;
+}
+/** How a date filter reads after its noun. Occurred, and a filter with no field, read as "dated". */
+const DATE_WORDS: Readonly<Record<EvidenceDateFieldV1, string>> = Object.freeze({ created: "created", updated: "updated", due: "due", received: "received", occurred: "dated" });
+function dateRange(since: string | undefined, until: string | undefined): string | undefined {
+  if (since !== undefined && until !== undefined) {
+    if (since === until) return `on ${agenticCalendarDayV1(since)}`;
+    const sameYear = CALENDAR_DAY.test(since) && CALENDAR_DAY.test(until) && since.slice(0, 4) === until.slice(0, 4);
+    const from = agenticCalendarDayV1(since);
+    return `from ${sameYear ? from.replace(/, \d{4}$/u, "") : from} to ${agenticCalendarDayV1(until)}`;
+  }
+  if (since !== undefined) return `since ${agenticCalendarDayV1(since)}`;
+  return until === undefined ? undefined : `through ${agenticCalendarDayV1(until)}`;
+}
+function joined(values: readonly string[]): string {
+  return values.length <= 1 ? values.join("") : `${values.slice(0, -1).join(", ")} and ${values.at(-1)!}`;
+}
+/** One line, at most `chars` characters: a member's label as a statement names it. */
+function line(value: string, chars: number): string {
+  const text = value.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim();
+  const characters = [...text];
+  return characters.length <= chars ? text : `${characters.slice(0, chars - 1).join("").trimEnd()}…`;
+}
+
+/**
+ * What a list's applied filter says after its noun (ADR-0041): its channel, its
+ * dates and its other fields, from the filter as applied, never the model's
+ * arguments. " created on October 4, 2026", " with kind action and owner Mara".
+ */
+export function agenticListFilterPhraseV1(filter: AgenticListFilterV1): string {
+  const fields = [
+    ...(filter.kind === undefined ? [] : [`kind ${filter.kind}`]),
+    ...(filter.owner === undefined ? [] : [`owner ${filter.owner}`]),
+    ...(filter.status === undefined ? [] : [`status ${filter.status}`]),
+  ];
+  const range = dateRange(filter.since, filter.until);
+  return [
+    ...(filter.channel === undefined ? [] : [` in #${filter.channel}`]),
+    ...(range === undefined ? [] : [` ${DATE_WORDS[filter.date_field ?? "occurred"]} ${range}`]),
+    ...(fields.length === 0 ? [] : [` with ${joined(fields)}`]),
+  ].join("");
+}
+
+/** A plural noun for a count: "1 Jira ticket", "8 Confluence pages". */
+function counted(noun: string, count: number): string {
+  return count === 1 && noun.endsWith("s") && !noun.endsWith("ss") ? noun.slice(0, -1) : noun;
+}
+
+/** The row facts a code-written statement names. */
+export type AgenticListNamedMemberV1 = Pick<AgenticWriterListMemberV1, "title" | "status" | "owner" | "due">;
+
+/**
+ * Members as a code-written statement names them: each label, cut to
+ * AGENTIC_LIST_NAME_CHARS_V1 characters, then its status, owner and due date
+ * wherever those differ between the named members (ignoring case). No source-specific rule:
+ * a page reads by title, a ticket by key and summary, a follow-up by title.
+ */
+export function agenticListMemberNamesV1(members: readonly AgenticListNamedMemberV1[]): readonly string[] {
+  // Values that differ only in case or spacing are the same value.
+  const differs = (field: "status" | "owner" | "due") => new Set(members.map(member => member[field]?.trim().toLowerCase())).size > 1;
+  const show = { status: differs("status"), owner: differs("owner"), due: differs("due") };
+  return Object.freeze(members.map(member => {
+    const details = [
+      ...(show.status && member.status !== undefined ? [line(member.status, 60)] : []),
+      ...(show.owner && member.owner !== undefined ? [member.owner === "none recorded" ? "no owner recorded" : `owner ${line(member.owner, 80)}`] : []),
+      ...(show.due && member.due !== undefined ? [`due ${agenticCalendarDayV1(line(member.due, 40))}`] : []),
+    ];
+    const label = line(member.title, AGENTIC_LIST_NAME_CHARS_V1);
+    return details.length === 0 ? label : `${label} (${details.join(", ")})`;
+  }));
+}
+
+/** Members whose row field equals the selection's value, ignoring case; every member without one. */
+export function agenticListSelectV1<T extends Pick<AgenticWriterListMemberV1, "owner" | "status">>(members: readonly T[], where: AgenticAnswerListUseV1["where"]): readonly T[] {
+  if (where === undefined) return members;
+  const wanted = where.value.trim().toLowerCase();
+  return Object.freeze(members.filter(member => member[where.field]?.trim().toLowerCase() === wanted));
+}
+
+/** What one code-written statement says about a list. */
+export interface AgenticListStatementInputV1 {
+  /** The list's noun, plural ("Confluence pages"). */
+  readonly noun: string;
+  readonly filter: AgenticListFilterV1;
+  /** Members ECHO listed: the list's own count, never a vendor's total (addition 5). */
+  readonly count: number;
+  readonly complete: boolean;
+  /** The writer's selection; `value` as the selected members record it. */
+  readonly where?: NonNullable<AgenticAnswerListUseV1["where"]>;
+  /** The selected members, in list order: every member without a selection. */
+  readonly selected: readonly AgenticListNamedMemberV1[];
+  /** Members this statement may name: the answer's share (agenticListNameSharesV1). */
+  readonly share: number;
+}
+
+/**
+ * The statement code writes for a list the answer uses (ADR-0041): its count,
+ * its filter and up to `share` names, then "and N more" with N from the list.
+ * A complete list: "8 Confluence pages created on October 4, 2026: A; B; ...".
+ * A selection: "3 of the 60 Jira tickets created ... have owner Dana Lee: A; B; C".
+ * A list that is not complete: "At least 12 Jira tickets ...". Names stop early
+ * when the statement would pass AGENTIC_LIST_STATEMENT_BYTES_V1. `named` is how
+ * many of `selected`, from the first, it names; the caller cites exactly those.
+ */
+export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly named: number } {
+  const { noun, count, complete, where, selected } = input;
+  if (selected.length === 0 || input.share < 1) throw new RangeError("A list statement names at least one member");
+  const phrase = agenticListFilterPhraseV1(input.filter);
+  const k = selected.length;
+  const lead = where === undefined
+    ? `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`
+    : complete
+      ? `${k} of the ${count} ${counted(noun, count)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)}`
+      : `At least ${k} ${counted(noun, k)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)} (${count} listed so far)`;
+  for (let named = Math.min(input.share, k); named >= 1; named -= 1) {
+    const names = agenticListMemberNamesV1(selected.slice(0, named));
+    const text = `${lead}: ${names.join("; ")}${named < k ? `; and ${k - named} more` : ""}.`;
+    if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || named === 1) return Object.freeze({ text, named });
+  }
+  throw new RangeError("unreachable");
+}
+
+/** The not_found phrase for a selection that matches no member: never a statement (ADR-0041). */
+export function agenticListSelectionNotFoundV1(noun: string, filter: AgenticListFilterV1, where: NonNullable<AgenticAnswerListUseV1["where"]>): string {
+  return `${noun}${agenticListFilterPhraseV1(filter)} that have ${where.field} ${line(where.value, 120)}`;
+}
+
+/**
+ * What code adds to a sentence that claims content across a list (addition 4)
+ * when not every member was checked: "(4 of 8 checked so far)"; for a list not
+ * read to its end, "(4 of at least 8 checked so far)". Undefined once every
+ * member of a complete list was checked.
+ */
+export function agenticListCheckedNoteV1(list: Pick<AgenticWriterListV1, "checked" | "count" | "complete">): string | undefined {
+  if (list.complete && list.checked >= list.count) return undefined;
+  return `(${list.checked} of ${list.complete ? "" : "at least "}${list.count} checked so far)`;
 }

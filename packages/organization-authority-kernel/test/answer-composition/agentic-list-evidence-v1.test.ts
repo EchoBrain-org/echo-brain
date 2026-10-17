@@ -6,14 +6,22 @@ import {
   AGENTIC_LIST_FILTER_FIELDS_V1,
   AGENTIC_LIST_NAMED_MAX_V1,
   AGENTIC_LIST_SELECTION_FIELDS_V1,
+  AGENTIC_LIST_STATEMENT_BYTES_V1,
   AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
   AGENTIC_SUPPORT_KINDS_V1,
+  agenticCalendarDayV1,
+  agenticListCheckedNoteV1,
   agenticListCompleteV1,
   agenticListEndUnverifiedV1,
   agenticListFilterNoticeV1,
+  agenticListFilterPhraseV1,
   agenticListIdV1,
+  agenticListMemberNamesV1,
   agenticListNameSharesV1,
   agenticListNounV1,
+  agenticListSelectionNotFoundV1,
+  agenticListSelectV1,
+  agenticListStatementV1,
   agenticNeedSupportV1,
   agenticSupportKindsV1,
   agenticWriterListMemberV1,
@@ -230,6 +238,14 @@ describe("the writer's view", () => {
     expect(agenticWriterListMemberV1({ short: "E2", item: action }, false)).toMatchObject({ owner: "none recorded", due: "2026-09-12" });
   });
 
+  it("shows fewer members when the writer's prompt has less room, never fewer than none", () => {
+    const list = createAgenticListEvidenceV1(OCTOBER_4);
+    const rows = list.members.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, false));
+    expect(agenticWriterListV1(list, rows, true, 3)).toMatchObject({ count: 8, members: rows.slice(0, 3), members_omitted: 5 });
+    expect(agenticWriterListV1(list, rows, true, 0)).toMatchObject({ count: 8, members: [], members_omitted: 8 });
+    expect(() => agenticWriterListV1(list, rows, true, -1)).toThrow(/max_members/u);
+  });
+
   it("bounds a long list's members and counts the rest, with checks counted over all members", () => {
     const ids = Array.from({ length: 120 }, (_, index) => `E${index + 1}`);
     const list = createAgenticListEvidenceV1({ ...OCTOBER_4, members: ids, shown: 120 });
@@ -293,5 +309,78 @@ describe("the bundle and the evaluation view", () => {
     const list = createAgenticListEvidenceV1(OCTOBER_4);
     expect(trimAgenticEvidenceBundleV1(bundle([list])).lists).toEqual([list]);
     expect(trimAgenticEvidenceBundleV1(bundle())).not.toHaveProperty("lists");
+  });
+});
+
+describe("the statement code writes for a list (ADR-0041)", () => {
+  const titles = ["ECHO Product Pipeline — Start Here", "Assumptions and decisions — source facts versus proposals", "Gate reviews — EVT pass, DVT hold, PVT pending"];
+  const page = (title: string) => ({ title, status: "current" });
+
+  it("reads a filter as applied: dates, channel and fields, never the model's arguments", () => {
+    expect(agenticCalendarDayV1("2026-10-04")).toBe("October 4, 2026");
+    expect(agenticCalendarDayV1("2026-10-04T08:00:00Z")).toBe("2026-10-04T08:00:00Z");
+    expect(agenticListFilterPhraseV1(OCTOBER_4.filter)).toBe(" created on October 4, 2026");
+    expect(agenticListFilterPhraseV1({ date_field: "updated", since: "2026-10-01", until: "2026-10-04" })).toBe(" updated from October 1 to October 4, 2026");
+    expect(agenticListFilterPhraseV1({ since: "2025-12-30", until: "2026-01-02" })).toBe(" dated from December 30, 2025 to January 2, 2026");
+    expect(agenticListFilterPhraseV1({ channel: "hw-dvt", since: "2026-10-03" })).toBe(" in #hw-dvt dated since October 3, 2026");
+    expect(agenticListFilterPhraseV1({ date_field: "due", until: "2026-10-09" })).toBe(" due through October 9, 2026");
+    expect(agenticListFilterPhraseV1({ kind: "action", owner: "Mara", status: "open", time_zone: "UTC" })).toBe(" with kind action, owner Mara and status open");
+    expect(agenticListFilterPhraseV1({ time_zone: "UTC" })).toBe("");
+  });
+
+  it("names members by label, with status, owner and due date only where they differ", () => {
+    expect(agenticListMemberNamesV1(titles.map(page))).toEqual(titles);
+    expect(agenticListMemberNamesV1([
+      { title: "THERM-1: Fixture", status: "In Progress", owner: "Dana Lee" },
+      { title: "THERM-2: Firmware", status: "Done", owner: "Dana Lee", due: "2026-10-09" },
+    ])).toEqual(["THERM-1: Fixture (In Progress)", "THERM-2: Firmware (Done, due October 9, 2026)"]);
+    expect(agenticListMemberNamesV1([{ title: "Check the numbers", owner: "none recorded" }, { title: "Ship it", owner: "Mara" }]))
+      .toEqual(["Check the numbers (no owner recorded)", "Ship it (owner Mara)"]);
+    const [long] = agenticListMemberNamesV1([{ title: `${"x".repeat(200)}\nsecond line` }]);
+    expect([...long!]).toHaveLength(120);
+    expect(long!.endsWith("…")).toBe(true);
+  });
+
+  it("writes the October 4 statement: the count, the filter and every name", () => {
+    const statement = agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 3, complete: true, selected: titles.map(page), share: 25 });
+    expect(statement).toEqual({ text: `3 Confluence pages created on October 4, 2026: ${titles.join("; ")}.`, named: 3 });
+    expect(agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 1, complete: true, selected: [page(titles[0]!)], share: 25 }).text)
+      .toBe(`1 Confluence page created on October 4, 2026: ${titles[0]}.`);
+  });
+
+  it("names its share, then 'and N more' with N from the list, and says 'at least' for a list not read to its end", () => {
+    const sixty = Array.from({ length: 60 }, (_, index) => ({ title: `THERM-${index + 1}: Fixture work ${index + 1}` }));
+    const statement = agenticListStatementV1({ noun: "Jira tickets", filter: OCTOBER_4.filter, count: 60, complete: true, selected: sixty, share: 25 });
+    expect(statement.named).toBe(25);
+    expect(statement.text).toBe(`60 Jira tickets created on October 4, 2026: ${sixty.slice(0, 25).map(value => value.title).join("; ")}; and 35 more.`);
+    expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: false, selected: sixty.slice(0, 2), share: 2 }).text)
+      .toBe("At least 25 Jira tickets: THERM-1: Fixture work 1; THERM-2: Fixture work 2.");
+  });
+
+  it("writes a selection by owner, and its not-found phrase when it matches nothing", () => {
+    const rows = [{ title: "THERM-1: A", owner: "Dana Lee" }, { title: "THERM-2: B", owner: "Tobias Lund" }, { title: "THERM-3: C", owner: "dana lee" }];
+    const mine = agenticListSelectV1(rows, { field: "owner", value: " DANA LEE " });
+    expect(mine).toEqual([rows[0], rows[2]]);
+    expect(agenticListSelectV1(rows, undefined)).toBe(rows);
+    expect(agenticListStatementV1({ noun: "Jira tickets", filter: OCTOBER_4.filter, count: 3, complete: true, where: { field: "owner", value: "Dana Lee" }, selected: mine, share: 25 }).text)
+      .toBe("2 of the 3 Jira tickets created on October 4, 2026 have owner Dana Lee: THERM-1: A; THERM-3: C.");
+    expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 50, complete: false, where: { field: "status", value: "Done" }, selected: [rows[1]!], share: 25 }).text)
+      .toBe("At least 1 Jira ticket has status Done (50 listed so far): THERM-2: B.");
+    expect(agenticListSelectionNotFoundV1("Jira tickets", OCTOBER_4.filter, { field: "owner", value: "Zhen Ye" })).toBe("Jira tickets created on October 4, 2026 that have owner Zhen Ye");
+  });
+
+  it("stops naming before a statement passes its byte bound, and counts the rest as more", () => {
+    const wide = Array.from({ length: 25 }, (_, index) => ({ title: `${index} ${"𝔸".repeat(118)}` }));
+    const statement = agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 25, complete: true, selected: wide, share: 25 });
+    expect(Buffer.byteLength(statement.text, "utf8")).toBeLessThanOrEqual(AGENTIC_LIST_STATEMENT_BYTES_V1);
+    expect(statement.named).toBeLessThan(25);
+    expect(statement.text.endsWith(`; and ${25 - statement.named} more.`)).toBe(true);
+    expect(() => agenticListStatementV1({ noun: "pages", filter: {}, count: 0, complete: true, selected: [], share: 25 })).toThrow(RangeError);
+  });
+
+  it("says how many members were checked for content across a list (addition 4)", () => {
+    expect(agenticListCheckedNoteV1({ checked: 4, count: 8, complete: true })).toBe("(4 of 8 checked so far)");
+    expect(agenticListCheckedNoteV1({ checked: 25, count: 25, complete: false })).toBe("(25 of at least 25 checked so far)");
+    expect(agenticListCheckedNoteV1({ checked: 8, count: 8, complete: true })).toBeUndefined();
   });
 });
