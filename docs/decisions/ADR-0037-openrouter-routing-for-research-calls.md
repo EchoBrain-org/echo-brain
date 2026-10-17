@@ -5,10 +5,11 @@ kind: decision
 title: Research model calls skip measured bad hosts, run at temperature 0 and record the serving host
 component_ids:
   - CMP-PROCESSING-ADAPTERS
+  - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-10-16
 reviewed_at: 2026-10-16
 reviewed_ref: 17e967cde9abc730ca3cb04d03350a319d3965e6
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -16,6 +17,10 @@ updates:
 ---
 
 # ADR-0037: Research model calls skip measured bad hosts, run at temperature 0 and record the serving host
+
+The founder accepted this on 2026-10-16, with the other fixes from the
+LangSmith audit of 42 `echo-staging` research traces from 2026-10-11 to
+2026-10-16. Acceptance does not mean the change is deployed or qualified.
 
 ## Context and options
 
@@ -98,9 +103,13 @@ and the generation id as `generation_id`. Both appear beside
 `provider_latency_ms` in the successful call's observation and in the
 failure's `generation_observation`. The host name passes through a closed list
 of the hosts OpenRouter lists, or has listed, for the routed model. Any other
-name becomes `other`, so a response cannot add labels. Exporting these fields to traces is
-separate work. The generation-id pattern now also accepts OpenRouter's current
-`gen-<digits>-<token>` form, which the earlier pattern rejected.
+name becomes `other`, so a response cannot add labels. The model gate copies
+both fields, as short tokens only, onto the call's `model_response` or
+`model_error` diagnostic event, and the LangSmith export puts them on that
+call's model run. On a failed call the host is often unknown, because
+OpenRouter names no selected endpoint for a failure. The generation-id pattern
+now also accepts OpenRouter's current `gen-<digits>-<token>` form, which the
+earlier pattern rejected.
 
 **Prompt caching is not fixed here.** Caching across steps would need either
 an explicit `session_id` per research run, which means passing the run's id
