@@ -346,7 +346,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     for (const item of result.items) if (!receipts.includes(item.receipt_sha256)) receipts.push(item.receipt_sha256);
     for (const receipt of result.receipt_digests) if (!receipts.includes(receipt)) receipts.push(receipt);
   };
-  /** Registers an item and returns its entry. Text only ever upgrades an entry. */
+  /**
+   * Registers an item and returns its entry. Text only ever upgrades an entry. Only text is novelty: a new item with
+   * text or an upgrade to text. A metadata-only row (a list page, a related reference) is not progress.
+   */
   const register = (item: EvidenceDeskItemV2): Entry => {
     const existing = entries.get(item.id);
     touch += 1;
@@ -357,7 +360,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     }
     const short = `E${entries.size + 1}`;
     const entry: Entry = { short, item, full: false, opened: false, touched: touch };
-    evidenceNovelty += 1;
+    if (item.text !== undefined) evidenceNovelty += 1;
     entries.set(item.id, entry); byShort.set(short, item.id);
     return entry;
   };
@@ -862,6 +865,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       }
       const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
       const before = hadCitableEvidence ? evidenceNovelty : retrievalProgress;
+      const entriesBefore = entries.size;
       results = [...await runReads(reads)];
       recordRound(roundStartedAt, reads.map((action, index) => roundView(action.tool, action.args, results[index])));
       const catalogIsExhaustivelyEmpty = entries.size === 0 && sourceCatalog.length > 0 && sourceCatalog.every(source => {
@@ -875,7 +879,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       }
       const progressed = (hadCitableEvidence ? evidenceNovelty : retrievalProgress) > before;
       idleSteps = progressed ? 0 : idleSteps + 1;
-      if (idleSteps >= 2) { researchStop = 'no_progress'; break; }
+      // New metadata-only items are not progress, but the planner may still open what this round discovered.
+      if (idleSteps >= (entries.size > entriesBefore ? 3 : 2)) { researchStop = 'no_progress'; break; }
     }
     if (plan.length === 0) plan = [newPart({ question: partQuestion(goal.kind === "question" ? goal.question : goal.task), needs: [], notes: "" })];
   };

@@ -38,14 +38,16 @@ describe("research loop: finishing with nothing found", () => {
   it("accepts not_found after searches while a metadata-only, newest-first ticket inventory has unread pages (c813591c)", async () => {
     const list = vi.fn(async (input: EvidenceDeskListInputV2) => ticketPage(pageOf(input), 5));
     const h = harness([
-      reads("open", [{ tool: "search", args: { query: "staged meeting approval" } }, { tool: "list", args: { source: "tickets" } }]),
-      reads("open", [{ tool: "search", args: { source: "tickets", query: "canary" } }]),
+      reads("open", [
+        { tool: "search", args: { query: "staged meeting approval" } }, { tool: "list", args: { source: "tickets" } },
+        { tool: "search", args: { source: "tickets", query: "canary" } },
+      ]),
       affects("not_found"),
     ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     // The first finish is accepted: no repair, and no further ticket page is read.
-    expect(h.generate).toHaveBeenCalledTimes(3);
-    expect(view.rounds.map(round => round.rejected)).toEqual([[], [], []]);
+    expect(h.generate).toHaveBeenCalledTimes(2);
+    expect(view.rounds.map(round => round.rejected)).toEqual([[], []]);
     expect(list).toHaveBeenCalledTimes(1);
     expect(view.stop).toEqual({ reason: "finished", completed: true });
     // Coverage still says the inventory was not read to its end.
@@ -54,14 +56,16 @@ describe("research loop: finishing with nothing found", () => {
 
   it("still asks for a search of a metadata-only source it listed but never searched", async () => {
     const h = harness([
-      reads("open", [{ tool: "search", args: { source: "meetings", query: "staged meeting approval" } }, { tool: "list", args: { source: "tickets" } }]),
-      reads("open", [{ tool: "search", args: { source: "meetings", query: "canary" } }]),
+      reads("open", [
+        { tool: "search", args: { source: "meetings", query: "staged meeting approval" } }, { tool: "search", args: { source: "meetings", query: "canary" } },
+        { tool: "list", args: { source: "tickets" } },
+      ]),
       affects("not_found"),
       reads("open", [{ tool: "search", args: { source: "tickets", query: "canary" } }]),
     ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list: async input => ticketPage(pageOf(input), 5) });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
-    expect(view.rounds[2]!.rejected).toEqual([expect.stringContaining('listed inventory still has unread pages; repeat list with {"source":"tickets"}, or search tickets for the fact')]);
-    expect(h.prompt(3).validation_error).toContain("or search tickets for the fact");
+    expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining('listed inventory still has unread pages; repeat list with {"source":"tickets"}, or search tickets for the fact')]);
+    expect(h.prompt(2).validation_error).toContain("or search tickets for the fact");
   });
 
   it("treats a filtered inventory as read when the same source's unfiltered inventory is complete", async () => {
@@ -139,5 +143,41 @@ describe("research loop: open", () => {
     expect(h.prompt(2).last_results).toEqual([expect.objectContaining({ tool: "open", id: "E2", opened: ["E2"] })]);
     expect(h.prompt(3).last_results).toEqual([{ tool: "open", id: "E2", note: "already open; its full text is in your scratchpad" }]);
     expect(view.stop).toEqual({ reason: "finished", completed: true });
+  });
+});
+
+describe("research loop: progress", () => {
+  it("counts new full text and text upgrades as progress, never new metadata rows or related references (35130ae1)", async () => {
+    const approved = record("display", "Approved: the display shows two decimals.");
+    const body = ticket("ECHO-1", "ECHO-1: unrelated dashboard work.");
+    const list = vi.fn(async (input: EvidenceDeskListInputV2) => ticketPage(pageOf(input), 10));
+    // ECHO-1 opens to its text and a related reference; ECHO-21 opens to a related reference only.
+    const open = vi.fn(async (input: { readonly item: string }) => input.item === body.id ? result([body, ticket("BUG-412")]) : result([ticket("BUG-413")]));
+    const listTickets = reads("open", [{ tool: "list", args: { source: "tickets" } }]);
+    const h = harness([
+      listTickets,                                           // 20 new rows: idle, and the planner may open what it found
+      reads("open", [{ tool: "open", args: { id: "E2" } }]),  // ECHO-1's text arrives: progress
+      listTickets,                                           // 20 more rows: idle
+      reads("open", [{ tool: "open", args: { id: "E23" } }]), // only a related reference: still idle
+      listTickets,                                           // 20 more rows: research stops
+      listTickets,
+    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list, open });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(view.rounds[3]!.actions[0]!.result).toMatchObject({ opened: [], items: ["E43"], note: "no readable text" });
+    expect(h.generate).toHaveBeenCalledTimes(5);
+    expect(list).toHaveBeenCalledTimes(3);
+    expect(view.stop).toEqual({ reason: "no_progress", completed: false });
+  });
+
+  it("stops after two idle rounds that discover nothing new", async () => {
+    const approved = record("display", "Approved: the display shows two decimals.");
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "display" } }]), reads("open", [{ tool: "search", args: { query: "decimals" } }]),
+      affects("not_found"),
+    ], { openCitation: async () => result([approved]) });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(h.generate).toHaveBeenCalledTimes(2);
+    expect(view.stop).toEqual({ reason: "no_progress", completed: false });
   });
 });
