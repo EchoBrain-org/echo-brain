@@ -116,8 +116,8 @@ describe("sweep renderer", () => {
     const run = alone({ replies: [REPLY] });
     const events: CoreRuntimeObservationV1[] = [];
     await observeCoreRuntimeV1("ask_request", () => run.render(), { observer: event => { events.push(event); } });
-    // Each finding's own item first, then the other sections of its page, then what research cited, read, and only saw listed.
-    expect(run.trace).toEqual(["context:E1,E3,E4,E5,E2,E6", "revalidate", "generate"]);
+    // Each finding's own item first, then the other sections of its page and the first finding's decision; nothing else research came across.
+    expect(run.trace).toEqual(["context:E1,E3,E4,E2", "revalidate", "generate"]);
     expect(events.filter(event => !event.root && event.event === "started").map(event => event.stage)).toEqual(["research_revalidation", "research_render"]);
     expect(run.gate.stats().generations.map(entry => entry.role)).toEqual(["answer"]);
     expect(run.inputs[0]!.system_prompt).toBe(SWEEP_PROMPT);
@@ -127,12 +127,11 @@ describe("sweep renderer", () => {
       { index: 0, finding: FINDINGS[0]!.finding, expected: "two decimals from DVT", about: ["E1"] },
       { index: 1, finding: FINDINGS[1]!.finding, expected: "the PRD specifies two decimals", about: ["E3"] },
     ]);
-    expect((user.items as { id: string }[]).map(value => value.id)).toEqual(["E1", "E3", "E4", "E5", "E2", "E6"]);
+    expect((user.items as { id: string }[]).map(value => value.id)).toEqual(["E1", "E3", "E4", "E2"]);
     expect((user.items as Record<string, unknown>[])[0]).toEqual({
       id: "E1", source: "tickets", kind: "ticket", title: "THERM-46: Display precision", provenance: { kind: "ticket" }, date: "2026-10-06", date_kind: "unspecified",
       attributes: { status: "Done", owner: "Tobias Lund" }, text: "THERM-46: the firmware formats two decimals (0.01 °C).",
     });
-    expect((user.items as Record<string, unknown>[]).find(value => value.id === "E6")).not.toHaveProperty("text");
     const serialized = run.inputs[0]!.user_prompt;
     for (const value of ITEMS) {
       expect(serialized).not.toContain(value.id);
@@ -330,7 +329,7 @@ describe("sweep renderer", () => {
   it("makes no model call when the time left cannot cover one, and still reports each finding", async () => {
     const run = alone({ replies: [REPLY], remaining: 2_999 });
     const rendered = await run.render();
-    expect(run.trace).toEqual(["context:E1,E3,E4,E5,E2,E6"]);
+    expect(run.trace).toEqual(["context:E1,E3,E4,E2"]);
     expect(rendered).toMatchObject({ outcome: "partial", fallbacks: 0, result: { status: "not_assessed", findings: [{ verdict: null }, { verdict: null }, { verdict: "unreadable" }] } });
   });
 
@@ -358,27 +357,16 @@ describe("sweep renderer", () => {
     await rejected;
   });
 
-  it("sends an instruction back for one repair", async () => {
-    const edit = firstVerdict({ line: "Update THERM-46 to two decimals" });
-    const run = alone({ replies: [edit, REPLY] });
-    const rendered = await run.render();
-    expect(run.inputs).toHaveLength(2);
-    expect(run.inputs[1]!.system_prompt).toContain("never what to change");
-    expect(rendered.result).toEqual((await alone({ replies: [REPLY] }).render()).result);
-    expect(JSON.stringify(rendered.result)).not.toContain("Update THERM-46");
-  });
-
-  // After its one repair, a line that still fails a screen is withheld; its verdict stands (ruling R39).
+  // A line is never stored: one that fails a screen is withheld and its verdict stands (ruling R39), with no repair spent on it.
   it.each([
-    ["an instruction", "Update THERM-46 to two decimals", "never what to change"],
-    ["a suggested edit naming the tool", "The PRD needs to be updated in Confluence to two decimals.", "never what to change"],
-    ["a line that says an item was reassigned", "THERM-46 was reassigned to the firmware team and formats two decimals.", "never say who owns"],
-  ] as const)("withholds %s that comes back after the repair, and keeps its verdict", async (_label, text, reason) => {
+    ["an instruction", "Update THERM-46 to two decimals"],
+    ["a suggested edit naming the tool", "The PRD needs to be updated in Confluence to two decimals."],
+    ["a line that says an item was reassigned", "THERM-46 was reassigned to the firmware team and formats two decimals."],
+  ] as const)("withholds %s with no repair, and keeps its verdict", async (_label, text) => {
     const screened = firstVerdict({ line: text });
-    const run = alone({ replies: [screened, screened] });
+    const run = alone({ replies: [screened] });
     const rendered = await run.render();
-    expect(run.inputs).toHaveLength(2);
-    expect(run.inputs[1]!.system_prompt).toContain(reason);
+    expect(run.inputs).toHaveLength(1);
     expect(rendered.result).toMatchObject({ status: "assessed", findings: [
       { finding_index: 0, verdict: "landed", line: "ECHO withheld this line.", citation_indexes: [0] },
       { finding_index: 1, verdict: "still_open", line: "The PRD display section still specifies one decimal.", citation_indexes: [1, 2] },
@@ -386,6 +374,57 @@ describe("sweep renderer", () => {
     ] });
     expect(rendered).toMatchObject({ fallbacks: 0, outcome: "partial" });
     expect(JSON.stringify(rendered.result)).not.toContain(text);
+  });
+
+  it("keeps a line that quotes the item it cites, and withholds one whose claim no cited item makes", async () => {
+    const fixOwner = item(ticketCitation("THERM-47", "THERM-47: Confirm BUG-412 requirement and fix-owner links"), "ticket", "THERM-47: Confirm BUG-412 requirement and fix-owner links",
+      "THERM-47: Confirm BUG-412 requirement and fix-owner links", { attributes: { status: "To Do" } });
+    const quoting = bundle({ unreadable: [], items: [...ITEMS, fixOwner] });
+    const findings = [{ finding: "THERM-47 does not trace the requirement.", expected: "the requirement and fix-owner confirmation recorded", citations: [TICKET_47] }];
+    const judged = (line: string) => alone({ findings, bundle: quoting, replies: [{ findings: [{ index: 0, verdict: "still_open", line, cites: ["E7"] }] }] });
+    const quoted = judged("THERM-47 is still To Do and asks for fix-owner links.");
+    expect((await quoted.render()).result.findings[0]!.line).toBe("THERM-47 is still To Do and asks for fix-owner links.");
+    const claimed = judged("THERM-47 is owned by Tobias Lund and still To Do.");
+    expect((await claimed.render()).result.findings[0]).toMatchObject({ verdict: "still_open", line: "ECHO withheld this line." });
+    expect(claimed.inputs).toHaveLength(1);
+  });
+
+  // A change that landed, or went another way, shows in the finding's own items: a verdict judged from its decision alone is not usable.
+  it.each([
+    ["landed", { verdict: "landed", line: "The decision says two decimals.", cites: ["E2"] }],
+    ["changed", { verdict: "changed", line: "The release notes say something else.", cites: ["E2", "E3"] }],
+  ] as const)("sends back a %s verdict that cites none of the finding's own items once, and leaves the findings not assessed if it comes back", async (_label, entry) => {
+    const ungrounded = firstVerdict(entry);
+    const run = alone({ replies: [ungrounded, REPLY] });
+    const rendered = await run.render();
+    expect(run.inputs).toHaveLength(2);
+    expect(run.inputs[1]!.system_prompt).toContain(`finding 0 is "${entry.verdict}" but cites none of the items it is about (E1)`);
+    expect(rendered.result).toEqual((await alone({ replies: [REPLY] }).render()).result);
+    const twice = await alone({ replies: [ungrounded, ungrounded] }).render();
+    expect(twice).toMatchObject({ fallbacks: 1, result: { status: "not_assessed", citations: [] } });
+    expect(SWEEP_PROMPT).toContain("A \"landed\" or \"changed\" verdict cites at least one of the finding's about items.");
+  });
+
+  it("takes still open from a finding's decision alone, in one call", async () => {
+    const run = alone({ replies: [{ findings: [{ ...REPLY.findings[0]!, verdict: "still_open", cites: ["E2"] }, REPLY.findings[1]!] }] });
+    const rendered = await run.render();
+    expect(run.inputs).toHaveLength(1);
+    expect(rendered.result.findings[0]).toMatchObject({ verdict: "still_open", citation_indexes: [0] });
+  });
+
+  it("shows the model only each finding's own items, its decision and what research cited for it", async () => {
+    // A plan part cites THERM-46 (finding 0's own item) with THERM-52; another cites only THERM-60, about no finding.
+    const planned: AgenticEvidenceBundleV1 = { ...bundle({ unreadable: [] }), plan: [
+      { part: 1, question: "THERM-46", notes: "", needs: [{ need: "current state", status: "found", evidence: ["E1", "E5"] }] },
+      { part: 2, question: "Display tests", notes: "", needs: [{ need: "test plan", status: "found", evidence: ["E6"] }] },
+    ] };
+    const run = alone({ findings: FINDINGS.slice(0, 2), bundle: planned, replies: [REPLY] });
+    await run.render();
+    expect(run.trace[0]).toBe("context:E1,E3,E4,E2,E5");
+    // Without the plan: the decision and the page's other section only; nothing research only came across.
+    const unplanned = alone({ findings: [FINDINGS[0]!], bundle: bundle({ unreadable: [] }), replies: [{ findings: [REPLY.findings[0]] }] });
+    await unplanned.render();
+    expect(unplanned.trace[0]).toBe("context:E1,E2");
   });
 
   // A reply is usable only whole: every finding it was given judged once, from items it was shown.
