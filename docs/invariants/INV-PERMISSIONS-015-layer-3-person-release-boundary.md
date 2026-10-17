@@ -26,6 +26,7 @@ decision_ids:
   - ADR-0033
   - ADR-0034
   - ADR-0036
+  - ADR-0038
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads, the ADR-0036 change check (digests only), and the Layer 4 request-local release and citation boundary
@@ -87,10 +88,15 @@ ADR-0019, as updated by ADR-0022, permits the V3 route to make bounded desk
 calls and at most 24 model calls, including retries and repairs, in one
 request. The desk pins the record
 snapshot or fixes an explicitly original-only mode when the index starts
-behind. Every desk release is audited before bytes leave Layer 3. Revalidate
-all released items and metadata, including the upcoming model input, before
-each model call and final response. Malformed output permits one repair within
-the hard budget and then a deterministic cited-evidence fallback. Unknown or
+behind. Every desk release is audited before bytes leave Layer 3. Before each
+model call, repairs included, recheck every item and metadata released since
+the previous check, which covers all new model input, together with the
+session, membership tenure, grants, each live connection and the snapshot pin
+([ADR-0038](../decisions/ADR-0038-incremental-access-check-before-model-calls.md)).
+Before the final response, recheck all released items and metadata. An item
+that passed a check may stay in model input for the rest of that request; it
+reaches a response only through the final check. Malformed output permits one
+repair within the hard budget and then a deterministic cited-evidence fallback. Unknown or
 out-of-part citations never establish support. Authorization, audit, snapshot
 and cancellation failures release no answer.
 
@@ -98,8 +104,9 @@ ADR-0026 extends this boundary to Jira live evidence on `POST /v4/person/ask`.
 The provider reads as the authenticated Person's current Jira grant. Audits commit
 only coordinates, digests and authorization commitments before releasing evidence;
 tool bodies and metadata remain request-local and never enter Layer 1 or Layer 2.
-Every later model call and final response rechecks all released evidence, the
-membership tenure, session and grant. Disconnect, replacement consent, lost
+Every later model call rechecks the evidence released since the previous check,
+the membership tenure, session, grant and connection; the final response
+rechecks all released evidence (ADR-0038). Disconnect, replacement consent, lost
 membership, changed permissions, audit failure or cancellation releases no answer.
 Project Jira reads MUST use a lead-configured mapping and the asker's own current
 connection. The exact ECHO project grant, mapping revision and stable Jira project
