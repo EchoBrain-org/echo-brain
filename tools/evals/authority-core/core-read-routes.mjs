@@ -47,7 +47,8 @@ function questionQuery(question) {
 
 /**
  * One deterministic research loop: search the question once, finish on the
- * first result whose full text was shown, otherwise complete a meeting
+ * highest-ranked result whose full text was shown (an approved record item
+ * before an unapproved import), otherwise complete a meeting
  * inventory read before reporting no result. It reads only the current prompt:
  * no corpus map, response fixture or caller-controlled citation.
  */
@@ -57,10 +58,14 @@ function stepResponse(userPrompt) {
   if (typeof question !== "string") throw new Error("deterministic agent did not receive a question");
   const part = (status, evidence = []) => ({ question, needs: [{ need: "the answer", status, evidence }], notes: "" });
   const lastResults = Array.isArray(prompt.last_results) ? prompt.last_results : [];
-  // A search result names its hits by id; their details and text are in seen.
-  const returned = new Set(lastResults.flatMap((result) => Array.isArray(record(result)?.results) ? result.results : []));
-  const seen = (Array.isArray(prompt.seen) ? prompt.seen : []).filter((item) => returned.has(record(item)?.id));
-  const full = seen.find((item) => record(item)?.full === true && typeof item.id === "string");
+  // A search result names its hits by id in rank order; their details and text
+  // are in seen, which is in id order, so walk the ids to keep the rank.
+  const shown = new Map((Array.isArray(prompt.seen) ? prompt.seen : []).map((item) => [record(item)?.id, item]));
+  const seen = lastResults.flatMap((result) => Array.isArray(record(result)?.results) ? result.results : [])
+    .map((id) => shown.get(id)).filter((item) => item !== undefined);
+  // Approved record items are the authority; an unapproved import is used only when no approved item was shown.
+  const shownInFull = seen.filter((item) => record(item)?.full === true && typeof item.id === "string");
+  const full = shownInFull.find((item) => record(record(item)?.provenance)?.kind === "approved_record") ?? shownInFull[0];
   if (full !== undefined) return Object.freeze({ parts: [part("found", [full.id])], actions: [{ tool: "finish", args: {} }] });
   if (prompt.step === 1) {
     const query = questionQuery(question);
