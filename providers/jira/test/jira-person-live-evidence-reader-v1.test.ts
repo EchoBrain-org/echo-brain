@@ -43,9 +43,13 @@ function fixture() {
     if (input.path === `${prefix}/myself`) return f.myself;
     if (input.path.startsWith(`${prefix}/project/`)) return f.project;
     if (input.path === `${prefix}/search/jql`) return f.pages.shift() ?? page([]);
-    if (input.path === `${prefix}/issue/bulkfetch`) return f.bulkResponse !== undefined ? f.bulkResponse : {
-      issues: (input.body!.issueIdsOrKeys as string[]).filter(id => !f.denied.has(id)).map(id => f.tickets.get(id)), issueErrors: [],
-    };
+    if (input.path === `${prefix}/issue/bulkfetch`) {
+      if (f.bulkResponse !== undefined) return f.bulkResponse;
+      // Like Jira, an id or a key; unknown and hidden issues are simply omitted.
+      const resolve = (idOrKey: string) => f.tickets.has(idOrKey) ? idOrKey : [...f.tickets.entries()].find(([, value]) => (value as { key?: string } | null)?.key === idOrKey)?.[0];
+      const ids = (input.body!.issueIdsOrKeys as string[]).map(resolve).filter((id): id is string => id !== undefined && !f.denied.has(id));
+      return { issues: ids.map(id => f.tickets.get(id)), issueErrors: [] };
+    }
     if (input.path.startsWith(`${prefix}/issue/`)) {
       const id = input.path.slice(`${prefix}/issue/`.length);
       const denied = f.denied.get(id);
@@ -80,11 +84,16 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     });
     const queries = diagnostics.filter(event => event.kind === 'provider_query');
     expect(queries).toHaveLength(2);
-    for (const query of queries) expect(f.request.mock.calls).toContainEqual([
-      expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ jql: query.query, maxResults: query.max_results }) }),
+    const text = queries.find(query => query.query.includes('DVT'))!;
+    expect(f.request.mock.calls).toContainEqual([
+      expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ jql: text.query, maxResults: text.max_results }) }),
     ]);
-    expect(queries.find(query => query.query.includes('DVT'))?.tool_context).toEqual({ tool_call_id: 1, round: 1 });
-    expect(queries.find(query => query.query.includes('ECHO-1'))?.tool_context).toEqual({ tool_call_id: 2, round: 1 });
+    // A key lookup is named in JQL form but runs as a bulk issue read.
+    const key = queries.find(query => query.query.includes('ECHO-1'))!;
+    expect(key).toMatchObject({ query: 'key in ("ECHO-1")', max_results: 1 });
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: expect.objectContaining({ issueIdsOrKeys: ['ECHO-1'] }) }));
+    expect(text.tool_context).toEqual({ tool_call_id: 1, round: 1 });
+    expect(key.tool_context).toEqual({ tool_call_id: 2, round: 1 });
     expect(JSON.stringify(metadata)).not.toContain('DVT');
   });
   it('reads a 25-ticket inventory page with one permission-applying bulk fetch, in discovery order', async () => {
@@ -373,17 +382,28 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   });
 
   it('pins a trusted project for keyword/key search and inventory without a model-selected container', async () => {
-    const f = fixture(); f.state.pages = [page(), page(), page()];
+    const f = fixture(); f.state.pages = [page(), page()];
     const { source } = await f.make('ECHO');
     await source.search({ query: 'launch' });
-    await source.search({ query: 'ECHO-1' });
+    expect((await source.search({ query: 'ECHO-1' })).items.map(item => item.citation.ticket_id)).toEqual(['10001']);
     expect((await source.list({})).items.map(item => item.citation.ticket_id)).toEqual(['10001']);
     expect(f.jqls()).toEqual([
       'project = 10000 AND (text ~ "\\\"launch\\\"") ORDER BY created DESC, id DESC',
-      'project = 10000 AND (key = "ECHO-1") ORDER BY created DESC, id DESC',
       'project = 10000 ORDER BY created DESC, id DESC',
     ]);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/project/ECHO` }));
+  });
+
+  it('drops a named key outside the pinned project as no match, without releasing it', async () => {
+    const f = fixture();
+    const other = ticket('10002', 'Private other project');
+    f.state.tickets.set('10002', { ...other, key: 'OTHER-2', fields: { ...other.fields, project: { id: '20000', key: 'OTHER', self: `${origin}/rest/api/3/project/20000` } } });
+    const { source } = await f.make('ECHO');
+    const result = await source.search({ query: 'OTHER-2' });
+    expect(result.items).toEqual([]);
+    expect(f.jqls()).toEqual([]);
+    expect(JSON.stringify(f.releases)).not.toContain('OTHER-2');
+    expect(JSON.stringify(f.releases)).not.toContain('Private other project');
   });
 
   it.each(['search', 'list', 'open', 'revalidate'] as const)('refuses an exact issue outside the pinned project during %s', async operation => {
@@ -582,11 +602,87 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     }
   });
 
-  it.each(['ECHO-1', 'echo-1'])('uses exact issue-key search for %s', async query => {
+  it.each(['ECHO-1', 'echo-1', '(ECHO-1),'])('looks up an issue key named alone (%s) through the bulk issue read, not JQL', async query => {
     const f = fixture(); const { source } = await f.make();
+    f.request.mockClear();
     const result = await source.search({ query });
-    expect(result.items).toHaveLength(1);
-    expect(f.jqls()[0]).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10001']);
+    expect(result.truncated).toBe(false);
+    expect(f.jqls()).toEqual([]);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, method: 'POST',
+      body: { issueIdsOrKeys: ['ECHO-1'], fields: ['summary', 'project', 'created', 'status', 'assignee', 'duedate'] } }));
+  });
+
+  it('treats a missing or hidden named key as no match rather than failing the search', async () => {
+    const f = fixture(); f.state.denied.set('10002', 'unauthorized');
+    const { source } = await f.make();
+    await expect(source.search({ query: 'ECHO-2' })).resolves.toMatchObject({ items: [], truncated: false });
+    await expect(source.search({ query: 'ECHO-404' })).resolves.toMatchObject({ items: [], truncated: false });
+    f.state.bulkResponse = { issues: [], issueErrors: [{ id: 'ECHO-1', errorMessage: 'private provider detail' }] };
+    await expect(source.search({ query: 'ECHO-1' })).rejects.toMatchObject({ code: 'unavailable' });
+  });
+
+  it('matches a key mixed with words exactly, or as a word with the rest, key first and without duplicates', async () => {
+    const f = fixture();
+    // ECHO-2 is named; ECHO-1 mentions it in its text.
+    f.state.pages = [page(['10002', '10001'])];
+    const { source } = await f.make('ECHO');
+    const result = await source.search({ query: 'blocks ECHO-2' });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10002', '10001']);
+    expect(f.jqls()).toEqual(['project = 10000 AND (text ~ "\\\"blocks\\\"" AND text ~ "\\\"ECHO\\\\-2\\\"") ORDER BY created DESC, id DESC']);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: expect.objectContaining({ issueIdsOrKeys: ['ECHO-2'] }) }));
+  });
+
+  it('keeps the named-key matches when the words match nothing, without a relaxed retry', async () => {
+    const f = fixture(); f.state.pages = [page([])];
+    const { source } = await f.make();
+    const result = await source.search({ query: 'blocks ECHO-2' });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10002']);
+    expect(f.jqls()).toHaveLength(1);
+  });
+
+  it('looks up at most the result limit of named keys and reports the rest as truncated', async () => {
+    const f = fixture();
+    for (const id of ['10003', '10004', '10005', '10006']) f.state.tickets.set(id, ticket(id));
+    const { source } = await f.make();
+    const result = await source.search({ query: 'ECHO-6 ECHO-5 ECHO-4 ECHO-3 ECHO-2 ECHO-1' });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10006', '10005', '10004', '10003', '10002']);
+    expect(result.truncated).toBe(true);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: expect.objectContaining({ issueIdsOrKeys: ['ECHO-6', 'ECHO-5', 'ECHO-4', 'ECHO-3', 'ECHO-2'] }) }));
+    expect(f.jqls()).toEqual([]);
+  });
+
+  it('retries an empty multi-word search once, matching all terms but one', async () => {
+    const f = fixture(); f.state.pages = [page([]), page(['10001'])];
+    const { source } = await f.make('ECHO');
+    const result = await source.search({ query: 'DVT blocking bug' });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10001']);
+    const literal = (term: string) => `text ~ "\\"${term}\\""`;
+    expect(f.jqls()).toEqual([
+      `project = 10000 AND (${literal('DVT')} AND ${literal('blocking')} AND ${literal('bug')}) ORDER BY created DESC, id DESC`,
+      `project = 10000 AND ((${literal('blocking')} AND ${literal('bug')}) OR (${literal('DVT')} AND ${literal('bug')}) OR (${literal('DVT')} AND ${literal('blocking')})) ORDER BY created DESC, id DESC`,
+    ]);
+
+    const two = fixture(); two.state.pages = [page([]), page([])];
+    const pair = await two.make();
+    await expect(pair.source.search({ query: 'blocking DVT' })).resolves.toMatchObject({ items: [] });
+    // Two terms relax to a plain OR, and an empty retry is not retried again.
+    expect(two.jqls()).toEqual([
+      `${literal('blocking')} AND ${literal('DVT')} ORDER BY created DESC, id DESC`,
+      `(${literal('DVT')}) OR (${literal('blocking')}) ORDER BY created DESC, id DESC`,
+    ]);
+  });
+
+  it.each([
+    ['one term', 'launch', [page([])]],
+    ['a match for every term', 'launch connector', [page(['10001'])]],
+    ['a further page of matches', 'launch connector', [page([], 'next')]],
+    ['seven terms', 'one two three four five six seven', [page([])]],
+  ] as const)('does not relax a search with %s', async (_label, query, pages) => {
+    const f = fixture(); f.state.pages = [...pages];
+    const { source } = await f.make();
+    await source.search({ query });
+    expect(f.jqls()).toHaveLength(1);
   });
 
   it('compiles keyword search as independent terms within the pinned project', async () => {
@@ -620,10 +716,10 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const literals = ['"hello\\""', '"OR"', '"project"', '"="', '"SECRET"'];
     expect(f.jqls()[0]).toBe(literals.map(value => `text ~ ${JSON.stringify(value)}`).join(' AND ') + ' ORDER BY created DESC, id DESC');
     expect(Object.isFrozen(reader.binding)).toBe(true);
-    f.state.pages = [page()];
     await reader.search({ query: 'ECHO-1', limit: 1, ...{ person: 'another-person', cloudid: 'another-site', connectionId: 'another-connection' } });
-    expect(f.jqls().at(-1)).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
-    expect(f.request.mock.calls.every(([r]) => !r.path.includes('another'))).toBe(true);
+    expect(f.request).toHaveBeenLastCalledWith(expect.objectContaining({ path: `${prefix}/myself` }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: expect.objectContaining({ issueIdsOrKeys: ['ECHO-1'] }) }));
+    expect(f.request.mock.calls.every(([r]) => !r.path.includes('another') && !JSON.stringify(r.body ?? {}).includes('another'))).toBe(true);
   });
 
   it('counts repeated keywords once when compiling a bounded query', async () => {

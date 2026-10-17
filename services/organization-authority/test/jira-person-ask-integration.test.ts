@@ -32,7 +32,6 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   // Wrong key normalization or phrase semantics must produce an empty provider
   // result, not the fixture ticket that used to hide every query error.
   const matchingQueries = new Set([
-    'key = "ECHO-1" ORDER BY created DESC, id DESC',
     'text ~ "\\\"Friday\\\"" AND text ~ "\\\"ship\\\"" ORDER BY created DESC, id DESC',
     'project = 10000 AND (text ~ "\\\"ship\\\"") ORDER BY created DESC, id DESC',
   ]);
@@ -103,8 +102,10 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(await tools(employee)).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'unlinked', external_subject_id: null })]));
     telemetry.length = 0;
     const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should ECHO-1 ship?' }); expect(response.status).toBe(200);
-    const exactSearch = jiraFetch.mock.calls.find(([url]) => String(url).endsWith('/search/jql'))!;
-    expect(JSON.parse(exactSearch[1]!.body as string).jql).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
+    // A named key is read exactly through the bulk issue read, not JQL.
+    expect(jiraFetch.mock.calls.filter(([url]) => String(url).endsWith('/search/jql'))).toEqual([]);
+    const exactSearch = jiraFetch.mock.calls.find(([url]) => String(url).endsWith('/issue/bulkfetch'))!;
+    expect(JSON.parse(exactSearch[1]!.body as string).issueIdsOrKeys).toEqual(['ECHO-1']);
     const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
     expect(() => validatePersonAnswerResponseV4(response.body)).toThrow();

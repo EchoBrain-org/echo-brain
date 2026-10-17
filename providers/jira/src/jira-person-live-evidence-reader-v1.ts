@@ -36,16 +36,35 @@ function limit(value: number): number {
   return value;
 }
 
-/** Shared keyword semantics, or an exact key. Never caller-authored JQL or Lucene operators. */
-function searchJql(query: string, projectId?: string): string {
+/** A relaxed retry drops one term at a time; past this many terms it would be too broad and too long. */
+const RELAXED_SEARCH_MAX_TERMS = 6;
+
+interface SearchTerms {
+  /** Distinct literal keywords, compared case-insensitively. */
+  readonly terms: readonly string[];
+  /** Distinct issue keys among the terms, ignoring surrounding punctuation. */
+  readonly keys: readonly string[];
+}
+
+/** Shared keyword semantics. Never caller-authored JQL or Lucene operators. */
+function searchTerms(query: string): SearchTerms {
   if (typeof query !== 'string' || query.trim() === '' || Buffer.byteLength(query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query)) jiraFailure('invalid_request');
   const terms = [...new Map(query.trim().split(/\s+/u).map(term => [term.toLowerCase(), term])).values()];
   if (terms.length > 32) jiraFailure('invalid_request');
-  const ticketKey = query.trim().toUpperCase();
-  const expression = JIRA_TICKET_KEY.test(ticketKey) ? `key = ${JSON.stringify(ticketKey)}` : terms.map(term => {
-    const literal = term.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&');
-    return `text ~ ${JSON.stringify(`"${literal}"`)}`;
-  }).join(' AND ');
+  const keys = [...new Set(terms.map(term => term.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase()).filter(term => JIRA_TICKET_KEY.test(term)))];
+  return Object.freeze({ terms: Object.freeze(terms), keys: Object.freeze(keys) });
+}
+
+/**
+ * Every term as an escaped literal text clause. The relaxed form, for one
+ * retry after an empty search, matches all terms but one: an OR of each
+ * term dropped in turn. With two terms that is a plain OR.
+ */
+function textJql(terms: readonly string[], relaxed: boolean, projectId?: string): string {
+  const clause = (term: string) => `text ~ ${JSON.stringify(`"${term.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&')}"`)}`;
+  const expression = relaxed
+    ? terms.map((_, dropped) => `(${terms.filter((_, index) => index !== dropped).map(clause).join(' AND ')})`).join(' OR ')
+    : terms.map(clause).join(' AND ');
   return `${projectId === undefined ? expression : `project = ${projectId} AND (${expression})`} ORDER BY created DESC, id DESC`;
 }
 
@@ -247,6 +266,34 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   }
 
   /**
+   * Issue keys named in a search, read through the bulk issue read rather than
+   * JQL: Jira refuses a whole JQL query when one named key is missing or
+   * hidden, while the bulk read applies current permissions and simply omits
+   * it. A missing, hidden or out-of-scope key is no match, not a failure.
+   */
+  async function keyIssues(keys: readonly string[], origin: string, signal?: AbortSignal): Promise<readonly ParsedJiraIssueV1[]> {
+    if (keys.length === 0) return Object.freeze([]);
+    // Diagnostics name the lookup in JQL form; it runs as a bulk read.
+    observeCoreRuntimeDiagnosticV1({ kind: 'provider_query', provider: 'jira', operation: 'search', query: `key in (${keys.map(key => JSON.stringify(key)).join(', ')})`, max_results: keys.length });
+    const page = jiraRecord(await transport.request({ path: `${pathPrefix}/issue/bulkfetch`, method: 'POST',
+      body: { issueIdsOrKeys: [...keys], fields: INVENTORY_FIELDS.split(',') }, signal }));
+    signal?.throwIfAborted();
+    if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, keys.length).length > 0) jiraFailure('unavailable');
+    const ids = new Set<string>();
+    const found: ParsedJiraIssueV1[] = [];
+    for (const raw of jiraArray(page.issues, keys.length)) {
+      // A moved issue answers to its old key with its current one, so keys cannot be matched one to one.
+      const parsed = parseJiraIssueV1(raw, { cloudid, origin, inventory: true });
+      if (ids.has(parsed.id)) jiraFailure('invalid_output');
+      ids.add(parsed.id);
+      if (pinnedProject === undefined || parsed.project_id === pinnedProject.id) found.push(parsed);
+    }
+    // Bulk results arrive in id order; answer in the order the keys were named.
+    const rank = (issue: ParsedJiraIssueV1) => { const index = keys.indexOf(issue.key); return index < 0 ? keys.length : index; };
+    return Object.freeze(found.sort((left, right) => rank(left) - rank(right)));
+  }
+
+  /**
    * The anchor's direct Jira links are only opaque IDs. Every selected linked
    * issue receives its own current exact read before metadata is released;
    * linked bodies remain unavailable until the caller opens that item ref.
@@ -283,12 +330,26 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = Math.min(limit(input.limit), 5);
-      const jql = searchJql(input.query, pinnedProject?.id);
+      const { terms, keys } = searchTerms(input.query);
+      const projectId = pinnedProject?.id;
+      const named = keys.slice(0, maximum);
+      // A query of only keys is a key lookup. Otherwise named keys match
+      // exactly, or as words alongside the rest: key in (...) OR every term.
+      const text = keys.length === terms.length ? undefined : terms;
       return safe(async () => {
         const origin = await verifyConnection(input.signal);
-        const page = await searchPage({ jql, maximum, origin, inventory: true, projectId: pinnedProject?.id, signal: input.signal });
+        const textPage = (relaxed: boolean) => searchPage({ jql: textJql(text!, relaxed, projectId), maximum, origin, inventory: true, projectId, signal: input.signal });
+        const [byKey, firstText] = await Promise.all([keyIssues(named, origin, input.signal), text === undefined ? undefined : textPage(false)]);
+        let byText = firstText;
+        // One bounded retry when nothing at all matched every term.
+        if (byKey.length === 0 && byText !== undefined && byText.selected.length === 0 && byText.token === undefined &&
+            text!.length >= 2 && text!.length <= RELAXED_SEARCH_MAX_TERMS) byText = await textPage(true);
         await verifyConnection(input.signal);
-        return Object.freeze({ items: remember(page.selected), truncated: page.token !== undefined || page.selected.some(item => item.truncated) });
+        const seen = new Set(byKey.map(item => item.id));
+        const matches = [...byKey, ...(byText?.selected ?? []).filter(item => !seen.has(item.id))];
+        const selected = matches.slice(0, maximum);
+        return Object.freeze({ items: remember(selected),
+          truncated: byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated) });
       }, input.signal);
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {

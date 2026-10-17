@@ -127,11 +127,19 @@ token refresh to the same immutable ECHO grant.
 request in `createAuditedPersonLiveEvidenceSourceV1`, because the reader alone
 is not a Layer 3 release endpoint.
 
-Search matches all supplied literal keywords independently (or an exact issue
-key, case-insensitively), never caller-authored JQL. It accepts at most 32
-distinct keywords and preserves identifier punctuation through the Ask protocol. The
-provider compiles each keyword to an escaped literal text clause and joins
-them with `AND`; it does not require the words to form one adjacent phrase.
+Search matches all supplied literal keywords independently, never
+caller-authored JQL. It accepts at most 32 distinct keywords and preserves
+identifier punctuation through the Ask protocol. The provider compiles each
+keyword to an escaped literal text clause and joins them with `AND`; it does
+not require the words to form one adjacent phrase. Issue keys among the
+keywords (case-insensitive, ignoring surrounding punctuation, at most the
+result limit) also match that ticket exactly, ahead of text matches, so a
+query means `key in (...) OR` every keyword; a query of only keys is a key
+lookup. Keys are read through the bulk issue read, not JQL, because Jira
+refuses a whole JQL query that names one missing or hidden key; such a key is
+simply no match. When nothing matches and there are two to six keywords, the
+search retries once with every keyword but one (an `OR` of each keyword
+dropped in turn; a plain `OR` for two).
 Ask can select `source: "tickets"` for a targeted search, or omit the source to
 search all available evidence. Every selection keeps the current Person and
 project boundary. Open accepts only a handle minted by that reader. List
