@@ -5,6 +5,11 @@ import { PERSON_CHANGES_ROUTE_V1, validatePersonChangesV1, type PersonChangesV1 
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
+  PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
+  createPersonAskProgressDecoderV1,
+  type PersonAskProgressEventV1, type PersonAskProgressStepEventV1, type PersonAskProgressTerminalEventV1, type PersonAskReceiptV1,
+} from '@echo-brain/organization-api';
+import {
   PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
   PERSON_ANSWER_PATH_V3,
   PERSON_ANSWER_PATH_V4,
@@ -181,6 +186,14 @@ export type PersonMeetingTranscriptReadV1 = PersonMeetingTranscriptV1;
 export type PersonListV1 = PersonListResponseV1;
 export type PersonOpenV1 = PersonOpenResponseV1;
 
+/** A live Ask's answer; `receipt` is present only when the Authority streamed its progress (ADR-0039). */
+export interface PersonLiveAnswerV1 {
+  readonly result: PersonAnswerV6 | PersonAnswerV5;
+  readonly receipt?: PersonAskReceiptV1;
+}
+/** Receives each stage, searched or read event of a streamed Ask as it arrives, synchronously and in order. */
+export type PersonAskProgressSinkV1 = (event: PersonAskProgressStepEventV1) => void;
+
 export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
   readonly unsent: boolean;
@@ -353,6 +366,102 @@ function parsedContextJson(text: string, status: number): unknown {
 
 function isJsonResponse(response: Response): boolean {
   return /^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(response.headers.get("content-type") ?? "");
+}
+
+/** `PERSON_ASK_PROGRESS_CONTENT_TYPE_V1`; any other reply to an opted-in Ask is read as today's JSON. */
+function isAskProgressStream(response: Response): boolean {
+  return /^text\/event-stream(?:\s*;\s*charset=utf-8)?$/i.test(response.headers.get("content-type") ?? "");
+}
+
+function requestSignal(timeoutMs: number, signal: AbortSignal | undefined): AbortSignal {
+  return signal === undefined ? AbortSignal.timeout(timeoutMs) : AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]);
+}
+
+/** A cancellation, timeout or lost connection mid-stream fails as it would before the headers. */
+function lostAskStream(): PersonAuthorityClientError {
+  return new PersonAuthorityClientError("transport_failed", null, "Person Authority request failed");
+}
+
+/**
+ * Reads a streamed Ask (ADR-0039) to its end with the shared decoder, hands
+ * each step event to `onProgress` as it arrives, and returns the one terminal
+ * event. Fails closed: a malformed frame or event, invalid UTF-8, or an end
+ * without exactly one terminal event is `invalid_response`, and a stream past
+ * its byte bound is `response_too_large`. Either failure cancels the body, so
+ * the Authority sees the disconnect and stops the Ask.
+ */
+async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV1): Promise<PersonAskProgressTerminalEventV1> {
+  // Only the V5 route streams, and it marks the stream as its own, so an in-band 404 is never a missing route.
+  if (response.status !== 200 || response.body === null || !response.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)) {
+    throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
+  }
+  const reader = response.body.getReader();
+  // A fetch whose body outlives its signal still stops: cancelling ends a pending read.
+  const cancel = () => { reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", cancel, { once: true });
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  const frames = createPersonAskProgressDecoderV1();
+  const decode = (chunk: Uint8Array | undefined): readonly PersonAskProgressEventV1[] => {
+    try {
+      if (chunk !== undefined) return frames.push(utf8.decode(chunk, { stream: true }));
+      const events = frames.push(utf8.decode());
+      frames.end();
+      return events;
+    } catch (error) {
+      if (!(error instanceof TypeError) && !isOrganizationApiValidationError(error)) throw error;
+      throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
+    }
+  };
+  let terminal: PersonAskProgressTerminalEventV1 | undefined;
+  let size = 0;
+  try {
+    // Nothing is handed on once the request is cancelled, even from bytes already received.
+    if (signal.aborted) throw lostAskStream();
+    for (;;) {
+      const next = await reader.read().catch(() => { throw lostAskStream(); });
+      if (signal.aborted) throw lostAskStream();
+      if (!next.done) {
+        size += next.value.byteLength;
+        if (size > PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1) {
+          throw new PersonAuthorityClientError("response_too_large", response.status, "Person Authority response exceeded its bound");
+        }
+      }
+      for (const event of decode(next.done ? undefined : next.value)) {
+        // The decoder refuses anything after the terminal event, so a step event always precedes it.
+        if (event.type === "answer" || event.type === "error") terminal = event;
+        else onProgress(event);
+      }
+      if (next.done) break;
+    }
+  } catch (error) {
+    cancel();
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    reader.releaseLock();
+  }
+  return terminal!;
+}
+
+type AskScope = ProjectIdV1 | { readonly mine: true } | undefined;
+
+/** Every Ask route takes the same V3 request. */
+function askRequest(question: string, scope: AskScope, captureId: PersonDiagnosticCaptureIdV1 | undefined) {
+  return validatePersonAnswerRequestV3({ schema_version: 3, question,
+    ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }) });
+}
+
+function askHeaders(): Readonly<Record<string, string>> {
+  return { [PERSON_ASK_CLIENT_NOW_HEADER_V1]: new Date().toISOString(), [PERSON_ASK_TIME_ZONE_HEADER_V1]: Intl.DateTimeFormat().resolvedOptions().timeZone };
+}
+
+/** Every Ask answer must echo the requested scope. */
+function inAskScope<T extends { readonly scope: unknown }>(response: T, scope: AskScope): T {
+  const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
+  if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
+    throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
+  }
+  return response;
 }
 
 /** Error codes of the closed project/V2 and document families. */
@@ -642,6 +751,15 @@ function employeeInviteRequest(value: unknown, includeName: boolean): Readonly<R
   return request as Readonly<Record<string, string>>;
 }
 
+interface JsonRequest {
+  readonly path: string;
+  readonly body: unknown;
+  readonly validate_request: (value: unknown) => unknown;
+  readonly access_token?: string;
+  readonly method?: "POST" | "PUT";
+  readonly headers?: Readonly<Record<string, string>>;
+}
+
 export class PersonAuthorityClient {
   private readonly origin: URL;
   private readonly fetchImpl: typeof fetch;
@@ -665,11 +783,20 @@ export class PersonAuthorityClient {
     timeoutMs = this.timeoutMs,
     signal?: AbortSignal,
   ): Promise<Response> {
+    return this.sendUntil(path, init, requestSignal(timeoutMs, signal));
+  }
+
+  /** `deadline` is the request's whole timeout and cancellation, which a streamed body is read under too. */
+  private async sendUntil(
+    path: string,
+    init: Omit<RequestInit, "redirect" | "signal">,
+    deadline: AbortSignal,
+  ): Promise<Response> {
     try {
       return await this.fetchImpl(new URL(path, this.origin), {
         ...init,
         redirect: "error",
-        signal: signal === undefined ? AbortSignal.timeout(timeoutMs) : AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]),
+        signal: deadline,
       });
     } catch (error) {
       throw new PersonAuthorityClientError(
@@ -681,26 +808,28 @@ export class PersonAuthorityClient {
     }
   }
 
-  private async json<T>(input: {
-    readonly path: string;
-    readonly body: unknown;
-    readonly validate_request: (value: unknown) => unknown;
+  private async json<T>(input: JsonRequest & {
     readonly validate_response: (value: unknown) => T;
-    readonly access_token?: string;
     readonly maximum_response_bytes?: number;
     readonly expected_status?: number;
     readonly timeout_ms?: number;
-    readonly method?: "POST" | "PUT";
-    readonly headers?: Readonly<Record<string, string>>;
     /** A caller cancellation disconnects the request; the timeout still applies. */
     readonly signal?: AbortSignal;
   }): Promise<T> {
+    const response = await this.post(input, requestSignal(input.timeout_ms ?? this.timeoutMs, input.signal));
+    const value = await this.jsonValue(response,
+      input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.expected_status);
+    return validateSuccess(value, response.status, input.validate_response);
+  }
+
+  /** Sends one validated, bounded JSON request; reading the reply is the caller's. */
+  private async post(input: JsonRequest, deadline: AbortSignal): Promise<Response> {
     const request = input.validate_request(input.body);
     const body = canonicalJson(request);
     if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
       throw new Error("Person Authority request exceeds its body bound");
     }
-    const response = await this.send(
+    return this.sendUntil(
       input.path,
       {
         method: input.method ?? "POST",
@@ -714,12 +843,8 @@ export class PersonAuthorityClient {
         },
         body,
       },
-      input.timeout_ms,
-      input.signal,
+      deadline,
     );
-    const value = await this.jsonValue(response,
-      input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.expected_status);
-    return validateSuccess(value, response.status, input.validate_response);
   }
 
   private async jsonValue(response: Response, maximumBytes: number, expectedStatus?: number): Promise<unknown> {
@@ -1339,20 +1464,38 @@ export class PersonAuthorityClient {
     return this.ask(PERSON_ANSWER_PATH_V5, validatePersonAnswerResponseV6, accessToken, question, scope, signal, captureId);
   }
 
+  /**
+   * V5 Ask that streams its progress (ADR-0039). Each step event reaches
+   * `onProgress` as it arrives; the answer comes back with the receipt the
+   * Authority built after its final check. An Authority that predates the
+   * stream answers with today's JSON, returned without a receipt, and an error
+   * inside the stream is the error its JSON response would have been. The ask
+   * timeout and the caller's signal bound the whole stream.
+   */
+  async askV5WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
+    onProgress: PersonAskProgressSinkV1): Promise<PersonLiveAnswerV1> {
+    const body = askRequest(question, scope, undefined);
+    const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
+    const response = await this.post({ path: PERSON_ANSWER_PATH_V5, body, validate_request: validatePersonAnswerRequestV3, access_token: accessToken,
+      headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V1 } }, deadline);
+    if (!isAskProgressStream(response)) {
+      const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
+      return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validatePersonAnswerResponseV6), scope) });
+    }
+    const terminal = await readAskProgressStream(response, deadline, onProgress);
+    if (terminal.type === 'error') {
+      throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request', { routeMatched: true });
+    }
+    return Object.freeze({ result: inAskScope(terminal.response, scope), receipt: terminal.receipt });
+  }
+
   /** Every Ask route takes the same V3 request and must echo the requested scope. */
   private async ask<T extends { readonly scope: unknown }>(path: string, validate_response: (value: unknown) => T, accessToken: string,
     question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined, captureId: PersonDiagnosticCaptureIdV1 | undefined): Promise<T> {
-    const request = validatePersonAnswerRequestV3({ schema_version: 3, question,
-      ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }) });
-    const response = await this.json({ path, body: request,
-      headers: { [PERSON_ASK_CLIENT_NOW_HEADER_V1]: new Date().toISOString(), [PERSON_ASK_TIME_ZONE_HEADER_V1]: Intl.DateTimeFormat().resolvedOptions().timeZone },
+    const response = await this.json({ path, body: askRequest(question, scope, captureId), headers: askHeaders(),
       validate_request: validatePersonAnswerRequestV3, validate_response,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
-    const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
-    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
-      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
-    }
-    return response;
+    return inAskScope(response, scope);
   }
 
   /** Prepares or reads an explicitly requested private capture on the ordinary product route. */

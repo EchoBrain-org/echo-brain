@@ -10,6 +10,8 @@ export {
   type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
   type PersonAskSourceEvidenceV1,
+  type PersonAskProgressSinkV1,
+  type PersonLiveAnswerV1,
   type PersonListV1,
   type PersonOpenV1,
   type PersonRecordListItemV1,
