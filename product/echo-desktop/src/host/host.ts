@@ -615,7 +615,7 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
-      return forAccount(method, expect, askArgv(text, scope), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
+      return forAccount(method, expect, askArgv(text, scope, expect), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
     }
     case 'ask.cancel':
       return ok(null);

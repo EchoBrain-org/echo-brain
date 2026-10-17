@@ -12,12 +12,14 @@ const decision = { citation: { kind: 'approved_record', atom_id: sha('1'), recor
 const line = (value: unknown) => JSON.stringify(value);
 
 describe('the command an Ask runs', () => {
-  it('asks a live Ask for its progress, and never Mine', () => {
+  it('asks a live Ask for its progress, as the account the page shows, and never Mine', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
-    expect(askArgv('What did we agree?', { kind: 'global' })).toEqual(['ask', '--question=What did we agree?', '--live', '--progress']);
-    expect(askArgv('What did we agree?', { kind: 'project', project_id: project }))
-      .toEqual(['ask', '--question=What did we agree?', '--live', '--progress', `--project=${project}`]);
-    expect(askArgv('What did we agree?', { kind: 'mine' })).toEqual(['ask', '--question=What did we agree?', '--mine']);
+    // The client refuses to ask as any other account, so no step of another reaches the page.
+    const pin = [`--expected-membership-id=${EXPECT.membership_id}`, `--expected-authority=${EXPECT.authority}`];
+    expect(askArgv('What did we agree?', { kind: 'global' }, EXPECT)).toEqual(['ask', '--question=What did we agree?', '--live', '--progress', ...pin]);
+    expect(askArgv('What did we agree?', { kind: 'project', project_id: project }, EXPECT))
+      .toEqual(['ask', '--question=What did we agree?', '--live', '--progress', ...pin, `--project=${project}`]);
+    expect(askArgv('What did we agree?', { kind: 'mine' }, EXPECT)).toEqual(['ask', '--question=What did we agree?', '--mine']);
     expect([askStreams({ kind: 'global' }), askStreams({ kind: 'project', project_id: project }), askStreams({ kind: 'mine' })]).toEqual([true, true, false]);
   });
 

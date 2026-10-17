@@ -16,12 +16,15 @@ export function askStreams(scope: AskScope): boolean {
 }
 
 /**
- * The client command for an Ask of `text` (already askText's). A live Ask
- * asks for its progress; an Authority that predates it answers as before,
- * with none.
+ * The client command for an Ask of `text` (already askText's), for the
+ * account the page shows. A live Ask asks for its progress, pinned to that
+ * account: a client signed in as another by then asks nothing and prints no
+ * step, so the page's account check of each step is the client's own. An
+ * Authority that predates progress answers as before, with none.
  */
-export function askArgv(text: string, scope: AskScope): string[] {
-  return ['ask', `--question=${text}`, ...(askStreams(scope) ? ['--live', '--progress'] : []),
+export function askArgv(text: string, scope: AskScope, expect: Expect): string[] {
+  return ['ask', `--question=${text}`,
+    ...(askStreams(scope) ? ['--live', '--progress', `--expected-membership-id=${expect.membership_id}`, `--expected-authority=${expect.authority}`] : []),
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : scope.kind === 'mine' ? ['--mine'] : [])];
 }
 

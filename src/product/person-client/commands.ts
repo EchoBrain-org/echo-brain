@@ -138,7 +138,7 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "mine", "tickets", "live", "progress"],
+    accepts: ["question", "project", "mine", "tickets", "live", "progress", "expected-membership-id", "expected-authority"],
     requires: ["question"],
   },
   list: { accepts: ["project", "mine", "cursor"] },
@@ -226,13 +226,13 @@ Run \`echo-brain person tools <verb> --help\` for each tool's options.
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --live [--progress]]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --live [--progress [--expected-membership-id <id> --expected-authority <origin>]]]
 
 Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved; Slack and shared transcripts are not read. Answers include typed citations; each opens with person open --ref when it carries a ref.
 
 --live selects the newest Ask route, using every configured request-local live source, including Jira tickets and Confluence pages. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools. --tickets retains the prior ticket-capable response for compatibility.
 
---progress (with --live only) prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line.
+--progress (with --live only) prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 `,
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
@@ -939,6 +939,10 @@ export async function runPersonClientCli(
     if (action === "ask" && values.progress === true && values.live !== true) {
       throw new Error("--progress requires --live with `echo-brain person ask`");
     }
+    // Only the streamed Ask checks a pinned account: on any other, a pin would be silently ignored.
+    if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
+      throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
+    }
     // List and open requests are complete and validated before any network or session use.
     if (action === "list") {
       listRequest = validatePersonListRequestV1({
@@ -1198,7 +1202,7 @@ export async function runPersonClientCli(
         if (values.progress === true) {
           // One line per step event as it arrives; the last line is today's, with the receipt when the Authority streamed.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
-            progress => print(stdout, validatePersonAskProgressLineV1({ ok: true, progress })));
+            progress => print(stdout, validatePersonAskProgressLineV1({ ok: true, progress })), expectedAccount(values));
           print(stdout, validatePersonAskProgressResultLineV1({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
           break;
         }

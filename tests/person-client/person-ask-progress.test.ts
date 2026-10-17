@@ -361,6 +361,27 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
   });
 
+  it('asks only as the account its caller expects: another sign-in that came first is refused before anything is sent', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const client = new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch });
+    const progress: PersonAskProgressStepEventV1[] = [];
+    for (const expected of [
+      { expected_authority: ORIGIN, expected_membership_id: 'mem_00000000-0000-4000-8000-000000000002' },
+      { expected_authority: 'https://other.example.test', expected_membership_id: SESSION.membership_id },
+      // A pin is both or it is refused.
+      { expected_membership_id: SESSION.membership_id },
+    ]) {
+      await expect(client.askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event), expected))
+        .rejects.toThrow('did not match the current account');
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(progress).toEqual([]);
+    fetch.mockResolvedValueOnce(sse(STREAM));
+    await expect(client.askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event),
+      { expected_authority: ORIGIN, expected_membership_id: SESSION.membership_id })).resolves.toEqual({ result: answer(), receipt: receipt() });
+    expect(progress).toEqual(STEPS);
+  });
+
   it('stops handing on steps once another account is signed in, and drops the stream', async () => {
     const home = sessionHome();
     const stream = openStream();
@@ -450,6 +471,26 @@ describe('person ask --live --progress', () => {
       expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
       expect(output.stdout).toBe(`${JSON.stringify({ ok: true, result: body })}\n`);
     }
+  });
+
+  it('pins the streamed Ask to the expected account: another one signed in prints no step and sends nothing', async () => {
+    const pin = (membership: string) => [`--expected-membership-id=${membership}`, `--expected-authority=${ORIGIN}`];
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const refused = cli(sessionHome(), fetch);
+    await expect(refused.run(['ask', '--question', 'What did we decide?', '--live', '--progress', ...pin('mem_00000000-0000-4000-8000-000000000002')])).resolves.toBe(1);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(refused.output.stdout).toBe('');
+    expect(JSON.parse(refused.output.stderr)).toMatchObject({ ok: false, action: 'ask' });
+
+    fetch.mockResolvedValueOnce(sse(STREAM));
+    const pinned = cli(sessionHome(), fetch);
+    await expect(pinned.run(['ask', '--question', 'What did we decide?', '--live', '--progress', ...pin(SESSION.membership_id)])).resolves.toBe(0);
+    expect(lines(pinned.output.stdout)).toHaveLength(STEPS.length + 1);
+
+    // Only a streamed Ask takes a pin: the others never check it.
+    const unpinned = cli(sessionHome(), vi.fn<typeof globalThis.fetch>());
+    await expect(unpinned.run(['ask', '--question', 'What did we decide?', '--live', ...pin(SESSION.membership_id)])).resolves.toBe(2);
+    expect(JSON.parse(unpinned.output.stderr)).toEqual({ ok: false, error: '--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`' });
   });
 
   it('refuses --progress without --live as a usage error before any request', async () => {

@@ -94,7 +94,7 @@ async function app() {
   const [{ runCli, lastJson }, ask, views, { askText }, progress, { openerOf }] = await Promise.all([
     desktop<{ runCli(cli: unknown, argv: readonly string[], dependencies: Json, onLine?: (line: string) => void): Promise<CliRun>; lastJson(text: string): unknown }>('host/cli.ts'),
     desktop<{
-      askArgv(text: string, scope: Scope): string[]; askRecordArgv(record: Json): string[]; askSourceArgv(ref: Json, scope: Scope): string[];
+      askArgv(text: string, scope: Scope, expect: Expect): string[]; askRecordArgv(record: Json): string[]; askSourceArgv(ref: Json, scope: Scope): string[];
       askProgressLines(cancelId: string, expect: Expect, signal: AbortSignal, post: (notice: Notice) => void, refused?: () => void): (line: string) => void;
     }>('host/ask.ts'),
     desktop<Views>('host/views.ts'),
@@ -135,7 +135,7 @@ async function app() {
       const abort = new AbortController();
       asks.set(params.cancel_id as string, abort);
       const read = ask.askProgressLines(params.cancel_id as string, account, abort.signal, notice => { notices.push(notice); store.askProgress(notice); }, refused);
-      const run = await runCli(runPersonClientCli, ask.askArgv(askText(params.question as string), scope), { ...client, abort_signal: abort.signal },
+      const run = await runCli(runPersonClientCli, ask.askArgv(askText(params.question as string), scope, account), { ...client, abort_signal: abort.signal },
         line => { lines.push(line); read(line); });
       runs.push(run);
       if (run.exit !== 0) return { ok: false, failure: { code: abort.signal.aborted ? 'cancelled' : 'failed', retryable: true } };

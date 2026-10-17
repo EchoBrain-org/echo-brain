@@ -168,6 +168,10 @@ coordinates and a fresh authorized read.
   today's final line.
 - **Flag rules.** `--progress` without `--live` is a usage error. Without the
   flag, the output is unchanged.
+- **Pinned account.** Paired `--expected-membership-id` and
+  `--expected-authority` (only with `--progress`) bind the Ask to the
+  caller's account, as the desktop sends them: signed in as another, the
+  client sends nothing and prints no step.
 
 The desktop runs this command for global and project Ask. Its host forwards
 the progress lines to the renderer as it already forwards sign-in phases, and

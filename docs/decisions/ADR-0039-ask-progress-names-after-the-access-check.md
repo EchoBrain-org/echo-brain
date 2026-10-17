@@ -240,7 +240,12 @@ cases. The negative disclosure tests are:
   `product/echo-desktop/test/unit/ask-progress.test.ts` for the page.
   `tests/person-client/person-ask-progress.test.ts` covers the Person client,
   which stops on an account switch and withholds a step while no session can
-  be read.
+  be read. The desktop pins its streamed Ask to the account the page shows
+  (`--expected-membership-id`, `--expected-authority`), so a client signed in
+  as another by the time it starts asks nothing and prints no step; the
+  page's own account check then compares what the client already checked
+  (`product/echo-desktop/test/unit/ask-host.test.ts` and the Person client
+  test).
 
 The round trip runs the real Authority runtime, the real Person client with
 `--progress`, the desktop host's own command builder, line reader and views,

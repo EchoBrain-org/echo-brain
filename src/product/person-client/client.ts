@@ -720,10 +720,20 @@ export class PersonClient {
    * session can be read (a refresh elsewhere, or a sign-out) is withheld, and
    * the final account check decides, as it does for every read.
    */
+  /**
+   * The live Ask, streamed (ADR-0039). A caller that names its account
+   * (`expected`, both parts, as the desktop does) is never asked for as
+   * another: a session another sign-in installed first is refused before
+   * anything is sent, so no step of that account reaches the caller.
+   */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV1): Promise<PersonLiveAnswerV1> {
+    onProgress: PersonAskProgressSinkV1, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {}): Promise<PersonLiveAnswerV1> {
     validateAskInput(question, scope);
     const stored = await this.accessSession();
+    if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
+        (expected.expected_authority !== stored.authority_origin || expected.expected_membership_id !== stored.session.membership_id)) {
+      throw new Error("Person tool operation did not match the current account");
+    }
     const authority = this.authority(stored.authority_origin);
     const token = stored.session.access_token;
     const forward: PersonAskProgressSinkV1 = event => {
