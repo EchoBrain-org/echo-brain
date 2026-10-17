@@ -5,7 +5,7 @@ import {
 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV3, createAgenticAskV4 } from '../../src/answer-composition/agentic-ask-v1.js';
-import { ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, STEP_PROMPT, followUpsStepGuidance } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { ANSWER_PROMPT, ASK_STEP_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, followUpsStepGuidance } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1 } from '../../src/answer-composition/agentic-evidence-bundle-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { evidenceDeskSourceV2, type EvidenceDeskItemV2, type EvidenceDeskPortV2, type EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
@@ -68,7 +68,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
       { sentences: [{ text: 'You own the open fan curve follow-up.', evidence: ['E1'] }], not_found: [] },
     ]);
     await createAgenticAskV4({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: followUpsOnly.model, audit: { append: () => undefined }, generation, asker }).answer({ question });
-    expect(followUpsOnly.steps()[0]!.system_prompt).toBe(`${STEP_PROMPT}\n\n${followUpsStepGuidance(true)}`);
+    expect(followUpsOnly.steps()[0]!.system_prompt).toBe(`${ASK_STEP_PROMPT}\n\n${followUpsStepGuidance(true)}`);
     expect(followUpsOnly.writer()!.system_prompt).toBe(`${ANSWER_PROMPT}\n\n${FOLLOW_UPS_ANSWER_GUIDANCE}`);
     expect(listSources(followUpsOnly.steps()[0]!)).toEqual(['meetings', 'documents', 'follow_ups']);
     expect((userOf(followUpsOnly.steps()[0]!).source_catalog as { source: string }[]).at(-1)).toEqual({ source: 'follow_ups', kind: 'follow_up', description: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.description, metadata_only_list: false });
@@ -76,7 +76,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     const withTools = scripted([step('open', [{ tool: 'finish', args: {} }])]);
     await createAgenticAskV4({ desk: deskWith([JIRA, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: withTools.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
     const toolsPrompt = withTools.steps()[0]!.system_prompt;
-    expect(toolsPrompt.startsWith(`${STEP_PROMPT}\n\nLive sources report current tool context`)).toBe(true);
+    expect(toolsPrompt.startsWith(`${ASK_STEP_PROMPT}\n\nLive sources report current tool context`)).toBe(true);
     expect(toolsPrompt.endsWith(`\n\n${followUpsStepGuidance(true)}`)).toBe(true);
     expect(listSources(withTools.steps()[0]!)).toEqual(['meetings', 'documents', 'tickets', 'follow_ups']);
 
@@ -105,7 +105,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     // Owner and status never default follow-ups to a meeting kind, and kind is a meeting filter only.
     expect(input).not.toHaveProperty('kinds');
     const listed = userOf(run.steps()[1]!);
-    expect(listed.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: '@Mara', status: 'In progress', kind: 'action' }, items: ['E1', 'E2'], more: false, note: 'kind applies to meetings only; ignored' }]);
+    expect(listed.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: '@Mara', status: 'In progress', kind: 'action' }, list: 'L1', items: ['E1', 'E2'], more: false, note: 'kind applies to meetings only; ignored' }]);
     expect(listed.seen).toEqual([
       { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, text: fanCurve.text, full: true },
       { id: 'E2', source: 'follow_ups', kind: 'follow_up', title: 'THERM-46 Alarm thresholds', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open' }, text: thresholds.text, full: true },

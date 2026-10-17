@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ASK_STEP_PROMPT, STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticDataSlotV1, agenticStartingSlotV1, fillAgenticTaskV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import type { EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
@@ -84,7 +84,7 @@ describe("brief: goals", () => {
     ], { search: vi.fn(async () => result([record("dashboard", "Approved: due September 11.")])) });
     const brief: AgenticBriefV1 = { goal: { kind: "question", question: "When is the dashboard due?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: true } };
     const view = await h.research.research({ trigger: "ask", brief });
-    expect(h.inputs[0]!.system_prompt).toBe(STEP_PROMPT);
+    expect(h.inputs[0]!.system_prompt).toBe(ASK_STEP_PROMPT);
     expect(Object.keys(h.prompt(0))[0]).toBe("question");
     expect(h.prompt(0)).not.toHaveProperty("task");
     expect(view).toMatchObject({ trigger: "ask", goal: brief.goal, budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1 });

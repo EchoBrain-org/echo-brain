@@ -1,5 +1,5 @@
 import { calendarDateV1, evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
-import { askResearchCompletionProblemsV1, type AskResearchObservationV1 } from './agentic-ask-research-state-v1.js';
+import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1, type AskResearchObservationV1 } from './agentic-ask-research-state-v1.js';
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   evidenceDeskSourceV2,
@@ -31,6 +31,16 @@ import {
 } from "./agentic-ask-v1-model-protocol.js";
 import { fillAgenticTaskV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
+import {
+  agenticListEndUnverifiedV1,
+  agenticListIdV1,
+  createAgenticListEvidenceV1,
+  type AgenticListEvidenceV1,
+  type AgenticListFilterApplicationV1,
+  type AgenticListFilterFieldV1,
+  type AgenticListFilterV1,
+  type AgenticListIdV1,
+} from "./agentic-list-evidence-v1.js";
 import type { AgenticResearchProgressReporterV1 } from "./agentic-ask-progress-recorder-v1.js";
 import {
   AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
@@ -148,6 +158,8 @@ export interface CreateAgenticResearchLoopV1Options {
   readonly observed: () => { readonly checked_at: string | null; readonly model_ms: number; readonly desk_ms: number };
   /** A streamed Ask's progress (ADR-0039): told what research reads and, after each step's access check, what it reads in full. */
   readonly report?: AgenticResearchProgressReporterV1;
+  /** Wall-clock epoch milliseconds, for when a list's first page was read (ADR-0041). Defaults to `Date.now`; tests pin it. */
+  readonly wall_now?: () => number;
 }
 
 /** What the request's audit and journey report read from research, while it runs and after it fails. */
@@ -190,6 +202,8 @@ type Entry = {
   touched: number;
   /** The latest search that returned this item; its preview shows where that search matched. */
   query?: string;
+  /** A research step admitted after its access check showed it, under opened or seen: a list member counts once shown (ADR-0041). */
+  shown?: boolean;
 };
 type ToolResult = Readonly<Record<string, unknown>>;
 /** A completed desk read waits here until earlier planned reads have updated state. */
@@ -200,9 +214,31 @@ type OrderedAdmission = (apply: () => ToolResult) => Promise<ToolResult>;
  */
 type NeedState = { readonly id: string; readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
 type PartState = { readonly question: string; notes: string; readonly needs: NeedState[] };
-type ListState = { args: StepArgs; readonly source: EvidenceDeskSourceV2; readonly unfiltered: boolean; items: EvidenceDeskItemV2[]; cursor: string | undefined; fetched: boolean; shown: number; truncated: boolean; available: boolean; note?: string };
+/** How the list applied each filter field the model asked for (ADR-0041). */
+type FilterApplication = Partial<Record<AgenticListFilterFieldV1, AgenticListFilterApplicationV1>>;
+/**
+ * One inventory: a normalized selection of one source and what it has fetched and paged out. A question goal (Ask)
+ * keeps it as list evidence (ADR-0041): its id, once its first page is read; its members, the entries it paged out,
+ * each once in list order; and the filter as applied.
+ */
+type ListState = {
+  args: StepArgs; readonly source: EvidenceDeskSourceV2; readonly unfiltered: boolean; items: EvidenceDeskItemV2[]; cursor: string | undefined; fetched: boolean;
+  /** Fetched items paged out to research so far. */
+  paged: number;
+  truncated: boolean; available: boolean; note?: string;
+  id?: AgenticListIdV1;
+  readonly members: Entry[];
+  readonly filter: AgenticListFilterV1;
+  readonly filter_applied: FilterApplication;
+  /** Notes on requested filters this source cannot apply, kept for every later view of the list. */
+  readonly filter_notes: string[];
+  /** The latest page had no next link but was exactly full (addition 1). */
+  unverified_end: boolean;
+  /** When the desk returned its first page (addition 2). */
+  read_at?: string;
+};
 /** An inventory has more to show: listed items not yet shown, or another page. */
-function inventoryMore(state: ListState): boolean { return state.shown < state.items.length || state.cursor !== undefined; }
+function inventoryMore(state: ListState): boolean { return state.paged < state.items.length || state.cursor !== undefined; }
 /** Identity of a cited object independent of the version or text released this time. */
 function citationIdentity(value: unknown): string {
   const citation = object(value) ?? {};
@@ -288,9 +324,13 @@ function followUpSource(source: AgenticResearchSourceV1 | undefined): boolean {
 }
 /** A follow-up has no date of its own, so a dated read of follow-ups is refused before the desk. */
 function followUpDatesError(selector: string): string { return `${selector} have no dates; omit since, until and date_field`; }
-type ListArgs = EvidenceDateFilterV1 & { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
-/** One inventory per normalized selection: notes never start another, and owner matching ignores case. */
-function listKey({ notes: _notes, status, owner, ...request }: ListArgs): string {
+/**
+ * A list request after normalization. `applied` says how the selection applies each filter field the model asked for
+ * (ADR-0041): a field this source cannot apply is `ignored`, with a note, and absent from the selection.
+ */
+type ListArgs = EvidenceDateFilterV1 & { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[]; readonly applied: FilterApplication };
+/** One inventory per normalized selection: notes and ignored filters never start another, and owner matching ignores case. */
+function listKey({ notes: _notes, applied: _applied, status, owner, ...request }: ListArgs): string {
   return JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
 }
 function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<string, AgenticResearchSourceV1>, readSource: (value: string | undefined) => string | undefined): ListArgs | { readonly error: string } {
@@ -301,33 +341,34 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
   // owner and status filter meeting actions here, after each page, and follow-ups at the desk.
   const filterable = [...sources.values()].some(followUpSource) ? "meeting actions and follow-ups" : "meeting actions";
   const notes: string[] = [];
+  const applied: FilterApplication = {};
   let kinds: EvidenceDeskKindV2[] | undefined;
   if (raw.kind !== undefined) {
     const kind = MEETING_KINDS[raw.kind.trim().toLowerCase()];
-    if (source !== "meeting") notes.push("kind applies to meetings only; ignored");
+    if (source !== "meeting") { notes.push("kind applies to meetings only; ignored"); applied.kind = "ignored"; }
     else if (kind === undefined) return { error: "kind must be \"decision\", \"action\" or \"rationale\"" };
-    else kinds = [kind];
+    else { kinds = [kind]; applied.kind = "applied"; }
   }
   let status: "open" | "done" | undefined;
   if (raw.status !== undefined) {
     const group = statusGroup(raw.status);
-    if (source !== "meeting" && !followUps) notes.push(`status applies to ${filterable} only; ignored`);
+    if (source !== "meeting" && !followUps) { notes.push(`status applies to ${filterable} only; ignored`); applied.status = "ignored"; }
     else if (group === null) return { error: "status must be \"open\" or \"done\"" };
-    else { status = group; if (!followUps) kinds ??= ["action"]; }
+    else { status = group; applied.status = "applied"; if (!followUps) kinds ??= ["action"]; }
   }
   let owner: string | undefined;
   if (raw.owner !== undefined) {
     const name = raw.owner.trim().replace(/^@/u, "").trim();
-    if (source !== "meeting" && !followUps) notes.push(`owner applies to ${filterable} only; ignored`);
+    if (source !== "meeting" && !followUps) { notes.push(`owner applies to ${filterable} only; ignored`); applied.owner = "ignored"; }
     else if (name.length === 0 || name.length > 80) return { error: "owner must be a person's name such as \"Dana\"" };
-    else { owner = name; if (!followUps) kinds ??= ["action"]; }
+    else { owner = name; applied.owner = "applied"; if (!followUps) kinds ??= ["action"]; }
   }
   let channel: string | undefined;
   if (raw.channel !== undefined) {
     const name = raw.channel.trim().replace(/^#/u, "").trim();
-    if (!descriptor.requires_channel) notes.push("channel is unsupported by this source; ignored");
+    if (!descriptor.requires_channel) { notes.push("channel is unsupported by this source; ignored"); applied.channel = "ignored"; }
     else if (name.length === 0 || name.length > 80) return { error: "channel must be a channel name such as \"hw-dvt\"" };
-    else channel = name;
+    else { channel = name; applied.channel = "applied"; }
   }
   if (descriptor.requires_channel && channel === undefined) return { error: `${descriptor.selector} needs a channel, such as ${JSON.stringify({ source: descriptor.selector, channel: "hw-dvt" })}` };
   if (followUps && (raw.since !== undefined || raw.until !== undefined || raw.date_field !== undefined)) return { error: followUpDatesError(descriptor.selector) };
@@ -337,8 +378,13 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
   try { validateEvidenceDateFilterV1({ since: since ?? undefined, until: until ?? undefined, date_field: raw.date_field as EvidenceDateFieldV1 | undefined }); }
   catch (error) { return { error: error instanceof Error ? error.message : 'Invalid date filter' }; }
   const defaultSince = descriptor.default_since_days !== undefined && since === undefined ? listDate(`${descriptor.default_since_days}d`, today)! : since ?? undefined;
+  // Dates are applied or refused: a source that cannot apply a date field refuses the read, never widens it. A default
+  // since the catalog declares is in the selection but was not asked for.
+  if (since !== undefined && since !== null) applied.since = "applied";
+  if (until !== undefined && until !== null) applied.until = "applied";
+  if (raw.date_field !== undefined) applied.date_field = "applied";
   return {
-    source, notes, ...(raw.date_field === undefined ? {} : { date_field: raw.date_field as EvidenceDateFieldV1 }),
+    source, notes, applied, ...(raw.date_field === undefined ? {} : { date_field: raw.date_field as EvidenceDateFieldV1 }),
     ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(channel === undefined ? {} : { channel }),
     ...(defaultSince === undefined ? {} : { since: defaultSince }), ...(until === undefined || until === null ? {} : { until }),
   };
@@ -357,6 +403,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const sourceCatalog: readonly AgenticResearchCatalogEntryV1[] = listAvailable ? options.catalog.entries
     : Object.freeze(options.catalog.entries.map(({ metadata_only_list: _metadata, requires_channel: _channel, default_since_days: _since, ...entry }) => Object.freeze(entry)));
   const budget = brief.budget;
+  /** A question goal (Ask) keeps every list it reads as evidence of which items exist (ADR-0041); a task goal does not. */
+  const ask = brief.goal.kind === "question";
+  const wallNow = options.wall_now ?? Date.now;
   /** Research steps: the audit records them as `step` calls, in the span the runner names. */
   const stepCall: AgenticModelCallV1 = Object.freeze({ role: "step", span: options.step_span });
   const requestDay = context.today;
@@ -384,6 +433,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const exhaustivelyEmptySources = new Set<EvidenceDeskSourceV2>();
   let retrievalProgress = 0;
   let evidenceNovelty = 0;
+  /** List members added (a question goal only): reading a list to its end is progress (ADR-0041). */
+  let listNovelty = 0;
+  /** Lists whose first page was read, so the next list's id follows the count. */
+  let listsRead = 0;
   const lists = new Map<string, ListState>();
   /** Items whose latest open was truncated or carried a notice. */
   const limitedOpens = new Set<string>();
@@ -528,7 +581,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (!listAvailable) return { tool: "list", args, error: LIST_UNAVAILABLE };
     const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource);
     if ("error" in normalized) return { tool: "list", args, error: normalized.error };
-    const { notes, status, owner, ...selection } = normalized;
+    const { notes, applied, status, owner, ...selection } = normalized;
     // Follow-ups are filtered by the desk, before anything is released; meeting actions are filtered here, after each page.
     const deskFilters = followUpSource(sourcesById.get(selection.source));
     const request = {
@@ -545,13 +598,25 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       });
       const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
         request.channel === undefined && request.since === undefined && request.until === undefined && request.date_field === undefined;
-      state = { args: stateArgs, source: request.source, unfiltered, items: [], cursor: undefined, fetched: false, shown: 0, truncated: false, available: true };
+      // The filter as applied: the normalized selection, never the model's raw arguments (ADR-0041).
+      const filter: AgenticListFilterV1 = Object.freeze({
+        ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }),
+        ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
+        ...(request.date_field === undefined ? {} : { date_field: request.date_field }), ...(request.time_zone === undefined ? {} : { time_zone: request.time_zone }),
+      });
+      state = {
+        args: stateArgs, source: request.source, unfiltered, items: [], cursor: undefined, fetched: false, paged: 0, truncated: false, available: true,
+        members: [], filter, filter_applied: {}, filter_notes: [], unverified_end: false,
+      };
       lists.set(key, state);
     }
+    // The same selection asked with a filter this source ignores is the same list, whose filter was asked for.
+    for (const [field, how] of Object.entries(applied) as [AgenticListFilterFieldV1, AgenticListFilterApplicationV1][]) state.filter_applied[field] ??= how;
+    for (const note of notes) if (!state.filter_notes.includes(note)) state.filter_notes.push(note);
     const currentState = state;
     let result: EvidenceDeskResultV2 | undefined;
-    const before = { cursor: state.cursor, shown: state.shown, fetched: state.fetched };
-    if (state.shown >= state.items.length && (!state.fetched || state.cursor !== undefined)) {
+    const before = { cursor: state.cursor, paged: state.paged, fetched: state.fetched };
+    if (state.paged >= state.items.length && (!state.fetched || state.cursor !== undefined)) {
       const deskInput: EvidenceDeskListInputV2 = { ...request, limit: LIST_FETCH, ...(state.cursor === undefined ? {} : { cursor: state.cursor }), signal };
       try { result = await raceAbort(signal, desk.list(deskInput)); }
       catch (error) {
@@ -567,7 +632,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         cover('list', request.source, result);
         currentState.available = currentState.available && result.notice === undefined;
         if (!currentState.fetched || result.next_cursor !== currentState.cursor) retrievalProgress += 1;
+        // A list's id and read time come from its first page, in plan order (ADR-0041, addition 2: search can lag edits).
+        if (!currentState.fetched) { currentState.id = agenticListIdV1(++listsRead); currentState.read_at = new Date(wallNow()).toISOString(); }
         currentState.fetched = true; currentState.cursor = result.next_cursor; currentState.truncated = result.truncated;
+        // An exactly full last page with no next link may hide more items (addition 1); counted before ECHO's own filter.
+        currentState.unverified_end = agenticListEndUnverifiedV1({ returned: result.items.length, requested: LIST_FETCH, ...(result.next_cursor === undefined ? {} : { next_cursor: result.next_cursor }), ...(result.page_full === undefined ? {} : { page_full: result.page_full }) });
         // A status filter applies only where an item records a status; approved actions usually record owner and
         // due date but not completion, so an item without a status is kept (never silently dropped as "not open").
         const statusOf = (item: EvidenceDeskItemV2) => item.attributes?.status === undefined ? null : statusGroup(item.attributes.status);
@@ -577,25 +646,38 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           return recorded !== undefined && wanted.every(part => recorded.includes(part));
         };
         currentState.items.push(...result.items.filter(item => deskFilters || ((status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item)))));
-        if (!deskFilters && status !== undefined && result.items.some(item => item.attributes?.status === undefined)) currentState.note = "some items do not record open or done; they are included";
+        if (!deskFilters && status !== undefined && result.items.some(item => item.attributes?.status === undefined)) {
+          currentState.note = "some items do not record open or done; they are included";
+          currentState.filter_applied.status = "partial";
+        }
         if (owner !== undefined && currentState.items.length === 0 && result.items.length > 0) currentState.note = `no listed item records ${owner} as owner; owners shown are exact names from the records`;
       }
 
-      const page = currentState.items.slice(currentState.shown, currentState.shown + LIST_PAGE).map(item => register(item));
-      for (const entry of page) entry.direct = true;
-      currentState.shown += page.length;
+      const page = currentState.items.slice(currentState.paged, currentState.paged + LIST_PAGE).map(item => register(item));
+      for (const entry of page) {
+        entry.direct = true;
+        // Members are each once, in list order. For a question goal, a page that adds members is progress (ADR-0041).
+        if (!currentState.members.includes(entry)) { currentState.members.push(entry); if (ask) listNovelty += 1; }
+      }
+      currentState.paged += page.length;
       if (page.length > 0) retrievalProgress += 1;
       const more = inventoryMore(currentState);
       if (currentState.unfiltered && currentState.available && !more && !currentState.truncated && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
-      if (!before.fetched || before.shown !== currentState.shown || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: currentState.available && !more && !currentState.truncated });
+      if (!before.fetched || before.paged !== currentState.paged || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: currentState.available && !more && !currentState.truncated });
       // An empty page is never "nothing more" while pages remain: a filter applied after each page can empty one. A repeat
       // of an inventory read to its end makes no desk call and no progress, and says so; only a complete one is "in full".
+      // For a question goal, an exactly full last page is not trusted as the end (addition 1).
+      const unverified = ask && !more && currentState.unverified_end;
       const emptyNote = page.length > 0 ? [] : more ? ["this page was empty (for example because of a date filter); more pages remain"]
         : result !== undefined ? ["nothing more to list"]
         : !currentState.available ? ["already listed; this source was unavailable, so its list is incomplete; use search"]
-        : currentState.truncated ? ["already listed; nothing more to list"] : ["already listed in full; nothing more to list"];
-      const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...emptyNote, ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : [])];
-      return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => describe(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
+        : currentState.truncated || unverified ? ["already listed; nothing more to list"] : ["already listed in full; nothing more to list"];
+      const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...emptyNote, ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : []),
+        ...(unverified && !currentState.truncated ? ["its last page was exactly full, so more items may exist than list can show; use search"] : [])];
+      return {
+        tool: "list", ...(ask && currentState.id !== undefined ? { list: currentState.id } : {}), source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }),
+        items: page.map(entry => describe(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }),
+      };
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -607,7 +689,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const lastResult = (action: StepAction, value: ToolResult): ToolResult => {
     const ids = (key: "results" | "items") => (value[key] as readonly Record<string, unknown>[]).map(row => row.id);
     return Object.freeze({
-      tool: action.tool, args: action.args,
+      tool: action.tool, args: action.args, ...(typeof value.list === "string" ? { list: value.list } : {}),
       ...(Array.isArray(value.opened) ? { opened: value.opened } : {}),
       ...(Array.isArray(value.results) ? { results: ids("results") } : {}), ...(Array.isArray(value.items) ? { items: ids("items") } : {}),
       ...(typeof value.more === "boolean" ? { more: value.more } : {}), ...(value.truncated === true ? { truncated: true } : {}),
@@ -758,7 +840,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   }));
   /** Listed inventories continue across planner turns without exposing cursors or desk identities. */
   const inventoryView = () => [...lists.values()].filter(state => state.fetched).map(state => Object.freeze({
-    args: state.args, shown_count: state.shown, more: inventoryMore(state),
+    args: state.args, shown_count: state.paged, more: inventoryMore(state),
     available: state.available, truncated: state.truncated,
   }));
   /**
@@ -774,11 +856,38 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const searched = (source: EvidenceDeskSourceV2) => searchedSources.has(null) || searchedSources.has(source);
     return fetched.filter(state => inventoryMore(state) && !covered.has(state.source) && !(sourcesById.get(state.source)?.metadata_only_list === true && searched(state.source)));
   };
+  /** Lists research read, in id order (a list gets its id when its first page is read). */
+  const listsInOrder = (): readonly (ListState & { readonly id: AgenticListIdV1 })[] =>
+    [...lists.values()].filter((state): state is ListState & { readonly id: AgenticListIdV1 } => state.id !== undefined).sort((left, right) => Number(left.id.slice(1)) - Number(right.id.slice(1)));
+  /** A list as list evidence. `extraShown`: members the prompt being built shows, which its admission will mark shown. */
+  const listEvidence = (state: ListState & { readonly id: AgenticListIdV1 }, extraShown: ReadonlySet<Entry> = new Set()): AgenticListEvidenceV1 => createAgenticListEvidenceV1({
+    id: state.id, source: state.args.source!, filter: state.filter, filter_applied: { ...state.filter_applied },
+    members: state.members.map(entry => entry.short), shown: state.members.filter(entry => entry.shown === true || extraShown.has(entry)).length,
+    ended: !inventoryMore(state), unverified_end: state.unverified_end, available: state.available, truncated: state.truncated, read_at: state.read_at!,
+  });
+  /**
+   * Ask's persistent lists (ADR-0041): each list by id, with its members, as the step being built will see it. `complete`
+   * counts the members this step shows, since admitting the step marks them shown.
+   */
+  const listView = (extraShown: ReadonlySet<Entry> = new Set()) => listsInOrder().map(state => {
+    const evidence = listEvidence(state, extraShown);
+    const notes = [...state.filter_notes, ...(state.note === undefined ? [] : [state.note])];
+    return Object.freeze({
+      id: state.id, args: state.args, members: evidence.members, shown_count: state.paged, more: inventoryMore(state), complete: evidence.complete,
+      available: state.available, truncated: state.truncated, unverified_end: state.unverified_end, ...(notes.length === 0 ? {} : { notes }),
+    });
+  });
+  /** What the finish check knows about each list (ADR-0041). */
+  const listsForCheck = (): readonly AskResearchListV1[] => listsInOrder().map(state => Object.freeze({
+    id: state.id, ended: !inventoryMore(state), args: state.args as Readonly<Record<string, string>>, members: state.members.map(entry => entry.short),
+  }));
 
   // ---- scratchpad ------------------------------------------------------
   const citable = (short: string): boolean => entryOf(short)?.full === true;
   const citedShorts = () => new Set(plan.flatMap(part => part.needs.flatMap(need => need.evidence)).filter(citable));
+  /** What the latest step prompt reads in full, and every entry it shows (opened or seen): its admission marks them. */
   let researchPromptEntries: readonly Entry[] = [];
+  let researchPromptShown: readonly Entry[] = [];
   /** Step model time (the runner's) when the latest step call started, and the longest step call so far. */
   let stepCallStartedAt: number | undefined;
   let longestStepMs = 0;
@@ -823,6 +932,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     return {
       opened: shown.map(entry => ({ ...describe(entry), text: entry.item.text })), seen: seen.map(({ value }) => value),
       read: [...shown, ...seen.filter(({ value }) => value.full === true).map(({ entry }) => entry)],
+      entries: [...shown, ...seen.map(({ entry }) => entry)],
     };
   };
   // ---- stop state ------------------------------------------------------
@@ -982,10 +1092,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // last one's head and evidence as its prefix, so the provider can serve that prefix from its cache. JSON keeps this
       // key order through the gate and the provider adapter.
       const head = { ...goalFields(), ...context, scope, source_catalog: sourceCatalog };
-      const tail = { step: steps + 1, steps_left: budget.max_rounds - steps - 1, plan: planView(true), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
-      const pad = scratchpad(researchBudget - bytes(JSON.stringify({ ...head, opened: [], seen: [], ...tail })), latest);
-      researchPromptEntries = pad.read;
-      const user = { ...head, opened: pad.opened, seen: pad.seen, ...tail };
+      // A question goal sees its lists by id (ADR-0041); a task goal keeps its inventories. A list's view can only shrink
+      // once the scratchpad is known (complete "false" becomes "true"), so the budget is measured before it.
+      const tailWith = (shownNow?: ReadonlySet<Entry>) => ({
+        step: steps + 1, steps_left: budget.max_rounds - steps - 1, plan: planView(true), ...(ask ? { lists: listView(shownNow) } : { inventories: inventoryView() }), last_results: results, searches_done: [...searchesRun],
+      });
+      const pad = scratchpad(researchBudget - bytes(JSON.stringify({ ...head, opened: [], seen: [], ...tailWith() })), latest);
+      researchPromptEntries = pad.read; researchPromptShown = pad.entries;
+      const user = { ...head, opened: pad.opened, seen: pad.seen, ...tailWith(new Set(pad.entries)) };
       const openIds = [...entries.values()].map(entry => entry.short);
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
       const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable);
@@ -999,7 +1113,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       report?.before_check(pad.read.filter(entry => entry.direct === true).map(entry => entry.item));
       try {
         step = await gate.withRepair(stepCall, researchPrompt, user, stepSchema, timeout, value => {
-          const parsed = parseStep(value);
+          const parsed = parseStep(value, { lists: ask });
           if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
           for (const action of parsed.actions) {
             if (action.tool === 'list' && !listAvailable) throw new AgenticAskOutputErrorV1(LIST_UNAVAILABLE);
@@ -1018,7 +1132,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           }
           if (parsed.actions.every(action => action.tool === 'finish')) {
             const completionPlan = proposedPlan(parsed.parts);
-            const problems = [...askResearchCompletionProblemsV1(completionPlan, researchObservations, citable, listAvailable)];
+            // A question goal's found need may rest on a list it read (ADR-0041); a task goal's needs an item read in full.
+            const problems = [...(ask
+              ? askQuestionCompletionProblemsV1(completionPlan, researchObservations, listsForCheck(), citable, listAvailable)
+              : askResearchCompletionProblemsV1(completionPlan, researchObservations, citable, listAvailable))];
             if (completionPlan.some(part => part.needs.some(need => need.status === 'not_found'))) {
               if (entries.size > 0 && [...entries.values()].every(entry => entry.item.text === undefined)) {
                 problems.unshift('discovered items have metadata only; open potentially relevant discovered items before concluding that it is absent');
@@ -1064,7 +1181,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         break;
       }
       const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
-      const before = hadCitableEvidence ? evidenceNovelty : retrievalProgress;
+      // Once research has read some text, only new evidence is progress: new text, or, for a question goal, list members.
+      const novelty = () => evidenceNovelty + listNovelty;
+      const before = hadCitableEvidence ? novelty() : retrievalProgress;
       const entriesBefore = entries.size;
       report?.reads(reads.some(action => action.tool !== "open"));
       results = await runReads(reads);
@@ -1081,7 +1200,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         researchStop = 'empty_catalog';
         break;
       }
-      const progressed = (hadCitableEvidence ? evidenceNovelty : retrievalProgress) > before;
+      const progressed = (hadCitableEvidence ? novelty() : retrievalProgress) > before;
       idleSteps = progressed ? 0 : idleSteps + 1;
       // New metadata-only items are not progress, but the planner may still open what the streak discovered, even after
       // another read first (a search that found titles, then an empty search, then a not_found finish).
@@ -1104,9 +1223,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       full: entry.full, opened: entry.opened, preloaded: entry.preloaded === true, touched: entry.touched,
       ...(entry.query === undefined ? {} : { query: entry.query }), cited_by_plan: cited.has(entry.short),
     }));
+    // A question goal's lists (ADR-0041).
+    const listRecords = ask ? listsInOrder().map(state => listEvidence(state)) : [];
     return Object.freeze({
       schema_version: 1 as const, kind: "echo-agentic-evidence-bundle-v1" as const, goal, budget,
-      plan: planView() as readonly AgenticResearchPartV1[], items: Object.freeze(items), unreadable_starting: Object.freeze([...unreadableStarting]), rounds: Object.freeze([...rounds]),
+      plan: planView() as readonly AgenticResearchPartV1[], items: Object.freeze(items), ...(ask ? { lists: Object.freeze(listRecords) } : {}),
+      unreadable_starting: Object.freeze([...unreadableStarting]), rounds: Object.freeze([...rounds]),
       coverage: Object.freeze({ reads: Object.freeze(readCoverage.map(read => Object.freeze({ ...read }))), inventories: Object.freeze(inventoryView().map(({ args, ...inventory }) => Object.freeze({ source: args.source, ...inventory }))), notices: Object.freeze([...notice]) }),
       stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete, ...(researchAdmission === undefined ? {} : { admission: researchAdmission }) }),
       cost: Object.freeze({ rounds: steps, model_calls: calls, repairs, fallbacks, input_tokens: usage("input_tokens"), output_tokens: usage("output_tokens"), total_tokens: usage("total_tokens"),
@@ -1128,6 +1250,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           if (!entry.full) evidenceNovelty += 1;
           entry.full = true;
         }
+        // Everything the call shows, text or row, has been shown to research: a list counts once every member has (ADR-0041).
+        for (const entry of researchPromptShown) entry.shown = true;
         // This call's access check has passed: the items it reads in full may now be named (ADR-0039).
         report?.given(researchPromptEntries.filter(entry => entry.direct === true).map(entry => entry.item));
       },

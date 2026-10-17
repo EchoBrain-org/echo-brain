@@ -323,7 +323,8 @@ describe("agentic Ask: research loop", () => {
     ]);
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: "Summarize this project" });
     expect(evidence.list).toHaveBeenCalledWith(expect.objectContaining({ source: "document", limit: 50 }));
-    expect(script.prompt(1).last_results[0]).toEqual({ tool: "list", args: { source: "documents" }, items: ["E1"], more: false });
+    // Ask's list result names the list it read (ADR-0041).
+    expect(script.prompt(1).last_results[0]).toEqual({ tool: "list", args: { source: "documents" }, list: "L1", items: ["E1"], more: false });
     expect(script.prompt(1).seen[0]).toMatchObject({ id: "E1", source: "document", title: "Atlas plan.md" });
     expect(script.prompt(2).opened[0]).toMatchObject({ id: "E1", text: passage.text });
     expect(evidence.open).toHaveBeenCalledWith(expect.objectContaining({ item: listed.id }));
@@ -784,8 +785,10 @@ describe("agentic Ask: research loop", () => {
     const evidence = desk({ list: () => ({ items: [], truncated: false, receipt_digests: [], next_cursor: 'page-2' }) });
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
     expect(result.outcome).toBe('partial');
-    expect(script.prompt(2).inventories).toEqual([{
-      args: { source: 'meetings' }, shown_count: 0, more: true, available: true, truncated: false,
+    // Ask sees each list by id, with its members (ADR-0041).
+    expect(script.prompt(2)).not.toHaveProperty('inventories');
+    expect(script.prompt(2).lists).toEqual([{
+      id: 'L1', args: { source: 'meetings' }, members: [], shown_count: 0, more: true, complete: false, available: true, truncated: false, unverified_end: false,
     }]);
     expect(script.prompt(3).validation_error).toContain('listed inventory still has unread pages; repeat list with {"source":"meetings"}');
     expect(script.prompt(3).validation_error).not.toContain('page-2');
@@ -815,7 +818,7 @@ describe("agentic Ask: research loop", () => {
     } });
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
     expect(result.outcome).toBe('not_found');
-    expect(script.prompt(2).inventories.find((inventory: { args: { source: string } }) => inventory.args.source === 'meetings')).toMatchObject({ more: false });
+    expect(script.prompt(2).lists.find((list: { args: { source: string } }) => list.args.source === 'meetings')).toMatchObject({ id: 'L1', more: false, complete: true });
   });
 
   it('stops stale synonym searches after evidence and lets the writer name the requested gap', async () => {

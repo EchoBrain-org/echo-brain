@@ -172,6 +172,12 @@ route, header, database table or client changes.
     is accepted, and the answer will say "at least N".
   - A need without list support still needs at least one cited item read in
     full, exactly as today.
+  - Member rows alone are not enough: a need that cites rows of a list must
+    also cite the list by its id, or an item read in full. Otherwise a content
+    need ("when is launch?") that cites a listed row would finish before its
+    item is read, and the writer, which never sees a row's text, could not
+    answer it. The refusal names both ways on: "cite L1 for which items
+    exist, or open the items for what they say".
   - A task goal keeps `askResearchCompletionProblemsV1` unchanged. The
     not-found rules are unchanged for every goal.
 - **Research can finish on a complete list** without opening any member. The

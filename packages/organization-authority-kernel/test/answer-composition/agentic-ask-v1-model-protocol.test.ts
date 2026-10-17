@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AgenticAskOutputErrorV1,
+  ASK_SEARCH_ONLY_STEP_PROMPT,
+  ASK_STEP_PROMPT,
   answerSchema,
   cleanId,
   createStepSchema,
@@ -97,6 +99,39 @@ describe("agentic Ask model protocol parity", () => {
     expect(SEARCH_ONLY_STEP_PROMPT).toContain("\"tool\" is \"search\", \"open\" or \"finish\".");
     expect(STEP_PROMPT).toContain("list, args {\"source\"");
     expect(STEP_PROMPT.split("\n").length - SEARCH_ONLY_STEP_PROMPT.split("\n").length).toBe(8);
+  });
+
+  it("gives Ask its own rules 3 and 4, and keeps the task prompt byte for byte (ADR-0041)", () => {
+    const rule = (prompt: string, number: number) => prompt.split("\n").find(line => line.startsWith(`${number}. `))!;
+    // A list's id is support for which items exist; Ask sees lists, a task sees inventories.
+    expect(rule(ASK_STEP_PROMPT, 3)).toContain("For which items exist, and each one's title, dates, status and owner, a list's id (such as L1, from lists) is also support.");
+    expect(ASK_STEP_PROMPT.split("\n")[0]).toContain("then your plan, lists, last_results");
+    expect(STEP_PROMPT.split("\n")[0]).toContain("then your plan, inventories, last_results");
+    // Addition 6: early stopping never applies to which items exist, and no list is left unread to save pages.
+    expect(rule(ASK_STEP_PROMPT, 4)).toContain("A question about which or how many items exist is supported only by a complete list: cite the list's id, never some of its items.");
+    expect(rule(ASK_STEP_PROMPT, 4)).toContain("cite it anyway; the answer will say \"at least\" its count");
+    expect(rule(ASK_STEP_PROMPT, 4).endsWith("Stop as soon as every requested fact is supported; a question about which items exist is supported only by a complete list.")).toBe(true);
+    expect(rule(ASK_SEARCH_ONLY_STEP_PROMPT, 4).endsWith("then open the candidates. Stop as soon as every requested fact is supported.")).toBe(true);
+    for (const prompt of [ASK_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) {
+      expect(prompt).not.toContain("You may stop early");
+      expect(prompt).not.toContain("instead of paging through it");
+    }
+    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain("You may stop early when the facts the question asks for are already supported.");
+    // Only rules 3 and 4 and the opening line differ; everything else is the same text.
+    const differing = (left: string, right: string) => left.split("\n").flatMap((line, index) => line === right.split("\n")[index] ? [] : [index]);
+    expect(differing(ASK_STEP_PROMPT, STEP_PROMPT)).toEqual([0, 5, 6]);
+    expect(differing(ASK_SEARCH_ONLY_STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT)).toEqual([6]);
+  });
+
+  it("keeps list ids in a need's evidence only for Ask, within the 12-id cap", () => {
+    const value = { parts: [{ question: "q", needs: [{ need: "which pages", status: "found", evidence: ["L1", "[l2]", " L 3 ", "E4", "4", "L1", "N1", "L0"] }], notes: "" }], actions: [{ tool: "finish", args: {} }] };
+    expect(parseStep(value, { lists: true }).parts[0]!.needs[0]!.evidence).toEqual(["L1", "L2", "L3", "E4"]);
+    // A task goal, and every caller before ADR-0041, drops them.
+    expect(parseStep(value).parts[0]!.needs[0]!.evidence).toEqual(["E4"]);
+    const many = { ...value, parts: [{ question: "q", needs: [{ need: "n", status: "found", evidence: [...Array.from({ length: 11 }, (_, index) => `E${index + 1}`), "L1", "L2"] }], notes: "" }] };
+    expect(parseStep(many, { lists: true }).parts[0]!.needs[0]!.evidence).toHaveLength(12);
+    // The writer's evidence keeps item ids only.
+    expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }).sentences[0]!.evidence).toEqual(["E2"]);
   });
 
   it("binds each action's argument schema to the selected tool", () => {
