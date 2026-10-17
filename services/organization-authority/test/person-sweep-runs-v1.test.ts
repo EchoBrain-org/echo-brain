@@ -18,6 +18,8 @@ afterEach(() => { for (const capture of captures.splice(0)) capture.close(); });
 type Verdict = PersonSweepVerdictV1 | null;
 type SweepScope = { readonly scope: 'mine' } | { readonly scope: 'record' | 'project'; readonly id: string };
 type DeskScope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
+/** A finding's own item, as research is given it: a ticket names its Jira id. */
+type ItemPointer = { readonly kind: string; readonly ticket_id?: string };
 const HOUR = 3_600_000;
 const MINE = { scope: 'mine' } as const;
 const NOTHING = { state: 'nothing_to_check' } as const;
@@ -38,11 +40,11 @@ function runOf(result: PersonRunsResultsV1['sweep']): string {
  * can change the world while a sweep is in flight.
  */
 async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owner?: FixturePerson;
-  readonly verdicts?: Partial<Record<string, Verdict>> | ((kind: string, desk: DeskScope) => Verdict) } = {}) {
+  readonly verdicts?: Partial<Record<string, Verdict>> | ((kind: string, desk: DeskScope, pointer: ItemPointer) => Verdict) } = {}) {
   const f = await sentFixture(options);
   const given = options.verdicts ?? {};
-  const verdictOf = (kind: string): Verdict => (typeof given === 'function'
-    ? given(kind, (f.bindDesk.mock.calls.at(-1)![2] as unknown as { readonly scope: DeskScope }).scope) : given[kind] ?? null);
+  const verdictOf = (pointer: ItemPointer): Verdict => (typeof given === 'function'
+    ? given(pointer.kind, (f.bindDesk.mock.calls.at(-1)![2] as unknown as { readonly scope: DeskScope }).scope, pointer) : given[pointer.kind] ?? null);
   /** Each sweep's findings, as its research was given them. */
   const findings: SweepTriggerInputV1['findings'][] = [];
   let release!: () => void;
@@ -53,8 +55,8 @@ async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owne
     await gate;
     const citations: unknown[] = [];
     const results = input.findings.map((finding, finding_index) => {
-      const pointer = finding.citations[0] as { readonly kind: string };
-      const verdict = verdictOf(pointer.kind);
+      const pointer = finding.citations[0] as ItemPointer;
+      const verdict = verdictOf(pointer);
       if (verdict === null || verdict === 'unreadable') return { finding_index, verdict, line: verdict === null ? 'Not assessed.' : 'ECHO could not read this item.', citation_indexes: [] };
       const kind = pointer.kind === 'approved_record' ? 'action' : pointer.kind === 'source_revision' ? 'document_passage' : pointer.kind;
       citations.push({ citation: pointer, kind, label: `Now ${f.outsideText}`, visibility: 'only_me' });
@@ -386,6 +388,37 @@ describe('what a sweep checks and how', () => {
     const keysOf = (itemIds: readonly string[]) => itemIds.map(itemId => f.items.read(itemId)!.item_key).sort();
     expect(f.findings.at(-1)!.slice(0, 2).map(finding => pointerKey(finding.citations[0])).sort()).toEqual(keysOf(waiting));
     expect(unchecked()).toEqual([]);
+  });
+
+  it('takes last the items one of the caller\'s sweeps of the last day could not read, so they never hold the twenty places', async () => {
+    // Twenty more tickets Ari's desk can no longer read (deleted, or his Jira access changed); the first ticket and the action it reads.
+    const lost = new Set(Array.from({ length: 20 }, (_, index) => String(20_000 + index)));
+    const f = await sweepFixture({ owner: 'mina', verdicts: (kind, _desk, pointer) => (kind === 'ticket' && lost.has(pointer.ticket_id!) ? 'unreadable' : 'still_open') });
+    const tickets = Array.from(lost, ticket_id => ({ ...f.card.pointers.ticket, ticket_id }));
+    f.db.transaction(() => f.items.insertForRun(f.db, f.runs.readUnfenced(f.runId)!, tickets.map(pointer => ({ item_key: impactItemKeyV1(pointer)!, pointer,
+      relation: 'needs_updating' as const, expected: 'launch next week', owner_membership_id: f.membership('mina'), owner_match: 'approver' as const }))))();
+    const unsent = f.items.forRun(f.runId).filter(row => row.state === 'unsent');
+    expect(f.items.send({ run_id: f.runId, by: f.membership('ari'), command_id: 'send-more', choices: unsent.map(row => ({ item_id: row.item_id, include: true })) })).toMatchObject({ sent: 20 });
+    // Mina judged the twenty first, and the first ticket and the action a second later: the twenty are checked longest ago.
+    for (const row of f.items.forRun(f.runId).filter(row => row.pointer.kind === 'ticket' && lost.has((row.pointer as ItemPointer).ticket_id!))) f.check(row.item_id, 'still_open', 'mina');
+    f.advance(1_000);
+    for (const item of [f.ticket, f.action]) f.check(item.item_id, 'still_open', 'mina');
+    const minas = [f.ticket, f.action].map(item => f.items.read(item.item_id)!.check!.at);
+    f.advance(25 * HOUR);
+    const swept = () => f.findings.at(-1)!.map(finding => finding.citations[0] as ItemPointer);
+    const first = await f.queueAndStart('ari');
+    await f.settled(first.run_id);
+    expect(swept().every(pointer => lost.has(pointer.ticket_id!))).toBe(true);
+    expect(f.counts(first.run_id)).toMatchObject({ unreadable: 20 });
+    // Mina's judged checks stand, so the twenty stay the oldest; the next sweep takes the first ticket and the action first all the same.
+    f.advance(HOUR);
+    const checkedAt = f.clock().toISOString();
+    const next = await f.queueAndStart('ari');
+    await f.settled(next.run_id);
+    expect(swept().slice(0, 2).map(pointer => pointer.kind).sort()).toEqual(['approved_record', 'ticket']);
+    expect(swept().slice(0, 2).flatMap(pointer => (pointer.kind === 'ticket' ? [pointer.ticket_id] : []))).toEqual([f.card.pointers.ticket.ticket_id]);
+    expect([f.ticket, f.action].map(item => f.items.read(item.item_id)!.check!.at)).toEqual([checkedAt, checkedAt]);
+    expect(minas.every(at => at < checkedAt)).toBe(true);
   });
 
   it('never sweeps an item on a Slack message, which never makes a sweep due: no desk reads one yet (R62)', async () => {

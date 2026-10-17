@@ -303,7 +303,12 @@ storage rules. It acts as the person who asked, with their access.
   those there that the caller can see, as `items` shows them. At start, the
   server reads the scope again and takes up to 20 items the caller still
   sees: never checked first, then the oldest last check, then the oldest
-  item. The rest wait for the next sweep.
+  item. An item one of the caller's sweeps of the last day could not read
+  goes after all the others: someone else's judged check stays its last
+  check, so it would otherwise come first in every sweep and keep the
+  caller's other stale items waiting. It is still read when places remain,
+  and a day after that sweep it takes its usual place again. The rest wait
+  for the next sweep.
 - **Findings.** One per item, in that order. A finding names the item by what
   the impact check found and its kind ("Outdated Jira ticket", "Conflicting
   page", "Affected page" when not assessed). It adds "from <decision title>"

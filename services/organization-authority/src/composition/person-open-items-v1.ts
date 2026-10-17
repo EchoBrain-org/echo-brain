@@ -157,9 +157,10 @@ export function errorCodeV1(error: unknown): string {
 }
 /**
  * The items the caller's sweeps created at or after `since` could not read, as each finished sweep stored them: a day on, such a
- * sweep is as old as a stale check. A result stored before sweeps kept them names none.
+ * sweep is as old as a stale check. A result stored before sweeps kept them names none. Home leaves them out of `sweep_due`, and a
+ * sweep takes them after every other item.
  */
-function unreadableSince(runs: Pick<SqliteTriggerRunsV1, 'list'>, actor: Parameters<SqliteTriggerRunsV1['list']>[0], since: string): ReadonlySet<string> {
+export function unreadableSinceV1(runs: Pick<SqliteTriggerRunsV1, 'list'>, actor: Parameters<SqliteTriggerRunsV1['list']>[0], since: string): ReadonlySet<string> {
   const items = new Set<string>();
   for (const run of runs.list(actor, SWEEPS_READ, 'sweep')) {
     if (run.created_at < since) break;
@@ -633,7 +634,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
       const old = rowsOnly ? [] : theirs.filter(entry => entry.row.check === null || entry.row.check.at < dayAgo).map(entry => entry.row);
-      const unreadable = old.length === 0 ? new Set<string>() : unreadableSince(options.runs, actor, dayAgo);
+      const unreadable = old.length === 0 ? new Set<string>() : unreadableSinceV1(options.runs, actor, dayAgo);
       const unchecked = old.filter(row => !unreadable.has(row.item_id));
       const connected = await connectedToolsFor(options, viewer, unchecked);
       const stale = unchecked.some(row => sweepTakesItem(row, connected));

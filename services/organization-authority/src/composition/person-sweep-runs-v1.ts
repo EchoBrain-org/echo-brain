@@ -12,9 +12,9 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authori
 import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { SWEEP_APPROVED_DECISION_V1, SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
 import type { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
-import type { TriggerRunRowV1, TriggerRunScopeV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
+import type { SqliteTriggerRunsV1, TriggerRunRowV1, TriggerRunScopeV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import {
-  assessOpenItemsV1, openItemDecisionPartsV1, openItemKindV1, sweepScopeOpenItemsV1,
+  assessOpenItemsV1, openItemDecisionPartsV1, openItemKindV1, sweepScopeOpenItemsV1, unreadableSinceV1,
   type AssessedOpenItemV1, type OpenItemsContextV1, type OpenItemSourcesV1, type OpenItemViewerV1,
 } from './person-open-items-v1.js';
 import type { PersonRecordAnchorV1 } from './person-record-search-route.js';
@@ -24,7 +24,10 @@ import type { PersonRecordAnchorV1 } from './person-record-search-route.js';
  * open items it rechecks, what it tells research about each, and the verdicts
  * it keeps. It acts as the person who asked, with their access. At start it
  * takes up to 20 of the items they see in its scope, the never-checked first,
- * then those checked longest ago. Each becomes a finding with the item first
+ * then those checked longest ago; an item one of their sweeps of the last day
+ * could not read goes after all of those, since someone else's judged check
+ * stays its last check and would otherwise keep it first in every sweep.
+ * Each becomes a finding with the item first
  * and, for a decision reader only, the decision after it (R33). The run stores
  * the counts by verdict and the ids of the items it could not read; each item
  * keeps only its verdict as the shared last
@@ -45,6 +48,7 @@ export interface SweepCountsV1 {
 }
 /** Where a sweep reads its items and their decisions, and writes its checks. */
 export interface PersonSweepSourcesV1 extends OpenItemSourcesV1 {
+  readonly runs: OpenItemSourcesV1['runs'] & Pick<SqliteTriggerRunsV1, 'list'>;
   readonly items: OpenItemSourcesV1['items'] & Pick<SqliteImpactItemsV1, 'read' | 'recordCheck'>;
   readonly records: OpenItemSourcesV1['records'] & PersonRecordAnchorV1;
 }
@@ -53,6 +57,8 @@ type DeskScope = { readonly kind: 'global' } | { readonly kind: 'project'; reado
 type Research = Pick<ReturnType<typeof createAgenticResearchV1>, 'renderWithResearch'>;
 
 const SWEEP = AGENTIC_TRIGGER_DEFINITIONS_V1.find(definition => definition.name === 'sweep')!;
+/** How long an item one of the caller's sweeps could not read goes last, as Home waits that long to count it stale (R32). */
+const DAY_MS = 24 * 3_600_000;
 const GLOBAL = Object.freeze({ kind: 'global' as const });
 /** How a finding names its item: what the impact check found it to be, and what it is. */
 const RELATION_WORDS = Object.freeze({ conflicts: 'Conflicting', needs_updating: 'Outdated', not_assessed: 'Affected' });
@@ -125,7 +131,11 @@ export async function sweepOpenItemsV1(input: {
   const { sources, viewer, run } = input;
   if (run.scope === null) throw new Error('A sweep run has a scope');
   const context = await sweepScopeOpenItemsV1(sources, viewer, run.scope);
-  const checked = [...context.assessed].sort(longestUncheckedFirst).slice(0, PERSON_SWEEP_RESULT_LIMITS_V1.findings);
+  // Every scope: a record's or a project's Check now would otherwise starve on them too. They are still read when places remain.
+  const unread = unreadableSinceV1(sources.runs, run.actor, new Date(Date.parse(input.checked_at) - DAY_MS).toISOString());
+  const checked = [...context.assessed]
+    .sort((left, right) => Number(unread.has(left.row.item_id)) - Number(unread.has(right.row.item_id)) || longestUncheckedFirst(left, right))
+    .slice(0, PERSON_SWEEP_RESULT_LIMITS_V1.findings);
   // Every item closed, or went out of the caller's sight, since the sweep was asked for.
   if (checked.length === 0) {
     input.fenceSession();
