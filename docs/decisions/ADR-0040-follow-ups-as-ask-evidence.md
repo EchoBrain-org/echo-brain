@@ -178,6 +178,13 @@ with its title, owner, status and latest check, its Open (shown only once the
 answer came) goes to the item page, and its source row says "owner ·
 status". Rollback is a code revert; older clients never reach V7.
 
+The staging research evaluation's question goal
+(`person-research-eval-v1.ts`) still runs Ask as `/v5` does, with V6
+answers and no follow-ups, so it does not measure the Ask that desktops and `ask --live`
+now run. Validate a follow-ups question, such as "help me understand all my
+open tasks", with the research-loop `trace` command, which captures the
+ordinary live Ask on `/v6`.
+
 Negative disclosure tests, required by
 [INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md):
 

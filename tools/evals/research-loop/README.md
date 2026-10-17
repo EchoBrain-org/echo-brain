@@ -15,6 +15,15 @@ Three triggers run the same loop:
   background budget, graded on the research result and the sweep result (a
   verdict and one line per finding).
 
+**Which Ask it runs.** The Ask trigger here runs Ask as
+`POST /v5/person/ask` runs it: V6 answers, with no follow-ups. Desktops and
+`person ask --live` now ask `/v6`, whose V7 answers may also cite ECHO's
+shared follow-ups ([ADR-0040](../../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)),
+so an Ask case here never finds or cites a follow-up. To see how a question
+about follow-ups (for example "help me understand all my open tasks") is
+researched, use the `trace` command below: it captures the ordinary live Ask
+on `/v6`.
+
 The report keeps the loop and the renderers apart. **Research loop**: every
 trigger, graded on its research result (needs, found, read, handed,
 established, verdicts). A sweep has no planner (open items ruling R77): it
