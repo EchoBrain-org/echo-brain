@@ -149,7 +149,7 @@ route, header, database table or client changes.
   `more`, `complete`, `available`, `truncated`, `unverified_end` and notes.
 - **Reading a list is progress.** A list page that adds members counts as new
   evidence, so the idle rule cannot stop research while a list is still being
-  read to its end.
+  read to its end. Built: a member counts once across the request's lists.
 - **Bundle and evaluation.** The evidence bundle carries `lists`, and its
   trimmed evaluation view carries them unchanged. `coverage.inventories` stays
   as it is, because the impact card renderer reads it.
@@ -444,7 +444,9 @@ not candidates.
      rows without text that needs more than three list-only steps after any
      text was read stops before its end.
    - Replacement: for a question goal, a list page that adds members counts as
-     progress.
+     progress. Built: only members no list had shown before count, so
+     re-listing the same items under another date field or range is idle, and
+     the two-idle-steps stop still fires.
 8. **A date filter a source cannot apply, answered as empty.** Checked when
    building; already refused, so nothing is retired (addition 3).
    - Where:

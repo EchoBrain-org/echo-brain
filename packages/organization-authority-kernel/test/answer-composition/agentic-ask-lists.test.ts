@@ -194,6 +194,26 @@ describe("Ask research: reading a list to its end", () => {
     expect(view.lists).toEqual([expect.objectContaining({ id: "L1", shown: 25, ended: true, unverified_end: true, complete: false })]);
   });
 
+  it("counts only items no list had shown as progress, so re-listing the same tickets under new filters stops as no_progress", async () => {
+    const launch = record("launch", "Approved: the THERM tickets track DVT.");
+    const need = "every THERM ticket";
+    const relist = (args: Record<string, string>) => ask("Which tickets track DVT?", need, "open", [], [{ tool: "list", args: { source: "tickets", ...args } }], "N1");
+    const steps = [
+      ask("Which tickets track DVT?", need, "open", [], [{ tool: "search", args: { query: "THERM DVT" } }]),
+      relist({ date_field: "created", since: "2026-10-01" }), relist({ date_field: "updated", since: "2026-10-01" }),
+      relist({ date_field: "created", since: "2026-09-01" }), relist({ date_field: "updated", since: "2026-09-01" }),
+      ask("Which tickets track DVT?", need, "found", ["L1"], [finish], "N1"),
+    ];
+    const h = harness(input => input.system_prompt.startsWith("You write") ? useL1 : steps.shift(), {
+      live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 3)) as EvidenceDeskResultV2), search: vi.fn(async () => result([launch])),
+    });
+    const view = await h.research.research({ trigger: "ask", brief: question("Which tickets track DVT?") });
+    // The first list found three tickets; the next two lists found only those again, so research stopped.
+    expect(view.stop).toEqual({ reason: "no_progress", completed: false });
+    expect(view.rounds).toHaveLength(4);
+    expect(view.lists!.map(list => list.members)).toEqual([["E2", "E3", "E4"], ["E2", "E3", "E4"], ["E2", "E3", "E4"]]);
+  });
+
   it("never takes a list whose end is unverified as a completed list for not_found (addition 1)", async () => {
     const need = "a ticket about the fixture vendor";
     const run = async (page_full: boolean) => {

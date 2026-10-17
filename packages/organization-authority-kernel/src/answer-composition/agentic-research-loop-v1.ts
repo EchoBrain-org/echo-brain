@@ -437,8 +437,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const exhaustivelyEmptySources = new Set<EvidenceDeskSourceV2>();
   let retrievalProgress = 0;
   let evidenceNovelty = 0;
-  /** List members added (a question goal only): reading a list to its end is progress (ADR-0041). */
+  /** List members no list had shown before (a question goal only): reading a list to its end is progress (ADR-0041). */
   let listNovelty = 0;
+  /** Entries some list has shown: the same items listed again under other filters are not progress. */
+  const everListed = new Set<Entry>();
   /** Lists whose first page was read, so the next list's id follows the count. */
   let listsRead = 0;
   const lists = new Map<string, ListState>();
@@ -660,8 +662,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const page = currentState.items.slice(currentState.paged, currentState.paged + LIST_PAGE).map(item => register(item));
       for (const entry of page) {
         entry.direct = true;
-        // Members are each once, in list order. For a question goal, a page that adds members is progress (ADR-0041).
-        if (!currentState.members.includes(entry)) { currentState.members.push(entry); if (ask) listNovelty += 1; }
+        // Members are each once, in list order. For a question goal, a page that adds members no list had shown is
+        // progress (ADR-0041); re-listing the same items under another filter is not.
+        if (!currentState.members.includes(entry)) currentState.members.push(entry);
+        if (ask && !everListed.has(entry)) { everListed.add(entry); listNovelty += 1; }
       }
       currentState.paged += page.length;
       if (page.length > 0) retrievalProgress += 1;
