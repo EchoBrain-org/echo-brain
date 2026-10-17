@@ -147,8 +147,8 @@ function quoted(text: string, start: number, end: number, sources: readonly stri
   const quotes = (value: string) => sources.some(source => occursIn(source, value));
   if (/^owners?$/iu.test(text.slice(start, end)) && tokens[last]!.end === end && last + 1 < tokens.length && own(last + 1) && quotes(phrase(first, last + 1))) return true;
   if (first === 0) {
-    const stop = text.slice(end).search(SENTENCE_END);
-    const clause = bare(folded(text.slice(0, stop < 0 ? text.length : end + stop)));
+    const stop = SENTENCE_END.exec(text.slice(end));
+    const clause = bare(folded(text.slice(0, stop === null ? text.length : end + stop.index)));
     return clause.length > 0 && sources.some(source => source.split(SENTENCE_END).some(sentence => {
       const words = bare(folded(sentence));
       return words.startsWith(clause) && !/[\p{L}\p{N}]/u.test(words.charAt(clause.length));
