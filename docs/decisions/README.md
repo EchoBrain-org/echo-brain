@@ -58,6 +58,7 @@ separately.
 | [ADR-0034](ADR-0034-confluence-person-live-page-evidence.md) | Person-bound Confluence live page evidence with Nango custody | proposed |
 | [ADR-0035](ADR-0035-desktop-updates-from-the-signed-feed.md) | The desktop app updates itself from the signed client feed | accepted |
 | [ADR-0036](ADR-0036-person-change-check.md) | A Person change check tells the desktop what moved in their own view | accepted |
+| [ADR-0037](ADR-0037-openrouter-routing-for-research-calls.md) | Research model calls skip measured bad hosts, run at temperature 0 and record the serving host | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary
