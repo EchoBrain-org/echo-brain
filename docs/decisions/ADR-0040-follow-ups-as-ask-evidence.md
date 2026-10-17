@@ -85,8 +85,10 @@ How an answer could cite one:
   item. A search returns at most 5 hits; only hits are read live.
 - **List** takes an owner (each word a whole word of the name, ignoring
   case) and a status (`open` or `done`), applied before anything is released
-  or read live. A page holds at most 10 rows. Date filters are refused: a
-  follow-up has no date of its own.
+  or read live. An owner of `me`, or the asker's own display name, which
+  research passes for "I" and "my", lists the asker's own follow-ups by
+  membership, never another member whose name holds theirs. A page holds at
+  most 10 rows. Date filters are refused: a follow-up has no date of its own.
 - **Live reads go through the request's own desk.** A follow-up's tool item
   is opened with the same bound tool source the rest of the Ask uses. Each
   read is that tool's audited live release, counts toward that tool's

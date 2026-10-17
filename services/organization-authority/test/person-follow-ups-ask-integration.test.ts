@@ -9,7 +9,7 @@ import { SqlitePersonSessionRepository } from '../src/adapters/persistence/sqlit
 import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
-import { sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { assign, sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 type Prompt = { readonly question?: string; readonly step?: number; readonly source_catalog?: readonly { readonly source: string }[] };
 type Step = { readonly actions: readonly unknown[]; readonly found?: boolean };
@@ -218,6 +218,19 @@ describe('"What are my open tasks?" through the real Authority composition (ADR-
     expect(releases.map(release => [release.operation, release.items.map(item => item.item_id)])).toEqual([['list', [f.ticket.item_id]], ['open', [f.ticket.item_id]]]);
     expect(new Set(releases.map(release => release.principal_id))).toEqual(new Set([f.people.mina.principal_id]));
     expect(auditBodies(f).find(body => body.kind === 'echo-person-agentic-ask-audit-v1')).toMatchObject({ outcome: 'answered' });
+  });
+
+  it('reads "my" as the asker alone, though another member\'s name holds theirs', async () => {
+    const f = await sentFixture();
+    // Rafael, renamed "Ari Moreno", takes the ticket; Ari still owns the action.
+    f.db.prepare('UPDATE authority_principals SET display_name=? WHERE principal_id=?').run('Ari Moreno', f.people.rafael.principal_id);
+    await assign(f, 'ari', f.ticket.item_id, 'rafael');
+    const planner = myOpenTasks();
+    const answer = await myTasksRoute(f, planner.model).ask({ access_token: 'ari', request: { schema_version: 3, question: 'What are my open tasks?' } });
+    expect(planner.steps[0]!.asked_by).toBe('Ari');
+    expect(planner.steps[1]!.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: 'Ari', status: 'open' }, items: ['E1'], more: false }]);
+    expect(answer.citations).toEqual([expect.objectContaining({ kind: 'follow_up', citation: { kind: 'follow_up', item_id: f.action.item_id } })]);
+    expect(new Set(followUpReleases(f).flatMap(release => release.items.map(item => item.item_id)))).toEqual(new Set([f.action.item_id]));
   });
 
   it('refuses the answer when the asker stops reading the decision their own follow-up carried', async () => {

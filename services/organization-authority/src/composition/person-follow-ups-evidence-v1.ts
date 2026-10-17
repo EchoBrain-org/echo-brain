@@ -113,7 +113,7 @@ const ORGANIZATION_PAGE = 1000;
 const PROJECT_RECORDS_MAX = 500;
 const PROJECT_ROWS_MAX = 5000;
 const LIVE_READS_AT_ONCE = 4;
-/** List owner words that name the asker. */
+/** List owner words that name the asker, as their own display name does. */
 const ASKER = new Set(['me', 'myself', 'mine', 'i']);
 const TICKET_KEY = /^[A-Z][A-Z0-9_]{0,63}-[1-9][0-9]{0,19}$/u;
 const DEFAULT_TITLE = 'Follow-up';
@@ -156,6 +156,10 @@ function queryOf(query: string): { readonly terms: readonly string[]; readonly k
   }
   return { terms: [...terms], keys: [...keys] };
 }
+/** A name as one compares it with another: NFC, lower case, runs of space as one. */
+function spelled(name: string): string {
+  return name.normalize('NFC').trim().toLowerCase().replace(/\s+/gu, ' ');
+}
 function wordsOf(values: readonly (string | null | undefined)[]): ReadonlySet<string> {
   return new Set(values.flatMap(value => (value ?? '').normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []));
 }
@@ -197,6 +201,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     const authorization = options.authenticate();
     if (authorization.organization_id !== viewer.organization || authorization.principal_id !== viewer.principal || authorization.membership_id !== viewer.membership) stale();
   };
+  /** The asker's display name in the directory, as the Ask route names them to research. */
+  const askerName = (): string => sources.people.people(viewer.organization, [viewer.membership]).get(viewer.membership)?.name ?? '';
   const projectRecords = (project_id: string): ReadonlySet<Sha256Digest> =>
     new Set(sources.records.projectRecords({ access_token: viewer.token, project_id, limit: PROJECT_RECORDS_MAX }));
 
@@ -377,7 +383,9 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         after = saved!.after;
       }
       const context = visible(input.signal);
-      const asker = owner !== undefined && ASKER.has(owner.toLowerCase());
+      // "me", or the asker's own name, which research passes for "I" and "my" (asked_by): their own follow-ups, by membership,
+      // never another member whose name holds theirs.
+      const asker = owner !== undefined && (ASKER.has(owner.toLowerCase()) || spelled(owner) === spelled(askerName()));
       // Filters apply before anything is released or read live.
       const matching = context.assessed.filter(({ row }) => (input.status === undefined || followUpInStatusV1(row.state, input.status)) &&
         (owner === undefined || (asker ? row.owner_membership_id === viewer.membership : followUpOwnerMatchesV1(openItemNameV1(context.people, row.owner_membership_id), owner))))

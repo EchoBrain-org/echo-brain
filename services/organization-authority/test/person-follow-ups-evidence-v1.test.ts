@@ -182,6 +182,19 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     await expect(list(desk, { cursor: 'follow_ups_99' })).rejects.toMatchObject({ code: 'invalid_request' });
   });
 
+  it("lists the asker's own follow-ups when the owner is their own name, though another member's name holds it", async () => {
+    const f = await sentFixture();
+    // Rafael, renamed "Ari Moreno", takes the ticket: Ari's whole name is one word of his.
+    f.db.prepare('UPDATE authority_principals SET display_name=? WHERE principal_id=?').run('Ari Moreno', f.people.rafael.principal_id);
+    await assign(f, 'ari', f.ticket.item_id, 'rafael');
+    const { desk } = askDesk(f, 'ari');
+    const ids = async (owner: string) => (await list(desk, { owner })).items.map(item => item.id);
+    expect(await ids('Ari Moreno')).toEqual([`follow_up_${f.ticket.item_id}`]);
+    for (const owner of ['Ari', ' ari ', '@ARI', 'me']) expect(await ids(owner)).toEqual([`follow_up_${f.action.item_id}`]);
+    // Another asker's "Ari" is any Ari.
+    expect((await list(askDesk(f, 'mina').desk, { owner: 'Ari' })).items.map(item => item.id).sort()).toEqual([`follow_up_${f.ticket.item_id}`, `follow_up_${f.action.item_id}`].sort());
+  });
+
   it('refuses date filters and the filters of other sources', async () => {
     const f = await sentFixture();
     const { desk } = askDesk(f, 'mina');
