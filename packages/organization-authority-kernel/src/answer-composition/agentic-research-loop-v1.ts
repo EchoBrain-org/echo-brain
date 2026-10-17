@@ -343,6 +343,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const retrievedTickets = new Set<string>();
   const byShort = new Map<string, string>();
   const searchesRun: { readonly query: string; readonly source?: EvidenceDeskSourceV2 }[] = [];
+  /** Searches whose first result carried a notice: one repeat of each reads the desk again. */
+  const noticedSearches = new Set<string>();
   /** Sources a completed search read (null: every source). A noticed or truncated search shows nothing about absence. */
   const searchedSources = new Set<EvidenceDeskSourceV2 | null>();
   const researchObservations: AskResearchObservationV1[] = [];
@@ -416,14 +418,20 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
     const source = readSource(args.source);
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
-    if (searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase())) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
-    searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
+    const fingerprint = JSON.stringify({ query: query.toLowerCase(), source: source ?? null });
+    const repeat = searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase());
+    // A source that could not be searched then (a notice) may answer now, so one repeat runs again; a complete or truncated
+    // result would come back the same, and a notice that persists (an index still catching up) is not paid for every round.
+    if (repeat && !noticedSearches.has(fingerprint)) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
+    if (!repeat) searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
+    noticedSearches.delete(fingerprint);
     const result = await raceAbort(signal, desk.search({ query, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: SEARCH_LIMIT, signal }));
     const apply = () => {
       observe(result);
       cover('search', source, result);
       const complete = !result.truncated && result.notice === undefined;
-      researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete });
+      if (!repeat && result.notice !== undefined) noticedSearches.add(fingerprint);
+      researchObservations.push({ operation: 'search', fingerprint, complete });
       if (complete) searchedSources.add(source ?? null);
       retrievalProgress += 1;
       const found = result.items.map(item => register(item));

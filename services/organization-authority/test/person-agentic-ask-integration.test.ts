@@ -293,7 +293,7 @@ describe("Agentic Ask V5 combined request-local sources", () => {
         const ids = prompt.evidence!.map(item => item.id);
         return { sentences: [{ text: "The meeting, work item and plan all place EVT on Tuesday.", evidence: ids }], not_found: [] };
       }
-      const listed = prompt.last_results?.find(result => result.tool === "search")?.items ?? [];
+      const listed = prompt.last_results?.find(result => result.tool === "search")?.results ?? [];
       return listed.length === 0
         ? { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "open", evidence: [] }] }], actions: [{ tool: "search", args: { query: "EVT Tuesday" } }] }
         : { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "found", evidence: [...listed] }] }], actions: [{ tool: "finish", args: {} }] };

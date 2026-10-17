@@ -155,6 +155,26 @@ describe("research loop: list", () => {
   });
 });
 
+describe("research loop: search", () => {
+  it("runs one repeat of a search that came back with an availability notice again, and no further repeat", async () => {
+    const approved = record("canary", "Approved: staging must verify owner approval of a staged meeting.");
+    // Jira answered 429 to the first search with no source chosen: local hits came back with a notice.
+    const search = vi.fn()
+      .mockResolvedValueOnce(result([record("local", "THERM-50 waits on the firmware build.")], { notice: "Live tickets could not be searched just now." }))
+      .mockResolvedValueOnce(result([ticket("THERM-50", "THERM-50: firmware build is green.")], { notice: "Live pages could not be searched just now." }));
+    const again = reads("open", [{ tool: "search", args: { query: "THERM-50 status" } }]);
+    const h = harness([again, again, again, step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E3"])])], [{ tool: "finish", args: {} }])], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), search });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+    // The repeat read the desk again; its own notice buys no third read.
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(h.prompt(2).last_results).toEqual([expect.objectContaining({ results: ["E3"], notice: "Live pages could not be searched just now." })]);
+    expect(h.prompt(3).last_results).toEqual([expect.objectContaining({ tool: "search", note: "already searched; results are in your scratchpad" })]);
+    // The planner is told of the search once.
+    expect(h.prompt(3).searches_done).toEqual([{ query: "THERM-50 status" }]);
+  });
+});
+
 describe("research loop: open", () => {
   it("answers an open of an item already open in full in the scratchpad without a desk call or progress (4d69130a)", async () => {
     const therm = ticket("THERM-48", "THERM-48: firmware formats one decimal.");
