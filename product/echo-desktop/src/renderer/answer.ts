@@ -1,4 +1,4 @@
-import type { AnswerSource, ConnectedTool, ExternalAnswerSource } from '../shared/protocol.js';
+import type { Answer, AnswerSource, AnswerStatement, ConnectedTool, ExternalAnswerSource } from '../shared/protocol.js';
 
 /**
  * One source as an answer shows it: a document, a meeting's approved record,
@@ -11,10 +11,27 @@ export interface SourceGroup {
   readonly indexes: readonly number[];
 }
 
-function groupKey(source: AnswerSource): string {
+/**
+ * The place a source opens, as a person reads it: a meeting (whichever of its
+ * items is cited), a document or note (whichever passage), a transcript's
+ * meeting, or one link. Sources of one place are one source.
+ */
+export function groupKey(source: AnswerSource): string {
   if (source.kind === 'record') return `record:${source.record.record_sha256}`;
   if (source.kind === 'original') return `original:${source.ref.source_id}`;
+  if (source.kind === 'transcript') return `transcript:${source.meeting}`;
   return `${source.kind}:${source.tool_id}:${source.permalink}`;
+}
+
+/** Every sentence of an answer, by the id the pane knows it by: "direct", or its part and place ("0.2", "0.r1" for a passage found). */
+export function answerSentences(answer: Answer): [string, AnswerStatement][] {
+  return [
+    ...(answer.direct ? [['direct', answer.direct] as [string, AnswerStatement]] : []),
+    ...answer.parts.flatMap((part, p) => [
+      ...part.statements.map((statement, i) => [`${p}.${i}`, statement] as [string, AnswerStatement]),
+      ...(part.records ?? []).map((statement, i) => [`${p}.r${i}`, statement] as [string, AnswerStatement]),
+    ]),
+  ];
 }
 
 /** An answer's sources, in the order it first cites them. */

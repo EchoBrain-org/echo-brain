@@ -1,5 +1,8 @@
 import { AuthorityOperationError } from '../domain/errors.js';
 
+/** Authorized sources without event dates cannot establish absence in a date-filtered result. */
+export const MISSING_EVENT_DATE_NOTICE_V1 = "Some accessible meetings are missing recorded event dates, so they could not be checked against the requested period. These results cannot establish that no meeting occurred.";
+
 /** Structured fields chosen by the model, never parsed from the person's question. */
 export type EvidenceDateFieldV1 = 'occurred' | 'created' | 'updated' | 'due' | 'received';
 export type EvidenceDatesV1 = Readonly<Partial<Record<EvidenceDateFieldV1, string>>>;

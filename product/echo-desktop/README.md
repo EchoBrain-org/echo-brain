@@ -7,6 +7,24 @@ Windows packaging is not implemented.
 Global Ask includes live Jira reads through the person's connected account and
 shows ticket citations that open directly in Jira. Project Ask includes Jira only through a saved project mapping. Mine excludes Jira.
 
+While a global or project Ask works (ADR-0039), one line says what it is
+doing (Searching, Reading, Checking access, Writing) beside its timer and
+Cancel. Under it, at most three rows say what it searched ("Searched meetings
+and Jira · 22 found", source kinds, never the words searched) and what it read
+("Read Tuesday sync ×3, ECHO-48 +2": a place once, with how many of its items,
+and "+N" more items), each item named only after ECHO checked you may open it. The first three seconds look as they always did, and an Authority
+that sends no steps keeps "Thinking…". When the answer comes, the rows fold
+into one line above it, "Looked through 14 items · 48s", which opens the rows
+the Authority audited. Cancel, a timeout or a refused answer removes them all.
+
+Every name, and every source of an answer, opens beside Ask, which keeps
+working: a meeting's decision, action or rationale opens its meeting with that
+item lit; a note, document or imported meeting its cited passages; a
+transcript its meeting; a Jira ticket, Confluence page or Slack message its
+"Open in …". Once the answer has come, **Open** goes to the item's own page in
+the reader (leaving Ask, so it is hidden while Ask works); a meeting opens
+there scrolled to the items the pane lit, lit too.
+
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 
 - **Approve**: a meeting waiting for your decision. Its card shows what was

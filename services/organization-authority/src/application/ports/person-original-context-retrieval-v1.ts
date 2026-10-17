@@ -148,6 +148,7 @@ export interface OriginalContextDeskItemV1 {
 }
 
 export interface OriginalContextDeskReleaseV1 {
+  readonly notice?: string;
   readonly release: OriginalContextReleaseV1;
   readonly receipt: Sha256Digest;
   readonly items: readonly OriginalContextDeskItemV1[];

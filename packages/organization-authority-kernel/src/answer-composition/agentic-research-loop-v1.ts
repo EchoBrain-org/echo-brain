@@ -31,6 +31,7 @@ import {
 } from "./agentic-ask-v1-model-protocol.js";
 import { fillAgenticTaskV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
+import type { AgenticResearchProgressReporterV1 } from "./agentic-ask-progress-recorder-v1.js";
 import {
   AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_ASK_MIN_STEP_MS_V1,
@@ -145,6 +146,8 @@ export interface CreateAgenticResearchLoopV1Options {
   readonly assert_live: () => void;
   /** The runner's own observation, read when the bundle is built: the last access check, and research's model and desk time. */
   readonly observed: () => { readonly checked_at: string | null; readonly model_ms: number; readonly desk_ms: number };
+  /** A streamed Ask's progress (ADR-0039): told what research reads and, after each step's access check, what it reads in full. */
+  readonly report?: AgenticResearchProgressReporterV1;
 }
 
 /** What the request's audit and journey report read from research, while it runs and after it fails. */
@@ -179,6 +182,11 @@ type Entry = {
   opened: boolean;
   /** Loaded before round 1: starting evidence or the small-scope preload. */
   preloaded?: boolean;
+  /**
+   * A read returned this item itself: a search or list row, an open's anchor, or a starting or preloaded item. A
+   * neighbour or continuation an open admitted beside its anchor is not. Only such an item counts as read for progress.
+   */
+  direct?: boolean;
   touched: number;
   /** The latest search that returned this item; its preview shows where that search matched. */
   query?: string;
@@ -341,7 +349,7 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
  * through `progress()` and the bundle `run` returns.
  */
 export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1Options): AgenticResearchLoopV1 {
-  const { desk, brief, context, scope, now, remaining, assert_live: assertLive, signal: activeSignal } = options;
+  const { desk, brief, context, scope, now, remaining, assert_live: assertLive, signal: activeSignal, report } = options;
   const { prompt: researchPrompt, prompt_budget: researchBudget } = options;
   const { by_id: sourcesById, resolve: readSource } = options.catalog;
   /** A search-only brief has no list tool, and its catalog shows nothing only list uses. */
@@ -369,6 +377,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const cover = (tool: 'search' | 'open' | 'list', source: string | undefined, result?: EvidenceDeskResultV2) => {
     readCoverage.push({ tool, source: source === undefined ? 'available_sources' : sourcesById.get(source)?.selector ?? source,
       returned_items: result?.items.length ?? 0, truncated: result?.truncated ?? false, notice: result?.notice !== undefined, unavailable: result === undefined });
+    // Progress counts only what a read released to this person.
+    if (result !== undefined) report?.returned(tool, source, result.items);
   };
   /** Sources whose complete, unfiltered inventory was observed empty. */
   const exhaustivelyEmptySources = new Set<EvidenceDeskSourceV2>();
@@ -455,7 +465,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       if (complete) searchedSources.add(source ?? null);
       retrievalProgress += 1;
       const found = result.items.map(item => register(item));
-      for (const entry of found) entry.query = query;
+      for (const entry of found) { entry.query = query; entry.direct = true; }
       searchHits += found.length;
       return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => describe(entry)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
     };
@@ -502,6 +512,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         admitted.push(opened);
         if (result.truncated || result.notice !== undefined) limitedOpens.add(item.id); else limitedOpens.delete(item.id);
       }
+      // What the open read: its anchor, or the first text read in its place (a page's section); never what came beside it.
+      if (admitted[0] !== undefined) admitted[0].direct = true;
       if (anchor !== undefined) anchorsRead.add(anchor.id);
       // Open may also release continuation metadata. Register it beside
       // the bounded text, without treating the continuation as read evidence.
@@ -570,6 +582,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       }
 
       const page = currentState.items.slice(currentState.shown, currentState.shown + LIST_PAGE).map(item => register(item));
+      for (const entry of page) entry.direct = true;
       currentState.shown += page.length;
       if (page.length > 0) retrievalProgress += 1;
       const more = inventoryMore(currentState);
@@ -908,7 +921,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       for (const item of [anchor, ...readable.filter(value => value !== anchor)]) {
         if (item !== anchor && used + bytes(item.text) > OPEN_BYTES) break;
         const entry = register(item); entry.opened = true; entry.preloaded = true; used += bytes(item.text);
-        if (item === anchor) startingIds.push(entry.short);
+        if (item === anchor) { startingIds.push(entry.short); entry.direct = true; }
       }
       if (anchor.citation.kind !== "source_revision") anchorsRead.add(anchor.id);
       for (const item of opened.items.filter(value => value.text === undefined)) register(item);
@@ -918,6 +931,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // ---- optional small-scope preload -----------------------------------
     if (brief.options.small_scope_preload) {
       assertLive();
+      report?.reads(true);
       const inventory = await observeAgenticLifecycleV1('preload', 'research_preload', { operation: 'search', limit: SHORTCUT_ITEMS, inventory_mode: 'items' },
         () => raceAbort(activeSignal, desk.search({ limit: SHORTCUT_ITEMS, inventory_mode: "items", signal: activeSignal })), releasedView);
       observe(inventory);
@@ -932,9 +946,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           cover('open', evidenceDeskSourceV2(listed), opened);
           const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
           if (exact === undefined || used + bytes(exact.text) > researchBudget / 2) continue;
-          const entry = register(exact); entry.opened = true; entry.preloaded = true; used += bytes(exact.text);
+          const entry = register(exact); entry.opened = true; entry.preloaded = true; entry.direct = true; used += bytes(exact.text);
         }
       }
+      report?.reads_done();
     } else observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'preload', event: 'skipped' });
 
     // ---- no planner: the reads above are the research --------------------
@@ -980,6 +995,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // repair keeps the gate's plain minimum.
       const callsBefore = gate.stats().calls;
       const timeout = () => (gate.stats().calls === callsBefore && stepTimeout() < stepNeeds() ? 0 : stepTimeout());
+      // A count only: the names wait for the access check before this call (the gate's before_call).
+      report?.before_check(pad.read.filter(entry => entry.direct === true).map(entry => entry.item));
       try {
         step = await gate.withRepair(stepCall, researchPrompt, user, stepSchema, timeout, value => {
           const parsed = parseStep(value);
@@ -1049,7 +1066,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
       const before = hadCitableEvidence ? evidenceNovelty : retrievalProgress;
       const entriesBefore = entries.size;
+      report?.reads(reads.some(action => action.tool !== "open"));
       results = await runReads(reads);
+      report?.reads_done();
       const actions = reads.map((action, index) => roundView(action.tool, action.args, results[index]));
       recordRound(roundStartedAt, actions);
       latest = new Set(actions.flatMap(action => [...action.result.opened, ...action.result.items]));
@@ -1109,6 +1128,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           if (!entry.full) evidenceNovelty += 1;
           entry.full = true;
         }
+        // This call's access check has passed: the items it reads in full may now be named (ADR-0039).
+        report?.given(researchPromptEntries.filter(entry => entry.direct === true).map(entry => entry.item));
       },
     }),
     progress: () => Object.freeze({ receipts, rounds: steps, fallbacks, searches: searchesRun.length, search_hits: searchHits, retrieved_tickets: retrievedTickets.size }),

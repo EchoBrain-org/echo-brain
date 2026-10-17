@@ -5,14 +5,16 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
+  AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
   NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
   ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, sameExpect } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { sourceGroups, type SourceGroup } from './answer.js';
+import { answerSentences, sourceGroups, type SourceGroup } from './answer.js';
+import { openerOf, sourceKey } from './openers.js';
+import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import * as freshness from './freshness.js';
@@ -34,6 +36,15 @@ export interface AskQuestion {
 export interface AskTurn extends AskQuestion {
   id: number;
   answer: Answer;
+  /** What it looked through, above the answer: only when the Authority streamed it and the Ask took long enough to show it. */
+  receipt?: AskReceipt;
+  /** How long the person waited for it with a receipt, by the page's clock, as its timer counted: the receipt's time. */
+  took?: number;
+}
+
+/** The question on its way, and what it has done so far (ADR-0039). */
+export interface AskAsking extends AskQuestion {
+  progress: AskProgress;
 }
 
 /**
@@ -50,7 +61,7 @@ export interface AskState {
   previous: AskTurn | null;
   /** The current answer. */
   shown: AskTurn | null;
-  asking: AskQuestion | null;
+  asking: AskAsking | null;
   /** The last question that could not be answered. */
   failed: (AskQuestion & { failure: Failure }) | null;
 }
@@ -69,14 +80,26 @@ export type Read<T> =
 export interface SourcesState {
   /** Which start this is: a read for an earlier one is dropped. */
   gen: number;
-  /** The source the pane shows, by its number in the answer less one; null while the pane is closed. */
+  /** The source the pane shows, by its number in the answer less one; null while it shows a named place, or is closed. */
   open: number | null;
+  /**
+   * The items of one place Ask named, in a live row or its receipt, that the
+   * pane shows in place of a numbered source: all of them lit, or all their
+   * passages, the first standing for the place. Named while Ask works, they
+   * go if the Ask gets no answer.
+   */
+  named: readonly AnswerSource[] | null;
   /** The sentence whose number opened the pane: "direct", or its part and place ("0.2", "0.r1" for a passage found); null when a row did. */
   focus: string | null;
   /** Approved records read for this answer, by digest. */
   records: Readonly<Record<string, Read<ApprovedRecord>>>;
-  /** The cited passages of the original the pane shows, by citation; read each time it is chosen. */
-  evidence: { seq: number; group: number; reads: Readonly<Record<number, Read<SourceEvidence>>> } | null;
+  /** Meetings read by their ref for a transcript the pane shows, by record digest: the first page, and whether more follows. */
+  meetings: Readonly<Record<string, Read<{ record: ApprovedRecord; more: boolean }>>>;
+  /**
+   * The cited passages of the original the pane shows, by citation (a named
+   * place's by their order in it, `group` null); read each time it is chosen.
+   */
+  evidence: { seq: number; group: number | null; reads: Readonly<Record<number, Read<SourceEvidence>>> } | null;
 }
 
 /** Who can read a capture: only you, the members of the projects ticked under Projects, or everyone in the organization. */
@@ -279,6 +302,20 @@ export interface OrganizationState {
   saved: { handle: string; action: 'invite' | 'reissue'; name: string; email: string; expires_at: string } | null;
 }
 
+/** A meeting record's sections, in the order its items come. */
+export const RECORD_SECTIONS = ['decisions', 'actions', 'rationales'] as const;
+export type RecordSectionKey = (typeof RECORD_SECTIONS)[number];
+
+/**
+ * A meeting's item by its section and its place there. A cited item has the
+ * same place in each read of its meeting, Ask's (with atom ids) and the
+ * reader's (by its ref, with none), since both walk the brief in its order.
+ */
+export interface CitedItem {
+  readonly section: RecordSectionKey;
+  readonly index: number;
+}
+
 /** Where an item was opened: a project's page (a row or a match in it), Mine, or a saved note found in all context. */
 export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'mine' } | { kind: 'search' };
 
@@ -296,6 +333,8 @@ export interface ReaderState {
   record?: ApprovedRecord;
   /** The record's next page, until all of it is read. */
   recordNext?: string | null;
+  /** The meeting's items Ask cited, when Open came from its pane: lit, and read on to until they show. */
+  cited?: readonly CitedItem[];
   failure?: Failure;
   /** The ⋯ menu, and its list of projects to add to. */
   menu: 'closed' | 'open' | 'projects';
@@ -1441,29 +1480,44 @@ function sameRef(a: ItemRef | undefined, b: ItemRef): boolean {
   return a?.kind === b.kind && a.id === b.id;
 }
 
+/** Pages the reader reads on by itself to show the items Ask cited. */
+const CITED_PAGES = 8;
+
+/** Every cited item shows, whole. */
+function citedShown(record: ApprovedRecord, cited: readonly CitedItem[]): boolean {
+  return cited.every(({ section, index }) => {
+    const item = record[section].items[index];
+    return item !== undefined && item.parts === undefined;
+  });
+}
+
 /**
  * An item opened by its ref, under your current access: a note, a page of a
  * document's text (the first, or the one a cursor names), or a page of a
  * meeting's record, joined to what shows. While a page loads, what the
- * reader shows of that item stays.
+ * reader shows of that item stays. A meeting opened on items Ask cited
+ * (`cited`) lights them, and reads on by itself, a few pages at most, until
+ * they show; its later pages keep them lit.
  */
-async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string): Promise<void> {
+async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, lit: { readonly cited?: readonly CitedItem[]; readonly follow?: number } = {}): Promise<void> {
   const account = expect();
   if (!account) return;
   const mine = ++readSeq;
   const shown = sameRef(state.reader?.ref, ref) ? state.reader : null;
   // An approved meeting's first page counts its follow-ups: its line.
   if (ref.kind === 'meeting' && cursor === undefined) void loadLine('impactLine', 'record', ref.id);
+  const cited = cursor === undefined ? lit.cited : shown?.cited;
+  const base = { ref, from, menu: 'closed' as const, ...(cited !== undefined && cited.length > 0 ? { cited } : {}) };
   const kept = {
     ...(shown?.content ? { content: shown.content, importedNext: shown.importedNext } : {}),
     ...(shown?.document ? { document: shown.document } : {}),
     ...(shown?.record ? { record: shown.record, recordNext: shown.recordNext } : {}),
   };
-  set({ reader: { ref, from, loading: true, menu: 'closed', ...kept }, toast: null });
+  set({ reader: { ...base, loading: true, ...kept }, toast: null });
   const result = await rpc('open.ref', { expect: account, ref, ...(cursor ? { cursor } : {}) });
   if (!sameRef(state.reader?.ref, ref) || readSeq !== mine) return;
   if (!result.ok) {
-    set({ reader: { ref, from, loading: false, menu: 'closed', failure: result.failure, ...kept } });
+    set({ reader: { ...base, loading: false, failure: result.failure, ...kept } });
     accountLost(result.failure);
     return;
   }
@@ -1471,14 +1525,18 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string): Prom
   if (opened.kind === 'imported_meeting') {
     const content = cursor === undefined ? opened.content : kept.content ? { ...opened.content, text: kept.content.text + opened.content.text } : null;
     if (!content) return;
-    set({ reader: { ref, from, loading: false, menu: 'closed', content, importedNext: opened.next_cursor } }); return;
+    set({ reader: { ...base, loading: false, content, importedNext: opened.next_cursor } }); return;
   }
-  if (opened.kind === 'note') { set({ reader: { ref, from, loading: false, menu: 'closed', content: opened.content } }); return; }
-  if (opened.kind === 'document') { set({ reader: { ref, from, loading: false, menu: 'closed', document: opened.document } }); return; }
+  if (opened.kind === 'note') { set({ reader: { ...base, loading: false, content: opened.content } }); return; }
+  if (opened.kind === 'document') { set({ reader: { ...base, loading: false, document: opened.document } }); return; }
   const record = cursor === undefined ? opened.record : kept.record ? joinRecord(kept.record, opened.record) : null;
   // A page that does not go on from what shows is never joined to it.
-  if (!record) { set({ reader: { ref, from, loading: false, menu: 'closed', failure: { code: 'invalid_output', retryable: true }, ...kept } }); return; }
-  set({ reader: { ref, from, loading: false, menu: 'closed', record, recordNext: opened.next_cursor } });
+  if (!record) { set({ reader: { ...base, loading: false, failure: { code: 'invalid_output', retryable: true }, ...kept } }); return; }
+  set({ reader: { ...base, loading: false, record, recordNext: opened.next_cursor } });
+  const follow = lit.follow ?? 0;
+  if (base.cited && opened.next_cursor && follow < CITED_PAGES && !citedShown(record, base.cited)) {
+    void openReader(ref, from, opened.next_cursor, { follow: follow + 1 });
+  }
 }
 
 /**
@@ -3235,7 +3293,9 @@ export function earlierTurns(thread: AskState): readonly AskTurn[] {
 /**
  * Asks, as a follow-up when a thread is open. One question at a time: a
  * second never replaces one on its way. The current answer moves up, and
- * joins the earlier ones only once the new question is answered.
+ * joins the earlier ones only once the new question is answered. While it
+ * works, the steps the host reports show under it (ADR-0039); with no answer,
+ * they go, and so does any item they opened in the pane.
  */
 export async function ask(question: string, scope: AskScope = state.barScope): Promise<void> {
   const account = expect();
@@ -3245,21 +3305,44 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
   activeAskCancelId = cancelId;
-  const asking: AskQuestion = { question: text, scope, scopeName: scopeName(scope) };
-  set({ ask: { seq: mine, earlier: thread?.earlier ?? [], previous: thread?.shown ?? null, shown: null, asking, failed: null }, sources: null, toast: null });
+  const asked: AskQuestion = { question: text, scope, scopeName: scopeName(scope) };
+  const started = Date.now();
+  set({
+    ask: { seq: mine, earlier: thread?.earlier ?? [], previous: thread?.shown ?? null, shown: null, asking: { ...asked, progress: startProgress(started) }, failed: null },
+    sources: emptySources(), toast: null,
+  });
   const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId });
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
   const current = state.ask;
   if (current?.seq !== mine) return; // cancelled, or Ask was left
   if (!result.ok) {
-    set({ ask: { ...current, previous: null, shown: current.previous, asking: null, failed: { ...asking, failure: result.failure } } });
+    set({ ask: { ...current, previous: null, shown: current.previous, asking: null, failed: { ...asked, failure: result.failure } }, sources: null });
     if (current.previous) startSources();
     accountLost(result.failure);
     return;
   }
   const earlier = current.previous ? [...current.earlier, current.previous].slice(-MAX_EARLIER) : current.earlier;
-  set({ ask: { ...current, earlier, previous: null, shown: { id: mine, ...asking, answer: result.value }, asking: null } });
-  startSources();
+  // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
+  const took = Date.now() - started;
+  const receipt = result.value.receipt !== undefined && took >= PROGRESS_AFTER_MS ? result.value.receipt : undefined;
+  set({ ask: { ...current, earlier, previous: null, shown: { id: mine, ...asked, answer: result.value, ...(receipt === undefined ? {} : { receipt, took }) }, asking: null } });
+  startSources(answerNames(result.value));
+}
+
+/** The items the audited answer names: its receipt's reads, and its sources. */
+function answerNames(answer: Answer): ReadonlySet<string> {
+  return new Set([...(answer.receipt?.rows ?? []).flatMap(row => row.type === 'read' ? row.items : []), ...answer.sources].map(sourceKey));
+}
+
+/**
+ * A step of the Ask on its way, as the host reports it. Only the Ask this
+ * page asked last, still on its way, for the account it shows, takes it: a
+ * step of an earlier Ask, a cancelled one or another account is dropped.
+ */
+export function askProgress(notice: AskProgressNotice): void {
+  const thread = state.ask;
+  if (!thread?.asking || activeAskCancelId === null || notice.cancel_id !== activeAskCancelId || !sameExpect(notice.expect, expect())) return;
+  set({ ask: { ...thread, asking: { ...thread.asking, progress: withStep(thread.asking.progress, notice.step) } } });
 }
 
 /**
@@ -3284,7 +3367,10 @@ export function askEverywhere(): void {
   void ask(turn.question, { kind: 'global' });
 }
 
-/** Cancel, while asking: the answer before comes back, or with none Ask closes. A late answer is dropped. */
+/**
+ * Cancel, while asking: the answer before comes back, or with none Ask closes.
+ * A late answer, and any step after, is dropped; what it named goes.
+ */
 export function cancelAsk(): void {
   const thread = state.ask;
   if (!thread?.asking) return;
@@ -3323,15 +3409,108 @@ export function answerGroups(current: State = state): SourceGroup[] {
   return sourceGroups(answerSources(current));
 }
 
+/** What the pane shows: one of the answer's numbered sources, or a place Ask named. */
+export interface PaneTarget {
+  /** Its citations, in the answer's order; a named place's, the items its name stands for. */
+  readonly sources: readonly AnswerSource[];
+  /** A numbered source's group and number less one; null for a named place. */
+  readonly group: SourceGroup | null;
+  readonly number: number | null;
+}
+
+/** Where the pane's citations are: a numbered source's places in the answer, a named place's order in it. */
+export function paneCitations(target: PaneTarget): readonly number[] {
+  return target.group?.indexes ?? target.sources.map((_, at) => at);
+}
+
+/** The pane's item, or null while it is closed. */
+export function paneTarget(current: State = state): PaneTarget | null {
+  const sources = current.sources;
+  if (!sources || current.ask === null) return null;
+  if (sources.named) return { sources: sources.named, group: null, number: null };
+  const group = sources.open === null ? undefined : answerGroups(current)[sources.open];
+  if (!group) return null;
+  const all = answerSources(current);
+  return { sources: group.indexes.map(index => all[index]!), group, number: sources.open };
+}
+
+/**
+ * Open, in the pane: shown only once the answer came, and only for an item
+ * with a page of its own in the app. While Ask works it is hidden, since
+ * leaving Ask cancels it.
+ */
+export function fullPageOffered(current: State = state): boolean {
+  const source = paneTarget(current)?.sources[0];
+  return source !== undefined && current.ask !== null && !current.ask.asking && openerOf(source).page !== null;
+}
+
+/**
+ * The atoms a record source cites, to light: all a named place stands for; a
+ * numbered source's that the chosen sentence cites, or all of them when a row
+ * opened it.
+ */
+export function litAtoms(current: State, target: PaneTarget): ReadonlySet<string> {
+  const atoms = (sources: readonly AnswerSource[]) => new Set(sources.flatMap(source => source.kind === 'record' ? [source.atom_id] : []));
+  const answer = current.ask?.shown?.answer;
+  if (!target.group || !answer) return atoms(target.sources);
+  const focused = answerSentences(answer).find(([id]) => id === current.sources?.focus)?.[1].citation_indexes ?? [];
+  const cited = target.group.indexes.filter(index => focused.includes(index));
+  const all = answerSources(current);
+  return atoms(cited.length > 0 ? cited.map(index => all[index]!) : target.sources);
+}
+
+/** Where `atoms` are in a meeting Ask read: each one's section and place. */
+export function citedItems(record: ApprovedRecord, atoms: ReadonlySet<string>): CitedItem[] {
+  return RECORD_SECTIONS.flatMap(section => record[section].items.flatMap((item, index) =>
+    item.atom_id !== undefined && atoms.has(item.atom_id) ? [{ section, index }] : []));
+}
+
+/**
+ * Open: the pane's item on its own page, in place of Ask. A meeting opens on
+ * the items the pane lit, found in the record the pane read; with that record
+ * not read, it opens at its top.
+ */
+export function openFullPage(): void {
+  const target = paneTarget();
+  const source = target?.sources[0];
+  const page = source === undefined ? null : openerOf(source).page;
+  if (!target || page === null || state.concealed || !fullPageOffered()) return;
+  const scope = state.ask?.shown?.answer.scope;
+  const read = source?.kind === 'record' ? state.sources?.records[source.record.record_sha256] : undefined;
+  const cited = read !== undefined && !read.loading && 'value' in read ? citedItems(read.value, litAtoms(state, target)) : [];
+  closeAsk();
+  if (page.kind === 'reader') {
+    void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : scope?.kind === 'mine' ? { kind: 'mine' } : { kind: 'search' },
+      undefined, { cited });
+  }
+}
+
+/** Nothing open in the pane, nothing read for it yet. */
+function emptySources(): SourcesState {
+  return { gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, evidence: null };
+}
+
 /**
  * An answer came on screen: its sources start unread, the pane closed, and
  * its approved records are read one after another, so each chip can name its
- * meeting.
+ * meeting. Answered, the items a live row opened stay in the pane, with what
+ * was read for them, but only those the audited answer names (`keep`): a
+ * name cleared while Ask worked lasts only for that run.
  */
-function startSources(): void {
-  const gen = ++seq;
-  set({ sources: { gen, open: null, focus: null, records: {}, evidence: null } });
-  void readRecords(gen);
+function startSources(keep: ReadonlySet<string> | null = null): void {
+  const sources = state.sources;
+  const named = keep === null ? [] : sources?.named?.filter(item => keep.has(sourceKey(item))) ?? [];
+  if (sources && named.length > 0) {
+    const same = named.length === sources.named!.length;
+    // With fewer passages, their places change: they are read again.
+    set({ sources: { ...sources, open: null, focus: null, named, ...(same ? {} : { evidence: null }) } });
+    if (!same) readPane(sources.gen, named[0]!);
+    void readRecords(sources.gen);
+    return;
+  }
+  const next = emptySources();
+  set({ sources: next });
+  void readRecords(next.gen);
 }
 
 function sourcesAt(gen: number): SourcesState | null {
@@ -3361,6 +3540,33 @@ async function readRecord(gen: number, record: RecordRef, background: boolean): 
   if (!result.ok && sourcesAt(gen) && (!background || ACCOUNT_GONE.includes(result.failure.code))) accountLost(result.failure);
 }
 
+/** A transcript's meeting, by its ref, as the reader reads it: its first page, and whether more follows. */
+async function readMeeting(gen: number, id: string): Promise<void> {
+  const account = expect();
+  if (!account || !sourcesAt(gen)) return;
+  const patch = (read: Read<{ record: ApprovedRecord; more: boolean }>) => {
+    const sources = sourcesAt(gen);
+    if (sources) set({ sources: { ...sources, meetings: { ...sources.meetings, [id]: read } } });
+  };
+  patch({ loading: true });
+  const result = await rpc('open.ref', { expect: account, ref: { kind: 'meeting', id } });
+  const opened = result.ok && result.value.kind === 'meeting' ? result.value : null;
+  patch(opened ? { loading: false, value: { record: opened.record, more: opened.next_cursor !== null } }
+    : { loading: false, failure: result.ok ? { code: 'invalid_output', retryable: true } : result.failure });
+  if (!result.ok && sourcesAt(gen)) accountLost(result.failure);
+}
+
+/** What the pane needs read for `source`, unless it already was: its record, its meeting, or its passages. */
+function readPane(gen: number, source: AnswerSource): void {
+  const sources = sourcesAt(gen);
+  if (!sources) return;
+  const opener = openerOf(source);
+  const stale = (read: Read<unknown> | undefined) => !read || (!read.loading && 'failure' in read);
+  if (opener.pane === 'passages') void readEvidence(gen);
+  else if (source.kind === 'record' && stale(sources.records[source.record.record_sha256])) void readRecord(gen, source.record, false);
+  else if (opener.pane === 'meeting' && opener.meeting !== undefined && stale(sources.meetings[opener.meeting])) void readMeeting(gen, opener.meeting);
+}
+
 /**
  * A source's number or row: the pane opens beside the answer on that source,
  * read unless it already was. A sentence's number also names the sentence.
@@ -3370,69 +3576,93 @@ export function chooseSource(group: number, focus: string | null = null): void {
   const chosen = answerGroups()[group];
   const source = chosen ? answerSources()[chosen.indexes[0]!] : undefined;
   if (!sources || !source) return;
-  set({ sources: { ...sources, open: group, focus, evidence: null } });
-  if (source.kind === 'original') { void readEvidence(sources.gen, group); return; }
-  if ('permalink' in source) return;
-  const read = sources.records[source.record.record_sha256];
-  if (!read || (!read.loading && 'failure' in read)) void readRecord(sources.gen, source.record, false);
+  set({ sources: { ...sources, open: group, focus, named: null, evidence: null } });
+  readPane(sources.gen, source);
 }
 
-/** External providers check current access when the person opens a cited link. */
-export async function openExternalSource(index: number): Promise<boolean> {
-  const source = answerSources()[index];
-  return !state.concealed && source !== undefined && 'permalink' in source &&
-    (await rpc('source.openExternal', { kind: source.kind, permalink: source.permalink })).ok;
+/**
+ * A name in a live row or the receipt: the pane opens on that place beside
+ * Ask, which keeps running, with every item of it the name stands for, read
+ * unless it already was.
+ */
+export function openNamed(items: readonly AnswerSource[]): void {
+  const sources = state.sources;
+  const [source] = items;
+  if (!sources || !source || !state.ask || state.concealed) return;
+  set({ sources: { ...sources, open: null, focus: null, named: items, evidence: null } });
+  readPane(sources.gen, source);
+}
+
+/** External providers check current access when the person opens a cited or named link; main checks the link again. */
+export async function openExternalSource(source: ExternalAnswerSource): Promise<boolean> {
+  return !state.concealed && (await rpc('source.openExternal', { kind: source.kind, permalink: source.permalink })).ok;
 }
 
 /** × on the pane: it closes, and forgets the passages it read. */
 export function closeSources(): void {
   const sources = state.sources;
-  if (sources) set({ sources: { ...sources, open: null, focus: null, evidence: null } });
+  if (sources) set({ sources: { ...sources, open: null, focus: null, named: null, evidence: null } });
 }
 
 /** Passages read at once: each is its own client call. */
 const EVIDENCE_READS_AT_ONCE = 3;
 
-/** An original's cited passages, each a verified evidence packet, read in order each time it is chosen. */
-async function readEvidence(gen: number, group: number): Promise<void> {
+/** Where the pane's passages are read: under the Ask on its way, or the answer's scope. */
+function paneScope(): AskScope | null {
+  const thread = state.ask;
+  return thread?.asking?.scope ?? thread?.shown?.answer.scope ?? null;
+}
+
+/**
+ * The cited passages of the original the pane shows, each a verified evidence
+ * packet, read in order each time it is chosen: a numbered source's by their
+ * place in the answer, a named place's by their order in it.
+ */
+async function readEvidence(gen: number): Promise<void> {
   const account = expect();
-  const answer = state.ask?.shown?.answer;
-  const indexes = answerGroups()[group]?.indexes ?? [];
+  const target = paneTarget();
+  const scope = paneScope();
   const sources = sourcesAt(gen);
-  if (!account || !answer || !sources || indexes.length === 0) return;
+  if (!account || !target || !scope || !sources) return;
+  const places = paneCitations(target);
+  const passages = places.flatMap((place, at) => {
+    const source = target.sources[at];
+    return source?.kind === 'original' ? [[place, source.ref] as const] : [];
+  });
+  if (passages.length === 0) return;
   const mine = ++seq;
-  set({ sources: { ...sources, evidence: { seq: mine, group, reads: Object.fromEntries(indexes.map(index => [index, { loading: true }])) } } });
+  set({ sources: { ...sources, evidence: { seq: mine, group: target.number, reads: Object.fromEntries(passages.map(([place]) => [place, { loading: true }])) } } });
   let next = 0;
   const reader = async () => {
     // A pane that moved on, or another app in front, stops the rest.
-    while (next < indexes.length && sourcesAt(gen)?.evidence?.seq === mine) {
-      const index = indexes[next++]!;
-      const source = answerSources()[index];
-      if (source?.kind !== 'original') continue;
-      const result = await rpc('ask.source', { expect: account, scope: answer.scope, ref: source.ref });
+    while (next < passages.length && sourcesAt(gen)?.evidence?.seq === mine) {
+      const [place, ref] = passages[next++]!;
+      const result = await rpc('ask.source', { expect: account, scope, ref });
       // Replies for another source or answer, or that land while another app is in front, are dropped.
       const now = sourcesAt(gen);
       if (now?.evidence?.seq !== mine) return;
       set({ sources: { ...now, evidence: { ...now.evidence, reads: { ...now.evidence.reads,
-        [index]: result.ok ? { loading: false, value: result.value } : { loading: false, failure: result.failure } } } } });
+        [place]: result.ok ? { loading: false, value: result.value } : { loading: false, failure: result.failure } } } } });
       if (!result.ok) accountLost(result.failure);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(EVIDENCE_READS_AT_ONCE, indexes.length) }, reader));
+  await Promise.all(Array.from({ length: Math.min(EVIDENCE_READS_AT_ONCE, passages.length) }, reader));
 }
 
 /** Try again, on the original the pane shows: all its passages, read again. */
 export function retryEvidence(): void {
   const sources = state.sources;
-  if (sources?.open != null) void readEvidence(sources.gen, sources.open);
+  if (sources && paneTarget()) void readEvidence(sources.gen);
 }
 
-/** Try again, on an approved record that could not be read. */
+/** Try again, on an approved record, or a transcript's meeting, that could not be read. */
 export function retryRecord(): void {
   const sources = state.sources;
-  const chosen = sources?.open != null ? answerGroups()[sources.open] : undefined;
-  const source = chosen ? answerSources()[chosen.indexes[0]!] : undefined;
-  if (sources && source?.kind === 'record') void readRecord(sources.gen, source.record, false);
+  const source = paneTarget()?.sources[0];
+  if (!sources || !source) return;
+  const opener = openerOf(source);
+  if (source.kind === 'record') void readRecord(sources.gen, source.record, false);
+  else if (opener.pane === 'meeting' && opener.meeting !== undefined) void readMeeting(sources.gen, opener.meeting);
 }
 
 // ---- the bar: live search -------------------------------------------------------
@@ -3953,7 +4183,7 @@ function conceal(): void {
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
   set({
-    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, records: {}, evidence: null } } : {}),
+    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
     ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });

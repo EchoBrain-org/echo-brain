@@ -61,7 +61,8 @@ Answer Lab evidence (local, not in this repository):
 
 ### Non-goals for V1
 
-Latency work; live progress streaming; unattached private notes in project
+Latency work; live progress streaming (delivered later by
+[ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)); unattached private notes in project
 scope (today's rule stands: a private item counts in project scope only when
 associated with the project); structured filters by owner, due date or status;
 embeddings or rerankers; conversation memory; an MCP door; moving legacy CLI
@@ -532,7 +533,10 @@ claim made by an offline pass. Existing candidate release gates still apply.
 ### Open questions
 
 1. Unattached private notes in project scope (deferred to V1.1).
-2. Progress streaming (deferred to V1.1).
+2. Progress streaming (deferred to V1.1). (Delivered by
+   [ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md):
+   an opt-in event stream on `/v5/person/ask` that names items only after
+   the access check before a model call.)
 3. Structured filters by owner, due date and status (deferred to V1.1).
 4. Model per role after a frozen-input comparison.
 5. Whether `/v2` adopts the desk's document ranking fixes.

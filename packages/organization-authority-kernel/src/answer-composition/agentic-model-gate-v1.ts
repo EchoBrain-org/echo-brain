@@ -1,3 +1,4 @@
+import { EvidenceDeskSnapshotChangedV1 } from "../shared/evidence-desk-v1.js";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import {
@@ -129,7 +130,7 @@ export function raceAbort<T>(signal: AbortSignal, operation: Promise<T>): Promis
 export function isAbort(error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true || (error instanceof DOMException && error.name === "AbortError");
 }
-export function abort(): never { throw new DOMException("Ask cancelled", "AbortError"); }
+export function abort(signal?: AbortSignal): never { throw signal === undefined ? new DOMException("Ask cancelled", "AbortError") : abortReason(signal); }
 
 /** Content-free span events: entering a call's runtime span, and its model time when it settles. */
 export type AgenticModelGateSpanEventV1 =
@@ -204,6 +205,7 @@ export async function revalidateWithTransientRetryV1<T>(check: () => Promise<T>,
 }): Promise<T> {
   try { return await check(); }
   catch (error) {
+    if (error instanceof EvidenceDeskSnapshotChangedV1) throw error;
     const transient = error instanceof AuthorityOperationError && (error.code === "unavailable" || error.code === "rate_limited");
     if (!transient || options.signal.aborted || (options.remaining !== undefined && options.remaining() <= AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1)) throw error;
     await abortablePause(AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, options.signal);
@@ -220,7 +222,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
   const invocationDigests: Sha256Digest[] = [];
   const remaining = () => deadline - now();
   const assertLive = () => {
-    if (options.input_signal?.aborted) abort();
+    if (options.input_signal?.aborted) abort(options.input_signal);
     if (options.is_deadline_expired() || now() >= deadline) throw new AgenticAskDeadlineErrorV1();
     if (activeSignal.aborted) throw new DOMException("Ask stopped", "AbortError");
   };

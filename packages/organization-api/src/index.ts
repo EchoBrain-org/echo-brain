@@ -67,6 +67,7 @@ export * from './person-answer-v5.js';
 export * from './person-answer-v6.js';
 export * from './person-answer-v7.js';
 export * from './person-follow-up-evidence-v1.js';
+export * from './person-ask-progress-v1.js';
 
 export * from './person-tool-connection-v1.js';
 export * from './person-tool-connection-client-v1.js';

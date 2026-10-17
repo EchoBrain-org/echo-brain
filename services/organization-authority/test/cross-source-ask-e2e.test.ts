@@ -1,46 +1,17 @@
-import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
-import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
-import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
-import { openJiraPersonLiveRuntimeV1 } from '../src/composition/jira-person-live-runtime-v1.js';
-import { LEGACY_TICKET_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
-import { liveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import type { PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
-import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
-import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
-import { ownerGenesis, port, signInHttp, syntheticOidcProvider } from './fixtures/owner-session.js';
-import { crossSourceLiveFixture, JIRA_TEXT, SLACK_TEXT, SLACK_CHANNEL, SLACK_TEAM } from './fixtures/cross-source-live-fixture.js';
-import { seedCrossSourceRecords } from './fixtures/cross-source-record-fixture.js';
-import { authorization } from './fixtures/project-context-sqlite.js';
+import { allSourceAskFixture, crossSourceAuthorityFixture, DOCUMENT_TEXT, PRIVATE_DOCUMENT_TEXT, SLACK_LIVE_CONNECTOR } from './fixtures/cross-source-ask-runtime.js';
+import { JIRA_TEXT, SLACK_TEXT, SLACK_CHANNEL, SLACK_TEAM } from './fixtures/cross-source-live-fixture.js';
 import { FIXTURE_JIRA_CLOUD_V1, FIXTURE_JIRA_SITE_V1 } from './fixtures/fake-jira-v1.js';
 
 const roots: string[] = [];
-// No production root registers a Slack live connector; these tests exercise the slack_message live kind.
-const SLACK_LIVE_CONNECTOR = Object.freeze({
-  descriptor: liveSourceDescriptorV2({ source: 'slack' }),
-  scopes: Object.freeze(['global'] as const), minimum_response_version: 5 as const,
-});
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
-const AUTHORITY = 'https://authority.example.test';
-const EMAIL = 'cross-source@example.test';
-const OIDC = { issuer: 'https://issuer.example.test', client_id: 'cross-source-client', redirect_uri: `${AUTHORITY}/v2/session/oidc/callback`, tenant: { kind: 'issuer' as const }, id_token_algorithms: ['RS256'] };
-
-async function fixture(owned = roots) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-cross-source-ask-')));
-  chmodSync(root, 0o700); owned.push(root);
-  const owner = ownerGenesis({ root, oidc: OIDC, email: EMAIL, authority_url: AUTHORITY, revision: 'cross-source-http-test' });
-  const initialized = owner.initialized;
-  const oidc = syntheticOidcProvider(OIDC, () => EMAIL);
-  const config = { state_directory: initialized.state_directory, host: '127.0.0.1' as const, port: await port(), authority_url: AUTHORITY, oidc: OIDC, client_authentication: { method: 'none' as const }, pkce_sealing_key: owner.pkce };
-  const login = (origin: string) => signInHttp(origin, oidc, owner.login_grant);
-  return { initialized, config, oidc, login };
-}
+const fixture = (owned = roots) => crossSourceAuthorityFixture(owned);
+const allSourceFixture = () => allSourceAskFixture(roots);
 
 function finishingModel() {
   const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
@@ -145,78 +116,6 @@ it('closes already opened connectors if a later registered connector fails to st
   ] })).rejects.toThrow('connector startup failed');
   expect(close).toHaveBeenCalledTimes(1);
 });
-
-const DOCUMENT_TEXT = 'Launchscope document: the rollout starts with the pilot group.';
-const PRIVATE_DOCUMENT_TEXT = 'Launchscope private document DENIED-DOCUMENT-8137.';
-type PromptItem = { readonly id: string; readonly text?: string; readonly title?: string; readonly full?: boolean };
-type Prompt = { readonly question: string; readonly step?: number; readonly last_results?: readonly { readonly results?: readonly string[] }[]; readonly opened?: readonly PromptItem[]; readonly seen?: readonly PromptItem[]; readonly evidence?: readonly PromptItem[] };
-
-async function allSourceFixture() {
-  const f = await fixture();
-  const seeded = await seedCrossSourceRecords(f.initialized.state_directory, f.initialized);
-  const database = openAuthorityDatabase(join(f.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
-  const repository = new SqlitePersonDocumentRepositoryV1(database);
-  for (const [actor, text, audience] of [
-    [{ organization_id: f.initialized.organization_id, principal_id: f.initialized.owner_principal_id, membership_id: f.initialized.owner_membership_id, membership_type: 'owner' as const }, DOCUMENT_TEXT, 'team'],
-    [seeded.hidden_actor, PRIVATE_DOCUMENT_TEXT, 'only_me'],
-  ] as const) {
-    const documents = createPersonDocumentApplicationV1({ repository, authenticate: () => authorization(actor) });
-    const bytes = Buffer.from(text);
-    documents.upload('synthetic-seed', { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: randomUUID(), filename: 'launchscope.md', title: 'Launchscope document', content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: audience }, project_id: null }, bytes);
-    const claim = repository.claimExtraction();
-    if (claim === undefined) throw new Error('Missing synthetic document extraction claim');
-    expect(repository.completeExtraction(claim, { status: 'ready', sourceSha256: claim.source_sha256, extractorVersion: 'cross-source-fixture-v1', chunks: [{ anchor_kind: 'paragraph', anchor_start: 1, text }], message: null })).toBe(true);
-  }
-  const live = crossSourceLiveFixture(f.initialized);
-  const prompts: string[] = [];
-  let beforeAnswerReturn: (() => void) | undefined;
-  const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    prompts.push(input.user_prompt);
-    expect(input.user_prompt).not.toContain(seeded.hidden_text);
-    expect(input.user_prompt).not.toContain(seeded.unapproved_text);
-    expect(input.user_prompt).not.toContain(PRIVATE_DOCUMENT_TEXT);
-    const prompt = JSON.parse(input.user_prompt) as Prompt;
-    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
-      beforeAnswerReturn?.();
-      return { sentences: (prompt.evidence ?? []).map(item => ({ text: item.text!, evidence: [item.id] })), not_found: [] };
-    }
-    // A result names its items by id; their details are in seen.
-    const returned = new Set(prompt.last_results?.flatMap(result => result.results ?? []));
-    const hits = prompt.opened?.length ? [...prompt.opened, ...(prompt.seen ?? [])] : (prompt.seen ?? []).filter(item => returned.has(item.id));
-    if (hits.length > 0) {
-      const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-live-evidence-release-audit-v1%'").all() as { body_json: string }[];
-      // Every provider passage has crossed the real durable release boundary before the next model call.
-      if (input.user_prompt.includes(JIRA_TEXT)) expect(rows.some(row => row.body_json.includes('"tool_id":"jira"'))).toBe(true);
-      if (input.user_prompt.includes(SLACK_TEXT)) expect(rows.some(row => row.body_json.includes('"tool_id":"slack"'))).toBe(true);
-      const unopened = hits.filter(item => item.text === undefined && item.full !== true);
-      if (unopened.length > 0) return { parts: [{ question: prompt.question, needs: [{ need: 'cross-source launch status', status: 'open', evidence: [] }], notes: '' }], actions: unopened.slice(0, 4).map(item => ({ tool: 'open', args: { id: item.id } })) };
-      return { parts: [{ question: prompt.question, needs: [{ need: 'cross-source launch status', status: 'found', evidence: hits.map(item => item.id) }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
-    }
-    return { parts: [{ question: prompt.question, needs: [{ need: 'cross-source launch status', status: prompt.step === 1 ? 'open' : 'not_found', evidence: [] }], notes: '' }], actions: prompt.step === 1 ? [{ tool: 'search', args: { query: 'Launchscope' } }] : [{ tool: 'finish', args: {} }] };
-  });
-  const runtime = await startOrganizationAuthorityApiRuntime(f.config, {
-    oidc_provider: f.oidc,
-    live_connectors: [
-      { ...LEGACY_TICKET_CONNECTOR_V1, open: sessions => openJiraPersonLiveRuntimeV1({ state_directory: f.initialized.state_directory, sessions,
-        configuration: { enabled: true, cloud_id: FIXTURE_JIRA_CLOUD_V1, integration_id: 'jira', nango_authorization: () => 'synthetic-only-nango-authorization' }, seams: { nango: live.jira.nango, fetch: live.jiraFetch } }) },
-      { ...SLACK_LIVE_CONNECTOR, open: live.slackFactory },
-    ],
-    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 25_000 } },
-  });
-  const origin = `http://127.0.0.1:${runtime.address.port}`;
-  const token = await f.login(origin);
-  const post = async (path: string, body: unknown, bearer = token) => {
-    const response = await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    return { status: response.status, body: await response.json() as Record<string, unknown> };
-  };
-  const connect = await post('/v1/person/tools/jira/connect', { schema_version: 1 });
-  expect(connect.status).toBe(201); live.jira.finish();
-  expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connect.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
-  const ask = () => post('/v4/person/ask', { schema_version: 3, question: 'Combine the Launchscope approved meeting, document, Jira ticket, and Slack message.' });
-  return { ...f, seeded, database, live, prompts, generate, post, ask,
-    beforeAnswerReturn(callback: () => void) { beforeAnswerReturn = callback; },
-    async close() { await runtime.close(); database.close(); } };
-}
 
 it('answers one authenticated HTTP question from approved Granola records, a document, Jira and Slack with current audited citations', async () => {
   const f = await allSourceFixture();

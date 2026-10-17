@@ -1,4 +1,6 @@
 import { PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1 } from "@echo-brain/organization-api";
+import { PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, type PersonAskProgressErrorStatusV1 } from "@echo-brain/organization-api";
+import { startPersonAskProgressStreamV1, type PersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
   PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
@@ -412,6 +414,26 @@ function fail(response: ServerResponse, status: number, code: string): void {
   json(response, status, { error: { code, message: "request failed" } });
 }
 
+/** The status and code a failed request answers with, in a JSON body or as a streamed Ask's error event. */
+function failureOf(error: unknown): { readonly status: PersonAskProgressErrorStatusV1; readonly code: string } {
+  if (!(error instanceof AuthorityOperationError)) return { status: 500, code: "internal" };
+  const status =
+    error.code === "unauthorized"
+      ? 401
+      : error.code === "not_found"
+        ? 404
+        : error.code === "conflict" || error.code === "quota_exceeded"
+          ? 409
+          : error.code === "invalid_output"
+            ? 502
+            : error.code === "unavailable"
+              ? 503
+              : error.code === "rate_limited"
+                ? 429
+                : 400;
+  return { status, code: error.code };
+}
+
 async function rawBody(request: IncomingMessage, maximum = MAXIMUM_BODY_BYTES): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -491,6 +513,49 @@ function personCancellablePost<Application, Request>(
     try {
       const requestBody = await personBody(request, validate);
       json(response, 200, await read(application, { access_token, request: requestBody, ...(ask ? { time_context: askTimeContext(request) } : {}), signal: disconnect.signal }));
+    } finally { disconnect.dispose(); }
+  };
+}
+
+/**
+ * The status a streamed Ask's terminal error event carried, by its response.
+ * Once the stream starts the HTTP status is 200, so the request's span
+ * records this one instead, as the JSON route's failure would (ADR-0039).
+ */
+const streamedFailureStatus = new WeakMap<ServerResponse, number>();
+
+/**
+ * `POST /v5/person/ask`. A client that sends the progress header gets the
+ * same Ask as server-sent events (ADR-0039), once the request authenticated
+ * and validated; before that, and for every other client, the response is
+ * today's JSON. A disconnect still cancels the Ask, and nothing more is written.
+ */
+function personAskV5Post(application: PersonAnswerV5HttpApplication | undefined): PersonPostHandler {
+  const plain = personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
+  return async (request, response) => {
+    if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V1) { await plain(request, response); return; }
+    const access_token = accessToken(request.headers.authorization);
+    const disconnect = disconnectSignal(request, response);
+    let stream: PersonAskProgressStreamV1 | undefined;
+    try {
+      const requestBody = await personBody(request, validatePersonAnswerRequestV3);
+      const time_context = askTimeContext(request);
+      const answered = await application.askWithProgress({
+        access_token, request: requestBody, ...(time_context === undefined ? {} : { time_context }), signal: disconnect.signal,
+        on_start: () => { stream ??= startPersonAskProgressStreamV1(response); },
+        on_progress: event => { stream?.step(event); },
+      });
+      stream ??= startPersonAskProgressStreamV1(response);
+      stream.end({ type: "answer", response: answered.response, receipt: answered.receipt });
+    } catch (error) {
+      // Before the stream starts, the server's ordinary JSON error.
+      if (stream === undefined) throw error;
+      if (disconnect.signal.aborted) stream.close();
+      else {
+        const { status, code } = failureOf(error);
+        streamedFailureStatus.set(response, status);
+        stream.end({ type: "error", status, error: { code, message: "request failed" } });
+      }
     } finally { disconnect.dispose(); }
   };
 }
@@ -723,7 +788,7 @@ export function createOrganizationAuthorityHttpServer(
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
-    [PERSON_ANSWER_PATH_V5, personCancellablePost(options.person_answer_v5, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
+    [PERSON_ANSWER_PATH_V5, personAskV5Post(options.person_answer_v5)],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     ...(options.person_research_eval === undefined ? [] : [
@@ -1148,29 +1213,12 @@ export function createOrganizationAuthorityHttpServer(
       }
       fail(response, 404, "not_found");
     } catch (error) {
-      if (error instanceof AuthorityOperationError) {
-        const status =
-          error.code === "unauthorized"
-            ? 401
-            : error.code === "not_found"
-              ? 404
-              : error.code === "conflict" || error.code === "quota_exceeded"
-                ? 409
-                : error.code === "invalid_output"
-                  ? 502
-                  : error.code === "unavailable"
-                    ? 503
-                    : error.code === "rate_limited"
-                      ? 429
-                      : 400;
-        fail(response, status, error.code);
-        return;
-      }
-      fail(response, 500, "internal");
+      const { status, code } = failureOf(error);
+      fail(response, status, code);
     } finally {
       if (responseFinished !== undefined) await responseFinished;
       activeHttp -= 1;
-      annotateCoreRuntimeV1({ counts: { http_status: response.statusCode, active_http: activeHttp } });
+      annotateCoreRuntimeV1({ counts: { http_status: streamedFailureStatus.get(response) ?? response.statusCode, active_http: activeHttp } });
     }
   }, options.core_runtime_observation));
   server.requestTimeout = PERSON_DOCUMENT_TRANSFER_DEADLINE_MS;

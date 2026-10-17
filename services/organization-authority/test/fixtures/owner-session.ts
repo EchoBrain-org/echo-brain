@@ -63,13 +63,18 @@ export function ownerGenesis(input: { readonly root: string; readonly oidc: Pers
 
 /** Signs in with `login_grant` as a browser would over HTTP and returns the sealed access token. */
 export async function signInHttp(origin: string, provider: SyntheticOidcProvider, login_grant: string, code = 'synthetic'): Promise<string> {
+  return (await signInHttpSession(origin, provider, login_grant, code)).access_token;
+}
+
+/** signInHttp's whole session, exactly as the CLI's loopback handoff receives it and installs it. */
+export async function signInHttpSession(origin: string, provider: SyntheticOidcProvider, login_grant: string, code = 'synthetic'): Promise<IssuedPersonSession> {
   const begun = await fetch(`${origin}/v2/session/oidc/begin`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ kind: 'identity_bootstrap', login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } }),
   });
   expect(begun.status).toBe(201);
   const callback = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(provider.state())}&code=${code}`)).text();
-  return (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(callback)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+  return JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(callback)![1]!, 'base64url').toString('utf8')) as IssuedPersonSession;
 }
 
 /** Signs the genesis owner in through the session application, before any server runs. */

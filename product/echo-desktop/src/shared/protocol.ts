@@ -205,7 +205,11 @@ export interface RecordRef {
   readonly policy_id: RecordPolicy;
 }
 
-/** What an answer is based on: an approved record, an original, or live evidence. */
+/**
+ * What an answer is based on, or an item Ask named while it worked: an
+ * approved record's item, an original's passage, a transcript's passage, or
+ * live evidence. Each kind opens through one opener (renderer/openers.ts).
+ */
 export interface ExternalAnswerSource {
   readonly kind: 'slack' | 'ticket' | 'page';
   readonly tool_id: string;
@@ -213,9 +217,45 @@ export interface ExternalAnswerSource {
   readonly permalink: string;
 }
 export type AnswerSource =
-  | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef }
-  | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef }
+  /** `atom_id`: the decision, action or rationale cited, as its record's items carry it. */
+  | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef; readonly atom_id: string }
+  /** `item`: the note, document or imported meeting it is a passage of, from the Authority's own ref, when it sent one. */
+  | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef; readonly item?: ItemRef }
+  /** A shared transcript's passage. It opens as its meeting (`meeting`, the record digest): there is no transcript reader. */
+  | { readonly kind: 'transcript'; readonly label: string; readonly ref: SourceRef; readonly meeting: string }
   | ExternalAnswerSource;
+
+/**
+ * What Ask is doing now (ADR-0039), from what ECHO ran: a step's searches,
+ * its reads and the research model reading, the final access check, or the
+ * answer being written.
+ */
+export type AskStage = 'searching' | 'reading' | 'checking_access' | 'writing';
+/** A kind of source a step searched: meetings, documents or Slack, or a live tool's tickets or pages, by the tool's id. */
+export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'slack' } | { readonly kind: 'tickets' | 'pages'; readonly tool_id: string };
+/** One step's searches: the source kinds, and how many items they returned that no earlier read had. */
+export interface AskSearched {
+  readonly type: 'searched';
+  readonly sources: readonly AskSearchedSource[];
+  readonly found: number;
+}
+/** Items whose full text research was just given, each after the access check before that read: as a source opens. */
+export interface AskRead {
+  readonly type: 'read';
+  readonly items: readonly AnswerSource[];
+}
+/** One step of an Ask still working. `pending`, only while reading: items about to be read whose names have not come yet. */
+export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readonly pending?: number } | AskSearched | AskRead;
+/**
+ * What an answered Ask looked through, rebuilt by the Authority from the
+ * items that passed its final check: how many it read, how long it took, and
+ * its searches and reads in order, neighbours of a type already merged.
+ */
+export interface AskReceipt {
+  readonly looked_through: number;
+  readonly elapsed_ms: number;
+  readonly rows: readonly (AskSearched | AskRead)[];
+}
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
 export interface AnswerStatement {
@@ -244,6 +284,8 @@ export interface Answer {
   readonly outcome: 'answered' | 'partial' | 'not_found' | 'off_scope';
   readonly assumption?: string;
   readonly notice?: string;
+  /** Only from an Authority that streamed the Ask: what it looked through. */
+  readonly receipt?: AskReceipt;
 }
 
 export interface SourceEvidence {
@@ -264,6 +306,8 @@ export interface RecordItem {
    * parts `from` to `to` of `count`, and the next page's first part goes on.
    */
   readonly parts?: { readonly from: number; readonly to: number; readonly count: number };
+  /** The item's id as an answer cites it (a digest, never its text): only on a record read for Ask's side panel. */
+  readonly atom_id?: string;
 }
 
 /** At most 32 items; `more` says some were left out. */
@@ -661,6 +705,16 @@ export interface Events {
   'update.changed': UpdateState;
   /** A notification was clicked: what it opens, as the page said when it asked for it. */
   'notice.open': { target: NoticeTarget };
+  /**
+   * A step of the Ask the host is running (ADR-0039), for the account and the
+   * Ask's renderer-issued cancel id it ran under: the page drops any other.
+   */
+  'ask.progress': AskProgressNotice;
+}
+export interface AskProgressNotice {
+  readonly cancel_id: string;
+  readonly expect: Expect;
+  readonly step: AskStep;
 }
 export type EventName = keyof Events;
 
@@ -675,7 +729,7 @@ export interface HostReply {
   readonly result: Result<unknown>;
 }
 export interface HostNotice {
-  readonly notice: 'signin.phase' | 'open-external';
+  readonly notice: 'signin.phase' | 'open-external' | 'ask.progress';
   readonly payload: unknown;
 }
 

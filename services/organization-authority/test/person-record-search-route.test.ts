@@ -960,7 +960,7 @@ describe("Person Layer 2 route", () => {
           access_token: "bearer-only",
           release,
         }),
-      ).toThrow("person authentication failed");
+      ).toThrow(expect.objectContaining({ code: "unavailable" }));
     } finally {
       value.record.close();
       value.authority.close();

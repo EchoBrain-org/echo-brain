@@ -198,6 +198,9 @@ function callHost(method: HostMethodName | 'host.drain', params: unknown): Promi
 function onHostNotice(message: HostNotice): void {
   if (message.notice === 'signin.phase') {
     send('signin.phase', message.payload as Events['signin.phase']);
+  } else if (message.notice === 'ask.progress') {
+    // The host validated the step and tagged it; the page drops one for another Ask or account.
+    send('ask.progress', message.payload as Events['ask.progress']);
   } else if (message.notice === 'open-external') {
     // The fixture Authority brings its own browser: tests never open a real one.
     // Only a host that runs it: any other host's sign-in needs this browser.

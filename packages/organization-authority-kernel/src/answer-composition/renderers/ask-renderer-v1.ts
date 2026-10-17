@@ -1,3 +1,4 @@
+import { MISSING_EVENT_DATE_NOTICE_V1 } from "../../shared/temporal-query-v1.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type {
   PersonAnswerPartV4,
@@ -22,6 +23,7 @@ import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 
 const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
 const RECORDS_GAP = "I found these records, but could not write a verified summary.";
 const INCOMPLETE_SEARCH_GAP = "I couldn't complete the search. Please try again.";
+const MISSING_DATE_GAP = "I can't verify the requested date because some accessible meeting sources have no recorded event date.";
 const INCOMPLETE_SEARCH_NOTICE = "Research stopped before it finished, so relevant context may be missing.";
 const LIMITED_COVERAGE_GAP = "Some source coverage was incomplete, so relevant context may be missing.";
 /** The writer runs in Ask's answer span; the audit records it as an `answer` call. */
@@ -158,8 +160,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const notFound = answer?.not_found ?? [];
       const coverageLimited = coverageIsLimitedFor(bundle, used);
       const incomplete = (answer === null && evidence.length > 0) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
+      const dateCoverageMissing = bundle.coverage.notices.some(notice => notice.includes(MISSING_EVENT_DATE_NOTICE_V1));
+      const incompleteGap = dateCoverageMissing ? MISSING_DATE_GAP : INCOMPLETE_SEARCH_GAP;
       const gapText = incomplete
-        ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
+        ? cleanLine(`${incompleteGap}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
         : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
       type Draft = { status: PersonAnswerPartV4["status"]; statements: typeof statements; gap?: string; records?: { text: string; citation_indexes: number[]; private: boolean }[] };
       let draft: Draft;
@@ -173,7 +177,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const records = fallback.map(entry => ({ text: entry.item.text!, citation_indexes: use([entry.short]), private: privateItem(entry.item) }));
         draft = records.length > 0
           ? { status: "records_only", statements: [], records, gap: RECORDS_GAP }
-          : { status: "not_found", statements: [], gap: gapText ?? (incomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
+          : { status: "not_found", statements: [], gap: gapText ?? (dateCoverageMissing ? MISSING_DATE_GAP : incomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
       // A completed answer can retain source coverage as a notice. A stop

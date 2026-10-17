@@ -1,4 +1,4 @@
-import { evidenceDayV1, matchesEvidenceDateV1, meetingEvidenceDatesV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import { MISSING_EVENT_DATE_NOTICE_V1, evidenceDayV1, matchesEvidenceDateV1, meetingEvidenceDatesV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { SqlitePersonImportedMeetingsV1, importedMeetingTextV1 } from './person-imported-meetings-v1.js';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -385,7 +385,12 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     annotateCoreRuntimeV1({ counts: { transcript_items: selected.filter((entry) => entry.transcript === true).length } });
     const atoms = selected.map(({ atom }) => atom);
     const items = selected.map(({ item }) => item());
-    return this.commitDeskRelease(actor, input.access_token, input.scope, items, atoms, expanded.length > limit);
+    const datedMeetings = input.source !== "document" && (input.date_field === undefined || input.date_field === "occurred") && (input.since !== undefined || input.until !== undefined);
+    const undated = datedMeetings && (
+      ((input.kinds === undefined || input.kinds.includes("imported_meeting")) && this.imported.rows(actor, input.scope).some(row => row.dates.occurred === undefined)) ||
+      ((input.kinds === undefined || input.kinds.includes("note")) && this.transcriptCandidates(actor, input.scope).some(row => row.dates.occurred === undefined)));
+    return this.commitDeskRelease(actor, input.access_token, input.scope, items, atoms, expanded.length > limit,
+      undated ? MISSING_EVENT_DATE_NOTICE_V1 : undefined);
   }
 
   deskAuthorize(input: { readonly access_token: string; readonly scope: PersonAskScopeV2 }): { readonly checked_at: string } {
@@ -929,14 +934,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return this.deskItem(row as DocumentRow, atom, includeText);
   }
 
-  private commitDeskRelease(actor: PersonAccessAuthorization, accessToken: string, scope: PersonAskScopeV2, items: readonly OriginalContextDeskItemV1[], atoms: readonly ReleasedSourceContextAtomV1[], truncated = false): OriginalContextDeskReleaseV1 {
+  private commitDeskRelease(actor: PersonAccessAuthorization, accessToken: string, scope: PersonAskScopeV2, items: readonly OriginalContextDeskItemV1[], atoms: readonly ReleasedSourceContextAtomV1[], truncated = false, notice?: string): OriginalContextDeskReleaseV1 {
     const release: OriginalContextReleaseV1 = Object.freeze({ authorization: Object.freeze({ principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, checked_at: actor.checked_at }), scope: Object.freeze({ ...scope }), authorization_revision: this.authorizationRevision(actor.organization_id), released_atoms: Object.freeze([...atoms]) });
     this.releases.add(release);
     this.revalidate({ access_token: accessToken, release });
     const audit = { schema_version: 1, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, authorization_revision: release.authorization_revision, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text, ref, dates }) => ({ citation, kind, visibility, label, received_at, version, ...(dates === undefined ? {} : { dates }), ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ...(ref === undefined ? {} : { ref }) }))), released_count: items.length, checked_at: actor.checked_at };
     const receipt = canonicalSha256(audit);
     this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(receipt, canonicalJson(audit), actor.checked_at);
-    const result: OriginalContextDeskReleaseV1 = Object.freeze({ release, receipt, items: Object.freeze([...items]), truncated });
+    const result: OriginalContextDeskReleaseV1 = Object.freeze({ release, receipt, items: Object.freeze([...items]), truncated, ...(notice === undefined ? {} : { notice }) });
     this.deskReleases.add(result);
     return result;
   }

@@ -164,7 +164,7 @@ schema 3), beside the approved-record-only `/v1/person/ask`. Both were retired
 by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md). The default CLI Ask,
 and the desktop's Mine Ask, use `POST /v3/person/ask` with V4 answers, and the
 scope rules here still apply to every route. The CLI accepts
-`person ask --question <text> [--project <project-id> | --mine] [--tickets | --live]`;
+`person ask --question <text> [--project <project-id> | --mine] [--tickets | --live [--progress [--expected-membership-id <id> --expected-authority <origin>]]]`;
 `--project` and `--mine` are exclusive, as are `--tickets` and `--live`. The
 client does not silently downgrade a project or mine request to global Ask.
 
@@ -179,7 +179,12 @@ unmapped projects exclude live tools. The desktop uses `--live` for every
 question outside Mine. An older Authority without the `/v5` route gets the
 ticket-capable fallback, `POST /v4/person/ask` with V5 answers; permission
 failures never fall back. `person ask --tickets` keeps that `/v4` route for
-compatibility. See [Person client architecture](../architecture/person-client-architecture.md)
+compatibility. `--live --progress` streams Ask's progress
+([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)): one JSON line per step before the final
+line, which adds the answer's receipt. An Authority that does not stream
+gets today's output. The desktop pins the streamed Ask to the account it
+shows (`--expected-membership-id` and `--expected-authority`): a client
+signed in as another asks nothing and prints no step. See [Person client architecture](../architecture/person-client-architecture.md)
 for the client side.
 
 Cited original evidence is read through `POST /v2/person/ask/source` or
@@ -237,3 +242,25 @@ when that is what the question asks. Unsupported date fields are refused;
 missing dates and truncated inventories limit what an empty result proves.
 Live natural-language qualification remains part of staging, separate from
 scripted-model transport and retrieval tests.
+
+Date searches report when reader-visible meetings have no recorded event date.
+That notice reaches both the research model and answer writer, including an
+empty result. The model may then search without date bounds and use an explicit
+event date in source text. A meeting on a different day cannot answer the
+requested day or establish that nothing happened then. Missing date metadata
+is reported as a coverage gap, not a promise that retrying will repair it.
+Synthetic staging submissions accept optional `started_at`, `ended_at` and
+`time_zone` fields; the source preserves them as meeting time. Existing undated
+submissions stay undated, and capture/approval times never substitute for them.
+
+If the approved record log advances during Ask, a valid old snapshot is
+classified as unavailable rather than failed authentication. Ordinary Ask
+restarts once with a new desk and research state, within the original 90-second
+work deadline. Cooperative timeout auditing finishes before the response returns;
+cleanup has a separate one-second bound if a connector does not settle after cancellation.
+The old evidence never enters the new attempt. Revoked access,
+changed grants, corrupt or foreign pointers and unknown failures are not
+retried. Diagnostic captures remain single-attempt so their content and fence
+cannot mix attempts; a snapshot change returns unavailable and the person may
+start a fresh capture. A still-building index can produce an explicit partial
+answer from other sources under the existing originals-only policy.

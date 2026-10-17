@@ -154,6 +154,29 @@ unapproved evidence. The source-card behavior below describes approved
 records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
+`person ask --live --progress` asks `/v5/person/ask` to stream its progress
+([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) by sending `x-echo-ask-progress: 1`.
+
+- **Reading the stream.** The client reads the server-sent events with the
+  shared decoder in `@echo-brain/organization-api`.
+- **Output.** It prints each stage, searched or read event as its own
+  `{"ok": true, "progress": …}` line. The final line keeps today's
+  `{"ok": true, "result": …}` and adds the answer's `receipt`.
+- **Errors.** An error after the stream started becomes the same client
+  error the JSON error response would have produced.
+- **Older Authority.** It answers with JSON, so the command prints only
+  today's final line.
+- **Flag rules.** `--progress` without `--live` is a usage error. Without the
+  flag, the output is unchanged.
+- **Pinned account.** Paired `--expected-membership-id` and
+  `--expected-authority` (only with `--progress`) bind the Ask to the
+  caller's account, as the desktop sends them: signed in as another, the
+  client sends nothing and prints no step.
+
+The desktop runs this command for global and project Ask. Its host forwards
+the progress lines to the renderer as it already forwards sign-in phases, and
+drops lines that belong to an earlier Ask or another account.
+
 Each Ask sends optional `x-echo-client-now` (a canonical UTC instant) and
 `x-echo-time-zone` (the client's IANA time zone) headers. The shared Person
 client supplies them for both desktop and CLI. Authority validates the pair
