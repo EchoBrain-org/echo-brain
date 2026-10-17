@@ -8,6 +8,7 @@ import {
 } from '../../src/shared/core-runtime-observation-v1.js';
 import { createJourneyTelemetryEventV1 } from '../../src/shared/journey-telemetry-v1.js';
 import { STRUCTURED_GENERATION_FAILURE_CLASSES_V1 } from '../../src/answer-composition/structured-generation-v1.js';
+import { coreRuntimeModelRoutingV1 } from '../../src/shared/core-runtime-diagnostics-v1.js';
 
 const payload = () => ({ kind: 'tool_response' as const, tool_call_id: 1, round: 1, tool: 'open' as const, result: { text: 'private released text', results: [{ id: 'E2' }] } });
 const vocabulary = { providers: [], models: [], triggers: ['ask', 'approved_record', 'future_trigger'] };
@@ -144,6 +145,21 @@ describe('shared selected-run diagnostics', () => {
     const lag = Object.assign(new Error('an exact-head readable-search generation is not available'), { name: 'PersonRecordSearchIndexLagV1', code: 'unavailable' });
     expect(coreRuntimeDiagnosticErrorKindV1(lag)).toBe('index_lag');
     expect(coreRuntimeDiagnosticErrorKindV1(Object.assign(new Error('an exact-head readable-search generation is not available'), { code: 'unavailable' }))).toBe('unavailable');
+  });
+
+  it('reads a model call\'s serving host and generation id off its result or its failure, as bounded tokens only', () => {
+    const routing = { upstream_provider: 'DeepInfra', generation_id: 'gen-1760650000-AbCdEfGh12345678' };
+    expect(coreRuntimeModelRoutingV1({ value: {}, provider_latency_ms: 1, ...routing }, 'result')).toEqual(routing);
+    const failure = Object.assign(new Error('private provider text'), { generation_observation: { usage: null, provider_latency_ms: 2, ...routing } });
+    expect(coreRuntimeModelRoutingV1(failure, 'failure')).toEqual(routing);
+    // A failure's own fields are not its generation observation's, and nothing is required.
+    expect(coreRuntimeModelRoutingV1({ ...routing }, 'failure')).toEqual({});
+    expect(coreRuntimeModelRoutingV1({ value: {}, upstream_provider: null, generation_id: null }, 'result')).toEqual({});
+    expect(coreRuntimeModelRoutingV1(undefined, 'result')).toEqual({});
+    // Free text, oversized or non-string values never pass, and an exotic value cannot throw.
+    expect(coreRuntimeModelRoutingV1({ upstream_provider: 'Deep Infra <x>', generation_id: `gen-${'a'.repeat(200)}` }, 'result')).toEqual({});
+    expect(coreRuntimeModelRoutingV1({ upstream_provider: 7, generation_id: { id: 'gen-1' } }, 'result')).toEqual({});
+    expect(coreRuntimeModelRoutingV1(new Proxy({}, { get() { throw new Error('private getter'); } }), 'failure')).toEqual({});
   });
 
   it('keeps correlation finite and opaque through the journey contract', async () => {

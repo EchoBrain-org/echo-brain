@@ -63,18 +63,13 @@ const SPAN_PHASES: ReadonlySet<string> = new Set(['model_call', 'evidence_connec
 /** Runtime spans one capture keeps; more are counted, not kept. */
 const MAX_SPANS = 512;
 /**
- * Fields a model event may carry beyond its declared shape (the adapter's
- * upstream host and generation id, among others): exported when present as
- * a bounded string or a finite number, never required.
+ * The serving host and generation id the model gate copied onto a call's
+ * terminal event from the adapter's result or failure, when it reported them.
  */
-const MODEL_EXTRAS = ['provider_latency_ms', 'request_id', 'upstream_provider', 'generation_id', 'failure_class', 'http_status'] as const;
-function modelExtras(event: Recorded): Record<string, string | number> {
-  const extras: Record<string, string | number> = {};
-  for (const key of MODEL_EXTRAS) {
-    const value = (event as unknown as Readonly<Record<string, unknown>>)[key];
-    if ((typeof value === 'string' && value.length <= 256) || (typeof value === 'number' && Number.isFinite(value))) extras[key] = value;
-  }
-  return extras;
+type ModelRouting = Pick<Extract<CoreRuntimeDiagnosticObservationV1, { readonly kind: 'model_response' }>, 'upstream_provider' | 'generation_id'>;
+function modelRouting(event: ModelRouting): ModelRouting {
+  return { ...(event.upstream_provider === undefined ? {} : { upstream_provider: event.upstream_provider }),
+    ...(event.generation_id === undefined ? {} : { generation_id: event.generation_id }) };
 }
 /** What a model call's provider span adds to its model run: provider time and status, and how long it queued before the provider. */
 function providerLeg(span: Span, run: LangSmithRunV1): Record<string, unknown> {
@@ -161,11 +156,11 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
             if (event.usage.total_tokens !== null) run.total_tokens = event.usage.total_tokens;
           }
           run.extra.metadata.finish_reason = event.finish_reason ?? null;
-          Object.assign(run.extra.metadata, modelExtras(event));
+          Object.assign(run.extra.metadata, modelRouting(event));
         } else if (event.kind === 'tool_response') run.outputs = { ...event.result };
         else {
           run.error = event.error_kind;
-          if (event.kind === 'model_error') Object.assign(run.extra.metadata, { error_kind: event.error_kind }, modelExtras(event));
+          if (event.kind === 'model_error') Object.assign(run.extra.metadata, { error_kind: event.error_kind }, modelRouting(event));
         }
       }
     } else if (event.kind === 'provider_query') {

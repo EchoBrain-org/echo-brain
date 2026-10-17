@@ -26,11 +26,17 @@ export interface CoreRuntimeDiagnosticUsageV1 {
   readonly reasoning_tokens: number | null;
 }
 
+/** Which upstream host served a model call and the provider's generation id, when the adapter reports them. */
+export type CoreRuntimeDiagnosticModelRoutingV1 = {
+  readonly upstream_provider?: string;
+  readonly generation_id?: string;
+};
+
 /** Exact model-port and model-facing tool projections. No HTTP state, credentials or desk receipts. */
 export type CoreRuntimeDiagnosticEventV1 =
   | (ModelIdentity & { readonly kind: 'model_request'; readonly recovery: boolean; readonly input: CoreRuntimeDiagnosticModelInputV1 })
-  | (ModelIdentity & { readonly kind: 'model_response'; readonly value: unknown; readonly usage?: CoreRuntimeDiagnosticUsageV1; readonly finish_reason?: 'stop' | 'length' | 'content_filter' | 'error' | 'other' | null })
-  | (ModelIdentity & { readonly kind: 'model_error'; readonly error_kind: CoreRuntimeDiagnosticErrorKindV1 })
+  | (ModelIdentity & CoreRuntimeDiagnosticModelRoutingV1 & { readonly kind: 'model_response'; readonly value: unknown; readonly usage?: CoreRuntimeDiagnosticUsageV1; readonly finish_reason?: 'stop' | 'length' | 'content_filter' | 'error' | 'other' | null })
+  | (ModelIdentity & CoreRuntimeDiagnosticModelRoutingV1 & { readonly kind: 'model_error'; readonly error_kind: CoreRuntimeDiagnosticErrorKindV1 })
   | (ToolIdentity & { readonly kind: 'tool_request'; readonly args: Readonly<Record<string, string>> })
   | (ToolIdentity & { readonly kind: 'tool_response'; readonly result: Readonly<Record<string, unknown>> })
   | (ToolIdentity & { readonly kind: 'tool_error'; readonly error_kind: CoreRuntimeDiagnosticErrorKindV1 })
@@ -79,6 +85,26 @@ export function emitCoreRuntimeDiagnosticV1(observer: CoreRuntimeDiagnosticObser
   }
   try { void Promise.resolve(observer(snapshot)).catch(() => undefined); }
   catch { /* Diagnostics cannot affect the operation. */ }
+}
+
+/** A host label or generation id: one short token, never free text. */
+const ROUTING_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/;
+
+/**
+ * The serving host and generation id a model port reports beside a `result`,
+ * or on a `failure`'s generation_observation (the OpenRouter adapter puts
+ * them there). Either is kept only as a short token; nothing is required.
+ */
+export function coreRuntimeModelRoutingV1(value: unknown, from: 'result' | 'failure'): CoreRuntimeDiagnosticModelRoutingV1 {
+  try {
+    const record = (candidate: unknown) => typeof candidate === 'object' && candidate !== null ? candidate as Readonly<Record<string, unknown>> : undefined;
+    const source = from === 'failure' ? record(record(value)?.generation_observation) : record(value);
+    const token = (candidate: unknown) => typeof candidate === 'string' && ROUTING_TOKEN.test(candidate) ? candidate : undefined;
+    const upstream = token(source?.upstream_provider);
+    const generation = token(source?.generation_id);
+    return Object.freeze({ ...(upstream === undefined ? {} : { upstream_provider: upstream }), ...(generation === undefined ? {} : { generation_id: generation }) });
+  } catch { /* Exotic values are not allowed to alter the call's path. */ }
+  return Object.freeze({});
 }
 
 /** Closed labels only: exception text, stacks and provider payloads are not operational metadata. */

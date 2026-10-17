@@ -108,9 +108,9 @@ describe('LangSmith projection of the shared observer', () => {
           await observeCoreRuntimeV1('model_call', async () => {
             annotateCoreRuntimeV1({ counts: { provider_latency_ms: 812, http_status: 200 }, provider_request: coreRuntimeIdentityV1('provider_request', 'gen-1') });
           });
-          // Fields another adapter version may add travel when present, and only as bounded scalars.
+          // The serving host and generation id the model gate copies from the adapter's result onto the call's terminal event.
           observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: 1, role: 'step', value: { actions: [] }, finish_reason: 'stop',
-            upstream_provider: 'Fixture Host', generation_id: 'gen-1', request_id: { nested: 'dropped' } } as unknown as CoreRuntimeDiagnosticEventV1);
+            upstream_provider: 'DeepInfra', generation_id: 'gen-1760650000-AbCdEfGh12345678' });
         });
         await withCoreRuntimeDiagnosticToolV1({ tool_call_id: 1, round: 1 }, async () => {
           observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', tool_call_id: 1, round: 1, tool: 'search', args: { query: 'DVT' } });
@@ -135,8 +135,7 @@ describe('LangSmith projection of the shared observer', () => {
     const [model] = named('model.step');
     expect(model!.parent_run_id).toBe(research!.id);
     expect(model!.extra.metadata).toMatchObject({ timeout_ms: 1000, provider_latency_ms: 812, http_status: 200, provider_result: null,
-      provider_request: coreRuntimeIdentityV1('provider_request', 'gen-1'), upstream_provider: 'Fixture Host', generation_id: 'gen-1', queue_ms: expect.any(Number) });
-    expect(model!.extra.metadata).not.toHaveProperty('request_id');
+      provider_request: coreRuntimeIdentityV1('provider_request', 'gen-1'), upstream_provider: 'DeepInfra', generation_id: 'gen-1760650000-AbCdEfGh12345678', queue_ms: expect.any(Number) });
     expect(named('search')[0]!.parent_run_id).toBe(research!.id);
     // A failed check fails its run, under the release that asked for it, with the finite error kind only.
     expect(failed).toMatchObject({ parent_run_id: named('release')[0]!.id, inputs: { purpose: 'before_audit' }, error: 'unavailable' });
@@ -158,12 +157,13 @@ describe('LangSmith projection of the shared observer', () => {
       await observeCoreRuntimeV1('ask_planner', async () => {
         observeCoreRuntimeDiagnosticV1({ kind: 'model_request', call_id: 1, role: 'step', recovery: false, input: { ...modelInput, timeout_ms: 7540 } });
         try { await observeCoreRuntimeV1('model_call', async () => { throw timeout; }); }
-        catch (error) { observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: 1, role: 'step', error_kind: coreRuntimeDiagnosticErrorKindV1(error) }); }
+        catch (error) { observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: 1, role: 'step', error_kind: coreRuntimeDiagnosticErrorKindV1(error), upstream_provider: 'Friendli', generation_id: 'gen-1760650001-ZyXwVuTs98765432' }); }
       });
       throw new PersonRecordSearchIndexLagV1();
     });
     const [root, model] = runs;
-    expect(model).toMatchObject({ name: 'model.step', error: 'adapter_timeout', extra: { metadata: { timeout_ms: 7540, error_kind: 'adapter_timeout', provider_result: 'timeout' } } });
+    expect(model).toMatchObject({ name: 'model.step', error: 'adapter_timeout', extra: { metadata: { timeout_ms: 7540, error_kind: 'adapter_timeout', provider_result: 'timeout',
+      upstream_provider: 'Friendli', generation_id: 'gen-1760650001-ZyXwVuTs98765432' } } });
     expect(root).toMatchObject({ error: 'index_lag', extra: { metadata: { result: 'index_lag' } } });
     expect(root!.events).toContainEqual({ name: 'application.failed', time: expect.any(String), kwargs: { error_kind: 'index_lag' } });
     expect(JSON.stringify(runs)).not.toContain('private provider text');
