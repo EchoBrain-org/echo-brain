@@ -2,13 +2,11 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import {
-  AGENTIC_LIST_FACTS_V1,
   AGENTIC_LIST_FILTER_FIELDS_V1,
   AGENTIC_LIST_NAMED_MAX_V1,
   AGENTIC_LIST_SELECTION_FIELDS_V1,
   AGENTIC_LIST_STATEMENT_BYTES_V1,
   AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
-  AGENTIC_SUPPORT_KINDS_V1,
   agenticCalendarDayV1,
   agenticListCheckedNoteV1,
   agenticListCompleteV1,
@@ -23,7 +21,6 @@ import {
   agenticListSelectV1,
   agenticListStatementV1,
   agenticNeedSupportV1,
-  agenticSupportKindsV1,
   agenticWriterListMemberV1,
   agenticWriterListV1,
   createAgenticListEvidenceV1,
@@ -34,7 +31,6 @@ import {
   type AgenticListFilterApplicationV1,
   type AgenticListIdV1,
   type AgenticNeedSupportLookupV1,
-  type AgenticSupportKindV1,
   type AgenticWriterListMemberV1,
 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
 import type { AgenticResearchResultV1 } from "../../src/answer-composition/agentic-research-v1.js";
@@ -186,29 +182,21 @@ describe("support kinds", () => {
     list_of: id => OCTOBER_4.members.includes(id) ? "L1" : undefined,
   };
 
-  it("are list facts and content, and a list supports row facts only", () => {
-    expect(AGENTIC_SUPPORT_KINDS_V1).toEqual(["list_fact", "content"]);
-    expectTypeOf<AgenticSupportKindV1>().toEqualTypeOf<"list_fact" | "content">();
-    expect(AGENTIC_LIST_FACTS_V1).toEqual(["membership", "title", "dates", "status", "owner"]);
-  });
-
   it("reads the refused round-2 finish of the October 4 run as the list", () => {
     const support = agenticNeedSupportV1(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"], lookup);
     expect(support).toEqual({ lists: ["L1"], content: [], unsupported: [] });
-    expect(agenticSupportKindsV1(support)).toEqual(["list_fact"]);
   });
 
   it("reads the accepted round-3 finish as the list plus four sections of content", () => {
     // The protocol's 12-id cap cut that finish to E1..E12.
     const support = agenticNeedSupportV1(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10", "E11", "E12"], lookup);
     expect(support).toEqual({ lists: ["L1"], content: ["E9", "E10", "E11", "E12"], unsupported: [] });
-    expect(agenticSupportKindsV1(support)).toEqual(["list_fact", "content"]);
   });
 
   it("takes a cited list id, and names what supports nothing", () => {
     expect(agenticNeedSupportV1(["L1", "E1", "L1"], lookup)).toEqual({ lists: ["L1"], content: [], unsupported: [] });
     expect(agenticNeedSupportV1(["L5", "E40", "E9", "E9"], lookup)).toEqual({ lists: [], content: ["E9"], unsupported: ["L5", "E40"] });
-    expect(agenticSupportKindsV1(agenticNeedSupportV1(["E40"], lookup))).toEqual([]);
+    expect(agenticNeedSupportV1(["E40"], lookup)).toEqual({ lists: [], content: [], unsupported: ["E40"] });
   });
 
   it("counts a member read in full as content, not as its list", () => {

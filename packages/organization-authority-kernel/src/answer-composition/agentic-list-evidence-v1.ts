@@ -178,14 +178,8 @@ export function agenticListFilterNoticeV1(list: Pick<AgenticListEvidenceV1, "fil
 }
 
 // ---- support kinds ----------------------------------------------------
-
-/** What can support a found need. A list gives list facts; an item read in full gives content. */
-export const AGENTIC_SUPPORT_KINDS_V1 = Object.freeze(["list_fact", "content"] as const);
-export type AgenticSupportKindV1 = (typeof AGENTIC_SUPPORT_KINDS_V1)[number];
-
-/** The facts a list supports: which items exist, and each member's row facts. Never what a member says. */
-export const AGENTIC_LIST_FACTS_V1 = Object.freeze(["membership", "title", "dates", "status", "owner"] as const);
-export type AgenticListFactV1 = (typeof AGENTIC_LIST_FACTS_V1)[number];
+// Two kinds support a found need: a list gives list facts (which items exist, and each member's title, dates, status
+// and owner), never what a member says; an item read in full gives content.
 
 /** How one found need's cited ids divide into support. */
 export interface AgenticNeedSupportV1 {
@@ -223,11 +217,6 @@ export function agenticNeedSupportV1(evidence: readonly string[], lookup: Agenti
     if (member !== undefined) add(lists, member); else add(unsupported, id);
   }
   return Object.freeze({ lists: Object.freeze(lists), content: Object.freeze(content), unsupported: Object.freeze(unsupported) });
-}
-
-/** The kinds of support a need has. */
-export function agenticSupportKindsV1(support: AgenticNeedSupportV1): readonly AgenticSupportKindV1[] {
-  return Object.freeze([...(support.lists.length > 0 ? ["list_fact" as const] : []), ...(support.content.length > 0 ? ["content" as const] : [])]);
 }
 
 // ---- the writer -------------------------------------------------------
