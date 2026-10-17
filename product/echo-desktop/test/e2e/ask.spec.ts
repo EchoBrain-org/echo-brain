@@ -432,7 +432,7 @@ test('a long Ask shows what it looks through, names that open beside it while it
   await names.nth(0).click();
   const pane = page.getByTestId('source-pane');
   await expect(pane).toContainText('Meeting · Approved record');
-  await expect(pane.locator('.record-item.on')).toHaveText(['Keep monthly plans until November.', /^Ship Apollo with annual plans first\./]);
+  await expect(pane.locator('.record-item.on')).toHaveText([/Keep monthly plans until November\./, /Ship Apollo with annual plans first\./]);
   await expect(names.nth(0)).toHaveAttribute('aria-pressed', 'true');
   await expect(pane.getByTestId('source-open')).toHaveCount(0);
   await expect(asking).toBeVisible();
@@ -517,6 +517,9 @@ test('a quick Ask shows nothing more, and its source opens the cited decision li
   const pane = page.getByTestId('source-pane');
   await expect(pane.locator('.record-item.on')).toHaveCount(1);
   await expect(pane.locator('.record-item.on')).toContainText('Ship Apollo with annual plans first.');
+  // Lit by more than colour: a screen reader hears which item is cited, and only that one.
+  await expect(pane.locator('.record-item.on')).toHaveText(/^Cited: Ship Apollo with annual plans first\./);
+  await expect(pane.getByTestId('record').getByText('Cited:')).toHaveCount(1);
   await pane.getByTestId('source-open').click();
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
   const reader = page.getByTestId('reader');
@@ -526,7 +529,7 @@ test('a quick Ask shows nothing more, and its source opens the cited decision li
   await expect(decisions).toHaveCount(2);
   await expect(decisions.nth(1)).toHaveClass(/\bon\b/);
   await expect(reader.locator('.record-item.on')).toHaveCount(1);
-  await expect(reader.locator('.record-item.on')).toContainText('Ship Apollo with annual plans first.');
+  await expect(reader.locator('.record-item.on')).toHaveText(/^Cited: Ship Apollo with annual plans first\./);
   expect(opens()).toEqual([`meeting:${RECORD}`]);
 });
 

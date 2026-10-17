@@ -453,10 +453,14 @@ function Receipt({ state, receipt, took }: { state: State; receipt: AskReceipt; 
   );
 }
 
-/** A decision, action or rationale, and the excerpts that support it. One an answer cites is lit (`on`). */
+/**
+ * A decision, action or rationale, and the excerpts that support it. One an
+ * answer cites is lit (`on`), and says so to a screen reader, not by colour alone.
+ */
 function Item({ item, on = false }: { item: RecordItem; on?: boolean }) {
   return (
     <div class={`record-item${on ? ' on' : ''}`} data-cited={on ? 'true' : undefined}>
+      {on && <span class="sr-only">Cited: </span>}
       {item.status && <div class="status">{item.status === 'proposed' ? 'Proposed' : 'Unresolved'}</div>}
       <div>{item.text}</div>
       {item.owner && <div class="owner" data-testid="record-owner">Owner: {item.owner}</div>}
