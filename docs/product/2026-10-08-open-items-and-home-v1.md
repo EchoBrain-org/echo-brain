@@ -303,8 +303,8 @@ storage rules. It acts as the person who asked, with their access.
   those there that the caller can see, as `items` shows them. At start, the
   server reads the scope again and takes up to 20 items the caller still
   sees: never checked first, then the oldest last check, then the oldest
-  item. An item one of the caller's sweeps of the last day could not read
-  goes after all the others: someone else's judged check stays its last
+  item. An item one of the caller's sweeps that finished in the last day
+  could not read goes after all the others: someone else's judged check stays its last
   check, so it would otherwise come first in every sweep and keep the
   caller's other stale items waiting. It is still read when places remain,
   and a day after that sweep it takes its usual place again. The rest wait
@@ -392,9 +392,10 @@ storage rules. It acts as the person who asked, with their access.
   caller has an open item they sent or own, of a kind a sweep covers (not a
   Slack message, and a ticket or page only in a tool they have connected),
   whose last check, by anyone, is older than 24 hours or missing, and that
-  none of their sweeps of the last day found unreadable (such an item waits a
-  day from that sweep, as its own unreadable check would, while someone else's
-  judged check stays its last check); no sweep of theirs is running; and none
+  none of their sweeps that finished in the last day found unreadable (such an
+  item waits a day from when that sweep finished, however long before it was
+  asked for, as its own unreadable check would, while someone else's judged
+  check stays its last check); no sweep of theirs is running; and none
   of their sweeps was created in the last hour, whatever its state. So a sweep
   that keeps failing, or leaves items not assessed, is not asked for again on
   every Home load. A sweep left pending for more than an hour does not hold

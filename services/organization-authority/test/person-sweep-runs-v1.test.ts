@@ -221,6 +221,25 @@ describe('sweep runs record a shared last check', () => {
     expect(await f.sweepDue('ari')).toBe(true);
   });
 
+  it('waits that day from when the sweep finished, though it was asked for days before', async () => {
+    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'unreadable' } });
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    f.check(f.ticket.item_id, 'still_open', 'mina');
+    f.advance(25 * HOUR);
+    // Asked for on Friday; the desktop closed before it started, and it starts on Monday.
+    const run_id = runOf(await f.sweep('ari', MINE));
+    f.advance(64 * HOUR);
+    const before = f.findings.length;
+    expect(await f.start('ari', run_id)).toEqual({ state: 'running' });
+    await vi.waitFor(() => expect(f.findings.length).toBeGreaterThan(before));
+    await f.settled(run_id);
+    expect(f.counts(run_id)).toEqual({ ...ZERO, unreadable: 1, unreadable_items: [f.ticket.item_id] });
+    // The sweep is days old, but its unreadable ticket waits a day from now: no second sweep is asked for at once.
+    expect(await f.sweepDue('ari')).toBe(false);
+    f.advance(24 * HOUR + 1);
+    expect(await f.sweepDue('ari')).toBe(true);
+  });
+
   it('answers nothing_to_check without queuing a run', async () => {
     const f = await sweepFixture({ owner: 'mina' });
     const queued = () => f.db.prepare("SELECT count(*) FROM authority_trigger_runs_v1 WHERE trigger='sweep'").pluck().get();

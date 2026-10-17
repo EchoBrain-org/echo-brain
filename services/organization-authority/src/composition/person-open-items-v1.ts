@@ -156,15 +156,15 @@ export function errorCodeV1(error: unknown): string {
   return error instanceof AuthorityOperationError && ERROR_CODES.includes(error.code) ? error.code : 'error';
 }
 /**
- * The items the caller's sweeps created at or after `since` could not read, as each finished sweep stored them: a day on, such a
- * sweep is as old as a stale check. A result stored before sweeps kept them names none. Home leaves them out of `sweep_due`, and a
- * sweep takes them after every other item.
+ * The items the caller's sweeps that finished at or after `since` could not read, as each stored them: a day on, such a sweep is as
+ * old as a stale check. A sweep counts from when it finished, not when it was asked for, since one can wait days to start. A result
+ * stored before sweeps kept them names none. Home leaves them out of `sweep_due`, and a sweep takes them after every other item.
  */
 export function unreadableSinceV1(runs: Pick<SqliteTriggerRunsV1, 'list'>, actor: Parameters<SqliteTriggerRunsV1['list']>[0], since: string): ReadonlySet<string> {
   const items = new Set<string>();
   for (const run of runs.list(actor, SWEEPS_READ, 'sweep')) {
-    if (run.created_at < since) break;
-    if (run.state !== 'done' || run.result_json === null) continue;
+    // A done run is never changed again, so its last update is when it finished. Runs are listed by when they were asked for.
+    if (run.state !== 'done' || run.result_json === null || run.updated_at < since) continue;
     const listed = (JSON.parse(run.result_json) as Partial<Record<keyof SweepCountsV1, unknown>>).unreadable_items;
     if (Array.isArray(listed)) for (const id of listed) if (typeof id === 'string') items.add(id);
   }
