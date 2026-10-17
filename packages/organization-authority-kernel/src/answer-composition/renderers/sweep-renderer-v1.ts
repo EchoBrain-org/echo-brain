@@ -12,7 +12,7 @@ import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1, type Ag
 import { object, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import type { StructuredGenerationJsonSchema } from "../structured-generation-v1.js";
-import { OWNERSHIP_CLAIM, SUGGESTED_EDIT } from "./impact-card-renderer-v1.js";
+import { screenImpactLineV1 } from "./impact-card-renderer-v1.js";
 import { impactItemKeyV1 } from "./impact-card-storage-v1.js";
 
 /**
@@ -103,9 +103,8 @@ function sectionOf(citation: unknown): string | undefined {
 }
 /** The screens' reason to send a line back, or null. */
 function screenFailure(line: string): string | null {
-  if (SUGGESTED_EDIT.some(rule => rule.test(line))) return INSTRUCTION_REASON;
-  if (OWNERSHIP_CLAIM.test(line)) return OWNERSHIP_REASON;
-  return null;
+  const failure = screenImpactLineV1(line, []);
+  return failure === null ? null : failure.screen === "edit" ? INSTRUCTION_REASON : OWNERSHIP_REASON;
 }
 
 /**

@@ -236,22 +236,39 @@ describe("impact card renderer", () => {
     expect(JSON.stringify(rendered.result)).not.toContain("private source-specific");
   });
 
-  it("falls back without a model: the cited items with their details and owners, not yet assessed, plus the notes", async () => {
+  it("falls back without a model: what the record decided in its own words, the cited items with their details and owners, not yet assessed, plus the notes", async () => {
     const run = alone({ replies: [{ wrong: true }, { still: "wrong" }] });
     const rendered = await run.render();
     expect(run.trace.filter(event => event === "generate")).toHaveLength(2);
     expect(rendered.result).toEqual({
-      status: "not_assessed", decided: [],
-      // The record's own items are what was decided, never possibly affected.
-      affected: [
-        { citation_index: 0, says_now: "THERM-46: Display precision; status In Progress; due 2026-10-15", owner: "Tobias Lund" },
-        { citation_index: 1, says_now: "PRD: Display" },
-        { citation_index: 2, says_now: "Planning sync action" },
+      status: "not_assessed",
+      // The record's own items are what was decided, in their approved text, never possibly affected.
+      decided: [
+        { text: "Approved: show two decimals (0.01 °C) on the display from DVT.", citation_index: 0 },
+        { text: "Mara will update the PRD display section by Oct 10.", citation_index: 1 },
       ],
-      unconfirmed: NOTES, people: [{ name: "Tobias Lund", items: [0] }],
-      citations: ["E3", "E4", "E6"].map(citation),
+      affected: [
+        { citation_index: 2, says_now: "THERM-46: Display precision; status In Progress; due 2026-10-15", owner: "Tobias Lund" },
+        { citation_index: 3, says_now: "PRD: Display" },
+        { citation_index: 4, says_now: "Planning sync action" },
+      ],
+      unconfirmed: NOTES, people: [{ name: "Tobias Lund", items: [2] }],
+      citations: ["E1", "E2", "E3", "E4", "E6"].map(citation),
     });
-    expect(rendered).toMatchObject({ cited: ["E3", "E4", "E6"], outcome: "partial", fallbacks: 1 });
+    expect(rendered).toMatchObject({ cited: ["E1", "E2", "E3", "E4", "E6"], outcome: "partial", fallbacks: 1 });
+    expect(validatePersonImpactCardV1(rendered.result)).toEqual(rendered.result);
+  });
+
+  it("writes the fallback's decided lines from decisions and actions only, without the owner the record adds to an action", async () => {
+    const record = [
+      recordItem("decision", "The pilot starts next week."),
+      recordItem("proposal", "Ship a dark theme.", { attributes: { status: "proposed" } }),
+      recordItem("action", "Send the vendor the plan. Owner: Mara Quinn.", { kind: "action", attributes: { owner: "Mara Quinn" } }),
+      recordItem("rationale", "The vendor needs two weeks.", { kind: "rationale" }),
+    ];
+    const rendered = await alone({ bundle: bundle({ items: [...record, ITEMS[2]!], cited: ["E5"] }), replies: [{ wrong: true }, { still: "wrong" }] }).render();
+    expect(rendered.result.decided).toEqual([{ text: "The pilot starts next week.", citation_index: 0 }, { text: "Send the vendor the plan.", citation_index: 1 }]);
+    expect(rendered.result.affected).toEqual([{ citation_index: 2, says_now: "THERM-46: Display precision; status In Progress; due 2026-10-15", owner: "Tobias Lund" }]);
     expect(validatePersonImpactCardV1(rendered.result)).toEqual(rendered.result);
   });
 
@@ -270,8 +287,10 @@ describe("impact card renderer", () => {
     const rendered = await run.render();
     expect(run.trace).toEqual(["context:E1,E2,E3,E4,E6,E8,E7,E5"]);
     expect(rendered).toMatchObject({ outcome: "partial", fallbacks: 0, result: { status: "not_assessed", unconfirmed: NOTES } });
+    // Nothing research cited: the card still says what the record decided.
     const nothing = await alone({ bundle: bundle({ cited: [] }), replies: [], remaining: 0 }).render();
-    expect(nothing).toMatchObject({ cited: [], outcome: "partial", result: { status: "not_assessed", affected: [], people: [], citations: [] } });
+    expect(nothing).toMatchObject({ cited: ["E1", "E2"], outcome: "partial", result: { status: "not_assessed", affected: [], people: [], citations: ["E1", "E2"].map(citation) } });
+    expect(nothing.result.decided.map(entry => entry.citation_index)).toEqual([0, 1]);
   });
 
   // A suggested edit, in any phrasing: the card never tells anyone what to change in a tool (spec section 5).
@@ -309,6 +328,66 @@ describe("impact card renderer", () => {
       expect(run.inputs[1]!.system_prompt).toContain("never say who owns, is assigned to or is responsible for anything");
       expect(JSON.stringify(rendered.result)).not.toMatch(/Zhen Ye said|Ana Ruiz|responsible/u);
     }
+  });
+
+  // The screens look only at words the model wrote: a line may quote its record item, or the item it describes.
+  describe("a line that quotes its source", () => {
+    const CANARY = "Release clean-v1-20261014-desktop-updates-038f099 must verify owner approval of a staged meeting.";
+    const quoting = bundle({ cited: ["E1", "E2", "E3"], items: [
+      recordItem("canary", CANARY),
+      recordItem("criteria", "Update the acceptance criteria to reflect the revised twenty-metre Bluetooth range requirement. Owner: Rafael Moreno.", { kind: "action", attributes: { owner: "Rafael Moreno" } }),
+      { ...ticket("THERM-47", "THERM-47: TRACE-01 — Confirm BUG-412 requirement and fix-owner links", { status: "To Do", owner: "Zhen Ye" }), label: "THERM-47: TRACE-01 — Confirm BUG-412 requirement and fix-owner links" },
+      ticket("THERM-48", "THERM-48: rerun the six DVT test bars.", { status: "To Do" }),
+    ] });
+    const reply = (decided: readonly { id: string; text: string }[], rows: readonly Record<string, unknown>[] = []) => ({ decided, affected: rows });
+
+    it("keeps the record's own words in a decided line, the canary's \"owner approval\" and an action's \"Update the\", in one call", async () => {
+      const run = alone({ bundle: quoting, replies: [reply([
+        { id: "E1", text: CANARY },
+        { id: "E2", text: "Update the acceptance criteria to reflect the revised twenty-metre Bluetooth range requirement." },
+      ])] });
+      const rendered = await run.render();
+      expect(run.inputs).toHaveLength(1);
+      expect(rendered.result).toMatchObject({ status: "assessed", decided: [{ text: CANARY, citation_index: 0 }, { citation_index: 1 }] });
+    });
+
+    it("keeps a ticket's own title in what it says now", async () => {
+      const run = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: CANARY }], [affected("E3", "THERM-47 asks for fix-owner links.", "confirms")])] });
+      const rendered = await run.render();
+      expect(run.inputs).toHaveLength(1);
+      expect(rendered.result.affected).toEqual([{ citation_index: 1, says_now: "THERM-47 asks for fix-owner links.", relation: "confirms", owner: "Zhen Ye" }]);
+    });
+
+    it("still sends back an ownership claim no source makes, naming the line and the word", async () => {
+      for (const [row, word] of [
+        [affected("E4", "Alice owns THERM-48.", "needs_updating"), "owns"],
+        // THERM-47's title says "fix-owner links", not who owns it.
+        [affected("E3", "THERM-47's owner is Alice.", "confirms"), "owner"],
+      ] as const) {
+        const run = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: CANARY }], [row]), reply([{ id: "E1", text: CANARY }])] });
+        const rendered = await run.render();
+        expect(run.inputs).toHaveLength(2);
+        expect(run.inputs[1]!.system_prompt).toContain(`never say who owns, is assigned to or is responsible for anything; the card adds owners from item details. The line "${row.says_now}" says "${word}".`);
+        expect(JSON.stringify(rendered.result)).not.toContain("Alice");
+      }
+    });
+
+    it("never lets an item's words excuse a decided line, or a record's words a line about an item", async () => {
+      // The ticket says "fix-owner"; the decided line is the record's, and its record item says nothing of the kind.
+      const run = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: "Releases need fix-owner links." }]), reply([{ id: "E1", text: CANARY }])] });
+      await run.render();
+      expect(run.inputs).toHaveLength(2);
+      const swapped = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: CANARY }], [affected("E4", "THERM-48 needs owner approval of a staged meeting.", "needs_updating")]), reply([{ id: "E1", text: CANARY }])] });
+      await swapped.render();
+      expect(swapped.inputs).toHaveLength(2);
+    });
+
+    it("quotes a long repair line only in part", async () => {
+      const long = `Alice owns THERM-48 ${"and the six DVT test bars ".repeat(6)}`.trim();
+      const run = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: CANARY }], [affected("E4", long, "needs_updating")]), reply([{ id: "E1", text: CANARY }])] });
+      await run.render();
+      expect(run.inputs[1]!.system_prompt).toContain(`The line "${long.slice(0, 79)}…" says "owns".`);
+    });
   });
 
   it("keeps the expected phrase for a conflict and drops it for a confirmation", async () => {

@@ -19,8 +19,9 @@ import type { StructuredGenerationJsonSchema } from "../structured-generation-v1
  * summaries and each item's relation. Code keeps only items the model was
  * shown, lays the card out, builds its citations, takes owners and the people
  * to tell from item details alone, and writes what research could not
- * confirm. With no usable reply, the items research cited are listed with
- * their details and owners, not yet assessed.
+ * confirm. With no usable reply, what was decided is the record's own
+ * approved text, and the items research cited are listed with their details
+ * and owners, not yet assessed.
  */
 
 type Entry = AgenticEvidenceBundleItemV1;
@@ -38,16 +39,19 @@ const RELATIONS: readonly PersonImpactRelationV1[] = ["conflicts", "needs_updati
 /**
  * A suggested edit: an instruction, a change made in a tool, or a change something
  * should, must or needs to get. The card describes; people decide what to change.
- * A false match costs one repair, then the honest fallback. The sweep's lines
- * pass the same screen.
+ * A false match costs one repair, then the honest fallback.
  */
-export const SUGGESTED_EDIT: readonly RegExp[] = [
-  /^(?:please\s+)?(?:change|update|edit|rewrite|replace|amend|modify|set)\b/iu,
-  /\b(?:chang|updat|edit|rewrit|amend|modif)\w*\b.{0,80}?\b(?:in|on)\s+(?:jira|confluence)\b/iu,
-  /\b(?:should|must|needs?\s+to|ha(?:s|ve)\s+to|ought\s+to)\s+(?:be\s+)?(?:chang|updat|edit|set|rewrit|amend|modif)\w*/iu,
+const SUGGESTED_EDIT: readonly RegExp[] = [
+  /^(?:please\s+)?(?:change|update|edit|rewrite|replace|amend|modify|set)\b/giu,
+  /\b(?:chang|updat|edit|rewrit|amend|modif)\w*\b.{0,80}?\b(?:in|on)\s+(?:jira|confluence)\b/giu,
+  /\b(?:should|must|needs?\s+to|ha(?:s|ve)\s+to|ought\s+to)\s+(?:be\s+)?(?:chang|updat|edit|set|rewrit|amend|modif)\w*/giu,
 ];
-/** A claim about who owns or is assigned something: owners come only from item details. The sweep's lines pass the same screen. */
-export const OWNERSHIP_CLAIM = /\b(?:owners?|owns|owned|owning|(?:re)?assign\w*|responsible)\b/iu;
+/** A claim about who owns or is assigned something: owners come only from item details. */
+const OWNERSHIP_CLAIM = /\b(?:owners?|owns|owned|owning|(?:re)?assign\w*|responsible)\b/giu;
+const EDIT_REASON = "write what the record decided and what each item says now, never what to change";
+const OWNERSHIP_REASON = "never say who owns, is assigned to or is responsible for anything; the card adds owners from item details";
+/** How much of an offending line a repair quotes back. */
+const REPAIR_LINE_CHARS = 80;
 const STOPPED_NOTE = "Research stopped before it finished, so other items may be affected too.";
 
 export const IMPACT_CARD_PROMPT = [
@@ -97,8 +101,59 @@ const IMPACT_CARD_SCHEMA: StructuredGenerationJsonSchema = Object.freeze({
 function bytes(value: string): number { return Buffer.byteLength(value, "utf8"); }
 const line = (value: unknown, maximum: number): string => stripEvidenceIds(cleanLine(value, maximum));
 
-/** A usable reply, normalized. A line telling someone to edit a tool is sent back for one repair. */
-function parseCard(value: unknown): Draft {
+/** A screen a line fails: an edit or an ownership claim, and the words of the line it matched. */
+export interface ImpactLineScreenFailureV1 { readonly screen: "edit" | "ownership"; readonly words: string }
+/** Text as a quote is compared: NFC, lower case, whitespace runs as one space, trimmed. */
+const folded = (value: string): string => value.normalize("NFC").toLowerCase().replace(/\s+/gu, " ").trim();
+/** A quote without the punctuation around it. */
+const bare = (value: string): string => value.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+/**
+ * Whether one of `sources` quotes the words of `text` from `start` to `end`: the words the match touches, together with the word
+ * before or the word after them, appear in it whatever their case ("verify owner" or "owner approval"). A match that opens the
+ * line must open a sentence of the source, with the word after it, so a record's "Mara will update the PRD" never lets a line
+ * instruct "Update the PRD".
+ */
+function quoted(text: string, start: number, end: number, sources: readonly string[]): boolean {
+  const space = (at: number) => /\s/u.test(text.charAt(at));
+  const wordStart = (at: number) => { let index = at; while (index > 0 && !space(index - 1)) index -= 1; return index; };
+  const wordEnd = (at: number) => { let index = at; while (index < text.length && !space(index)) index += 1; return index; };
+  const from = wordStart(start);
+  const to = wordEnd(end);
+  let before = from;
+  while (before > 0 && space(before - 1)) before -= 1;
+  let after = to;
+  while (after < text.length && space(after)) after += 1;
+  const quote = (left: number, right: number) => bare(folded(text.slice(left, right)));
+  const withNext = quote(from, after < text.length ? wordEnd(after) : to);
+  if (before === 0) {
+    return withNext.length > 0 && sources.some(source => source.normalize("NFC").toLowerCase().split(/[\n.!?;:•]+/u).some(sentence => bare(folded(sentence)).startsWith(withNext)));
+  }
+  const quotes = [quote(wordStart(before), to), ...(after < text.length ? [withNext] : [])].filter(value => value.length > 0);
+  return sources.some(source => { const words = folded(source); return quotes.some(value => words.includes(value)); });
+}
+/**
+ * The screen a line a model wrote fails, or null. A match the line quotes from `sources` (the record's own words, or the title
+ * and text of the item the line describes) is excused: the record may say "owner approval" and a ticket "fix-owner links".
+ * A new ownership claim or suggested edit still fails. The sweep's lines pass the same screen.
+ */
+export function screenImpactLineV1(text: string, sources: readonly string[]): ImpactLineScreenFailureV1 | null {
+  const unquoted = (rule: RegExp) => [...text.matchAll(rule)].find(match => match[0].length > 0 && !quoted(text, match.index, match.index + match[0].length, sources));
+  for (const rule of SUGGESTED_EDIT) {
+    const match = unquoted(rule);
+    if (match !== undefined) return Object.freeze({ screen: "edit" as const, words: match[0] });
+  }
+  const match = unquoted(OWNERSHIP_CLAIM);
+  return match === undefined ? null : Object.freeze({ screen: "ownership" as const, words: match[0] });
+}
+
+/** Where a decided line or an affected item's lines may quote from: the record item's text, or the item's title and text. */
+type QuoteSources = (id: string, part: "decided" | "affected") => readonly string[];
+
+/**
+ * A usable reply, normalized. A line telling someone to edit a tool, or saying who owns something, that it does not quote from
+ * its sources is sent back for one repair, which names the line and the words.
+ */
+function parseCard(value: unknown, sourcesOf: QuoteSources): Draft {
   const body = object(value);
   if (body === null || !Array.isArray(body.decided) || !Array.isArray(body.affected)) throw new AgenticAskOutputErrorV1("the reply must be a JSON object with \"decided\" and \"affected\" arrays");
   const decided = body.decided.slice(0, LIMITS.decided).flatMap((raw: unknown) => {
@@ -115,9 +170,17 @@ function parseCard(value: unknown): Draft {
     return [{ id, says_now: saysNow, relation, ...(expected.length > 0 ? { expected } : {}), ...(isPersonImpactCardDateV1(date) && milestone.length > 0 ? { date_at_risk: { date, milestone } } : {}) }];
   });
   // The free text a model writes: decided lines, what items say now, what the record expects of them, milestones. The relation is a closed value.
-  const lines = [...decided.map(entry => entry.text), ...affected.flatMap(entry => [entry.says_now, ...(entry.expected === undefined ? [] : [entry.expected]), ...(entry.date_at_risk === undefined ? [] : [entry.date_at_risk.milestone])])];
-  if (lines.some(text => SUGGESTED_EDIT.some(rule => rule.test(text)))) throw new AgenticAskOutputErrorV1("write what the record decided and what each item says now, never what to change");
-  if (lines.some(text => OWNERSHIP_CLAIM.test(text))) throw new AgenticAskOutputErrorV1("never say who owns, is assigned to or is responsible for anything; the card adds owners from item details");
+  // A decided line may quote its record item's text; an affected item's lines may quote the item's title and text.
+  const lines = [
+    ...decided.map(entry => ({ text: entry.text, sources: sourcesOf(entry.id, "decided") })),
+    ...affected.flatMap(entry => [entry.says_now, ...(entry.expected === undefined ? [] : [entry.expected]), ...(entry.date_at_risk === undefined ? [] : [entry.date_at_risk.milestone])]
+      .map(text => ({ text, sources: sourcesOf(entry.id, "affected") }))),
+  ];
+  const failures = lines.flatMap(({ text, sources }) => { const failure = screenImpactLineV1(text, sources); return failure === null ? [] : [{ ...failure, text }]; });
+  const failure = failures.find(entry => entry.screen === "edit") ?? failures[0];
+  if (failure !== undefined) {
+    throw new AgenticAskOutputErrorV1(`${failure.screen === "edit" ? EDIT_REASON : OWNERSHIP_REASON}. The line "${cleanLine(failure.text, REPAIR_LINE_CHARS)}" says "${failure.words}".`);
+  }
   return { decided, affected };
 }
 
@@ -144,6 +207,17 @@ export function statesImpactDateV1(item: ImpactItemFactsV1, date: string): boole
 export function detailsOfImpactItemV1(item: ImpactItemFactsV1): string {
   const { status, due_at: due } = item.attributes ?? {};
   return cleanLine([item.label, ...(status === undefined ? [] : [`status ${status}`]), ...(due === undefined ? [] : [`due ${due}`])].join("; "), LIMITS.line_chars);
+}
+/**
+ * A record item as a decided line with no model: its approved text on one line, without the " Owner: <name>." the record adds to
+ * an action with a confirmed owner (owners come from item details). Rationale, and a decision still proposed or unresolved, make none.
+ */
+function approvedLineOf(item: Entry["item"]): string {
+  if (item.kind !== "decision" && item.kind !== "action") return "";
+  if (item.kind === "decision" && item.attributes?.status !== undefined && item.attributes.status !== "decided") return "";
+  const text = item.text ?? "";
+  const owned = item.kind === "action" && item.attributes?.owner !== undefined ? ` Owner: ${item.attributes.owner}.` : undefined;
+  return cleanLine(owned !== undefined && text.endsWith(owned) ? text.slice(0, -owned.length) : text, LIMITS.line_chars);
 }
 /** Couldn't confirm: code-observed retrieval limits, never the planner's invented needs. */
 function unconfirmedOf(bundle: AgenticEvidenceBundleV1): string[] {
@@ -188,8 +262,15 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
       ...recent(others.filter(entry => !entry.full && entry.item.text !== undefined)), ...recent(others.filter(entry => entry.item.text === undefined)),
     ])].filter(fits);
     input.on_context?.(Object.freeze([...record, ...items].map(entry => entry.short)));
+    const shown = new Map([...record, ...items].map(entry => [entry.short, entry]));
+    // A decided line quotes its record item's text; an affected item's lines quote the item's title and text. An id the model was not shown quotes nothing.
+    const sourcesOf: QuoteSources = (id, part) => {
+      const entry = shown.get(id);
+      if (entry === undefined || inRecord(entry) !== (part === "decided")) return [];
+      return [...(part === "decided" ? [] : [entry.item.label]), ...(entry.item.text === undefined ? [] : [entry.item.text])];
+    };
 
-    const written = record.length === 0 ? null : await callRendererModelV1(input, RENDER_CALL, IMPACT_CARD_PROMPT, { task, record: record.map(view), items: items.map(view) }, IMPACT_CARD_SCHEMA, parseCard);
+    const written = record.length === 0 ? null : await callRendererModelV1(input, RENDER_CALL, IMPACT_CARD_PROMPT, { task, record: record.map(view), items: items.map(view) }, IMPACT_CARD_SCHEMA, value => parseCard(value, sourcesOf));
     const draft = written?.value ?? null;
 
     // ---- layout (code, not model) ---------------------------------------
@@ -198,7 +279,6 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
       if (!used.includes(entry)) used.push(entry);
       return used.indexOf(entry);
     };
-    const shown = new Map([...record, ...items].map(entry => [entry.short, entry]));
     let decided: PersonImpactCardV1["decided"] = [];
     let rows: { readonly entry: Entry; readonly says_now: string; readonly relation?: PersonImpactRelationV1; readonly expected?: string; readonly date_at_risk?: PersonImpactAffectedV1["date_at_risk"] }[];
     if (draft !== null) {
@@ -213,7 +293,9 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
         return { entry, ...value, ...(risk !== undefined && statesImpactDateV1(entry.item, risk.date) ? { date_at_risk: risk } : {}) };
       });
     } else {
-      // Possibly affected, not yet assessed: what research cited, with its details.
+      // What was decided needs no model: the record's own approved words. Then possibly affected, not yet assessed: what research cited, with its details.
+      decided = bundle.items.filter(inRecord).flatMap(entry => { const text = approvedLineOf(entry.item); return text.length === 0 ? [] : [{ entry, text }]; })
+        .slice(0, LIMITS.decided).map(({ entry, text }) => ({ text, citation_index: cite(entry) }));
       rows = others.filter(entry => entry.cited_by_plan).slice(0, LIMITS.affected).map(entry => ({ entry, says_now: detailsOfImpactItemV1(entry.item) }));
     }
     const affected = rows.map(({ entry, ...row }) => {
