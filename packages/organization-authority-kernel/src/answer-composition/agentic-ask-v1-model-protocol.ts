@@ -294,7 +294,7 @@ export const STEP_PROMPT = [
   "list, args {\"source\": \"<source from source_catalog>\", optional \"kind\", \"status\", \"owner\", \"channel\", \"since\", \"until\"}",
   "  Purpose: see what exists in one source without keywords.",
   "  When to use: broad questions (an overview, what happened this week, what is still open); questions about a person (what someone owns or is doing: list meeting actions with their owner); when searches keep missing; to be sure you have every item of one kind, such as every action.",
-  "  Returns: up to 25 items per call with id, title and date, plus owner, due date and status for meeting actions. Bodies, when available, appear in seen or opened. Open metadata-only items you need.",
+  "  Returns: one page of items per call, with id, title and date, plus owner, due date and status for meeting actions. Bodies, when available, appear in seen or opened. Open metadata-only items you need.",
   "  Limits: one source per call; call again with the same args for the next page. kind (meetings): decision, action or rationale. owner (meeting actions): a person's name; names are not searchable text, so use this to find someone's actions. status (meeting actions): open or done, applied only where items record a status; approved actions usually record owner and due date but not completion. A source with requires_channel needs \"channel\", such as \"hw-dvt\". since and until take a date (2026-09-21) or an age (7d, 2w); the source catalog declares any default_since_days.",
   "  Related: open reads items; search is faster when you have good keywords.",
   "  Examples: {\"source\": \"meetings\", \"kind\": \"action\"}, {\"source\": \"meetings\", \"owner\": \"Jules\"}, {\"source\": \"documents\"}",

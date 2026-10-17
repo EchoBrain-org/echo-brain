@@ -501,7 +501,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const more = inventoryMore(currentState);
       if (currentState.unfiltered && currentState.available && !more && !currentState.truncated && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
       if (!before.fetched || before.shown !== currentState.shown || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: currentState.available && !more && !currentState.truncated });
-      const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...(page.length === 0 ? ["nothing more to list"] : []), ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : [])];
+      // An empty page is never "nothing more" while pages remain: a filter applied after each page can empty one. A repeat
+      // of an inventory read to its end makes no desk call and no progress, and says so.
+      const emptyNote = page.length > 0 ? [] : more ? ["this page was empty (for example because of a date filter); more pages remain"]
+        : result === undefined ? ["already listed in full; nothing more to list"] : ["nothing more to list"];
+      const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...emptyNote, ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : [])];
       return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => describe(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
     };
     return admit === undefined ? apply() : admit(apply);

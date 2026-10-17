@@ -78,3 +78,32 @@ describe("research loop: finishing with nothing found", () => {
     expect(view.stop).toEqual({ reason: "finished", completed: true });
   });
 });
+
+describe("research loop: list", () => {
+  const approved = record("display", "Approved: the display shows two decimals.");
+
+  it("says an empty page with more to read was empty, never that nothing more is left", async () => {
+    // A date filter applied after each newest-first page can leave a page empty while older pages remain.
+    const list = vi.fn(async (input: EvidenceDeskListInputV2) => result([], input.cursor === undefined ? { next_cursor: "page-2" } : {}));
+    const h = harness([
+      reads("open", [{ tool: "list", args: { source: "tickets", since: "2026-10-13" } }]),
+      reads("open", [{ tool: "list", args: { source: "tickets", since: "2026-10-13" } }]),
+    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(h.prompt(1).last_results).toEqual([expect.objectContaining({ tool: "list", items: [], more: true, note: "this page was empty (for example because of a date filter); more pages remain" })]);
+    expect(view.rounds[1]!.actions[0]!.result).toMatchObject({ items: [], more: false, note: "nothing more to list" });
+  });
+
+  it("answers a repeat list of an inventory read to its end without a desk call or progress", async () => {
+    const action = record("action", "Mara will publish the dashboard.", { kind: "action", attributes: { owner: "Mara Quinn" } });
+    const list = vi.fn(async () => result([action]));
+    const again = reads("open", [{ tool: "list", args: { source: "meetings" } }]);
+    const h = harness([again, again, again, affects("not_found")], { openCitation: async () => result([approved]), list });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(h.prompt(2).last_results).toEqual([expect.objectContaining({ tool: "list", items: [], more: false, note: "already listed in full; nothing more to list" })]);
+    // Two repeat lists add nothing, so research stops before a fourth step.
+    expect(h.generate).toHaveBeenCalledTimes(3);
+    expect(view.stop).toEqual({ reason: "no_progress", completed: false });
+  });
+});
