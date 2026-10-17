@@ -53,7 +53,8 @@ describe('LangSmith projection of the shared observer', () => {
         await observeCoreRuntimeV1('evidence_search', async () => {
           observeCoreRuntimeDiagnosticV1({ kind: 'provider_query', provider: 'jira', operation: 'search', query: id === 1 ? 'text ~ "DVT"' : 'key = "BUG-412"', max_results: 5 });
         });
-        observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: id, round: 1, tool: 'search', result: { items: [], query: id === 1 ? 'DVT' : 'BUG-412' } });
+        // The research loop's compact read result, as the next step's last_results shows it: ids only, details live in seen.
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: id, round: 1, tool: 'search', result: { tool: 'search', args: { query: id === 1 ? 'DVT' : 'BUG-412' }, results: id === 1 ? ['E1', 'E2'] : [] } });
       })));
       return 'unchanged answer';
     }), observer.scope);
@@ -64,7 +65,8 @@ describe('LangSmith projection of the shared observer', () => {
     expect(root.extra?.metadata).toMatchObject({ complete: true, release_sha: 'a'.repeat(40) });
     const searches = runs.filter(run => run.run_type === 'tool');
     expect(searches).toHaveLength(2);
-    for (const search of searches) expect(search.outputs?.query).toBe(search.inputs.query);
+    // A tool run's outputs are exactly what the planner saw of that read, and nothing the next step's seen holds.
+    for (const search of searches) expect(search.outputs).toEqual({ tool: 'search', args: search.inputs, results: search.inputs.query === 'DVT' ? ['E1', 'E2'] : [] });
     // LangSmith keeps an event's name, time and kwargs only: the payload is under kwargs.
     expect(searches.find(search => search.inputs.query === 'BUG-412')?.events).toEqual([
       { name: 'jira.search', time: expect.any(String), kwargs: { query: 'key = "BUG-412"', max_results: 5, echo_span_id: expect.any(String) } },
@@ -114,7 +116,7 @@ describe('LangSmith projection of the shared observer', () => {
         });
         await withCoreRuntimeDiagnosticToolV1({ tool_call_id: 1, round: 1 }, async () => {
           observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', tool_call_id: 1, round: 1, tool: 'search', args: { query: 'DVT' } });
-          observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: 1, round: 1, tool: 'search', result: { items: [] } });
+          observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: 1, round: 1, tool: 'search', result: { tool: 'search', args: { query: 'DVT' }, results: [] } });
         });
       });
       await stage('release', 'research_release', { outcome: 'answered' }, () => fence({ purpose: 'before_audit' }, new AuthorityOperationError('unavailable', 'private Jira outage')));
@@ -238,7 +240,7 @@ describe('LangSmith projection of the shared observer', () => {
     await observeCoreRuntimeV1('research_run', async () => {
       now += 101;
       observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', tool_call_id: 1, round: 1, tool: 'finish', args: {} });
-      observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: 1, round: 1, tool: 'finish', result: { accepted: true } });
+      observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: 1, round: 1, tool: 'finish', result: { tool: 'finish' } });
     }, observer.scope);
     await observeCoreRuntimeV1('research_run', async () => 42, observer.scope);
     await observer.flush();

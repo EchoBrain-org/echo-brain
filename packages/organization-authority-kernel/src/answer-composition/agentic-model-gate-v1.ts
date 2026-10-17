@@ -10,8 +10,7 @@ import {
 } from "./structured-generation-v1.js";
 import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, repairInstruction } from "./agentic-ask-v1-model-protocol.js";
-import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
-import { coreRuntimeModelRoutingV1 } from '../shared/core-runtime-diagnostics-v1.js';
+import { coreRuntimeDiagnosticErrorKindV1, coreRuntimeModelRoutingV1 } from '../shared/core-runtime-diagnostics-v1.js';
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import { AuthorityOperationError } from '../domain/errors.js';
 

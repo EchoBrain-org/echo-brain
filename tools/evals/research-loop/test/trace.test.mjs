@@ -9,7 +9,8 @@ const captureId = "cap_00000000-0000-4000-8000-000000000001";
 const projectId = "prj_00000000-0000-4000-8000-000000000002";
 const outDir = () => mkdtempSync(join(tmpdir(), "echo-private-research-trace-"));
 const read = (out, file) => JSON.parse(readFileSync(join(out, file), "utf8"));
-const prompt = { last_results: [{ tool: "open", id: "E1", opened: ["E1"], results: [{ id: "E2", title: "Fixture readiness" }] }], opened: [{ id: "E1", text: "Gate\nReadiness depends on fixtures." }] };
+// The research loop's compact last_results: ids only; details live in opened and seen.
+const prompt = { opened: [{ id: "E1", text: "Gate\nReadiness depends on fixtures." }], seen: [{ id: "E2", title: "Fixture readiness" }], last_results: [{ tool: "open", args: { id: "E1" }, opened: ["E1"], items: ["E2"] }] };
 const trace = () => ({ schema_version: 1, kind: "echo-agentic-research-trace-v1", complete: true, dropped_events: 0, events: [
   { sequence: 1, kind: "tool_request", tool_call_id: 1, round: 1, tool: "open", args: { id: "E1" } },
   { sequence: 2, kind: "tool_response", tool_call_id: 1, round: 1, tool: "open", result: prompt.last_results[0] },
