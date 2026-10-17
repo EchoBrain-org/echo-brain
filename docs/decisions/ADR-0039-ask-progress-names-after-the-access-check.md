@@ -125,8 +125,11 @@ record and holds:
   which also counts the client and the network);
 - the run's searched and read rows, merged.
 
-Cancellation, the deadline, a refused check or any other failure sends no
-receipt and no further event. Desktop clients remove the names already shown.
+A cancellation (the client disconnected) sends nothing further. The
+deadline, a refused check or any other failure sends no further progress
+event and no receipt: only the one terminal `error` event follows, with the
+status and body the JSON response would have had. Desktop clients remove
+the names already shown.
 
 **Audit.** Every named item was already audited when the evidence desk
 released it, before any of its bytes left the Authority. The request's one

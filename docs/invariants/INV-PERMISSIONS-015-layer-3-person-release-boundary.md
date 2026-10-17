@@ -127,8 +127,11 @@ check.
 
 Progress events never carry notes, needs, plans, model-written or provider
 queries, bodies, excerpts, scratchpad or desk ids, round numbers, or counts
-that include unreadable items. Cancellation, the deadline, a refused check
-or any failure sends no further event and no receipt. The request's audit
+that include unreadable items. A cancellation (the client disconnected)
+sends nothing further. The deadline, a refused check or any other failure
+sends no further progress event and no receipt: only the one terminal
+`error` event follows, with the status and body the JSON response would
+have had. The request's audit
 record, when one is written (released, cancelled or timed out), lists the
 named items as citation digests, never labels.
 
