@@ -206,6 +206,9 @@ button.marker:hover { background: rgba(240, 236, 230, 0.18); }
 .asking i { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); animation: pulse 1.2s infinite ease-in-out; }
 .asking i:nth-child(2) { animation-delay: 0.15s; } .asking i:nth-child(3) { animation-delay: 0.3s; }
 @keyframes pulse { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+.pane-actions { display: flex; flex-shrink: 0; align-items: center; gap: 2px; }
+/* The decision, action or rationale an answer or a name cites, lit in its meeting. */
+.record-item.on { background: var(--accent-soft); }
 .reader { width: var(--ask-width); max-width: calc(100% - 48px); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
 .reader h1 { margin: 0; font-size: 24px; font-weight: 650; line-height: 1.25; }
 .reader-title .notice { font-size: 13.5px; }

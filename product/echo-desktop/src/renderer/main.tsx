@@ -23,7 +23,7 @@ import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
-  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, projectSettingsModal, readUpdate, refreshStatus, retryStart,
+  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, paneTarget, projectSettingsModal, readUpdate, refreshStatus, retryStart,
   sheetShown, shownItem, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore,
   WARNINGS, windowState, windowTakesDrop, type State,
 } from './store.js';
@@ -175,7 +175,7 @@ function App() {
   const covering = state.reader !== null || overlay;
   const backLabel = covered ? null : (state.ask && covering) || (overlay && (state.reader !== null || over > 1)) ? 'Back'
     : state.ask || covering ? pageName ?? 'Home' : pageName ? 'Home' : null;
-  const pane = !covered && state.ask !== null && state.sources?.open != null;
+  const pane = !covered && paneTarget(state) !== null;
   // A project change not shown where it was asked for shows at the top of the page.
   const banner = state.change && !state.concealed && !changeShownInPlace(state) ? state.change : null;
   const sheet = state.sheet;

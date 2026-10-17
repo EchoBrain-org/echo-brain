@@ -2,11 +2,12 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, CreatedProject, DocumentSummary,
-  Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
+  Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools,
+  CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonOpenItemV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
 
@@ -387,16 +388,48 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
     ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }) };
 }
 
+/** The Authority's open refs (ADR-0024), by kind: each names exactly one item. */
+const OPEN_REF = /^(imported_meeting:cap_[a-f0-9]{64}|note:ctx_[0-9a-f]{64}|document:doc_[0-9a-f]{64}|meeting:sha256:[a-f0-9]{64}|transcript:sha256:[a-f0-9]{64})$/;
+
+/** A citation's open ref, when it has one: absent, or one of the Authority's own shapes. */
+function openRef(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !OPEN_REF.test(value)) throw new ViewError();
+  return value;
+}
+
+/**
+ * An original's passage, by what its ref opens: a transcript's opens its
+ * meeting, any other its note, document or imported meeting. A document's id
+ * opens it when no ref came. As the contract has it, a document's passage
+ * names its own document and any other passage never names a document or a
+ * meeting; anything else is refused.
+ */
+function originalSource(citation: Json, label: string, ref: string | undefined): AnswerSource {
+  const passage = sourceRef(citation);
+  const document = passage.document_id;
+  if (ref !== undefined && (document === undefined ? /^(document|meeting):/.test(ref) : ref !== `document:${document}`)) throw new ViewError();
+  if (ref?.startsWith('transcript:')) return { kind: 'transcript', label, ref: passage, meeting: ref.slice('transcript:'.length) };
+  const opens = ref ?? (document === undefined ? undefined : `document:${document}`);
+  if (opens === undefined) return { kind: 'original', label, ref: passage };
+  const at = opens.indexOf(':');
+  return { kind: 'original', label, ref: passage, item: { kind: opens.slice(0, at) as ItemRef['kind'], id: opens.slice(at + 1) } };
+}
+
 function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = false): AnswerSource {
   const item = object(raw);
   const citation = object(item.citation);
   const label = text(item.label);
+  const ref = openRef(item.ref);
   if (citation.kind === 'approved_record') {
     const record = { record_sha256: citation.record_sha256, policy_id: citation.policy_id };
-    if (!isRecordRef(record)) throw new ViewError();
-    return { kind: 'record', label: label || fallback, record };
+    if (!isRecordRef(record) || typeof citation.atom_id !== 'string' || !SHA256.test(citation.atom_id) ||
+        (ref !== undefined && ref !== `meeting:${record.record_sha256}`)) throw new ViewError();
+    return { kind: 'record', label: label || fallback, record, atom_id: citation.atom_id };
   }
-  if (citation.kind === 'source_revision') return { kind: 'original', label: label || fallback, ref: sourceRef(citation) };
+  if (citation.kind === 'source_revision') return originalSource(citation, label || fallback, ref);
+  // Live evidence has no ref: it opens in its own app.
+  if (ref !== undefined) throw new ViewError();
   const kind = citation.kind === 'slack_message' ? 'slack'
     : tickets && item.kind === 'ticket' && citation.kind === 'ticket' ? 'ticket'
     : pages && item.kind === 'page' && citation.kind === 'page' ? 'page' : null;
@@ -492,11 +525,19 @@ function isoTime(value: unknown): string | undefined {
 }
 
 /**
+ * An approved item's id as the Authority's citations carry it: the digest of
+ * its record and its signal's id, never the signal id itself.
+ */
+export function atomId(recordSha256: string, signalId: string): string {
+  return canonicalSha256({ kind: 'echo-organization-record-atom', record_hash: recordSha256, signal_id: signalId });
+}
+
+/**
  * One section of the approved brief. Every item must be of the section's kind,
  * with its own id and some text, or the whole record is refused. The first 32
  * show, each with its first three distinct excerpts.
  */
-function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale', owners: ReadonlyMap<string, string> = new Map()): RecordSection {
+function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale', record: string, owners: ReadonlyMap<string, string> = new Map()): RecordSection {
   const ids = new Set<string>();
   const items: RecordItem[] = [];
   const entries = list(raw);
@@ -519,7 +560,7 @@ function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale', 
     }
     const status = kind === 'decision' && (item.status === 'proposed' || item.status === 'unresolved') ? item.status : undefined;
     const owner = kind === 'action' ? owners.get(item.id) : undefined;
-    items.push({ text: itemText, ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), excerpts });
+    items.push({ text: itemText, ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), excerpts, atom_id: atomId(record, item.id) });
   }
   return { items, more: entries.length > MAX_RECORD_ITEMS };
 }
@@ -539,7 +580,8 @@ function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
 /**
  * The one approved record asked for, as `person records --record-sha256`
  * prints it: only an approved event under the policy the answer cited. Only
- * what the pane shows is copied; participants' identities stay behind.
+ * what the pane shows is copied, and each item's atom id, the digest its
+ * citations carry; participants' identities and signal ids stay behind.
  */
 export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
   const root = object(raw);
@@ -561,9 +603,10 @@ export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
   if (event.kind !== 'approved' || event.policy_id !== asked.policy_id) throw new ViewError();
   const brief = object(object(object(event.approved_snapshot).approved_payload).brief);
   const meeting = object(brief.meeting);
-  const decisions = recordSection(brief.decisions, 'decision');
-  const actions = recordSection(brief.actions, 'action', confirmedOwners(body.human_act_resolution_ref));
-  const rationales = recordSection(brief.rationales, 'rationale');
+  // Each item carries its atom id, so the pane can light the ones an answer cites.
+  const decisions = recordSection(brief.decisions, 'decision', asked.record_sha256);
+  const actions = recordSection(brief.actions, 'action', asked.record_sha256, confirmedOwners(body.human_act_resolution_ref));
+  const rationales = recordSection(brief.rationales, 'rationale', asked.record_sha256);
 
   const participants: string[] = [];
   let participantsMore = false;

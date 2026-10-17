@@ -205,7 +205,11 @@ export interface RecordRef {
   readonly policy_id: RecordPolicy;
 }
 
-/** What an answer is based on: an approved record, an original, or live evidence. */
+/**
+ * What an answer is based on, or an item Ask named while it worked: an
+ * approved record's item, an original's passage, a transcript's passage, or
+ * live evidence. Each kind opens through one opener (renderer/openers.ts).
+ */
 export interface ExternalAnswerSource {
   readonly kind: 'slack' | 'ticket' | 'page';
   readonly tool_id: string;
@@ -213,8 +217,12 @@ export interface ExternalAnswerSource {
   readonly permalink: string;
 }
 export type AnswerSource =
-  | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef }
-  | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef }
+  /** `atom_id`: the decision, action or rationale cited, as its record's items carry it. */
+  | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef; readonly atom_id: string }
+  /** `item`: the note, document or imported meeting it is a passage of, from the Authority's own ref, when it sent one. */
+  | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef; readonly item?: ItemRef }
+  /** A shared transcript's passage. It opens as its meeting (`meeting`, the record digest): there is no transcript reader. */
+  | { readonly kind: 'transcript'; readonly label: string; readonly ref: SourceRef; readonly meeting: string }
   | ExternalAnswerSource;
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
@@ -264,6 +272,8 @@ export interface RecordItem {
    * parts `from` to `to` of `count`, and the next page's first part goes on.
    */
   readonly parts?: { readonly from: number; readonly to: number; readonly count: number };
+  /** The item's id as an answer cites it (a digest, never its text): only on a record read for Ask's side panel. */
+  readonly atom_id?: string;
 }
 
 /** At most 32 items; `more` says some were left out. */
