@@ -1,7 +1,8 @@
-// An Ask on the host (ADR-0039): the client command it runs, and the reader
-// of the progress lines that command prints while the Ask works. Kept apart
-// from host.ts so the whole path, Authority to page, is tested as it runs.
-import type { AskProgressNotice, AskScope, AskStep, Expect } from '../shared/protocol.js';
+// An Ask on the host (ADR-0039): the client commands it runs (the Ask, and
+// the reads of what it cites), and the reader of the progress lines the Ask
+// prints while it works. Kept apart from host.ts so the whole path, Authority
+// to page, is tested as it runs.
+import type { AskProgressNotice, AskScope, AskStep, Expect, RecordRef, SourceRef } from '../shared/protocol.js';
 import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
 
@@ -22,6 +23,22 @@ export function askStreams(scope: AskScope): boolean {
 export function askArgv(text: string, scope: AskScope): string[] {
   return ['ask', `--question=${text}`, ...(askStreams(scope) ? ['--live', '--progress'] : []),
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : scope.kind === 'mine' ? ['--mine'] : [])];
+}
+
+/** The client command that reads a cited meeting's approved record, for the pane to light the cited items. */
+export function askRecordArgv(record: RecordRef): string[] {
+  return ['records', `--record-sha256=${record.record_sha256}`];
+}
+
+/**
+ * The client command that reads one cited passage of an original, where it
+ * was cited: in the project asked, or else under all you may read. What you
+ * added is a part of that, so a mine answer's sources read there.
+ */
+export function askSourceArgv(ref: SourceRef, scope: AskScope): string[] {
+  return ['ask-source', `--source-id=${ref.source_id}`, `--revision-id=${ref.revision_id}`, `--source-sha256=${ref.source_sha256}`,
+    `--representation-sha256=${ref.representation_sha256}`, `--anchor-sha256=${ref.anchor_sha256}`, ...(ref.document_id ? [`--document-id=${ref.document_id}`] : []),
+    ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : [])];
 }
 
 /**

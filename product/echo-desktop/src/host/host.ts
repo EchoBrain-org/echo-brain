@@ -7,11 +7,11 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { askArgv, askProgressLines, askStreams } from './ask.js';
+import { askArgv, askProgressLines, askRecordArgv, askSourceArgv, askStreams } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
   abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
@@ -335,14 +335,6 @@ function audienceArgs(audience: Audience | undefined, projectIds: unknown): stri
   }
 }
 
-/**
- * Where a cited original is read: in the project asked, or else under all you
- * may read. What you added is a part of that, so a mine answer's sources read there.
- */
-function sourceScopeArgs(scope: AskScope): string[] {
-  return scope.kind === 'project' ? [option('project', scope.project_id)] : [];
-}
-
 /** A list's scope: what you added, or one project. Never all you may read: the app lists only these. Null for anything else. */
 function listScopeArgs(scope: ListScope | undefined): string[] | null {
   if (scope === null || typeof scope !== 'object') return null;
@@ -629,18 +621,13 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       return ok(null);
     case 'ask.source': {
       const { expect, scope, ref } = params as Params<'ask.source'>;
-      return forAccount(method, expect, [
-        'ask-source', option('source-id', ref.source_id), option('revision-id', ref.revision_id),
-        option('source-sha256', ref.source_sha256), option('representation-sha256', ref.representation_sha256),
-        option('anchor-sha256', ref.anchor_sha256), ...(ref.document_id ? [option('document-id', ref.document_id)] : []), ...sourceScopeArgs(scope),
-      ], stdout => evidenceView(lastJson(stdout)));
+      return forAccount(method, expect, askSourceArgv(ref, scope), stdout => evidenceView(lastJson(stdout)));
     }
     case 'ask.record': {
       const { expect, record } = params as Params<'ask.record'>;
       if (!isRecordRef(record)) return code('invalid_request');
       const asked = { record_sha256: record.record_sha256, policy_id: record.policy_id };
-      return forAccount(method, expect, ['records', option('record-sha256', asked.record_sha256)],
-        stdout => recordView(lastJson(stdout), asked));
+      return forAccount(method, expect, askRecordArgv(asked), stdout => recordView(lastJson(stdout), asked));
     }
     case 'search.run': {
       const { expect, query, scope } = params as Params<'search.run'>;

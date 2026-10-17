@@ -1,7 +1,7 @@
 // The host's side of Ask progress (ADR-0039): the command an Ask runs, and
 // what of its printed lines reaches the page.
 import { describe, expect, it, vi } from 'vitest';
-import { askArgv, askProgressLines, askStreams } from '../../src/host/ask.js';
+import { askArgv, askProgressLines, askRecordArgv, askSourceArgv, askStreams } from '../../src/host/ask.js';
 import type { AskProgressNotice, Expect } from '../../src/shared/protocol.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -19,6 +19,17 @@ describe('the command an Ask runs', () => {
       .toEqual(['ask', '--question=What did we agree?', '--live', '--progress', `--project=${project}`]);
     expect(askArgv('What did we agree?', { kind: 'mine' })).toEqual(['ask', '--question=What did we agree?', '--mine']);
     expect([askStreams({ kind: 'global' }), askStreams({ kind: 'project', project_id: project }), askStreams({ kind: 'mine' })]).toEqual([true, true, false]);
+  });
+
+  it('reads what it cites: a meeting by its record, a passage where it was asked', () => {
+    const project = 'prj_00000000-1111-4111-8111-111111111111';
+    expect(askRecordArgv({ record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' })).toEqual(['records', `--record-sha256=${sha('2')}`]);
+    const ref = { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha('6') };
+    const passage = ['ask-source', `--source-id=${ref.source_id}`, '--revision-id=r1', `--source-sha256=${sha('4')}`, `--representation-sha256=${sha('5')}`, `--anchor-sha256=${sha('6')}`];
+    expect(askSourceArgv(ref, { kind: 'global' })).toEqual(passage);
+    expect(askSourceArgv(ref, { kind: 'mine' })).toEqual(passage);
+    expect(askSourceArgv({ ...ref, document_id: `doc_${'a'.repeat(64)}` }, { kind: 'project', project_id: project }))
+      .toEqual([...passage, `--document-id=doc_${'a'.repeat(64)}`, `--project=${project}`]);
   });
 });
 
