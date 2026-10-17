@@ -39,6 +39,8 @@ import {
   type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
   type PersonAskSourceEvidenceV1,
+  type PersonAskProgressSinkV1,
+  type PersonLiveAnswerV1,
   type PersonListV1,
   type PersonMeetingTranscriptReadV1,
   type PersonOpenV1,
@@ -201,6 +203,21 @@ function invitationOutputPath(path: string): string {
 function validateAskInput(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined): void {
   validatePersonQueryText(question);
   if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+}
+
+/** A refreshed session is the same account; another sign-in is not. */
+function sameAccount(current: StoredPersonClientSessionV1, stored: StoredPersonClientSessionV1): boolean {
+  return current.authority_origin === stored.authority_origin &&
+    current.authority_id === stored.authority_id &&
+    current.session.organization_id === stored.session.organization_id &&
+    current.session.principal_id === stored.session.principal_id &&
+    current.session.membership_id === stored.session.membership_id &&
+    current.session.session_family_id === stored.session.session_family_id;
+}
+
+/** Only an Authority with no V5 route answers 404 without the route header; any other failure never falls back. */
+function withoutLiveAskRoute(error: unknown): boolean {
+  return error instanceof PersonAuthorityClientError && error.status === 404 && error.code === 'not_found' && !error.routeMatched;
 }
 
 function summary(
@@ -380,15 +397,7 @@ export class PersonClient {
   }
 
   private assertCurrentSession(stored: StoredPersonClientSessionV1): void {
-    const current = this.store.read();
-    if (
-      current.authority_origin !== stored.authority_origin ||
-      current.authority_id !== stored.authority_id ||
-      current.session.organization_id !== stored.session.organization_id ||
-      current.session.principal_id !== stored.session.principal_id ||
-      current.session.membership_id !== stored.session.membership_id ||
-      current.session.session_family_id !== stored.session.session_family_id
-    ) {
+    if (!sameAccount(this.store.read(), stored)) {
       throw new Error("Person tool operation did not match the current account");
     }
   }
@@ -694,10 +703,47 @@ export class PersonClient {
     return this.withReadSession(async (authority, token) => {
       try { return await authority.askV5(token, question, scope, signal, captureId); }
       catch (error) {
-        if (captureId !== undefined || !(error instanceof PersonAuthorityClientError) || error.status !== 404 || error.code !== 'not_found' || error.routeMatched) throw error;
+        if (captureId !== undefined || !withoutLiveAskRoute(error)) throw error;
         return authority.askV4(token, question, scope, signal);
       }
     });
+  }
+
+  /**
+   * `askWithLiveSources` with Ask progress (ADR-0039): each step event reaches
+   * `onProgress` as it arrives, and the answer carries its receipt only when
+   * the Authority streamed. An older Authority's JSON answer, and the V4
+   * fallback, come back without progress or a receipt.
+   *
+   * A step is passed on only while the account that asked is the signed-in
+   * one. Another account stops the Ask at once. A step that arrives while no
+   * session can be read (a refresh elsewhere, or a sign-out) is withheld, and
+   * the final account check decides, as it does for every read.
+   */
+  async askWithLiveProgress(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
+    onProgress: PersonAskProgressSinkV1): Promise<PersonLiveAnswerV1> {
+    validateAskInput(question, scope);
+    const stored = await this.accessSession();
+    const authority = this.authority(stored.authority_origin);
+    const token = stored.session.access_token;
+    const forward: PersonAskProgressSinkV1 = event => {
+      let current: StoredPersonClientSessionV1;
+      try { current = this.store.read(); } catch (error) {
+        if (error instanceof PersonClientSessionUnavailableError) return;
+        throw error;
+      }
+      if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
+      onProgress(event);
+    };
+    let answer: PersonLiveAnswerV1;
+    try {
+      answer = await authority.askV5WithProgress(token, question, scope, signal, forward);
+    } catch (error) {
+      if (!withoutLiveAskRoute(error)) throw error;
+      answer = Object.freeze({ result: await authority.askV4(token, question, scope, signal) });
+    }
+    this.assertCurrentSession(stored);
+    return answer;
   }
 
   /** Prepare before starting work so the capture remains readable even if the product response is lost. */
