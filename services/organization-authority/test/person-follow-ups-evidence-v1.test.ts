@@ -289,6 +289,26 @@ describe('follow-ups as an Ask source: checks and audit (ADR-0040, ADR-0038)', (
     await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 
+  it('refuses before the next model call a follow-up hidden since it was released', async () => {
+    const f = await sentFixture({ ticketOwner: 'okafor' });
+    const { desk } = askDesk(f, 'okafor');
+    expect((await search(desk, 'launch')).items).toHaveLength(1);
+    // Handed to Mina before any check: the incremental check alone refuses it.
+    await assign(f, 'ari', f.ticket.item_id, 'mina');
+    await expect(desk.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'stale_access_state' });
+  });
+
+  it("refuses at the check a project Ask's follow-up whose decision left the project, though the asker still reads it", async () => {
+    const f = await sentFixture();
+    const { desk } = askDesk(f, 'mina', { scope: { kind: 'project', project_id: f.projectA as `prj_${string}` } });
+    expect((await search(desk, 'launch')).items).toHaveLength(1);
+    await desk.revalidate({});
+    // The decision is no longer in project A, and Mina still reads it everywhere else.
+    vi.spyOn(f.records, 'projectRecords').mockReturnValue([]);
+    expect((await search(askDesk(f, 'mina').desk, 'launch')).items).toHaveLength(1);
+    await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+  });
+
   it('audits every release before it leaves, with ids and digests only', async () => {
     const f = await sentFixture();
     const { desk, audits } = askDesk(f, 'mina');
