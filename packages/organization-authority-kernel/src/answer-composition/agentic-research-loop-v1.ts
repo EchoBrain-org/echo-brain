@@ -414,6 +414,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const raw = args.id ?? "";
     const entry = entryOf(raw) ?? entryByTitle(raw);
     if (entry === undefined) return { tool: "open", args, error: "unknown id; pass an id such as E4 from your scratchpad" };
+    // Like a repeated search: an item already open whose full text was in the scratchpad the planner just read is not
+    // read again (the access check before every model call already covers it), and adds nothing new.
+    if (entry.opened && researchPromptEntries.includes(entry)) return { tool: "open", id: entry.short, note: "already open; its full text is in your scratchpad" };
     let result: EvidenceDeskResultV2;
     try { result = await raceAbort(signal, desk.open({ item: entry.item.id, neighbours: OPEN_NEIGHBOURS, signal })); }
     catch (error) {

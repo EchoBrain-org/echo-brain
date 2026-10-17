@@ -107,3 +107,37 @@ describe("research loop: list", () => {
     expect(view.stop).toEqual({ reason: "no_progress", completed: false });
   });
 });
+
+describe("research loop: open", () => {
+  it("answers an open of an item already open in full in the scratchpad without a desk call or progress (4d69130a)", async () => {
+    const therm = ticket("THERM-48", "THERM-48: firmware formats one decimal.");
+    const open = vi.fn(async () => result([therm]));
+    const reopen = reads("open", [{ tool: "open", args: { id: "E1" } }]);
+    const h = harness([reopen, reopen, affects("found")], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([therm]), open });
+    const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], {}, "report") });
+    expect(open).not.toHaveBeenCalled();
+    expect(h.prompt(0).opened).toEqual([expect.objectContaining({ id: "E1", text: therm.text })]);
+    expect(h.prompt(1).last_results).toEqual([{ tool: "open", id: "E1", note: "already open; its full text is in your scratchpad" }]);
+    // Re-opening adds nothing, so two such steps stop research.
+    expect(h.generate).toHaveBeenCalledTimes(2);
+    expect(view.stop).toEqual({ reason: "no_progress", completed: false });
+  });
+
+  it("still opens a discovered item once, then answers a repeat from the scratchpad", async () => {
+    const approved = record("display", "Approved: the display shows two decimals.");
+    const listedRow = ticket("THERM-46");
+    const body = ticket("THERM-46", "THERM-46: firmware formats one decimal.");
+    const open = vi.fn(async () => result([body]));
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "display decimals" } }]),
+      reads("open", [{ tool: "open", args: { id: "E2" } }]),
+      reads("open", [{ tool: "open", args: { id: "E2" } }]),
+      step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
+    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), search: async () => result([listedRow]), open });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(h.prompt(2).last_results).toEqual([expect.objectContaining({ tool: "open", id: "E2", opened: ["E2"] })]);
+    expect(h.prompt(3).last_results).toEqual([{ tool: "open", id: "E2", note: "already open; its full text is in your scratchpad" }]);
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+  });
+});
