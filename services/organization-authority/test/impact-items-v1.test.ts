@@ -348,4 +348,20 @@ describe('SQLite open items v1', () => {
     expect(f.items.forRecords(records, { states: ['open'], limit: 10 })).toEqual([]);
     expect(f.items.forRecords(records, { states: ['unsent'], limit: 0 })).toEqual([]);
   });
+
+  it('pages every item of the organization oldest first, and none of another (ADR-0040)', async () => {
+    const f = await finishedRunsFixture([['46', '47'], ['48', '49']]);
+    const org = f.owner.organization_id;
+    const all = f.items.inOrganization(org, { states: ['unsent'], limit: 10 });
+    expect(ids(all)).toEqual(ids(f.items.forRecords(f.finished.map(run => run.record_sha256!), { states: ['unsent'], limit: 10 })));
+    expect(all).toHaveLength(4);
+    const first = f.items.inOrganization(org, { states: ['unsent'], limit: 3 });
+    const last = first[first.length - 1]!;
+    const second = f.items.inOrganization(org, { states: ['unsent'], limit: 3, after: { created_at: last.created_at, item_id: last.item_id } });
+    expect(ids([...first, ...second])).toEqual(ids(all));
+    expect(f.items.inOrganization(org, { states: ['open'], limit: 10 })).toEqual([]);
+    expect(f.items.inOrganization(org, { states: [], limit: 10 })).toEqual([]);
+    expect(f.items.inOrganization(org, { states: ['unsent'], limit: 0 })).toEqual([]);
+    expect(f.items.inOrganization('org_other', { states: ['unsent'], limit: 10 })).toEqual([]);
+  });
 });

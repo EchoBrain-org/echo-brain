@@ -164,6 +164,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     const name = token(input.access_token);
     return new Map(input.record_sha256s.filter(sha => sha === recordSha256 && reads(name)).map(sha => [sha, Object.freeze({
       approval_id: f.approvalId, record_sha256: sha, title: 'Pilot planning', approved_at: '2026-10-07T09:00:00.000Z', project_ids: Object.freeze([f.projectA]) as never,
+      visibility: 'project' as const,
     })]));
   });
   const records: PersonReadableDecisionsV1 & PersonReadableDecisionProjectsV1 & Parameters<typeof createPersonTriggerRunsV1>[0]['records'] = {

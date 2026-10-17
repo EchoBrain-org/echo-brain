@@ -154,6 +154,19 @@ export class SqliteImpactItemsV1 {
       ${ORDER} LIMIT ?`).all(organizationId, membershipId, membershipId, ...(handedOn ? [membershipId] : []), JSON.stringify([...new Set(options.states)]), ...after.params, limit) as StoredItemV1[]).map(publicItem);
   }
 
+  /**
+   * Every item of the organization in these states, oldest first; `after` is the last row of the previous page. Nothing here
+   * decides who sees a row: Ask's follow-ups (ADR-0040) page through it and ask the open-items policy of each row.
+   */
+  inOrganization(organizationId: string, options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly after?: After }): readonly ImpactItemRowV1[] {
+    const limit = limitOf(options.limit);
+    if (options.states.length === 0 || limit === 0) return [];
+    const after = afterRow(options.after);
+    return (this.database.prepare(`${selectItems}
+      WHERE item.organization_id=? AND item.state IN (SELECT value FROM json_each(?)) ${after.clause}
+      ${ORDER} LIMIT ?`).all(organizationId, JSON.stringify([...new Set(options.states)]), ...after.params, limit) as StoredItemV1[]).map(publicItem);
+  }
+
   /** Unsent or open items whose approver and owner memberships are both inactive. */
   orphaned(organizationId: string, options: { readonly limit: number }): readonly ImpactItemRowV1[] {
     const limit = limitOf(options.limit);
