@@ -1,5 +1,5 @@
 import { validatePersonQueryText } from "@echo-brain/organization-api";
-import { parseAgenticListIdV1 } from "./agentic-list-evidence-v1.js";
+import { AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1 } from "./agentic-list-evidence-v1.js";
 import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.js";
 
 /**
@@ -25,6 +25,7 @@ const NOTES_CHARS = 800;
 const ARG_CHARS = 240;
 const SENTENCE_CHARS = 700;
 const NOT_FOUND_CHARS = 200;
+const SELECTION_CHARS = 120;
 
 /** A model response failed its closed, request-local protocol. */
 export class AgenticAskOutputErrorV1 extends Error {
@@ -43,7 +44,8 @@ export type StepNeed = { readonly id?: string; readonly need: string; readonly s
 export type StepPart = { readonly question: string; readonly needs: readonly StepNeed[]; readonly notes: string };
 export type Step = { readonly parts: readonly StepPart[]; readonly actions: readonly StepAction[] };
 export type AnswerSentence = { readonly text: string; readonly evidence: readonly string[] };
-export type Answer = { readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[] };
+/** `lists` (Ask, ADR-0041): the lists whose members code names, present only when the answer was parsed with lists. */
+export type Answer = { readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[]; readonly lists?: readonly AgenticAnswerListUseV1[] };
 
 /** Each tool's first argument is required; finish has no arguments. */
 const ACTION_ARGS = {
@@ -98,8 +100,18 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
 
 export const stepSchema = createStepSchema(['meetings', 'documents', 'slack']);
 
+/** A list the answer uses (ADR-0041): its id, and optionally the members with one owner or status. Code names them. */
+const listUse = {
+  type: "object", additionalProperties: false, required: ["id"], properties: {
+    id: { type: "string", maxLength: 8 },
+    where: { type: "object", additionalProperties: false, required: ["field", "value"], properties: { field: closedString(AGENTIC_LIST_SELECTION_FIELDS_V1), value: { type: "string", maxLength: SELECTION_CHARS } } },
+  },
+} as const;
+
+/** Ask's answer: the lists code names first (ADR-0041), the writer's own sentences, and what it could not find. */
 export const answerSchema: StructuredGenerationJsonSchema = Object.freeze({
-  type: "object", additionalProperties: false, required: ["sentences", "not_found"], properties: {
+  type: "object", additionalProperties: false, required: ["lists", "sentences", "not_found"], properties: {
+    lists: { type: "array", maxItems: AGENTIC_LIST_WRITER_LISTS_MAX_V1, items: listUse },
     sentences: { type: "array", maxItems: AGENTIC_ASK_MAX_SENTENCES_V1, items: {
       type: "object", additionalProperties: false, required: ["text", "evidence"], properties: {
         text: { type: "string", maxLength: SENTENCE_CHARS }, evidence: ids,
@@ -236,34 +248,54 @@ export function parseStep(value: unknown, options: { readonly lists?: boolean } 
   return Object.freeze({ parts: Object.freeze(parts), actions: Object.freeze(actions) });
 }
 
-/** One or more evidence ids: "E4", "E4, E7", "e4 and E5", "E2, and E4". */
-const EVIDENCE_ID_LIST = String.raw`e\d{1,4}(?:\s*(?:,\s*(?:and|&)|,|;|and|&)\s*e\d{1,4})*`;
+/** One or more evidence ids: "E4", "E4, E7", "e4 and E5", "E2, and E4"; with lists, list ids such as L1 too. */
+const evidenceIdList = (id: string) => String.raw`${id}(?:\s*(?:,\s*(?:and|&)|,|;|and|&)\s*${id})*`;
 /**
  * A bracket that only points at evidence: ids, optionally after "ids:" or "see", or the word "evidence" with or without
  * ids ("(E4)", "[E4, E7]", "(ids: E4)", "(evidence)", "(evidence: E5)", "(evidence E2, E4)"). A bracket that says
  * anything else ("(no evidence of approval)", "(THERM-48)", "(E2E tests)") is prose and stays.
  */
-const EVIDENCE_REFERENCE = new RegExp(String.raw`\s*[([]\s*(?:(?:see\s+)?evidence\b(?:\s*:?\s*${EVIDENCE_ID_LIST})?|(?:see\s+|ids?\s*:?\s*)?${EVIDENCE_ID_LIST})\s*[)\]]`, "giu");
+const evidenceReference = (id: string) => new RegExp(String.raw`\s*[([]\s*(?:(?:see\s+)?evidence\b(?:\s*:?\s*${evidenceIdList(id)})?|(?:see\s+|ids?\s*:?\s*)?${evidenceIdList(id)})\s*[)\]]`, "giu");
+const EVIDENCE_REFERENCE = evidenceReference(String.raw`e\d{1,4}`);
+/** With lists (Ask, ADR-0041), "(L1)" and "(E4, L1)" are references too. */
+const LIST_EVIDENCE_REFERENCE = evidenceReference(String.raw`[el]\d{1,4}`);
 
 /** Evidence ids belong in "evidence", not in prose; drop "(E4)", "[E4, E7]", "(evidence: E5)" and similar from sentence text. */
-export function stripEvidenceIds(text: string): string {
+export function stripEvidenceIds(text: string, lists = false): string {
   return text
-    .replace(EVIDENCE_REFERENCE, "")
+    .replace(lists ? LIST_EVIDENCE_REFERENCE : EVIDENCE_REFERENCE, "")
     .replace(/\s+([.,;:!?])/gu, "$1")
     .replace(/\s{2,}/gu, " ")
     .trim();
 }
 
-export function parseAnswer(value: unknown): Answer {
+/** A list the answer uses: "L1", {"id": "L1"} or {"id": "L1", "where": {"field": "owner", "value": "Dana Lee"}}. Null for anything else. */
+function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
+  const entry = object(raw);
+  const id = parseAgenticListIdV1(entry === null ? raw : entry.id);
+  if (id === null) return null;
+  const where = entry === null ? null : object(entry.where);
+  const field = typeof where?.field === "string" ? where.field.trim().toLowerCase() : "";
+  const selection = cleanLine(where?.value, SELECTION_CHARS);
+  if (where === null || !(AGENTIC_LIST_SELECTION_FIELDS_V1 as readonly string[]).includes(field) || selection.length === 0) return Object.freeze({ id });
+  return Object.freeze({ id, where: Object.freeze({ field: field as NonNullable<AgenticAnswerListUseV1["where"]>["field"], value: selection }) });
+}
+
+/**
+ * Ask's answer. With `lists` (ADR-0041) it also reads the lists the answer uses, each once and at most
+ * AGENTIC_LIST_WRITER_LISTS_MAX_V1, and keeps list ids such as L1 in a sentence's evidence.
+ */
+export function parseAnswer(value: unknown, options: { readonly lists?: boolean } = {}): Answer {
   const body = object(value);
   if (body === null) throw new AgenticAskOutputErrorV1("the reply was not a JSON object");
   if (!Array.isArray(body.sentences)) throw new AgenticAskOutputErrorV1(`"sentences" must be an array (got ${keysOf(body)})`);
+  const lists = options.lists === true;
   const sentences: AnswerSentence[] = [];
   for (const raw of body.sentences) {
     const entry = object(raw);
     if (entry === null) continue;
-    const text = stripEvidenceIds(cleanLine(entry.text, SENTENCE_CHARS));
-    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry.evidence) }));
+    const text = stripEvidenceIds(cleanLine(entry.text, SENTENCE_CHARS), lists);
+    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry.evidence, lists) }));
     if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) break;
   }
   const notFound: string[] = [];
@@ -272,7 +304,14 @@ export function parseAnswer(value: unknown): Answer {
     if (text.length > 0 && !notFound.includes(text)) notFound.push(text);
     if (notFound.length === AGENTIC_ASK_MAX_PARTS_V1) break;
   }
-  return Object.freeze({ sentences: Object.freeze(sentences), not_found: Object.freeze(notFound) });
+  if (!lists) return Object.freeze({ sentences: Object.freeze(sentences), not_found: Object.freeze(notFound) });
+  const uses: AgenticAnswerListUseV1[] = [];
+  for (const raw of Array.isArray(body.lists) ? body.lists : []) {
+    const use = listUseOf(raw);
+    if (use !== null && !uses.some(existing => existing.id === use.id)) uses.push(use);
+    if (uses.length === AGENTIC_LIST_WRITER_LISTS_MAX_V1) break;
+  }
+  return Object.freeze({ sentences: Object.freeze(sentences), not_found: Object.freeze(notFound), lists: Object.freeze(uses) });
 }
 
 /**
@@ -372,10 +411,13 @@ export const ANSWER_PROMPT = [
   "",
   "Write a direct answer as a list of sentences:",
   "- Lead with the direct answer, then the facts that support or qualify it, in plain words a busy reader can scan. Use a compact paragraph for a narrative answer, or checklist-style sentences when the question asks for prerequisites, conditions, or several parallel items. Usually 2 to 6 sentences; use up to 10 when the question asks several things. Never leave out something the question asks for to stay short.",
-  "- Every factual answer sentence cites the ids that support it, and only those, in \"evidence\". Never write ids such as E4 in the sentence text. Use only the evidence; never guess or add outside knowledge.",
+  "- Every factual answer sentence cites the ids that support it, and only those, in \"evidence\". Never write ids such as E4 or L1 in the sentence text. Use only the evidence and lists; never guess or add outside knowledge.",
   "- Answer only what was asked. Do not add facts about other topics, customers or projects. If the question asks about something the evidence does not cover, put that missing fact in \"not_found\"; do not substitute a related answer, and do not guess who or what the question means.",
   "- source_catalog describes source capabilities, not extra questions to answer. Do not report an unrequested discussion, document or approval as missing when the requested fact is already supported.",
-  "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If none of the evidence answers the question, return {\"sentences\":[],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
+  "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If neither the evidence nor a list answers the question, return {\"lists\":[],\"sentences\":[],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
+  "- \"lists\" holds each list research read: its id (L1, L2, ...), source, the filter it applied (filter_applied says how each requested filter applied; \"ignored\" means the list is not limited by it), complete, count, checked, read_at, cited_by_plan and its members. A member is a row: id, title, dates, status, owner and due date, never its text. When complete is true, count is exactly how many items match the filter; otherwise at least count exist. read_at is when the list was read; a source's search can lag recent edits.",
+  "- For which or how many items exist, use the list: put {\"id\": \"L1\"} in \"lists\" for all its members, or {\"id\": \"L1\", \"where\": {\"field\": \"owner\", \"value\": \"<an owner exactly as a member records it>\"}} for the members with one owner or status. Code then writes the sentence that counts and names those members, first in the answer, citing each one. Never write that count or those names yourself, and never cite some of a list's members instead of the list. Use every list with cited_by_plan true.",
+  "- A list shows which items exist and each member's title, dates, status and owner, never what an item says: what items say comes from evidence text. A sentence about what members of a list say (\"which of these mention BUG-412\") cites the list's id beside the evidence it uses; code adds how many members were checked.",
   "- Keep each fact's owner, date and status with it.",
   "- dates carries source-supplied timestamps or calendar dates by meaning (occurred, created, updated, due, received). Interpret timestamps in the request time_zone. Calendar-only dates keep their stated day. Received is capture/upload time, never proof of when the described events happened. Updated describes the current revision, not a complete activity history. Use the supplied now/today to interpret relative wording; client time is query context, not evidence that an event occurred.",
   "- date_kind gives a supplied date's meaning: created is item creation, version_created is page-version creation, occurred is the recorded event, and unspecified has no established meaning. Never call a creation date a status-change date, a retrieval date, or an as-of date for the current status. State decision or completion dates only when the evidence explicitly supports them. provenance identifies the evidence record type; a page version identifies the retrieved version, not its approval status.",
@@ -389,12 +431,12 @@ export const ANSWER_PROMPT = [
   "- Separate requirements, reported state, and evidence of completion. A checklist says what must happen; a ticket's status reports that ticket's state. Neither alone establishes that a broader gate passed or that implementation and tests did not happen. For comparisons, connect each requirement to evidence that satisfies it, contradicts it, or leaves it unknown; preserve disagreements.",
   "- For a date-specific question, only events explicitly supported on that date answer it. A meeting on another day does not establish that the asker had no meeting on the requested day. If event-date coverage is missing, say you cannot verify the requested day and put it in not_found; do not correct the asker to a different date. An explicit event date in source text may support an answer even when structured dates are absent. Do not invent dates from receipt or approval times.",
   "- Missing evidence is not evidence of absence. For example, pending gate tickets support \"The retrieved gate records do not establish approval\", not \"No implementation or tests exist\". Make an absence claim only when evidence explicitly establishes it within a stated scope. Put unsupported requested facts in not_found.",
-  "- research is observed retrieval coverage, not factual evidence: completed means the loop finished, not that all relevant information exists in these excerpts. Truncated reads, unread inventories, notices, omitted evidence, or an early stop limit absence and completeness claims. A complete released passage can still be only part of a document. Use supported facts even when research is incomplete; name only gaps needed for this question. Never cite research metadata as proof of a real-world fact.",
+  "- research is observed retrieval coverage, not factual evidence: completed means the loop finished, not that all relevant information exists in these excerpts. Truncated reads, lists that are not complete, notices, omitted evidence, or an early stop limit absence and completeness claims. A complete released passage can still be only part of a document. Use supported facts even when research is incomplete; name only gaps needed for this question. Never cite research metadata as proof of a real-world fact.",
   "- \"not_found\": short phrases for what the question asks that the evidence does not answer; [] when nothing is missing. Never list something the evidence answers. Research plans, source_catalog entries, and optional context do not create extra missing requirements.",
   "- Check every requested fact before returning JSON. If your prose says a requested date, owner, result or decision is unknown or not recorded, that fact must also appear in not_found. For example, when asked when a ticket moved to Done, a creation date and current Done status cannot answer: return not_found containing \"date the ticket moved to Done\".",
   "",
   "Reply with ONLY a JSON object in exactly this shape:",
-  "{\"sentences\":[{\"text\":\"<sentence>\",\"evidence\":[\"E1\"]}],\"not_found\":[]}",
+  "{\"lists\":[],\"sentences\":[{\"text\":\"<sentence>\",\"evidence\":[\"E1\"]}],\"not_found\":[]}",
 ].join("\n");
 
 /**

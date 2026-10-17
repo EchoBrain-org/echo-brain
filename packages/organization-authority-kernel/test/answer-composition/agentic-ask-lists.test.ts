@@ -61,6 +61,8 @@ const question = (text: string): AgenticBriefV1 => ({ goal: { kind: "question", 
 const ask = (text: string, need: string, status: "open" | "found" | "not_found", evidence: readonly string[], actions: readonly unknown[], id?: string) =>
   ({ parts: [{ question: text, needs: [{ ...(id === undefined ? {} : { id }), need, status, evidence }], notes: "" }], actions });
 const finish = { tool: "finish", args: {} } as const;
+/** The writer uses list L1: code names its members (ADR-0041). */
+const useL1 = { lists: [{ id: "L1" }], sentences: [], not_found: [] } as const;
 
 const OCT4 = "Which Confluence pages were created on October 4, 2026?";
 const OCT4_NEED = "list of Confluence pages created on 2026-10-04";
@@ -75,10 +77,11 @@ describe("Ask research: the October 4 Confluence list (trace ee2f0973)", () => {
     const h = harness([
       ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
       ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"),
+      useL1,
     ], october4Desk());
     const view = await h.research.research({ trigger: "ask", brief: question(OCT4) });
-    // Two research calls; the rows have no text, so no writer call runs yet.
-    expect(h.generate).toHaveBeenCalledTimes(2);
+    // Two research calls, then the writer, which sees the list's rows although they have no text.
+    expect(h.generate).toHaveBeenCalledTimes(3);
     expect(view.stop).toEqual({ reason: "finished", completed: true });
     expect(view.rounds.map(round => round.rejected)).toEqual([[], []]);
     expect(view.rounds.flatMap(round => round.actions.map(action => action.tool))).toEqual(["list", "finish"]);
@@ -108,6 +111,7 @@ describe("Ask research: the October 4 Confluence list (trace ee2f0973)", () => {
       ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
       ask(OCT4, OCT4_NEED, "found", MEMBERS, [finish], "N1"),
       ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"),
+      useL1,
     ], october4Desk());
     const view = await h.research.research({ trigger: "ask", brief: question(OCT4) });
     expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining('need N1 "list of Confluence pages created on 2026-10-04" is found but cites no item whose full text you have read: cite L1 for which items exist, or open the items for what they say')]);
@@ -150,6 +154,7 @@ describe("Ask research: reading a list to its end", () => {
       ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
       ask(TICKETS, TICKETS_NEED, "open", [], [LIST], "N1"),
       ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+      useL1,
     ], { live_sources: [JIRA], ticket_available: true, list });
     const view = await h.research.research({ trigger: "ask", brief: question(TICKETS) });
     expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining(
@@ -166,10 +171,11 @@ describe("Ask research: reading a list to its end", () => {
     const h = harness([
       ask(TICKETS, TICKETS_NEED, "open", [], [LIST]),
       ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+      useL1,
     ], { live_sources: [JIRA], ticket_available: true, list });
     const view = await h.research.research({ trigger: "ask", brief: question(TICKETS) });
     // It cannot be read further, so the finish is accepted; it is not complete, so the answer can only say "at least 25".
-    expect(h.generate).toHaveBeenCalledTimes(2);
+    expect(h.generate).toHaveBeenCalledTimes(3);
     expect(view.stop).toEqual({ reason: "finished", completed: true });
     expect(h.prompt(1).last_results).toEqual([expect.objectContaining({ list: "L1", more: false, note: "its last page was exactly full, so more items may exist than list can show; use search" })]);
     expect(h.prompt(1).lists).toEqual([expect.objectContaining({ id: "L1", more: false, complete: false, unverified_end: true })]);
@@ -183,7 +189,7 @@ describe("Ask research: reading a list to its end", () => {
       ask("Which actions does Dana own?", "actions owned by Dana", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Dana" } }]),
       ask("Which actions does Dana own?", "actions owned by Dana", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Dana" } }], "N1"),
       ask("Which actions does Dana own?", "actions owned by Dana", "found", ["L1"], [finish], "N1"),
-      { sentences: [], not_found: ["actions owned by Dana"] },
+      useL1,
     ], { list });
     const view = await h.research.research({ trigger: "ask", brief: question("Which actions does Dana own?") });
     expect(list).toHaveBeenCalledOnce();
@@ -201,7 +207,7 @@ describe("Ask research: reading a list to its end", () => {
       ask("Which tickets track DVT?", need, "open", [], [{ tool: "search", args: { query: "THERM DVT" } }]),
       ...Array.from({ length: 4 }, () => ask("Which tickets track DVT?", need, "open", [], [LIST_ALL], "N1")),
       ask("Which tickets track DVT?", need, "found", ["L1"], [finish], "N1"),
-      { sentences: [], not_found: [need] },
+      useL1,
     ], { live_sources: [JIRA], ticket_available: true, list, search: vi.fn(async () => result([launch])) });
     const view = await h.research.research({ trigger: "ask", brief: question("Which tickets track DVT?") });
     // Before ADR-0041 the third list-only step after a read text stopped research as no_progress.
@@ -218,6 +224,7 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     const h = harness([
       ask(text, "Dana's tickets", "open", [], [{ tool: "list", args: { source: "tickets", owner: "Dana" } }]),
       ask(text, "Dana's tickets", "found", ["L1"], [finish], "N1"),
+      useL1,
     ], { live_sources: [JIRA], ticket_available: true, list });
     const view = await h.research.research({ trigger: "ask", brief: question(text) });
     expect(list.mock.calls[0]![0]).not.toHaveProperty("owner");
@@ -237,7 +244,7 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     const h = harness([
       ask(text, "open actions", "open", [], [{ tool: "list", args: { source: "meetings", status: "open" } }]),
       ask(text, "open actions", "found", ["L1"], [finish], "N1"),
-      { sentences: [], not_found: ["open actions"] },
+      useL1,
     ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
     const view = await h.research.research({ trigger: "ask", brief: question(text) });
     expect(view.lists).toEqual([expect.objectContaining({ id: "L1", filter: { kind: "action", status: "open", time_zone: "UTC" }, filter_applied: { status: "partial" }, members: ["E1", "E2"], complete: true })]);
@@ -282,7 +289,7 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
     const h = harness([
       ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
       ask(text, "actions owned by Mara", "found", ["L1"], [finish], "N1"),
-      { sentences: [{ text: "Mara owns publishing the dashboard and reviewing the PRD.", evidence: ["E1", "E2"] }], not_found: [] },
+      useL1,
     ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
     const view = await h.research.research({ trigger: "ask", brief: question(text) });
     expect(view.stop).toEqual({ reason: "finished", completed: true });
@@ -308,12 +315,15 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
     const replies: unknown[] = [
       ask(text, "my open follow-ups", "open", [], [{ tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } }]),
       ask(text, "my open follow-ups", "found", ["L1"], [finish], "N1"),
-      { sentences: [{ text: "You own two open follow-ups.", evidence: ["E1", "E2"] }], not_found: [] },
+      { lists: [{ id: "L1" }], sentences: [{ text: "Both are open.", evidence: ["E1", "E2"] }], not_found: [] },
     ];
-    await createAgenticAskV4({
+    const response = await createAgenticAskV4({
       desk, generation, audit: { append: () => undefined }, asker: { display_name: "Mara Lind" }, wall_ms: () => Date.parse(LIST_READ_AT),
       model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift(); } },
     }).answer({ question: text });
+    // Code names the list first; the writer's own sentence follows (ADR-0041).
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual(["2 follow-ups with owner Mara Lind and status open: THERM-41 follow-up; THERM-42 follow-up.", "Both are open."]);
+    expect(response.citations.map(citation => citation.kind)).toEqual(["follow_up", "follow_up"]);
     expect(desk.list).toHaveBeenCalledWith(expect.objectContaining({ source: "follow_ups", owner: "Mara Lind", status: "open" }));
     const steps = inputs.filter(input => input.system_prompt.startsWith("You are Echo's research agent"));
     expect(steps).toHaveLength(2);
@@ -322,6 +332,189 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
       available: true, truncated: false, unverified_end: false,
     }]);
     expect(replies).toEqual([]);
+  });
+});
+
+describe("Ask's answer: code names a list's members (ADR-0041)", () => {
+  const OCT4_NAMES = OCTOBER_4.map(([, title]) => title);
+  const writerInputs = (h: ReturnType<typeof harness>) => h.inputs.filter(input => input.system_prompt.startsWith("You write"));
+  const writerPrompt = (h: ReturnType<typeof harness>, index = 0) => JSON.parse(writerInputs(h)[index]!.user_prompt) as Record<string, any>;
+  const research = (writer: readonly unknown[], desk: Partial<EvidenceDeskPortV2> = october4Desk()) =>
+    harness([ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]), ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"), ...writer], desk);
+  const fullStatement = `8 Confluence pages created on October 4, 2026: ${OCT4_NAMES.join("; ")}.`;
+
+  it("names all 8 October 4 pages, each citing its own row, from rows the writer saw without their text", async () => {
+    const h = research([useL1]);
+    const { response, writer_evidence } = await h.research.answerWithResearch({ question: OCT4 });
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ question: OCT4, status: "answered", statements: [{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }] }] });
+    expect(response.parts[0]).not.toHaveProperty("gap");
+    expect(response.citations.map(citation => citation.citation)).toEqual(PAGES.map(page => page.citation));
+    expect(response).not.toHaveProperty("notice");
+    // Two research steps and one writer call; the writer saw the list's rows and no text.
+    expect(h.generate).toHaveBeenCalledTimes(3);
+    const prompt = writerPrompt(h);
+    expect(prompt.evidence).toEqual([]);
+    expect(prompt.research).not.toHaveProperty("inventories");
+    expect(prompt.lists).toEqual([{
+      id: "L1", source: "pages", filter: { since: "2026-10-04", until: "2026-10-04", date_field: "created", time_zone: "UTC" }, filter_applied: { since: "applied", until: "applied", date_field: "applied" },
+      complete: true, count: 8, checked: 0, read_at: LIST_READ_AT, cited_by_plan: true,
+      members: MEMBERS.map((id, index) => ({ id, kind: "page", title: OCT4_NAMES[index], dates: PAGES[index]!.dates, date: PAGES[index]!.occurred_at, date_kind: "version_created", status: "current", checked: false })),
+    }]);
+    for (const page of PAGES) for (const hidden of [page.id, page.receipt_sha256, (page.citation as { permalink: string }).permalink]) expect(writerInputs(h)[0]!.user_prompt).not.toContain(hidden);
+    expect(writer_evidence).toEqual(MEMBERS);
+  });
+
+  it("sends an answer that names 4 of the 8 pages back once, then writes the full list itself", async () => {
+    const subset = { lists: [], sentences: [{ text: "The pages created on October 4 are ECHO Product Pipeline, Assumptions and decisions, Gate reviews and Traceability.", evidence: ["E1", "E2", "E3", "E4"] }], not_found: [] };
+    const h = research([subset, subset]);
+    const { response } = await h.research.answerWithResearch({ question: OCT4 });
+    expect(writerInputs(h)).toHaveLength(2);
+    const repair = writerPrompt(h, 1);
+    expect(repair.validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members');
+    expect(repair.rejected_response).toContain("The pages created on October 4 are");
+    // The repaired reply still names 4: code writes all 8 and drops the sentence that restated part of the list.
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]!.statements).toEqual([{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
+  });
+
+  it("accepts the repaired answer that uses the list", async () => {
+    const subset = { sentences: [{ text: "Four pages were created.", evidence: ["E1", "E2", "E3", "E4"] }], not_found: [] };
+    const h = research([subset, useL1]);
+    const { response } = await h.research.answerWithResearch({ question: OCT4 });
+    expect(h.generate).toHaveBeenCalledTimes(4);
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([fullStatement]);
+  });
+
+  it("writes the list itself when the writer gives no usable reply", async () => {
+    const h = research([{ wrong: true }, { still: "wrong" }]);
+    const { response } = await h.research.answerWithResearch({ question: OCT4 });
+    expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: fullStatement }], gap: "I found these items, but could not write the rest of the answer." }] });
+    expect(response.parts[0]).not.toHaveProperty("records");
+  });
+
+  const TICKETS = "Which Jira tickets were created on October 4, 2026?";
+  const TICKETS_NEED = "tickets created on 2026-10-04";
+  const TICKETS_LIST = { tool: "list", args: { source: "tickets", date_field: "created", since: "2026-10-04", until: "2026-10-04" } } as const;
+  const ticketNames = (from: number, count: number) => tickets(from, count).map(item => item.label);
+
+  it("names 25 of a 60-ticket list and says 'and 35 more', the count from ECHO's own list", async () => {
+    const list = vi.fn(async (input: EvidenceDeskListInputV2) => (input.cursor === undefined
+      ? result(tickets(1, 50), { next_cursor: "page-2", page_full: false })
+      : result(tickets(51, 10), { page_full: false })) as EvidenceDeskResultV2);
+    const h = harness([
+      ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]),
+      ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST], "N1"),
+      ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST], "N1"),
+      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+      useL1,
+    ], { live_sources: [JIRA], ticket_available: true, list });
+    const { response, research: view } = await h.research.answerWithResearch({ question: TICKETS });
+    expect(view.lists).toEqual([expect.objectContaining({ id: "L1", members: Array.from({ length: 60 }, (_, index) => `E${index + 1}`), complete: true })]);
+    expect(writerPrompt(h).lists[0]).toMatchObject({ count: 60, complete: true });
+    expect(writerPrompt(h).lists[0].members).toHaveLength(60);
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]!.statements).toEqual([{
+      text: `60 Jira tickets created on October 4, 2026: ${ticketNames(1, 25).join("; ")}; and 35 more.`, citation_indexes: Array.from({ length: 25 }, (_, index) => index), private: true,
+    }]);
+    expect(response.citations.map(citation => citation.label)).toEqual(ticketNames(1, 25));
+  });
+
+  it("says 'at least' for a list whose end could not be confirmed, and marks the part partial", async () => {
+    const h = harness([
+      ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]),
+      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+      useL1,
+    ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 25), { page_full: true }) as EvidenceDeskResultV2) });
+    const { response } = await h.research.answerWithResearch({ question: TICKETS });
+    expect(writerPrompt(h).lists[0]).toMatchObject({ complete: false, count: 25 });
+    expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "The list of Jira tickets could not be read to its end, so more may exist." }] });
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([`At least 25 Jira tickets created on October 4, 2026: ${ticketNames(1, 25).join("; ")}.`]);
+  });
+
+  it("answers 'which are assigned to me' with only the members that owner records, and none as not found", async () => {
+    const assigned = [ticketRow(1, "Zhen Ye"), ticketRow(2, "Dana Lee", "Done"), ticketRow(3, "zhen ye"), ticketRow(4, "Tobias Lund")];
+    const text = "Which of the Jira tickets created on October 4, 2026 are assigned to Zhen Ye?";
+    const run = async (value: string) => {
+      const h = harness([
+        ask(text, TICKETS_NEED, "open", [], [TICKETS_LIST]),
+        ask(text, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+        { lists: [{ id: "L1", where: { field: "owner", value } }], sentences: [], not_found: [] },
+      ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(assigned) as EvidenceDeskResultV2) });
+      return (await h.research.answerWithResearch({ question: text })).response;
+    };
+    const mine = await run("ZHEN YE");
+    expect(mine.outcome).toBe("answered");
+    expect(mine.parts[0]!.statements).toEqual([{ text: "2 of the 4 Jira tickets created on October 4, 2026 have owner Zhen Ye: THERM-1: Fixture work 1; THERM-3: Fixture work 3.", citation_indexes: [0, 1], private: true }]);
+    expect(mine.citations.map(citation => citation.label)).toEqual(["THERM-1: Fixture work 1", "THERM-3: Fixture work 3"]);
+    const nobody = await run("Mara Quinn");
+    expect(nobody).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: "Not found: Jira tickets created on October 4, 2026 that have owner Mara Quinn." }] });
+  });
+
+  it("says how many members were checked when a sentence claims content across a list (addition 4)", async () => {
+    const section = (row: EvidenceDeskItemV2, body: string): EvidenceDeskItemV2 => Object.freeze({
+      ...row, id: row.id.replace("inventory", "s1"), text: body,
+      citation: { ...(row.citation as Extract<EvidenceDeskItemV2["citation"], { kind: "page" }>), section_id: "s1", text_sha256: sha256Digest(body) },
+    });
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, row.label.startsWith("Traceability") ? "BUG-412 is traced to TC-D-03." : "No defects are discussed.")]) as EvidenceDeskResultV2;
+    });
+    const text = "Which pages created on October 4, 2026 mention BUG-412?";
+    const need = "pages created on 2026-10-04 that mention BUG-412";
+    const h = harness([
+      ask(text, need, "open", [], [OCT4_LIST]),
+      ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
+      ask(text, need, "found", ["L1", "E12"], [finish], "N1"),
+      { lists: [], sentences: [{ text: "Traceability — requirement threads and BUG-412 walkthrough mentions BUG-412.", evidence: ["L1", "E12"] }], not_found: [] },
+    ], october4Desk({ open }));
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(open).toHaveBeenCalledTimes(4);
+    expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 4, cited_by_plan: true });
+    expect(writerPrompt(h).lists[0].members.map((member: { checked: boolean }) => member.checked)).toEqual([true, true, true, true, false, false, false, false]);
+    expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
+    expect(response.parts[0]!.statements).toEqual([{ text: "Traceability — requirement threads and BUG-412 walkthrough mentions BUG-412 (4 of 8 checked so far).", citation_indexes: [0], private: true }]);
+    expect(response.citations.map(citation => (citation.citation as { section_id: string }).section_id)).toEqual(["s1"]);
+  });
+
+  it("names only items released to the asker, counts ECHO's own list, and stops when access is revoked before the writer", async () => {
+    // A vendor's total is never read: the count is the members the desk released to this person.
+    const released = [ticketRow(1), { ...ticketRow(2), visibility: "team" as const }, ticketRow(3)];
+    const list = vi.fn(async () => ({ ...result(released), total: 500 }) as unknown as EvidenceDeskResultV2);
+    const replies = [ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]), ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"), useL1];
+    const h = harness(replies, { live_sources: [JIRA], ticket_available: true, list });
+    const { response } = await h.research.answerWithResearch({ question: TICKETS });
+    expect(response.parts[0]!.statements).toEqual([{ text: `3 Jira tickets created on October 4, 2026: ${released.map(item => item.label).join("; ")}.`, citation_indexes: [0, 1, 2], private: true }]);
+    expect(response.citations.map(citation => citation.visibility)).toEqual(["only_me", "team", "only_me"]);
+    expect(writerInputs(h)[0]!.user_prompt).not.toContain("500");
+    let checks = 0;
+    const revalidate = vi.fn(async () => {
+      checks += 1;
+      if (checks === 3) throw new AuthorityOperationError("unauthorized", "A listed ticket is no longer readable");
+      return checked;
+    });
+    const revoked = harness(replies, { live_sources: [JIRA], ticket_available: true, list, revalidate });
+    await expect(revoked.research.answerWithResearch({ question: TICKETS })).rejects.toMatchObject({ code: "unauthorized" });
+    // The check before the writer covers the rows the list released: no writer call names them.
+    expect(revoked.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("names a meeting-action list the same way, with a due date where members differ", async () => {
+    const actions = [
+      record("a1", "Mara will publish the dashboard.", { kind: "action", attributes: { owner: "Mara Quinn", due_at: "2026-10-09" } }),
+      record("a2", "Mara will review the PRD.", { kind: "action", attributes: { owner: "Mara Quinn" } }),
+    ];
+    const text = "Which actions does Mara own?";
+    const h = harness([
+      ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
+      ask(text, "actions owned by Mara", "found", ["L1"], [finish], "N1"),
+      { lists: [{ id: "L1" }], sentences: [{ text: "Mara will publish the dashboard first.", evidence: ["E1"] }], not_found: [] },
+    ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]!.statements).toEqual([
+      { text: "2 meetings with kind action and owner Mara: Meeting a1 (due October 9, 2026); Meeting a2.", citation_indexes: [0, 1], private: false },
+      { text: "Mara will publish the dashboard first.", citation_indexes: [0], private: false },
+    ]);
   });
 });
 

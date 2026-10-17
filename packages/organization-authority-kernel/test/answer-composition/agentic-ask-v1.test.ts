@@ -217,6 +217,8 @@ describe("agentic Ask: research loop", () => {
         expect(prompt.validation_error).toContain('cites no item whose full text you have read');
         return finish([found(['E1'])]);
       },
+      // The writer sees the listed row, never the body that did not fit, and finds no launch date in it.
+      answer([], ['launch date']),
     ]);
     const result = await ask({ desk: desk({ list: () => [metadata], open: () => [body] }), model: script.model, context_tokens: 4_096 }).answer({ question: 'When is launch?' });
     expect(result.citations).toEqual([]);
@@ -367,6 +369,7 @@ describe("agentic Ask: research loop", () => {
       step([{ needs: [{ need: "open actions" }] }], [{ tool: "list", args: { source: "meetings", kind: "action", status: "open" } }, { tool: "list", args: { source: "meetings", owner: "jules" } }]),
       finish([{ needs: [{ need: "open actions", status: "not_found" }] }]),
       finish([{ needs: [{ need: "open actions", status: "not_found" }] }]),
+      answer([], ["open actions"]),
     ]);
     await ask({ desk: evidence, model: script.model }).answer({ question: "What does Jules own?" });
     const [byStatus, byOwner] = script.prompt(1).last_results;

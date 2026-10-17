@@ -135,6 +135,6 @@ export interface AgenticResearchResultV1 {
 export interface AgenticAskWithResearchV1<R> {
   readonly response: R;
   readonly research: AgenticResearchResultV1;
-  /** Short ids handed to the writer, in order; empty when the writer was not called. */
+  /** Short ids handed to the writer, in order: items it read, then list rows it saw (ADR-0041); empty when the writer was not called. */
   readonly writer_evidence: readonly string[];
 }

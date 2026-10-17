@@ -77,10 +77,12 @@ describe('synthesis receives observed research coverage', () => {
     expect(answer.notice).toBe('Research stopped before it finished, so relevant context may be missing.');
   });
 
-  it('keeps an unread inventory visible even when the requested fact was found', async () => {
+  it('keeps an unread list visible even when the requested fact was found', async () => {
     const { writer } = await run({ inventory: true });
-    expect(writer.research).toMatchObject({ completed: true, inventories: [
-      { source: 'pages', shown_count: 1, more: true, available: true },
-    ], omitted_evidence_items: 0 });
+    // The writer sees the list by id with its rows and filter (ADR-0041); research no longer reports a bare count.
+    expect(writer.research).toMatchObject({ completed: true, omitted_evidence_items: 0 });
+    expect(writer.research).not.toHaveProperty('inventories');
+    expect(writer.lists).toEqual([expect.objectContaining({ id: 'L1', source: 'pages', complete: false, count: 1, cited_by_plan: false, members: [expect.objectContaining({ id: 'E1', title: 'Gate guide' })] })]);
+    expect(JSON.stringify(writer.lists)).not.toContain(body);
   });
 });

@@ -130,8 +130,25 @@ describe("agentic Ask model protocol parity", () => {
     expect(parseStep(value).parts[0]!.needs[0]!.evidence).toEqual(["E4"]);
     const many = { ...value, parts: [{ question: "q", needs: [{ need: "n", status: "found", evidence: [...Array.from({ length: 11 }, (_, index) => `E${index + 1}`), "L1", "L2"] }], notes: "" }] };
     expect(parseStep(many, { lists: true }).parts[0]!.needs[0]!.evidence).toHaveLength(12);
-    // The writer's evidence keeps item ids only.
+    // Without lists the writer's evidence keeps item ids only; Ask's writer parses with lists.
     expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }).sentences[0]!.evidence).toEqual(["E2"]);
+    expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }, { lists: true }).sentences[0]!.evidence).toEqual(["L1", "E2"]);
+  });
+
+  it("reads the lists Ask's answer uses: each once, by id, with an optional owner or status selection", () => {
+    const value = {
+      lists: ["l2", { id: "L1" }, { id: "[L3]", where: { field: "Owner", value: " Dana  Lee " } }, { id: "L1", where: { field: "owner", value: "x" } },
+        { id: "L4", where: { field: "title", value: "PRD" } }, { id: "L5", where: { field: "status", value: " " } }, { id: "E6" }, 7, { id: "L8" }, { id: "L9" }],
+      sentences: [{ text: "Two pages mention BUG-412 (L1, E4).", evidence: ["L1", "E4"] }], not_found: [],
+    };
+    const parsed = parseAnswer(value, { lists: true });
+    expect(parsed.lists).toEqual([{ id: "L2" }, { id: "L1" }, { id: "L3", where: { field: "owner", value: "Dana Lee" } }, { id: "L4" }, { id: "L5" }]);
+    expect(parsed.sentences).toEqual([{ text: "Two pages mention BUG-412.", evidence: ["L1", "E4"] }]);
+    expect(parseAnswer(value)).not.toHaveProperty("lists");
+    expect(parseAnswer({ sentences: [], not_found: [] }, { lists: true }).lists).toEqual([]);
+    // A list reference in prose is stripped only for Ask's answer; elsewhere "(L2)" stays prose.
+    expect(stripEvidenceIds("Support tier (L2) owns it (E4).")).toBe("Support tier (L2) owns it.");
+    expect(stripEvidenceIds("Support tier owns it (L2) [E4, L1].", true)).toBe("Support tier owns it.");
   });
 
   it("binds each action's argument schema to the selected tool", () => {
@@ -173,6 +190,7 @@ describe("agentic Ask model protocol parity", () => {
     for (let seed = 1; seed <= 400; seed += 1) {
       const value = generator(seed)(answerSchema);
       expect(() => parseAnswer(value)).not.toThrow();
+      expect(() => parseAnswer(value, { lists: true })).not.toThrow();
     }
   });
 
