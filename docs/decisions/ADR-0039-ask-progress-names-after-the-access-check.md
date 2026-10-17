@@ -74,6 +74,8 @@ interface is `agentic-ask-progress-v1.ts` beside the Ask run.
 what ECHO ran, never from model output:
 
 - **The stage:** `searching`, `reading`, `checking_access` or `writing`.
+  `reading` comes only for a research call given at least one item in
+  full, so a run's first plan, which has read nothing, sends no stage.
 - **One `searched` row per research step** (or for the small-scope preload).
   It lists the step's source kinds from the request's own catalog, with a
   live tool named by its tool id. It also gives the number of distinct items

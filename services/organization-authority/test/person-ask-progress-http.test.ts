@@ -113,7 +113,6 @@ describe('Ask progress over HTTP', () => {
     // The desk cites an original with its display label, exactly as the answer's citations do.
     const named = { citation: { ...f.note.citation, label: f.note.label }, kind: 'note', label: f.note.label, visibility: 'only_me', ref: f.note.ref };
     expect(events.slice(0, -1)).toEqual([
-      { type: 'stage', stage: 'reading' },
       { type: 'stage', stage: 'searching' },
       { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }], found: 1 },
       { type: 'stage', stage: 'reading', pending: 1 },

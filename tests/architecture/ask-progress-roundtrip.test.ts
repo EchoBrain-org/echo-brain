@@ -197,8 +197,8 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(writing).toMatchObject({ runs: 0, lines: writerAt + 1 });
 
       const stages = steps.flatMap(step => step.type === 'stage' ? [step.stage] : []);
-      // Research reads the question, searches, reads what it found; then the writer; the final check comes last.
-      expect(stages.slice(0, 2)).toEqual(['reading', 'searching']);
+      // Research searches, then reads what it found (no stage before its first search); then the writer; the final check comes last.
+      expect(stages.slice(0, 2)).toEqual(['searching', 'reading']);
       expect(steps.slice(writerAt)).toEqual([{ type: 'stage', stage: 'writing' }, { type: 'stage', stage: 'checking_access' }]);
       const searched = steps.filter((step): step is Extract<PersonAskProgressStepEventV1, { type: 'searched' }> => step.type === 'searched');
       expect(searched).toHaveLength(1);

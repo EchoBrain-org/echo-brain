@@ -38,7 +38,7 @@ export interface AgenticResearchProgressReporterV1 {
   returned(tool: "search" | "open" | "list", source_id: string | undefined, items: readonly EvidenceDeskItemV2[]): void;
   /** The batch's results are applied: a batch that searched or listed becomes one `searched` row. */
   reads_done(): void;
-  /** A research call is about to be given these items' complete text. Its access check has not run yet. */
+  /** A research call is about to be given these items' complete text, perhaps none. Its access check has not run yet. */
   before_check(items: readonly EvidenceDeskItemV2[]): void;
   /** The gate's `before_call`: the access check before that call passed, and the model is given these items in full. */
   given(items: readonly EvidenceDeskItemV2[]): void;
@@ -165,6 +165,8 @@ export function createAgenticAskProgressRecorderV1(options: {
       if (sent !== undefined && sent.type === "searched") rows.push(sent);
     },
     before_check(items: readonly EvidenceDeskItemV2[]) {
+      // A call given nothing in full (the first step's plan) reads nothing: no stage, so it is never said.
+      if (items.length === 0) return;
       const fresh = new Set(items.map(itemKey).filter(key => !readKeys.has(key)));
       stage("reading", fresh.size);
     },

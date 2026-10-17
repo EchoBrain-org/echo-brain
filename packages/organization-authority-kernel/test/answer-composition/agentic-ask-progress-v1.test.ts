@@ -135,8 +135,8 @@ describe("agentic Ask progress (ADR-0039)", () => {
     const f = fixture();
     const { response, receipt } = await f.ask.answerWithReceipt({ question: "When is launch?", on_progress: f.sink });
 
+    // The first step reads nothing yet: no stage until its search.
     expect(f.events).toEqual([
-      { type: "stage", stage: "reading" },
       { type: "stage", stage: "searching" },
       { type: "searched", sources: every, found: 3 },
       { type: "stage", stage: "reading", pending: 1 },
@@ -293,6 +293,9 @@ describe("agentic Ask progress recorder", () => {
     const events: PersonAskProgressStepEventV1[] = [];
     const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
     const items = many(130);
+    // A call given nothing in full is not reading.
+    recorder.research.before_check([]);
+    expect(events).toEqual([]);
     recorder.research.before_check(items.slice(0, 60));
     recorder.research.given(items.slice(0, 60));
     recorder.research.given(items.slice(0, 60));
