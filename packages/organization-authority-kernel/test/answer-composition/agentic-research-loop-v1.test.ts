@@ -411,6 +411,70 @@ describe("research loop: search only (a record in no project)", () => {
   });
 });
 
+describe("research loop: need ids", () => {
+  /** A proposed need that names the plan's id for it. */
+  const withId = (id: string, value: ReturnType<typeof need>) => ({ id, ...value });
+  const release = "clean-v1-20261015-follow-ups-25bff4b-r2";
+  const question = `What was decided about synthetic staging release ${release}?`;
+  const planned = `any decision about synthetic staging release ${release}`;
+  const search = async () => result([
+    record("decision", `Approved: synthetic staging release ${release} must verify owner approval of a staged meeting.`),
+    record("action", `Verify owner approval for release ${release} before sign-off.`, { kind: "action" }),
+    record("rationale", `Release ${release} is a canary for the approval path.`, { kind: "rationale" }),
+  ]);
+  const first = step([part(question, [need(planned, "open")])], [{ tool: "search", args: { query: release } }]);
+  /** 005d7876 step 2: a correct finish that rewords the planned need and adds two more. */
+  const reworded = (id?: string) => step([part(question, [
+    id === undefined ? need(`approved decision about release ${release}`, "found", ["E1"]) : withId(id, need(`approved decision about release ${release}`, "found", ["E1"])),
+    need("any associated action", "found", ["E2"]), need("rationale for the decision", "found", ["E3"]),
+  ])], [{ tool: "finish", args: {} }]);
+  const answer = { sentences: [{ text: "The release must verify owner approval of a staged meeting.", evidence: ["E1"] }], not_found: [] };
+  const settled = [
+    { need: planned, status: "found", evidence: ["E1"] },
+    { need: "any associated action", status: "found", evidence: ["E2"] }, { need: "rationale for the decision", status: "found", evidence: ["E3"] },
+  ];
+
+  it("accepts a finish that rewords a need but keeps its id (005d7876)", async () => {
+    const h = harness([first, reworded("N1"), answer], { search });
+    const { research } = await h.research.answerWithResearch({ question });
+    // The planner sees each need's id; the first finish is accepted, with no repair.
+    expect(h.prompt(1).plan).toEqual([{ part: 1, question, notes: "", needs: [{ id: "N1", need: planned, status: "open", evidence: [] }] }]);
+    expect(h.generate).toHaveBeenCalledTimes(3);
+    expect(research.rounds.map(round => round.rejected)).toEqual([[], []]);
+    expect(research.stop).toEqual({ reason: "finished", completed: true });
+    // A need keeps the wording first planned, and the bundle's plan carries no ids.
+    expect(research.plan[0]!.needs).toEqual(settled);
+  });
+
+  it("names the need a reworded finish left open by its id, so the repair can settle it", async () => {
+    const h = harness([first, reworded(), reworded("n1"), answer], { search });
+    const { research } = await h.research.answerWithResearch({ question });
+    expect(h.prompt(2).validation_error).toContain(`part 1 need N1 "${planned}" is still open`);
+    expect(research.stop).toEqual({ reason: "finished", completed: true });
+    expect(research.plan[0]!.needs).toEqual(settled);
+  });
+
+  it("settles a need by its id in any part, and gives each new need the next id", async () => {
+    const h = harness([
+      step([part("When is launch?", [need("launch date", "open")]), part("Who owns it?", [need("launch owner", "open")])], [{ tool: "search", args: { query: "launch" } }]),
+      // Parts reordered: the ids still name the right needs.
+      step([
+        part("Who owns it?", [withId("N2", need("owner of the launch", "found", ["E2"])), need("owner's team", "open")]),
+        part("When is launch?", [withId("N1", need("approved launch date", "found", ["E1"]))]),
+      ], [{ tool: "search", args: { query: "launch team" } }]),
+      step([part("When is launch?", [])], [{ tool: "finish", args: {} }]),
+      step([part("When is launch?", [])], [{ tool: "finish", args: {} }]),
+    ], { search: async () => result([record("date", "Launch is approved for Tuesday."), record("owner", "Mara owns the launch.")]) });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief("Find the launch date and owner.", []) });
+    expect(h.prompt(2).plan).toEqual([
+      { part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "found", evidence: ["E1"] }, { id: "N3", need: "owner's team", status: "open", evidence: [] }] },
+      { part: 2, question: "Who owns it?", notes: "", needs: [{ id: "N2", need: "launch owner", status: "found", evidence: ["E2"] }] },
+    ]);
+    // A finish that leaves N3 open is refused by its id.
+    expect(view.rounds[2]!.rejected[0]).toContain('part 1 need N3 "owner\'s team" is still open');
+  });
+});
+
 describe("research core: what a task trigger's renderer was shown and cited", () => {
   const decision = record("two-decimals", "Approved on Oct 8: show 0.01 °C on the display for MRD-02.");
   const therm = ticket("THERM-46", "THERM-46: the firmware formats one decimal.");

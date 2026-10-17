@@ -7,6 +7,8 @@ export interface AskResearchObservationV1 {
 }
 
 export interface AskResearchNeedV1 {
+  /** The need's id the planner sees ("N3"), so a rejected finish names it. */
+  readonly id?: string;
   readonly need: string;
   readonly status: 'open' | 'found' | 'not_found';
   readonly evidence: readonly string[];
@@ -30,7 +32,7 @@ export function askResearchCompletionProblemsV1(
   const problems: string[] = [];
   for (const [index, part] of parts.entries()) {
     for (const need of part.needs) {
-      const label = `part ${index + 1} need "${need.need}"`;
+      const label = `part ${index + 1} need ${need.id === undefined ? "" : `${need.id} `}"${need.need}"`;
       if (need.status === 'open') problems.push(`${label} is still open`);
       else if (need.status === 'found' && !need.evidence.some(citable)) problems.push(`${label} is found but cites no item whose full text you have read`);
       else if (need.status === 'not_found') {

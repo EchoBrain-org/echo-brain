@@ -305,7 +305,7 @@ describe("agentic Ask: research loop", () => {
       expect(input.user_prompt).not.toContain(launch.citation.kind === "approved_record" ? launch.citation.atom_id : "");
     }
     expect(script.prompt(1).seen[0]).toMatchObject({ id: "E1", source: "meeting", text: "Launch is approved for Tuesday.", full: true });
-    expect(script.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ need: "launch date", status: "open", evidence: [] }] }]);
+    expect(script.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "open", evidence: [] }] }]);
   });
 
   it("lists a keyword-free source, opens an item, and cites its full text", async () => {
@@ -561,7 +561,7 @@ describe("agentic Ask: research loop", () => {
       answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }], ["launch owner"]),
     ]);
     const result = await ask({ desk: desk({ search: () => [launch] }), model: script.model }).answer({ question: "When is launch and who owns it?" });
-    expect(script.prompt(2).validation_error).toContain("need \"launch owner\" is still open");
+    expect(script.prompt(2).validation_error).toContain("need N2 \"launch owner\" is still open");
     expect(script.prompt(2).plan[0].needs.map((need: { need: string }) => need.need)).toEqual(["launch date", "launch owner"]);
     expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "I couldn't complete the search. Please try again. Missing context: launch owner." }] });
   });

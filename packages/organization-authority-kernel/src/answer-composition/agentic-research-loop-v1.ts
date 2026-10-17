@@ -178,8 +178,11 @@ type Entry = {
 type ToolResult = Readonly<Record<string, unknown>>;
 /** A completed desk read waits here until earlier planned reads have updated state. */
 type OrderedAdmission = (apply: () => ToolResult) => Promise<ToolResult>;
-/** Code-owned plan state. A need leaves the plan only by being marked found or not_found. */
-type NeedState = { readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
+/**
+ * Code-owned plan state. A need leaves the plan only by being marked found or not_found. Its id (N1, N2, ...) never
+ * changes, so a step can reword a need and still settle it; its wording stays the one first planned.
+ */
+type NeedState = { readonly id: string; readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
 type PartState = { readonly question: string; notes: string; readonly needs: NeedState[] };
 type ListState = { args: StepArgs; readonly source: EvidenceDeskSourceV2; readonly unfiltered: boolean; items: EvidenceDeskItemV2[]; cursor: string | undefined; fetched: boolean; shown: number; truncated: boolean; available: boolean; note?: string };
 /** An inventory has more to show: listed items not yet shown, or another page. */
@@ -623,32 +626,42 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
 
   // ---- plan (parts and needs) -------------------------------------------
   let plan: PartState[] = [];
-  const newNeed = (need: string, status: NeedStatus, evidence: readonly string[]): NeedState =>
-    ({ need, status, evidence, observations_before: researchObservations.length });
-  const newPart = (part: StepPart): PartState => ({
-    question: part.question, notes: part.notes,
-    // A part without needs still needs its own answer.
-    needs: part.needs.length > 0 ? part.needs.map(need => newNeed(need.need, need.status, need.evidence)) : [newNeed(part.question, "open", [])],
-  });
+  /** The plan a step proposes, merged into the current one. Nothing is kept until the step is accepted. */
   const proposedPlan = (parts: readonly StepPart[]): PartState[] => {
     const next = plan.map(part => ({ ...part, needs: part.needs.map(need => ({ ...need })) }));
+    // Needs are never removed, so the next id follows the count.
+    let ids = next.reduce((count, part) => count + part.needs.length, 0);
+    const newNeed = (need: string, status: NeedStatus, evidence: readonly string[]): NeedState =>
+      ({ id: `N${++ids}`, need, status, evidence, observations_before: researchObservations.length });
+    const newPart = (part: StepPart): PartState => ({
+      question: part.question, notes: part.notes,
+      // A part without needs still needs its own answer.
+      needs: part.needs.length > 0 ? part.needs.map(need => newNeed(need.need, need.status, need.evidence)) : [newNeed(part.question, "open", [])],
+    });
     if (parts.length === 0) return next;
     if (next.length === 0) return parts.map(newPart);
+    const updated = new Set<NeedState>();
     for (const [index, part] of parts.entries()) {
       const existing = next[index];
       if (existing === undefined) { next.push(newPart(part)); continue; }
       if (part.notes.length > 0) existing.notes = part.notes;
       for (const need of part.needs) {
-        const match = existing.needs.find(value => needKey(value.need) === needKey(need.need));
-        if (match !== undefined) { match.status = need.status; match.evidence = need.evidence; }
-        else if (existing.needs.length < AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) existing.needs.push(newNeed(need.need, need.status, need.evidence));
+        // The same need by its id, in whichever part, or else by its wording in this part (005d7876: a reworded need
+        // with no id left the original open, so a correct finish was refused). The first proposal for a need wins.
+        const match = (need.id === undefined ? undefined : next.flatMap(value => value.needs).find(value => value.id === need.id))
+          ?? existing.needs.find(value => needKey(value.need) === needKey(need.need));
+        if (match !== undefined) {
+          if (updated.has(match)) continue;
+          updated.add(match); match.status = need.status; match.evidence = need.evidence;
+        } else if (existing.needs.length < AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) existing.needs.push(newNeed(need.need, need.status, need.evidence));
       }
     }
     return next;
   };
-  const planView = () => plan.map((part, index) => ({
+  /** The plan as the bundle and rounds record it; a step is also shown each need's id. */
+  const planView = (ids = false) => plan.map((part, index) => ({
     part: index + 1, question: part.question, notes: part.notes,
-    needs: part.needs.map(need => ({ need: need.need, status: need.status, evidence: need.evidence })),
+    needs: part.needs.map(need => ({ ...(ids ? { id: need.id } : {}), need: need.need, status: need.status, evidence: need.evidence })),
   }));
   /** Listed inventories continue across planner turns without exposing cursors or desk identities. */
   const inventoryView = () => [...lists.values()].filter(state => state.fetched).map(state => Object.freeze({
@@ -840,7 +853,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const roundStartedAt = now();
       // Leave room for the answer call and its possible repair.
       if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || gate.stats().calls + 2 >= budget.max_model_calls) { researchStop = 'budget'; break; }
-      const header = { ...goalFields(), ...context, scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: budget.max_rounds - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
+      const header = { ...goalFields(), ...context, scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: budget.max_rounds - steps - 1, plan: planView(true), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
       const pad = scratchpad(researchBudget - bytes(JSON.stringify({ ...header, opened: [], seen: [] })));
       researchPromptEntries = pad.read;
       const user = { ...header, opened: pad.opened, seen: pad.seen };
@@ -933,7 +946,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // New metadata-only items are not progress, but the planner may still open what this round discovered.
       if (idleSteps >= (entries.size > entriesBefore ? 3 : 2)) { researchStop = 'no_progress'; break; }
     }
-    if (plan.length === 0) plan = [newPart({ question: partQuestion(goal.kind === "question" ? goal.question : goal.task), needs: [], notes: "" })];
+    if (plan.length === 0) plan = proposedPlan([{ question: partQuestion(goal.kind === "question" ? goal.question : goal.task), needs: [], notes: "" }]);
   };
   /** Everything research gathered, as the server holds it; built once research stops. */
   const evidenceBundle = (gate: AgenticModelGateV1, researchStartedAt: number): Omit<AgenticEvidenceBundleV1, "trigger"> => {

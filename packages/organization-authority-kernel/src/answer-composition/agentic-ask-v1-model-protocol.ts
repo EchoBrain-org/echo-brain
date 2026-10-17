@@ -19,6 +19,7 @@ export const AGENTIC_ASK_MAX_SENTENCES_V1 = 10;
 export const AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 = 12;
 const QUESTION_CHARS = 400;
 const NEED_CHARS = 200;
+const NEED_ID_CHARS = 8;
 const NOTES_CHARS = 800;
 const ARG_CHARS = 240;
 const SENTENCE_CHARS = 700;
@@ -36,7 +37,8 @@ export type StepTool = "search" | "open" | "list" | "finish";
 export type StepArgs = Readonly<Partial<Record<"query" | "id" | "source" | "kind" | "status" | "owner" | "channel" | "since" | "until", string>>>;
 export type StepAction = { readonly tool: StepTool; readonly args: StepArgs };
 export type NeedStatus = "open" | "found" | "not_found";
-export type StepNeed = { readonly need: string; readonly status: NeedStatus; readonly evidence: readonly string[] };
+/** `id` is the need's id from the plan the step was shown ("N3"); a new need has none. */
+export type StepNeed = { readonly id?: string; readonly need: string; readonly status: NeedStatus; readonly evidence: readonly string[] };
 export type StepPart = { readonly question: string; readonly needs: readonly StepNeed[]; readonly notes: string };
 export type Step = { readonly parts: readonly StepPart[]; readonly actions: readonly StepAction[] };
 export type AnswerSentence = { readonly text: string; readonly evidence: readonly string[] };
@@ -73,6 +75,7 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
         question: { type: "string", maxLength: QUESTION_CHARS },
         needs: { type: "array", maxItems: AGENTIC_ASK_MAX_NEEDS_PER_PART_V1, items: {
           type: "object", additionalProperties: false, required: ["need", "status", "evidence"], properties: {
+            id: { type: "string", maxLength: NEED_ID_CHARS },
             need: { type: "string", maxLength: NEED_CHARS },
             status: closedString(["open", "found", "not_found"]),
             evidence: ids,
@@ -185,14 +188,21 @@ export function normalizeQuery(value: unknown): string | null {
   try { return validatePersonQueryText(line); } catch { return null; }
 }
 
+/** A need's id as the plan shows it ("N3"); accept common spellings and ignore the rest. */
+function needId(value: unknown): string | undefined {
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const match = /^\s*\[?\s*[Nn]?\s*(\d{1,3})\s*\]?\s*$/u.exec(String(value));
+  return match === null ? undefined : `N${Number(match[1])}`;
+}
 function needs(value: unknown): readonly StepNeed[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: StepNeed[] = [];
   for (const raw of value) {
     const entry = object(raw);
     const need = entry === null ? cleanLine(raw, NEED_CHARS) : cleanLine(entry.need, NEED_CHARS);
-    if (need.length === 0 || result.some(existing => existing.need.toLowerCase() === need.toLowerCase())) continue;
-    result.push(Object.freeze({ need, status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence) }));
+    const id = entry === null ? undefined : needId(entry.id);
+    if (need.length === 0 || result.some(existing => existing.need.toLowerCase() === need.toLowerCase() || (id !== undefined && existing.id === id))) continue;
+    result.push(Object.freeze({ ...(id === undefined ? {} : { id }), need, status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence) }));
     if (result.length === AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) break;
   }
   return Object.freeze(result);
@@ -270,7 +280,7 @@ function stepPrompt(list: boolean): string { return [
   "You are Echo's research agent. A person asked a question about their organization's work. The supplied source_catalog describes the sources they can read and which connected tools provide them. You work in steps: each step you update your plan and notes and choose up to 4 actions; the system runs them and shows you the results at the next step.",
   "",
   "How to work:",
-  "1. In step 1, split the question into its parts (1 to 5, in the asker's order). For each part, list only the facts the asker requested or that are necessary to identify the requested subject, such as \"approved DVT start date\", \"who owns the vendor follow-up\", \"latest discussion status\". Keep the same parts afterwards. Add a need only when it is necessary to answer that original question. Dates, owners, rationale, and other sources are not requirements unless the question asks for them or the answer depends on them.",
+  "1. In step 1, split the question into its parts (1 to 5, in the asker's order). For each part, list only the facts the asker requested or that are necessary to identify the requested subject, such as \"approved DVT start date\", \"who owns the vendor follow-up\", \"latest discussion status\". Keep the same parts afterwards. The plan gives each need an id (N1, N2, ...): on every later step, write each need again with its id, even when you reword it; a new need has no id. Add a need only when it is necessary to answer that original question. Dates, owners, rationale, and other sources are not requirements unless the question asks for them or the answer depends on them.",
   list ? "2. Search, list and open until every need is found or clearly not available." : "2. Search and open until every need is found or clearly not available.",
   `3. Mark a need \"found\" only with ids whose full text you have seen: items under \"opened\", or items under \"seen\" marked \"full\": true. Mark a need \"not_found\" after at least two different completed searches${list ? ", or a completed list," : ""} fail to provide it. Do not keep searching the same exhausted source with minor wording changes. ${list ? "An error, availability notice, or an unfinished page" : "An error or availability notice"} is incomplete research, not absence.`,
   list ? "4. The persistent inventories field records lists you started. When more is true, repeat list with its args to read the next page; changing filters starts a different inventory. A source with metadata_only_list lists titles and dates only, so its pages cannot show that a fact is absent: search that source for the fact instead of paging through it. Before marking a requested fact not_found, finish any other inventory you were browsing; a complete unfiltered inventory of a source covers its filtered ones. You may stop early when the facts the question asks for are already supported."
@@ -334,7 +344,7 @@ function stepPrompt(list: boolean): string { return [
   `A need's \"status\" is \"open\", \"found\" or \"not_found\". \"tool\" is ${list ? "\"search\", \"open\", \"list\" or \"finish\"" : "\"search\", \"open\" or \"finish\""}.`,
   "",
   "Example:",
-  "{\"parts\":[{\"question\":\"Is the DVT build on track?\",\"needs\":[{\"need\":\"approved DVT start date\",\"status\":\"found\",\"evidence\":[\"E2\"]},{\"need\":\"latest fixture vendor date\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"E2: Sep 24 review approved DVT start Oct 12. E5 (discussion, preview cut off) mentions a vendor slip.\"}],\"actions\":[{\"tool\":\"open\",\"args\":{\"id\":\"E5\"}},{\"tool\":\"search\",\"args\":{\"query\":\"fixture vendor date\"}}]}",
+  "{\"parts\":[{\"question\":\"Is the DVT build on track?\",\"needs\":[{\"id\":\"N1\",\"need\":\"approved DVT start date\",\"status\":\"found\",\"evidence\":[\"E2\"]},{\"id\":\"N2\",\"need\":\"latest fixture vendor date\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"E2: Sep 24 review approved DVT start Oct 12. E5 (discussion, preview cut off) mentions a vendor slip.\"}],\"actions\":[{\"tool\":\"open\",\"args\":{\"id\":\"E5\"}},{\"tool\":\"search\",\"args\":{\"query\":\"fixture vendor date\"}}]}",
 ].join("\n"); }
 
 export const STEP_PROMPT = stepPrompt(true);

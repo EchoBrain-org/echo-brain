@@ -170,6 +170,15 @@ describe("agentic Ask model protocol parity", () => {
     expect(step.parts[0]!.needs.map(need => [need.need, need.status])).toEqual([["A", "found"], ["B", "not_found"], ["C", "open"]]);
   });
 
+  it("reads a need's id in common spellings, ignores the rest, and drops a second need with the same id", () => {
+    const step = parseStep({ parts: [{ question: "q", needs: [
+      { id: "N1", need: "A", status: "open", evidence: [] }, { id: " n2 ", need: "B", status: "open", evidence: [] }, { id: "[N3]", need: "C", status: "open", evidence: [] },
+      { id: 4, need: "D", status: "open", evidence: [] }, { id: "E5", need: "E", status: "open", evidence: [] }, { id: "N1", need: "F", status: "found", evidence: [] },
+    ], notes: "" }], actions: [{ tool: "finish", args: {} }] });
+    expect(step.parts[0]!.needs.map(need => [need.id, need.need])).toEqual([["N1", "A"], ["N2", "B"], ["N3", "C"], ["N4", "D"], [undefined, "E"]]);
+    expect(step.parts[0]!.needs[4]).not.toHaveProperty("id");
+  });
+
   it("truncates over-long text to its bound instead of rejecting it", () => {
     const step = parseStep({ parts: [{ question: "q".repeat(900), needs: [{ need: "n".repeat(900), status: "open", evidence: [] }], notes: "n".repeat(5_000) }], actions: [{ tool: "finish", args: {} }] });
     expect([...step.parts[0]!.question].length).toBeLessThanOrEqual(400);
