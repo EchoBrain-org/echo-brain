@@ -36,7 +36,7 @@ import {
   agenticListFilterNoticeV1,
   agenticListIdV1,
   agenticListMembershipV1,
-  agenticListNounV1,
+  agenticListMembersNounV1,
   agenticNeedSupportV1,
   createAgenticListEvidenceV1,
   type AgenticListEvidenceV1,
@@ -1244,7 +1244,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const filterNotices = listed.flatMap((state, index) => {
       if (!relied.has(state.id)) return [];
       const source = sourcesById.get(state.source);
-      const text = agenticListFilterNoticeV1(listRecords[index]!, agenticListNounV1({ selector: source?.selector ?? state.args.source!, ...(source?.tool_id === undefined ? {} : { tool_id: source.tool_id }) }));
+      const noun = agenticListMembersNounV1({ selector: source?.selector ?? state.args.source!, ...(source?.tool_id === undefined ? {} : { tool_id: source.tool_id }) }, state.members.map(entry => entry.item.kind));
+      const text = agenticListFilterNoticeV1(listRecords[index]!, noun.plural);
       return text === undefined || notice.has(text) ? [] : [text];
     });
     return Object.freeze({

@@ -15,6 +15,7 @@ import {
   agenticListFilterPhraseV1,
   agenticListIdV1,
   agenticListMemberNamesV1,
+  agenticListMembersNounV1,
   agenticListNameSharesV1,
   agenticListNounV1,
   agenticListSelectionNotFoundV1,
@@ -160,6 +161,19 @@ describe("a list's noun and its filter notice (addition 3)", () => {
     expect(agenticListNounV1({ selector: "meetings" })).toBe("meetings");
     expect(agenticListNounV1({ selector: "follow_ups" })).toBe("follow-ups");
     expect(agenticListNounV1({ selector: "slack", tool_id: "slack" })).toBe("slack");
+  });
+
+  it("names members by what their desk kinds are, never a meeting for a decision", () => {
+    const forms = (plural: string, singular: string, kind?: string) => ({ plural, singular, ...(kind === undefined ? {} : { kind }) });
+    expect(agenticListMembersNounV1({ selector: "tickets", tool_id: "jira" }, ["ticket", "ticket"])).toEqual(forms("Jira tickets", "Jira ticket", "ticket"));
+    expect(agenticListMembersNounV1({ selector: "pages", tool_id: "confluence" }, ["page"])).toEqual(forms("Confluence pages", "Confluence page", "page"));
+    expect(agenticListMembersNounV1({ selector: "follow_ups" }, ["follow_up"])).toEqual(forms("follow-ups", "follow-up", "follow_up"));
+    expect(agenticListMembersNounV1({ selector: "slack", tool_id: "slack" }, ["slack_message"])).toEqual(forms("Slack messages", "Slack message", "slack_message"));
+    expect(agenticListMembersNounV1({ selector: "meetings" }, ["decision", "decision"])).toEqual(forms("decisions", "decision", "decision"));
+    expect(agenticListMembersNounV1({ selector: "meetings" }, ["action"])).toEqual(forms("actions", "action", "action"));
+    // Members of several kinds are items from the source; no member keeps the source's own noun.
+    expect(agenticListMembersNounV1({ selector: "meetings" }, ["imported_meeting", "decision", "action"])).toEqual(forms("items from meetings", "item from meetings"));
+    expect(agenticListMembersNounV1({ selector: "meetings" }, [])).toEqual(forms("meetings", "meeting"));
   });
 
   it("says which requested filters a source ignored or applied only where items record them", () => {
@@ -373,9 +387,25 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(long!.endsWith("…")).toBe(true);
   });
 
+  it("names members that share a label once, with their kinds counted", () => {
+    const sync = "THERM DVT sync (2026-10-04)";
+    // A meeting's records all carry the meeting's label.
+    const records = [{ title: sync, kind: "imported_meeting" }, { title: sync, kind: "decision" }, { title: "Vendor review (2026-10-04)", kind: "action", owner: "Dana" }, { title: sync, kind: "action", owner: "Dana" }, { title: sync, kind: "rationale" }];
+    expect(agenticListMemberNamesV1(records)).toEqual([`${sync} (1 meeting, 1 decision, 1 action and 1 rationale)`, "Vendor review (2026-10-04) (1 action, owner Dana)"]);
+    const statement = agenticListStatementV1({ noun: agenticListMembersNounV1({ selector: "meetings" }, records.map(record => record.kind)), filter: { since: "2026-10-04", until: "2026-10-04" }, count: 5, complete: true, selected: records, share: 25 });
+    expect(statement).toEqual({ text: `5 items from meetings dated on October 4, 2026: ${sync} (1 meeting, 1 decision, 1 action and 1 rationale); Vendor review (2026-10-04) (1 action, owner Dana).`, named: 5, cited: [0, 1, 2, 3, 4] });
+    // A kind filter is the noun, not a phrase; three decisions of one meeting are one name.
+    const decisions = Array.from({ length: 3 }, () => ({ title: sync, kind: "decision" }));
+    expect(agenticListStatementV1({ noun: agenticListMembersNounV1({ selector: "meetings" }, ["decision"]), filter: { kind: "decision", owner: "Dana" }, count: 3, complete: true, selected: decisions, share: 25 }).text)
+      .toBe(`3 decisions with owner Dana: ${sync} (3 decisions).`);
+    // A share smaller than a name's members cites the first of them; "and N more" counts members, from the list.
+    const two = agenticListStatementV1({ noun: "decisions", filter: {}, count: 4, complete: true, selected: [...decisions, { title: "Other (2026-10-05)", kind: "decision" }], share: 2 });
+    expect(two).toEqual({ text: `4 decisions: ${sync} (3 decisions); and 1 more.`, named: 3, cited: [0, 1] });
+  });
+
   it("writes the October 4 statement: the count, the filter and every name", () => {
     const statement = agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 3, complete: true, selected: titles.map(page), share: 25 });
-    expect(statement).toEqual({ text: `3 Confluence pages created on October 4, 2026: ${titles.join("; ")}.`, named: 3 });
+    expect(statement).toEqual({ text: `3 Confluence pages created on October 4, 2026: ${titles.join("; ")}.`, named: 3, cited: [0, 1, 2] });
     expect(agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 1, complete: true, selected: [page(titles[0]!)], share: 25 }).text)
       .toBe(`1 Confluence page created on October 4, 2026: ${titles[0]}.`);
   });

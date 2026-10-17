@@ -24,8 +24,8 @@ import {
   AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
   agenticListCheckedNoteV1,
   agenticListMembershipV1,
+  agenticListMembersNounV1,
   agenticListNameSharesV1,
-  agenticListNounV1,
   agenticListSelectionNotFoundV1,
   agenticListSelectV1,
   agenticListStatementV1,
@@ -198,9 +198,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const writerOrder = [...relied.map(id => listById.get(id)!), ...lists.filter(list => !relied.includes(list.id))].slice(0, AGENTIC_LIST_WRITER_LISTS_MAX_V1);
       const rows = new Map(writerOrder.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short)))]));
       const writerListsWith = (cap: number) => writerOrder.map(list => agenticWriterListV1(list, rows.get(list.id)!, relied.includes(list.id), cap));
-      const nounOf = (source: string) => {
-        const tool = options.source_catalog.find(entry => entry.source === source)?.tool_id;
-        return agenticListNounV1({ selector: source, ...(typeof tool === "string" ? { tool_id: tool } : {}) });
+      /** What a list's members are called: their desk kinds, after the catalog's tool (ADR-0041). */
+      const nounOf = (list: AgenticWriterListV1) => {
+        const tool = options.source_catalog.find(entry => entry.source === list.source)?.tool_id;
+        return agenticListMembersNounV1({ selector: list.source, ...(typeof tool === "string" ? { tool_id: tool } : {}) }, rows.get(list.id)!.map(member => member.kind));
       };
 
       // ---- final answer ---------------------------------------------------
@@ -331,8 +332,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const selectionNotFound: string[] = [];
       const naming = uses.flatMap(use => {
         if (use.list.count === 0) return [];
-        const noun = nounOf(use.list.source);
-        if (!use.list.complete) listGaps.push(listEndGap(noun));
+        const noun = nounOf(use.list);
+        if (!use.list.complete) listGaps.push(listEndGap(noun.plural));
         const selected: readonly AgenticWriterListMemberV1[] = agenticListSelectV1(rows.get(use.list.id)!, use.where);
         if (selected.length === 0) { selectionNotFound.push(agenticListSelectionNotFoundV1(noun, use.list.filter, use.where!)); return []; }
         return [{ ...use, noun, selected }];
@@ -346,7 +347,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(field === undefined ? {} : { where: { field, value: value.selected[0]![field]! } }),
         });
         // Each named member cites its own row.
-        return statementOf(statement.text, value.selected.slice(0, statement.named).map(member => member.id));
+        return statementOf(statement.text, statement.cited.map(index => value.selected[index]!.id));
       });
 
       // The writer's sentences: cited ids it was given, each list it cites adding no citation of its own. A sentence that

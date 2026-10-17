@@ -155,6 +155,54 @@ export function agenticListNounV1(source: { readonly selector: string; readonly 
   return tool === undefined ? selector : `${tool.charAt(0).toUpperCase()}${tool.slice(1)} ${selector}`;
 }
 
+/**
+ * What each desk kind is, plural and singular: a decision is a decision whichever source listed it. A document
+ * passage that a list releases stands for its document (the inventory lists each document's first passage).
+ */
+const KIND_NOUNS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
+  imported_meeting: ["meetings", "meeting"], decision: ["decisions", "decision"], action: ["actions", "action"], rationale: ["rationales", "rationale"],
+  note: ["notes", "note"], document_passage: ["documents", "document"], slack_message: ["messages", "message"],
+  ticket: ["tickets", "ticket"], page: ["pages", "page"], follow_up: ["follow-ups", "follow-up"],
+});
+function kindNoun(kind: string, count: number): string {
+  const [plural, singular] = KIND_NOUNS[kind] ?? ["items", "item"];
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+/** A plural noun's singular: "Jira tickets" is "Jira ticket". */
+function singularOf(noun: string): string {
+  return noun.endsWith("s") && !noun.endsWith("ss") ? noun.slice(0, -1) : noun;
+}
+
+/** How a list's members are called, plural and singular. */
+export interface AgenticListNounFormsV1 {
+  readonly plural: string;
+  readonly singular: string;
+  /** The one desk kind every member has, when the noun names it; a kind filter then needs no words of its own. */
+  readonly kind?: string;
+}
+
+/**
+ * A list's noun from what its members are (ADR-0041): their desk kinds, after the tool when the catalog names one
+ * ("Jira tickets", "Slack messages"), so a meeting list of decisions says "decisions", never "meetings". Members of
+ * several kinds are "items from" the source's own noun; a list with no member keeps that noun. It reads the catalog
+ * entry and the members' kinds only, never a source-specific rule.
+ */
+export function agenticListMembersNounV1(source: { readonly selector: string; readonly tool_id?: string }, kinds: readonly string[]): AgenticListNounFormsV1 {
+  const distinct = [...new Set(kinds)];
+  const known = distinct.length === 1 ? KIND_NOUNS[distinct[0]!] : undefined;
+  const tool = source.tool_id === undefined || source.tool_id.length === 0 ? undefined : `${source.tool_id.charAt(0).toUpperCase()}${source.tool_id.slice(1)}`;
+  if (known !== undefined) {
+    const tooled = (noun: string) => tool === undefined ? noun : `${tool} ${noun}`;
+    return Object.freeze({ plural: tooled(known[0]), singular: tooled(known[1]), kind: distinct[0]! });
+  }
+  const noun = agenticListNounV1(source);
+  return Object.freeze(distinct.length < 2 ? { plural: noun, singular: singularOf(noun) } : { plural: `items from ${noun}`, singular: `item from ${noun}` });
+}
+/** A noun as a caller passes it: forms, or a plural whose singular drops its last "s". */
+function formsOf(noun: string | AgenticListNounFormsV1): AgenticListNounFormsV1 {
+  return typeof noun === "string" ? { plural: noun, singular: singularOf(noun) } : noun;
+}
+
 const FILTER_WORDS: Readonly<Record<AgenticListFilterFieldV1, string>> = Object.freeze({
   kind: "kind", status: "status", owner: "owner", channel: "channel", since: "date", until: "date", date_field: "date",
 });
@@ -472,33 +520,71 @@ export function agenticListFilterPhraseV1(filter: AgenticListFilterV1): string {
   ].join("");
 }
 
-/** A plural noun for a count: "1 Jira ticket", "8 Confluence pages". */
-function counted(noun: string, count: number): string {
-  return count === 1 && noun.endsWith("s") && !noun.endsWith("ss") ? noun.slice(0, -1) : noun;
+/** A noun for a count: "1 Jira ticket", "8 Confluence pages". */
+function counted(noun: AgenticListNounFormsV1, count: number): string {
+  return count === 1 ? noun.singular : noun.plural;
+}
+/** The filter phrase after a noun: a kind filter the noun already names has no words of its own. */
+function phraseAfter(noun: AgenticListNounFormsV1, filter: AgenticListFilterV1): string {
+  if (noun.kind === undefined || filter.kind !== noun.kind) return agenticListFilterPhraseV1(filter);
+  const { kind: _kind, ...rest } = filter;
+  return agenticListFilterPhraseV1(rest);
 }
 
-/** The row facts a code-written statement names. */
-export type AgenticListNamedMemberV1 = Pick<AgenticWriterListMemberV1, "title" | "status" | "owner" | "due">;
+/** The row facts a code-written statement names; `kind` is the member's desk kind. */
+export type AgenticListNamedMemberV1 = Pick<AgenticWriterListMemberV1, "title" | "status" | "owner" | "due"> & { readonly kind?: string };
+
+/** Members that share a label (ignoring case and spacing) are one name: indexes in list order, by first member. */
+function nameGroups(members: readonly AgenticListNamedMemberV1[]): readonly (readonly number[])[] {
+  const groups = new Map<string, number[]>();
+  members.forEach((member, index) => {
+    const key = line(member.title, AGENTIC_LIST_NAME_CHARS_V1).toLowerCase();
+    groups.set(key, [...(groups.get(key) ?? []), index]);
+  });
+  return [...groups.values()];
+}
+
+/** Names for groups of `members` (nameGroups), in order. */
+function groupNames(members: readonly AgenticListNamedMemberV1[], groups: readonly (readonly number[])[]): readonly string[] {
+  // A group's status, owner or due date is the value all its members record; values that differ only in case or
+  // spacing are the same value.
+  const same = (value: string | undefined) => value?.trim().toLowerCase();
+  const common = (group: readonly number[], field: "status" | "owner" | "due") => {
+    const values = group.map(index => members[index]![field]);
+    return values.every(value => same(value) === same(values[0])) ? values[0] : undefined;
+  };
+  const differs = (field: "status" | "owner" | "due") => new Set(groups.map(group => same(common(group, field)))).size > 1;
+  const show = { status: differs("status"), owner: differs("owner"), due: differs("due") };
+  // Several kinds among the members: each name says which kinds it holds.
+  const mixed = new Set(members.map(member => member.kind)).size > 1;
+  return Object.freeze(groups.map(group => {
+    const kinds = [...new Set(group.map(index => members[index]!.kind ?? ""))];
+    const status = show.status ? common(group, "status") : undefined;
+    const owner = show.owner ? common(group, "owner") : undefined;
+    const due = show.due ? common(group, "due") : undefined;
+    const details = [
+      ...(group.length > 1 || mixed ? [joined(kinds.map(kind => kindNoun(kind, group.filter(index => (members[index]!.kind ?? "") === kind).length)))] : []),
+      ...(status === undefined ? [] : [line(status, 60)]),
+      ...(owner === undefined ? [] : [owner === "none recorded" ? "no owner recorded" : `owner ${line(owner, 80)}`]),
+      ...(due === undefined ? [] : [`due ${agenticCalendarDayV1(line(due, 40))}`]),
+    ];
+    const label = line(members[group[0]!]!.title, AGENTIC_LIST_NAME_CHARS_V1);
+    return details.length === 0 ? label : `${label} (${details.join(", ")})`;
+  }));
+}
 
 /**
  * Members as a code-written statement names them: each label, cut to
  * AGENTIC_LIST_NAME_CHARS_V1 characters, then its status, owner and due date
- * wherever those differ between the named members (ignoring case). No source-specific rule:
- * a page reads by title, a ticket by key and summary, a follow-up by title.
+ * wherever those differ between the named members (ignoring case). Members
+ * that share a label are one name with their kinds counted: a meeting's
+ * records all carry the meeting's label, so "THERM DVT sync (2026-10-04) (1
+ * decision and 2 actions)". No source-specific rule: a page reads by title, a
+ * ticket by key and summary, a follow-up by title, a meeting record by its
+ * meeting.
  */
 export function agenticListMemberNamesV1(members: readonly AgenticListNamedMemberV1[]): readonly string[] {
-  // Values that differ only in case or spacing are the same value.
-  const differs = (field: "status" | "owner" | "due") => new Set(members.map(member => member[field]?.trim().toLowerCase())).size > 1;
-  const show = { status: differs("status"), owner: differs("owner"), due: differs("due") };
-  return Object.freeze(members.map(member => {
-    const details = [
-      ...(show.status && member.status !== undefined ? [line(member.status, 60)] : []),
-      ...(show.owner && member.owner !== undefined ? [member.owner === "none recorded" ? "no owner recorded" : `owner ${line(member.owner, 80)}`] : []),
-      ...(show.due && member.due !== undefined ? [`due ${agenticCalendarDayV1(line(member.due, 40))}`] : []),
-    ];
-    const label = line(member.title, AGENTIC_LIST_NAME_CHARS_V1);
-    return details.length === 0 ? label : `${label} (${details.join(", ")})`;
-  }));
+  return groupNames(members, nameGroups(members));
 }
 
 /** Members whose row field equals the selection's value, ignoring case; every member without one. */
@@ -510,8 +596,8 @@ export function agenticListSelectV1<T extends Pick<AgenticWriterListMemberV1, "o
 
 /** What one code-written statement says about a list. */
 export interface AgenticListStatementInputV1 {
-  /** The list's noun, plural ("Confluence pages"). */
-  readonly noun: string;
+  /** The list's noun (agenticListMembersNounV1), or a plural ("Confluence pages") whose singular drops its "s". */
+  readonly noun: string | AgenticListNounFormsV1;
   readonly filter: AgenticListFilterV1;
   /** Members ECHO listed: the list's own count, never a vendor's total (addition 5). */
   readonly count: number;
@@ -520,40 +606,53 @@ export interface AgenticListStatementInputV1 {
   readonly where?: NonNullable<AgenticAnswerListUseV1["where"]>;
   /** The selected members, in list order: every member without a selection. */
   readonly selected: readonly AgenticListNamedMemberV1[];
-  /** Members this statement may name: the answer's share (agenticListNameSharesV1). */
+  /** Members this statement may cite: the answer's share (agenticListNameSharesV1). */
   readonly share: number;
 }
 
 /**
  * The statement code writes for a list the answer uses (ADR-0041): its count,
- * its filter and up to `share` names, then "and N more" with N from the list.
+ * its filter and its names, then "and N more" with N from the list.
  * A complete list: "8 Confluence pages created on October 4, 2026: A; B; ...".
  * A selection: "3 of the 60 Jira tickets created ... have owner Dana Lee: A; B; C".
- * A list that is not complete: "At least 12 Jira tickets ...". Names stop early
- * when the statement would pass AGENTIC_LIST_STATEMENT_BYTES_V1. `named` is how
- * many of `selected`, from the first, it names; the caller cites exactly those.
+ * A list that is not complete: "At least 12 Jira tickets ...". Members that
+ * share a label are one name (agenticListMemberNamesV1). Names are taken in
+ * list order while the members they cover fit `share` (the first always, citing
+ * at most `share` of its members), and stop early when the statement would pass
+ * AGENTIC_LIST_STATEMENT_BYTES_V1. `named` is how many of `selected` the names
+ * cover, so "and N more" is `selected.length - named`; `cited` are the indexes
+ * of `selected`, in order, the caller cites.
  */
-export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly named: number } {
-  const { noun, count, complete, where, selected } = input;
+export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly named: number; readonly cited: readonly number[] } {
+  const { count, complete, where, selected } = input;
   if (selected.length === 0 || input.share < 1) throw new RangeError("A list statement names at least one member");
-  const phrase = agenticListFilterPhraseV1(input.filter);
+  const noun = formsOf(input.noun);
+  const phrase = phraseAfter(noun, input.filter);
   const k = selected.length;
   const lead = where === undefined
     ? `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`
     : complete
       ? `${k} of the ${count} ${counted(noun, count)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)}`
       : `At least ${k} ${counted(noun, k)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)} (${count} listed so far)`;
-  for (let named = Math.min(input.share, k); named >= 1; named -= 1) {
-    const names = agenticListMemberNamesV1(selected.slice(0, named));
-    const text = `${lead}: ${names.join("; ")}${named < k ? `; and ${k - named} more` : ""}.`;
-    if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || named === 1) return Object.freeze({ text, named });
+  const groups = nameGroups(selected);
+  let fit = 1;
+  for (let covered = groups[0]!.length; fit < groups.length && covered + groups[fit]!.length <= input.share; fit += 1) covered += groups[fit]!.length;
+  for (let shown = fit; shown >= 1; shown -= 1) {
+    const named = groups.slice(0, shown);
+    const covered = named.reduce((total, group) => total + group.length, 0);
+    const text = `${lead}: ${groupNames(selected, named).join("; ")}${covered < k ? `; and ${k - covered} more` : ""}.`;
+    if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || shown === 1) {
+      const cited = named.flatMap(group => group).slice(0, Math.max(input.share, 1));
+      return Object.freeze({ text, named: covered, cited: Object.freeze([...cited].sort((left, right) => left - right)) });
+    }
   }
   throw new RangeError("unreachable");
 }
 
 /** The not_found phrase for a selection that matches no member: never a statement (ADR-0041). */
-export function agenticListSelectionNotFoundV1(noun: string, filter: AgenticListFilterV1, where: NonNullable<AgenticAnswerListUseV1["where"]>): string {
-  return `${noun}${agenticListFilterPhraseV1(filter)} that have ${where.field} ${line(where.value, 120)}`;
+export function agenticListSelectionNotFoundV1(noun: string | AgenticListNounFormsV1, filter: AgenticListFilterV1, where: NonNullable<AgenticAnswerListUseV1["where"]>): string {
+  const forms = formsOf(noun);
+  return `${forms.plural}${phraseAfter(forms, filter)} that have ${where.field} ${line(where.value, 120)}`;
 }
 
 /**

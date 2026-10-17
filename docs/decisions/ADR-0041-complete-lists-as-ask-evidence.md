@@ -237,7 +237,16 @@ route, header, database table or client changes.
   differ between the named members. There is no source-specific branch:
   Confluence pages read by title; Jira tickets by key and summary, with status
   and assignee; meetings by their record's label; follow-ups by title, with
-  owner and due date.
+  owner and due date. Built: the noun says what the members are, from their
+  desk kinds after the catalog's tool (`agenticListMembersNounV1`): "Jira
+  tickets", "Slack messages", and "decisions" or "actions" for a meeting list
+  of those records, never "meetings". A kind filter the noun names has no
+  words of its own ("2 actions with owner Mara"). Members of several kinds are
+  "items from" the source's noun. Members that share a label are one name with
+  their kinds counted, since every record of a meeting carries the meeting's
+  label: "THERM DVT sync (2026-10-04) (1 decision and 2 actions)". The count
+  and "and N more" still count members, from the list itself; a name is cited
+  by each member it covers, within the answer's share.
 - **Long lists.** One answer names at most 25 members across all its lists,
   shared round-robin between the lists it uses (`agenticListNameSharesV1`).
   Each statement ends "and N more" for the rest. Names stop early if the

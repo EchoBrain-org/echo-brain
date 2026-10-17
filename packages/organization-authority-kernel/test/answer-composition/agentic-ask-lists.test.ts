@@ -260,7 +260,7 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
     const view = await h.research.research({ trigger: "ask", brief: question(text) });
     expect(view.lists).toEqual([expect.objectContaining({ id: "L1", filter: { kind: "action", status: "open", time_zone: "UTC" }, filter_applied: { status: "partial" }, members: ["E1", "E2"], complete: true })]);
-    expect(view.coverage.notices).toEqual(["Meetings were filtered by status only where they record one, so this list also includes items that record none."]);
+    expect(view.coverage.notices).toEqual(["Actions were filtered by status only where they record one, so this list also includes items that record none."]);
   });
 
   it("names no filter a found need does not rest on", async () => {
@@ -591,8 +591,28 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", complete: true, count: 8, checked: 4, cited_by_plan: true });
     expect(response.outcome).toBe("answered");
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([
-      `8 meetings with kind action and owner Mara: ${rows.map(row => row.label).join("; ")}.`,
+      `8 actions with owner Mara: ${rows.map(row => row.label).join("; ")}.`,
     ]);
+  });
+
+  it("names a meeting's records once, by its label with their kinds, never as that many meetings", async () => {
+    // Production labels: every record of a meeting carries the meeting's title and date.
+    const label = "THERM DVT sync (2026-10-04)";
+    const day = { occurred_at: "2026-10-04", label };
+    const items = [
+      listed("meeting", { ...day, kind: "imported_meeting" }), listed("d1", { ...day, kind: "decision" }),
+      listed("a1", { ...day, kind: "action", attributes: { owner: "Dana Lee" } }), listed("r1", { ...day, kind: "rationale" }),
+    ];
+    const text = "Which meetings did I have on October 4, 2026?";
+    const need = "meetings on 2026-10-04";
+    const h = harness([
+      ask(text, need, "open", [], [{ tool: "list", args: { source: "meetings", since: "2026-10-04", until: "2026-10-04" } }]),
+      ask(text, need, "found", ["L1"], [finish], "N1"),
+      useL1,
+    ], { list: vi.fn(async () => result(items) as EvidenceDeskResultV2) });
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]!.statements).toEqual([{ text: `4 items from meetings dated on October 4, 2026: ${label} (1 meeting, 1 decision, 1 action and 1 rationale).`, citation_indexes: [0, 1, 2, 3], private: false }]);
   });
 
   it("names a meeting-action list the same way, with a due date where members differ", async () => {
@@ -609,7 +629,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const { response } = await h.research.answerWithResearch({ question: text });
     expect(response.outcome).toBe("answered");
     expect(response.parts[0]!.statements).toEqual([
-      { text: "2 meetings with kind action and owner Mara: Meeting a1 (due October 9, 2026); Meeting a2.", citation_indexes: [0, 1], private: false },
+      { text: "2 actions with owner Mara: Meeting a1 (due October 9, 2026); Meeting a2.", citation_indexes: [0, 1], private: false },
       { text: "Mara will publish the dashboard first.", citation_indexes: [0], private: false },
     ]);
   });
