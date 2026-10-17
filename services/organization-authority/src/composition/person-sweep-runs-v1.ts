@@ -10,7 +10,7 @@ import {
 import type { createAgenticResearchV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
-import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
+import { SWEEP_APPROVED_DECISION_V1, SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
 import type { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { TriggerRunRowV1, TriggerRunScopeV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import {
@@ -53,8 +53,6 @@ const KIND_WORDS: Readonly<Record<PersonOpenItemKindV1, string>> = Object.freeze
   // A meeting action is never swept (the sweep trigger refuses its pointer); its word only completes the map.
   action: 'meeting action', ticket: 'Jira ticket', page: 'page', slack_message: 'Slack message', record: 'ECHO record', document: 'ECHO document',
 });
-/** What a finding expects of an item with no phrase of its own, for a caller not shown the decision's first line. */
-const APPROVED_DECISION = 'the approved decision';
 
 function ascending(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -134,11 +132,13 @@ export async function sweepOpenItemsV1(input: {
     const { row } = entry;
     const decision = decisionPart(entry);
     const item = `${RELATION_WORDS[row.relation ?? 'not_assessed']} ${KIND_WORDS[openItemKindV1(row.pointer)]}`;
-    // A short phrase, as an item's own `expected` is.
+    // A short phrase, as an item's own `expected` is: else the first line its impact card decided, for a decision reader. Else the
+    // renderer shows the judge the decision's own current text in place of the placeholder (a caller not shown the decision has no
+    // decision citation, so it stays the placeholder).
     const firstLine = decision?.first_line == null ? '' : impactCardLineV1(decision.first_line, LIMITS.expected_chars);
     return {
       finding: decision === undefined ? item : `${item} from ${decision.title}`,
-      expected: row.expected ?? (firstLine || APPROVED_DECISION),
+      expected: row.expected ?? (firstLine || SWEEP_APPROVED_DECISION_V1),
       // The item first: the renderer judges a finding against its own items. The decision after it is context.
       citations: decision === undefined ? [row.pointer] : [row.pointer, anchorOf(row.record_sha256)],
     };

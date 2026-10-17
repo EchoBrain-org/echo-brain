@@ -5,7 +5,7 @@ import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/
 import { describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import { AGENTIC_MODEL_OUTPUT_TOKENS_V1, AgenticAskDeadlineErrorV1, createAgenticModelGateV1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../../src/answer-composition/agentic-research-v1.js";
-import { SWEEP_PROMPT, SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from "../../../src/answer-composition/renderers/sweep-renderer-v1.js";
+import { SWEEP_APPROVED_DECISION_V1, SWEEP_PROMPT, SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from "../../../src/answer-composition/renderers/sweep-renderer-v1.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2 } from "../../../src/shared/evidence-desk-v2.js";
 import { EMPTY_BUNDLE, checked, generation, scriptedGate } from "../fixtures/agentic-scenarios.js";
@@ -425,6 +425,22 @@ describe("sweep renderer", () => {
     const unplanned = alone({ findings: [FINDINGS[0]!], bundle: bundle({ unreadable: [] }), replies: [{ findings: [REPLY.findings[0]] }] });
     await unplanned.render();
     expect(unplanned.trace[0]).toBe("context:E1,E2");
+  });
+
+  it("tells the judge what was expected: the decision's own words, as research read them now, in place of the placeholder", async () => {
+    expect(SWEEP_APPROVED_DECISION_V1).toBe("the approved decision");
+    const placeholder = { ...FINDINGS[0]!, expected: SWEEP_APPROVED_DECISION_V1 };
+    const expectedOf = async (finding: SweepTriggerInputV1["findings"][number], value: AgenticEvidenceBundleV1) => {
+      const run = alone({ findings: [finding], bundle: value, replies: [{ findings: [REPLY.findings[0]] }] });
+      await run.render();
+      return (run.prompt(0).findings as { expected: string }[])[0]!.expected;
+    };
+    expect(await expectedOf(placeholder, bundle({ unreadable: [] }))).toBe("Approved: show two decimals (0.01 °C) on the display from DVT.");
+    // A finding's own phrase is kept as it is.
+    expect(await expectedOf(FINDINGS[0]!, bundle({ unreadable: [] }))).toBe("two decimals from DVT");
+    // A decision research could not read, or a caller not shown it (no decision citation): the placeholder stays.
+    expect(await expectedOf(placeholder, bundle({ unreadable: [DECISION], items: [ITEMS[0]!] }))).toBe(SWEEP_APPROVED_DECISION_V1);
+    expect(await expectedOf({ ...placeholder, citations: [TICKET_46] }, bundle({ unreadable: [] }))).toBe(SWEEP_APPROVED_DECISION_V1);
   });
 
   // A reply is usable only whole: every finding it was given judged once, from items it was shown.
