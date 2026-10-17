@@ -70,10 +70,13 @@ describe("research loop: finishing with nothing found", () => {
       ]),
       affects("not_found"),
       reads("open", [{ tool: "search", args: { source: "tickets", query: "canary" } }]),
+      affects("not_found"),
     ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list: async input => ticketPage(pageOf(input), 5) });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining('listed inventory still has unread pages; repeat list with {"source":"tickets"}, or search tickets for the fact')]);
     expect(h.prompt(2).validation_error).toContain("or search tickets for the fact");
+    // Once tickets were searched, the same finish is accepted.
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
   });
 
   it("treats a filtered inventory as read when the same source's unfiltered inventory is complete", async () => {
@@ -198,6 +201,22 @@ describe("research loop: progress", () => {
     expect(h.generate).toHaveBeenCalledTimes(5);
     expect(list).toHaveBeenCalledTimes(3);
     expect(view.stop).toEqual({ reason: "no_progress", completed: false });
+  });
+
+  it("keeps the extra idle round a discovery earned through a later empty search, so a not_found finish is still accepted", async () => {
+    const approved = record("canary", "Approved: staging must verify owner approval of a staged meeting.");
+    const hits = ["ECHO-7", "ECHO-8", "ECHO-9"].map(key => ticket(key));
+    const search = vi.fn(async (input: Parameters<EvidenceDeskPortV2["search"]>[0]) => result(input.query === "canary" ? hits : []));
+    const h = harness([
+      reads("open", [{ tool: "search", args: { source: "tickets", query: "canary" } }]),         // 3 new metadata-only hits: idle
+      reads("open", [{ tool: "search", args: { source: "tickets", query: "staged meeting" } }]), // nothing: still idle
+      affects("not_found"),
+    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), search });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(h.generate).toHaveBeenCalledTimes(3);
+    expect(view.rounds.map(round => round.rejected)).toEqual([[], [], []]);
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
   });
 
   it("stops after two idle rounds that discover nothing new", async () => {

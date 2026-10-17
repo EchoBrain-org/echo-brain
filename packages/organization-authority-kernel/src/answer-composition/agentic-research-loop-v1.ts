@@ -883,6 +883,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     let results: readonly ToolResult[] = [];
     let latest: ReadonlySet<string> = new Set();
     let idleSteps = 0;
+    /** A round of the current idle streak discovered new items: the planner keeps one more round to open them. */
+    let idleDiscovered = false;
     const stepTimeout = () => Math.min(STEP_TIMEOUT_MS, remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
     /** The time a step needs to start: the minimum, or the margin over the longest step call so far, at most a whole step. */
     const stepNeeds = () => Math.min(STEP_TIMEOUT_MS, Math.max(AGENTIC_ASK_MIN_STEP_MS_V1, Math.ceil(STEP_TIME_MARGIN * longestStepMs)));
@@ -989,8 +991,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       }
       const progressed = (hadCitableEvidence ? evidenceNovelty : retrievalProgress) > before;
       idleSteps = progressed ? 0 : idleSteps + 1;
-      // New metadata-only items are not progress, but the planner may still open what this round discovered.
-      if (idleSteps >= (entries.size > entriesBefore ? 3 : 2)) { researchStop = 'no_progress'; break; }
+      // New metadata-only items are not progress, but the planner may still open what the streak discovered, even after
+      // another read first (a search that found titles, then an empty search, then a not_found finish).
+      idleDiscovered = !progressed && (idleDiscovered || entries.size > entriesBefore);
+      if (idleSteps >= (idleDiscovered ? 3 : 2)) { researchStop = 'no_progress'; break; }
     }
     if (plan.length === 0) plan = proposedPlan([{ question: partQuestion(goal.kind === "question" ? goal.question : goal.task), needs: [], notes: "" }]);
   };
