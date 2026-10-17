@@ -11,6 +11,8 @@ import {
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
   PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
   formatPersonAskProgressEventV1,
+  validatePersonAskProgressLineV1,
+  validatePersonAskProgressResultLineV1,
   type OrganizationPersonSessionV2,
   type PersonAnswerScopeV3,
   type PersonAskProgressEventV1,
@@ -18,9 +20,10 @@ import {
 } from '@echo-brain/organization-api';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { PersonClient } from '../../src/product/person-client/client.js';
+import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 
-// Ask progress V1 (ADR-0039) on the Person client: the opt-in stream and its fallbacks.
+// Ask progress V1 (ADR-0039) on the Person client: the opt-in stream, its fallbacks, and `person ask --live --progress`.
 
 const ORIGIN = 'https://authority.example.test';
 const NOW = '2026-10-16T10:00:00.000Z';
@@ -94,6 +97,15 @@ const authority = (fetch: typeof globalThis.fetch) => new PersonAuthorityClient(
 const pathOf = (input: unknown) => new URL(String(input)).pathname;
 const headersOf = (init: RequestInit | undefined) => new Headers(init?.headers);
 
+function cli(home: string, fetch: typeof globalThis.fetch, abort_signal?: AbortSignal) {
+  const output = { stdout: '', stderr: '' };
+  const run = (argv: readonly string[]) => runPersonClientCli(argv, {
+    home_directory: home, now: () => NOW, fetch, ...(abort_signal === undefined ? {} : { abort_signal }),
+    stdout: { write: value => { output.stdout += value; } }, stderr: { write: value => { output.stderr += value; } },
+  });
+  return { output, run };
+}
+const lines = (text: string) => text.split('\n').filter(line => line !== '').map(line => JSON.parse(line) as unknown);
 
 describe('Ask progress stream on the Person client (ADR-0039)', () => {
   it('opts in on V5 and reads every event across any chunking, heartbeats included', async () => {
@@ -383,5 +395,104 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     stream.close();
     await expect(pending).resolves.toEqual({ result: answer(), receipt: receipt() });
     expect(progress).toEqual([STEPS[0], ...STEPS.slice(2)]);
+  });
+});
+
+describe('person ask --live --progress', () => {
+  it('prints each step as its own line, then today\'s final line with the receipt', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(STREAM, 7));
+    const { output, run } = cli(sessionHome(), fetch);
+    await expect(run(['ask', '--question', 'What did we decide?', '--live', '--progress'])).resolves.toBe(0);
+    expect(output.stderr).toBe('');
+    const printed = lines(output.stdout);
+    expect(printed.slice(0, -1).map(line => validatePersonAskProgressLineV1(line))).toEqual(STEPS.map(progress => ({ ok: true, progress })));
+    expect(validatePersonAskProgressResultLineV1(printed.at(-1))).toEqual({ ok: true, result: answer(), receipt: receipt() });
+    expect(output.stdout.endsWith('\n')).toBe(true);
+    expect(headersOf(fetch.mock.calls[0]![1]).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('1');
+  });
+
+  it('keeps the project scope on the streamed request', async () => {
+    const project = 'prj_00000000-0000-4000-8000-000000000019' as const;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(frames([{ type: 'answer', response: answer({ kind: 'project', project_id: project }), receipt: receipt() }])));
+    const { output, run } = cli(sessionHome(), fetch);
+    await expect(run(['ask', '--question', 'What did we decide?', '--live', '--progress', '--project', project])).resolves.toBe(0);
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ schema_version: 3, question: 'What did we decide?', project_id: project });
+    expect(lines(output.stdout)).toEqual([{ ok: true, result: answer({ kind: 'project', project_id: project }), receipt: receipt() }]);
+  });
+
+  it('prints exactly today\'s line from an Authority that does not stream, and from the V4 fallback', async () => {
+    const home = sessionHome();
+    for (const [replies, result] of [
+      [() => [json(answer())], answer()],
+      [() => [json({ error: { code: 'not_found', message: 'route absent' } }, 404), json(v5Answer())], v5Answer()],
+    ] as const) {
+      const ask = async (argv: readonly string[]) => {
+        const queue = replies();
+        const { output, run } = cli(home, vi.fn<typeof globalThis.fetch>().mockImplementation(async () => queue.shift()!));
+        await expect(run(argv)).resolves.toBe(0);
+        return output;
+      };
+      const today = await ask(['ask', '--question', 'What did we decide?', '--live']);
+      await expect(ask(['ask', '--question', 'What did we decide?', '--live', '--progress'])).resolves.toEqual(today);
+      expect(lines(today.stdout)).toEqual([{ ok: true, result }]);
+    }
+  });
+
+  it('sends no opt-in header and prints one line without --progress, and never streams Mine on V3', async () => {
+    for (const [argv, path, body] of [
+      [['ask', '--question', 'What did we decide?', '--live'], '/v5/person/ask', answer()],
+      [['ask', '--question', 'What did we decide?', '--mine'], '/v3/person/ask', { ...answer({ kind: 'mine' }), schema_version: 4, kind: 'echo-clean-person-answer-v4' }],
+    ] as const) {
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body));
+      const { output, run } = cli(sessionHome(), fetch);
+      await expect(run(argv)).resolves.toBe(0);
+      expect(pathOf(fetch.mock.calls[0]![0])).toBe(path);
+      expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
+      expect(output.stdout).toBe(`${JSON.stringify({ ok: true, result: body })}\n`);
+    }
+  });
+
+  it('refuses --progress without --live as a usage error before any request', async () => {
+    for (const extra of [[], ['--mine'], ['--tickets'], ['--project', 'prj_00000000-0000-4000-8000-000000000019']]) {
+      const fetch = vi.fn<typeof globalThis.fetch>();
+      const { output, run } = cli(sessionHome(), fetch);
+      await expect(run(['ask', '--question', 'What did we decide?', '--progress', ...extra])).resolves.toBe(2);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(output.stdout).toBe('');
+      expect(JSON.parse(output.stderr)).toEqual({ ok: false, error: '--progress requires --live with `echo-brain person ask`' });
+    }
+  });
+
+  it('makes an error inside the stream the command\'s ordinary failure, after the steps already printed', async () => {
+    for (const [status, code, message] of [[502, 'invalid_output', 'Answer generation returned an invalid response.'], [503, 'unavailable', 'Person Authority rejected the request']] as const) {
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(`${frames(STEPS.slice(0, 1))}${frames([{ type: 'error', status, error: { code, message: 'request failed' } }])}`));
+      const { output, run } = cli(sessionHome(), fetch);
+      await expect(run(['ask', '--question', 'What did we decide?', '--live', '--progress'])).resolves.toBe(1);
+      expect(lines(output.stdout)).toEqual([{ ok: true, progress: STEPS[0] }]);
+      expect(JSON.parse(output.stderr)).toEqual({ ok: false, action: 'ask', error: message, code, status });
+    }
+  });
+
+  it('fails a malformed stream as invalid_response and prints no result', async () => {
+    // Byte by byte, so the first step is complete before the malformed event arrives.
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(`${frames(STEPS.slice(0, 1))}data: {"type":"stage","stage":"thinking"}\n\n`, 1));
+    const { output, run } = cli(sessionHome(), fetch);
+    await expect(run(['ask', '--question', 'What did we decide?', '--live', '--progress'])).resolves.toBe(1);
+    expect(lines(output.stdout)).toEqual([{ ok: true, progress: STEPS[0] }]);
+    expect(JSON.parse(output.stderr)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response', status: 200 });
+  });
+
+  it('stops on the desktop\'s cancellation mid-stream and prints no result', async () => {
+    const stream = openStream();
+    const caller = new AbortController();
+    const { output, run } = cli(sessionHome(), vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response), caller.signal);
+    const pending = run(['ask', '--question', 'What did we decide?', '--live', '--progress']);
+    stream.write(frames(STEPS.slice(0, 1)));
+    await vi.waitFor(() => expect(lines(output.stdout)).toHaveLength(1));
+    caller.abort();
+    await expect(pending).resolves.toBe(1);
+    expect(stream.state.cancelled).toBe(true);
+    expect(lines(output.stdout)).toEqual([{ ok: true, progress: STEPS[0] }]);
+    expect(JSON.parse(output.stderr)).toMatchObject({ ok: false, action: 'ask', code: 'transport_failed' });
   });
 });
