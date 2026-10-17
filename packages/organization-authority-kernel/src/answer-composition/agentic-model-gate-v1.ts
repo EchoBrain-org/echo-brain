@@ -12,6 +12,7 @@ import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeP
 import { AgenticAskOutputErrorV1, cleanLine, repairPrompt } from "./agentic-ask-v1-model-protocol.js";
 import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
+import { AuthorityOperationError } from '../domain/errors.js';
 
 /**
  * The shared model gate (research trigger contract v1, section 3): every model
@@ -177,6 +178,40 @@ export interface AgenticModelGateV1 {
   stats(): AgenticModelGateStatsV1;
 }
 
+/** The pause before the one retry of an access check that failed transiently. */
+export const AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1 = 400;
+
+function abortablePause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const cancelled = () => { clearTimeout(timer); reject(abortReason(signal)); };
+    const timer = setTimeout(() => { signal.removeEventListener("abort", cancelled); resolve(); }, ms);
+    signal.addEventListener("abort", cancelled, { once: true });
+  });
+}
+
+/**
+ * Runs one access check, and runs it once more after a short pause when it
+ * failed with a transient code (`unavailable`, `rate_limited`). The retry is
+ * a fresh check of the same evidence, so it proves what a first success
+ * would. Authorization, stale-access and not-found failures, aborts and the
+ * deadline are never retried, and no retry starts without time for the pause.
+ */
+export async function revalidateWithTransientRetryV1<T>(check: () => Promise<T>, options: {
+  readonly signal: AbortSignal;
+  readonly assert_live: () => void;
+  /** Milliseconds left before the request deadline, when the caller knows it. */
+  readonly remaining?: () => number;
+}): Promise<T> {
+  try { return await check(); }
+  catch (error) {
+    const transient = error instanceof AuthorityOperationError && (error.code === "unavailable" || error.code === "rate_limited");
+    if (!transient || options.signal.aborted || (options.remaining !== undefined && options.remaining() <= AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1)) throw error;
+    await abortablePause(AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, options.signal);
+    options.assert_live();
+    return check();
+  }
+}
+
 export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Options): AgenticModelGateV1 {
   const { budget, now, deadline } = options;
   const activeSignal = options.signal;
@@ -194,9 +229,11 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     if (calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
     // Every call is preceded by a desk check of what it may carry: what was
     // released since the last check, plus the session, membership, grant and
-    // connection (ADR-0038). Release runs the full cumulative check.
-    const validated = await observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'model', mode: 'incremental', role, next_call_id: calls + 1 },
-      () => raceAbort(activeSignal, options.desk_revalidate({ signal: activeSignal, mode: "incremental" })), value => ({ checked_at: value.checked_at }));
+    // connection (ADR-0038). Release runs the full cumulative check. A
+    // transient failure is retried once; each attempt is its own span.
+    const validated = await revalidateWithTransientRetryV1(() => observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'model', mode: 'incremental', role, next_call_id: calls + 1 },
+      () => raceAbort(activeSignal, options.desk_revalidate({ signal: activeSignal, mode: "incremental" })), value => ({ checked_at: value.checked_at })),
+    { signal: activeSignal, assert_live: assertLive, remaining });
     options.on_checked(validated.checked_at);
     assertLive();
     // Revalidation itself spends request time. Recompute the role budget after the fence,

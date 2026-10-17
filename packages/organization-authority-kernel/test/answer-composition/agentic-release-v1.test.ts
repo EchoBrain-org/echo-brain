@@ -5,6 +5,7 @@ import type { AgenticAskAuditEntryV1 } from "../../src/answer-composition/agenti
 import type { AgenticModelGateStatsV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1 } from "../../src/answer-composition/agentic-release-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
+import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
 import { withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { checked as deskCheck, need, part, replay, researchHarness, SCENARIOS, step } from "./fixtures/agentic-scenarios.js";
@@ -68,6 +69,28 @@ describe("release step", () => {
     const r = release({ fence_after_audit: true, fence: () => Promise.reject(refusal) });
     await expect(r.run()).rejects.toBe(refusal);
     expect(r.trace).toEqual(["revalidate"]);
+    expect(r.audited()).toBe(0);
+  });
+
+  it.each(["before", "after"] as const)("retries one transient failure of the check %s the audit, then releases", async at => {
+    const failing = at === "before" ? 1 : 2;
+    const r = release({ fence_after_audit: true, fence: index => index === failing ? Promise.reject(new AuthorityOperationError("unavailable", "Live evidence operation could not be completed")) : Promise.resolve({ checked_at: `2026-10-06T00:00:0${index}.000Z` }) });
+    await expect(r.run()).resolves.toBe(r.response);
+    expect(r.trace).toEqual(at === "before" ? ["revalidate", "revalidate", "append", "revalidate"] : ["revalidate", "append", "revalidate", "revalidate"]);
+    expect(r.entries).toHaveLength(1);
+  });
+
+  it.each(["unauthorized", "stale_access_state", "not_found"] as const)("never retries a %s release check and releases nothing", async code => {
+    const r = release({ fence_after_audit: true, fence: () => Promise.reject(new AuthorityOperationError(code, "Live evidence operation could not be completed")) });
+    await expect(r.run()).rejects.toMatchObject({ code });
+    expect(r.trace).toEqual(["revalidate"]);
+    expect(r.audited()).toBe(0);
+  });
+
+  it("releases nothing when the retried release check fails again", async () => {
+    const r = release({ fence_after_audit: true, fence: () => Promise.reject(new AuthorityOperationError("rate_limited", "Live evidence operation could not be completed")) });
+    await expect(r.run()).rejects.toMatchObject({ code: "rate_limited" });
+    expect(r.trace).toEqual(["revalidate", "revalidate"]);
     expect(r.audited()).toBe(0);
   });
 
