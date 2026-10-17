@@ -693,6 +693,15 @@ describe("research loop: need ids", () => {
     expect(view.rounds[2]!.rejected[0]).toContain('part 1 need N3 "owner\'s team" is still open');
   });
 
+  it("shows the need id in the reply shape both step prompts call exact, as rule 1 and the example do", () => {
+    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) {
+      const lines = prompt.split("\n");
+      const shape = JSON.parse(lines[lines.indexOf("Reply with ONLY a JSON object in exactly this shape:") + 1]!) as { parts: { needs: unknown[] }[] };
+      expect(shape.parts[0]!.needs[0]).toEqual({ id: "N1", need: "<a fact needed>", status: "open", evidence: [] });
+      expect(prompt).toContain("A need's \"id\" is its id from plan; leave it out in step 1 and for a new need.");
+    }
+  });
+
   it("settles a need its id names in a part the step adds, where it was planned, and adds only the new needs", async () => {
     const h = harness([
       step([part("When and who?", [need("launch date", "open"), need("launch owner", "open")])], [{ tool: "search", args: { query: "launch" } }]),
