@@ -175,7 +175,9 @@ type OrderedAdmission = (apply: () => ToolResult) => Promise<ToolResult>;
 /** Code-owned plan state. A need leaves the plan only by being marked found or not_found. */
 type NeedState = { readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
 type PartState = { readonly question: string; notes: string; readonly needs: NeedState[] };
-type ListState = { args: StepArgs; items: EvidenceDeskItemV2[]; cursor: string | undefined; fetched: boolean; shown: number; truncated: boolean; available: boolean; note?: string };
+type ListState = { args: StepArgs; readonly source: EvidenceDeskSourceV2; readonly unfiltered: boolean; items: EvidenceDeskItemV2[]; cursor: string | undefined; fetched: boolean; shown: number; truncated: boolean; available: boolean; note?: string };
+/** An inventory has more to show: listed items not yet shown, or another page. */
+function inventoryMore(state: ListState): boolean { return state.shown < state.items.length || state.cursor !== undefined; }
 /** Identity of a cited object independent of the version or text released this time. */
 function citationIdentity(value: unknown): string {
   const citation = object(value) ?? {};
@@ -455,7 +457,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }),
         ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
       });
-      state = { args: stateArgs, items: [], cursor: undefined, fetched: false, shown: 0, truncated: false, available: true };
+      const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
+        request.channel === undefined && request.since === undefined && request.until === undefined;
+      state = { args: stateArgs, source: request.source, unfiltered, items: [], cursor: undefined, fetched: false, shown: 0, truncated: false, available: true };
       lists.set(key, state);
     }
     const currentState = state;
@@ -494,10 +498,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const page = currentState.items.slice(currentState.shown, currentState.shown + LIST_PAGE).map(item => register(item));
       currentState.shown += page.length;
       if (page.length > 0) retrievalProgress += 1;
-      const more = currentState.shown < currentState.items.length || currentState.cursor !== undefined;
-      const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
-        request.channel === undefined && request.since === undefined && request.until === undefined;
-      if (unfiltered && currentState.available && !more && !currentState.truncated && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
+      const more = inventoryMore(currentState);
+      if (currentState.unfiltered && currentState.available && !more && !currentState.truncated && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
       if (!before.fetched || before.shown !== currentState.shown || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: currentState.available && !more && !currentState.truncated });
       const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...(page.length === 0 ? ["nothing more to list"] : []), ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : [])];
       return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => describe(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
@@ -625,9 +627,22 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   }));
   /** Listed inventories continue across planner turns without exposing cursors or desk identities. */
   const inventoryView = () => [...lists.values()].filter(state => state.fetched).map(state => Object.freeze({
-    args: state.args, shown_count: state.shown, more: state.shown < state.items.length || state.cursor !== undefined,
+    args: state.args, shown_count: state.shown, more: inventoryMore(state),
     available: state.available, truncated: state.truncated,
   }));
+  /**
+   * Inventories whose unread pages still block a not_found finish. A complete
+   * unfiltered inventory of a source covers its filtered ones. A metadata-only
+   * list (live tickets or pages, newest first) shows titles and dates only, so
+   * its pages cannot show that a fact is absent: once research has searched
+   * that source, its unread pages no longer block.
+   */
+  const blockingInventories = (): readonly ListState[] => {
+    const fetched = [...lists.values()].filter(state => state.fetched);
+    const covered = new Set(fetched.filter(state => state.unfiltered && state.available && !state.truncated && !inventoryMore(state)).map(state => state.source));
+    const searched = (source: EvidenceDeskSourceV2) => searchesRun.some(previous => previous.source === undefined || previous.source === source);
+    return fetched.filter(state => inventoryMore(state) && !covered.has(state.source) && !(sourcesById.get(state.source)?.metadata_only_list === true && searched(state.source)));
+  };
 
   // ---- scratchpad ------------------------------------------------------
   const citable = (short: string): boolean => entryOf(short)?.full === true;
@@ -798,8 +813,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               if (entries.size > 0 && [...entries.values()].every(entry => entry.item.text === undefined)) {
                 problems.unshift('discovered items have metadata only; open potentially relevant discovered items before concluding that it is absent');
               }
-              const unread = inventoryView().filter(inventory => inventory.more);
-              if (unread.length > 0) problems.unshift(`listed inventory still has unread pages; repeat list with ${unread.slice(0, 3).map(inventory => JSON.stringify(inventory.args)).join(' or ')}`);
+              const unread = blockingInventories();
+              const unsearched = [...new Set(unread.filter(state => sourcesById.get(state.source)?.metadata_only_list === true).map(state => state.args.source))];
+              if (unread.length > 0) problems.unshift(`listed inventory still has unread pages; repeat list with ${unread.slice(0, 3).map(state => JSON.stringify(state.args)).join(' or ')}${unsearched.length === 0 ? '' : `, or search ${unsearched.join(' and ')} for the fact`}`);
             }
             if (!finishAvailable) problems.unshift('no source has been read; use search or list first');
             if (problems.length > 0) throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. Search, list or open more, or correct the need status and evidence.`);

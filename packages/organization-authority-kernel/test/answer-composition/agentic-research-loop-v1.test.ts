@@ -1,0 +1,80 @@
+import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
+import { describe, expect, it, vi } from "vitest";
+import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
+import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
+import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
+import { need, part, record, researchHarness as harness, result, step } from "./fixtures/agentic-scenarios.js";
+
+/**
+ * The research loop's own rules, through the research core: when a finish is
+ * accepted, what list and open answer, what counts as progress, and how
+ * starting evidence is read.
+ */
+
+const JIRA: NonNullable<EvidenceDeskPortV2["live_sources"]>[number] = { source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" };
+/** A live ticket as a list row (metadata only) or opened (with its body). */
+function ticket(key: string, text?: string): EvidenceDeskItemV2 {
+  return Object.freeze({
+    id: `ticket_${key}`, source_id: "jira", kind: "ticket",
+    citation: { kind: "ticket", tool_id: "jira", external_scope_id: "cloud-one", ticket_id: key.replace(/\D/gu, ""), permalink: `https://tickets.example.test/browse/${key}`, text_sha256: sha256Digest(text ?? "") },
+    label: `${key}: Unrelated work`, ...(text === undefined ? {} : { text }), visibility: "only_me", occurred_at: "2026-10-06", date_kind: "created",
+    attributes: { status: "Open" }, receipt_sha256: canonicalSha256({ key, text: text ?? null }),
+  } satisfies EvidenceDeskItemV2);
+}
+/** One newest-first ticket page of 20 metadata rows, and a cursor while pages remain. */
+const ticketPage = (page: number, pages: number) => result(Array.from({ length: 20 }, (_, index) => ticket(`ECHO-${page * 20 + index + 1}`)), page + 1 < pages ? { next_cursor: `page-${page + 2}` } : {});
+const pageOf = (input: EvidenceDeskListInputV2) => input.cursor === undefined ? 0 : Number(input.cursor.slice(5)) - 1;
+
+const brief = (task: string, starting: readonly unknown[], options: Partial<AgenticBriefV1["options"]> = {}, ifUnreadable: "fail" | "report" = "fail"): AgenticBriefV1 => ({
+  goal: { kind: "task", task }, starting: starting.map(citation => ({ citation, if_unreadable: ifUnreadable })),
+  budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false, ...options },
+});
+const affects = (status: string) => step([part("What does E1 affect?", [need("tickets the record affects", status)])], status === "open" ? [] : [{ tool: "finish", args: {} }]);
+const reads = (status: string, actions: readonly { tool: string; args: Record<string, string> }[]) => ({ ...affects(status), actions });
+
+describe("research loop: finishing with nothing found", () => {
+  const approved = record("canary", "Approved: staging must verify owner approval of a staged meeting.");
+
+  it("accepts not_found after searches while a metadata-only, newest-first ticket inventory has unread pages (c813591c)", async () => {
+    const list = vi.fn(async (input: EvidenceDeskListInputV2) => ticketPage(pageOf(input), 5));
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "staged meeting approval" } }, { tool: "list", args: { source: "tickets" } }]),
+      reads("open", [{ tool: "search", args: { source: "tickets", query: "canary" } }]),
+      affects("not_found"),
+    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    // The first finish is accepted: no repair, and no further ticket page is read.
+    expect(h.generate).toHaveBeenCalledTimes(3);
+    expect(view.rounds.map(round => round.rejected)).toEqual([[], [], []]);
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+    // Coverage still says the inventory was not read to its end.
+    expect(view.coverage.inventories).toEqual([expect.objectContaining({ source: "tickets", shown_count: 20, more: true })]);
+  });
+
+  it("still asks for a search of a metadata-only source it listed but never searched", async () => {
+    const h = harness([
+      reads("open", [{ tool: "search", args: { source: "meetings", query: "staged meeting approval" } }, { tool: "list", args: { source: "tickets" } }]),
+      reads("open", [{ tool: "search", args: { source: "meetings", query: "canary" } }]),
+      affects("not_found"),
+      reads("open", [{ tool: "search", args: { source: "tickets", query: "canary" } }]),
+    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list: async input => ticketPage(pageOf(input), 5) });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(view.rounds[2]!.rejected).toEqual([expect.stringContaining('listed inventory still has unread pages; repeat list with {"source":"tickets"}, or search tickets for the fact')]);
+    expect(h.prompt(3).validation_error).toContain("or search tickets for the fact");
+  });
+
+  it("treats a filtered inventory as read when the same source's unfiltered inventory is complete", async () => {
+    const action = record("action", "Mara will publish the dashboard.", { kind: "action", attributes: { owner: "Mara Quinn" } });
+    const h = harness([
+      reads("open", [{ tool: "list", args: { source: "meetings", kind: "action" } }, { tool: "list", args: { source: "meetings" } }]),
+      affects("not_found"),
+    ], {
+      openCitation: async () => result([approved]),
+      list: async input => input.kinds === undefined ? result([action]) : result([action], { next_cursor: "page-2" }),
+    });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(h.generate).toHaveBeenCalledTimes(2);
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+  });
+});
