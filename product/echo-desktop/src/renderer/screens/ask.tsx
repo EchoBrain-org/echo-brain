@@ -292,15 +292,22 @@ export function AskView({ state }: { state: State }) {
   const scroller = useRef<HTMLElement>(null);
   // Whether the person was at the bottom when they last scrolled, or the thread last took them there.
   const atBottom = useRef(true);
+  // Where the thread last put the view: the scroll event that records a person's scroll can arrive after a new row.
+  const placedAt = useRef<number | null>(null);
   const toBottom = () => {
     const view = scroller.current;
-    if (view) view.scrollTop = view.scrollHeight;
+    if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
     atBottom.current = true;
   };
   // A new question, answer or failure scrolls to the bottom.
   useLayoutEffect(toBottom, [thread.seq, thread.shown, thread.asking === null, thread.failed]);
-  // A row of the question on its way only when the person is there: one who scrolled up to read stays put.
-  const follow = useCallback(() => { if (atBottom.current) toBottom(); }, []);
+  // A row of the question on its way only when the person is there: one who scrolled up to read stays put, even before
+  // their scroll event has arrived, because the view is no longer where the thread left it.
+  const follow = useCallback(() => {
+    const view = scroller.current;
+    if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) atBottom.current = false;
+    if (atBottom.current) toBottom();
+  }, []);
   const onScroll = () => {
     const view = scroller.current;
     if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
