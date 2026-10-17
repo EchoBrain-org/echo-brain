@@ -32,6 +32,7 @@ import { openItemAccessV1, openItemDecisionAccessV1, openItemSendAccessV1, type 
 import type { bindPersonLiveEvidenceDeskV1, CreatePersonLiveAnswerRouteOptionsV1, PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonReadableDecisionV1, PersonReadableDecisionsV1 } from './person-record-search-route.js';
 import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
+import type { SweepCountsV1 } from './person-sweep-runs-v1.js';
 
 /**
  * The shared open items on the runs API (open items and Home v1, sections 4,
@@ -145,12 +146,28 @@ const ACCESS_REFUSED: readonly AuthorityErrorCode[] = ['unauthorized', 'not_foun
 /** A last check older than a day makes a sweep due; a person's sweep is asked for at most hourly (R32). */
 const DAY_MS = 24 * 3_600_000;
 const HOUR_MS = 3_600_000;
+/** A person's newest sweeps Home reads for the items they could not read: more than a day of hourly ones (R32). */
+const SWEEPS_READ = 50;
 const SWEEP_TRIGGER = AGENTIC_TRIGGER_DEFINITIONS_V1.find(definition => definition.name === 'sweep')!;
 
 const notFound = () => new AuthorityOperationError('not_found', 'item is not available');
 /** An error's Authority code, or `error`. */
 export function errorCodeV1(error: unknown): string {
   return error instanceof AuthorityOperationError && ERROR_CODES.includes(error.code) ? error.code : 'error';
+}
+/**
+ * The items the caller's sweeps created at or after `since` could not read, as each finished sweep stored them: a day on, such a
+ * sweep is as old as a stale check. A result stored before sweeps kept them names none.
+ */
+function unreadableSince(runs: Pick<SqliteTriggerRunsV1, 'list'>, actor: Parameters<SqliteTriggerRunsV1['list']>[0], since: string): ReadonlySet<string> {
+  const items = new Set<string>();
+  for (const run of runs.list(actor, SWEEPS_READ, 'sweep')) {
+    if (run.created_at < since) break;
+    if (run.state !== 'done' || run.result_json === null) continue;
+    const listed = (JSON.parse(run.result_json) as Partial<Record<keyof SweepCountsV1, unknown>>).unreadable_items;
+    if (Array.isArray(listed)) for (const id of listed) if (typeof id === 'string') items.add(id);
+  }
+  return items;
 }
 function refusedAccess(error: unknown): boolean {
   return error instanceof AuthorityOperationError && ACCESS_REFUSED.includes(error.code);
@@ -610,10 +627,14 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // caller asked for a sweep in the last hour (R32: one that keeps failing, or leaves items unassessed, is not asked for on every
       // load) or one of theirs is running. A sweep still waiting after the hour lets the desktop ask again, which hands back that run
       // to start (R58). Check now is the caller's own request, and never limited. Rows only never makes one due: a quiet re-read
-      // after a change check must never start a sweep.
+      // after a change check must never start a sweep. An item one of the caller's sweeps of the last day could not read waits a day
+      // from that sweep, as its own unreadable check would: someone else's judged check stays its last check, and asking the caller
+      // again every hour would not let them read it.
       const time = now().getTime();
       const dayAgo = new Date(time - DAY_MS).toISOString();
-      const unchecked = rowsOnly ? [] : theirs.filter(entry => entry.row.check === null || entry.row.check.at < dayAgo).map(entry => entry.row);
+      const old = rowsOnly ? [] : theirs.filter(entry => entry.row.check === null || entry.row.check.at < dayAgo).map(entry => entry.row);
+      const unreadable = old.length === 0 ? new Set<string>() : unreadableSince(options.runs, actor, dayAgo);
+      const unchecked = old.filter(row => !unreadable.has(row.item_id));
       const connected = await connectedToolsFor(options, viewer, unchecked);
       const stale = unchecked.some(row => sweepTakesItem(row, connected));
       const newest = stale ? options.runs.newestSweep(actor) : undefined;

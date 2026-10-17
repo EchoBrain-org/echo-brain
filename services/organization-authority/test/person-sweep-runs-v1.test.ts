@@ -21,7 +21,7 @@ type DeskScope = { readonly kind: 'global' } | { readonly kind: 'project'; reado
 const HOUR = 3_600_000;
 const MINE = { scope: 'mine' } as const;
 const NOTHING = { state: 'nothing_to_check' } as const;
-const ZERO = { schema_version: 1, landed: 0, still_open: 0, changed: 0, unreadable: 0, not_assessed: 0 };
+const ZERO = { schema_version: 1, landed: 0, still_open: 0, changed: 0, unreadable: 0, not_assessed: 0, unreadable_items: [] };
 
 function runOf(result: PersonRunsResultsV1['sweep']): string {
   if (!('run_id' in result)) throw new Error('expected a sweep run');
@@ -193,6 +193,28 @@ describe('sweep runs record a shared last check', () => {
     expect(await f.sweepDue('ari')).toBe(false);
     f.advance(HOUR - 1);
     expect(await f.sweepDue('ari')).toBe(false);                 // within the hour of the newest sweep
+    f.advance(1);
+    expect(await f.sweepDue('ari')).toBe(true);
+  });
+
+  it('waits a day from a sweep of the caller\'s that could not read an item whose judged check it left standing', async () => {
+    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'unreadable' } });
+    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
+    // Mina read the ticket and judged it; a day on, Ari's desk no longer can (the ticket was deleted, or his Jira access changed).
+    f.check(f.ticket.item_id, 'still_open', 'mina');
+    f.advance(25 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(true);
+    const { run_id } = await f.queueAndStart('ari');
+    await f.settled(run_id);
+    // Mina's verdict stays the last check, and Ari's run keeps which item he could not read.
+    expect(f.items.read(f.ticket.item_id)!.check).toMatchObject({ verdict: 'still_open', by: f.membership('mina') });
+    expect(f.counts(run_id)).toEqual({ ...ZERO, unreadable: 1, unreadable_items: [f.ticket.item_id] });
+    // The last check is over a day old, but asking Ari again every hour would not let him read the ticket: not due for a day.
+    f.advance(2 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(false);
+    expect(await f.sweepDue('mina')).toBe(true);                 // she reads it, and her own sweep may judge it again
+    f.advance(22 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(false);                 // a day after his sweep, not later
     f.advance(1);
     expect(await f.sweepDue('ari')).toBe(true);
   });
