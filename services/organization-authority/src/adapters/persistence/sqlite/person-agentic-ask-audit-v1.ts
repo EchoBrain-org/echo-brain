@@ -3,6 +3,7 @@ import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/f
 import type Database from "better-sqlite3";
 import type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
+import { PERSON_ASK_PROGRESS_NAMED_MAX_V1 } from "@echo-brain/organization-api";
 
 export interface AgenticAskAuditRequestContextV1 {
   readonly authority_id: string;
@@ -99,7 +100,11 @@ export class SqlitePersonAgenticAskAuditV1 {
           .every((value) => value === null || (Number.isSafeInteger(value) && value >= 0)))) ||
       ![entry.generation_usage.input_tokens, entry.generation_usage.output_tokens, entry.generation_usage.total_tokens]
         .every((value) => value === null || (Number.isSafeInteger(value) && value >= 0)) ||
-      Object.entries(entry.finish_reason_counts).some(([reason, count]) => reason.length === 0 || reason.length > 128 || !Number.isSafeInteger(count) || count < 1 || count > entry.model_calls)
+      Object.entries(entry.finish_reason_counts).some(([reason, count]) => reason.length === 0 || reason.length > 128 || !Number.isSafeInteger(count) || count < 1 || count > entry.model_calls) ||
+      // A streamed request's named items (ADR-0039): distinct citation commitments, never labels.
+      (entry.named_citation_digests !== undefined && (!Array.isArray(entry.named_citation_digests) ||
+        entry.named_citation_digests.length > PERSON_ASK_PROGRESS_NAMED_MAX_V1 || new Set(entry.named_citation_digests).size !== entry.named_citation_digests.length ||
+        !entry.named_citation_digests.every((digest) => typeof digest === "string" && /^sha256:[a-f0-9]{64}$/.test(digest))))
     ) throw new Error("Agentic Ask audit entry is invalid");
 
     const recorded_at = entry.checked_at ?? this.now();
@@ -132,6 +137,7 @@ export class SqlitePersonAgenticAskAuditV1 {
       generations: entry.generations,
       generation_usage: entry.generation_usage,
       finish_reason_counts: entry.finish_reason_counts,
+      ...(entry.named_citation_digests === undefined ? {} : { named_citation_digests: [...entry.named_citation_digests] }),
     });
     const row_sha256 = canonicalSha256(body);
     this.database.prepare(
