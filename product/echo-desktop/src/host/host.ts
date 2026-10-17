@@ -7,13 +7,14 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type AskStep, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
+import { askArgv, askProgressLines, askStreams } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
+  abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
   NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
@@ -284,30 +285,6 @@ async function forAccount<T>(
   }
 }
 
-/**
- * An Ask's progress lines (ADR-0039): each step the page shows while the Ask
- * runs, tagged with the account it runs for and the page's own cancel id, so
- * the page drops a step of any other Ask or account. A line that is not a
- * valid step, and any line once the Ask was cancelled or timed out, goes nowhere.
- */
-function progressLines(cancelId: string, expect: Expect, abortSignal: AbortSignal): (line: string) => void {
-  const account = { authority: expect.authority, membership_id: expect.membership_id };
-  return line => {
-    if (abortSignal.aborted) return;
-    for (const value of jsonLines(line)) {
-      if (value === null || typeof value !== 'object' || !Object.hasOwn(value, 'progress')) continue;
-      let step: AskStep;
-      try {
-        step = askStepView(value);
-      } catch {
-        if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused');
-        continue;
-      }
-      port.postMessage({ notice: 'ask.progress', payload: { cancel_id: cancelId, expect: account, step } });
-    }
-  };
-}
-
 /** Google in the browser, then the new session. Only the phase crosses to the renderer; the sign-in URL never does. */
 async function login(identity: string[], fallback: string): Promise<Result<AppStatus>> {
   const run = await cli(['login', ...identity, '--open-browser'], line => {
@@ -356,11 +333,6 @@ function audienceArgs(audience: Audience | undefined, projectIds: unknown): stri
     }
     default: return null;
   }
-}
-
-/** Ask's scope: one project, only what you added, or all you may read. */
-function askScopeArgs(scope: AskScope): string[] {
-  return scope.kind === 'project' ? [option('project', scope.project_id)] : scope.kind === 'mine' ? ['--mine'] : [];
 }
 
 /**
@@ -646,12 +618,12 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       const { expect, question, scope, cancel_id } = params as Params<'ask.run'>;
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      // Mine reads only retained context and must also work on older Authorities; it never streams.
-      // A live Ask asks for its progress; an Authority that predates it answers as before, with none.
-      const live = scope.kind !== 'mine';
-      return forAccount(method, expect, ['ask', option('question', text), ...(live ? ['--live', '--progress'] : []), ...askScopeArgs(scope)],
-        stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined,
-        live && abortSignal !== undefined ? progressLines(cancel_id, expect, abortSignal) : undefined);
+      // A live Ask's steps reach the page as they are printed; Mine never streams (ask.ts).
+      const progress = askStreams(scope) && abortSignal !== undefined
+        ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
+          () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
+        : undefined;
+      return forAccount(method, expect, askArgv(text, scope), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
     }
     case 'ask.cancel':
       return ok(null);
