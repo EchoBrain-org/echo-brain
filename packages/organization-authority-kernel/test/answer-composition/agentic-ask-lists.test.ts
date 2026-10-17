@@ -45,6 +45,11 @@ function pageRow([id, title, created, updated, version]: readonly [string, strin
 }
 const PAGES = OCTOBER_4.map(pageRow);
 const MEMBERS = PAGES.map((_, index) => `E${index + 1}`);
+/** What opening a page row released on staging: one of its sections, a new item with its own id. */
+const section = (row: EvidenceDeskItemV2, body: string): EvidenceDeskItemV2 => Object.freeze({
+  ...row, id: row.id.replace("inventory", "s1"), text: body,
+  citation: { ...(row.citation as Extract<EvidenceDeskItemV2["citation"], { kind: "page" }>), section_id: "s1", text_sha256: sha256Digest(body) },
+});
 
 /** A ticket as a list row: key and summary, status and assignee, no text. */
 function ticketRow(n: number, owner = "Dana Lee", status = "In Progress"): EvidenceDeskItemV2 {
@@ -497,11 +502,31 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(nobody).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: "Not found: Jira tickets created on October 4, 2026 that have owner Mara Quinn." }] });
   });
 
-  it("says how many members were checked when a sentence claims content across a list (addition 4)", async () => {
-    const section = (row: EvidenceDeskItemV2, body: string): EvidenceDeskItemV2 => Object.freeze({
-      ...row, id: row.id.replace("inventory", "s1"), text: body,
-      citation: { ...(row.citation as Extract<EvidenceDeskItemV2["citation"], { kind: "page" }>), section_id: "s1", text_sha256: sha256Digest(body) },
+  it("checks an answer that names 4 pages by their opened sections, not their rows: code names all 8", async () => {
+    // The sections are new items, so before this the plan and the writer could cite them as if they were no member.
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, `${row.label}: created October 4.`)]) as EvidenceDeskResultV2;
     });
+    const sections = ["E9", "E10", "E11", "E12"];
+    const subset = { lists: [], sentences: [{ text: "The pages created on October 4 are ECHO Product Pipeline, Assumptions and decisions, Gate reviews and Traceability.", evidence: sections }], not_found: [] };
+    for (const plan of [sections, ["L1", ...sections]]) {
+      const h = harness([
+        ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
+        ask(OCT4, OCT4_NEED, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
+        ask(OCT4, OCT4_NEED, "found", plan, [finish], "N1"),
+        subset, subset,
+      ], october4Desk({ open }));
+      const { response } = await h.research.answerWithResearch({ question: OCT4 });
+      expect(writerInputs(h)).toHaveLength(2);
+      expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 4, cited_by_plan: true });
+      // Code names all 8, and the sentence that named 4 of them by their sections is dropped.
+      expect(response.outcome).toBe("answered");
+      expect(response.parts[0]!.statements).toEqual([{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
+    }
+  });
+
+  it("says how many members were checked when a sentence claims content across a list (addition 4)", async () => {
     const open = vi.fn(async (input: { readonly item: string }) => {
       const row = PAGES.find(page => page.id === input.item)!;
       return result([section(row, row.label.startsWith("Traceability") ? "BUG-412 is traced to TC-D-03." : "No defects are discussed.")]) as EvidenceDeskResultV2;

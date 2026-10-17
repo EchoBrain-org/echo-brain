@@ -719,6 +719,10 @@ test("the fixed October 4 answer names all 8 pages from a complete list, citing 
   assert.deepEqual([scores.tools_read, scores.tools_handed, scores.research_established, scores.writer_parts_correct, scores.writer_lists_named, scores.complete_and_supported], [1, 1, 1, 1, 1, true]);
   // A plan that cites a member row rests on that row's list, as the finish check divides support.
   assert.equal(codeChecks(fixed.testCase, october4Run({ lists: [OCT4_LIST], evidence: ["E3"], writer: ids, cites: ROWS }).run, dataset).parts[0].cited_by_plan, true);
+  // So does a plan that cites two members' opened sections: a section is its page. One page's section is content only.
+  const opened = OCTOBER_4.slice(0, 2).map(pageSection);
+  const bySections = evidence => codeChecks(fixed.testCase, october4Run({ items: [...ROWS, ...opened], lists: [OCT4_LIST], evidence, writer: ids, cites: ROWS }).run, dataset).parts[0].cited_by_plan;
+  assert.deepEqual([bySections(opened.map(item => item.id)), bySections([opened[0].id])], [true, false]);
 
   const seven = codeChecks(fixed.testCase, october4Run({ lists: [OCT4_LIST], evidence: ["L1"], writer: ids, cites: ROWS.slice(0, 7) }).run, dataset);
   assert.deepEqual([seven.parts[0].named, seven.parts[0].members_named], [false, 7]);

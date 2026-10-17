@@ -20,6 +20,7 @@ import {
   agenticListSelectionNotFoundV1,
   agenticListSelectV1,
   agenticListStatementV1,
+  agenticListMembershipV1,
   agenticNeedSupportV1,
   agenticWriterListMemberV1,
   agenticWriterListV1,
@@ -174,12 +175,40 @@ describe("a list's noun and its filter notice (addition 3)", () => {
   });
 });
 
+describe("list membership", () => {
+  const pages = ["589865", "1474561", "1441793"].map((id, index) => ({ short: `E${index + 1}`, item: pageRow(id, `Page ${index + 1}`) }));
+  const section = (short: string, row: EvidenceDeskItemV2, section_id: string) =>
+    ({ short, item: { ...row, id: row.id.replace("inventory", section_id), citation: { ...(row.citation as Extract<EvidenceDeskItemV2["citation"], { kind: "page" }>), section_id } } });
+  const lists = [{ id: "L1" as const, members: ["E1", "E2", "E3"] }, { id: "L2" as const, members: ["E2"] }];
+
+  it("reads an opened section of a listed page as that page, never as another member", () => {
+    const membership = agenticListMembershipV1(lists, [...pages, section("E9", pages[0]!.item, "s1"), section("E10", pages[0]!.item, "s2"), section("E11", pages[1]!.item, "s1"), section("E12", pageRow("999", "Other"), "s1")]);
+    expect(membership.first("E2")).toEqual({ list: "L1", member: "E2" });
+    expect(membership.first("E9")).toEqual({ list: "L1", member: "E1" });
+    expect(membership.first("E10")).toEqual({ list: "L1", member: "E1" });
+    expect(membership.in("L2", "E11")).toBe("E2");
+    expect(membership.in("L2", "E9")).toBeUndefined();
+    // A page no list holds, and an id nothing knows, belong to no list.
+    expect(membership.first("E12")).toBeUndefined();
+    expect(membership.first("E40")).toBeUndefined();
+  });
+
+  it("reads a ticket's opened body as its listed row, and keeps each meeting record its own", () => {
+    const ticket = (short: string, id: string, ticket_id: string) => ({ short, item: { id, citation: { kind: "ticket", tool_id: "jira", external_scope_id: "cloud-one", ticket_id, permalink: `https://tickets.example.test/browse/T-${ticket_id}`, text_sha256: sha256Digest(id) } } });
+    const atom = (short: string, atom_id: string) => ({ short, item: { id: atom_id, citation: { kind: "approved_record", atom_id, record_sha256: canonicalSha256({ record: 1 }) } } });
+    const membership = agenticListMembershipV1([{ id: "L1", members: ["E1", "E3"] }], [ticket("E1", "row", "100"), ticket("E2", "body", "100"), atom("E3", canonicalSha256({ atom: 1 })), atom("E4", canonicalSha256({ atom: 2 }))]);
+    expect(membership.first("E2")).toEqual({ list: "L1", member: "E1" });
+    expect(membership.first("E4")).toBeUndefined();
+  });
+});
+
 describe("support kinds", () => {
+  const membership = (id: string) => OCTOBER_4.members.includes(id) ? { list: "L1" as const, member: id } : undefined;
   const lookup: AgenticNeedSupportLookupV1 = {
     list: id => id === "L1",
     // E9 to E12 are sections research opened; rows E1 to E8 have no text.
     full: id => ["E9", "E10", "E11", "E12"].includes(id),
-    list_of: id => OCTOBER_4.members.includes(id) ? "L1" : undefined,
+    member_of: membership,
   };
 
   it("reads the refused round-2 finish of the October 4 run as the list", () => {
@@ -209,6 +238,14 @@ describe("support kinds", () => {
     const opened: AgenticNeedSupportLookupV1 = { ...lookup, full: id => ["E2", "E3", "E9"].includes(id) };
     expect(agenticNeedSupportV1(["E2", "E3"], opened)).toEqual({ lists: ["L1"], content: ["E2", "E3"], unsupported: [] });
     expect(agenticNeedSupportV1(["E9", "E3"], opened)).toEqual({ lists: [], content: ["E9", "E3"], unsupported: [] });
+  });
+
+  it("counts an opened section as the member it is part of: four pages' sections rest on their list, one page's do not", () => {
+    // E9 to E12 are sections of E1 to E4; E13 is a second section of E1.
+    const parts: Readonly<Record<string, string>> = { E9: "E1", E10: "E2", E11: "E3", E12: "E4", E13: "E1" };
+    const sections: AgenticNeedSupportLookupV1 = { ...lookup, full: id => id in parts, member_of: id => membership(parts[id] ?? id) };
+    expect(agenticNeedSupportV1(["E9", "E10", "E11", "E12"], sections)).toEqual({ lists: ["L1"], content: ["E9", "E10", "E11", "E12"], unsupported: [] });
+    expect(agenticNeedSupportV1(["E9", "E13"], sections)).toEqual({ lists: [], content: ["E9", "E13"], unsupported: [] });
   });
 });
 

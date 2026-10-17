@@ -35,6 +35,7 @@ import {
   agenticListEndUnverifiedV1,
   agenticListFilterNoticeV1,
   agenticListIdV1,
+  agenticListMembershipV1,
   agenticListNounV1,
   agenticNeedSupportV1,
   createAgenticListEvidenceV1,
@@ -884,6 +885,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const listsForCheck = (): readonly AskResearchListV1[] => listsInOrder().map(state => Object.freeze({
     id: state.id, ended: !inventoryMore(state), args: state.args as Readonly<Record<string, string>>, members: state.members.map(entry => entry.short),
   }));
+  /** Which list member each item is, or is part of: an opened page's section is its page (ADR-0041). */
+  const listMembership = (lists: readonly { readonly id: AgenticListIdV1; readonly members: readonly string[] }[]) => agenticListMembershipV1(lists, [...entries.values()]);
+  /** A question goal's finish check: a found need may rest on a list it read (ADR-0041). */
+  const questionCompletionProblems = (parts: readonly { readonly needs: readonly NeedState[] }[]) => {
+    const checked = listsForCheck();
+    return askQuestionCompletionProblemsV1(parts, researchObservations, checked, citable, listAvailable, listMembership(checked).first);
+  };
 
   // ---- scratchpad ------------------------------------------------------
   const citable = (short: string): boolean => entryOf(short)?.full === true;
@@ -1137,7 +1145,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
             const completionPlan = proposedPlan(parsed.parts);
             // A question goal's found need may rest on a list it read (ADR-0041); a task goal's needs an item read in full.
             const problems = [...(ask
-              ? askQuestionCompletionProblemsV1(completionPlan, researchObservations, listsForCheck(), citable, listAvailable)
+              ? questionCompletionProblems(completionPlan)
               : askResearchCompletionProblemsV1(completionPlan, researchObservations, citable, listAvailable))];
             if (completionPlan.some(part => part.needs.some(need => need.status === 'not_found'))) {
               if (entries.size > 0 && [...entries.values()].every(entry => entry.item.text === undefined)) {
@@ -1229,8 +1237,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // A question goal's lists, and what the person is told about the filters of those a found need rests on (ADR-0041).
     const listed = ask ? listsInOrder() : [];
     const listRecords = listed.map(state => listEvidence(state));
+    const membership = listMembership(listRecords);
     const relied = new Set(plan.flatMap(part => part.needs.filter(need => need.status === "found").flatMap(need => agenticNeedSupportV1(need.evidence, {
-      list: id => listRecords.some(list => list.id === id), full: citable, list_of: id => listRecords.find(list => list.members.includes(id))?.id,
+      list: id => listRecords.some(list => list.id === id), full: citable, member_of: membership.first,
     }).lists)));
     const filterNotices = listed.flatMap((state, index) => {
       if (!relied.has(state.id)) return [];

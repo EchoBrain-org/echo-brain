@@ -23,6 +23,7 @@ import {
   AGENTIC_LIST_WRITER_LISTS_MAX_V1,
   AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
   agenticListCheckedNoteV1,
+  agenticListMembershipV1,
   agenticListNameSharesV1,
   agenticListNounV1,
   agenticListSelectionNotFoundV1,
@@ -183,14 +184,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // ---- lists (ADR-0041): which the plan rests on, and how the writer sees them ----
       const lists = bundle.lists ?? [];
       const listById = new Map(lists.map(list => [list.id, list]));
+      /** Which list member an item is, or is part of: an opened page's section is its page. */
+      const membership = agenticListMembershipV1(lists, bundle.items);
       /** Lists a found need of the plan rests on, in the plan's order. */
       const relied: AgenticListIdV1[] = [];
       for (const part of bundle.plan) for (const need of part.needs) {
         if (need.status !== "found") continue;
-        const support = agenticNeedSupportV1(need.evidence, {
-          list: id => listById.has(id), full: short => byShort.get(short)?.full === true,
-          list_of: short => lists.find(list => list.members.includes(short))?.id,
-        });
+        const support = agenticNeedSupportV1(need.evidence, { list: id => listById.has(id), full: short => byShort.get(short)?.full === true, member_of: membership.first });
         for (const id of support.lists) if (!relied.includes(id)) relied.push(id);
       }
       const checked = checkedItems(bundle);
@@ -251,15 +251,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
        */
       const usesList = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id) ||
         keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short)));
+      /** The members of `list` that `shorts` are, or are part of, each once. */
+      const membersCited = (list: AgenticListIdV1, shorts: readonly string[]) => new Set(shorts.flatMap(short => membership.in(list, short) ?? []));
       /**
        * Lists the answer should use but does not: one the plan rests on, or one it cites some, not all, members of. A
-       * member counts whether the writer has its text or only its row: a follow-up's row carries its text.
+       * member counts whether the writer has its text or only its row (a follow-up's row carries its text), and an
+       * opened section counts as its page.
        */
       const listProblems = (answer: Answer): readonly { readonly id: AgenticListIdV1; readonly reason: string }[] => writerLists.flatMap(list => {
         if (list.count === 0 || usesList(answer, list.id)) return [];
         if (list.cited_by_plan) return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members` }];
-        const members = new Set(rows.get(list.id)!.map(member => member.id));
-        const cited = new Set(keptSentences(answer).flatMap(sentence => sentence.evidence).filter(short => members.has(short) && allowed.has(short)));
+        const cited = membersCited(list.id, keptSentences(answer).flatMap(sentence => sentence.evidence).filter(short => allowed.has(short)));
         return cited.size >= 2 && cited.size < list.count
           ? [{ id: list.id, reason: `the answer cites ${cited.size} of the ${list.count} members of list ${list.id} without the list: put {"id": "${list.id}"} in "lists", with "where" to select by owner or status, so code names every matching member; for what those members say, cite ${list.id} beside their evidence` }]
           : [];
@@ -348,10 +350,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       });
 
       // The writer's sentences: cited ids it was given, each list it cites adding no citation of its own. A sentence that
-      // cites only members of a list code wrote after the check, two or more of them or rows only, restates part of that
-      // list, which code now names in full. A sentence about one member's text stays.
-      const forcedRows = new Set(forced.flatMap(id => rows.get(id)!.map(member => member.id)));
-      const restates = (shorts: readonly string[]) => shorts.every(short => forcedRows.has(short)) && (shorts.length >= 2 || !shorts.some(short => textGiven.has(short)));
+      // cites only members of a list code wrote after the check (or their opened sections), two or more of them or rows
+      // only, restates part of that list, which code now names in full. A sentence about one member's text stays.
+      const restates = (shorts: readonly string[]) => shorts.every(short => forced.some(id => membership.in(id, short) !== undefined)) &&
+        (new Set(forced.flatMap(id => [...membersCited(id, shorts)])).size >= 2 || !shorts.some(short => textGiven.has(short)));
       const writerSentences = (answer?.sentences ?? []).flatMap(sentence => {
         const shorts = sentence.evidence.filter(short => allowed.has(short));
         if (shorts.length === 0 || restates(shorts)) return [];

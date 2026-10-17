@@ -166,7 +166,11 @@ route, header, database table or client changes.
   members of one list also rests on that list, read in full or not. A
   follow-up's row carries its text, and an opened meeting record keeps its
   row's id, so "my open follow-ups" citing a first page of ten members must
-  still read the list to its end. One member read in full stays content.
+  still read the list to its end. One member read in full stays content. An
+  item belongs to a list when it is a member or cites the same object as one
+  (`agenticListMembershipV1`): Confluence releases an opened row's sections as
+  new items, so four opened sections are four of the list's members, for the
+  finish check and the writer's check alike.
 - **The finish check** replaces `need.evidence.some(citable)` for a question
   goal:
   - A need with list support is checked against those lists. A list that can

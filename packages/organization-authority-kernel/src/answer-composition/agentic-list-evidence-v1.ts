@@ -194,14 +194,88 @@ export interface AgenticNeedSupportV1 {
   readonly unsupported: readonly string[];
 }
 
+/** A list member an item is, or is part of. */
+export interface AgenticListMemberRefV1 {
+  readonly list: AgenticListIdV1;
+  /** The member's E id: the item itself, or the member row it is part of. */
+  readonly member: string;
+}
+
 /** What the request knows about a cited id. */
 export interface AgenticNeedSupportLookupV1 {
   /** A list with this id was read in this request. */
   readonly list: (id: AgenticListIdV1) => boolean;
   /** Research read this item's complete released text. */
   readonly full: (id: string) => boolean;
-  /** The first list, in id order, whose members include this item. */
-  readonly list_of: (id: string) => AgenticListIdV1 | undefined;
+  /** The first list, in id order, holding this item as a member or holding the member it is part of (agenticListMembershipV1). */
+  readonly member_of: (id: string) => AgenticListMemberRefV1 | undefined;
+}
+
+// ---- membership: an item is a member, or part of one --------------------
+
+/**
+ * The fields that name the object a citation cites, by citation kind. A page's
+ * section and version, a document passage's anchor and representation, and a
+ * ticket's or follow-up's released text are parts of one object; each meeting
+ * record and each message is its own. A kind not here is its own object only.
+ */
+const CITED_OBJECT_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  page: ["tool_id", "external_scope_id", "page_id"], ticket: ["tool_id", "external_scope_id", "ticket_id"],
+  slack_message: ["team_id", "channel_id", "message_ts"], approved_record: ["atom_id"], source_revision: ["source_id", "revision_id"], follow_up: ["item_id"],
+});
+function citedObject(citation: unknown): string | undefined {
+  if (typeof citation !== "object" || citation === null) return undefined;
+  const value = citation as Readonly<Record<string, unknown>>;
+  const fields = CITED_OBJECT_FIELDS[String(value.kind)];
+  if (fields === undefined || fields.some(field => typeof value[field] !== "string")) return undefined;
+  return JSON.stringify([value.kind, ...fields.map(field => value[field])]);
+}
+
+/** Which list member an item is (ADR-0041). */
+export interface AgenticListMembershipV1 {
+  /** The first list, in id order, holding the item as a member or holding the member it is part of; and that member. */
+  readonly first: (id: string) => AgenticListMemberRefV1 | undefined;
+  /** The member of `list` the item is, or is part of. */
+  readonly in: (list: AgenticListIdV1, id: string) => string | undefined;
+}
+
+/**
+ * An item belongs to a list when it is a member, or when it cites the same
+ * object as a member: opening a Confluence row releases its sections as new
+ * items, and opening a ticket row releases its body. So "the pages are A, B, C
+ * and D" citing four opened sections names four of the list's members. `lists`
+ * in id order; `items` every item the request registered.
+ */
+export function agenticListMembershipV1(
+  lists: readonly { readonly id: AgenticListIdV1; readonly members: readonly string[] }[],
+  items: readonly { readonly short: string; readonly item: { readonly citation: unknown } }[],
+): AgenticListMembershipV1 {
+  const citationOf = new Map(items.map(entry => [entry.short, entry.item.citation]));
+  const objects = new Map(lists.map(list => {
+    const byObject = new Map<string, string>();
+    for (const member of list.members) {
+      const object = citedObject(citationOf.get(member));
+      if (object !== undefined && !byObject.has(object)) byObject.set(object, member);
+    }
+    return [list.id, { members: new Set(list.members), byObject }] as const;
+  }));
+  const memberIn = (list: AgenticListIdV1, id: string): string | undefined => {
+    const known = objects.get(list);
+    if (known === undefined) return undefined;
+    if (known.members.has(id)) return id;
+    const object = citedObject(citationOf.get(id));
+    return object === undefined ? undefined : known.byObject.get(object);
+  };
+  return Object.freeze({
+    in: memberIn,
+    first: (id: string) => {
+      for (const list of lists) {
+        const member = memberIn(list.id, id);
+        if (member !== undefined) return Object.freeze({ list: list.id, member });
+      }
+      return undefined;
+    },
+  });
 }
 
 /**
@@ -213,7 +287,8 @@ export interface AgenticNeedSupportLookupV1 {
  * members of one list are a selection of it, read in full or not, so the need
  * also rests on that list: a follow-up row carries its text, and an opened
  * meeting record keeps its row's id, so "my open follow-ups" citing the first
- * page's ten members still has to read the list to its end.
+ * page's ten members still has to read the list to its end. An opened section
+ * counts as the member it is part of.
  */
 export function agenticNeedSupportV1(evidence: readonly string[], lookup: AgenticNeedSupportLookupV1): AgenticNeedSupportV1 {
   const lists: AgenticListIdV1[] = []; const content: string[] = []; const unsupported: string[] = [];
@@ -222,10 +297,11 @@ export function agenticNeedSupportV1(evidence: readonly string[], lookup: Agenti
   for (const id of evidence) {
     const list = parseAgenticListIdV1(id);
     if (list !== null) { if (lookup.list(list)) add(lists, list); else add(unsupported, id); continue; }
-    const member = lookup.list_of(id);
-    if (member !== undefined) members.set(member, (members.get(member) ?? new Set()).add(id));
+    const member = lookup.member_of(id);
+    // Two sections of one page are one member.
+    if (member !== undefined) members.set(member.list, (members.get(member.list) ?? new Set()).add(member.member));
     if (lookup.full(id)) { add(content, id); continue; }
-    if (member !== undefined) add(lists, member); else add(unsupported, id);
+    if (member !== undefined) add(lists, member.list); else add(unsupported, id);
   }
   for (const [list, cited] of members) if (cited.size >= 2) add(lists, list);
   return Object.freeze({ lists: Object.freeze(lists), content: Object.freeze(content), unsupported: Object.freeze(unsupported) });

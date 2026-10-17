@@ -1,4 +1,4 @@
-import { agenticNeedSupportV1, type AgenticListIdV1 } from "./agentic-list-evidence-v1.js";
+import { agenticNeedSupportV1, type AgenticListIdV1, type AgenticListMemberRefV1 } from "./agentic-list-evidence-v1.js";
 
 /** Request-local retrieval observations. No provider payload is stored here. */
 export interface AskResearchObservationV1 {
@@ -60,6 +60,10 @@ export interface AskResearchListV1 {
  * cites a list's row would finish before research read the item, and the
  * writer, which never sees a row's text, could not answer it. The refusal
  * names both ways on: cite the list for which items exist, or open the items.
+ *
+ * `member_of` says which list member an item is, or is part of (an opened
+ * page's section is its page: agenticListMembershipV1); by default an item
+ * belongs only to the lists whose members include it.
  */
 export function askQuestionCompletionProblemsV1(
   parts: readonly { readonly needs: readonly AskResearchNeedV1[] }[],
@@ -67,13 +71,13 @@ export function askQuestionCompletionProblemsV1(
   lists: readonly AskResearchListV1[],
   full: (id: string) => boolean,
   list = true,
+  member_of: (id: string) => AgenticListMemberRefV1 | undefined = id => {
+    const holder = lists.find(value => value.members.includes(id));
+    return holder === undefined ? undefined : { list: holder.id, member: id };
+  },
 ): readonly string[] {
   const byId = new Map(lists.map(value => [value.id, value]));
-  const lookup = {
-    list: (id: AgenticListIdV1) => byId.has(id),
-    full,
-    list_of: (id: string) => lists.find(value => value.members.includes(id))?.id,
-  };
+  const lookup = { list: (id: AgenticListIdV1) => byId.has(id), full, member_of };
   return completionProblems(parts, observations, list, (need, label) => {
     const support = agenticNeedSupportV1(need.evidence, lookup);
     const named = support.lists.some(id => need.evidence.some(cited => cited === id));

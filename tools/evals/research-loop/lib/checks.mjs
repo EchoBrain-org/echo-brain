@@ -100,21 +100,39 @@ export function codeChecks(testCase, run, dataset) {
 /** Part types a list member's row can carry (ADR-0041): dates, owner and status are row facts. */
 const ROW_FACT_PARTS = new Set(["date", "owner", "status"]);
 
+/** The fields naming the object a citation cites, as Ask's list membership reads them (agenticListMembershipV1). */
+const CITED_OBJECT_FIELDS = {
+  page: ["tool_id", "external_scope_id", "page_id"], ticket: ["tool_id", "external_scope_id", "ticket_id"],
+  slack_message: ["team_id", "channel_id", "message_ts"], approved_record: ["atom_id"], source_revision: ["source_id", "revision_id"], follow_up: ["item_id"],
+};
+function citedObject(citation) {
+  const fields = CITED_OBJECT_FIELDS[citation?.kind];
+  return fields === undefined || fields.some(field => typeof citation[field] !== "string") ? undefined : JSON.stringify([citation.kind, ...fields.map(field => citation[field])]);
+}
+
 /**
  * The lists a run's research read (ADR-0041; a run from before it has none): the lists holding each item, and those
- * the plan rests on. As Ask's finish check divides support, a found need rests on each list it cites by id, on the
+ * the plan rests on. An item belongs to a list when it is a member or cites the same object as one (an opened page's
+ * section is its page). As Ask's finish check divides support, a found need rests on each list it cites by id, on the
  * first list holding each member row it cites that research never read in full, and on the first list holding two or
  * more of the members it cites, read in full or not.
  */
 function listIndex(research, items) {
   const all = Array.isArray(research.lists) ? research.lists : [];
   const full = new Set(items.filter(item => item.read_in_full).map(item => item.id));
-  const of = id => all.filter(list => list.members.includes(id));
+  const citation = new Map(items.map(item => [item.id, item.citation]));
+  const memberIn = (list, id) => {
+    if (list.members.includes(id)) return id;
+    const object = citedObject(citation.get(id));
+    return object === undefined ? undefined : list.members.find(member => citedObject(citation.get(member)) === object);
+  };
+  const of = id => all.filter(list => memberIn(list, id) !== undefined);
   const relied = new Set(research.plan.flatMap(part => part.needs.filter(need => need.status === "found").flatMap(need => {
-    const first = id => of(id).slice(0, 1).map(list => list.id);
-    const cited = need.evidence.flatMap(first);
-    return need.evidence.flatMap(id => all.some(list => list.id === id) ? [id] : full.has(id) ? [] : first(id))
-      .concat(cited.filter(id => cited.filter(other => other === id).length >= 2));
+    const first = id => of(id).slice(0, 1).map(list => ({ list: list.id, member: memberIn(list, id) }));
+    const members = new Map();
+    for (const { list, member } of need.evidence.flatMap(first)) members.set(list, new Set([...(members.get(list) ?? []), member]));
+    return need.evidence.flatMap(id => all.some(list => list.id === id) ? [id] : full.has(id) ? [] : first(id).map(value => value.list))
+      .concat([...members].filter(([, cited]) => cited.size >= 2).map(([list]) => list));
   })));
   return { of, relied: list => relied.has(list.id) };
 }
