@@ -105,6 +105,8 @@ export interface PersonFollowUpsEvidenceSourceV1 {
 
 type Assessed = AssessedOpenItemV1;
 type Context = OpenItemsContextV1;
+/** Rows assessed for the asker, and their decisions' parts, with each decision's first line read once. */
+type View = { readonly context: Context; readonly decisionPart: ReturnType<typeof openItemDecisionPartsV1> };
 type Entry = { readonly entry: Assessed; readonly read?: LiveRead | undefined };
 /** A live read and the receipts of the tool releases it made, which the Ask's terminal audit binds. */
 type LiveRead = { readonly read: OpenItemLiveReadV1; readonly receipts: readonly Sha256Digest[] };
@@ -112,7 +114,7 @@ type LiveRead = { readonly read: OpenItemLiveReadV1; readonly receipts: readonly
 const STATES: readonly ImpactItemStateV1[] = ['unsent', 'open', 'done', 'not_relevant'];
 /** Search ranks current work first among equal matches. */
 const STATE_ORDER: Readonly<Record<ImpactItemStateV1, number>> = Object.freeze({ open: 0, unsent: 1, done: 2, not_relevant: 3 });
-/** The organization's rows a global scope reads at a time; it reads every page, each through the policy, with no bound before it. */
+/** The organization's rows a global scope reads at a time; once a request, it reads every page, each through the policy, with no bound before it. */
 const ORGANIZATION_PAGE = 1000;
 /** A project scope reads what the runs API's project scope reads: the records the asker reads in it now, and their rows. */
 const PROJECT_RECORDS_MAX = 500;
@@ -224,8 +226,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     new Set(sources.records.projectRecords({ access_token: viewer.token, project_id, limit: PROJECT_RECORDS_MAX }));
 
   /** Every row this scope shows the asker, through the policy. */
-  const visible = (signal?: AbortSignal): Context => {
-    current(signal);
+  const scan = (): Context => {
     if (scope.kind === 'project') {
       const context = assessOpenItemsV1(sources, viewer, sources.items.forRecords([...projectRecords(scope.project_id)], { states: STATES, limit: PROJECT_ROWS_MAX }));
       return { ...context, assessed: context.assessed.filter(entry => entry.access.see_row) };
@@ -243,6 +244,17 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       after = rows.at(-1);
       if (rows.length < ORGANIZATION_PAGE || after === undefined) return { decisions, people, assessed };
     }
+  };
+  let shown: View | undefined;
+  /**
+   * What this scope shows the asker, read once a request at its first search or list, with the asker's session read again
+   * on every call. Each release is rechecked against fresh rows before the next model call and in full before the answer
+   * (ADR-0038), so a follow-up hidden since this read never reaches either; one shown since appears in the next request.
+   */
+  const visible = (signal?: AbortSignal): View => {
+    current(signal);
+    if (shown === undefined) { const context = scan(); shown = Object.freeze({ context, decisionPart: openItemDecisionPartsV1(sources, context) }); }
+    return shown;
   };
 
   const slot = async (): Promise<() => void> => {
@@ -290,7 +302,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
    * its decision only when the policy shows them the decision. A part the
    * evidence contract refuses is left out (they see less, never more).
    */
-  const shape = (context: Context, decisionPart: ReturnType<typeof openItemDecisionPartsV1>, { entry, read }: Entry) => {
+  const shape = ({ context, decisionPart }: View, { entry, read }: Entry) => {
     const { row, facts } = entry;
     const opened = read?.read.reach === 'opened' ? read.read.item : undefined;
     const access = openItemAccessV1(read === undefined ? facts : { ...facts, opens_item: opened !== undefined });
@@ -327,10 +339,9 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
   };
 
   /** Audits one call's follow-ups before they leave, then remembers each for `open` and the checks. */
-  const release = (operation: 'search' | 'list' | 'open', context: Context, entries: readonly Entry[], truncated: boolean,
+  const release = (operation: 'search' | 'list' | 'open', view: View, entries: readonly Entry[], truncated: boolean,
     { next_cursor, notice }: { readonly next_cursor?: string | undefined; readonly notice?: string | undefined } = {}): EvidenceDeskResultV2 => {
-    const decisionPart = openItemDecisionPartsV1(sources, context);
-    const shaped = entries.flatMap(entry => { const value = shape(context, decisionPart, entry); return value === undefined ? [] : [value]; });
+    const shaped = entries.flatMap(entry => { const value = shape(view, entry); return value === undefined ? [] : [value]; });
     const receipt = options.audit.record({ operation, items: shaped.map(({ evidence, visibility }) => ({ item_id: evidence.item_id, released_fields_sha256: canonicalSha256({ evidence, visibility }) })) });
     const items = shaped.map(({ evidence, visibility, decision }): EvidenceDeskItemV2 => {
       const id = `follow_up_${evidence.item_id}`;
@@ -359,8 +370,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       if (typeof input.query !== 'string') invalid('query is required');
       const live = input.live !== false;
       const { terms, keys } = queryOf(input.query);
-      const context = visible(input.signal);
-      const decisionPart = openItemDecisionPartsV1(sources, context);
+      const view = visible(input.signal);
+      const { context, decisionPart } = view;
       // Only ECHO-held text the policy shows the asker: the decision's title and first line where the decision is shown, the
       // expected phrase, the owner's name, each with its key-shaped words as written; and a ticket's own key. Never a word read from a tool.
       const candidates = context.assessed.flatMap(entry => {
@@ -394,7 +405,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       input.signal?.throwIfAborted();
       // Each key may need one more read than the request had made before its lookup.
       const notice = keys.length === 0 ? undefined : !live ? KEY_ACROSS_SOURCES : readBefore + keys.length > FOLLOW_UPS_LIMITS_V1.live_reads ? KEY_PAST_READS : undefined;
-      return release('search', context, hits, worded.length > chosen.length, { notice });
+      return release('search', view, hits, worded.length > chosen.length, { notice });
     },
 
     async list(input) {
@@ -411,7 +422,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         if (saved === undefined || saved.selection !== selection) invalid('Evidence list cursor is invalid');
         after = saved!.after;
       }
-      const context = visible(input.signal);
+      const view = visible(input.signal);
+      const { context } = view;
       // "me", or the asker's own name, which research passes for "I" and "my" (asked_by): their own follow-ups, by membership,
       // never another member whose name holds theirs.
       const asker = owner !== undefined && (ASKER.has(owner.toLowerCase()) || spelled(owner) === spelled(askerName()));
@@ -428,7 +440,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         next_cursor = `follow_ups_${++cursorSequence}`;
         cursors.set(next_cursor, Object.freeze({ selection, after: page.at(-1)!.row }));
       }
-      return release('list', context, entries, false, { next_cursor });
+      return release('list', view, entries, false, { next_cursor });
     },
 
     async open(input) {
@@ -442,7 +454,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       if (entry === undefined || !entry.access.see_row) return notFound();
       const entries = await withReads([entry], input.signal);
       input.signal?.throwIfAborted();
-      return release('open', context, entries, false);
+      return release('open', { context, decisionPart: openItemDecisionPartsV1(sources, context) }, entries, false);
     },
 
     revalidate(input) {

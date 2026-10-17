@@ -196,21 +196,25 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     expect((await list(desk, { owner: 'Pat' })).items).toEqual([]);                  // a part of "Patel" is not her name
     expect(titles(await list(desk, { status: 'open' }))).toHaveLength(2);
     expect((await list(desk, { status: 'done' })).items).toEqual([]);
+    // A request reads its follow-ups once: the next request sees a state changed since.
     await setState(f, 'mina', f.ticket.item_id, 'done');
-    expect(titles(await list(desk, { owner: 'me', status: 'done' }))).toEqual([`ECHO-12 ${f.outsideText}`]);
-    expect((await list(desk, { owner: 'me', status: 'open' })).items).toEqual([]);
+    expect((await list(desk, { owner: 'me', status: 'done' })).items).toEqual([]);
+    const later = askDesk(f, 'mina').desk;
+    expect(titles(await list(later, { owner: 'me', status: 'done' }))).toEqual([`ECHO-12 ${f.outsideText}`]);
+    expect((await list(later, { owner: 'me', status: 'open' })).items).toEqual([]);
     // Fifteen more, unsent: newest first, ten a page, then the rest; a cursor belongs to its own selection.
     f.advance(1_000);
     insertRows(f, 15);
-    const first = await list(desk);
+    const paged = askDesk(f, 'mina').desk;
+    const first = await list(paged);
     expect(first.items).toHaveLength(10);
     expect(first.items.every(item => item.attributes?.status === 'not sent yet')).toBe(true);
-    const second = await list(desk, { cursor: first.next_cursor });
+    const second = await list(paged, { cursor: first.next_cursor });
     expect(second.items).toHaveLength(7);
     expect(second).not.toHaveProperty('next_cursor');
     expect(new Set([...first.items, ...second.items].map(item => item.id)).size).toBe(17);
-    await expect(list(desk, { cursor: first.next_cursor, owner: 'me' })).rejects.toMatchObject({ code: 'invalid_request' });
-    await expect(list(desk, { cursor: 'follow_ups_99' })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(list(paged, { cursor: first.next_cursor, owner: 'me' })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(list(paged, { cursor: 'follow_ups_99' })).rejects.toMatchObject({ code: 'invalid_request' });
   });
 
   it("lists the asker's own follow-ups when the owner is their own name, though another member's name holds it", async () => {
@@ -224,6 +228,27 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     for (const owner of ['Ari', ' ari ', '@ARI', 'me']) expect(await ids(owner)).toEqual([`follow_up_${f.action.item_id}`]);
     // Another asker's "Ari" is any Ari.
     expect((await list(askDesk(f, 'mina').desk, { owner: 'Ari' })).items.map(item => item.id).sort()).toEqual([`follow_up_${f.ticket.item_id}`, `follow_up_${f.action.item_id}`].sort());
+  });
+
+  it("reads the follow-ups a scope shows, and each decision's first line, once a request", async () => {
+    const f = await sentFixture();
+    insertRows(f, 12);
+    const { desk } = askDesk(f, 'mina');
+    const pages = vi.spyOn(f.items, 'inOrganization');
+    const cards = vi.spyOn(f.runs, 'readUnfenced');
+    const decisions = f.readable.mock.calls.length;
+    await search(desk, 'launch');
+    await search(desk, 'Pilot planning');
+    const first = await list(desk);
+    await list(desk, { cursor: first.next_cursor });
+    await list(desk, { owner: 'me', status: 'open' });
+    await desk.search({ query: 'launch', limit: 8 });
+    expect(pages).toHaveBeenCalledTimes(1);
+    expect(f.readable.mock.calls.length - decisions).toBe(1);
+    expect(cards).toHaveBeenCalledTimes(1);
+    // The checks still read every release again.
+    await desk.revalidate({});
+    expect(f.readable.mock.calls.length - decisions).toBe(2);
   });
 
   it('refuses date filters and the filters of other sources', async () => {

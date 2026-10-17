@@ -129,7 +129,11 @@ How an answer could cite one:
   and the decision is still shown wherever a release carried it. Outside
   words are rechecked by their tool in the same check. At release, the check
   is full: every follow-up released in the request. A follow-up the asker can
-  no longer see fails the check, so no answer is released. Its state or owner
+  no longer see fails the check, so no answer is released. A request reads
+  the follow-ups its scope shows once, at its first search or list, and the
+  checks read each release again from fresh rows: one hidden since that read
+  is refused before the next model call, and one shown since appears in the
+  next request. Its state or owner
   changing while it stays visible is not an access change. ADR-0038's
   trade-off applies unchanged: an item revoked after its check may reach
   later model calls in that request, never the answer.
