@@ -216,16 +216,38 @@ The shared validators and stream framing are tested in
 `packages/organization-api/test/person-ask-progress-v1.test.ts`. The tests
 cover exact keys, the closed stage, source and status sets, the bounds, the
 receipt's merge and coverage rules, chunked decoding, and the fail-closed
-cases. The build must also add these negative disclosure tests:
+cases. The negative disclosure tests are:
 
-- a revoked item is never named after a check has seen the revocation;
-- no count includes an item the person cannot see;
-- no note, need, plan, model-written query, provider query or body is ever
-  sent;
-- a cancelled or timed-out run sends nothing further, and its audit lists
-  what was named;
-- a refused answer sends no receipt;
-- a client drops progress from an earlier Ask or another account.
+- **A revoked item is never named after a check has seen the revocation:**
+  `packages/organization-authority-kernel/test/answer-composition/agentic-ask-progress-v1.test.ts`.
+- **No count includes an item the person cannot see:** the same kernel test,
+  and `tests/architecture/ask-progress-roundtrip.test.ts`. In the round trip,
+  a private document, a hidden meeting and an unapproved one all match the
+  search, and the count is exactly the items named.
+- **No note, need, plan, model-written query, provider query or body is ever
+  sent:** the kernel test,
+  `services/organization-authority/test/person-ask-progress-http.test.ts`,
+  and the round trip, which checks every line the Person client prints.
+- **A cancelled or timed-out run sends nothing further, and its audit lists
+  what was named:** the kernel test (cancel and deadline), the HTTP test (a
+  client disconnect), and the round trip (Cancel on the desktop page,
+  through the client to the Authority's audit record).
+- **A refused answer sends no receipt:** the kernel test, and the HTTP test
+  (an in-stream error event, with no request audit record).
+- **A client drops progress from an earlier Ask or another account:**
+  `product/echo-desktop/test/unit/ask-progress.test.ts` for the page.
+  `tests/person-client/person-ask-progress.test.ts` covers the Person client,
+  which stops on an account switch and withholds a step while no session can
+  be read.
+
+The round trip runs the real Authority runtime, the real Person client with
+`--progress`, the desktop host's own command builder, line reader and views,
+and the desktop's store in one process. Step lines reach the page while the
+Authority is still inside the writer's model call. The receipt names exactly
+what was named. The audit lists the same citation commitments in the same
+order. A named decision opens its meeting with that item lit, and a named
+document opens its cited passage. The desktop's own end-to-end proof, against
+its fixture Authority, is `product/echo-desktop/test/e2e/ask.spec.ts`.
 
 Staging delivery through Cloudflare and Caddy is a manual operator check
 after merge. Live qualification is separate.
