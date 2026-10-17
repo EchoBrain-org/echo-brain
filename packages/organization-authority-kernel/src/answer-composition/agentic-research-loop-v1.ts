@@ -66,6 +66,11 @@ import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 
 /** One research step's model call; a stalled host fails fast and research goes on. */
 const STEP_TIMEOUT_MS = 25_000;
+/**
+ * A step starts only with this many times the longest step call so far (or a whole step's time): 2233bad1 started its
+ * last step with 7.54 s after 6 to 8 s steps, timed out, and reported an unusable step instead of a budget stop.
+ */
+const STEP_TIME_MARGIN = 1.25;
 const SEARCH_LIMIT = 8;
 const LIST_PAGE = 25;
 const LIST_FETCH = 50;
@@ -702,6 +707,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const citable = (short: string): boolean => entryOf(short)?.full === true;
   const citedShorts = () => new Set(plan.flatMap(part => part.needs.flatMap(need => need.evidence)).filter(citable));
   let researchPromptEntries: readonly Entry[] = [];
+  /** Step model time (the runner's) when the latest step call started, and the longest step call so far. */
+  let stepCallStartedAt: number | undefined;
+  let longestStepMs = 0;
+  const settleStepCall = () => {
+    if (stepCallStartedAt === undefined) return;
+    longestStepMs = Math.max(longestStepMs, options.observed().model_ms - stepCallStartedAt);
+    stepCallStartedAt = undefined;
+  };
   /**
    * The scratchpad: opened bodies, then every other entry, each in E-id order and never re-sorted between steps, so a
    * step's prompt repeats the evidence of the step before as its prefix (prompt caching). Exact released bodies when
@@ -871,11 +884,15 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     let latest: ReadonlySet<string> = new Set();
     let idleSteps = 0;
     const stepTimeout = () => Math.min(STEP_TIMEOUT_MS, remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
+    /** The time a step needs to start: the minimum, or the margin over the longest step call so far, at most a whole step. */
+    const stepNeeds = () => Math.min(STEP_TIMEOUT_MS, Math.max(AGENTIC_ASK_MIN_STEP_MS_V1, Math.ceil(STEP_TIME_MARGIN * longestStepMs)));
     while (steps < budget.max_rounds) {
       assertLive();
+      settleStepCall();
       const roundStartedAt = now();
-      // Leave room for the answer call and its possible repair.
-      if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || gate.stats().calls + 2 >= budget.max_model_calls) { researchStop = 'budget'; break; }
+      // Leave room for the answer call and its possible repair, and never start a step that probably cannot finish:
+      // the writer gets the time instead.
+      if (stepTimeout() < stepNeeds() || gate.stats().calls + 2 >= budget.max_model_calls) { researchStop = 'budget'; break; }
       // A stable head, then the evidence, which only grows, then what changes every step: each step's prompt repeats the
       // last one's head and evidence as its prefix, so the provider can serve that prefix from its cache. JSON keeps this
       // key order through the gate and the provider adapter.
@@ -1008,7 +1025,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // Only an admitted research call makes a complete body read. Retrieval,
       // opening, and scratchpad construction alone cannot satisfy a need.
       before_call: (role: AgenticAskModelRoleV1) => {
-        if (role === 'step') for (const entry of researchPromptEntries) {
+        if (role !== 'step') return;
+        // A repair's call ends the call before it.
+        settleStepCall(); stepCallStartedAt = options.observed().model_ms;
+        for (const entry of researchPromptEntries) {
           if (!entry.full) evidenceNovelty += 1;
           entry.full = true;
         }

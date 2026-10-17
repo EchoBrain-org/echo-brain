@@ -536,6 +536,32 @@ describe("research loop: need ids", () => {
   });
 });
 
+describe("research loop: step time", () => {
+  /** Ask's 90 s deadline with room for 20 rounds, so only time stops research. */
+  const timed: AgenticBriefV1 = { ...brief("Find what changed.", []), budget: { deadline_ms: 90_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000 } };
+  const searching = (index: number) => reads("open", [{ tool: "search", args: { query: `term ${index}` } }]);
+  const search = async (input: { readonly query?: string }) => result([record(`hit-${input.query ?? ""}`)]);
+
+  it("does not start a step with less than 1.25 times the longest step call so far, and stops for budget (2233bad1)", async () => {
+    let time = 0;
+    // Each step call takes 8 s of the request's time: the eighth would start with 7 s, where it used to start (and time out).
+    const h = harness((_input, index) => { time += 8_000; return searching(index); }, { search }, { now_ms: () => time });
+    const view = await h.research.research({ trigger: "approved_record", brief: timed });
+    expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 23_000, 15_000]);
+    expect(view.stop).toEqual({ reason: "budget", completed: false });
+    expect(view.cost).toMatchObject({ rounds: 7, fallbacks: 0 });
+  });
+
+  it("still starts a step that has a whole step's time after a slower step", async () => {
+    let time = 0;
+    const h = harness((_input, index) => { time += 22_000; return searching(index); }, { search }, { now_ms: () => time });
+    const view = await h.research.research({ trigger: "approved_record", brief: timed });
+    // 1.25 times 22 s is more than a whole step: the second step starts with its whole 25 s; the third, with 19 s, does not.
+    expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000]);
+    expect(view.stop).toEqual({ reason: "budget", completed: false });
+  });
+});
+
 describe("research core: what a task trigger's renderer was shown and cited", () => {
   const decision = record("two-decimals", "Approved on Oct 8: show 0.01 °C on the display for MRD-02.");
   const therm = ticket("THERM-46", "THERM-46: the firmware formats one decimal.");

@@ -49,11 +49,11 @@
   },
   "budget_stop_with_slow_clock": {
     "calls": 4,
-    "prompt_sha256": "sha256:dee7d89c15670e1874efb7333c0a1530d6244628042afba4379c84cb7b08a53b",
+    "prompt_sha256": "sha256:968f514b4928a0b5c538054e8d2575fef126be628cf0c50b748e30f8e5137259",
     "response_sha256": "sha256:58f611778059bb722c05b6014933c4160a533a8a88b0ad965124b515df14fc7e",
-    "model_inputs_sha256": "sha256:d534bd0ae1d4c5b0e7692062805474617e2b607ac37990588128c6385353c07d",
+    "model_inputs_sha256": "sha256:7276612d189a0d3843973f631d96226a5206df44e0a923b32b164cb8337b33da",
     "outcome": "partial",
-    "audit_sha256": "sha256:2d657d4e24a42d0d7d578a84deb2fb3096e8811290b7273adc1593976dd33c9c"
+    "audit_sha256": "sha256:36d2cccb2dca6cf8da8a5bdc50f48be4324cd5f7a5b503bfc865ca4b0fb55f3f"
   },
   "small_scope_preload": {
     "calls": 2,

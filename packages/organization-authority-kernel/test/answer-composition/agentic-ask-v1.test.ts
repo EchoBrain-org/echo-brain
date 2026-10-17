@@ -1174,14 +1174,15 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const launch = item("a");
     const evidence = desk({ search: () => [launch], open: () => [launch], revalidate: async () => {
       checks += 1;
-      if (checks === 3) clock += 10_000.25;
+      // Steps of 12 s leave the third step room to start; its permission check then takes 26 s.
+      if (checks === 3) clock += 26_000.25;
       if (checks === 4) clock += 15_000.25;
       return { checked_at: checked };
     } });
     const timeouts: number[] = [];
     const script = scripted([
-      () => { clock += 20_000; return step([{}], [search("launch")]); },
-      () => { clock += 20_000; return step([{}], [open("E1")]); },
+      () => { clock += 12_000; return step([{}], [search("launch")]); },
+      () => { clock += 12_000; return step([{}], [open("E1")]); },
       (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); clock += 10_000; return finish([found(["E1"])]); },
       (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); return answer([{ text: "Tuesday.", evidence: ["E1"] }]); },
     ]);
@@ -1258,8 +1259,9 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const evidence = desk({ search: () => [launch], open: () => [launch] });
     const audit: AgenticAskAuditEntryV1[] = [];
     const script = scripted([
-      () => { clock += 20_000.25; return step([{}], [search("launch")]); },
-      () => { clock += 20_000.125; return step([{}], [open("E1")]); },
+      // The third step starts with less than a whole step's time, but more than it needs after 19.5 s steps.
+      () => { clock += 19_000.25; return step([{}], [search("launch")]); },
+      () => { clock += 19_500.125; return step([{}], [open("E1")]); },
       () => { clock += 21_000.25; return finish([found(["E1"])]); },
       answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
     ]);
