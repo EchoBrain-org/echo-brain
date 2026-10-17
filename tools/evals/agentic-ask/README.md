@@ -49,7 +49,12 @@ route diagnosis mode. The normal evaluator uses the unmodified production
 bundle. Route diagnosis uses a local adapter because the bundle deliberately
 does not expose a transport hook; it preserves the adapter's existing request
 properties, sets `only` to the requested lowercase provider slug with fallback
-disabled, and records only the public provider name returned by OpenRouter. It never records headers,
+disabled, and records only the public provider name returned by OpenRouter.
+The production request ignores Friendli (and AtlasCloud) for
+`deepseek/deepseek-v3.2`
+([ADR-0037](../../../docs/decisions/ADR-0037-openrouter-routing-for-research-calls.md)),
+so route diagnosis also drops the requested slug from that ignore list;
+otherwise no host would qualify. It never records headers,
 authorization, request bodies, or response bodies.
 
 The report is mode `0600` in a fresh private temporary directory unless an

@@ -133,9 +133,10 @@ function safeObservedProvider(value) {
  * The normal path uses the unmodified production bundle. Route diagnosis uses
  * this local adapter only because that bundle intentionally does not expose a
  * fetch hook. It keeps the same private-file resolver and never logs headers,
- * authorization, request bodies, or response bodies.
+ * authorization, request bodies, or response bodies. `upstream` is the network
+ * fetch, replaced only in tests.
  */
-function routeDiagnosticAdapter(credentialFile, requestedRoute, observedProviders) {
+export function routeDiagnosticAdapter(credentialFile, requestedRoute, observedProviders, upstream = fetch) {
   const credentialReference = `file:${credentialFile}`;
   const credential = readPrivateAuthorityCredential(credentialReference);
   return createOpenRouterStructuredGenerationAdapter({
@@ -143,8 +144,11 @@ function routeDiagnosticAdapter(credentialFile, requestedRoute, observedProvider
     credential_resolver: (reference) => reference === credentialReference ? credential : undefined,
     fetch_impl: async (url, init) => {
       const request = JSON.parse(String(init?.body));
-      request.provider = { ...request.provider, only: [requestedRoute], allow_fallbacks: false };
-      const response = await fetch(url, { ...init, body: JSON.stringify(request) });
+      // Production ignores hosts measured as garbling output (ADR-0037); a route still ignored would leave no host to serve the call.
+      const { ignore = [], ...provider } = request.provider ?? {};
+      const ignored = ignore.filter((slug) => slug !== requestedRoute);
+      request.provider = { ...provider, ...(ignored.length === 0 ? {} : { ignore: ignored }), only: [requestedRoute], allow_fallbacks: false };
+      const response = await upstream(url, { ...init, body: JSON.stringify(request) });
       try {
         const payload = await response.clone().json();
         const provider = safeObservedProvider(payload?.provider);
