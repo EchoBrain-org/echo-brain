@@ -216,7 +216,7 @@ describe("research loop: starting evidence", () => {
   const items = ["THERM-48", "THERM-46", "THERM-47"].map(key => ticket(key, `${key}: firmware formats one decimal.`));
   const keyOf = (input: EvidenceDeskOpenCitationInputV2) => (input.citation as { readonly ticket_id: string }).ticket_id;
 
-  it("opens every starting item at once and registers them in brief order, whatever order they arrive in", async () => {
+  it("opens starting items together and registers them in brief order, whatever order they arrive in", async () => {
     const pending = new Map(items.map(item => [(item.citation as { readonly ticket_id: string }).ticket_id, deferred<EvidenceDeskResultV2>()]));
     const openCitation = vi.fn((input: EvidenceDeskOpenCitationInputV2) => pending.get(keyOf(input))!.promise);
     const h = harness([found("E1", "E2", "E3")], { live_sources: [JIRA], ticket_available: true, openCitation });
@@ -226,6 +226,22 @@ describe("research loop: starting evidence", () => {
     const view = await run;
     expect(h.prompt(0).task).toBe("Recheck E1, E2 and E3.");
     expect(view.items.map(item => [item.id, item.title])).toEqual([["E1", items[0]!.label], ["E2", items[1]!.label], ["E3", items[2]!.label]]);
+  });
+
+  it("keeps at most four starting reads in flight, as one planner step does", async () => {
+    const many = Array.from({ length: 6 }, (_, index) => ticket(`THERM-${60 + index}`, `THERM-${60 + index}: body.`));
+    const pending = many.map(() => deferred<EvidenceDeskResultV2>());
+    const openCitation = vi.fn((input: EvidenceDeskOpenCitationInputV2) => pending[Number(keyOf(input)) - 60]!.promise);
+    const h = harness([found("E1")], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const run = h.research.research({ trigger: "sweep", brief: brief(many.map((_, index) => agenticStartingSlotV1(index + 1)).join(" "), many.map(item => item.citation), {}, "report") });
+    await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(4));
+    pending[2]!.resolve(result([many[2]!]));
+    await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(5));
+    for (const [index, item] of many.entries()) pending[index]!.resolve(result([item]));
+    const view = await run;
+    expect(openCitation).toHaveBeenCalledTimes(6);
+    expect(h.prompt(0).task).toBe("E1 E2 E3 E4 E5 E6");
+    expect(view.items.map(item => item.title)).toEqual(many.map(item => item.label));
   });
 
   it("gives each starting item its own context budget", async () => {

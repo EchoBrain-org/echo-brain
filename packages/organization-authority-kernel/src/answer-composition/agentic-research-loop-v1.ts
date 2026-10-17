@@ -10,6 +10,7 @@ import {
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
 import {
+  AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
   AgenticAskOutputErrorV1,
   cleanId,
@@ -77,6 +78,8 @@ const OPEN_EXTRA_ITEMS = 20;
 const OPEN_NEIGHBOURS = 2;
 const OPEN_BYTES = 24 * 1024;
 const SHORTCUT_ITEMS = 20;
+/** Starting reads in flight at once: as many as one planner step's reads, so a sweep of many items never floods a source. */
+const STARTING_READS_AT_ONCE = AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
 const MAX_SEEN_ENTRIES = 300;
 /** What a search-only brief's planner is told when it proposes list. */
 const LIST_UNAVAILABLE = "list is unavailable in this run; use search and open";
@@ -734,14 +737,20 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** The research phase: optional preload, then the loop until a stop rule fires. */
   const research = async (gate: AgenticModelGateV1): Promise<void> => {
     // ---- starting evidence: read fresh through the access-checked desk ----
-    // The reads run together and are registered in brief order, so ids, receipts and failures are those of reading one at a
-    // time: a failure that stops research stops only the reads after it, and the first failure in brief order is the one thrown.
+    // The reads run together, a few at a time in brief order, and are registered in brief order, so ids, receipts and
+    // failures are those of reading one at a time: a failure that stops research stops only the reads after it, and the
+    // first failure in brief order is the one thrown.
     type StartingRead = { readonly opened: EvidenceDeskResultV2; readonly readable: readonly EvidenceDeskItemV2[]; readonly anchor: EvidenceDeskItemV2 | undefined } | { readonly unreadable: true };
     assertLive();
     const stopReads = brief.starting.map(() => new AbortController());
+    let reading = 0;
+    const waiting: (() => void)[] = [];
     const settled = await Promise.allSettled(brief.starting.map(async ({ citation, if_unreadable: ifUnreadable }, index): Promise<StartingRead> => {
       const signal = AbortSignal.any([activeSignal, stopReads[index]!.signal]);
+      if (reading >= STARTING_READS_AT_ONCE) await new Promise<void>(resolve => { waiting.push(resolve); });
+      reading += 1;
       try {
+        signal.throwIfAborted();
         const opened = await observeAgenticLifecycleV1('starting_read', 'research_starting_read', { index: index + 1, citation, if_unreadable: ifUnreadable }, async () => {
           if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
           return raceAbort(signal, desk.openCitation({ citation, signal }));
@@ -756,6 +765,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         if (ifUnreadable === "report" && unreadableRefusal(error)) return { unreadable: true };
         for (const stop of stopReads.slice(index + 1)) stop.abort();
         throw error;
+      } finally {
+        reading -= 1;
+        waiting.shift()?.();
       }
     }));
     const failed = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
