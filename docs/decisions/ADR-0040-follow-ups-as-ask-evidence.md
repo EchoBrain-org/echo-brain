@@ -215,7 +215,9 @@ Negative disclosure tests, required by
 
 They are in `services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`,
 `person-follow-ups-ask-integration.test.ts` and, for the stream,
-`person-ask-progress-v6-http.test.ts`. The contracts are tested in
+`person-ask-progress-v6-http.test.ts`; a `/v6` Ask restarted by a snapshot
+change keeps one stream and names each item once, as `/v5` does, in
+`person-ask-progress-http.test.ts`. The contracts are tested in
 `packages/organization-api/test/person-answer-v7.test.ts`,
 `person-ask-progress-v2.test.ts` and
 `packages/organization-authority-kernel/test/shared/follow-up-evidence-v1.test.ts`.
