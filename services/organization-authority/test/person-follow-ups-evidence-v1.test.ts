@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { impactItemKeyV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { EvidenceDeskPortV1, EvidenceDeskResultV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import type { EvidenceDeskPortV2, EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
@@ -141,6 +142,35 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
     const down = await sentFixture({ openFails: { ticket: new AuthorityOperationError('unavailable', 'Jira is down') } });
     expect((await search(askDesk(down, 'mina').desk, 'ECHO-12')).items).toEqual([]);
     expect((await search(askDesk(down, 'mina').desk, 'launch')).items[0]).toMatchObject({ label: 'launch next week' });
+  });
+
+  it('says a key-only search was cut when one more key would have found another opened follow-up', async () => {
+    const f = await sentFixture();
+    // Six tickets keyed as ECHO keys them, that Jira opens for whoever may open tickets, and that only their keys match.
+    const pointers = Array.from({ length: 6 }, (_, index) => ({ kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: String(30_000 + index),
+      permalink: `https://echo-fixture.atlassian.net/browse/ECHO-${100 + index}`, text_sha256: canonicalSha256(`gate ticket ${index}`) }));
+    const run = f.runs.read(f.person, f.runId)!;
+    f.db.transaction(() => f.items.insertForRun(f.db, run, pointers.map(pointer => ({ item_key: impactItemKeyV1(pointer)!, relation: 'conflicts' as const,
+      expected: 'hold the gate', owner_membership_id: f.membership('ari'), owner_match: 'approver' as const, pointer }))))();
+    const original = f.openCitation.getMockImplementation()!;
+    f.openCitation.mockImplementation(async (name, citation) => {
+      const pointer = pointers.find(value => value.ticket_id === (citation as { readonly ticket_id?: string }).ticket_id);
+      if (pointer === undefined || name === 'rafael') return original(name, citation);
+      const opened = await original(name, citation);
+      return { items: [{ id: `desk-${pointer.ticket_id}`, citation: pointer, kind: 'ticket', label: `${pointer.permalink.split('/').pop()} Gate hold`, visibility: 'only_me',
+        text: 'The gate stays on hold.', attributes: { status: 'To Do' }, receipt_sha256: opened.receipt_digests[0] }], truncated: false, receipt_digests: opened.receipt_digests };
+    });
+    const keys = pointers.map(pointer => pointer.permalink.split('/').pop()).join(' ');
+    // Six follow-ups that only their keys match, each opened live: five come back, and the search says there are more.
+    const capped = await search(askDesk(f, 'mina').desk, keys, { limit: 5 });
+    expect(capped.items).toHaveLength(5);
+    expect(capped.truncated).toBe(true);
+    // Exactly as many as fit: nothing is cut, so nothing says so.
+    const fits = await search(askDesk(f, 'mina').desk, keys.split(' ').slice(0, 5).join(' '), { limit: 5 });
+    expect(fits.items).toHaveLength(5);
+    expect(fits.truncated).toBe(false);
+    // A key the asker cannot open is no hit, so it never makes a search look cut.
+    expect(await search(askDesk(f, 'rafael').desk, keys, { limit: 5 })).toMatchObject({ items: [], truncated: false });
   });
 
   it('matches a word shaped like a ticket key where ECHO holds it as written, such as a build name', async () => {

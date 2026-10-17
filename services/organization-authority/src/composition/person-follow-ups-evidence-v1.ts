@@ -394,8 +394,12 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       // Home shows an item's key only with the item opened: a hit its key alone matched ranks after every word match, and is a hit
       // only once the live read opened it. One that did not is as if it never matched, and never counts toward truncation.
       const keyOnly = live ? candidates.filter(value => value.keyOnly).map(value => value.entry) : [];
-      for (let next = 0; hits.length < limit && next < keyOnly.length;) {
-        const round = keyOnly.slice(next, next + limit - hits.length);
+      // Unless the words already overflow the page, look for one opened hit past it: only a real hit there says the page was cut,
+      // never a key the asker cannot open.
+      const wordsCut = worded.length > chosen.length;
+      const wanted = wordsCut ? limit : limit + 1;
+      for (let next = 0; hits.length < wanted && next < keyOnly.length;) {
+        const round = keyOnly.slice(next, next + wanted - hits.length);
         next += round.length;
         for (const entry of await withReads(round, input.signal)) {
           const read = entry.read?.read;
@@ -405,7 +409,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       input.signal?.throwIfAborted();
       // Each key may need one more read than the request had made before its lookup.
       const notice = keys.length === 0 ? undefined : !live ? KEY_ACROSS_SOURCES : readBefore + keys.length > FOLLOW_UPS_LIMITS_V1.live_reads ? KEY_PAST_READS : undefined;
-      return release('search', view, hits, worded.length > chosen.length, { notice });
+      return release('search', view, hits.slice(0, limit), wordsCut || hits.length > limit, { notice });
     },
 
     async list(input) {
