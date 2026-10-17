@@ -227,6 +227,11 @@ const slackLinkResult = (n: number) => ({
 });
 
 /** A valid V6 live-source answer with a Confluence page citation. */
+/** The same answer on /v6: a V7 answer may cite every V6 kind (ADR-0040). */
+function v7PageAnswer(input: { readonly scope?: unknown } = {}) {
+  return { ...v6PageAnswer(input), schema_version: 7, kind: 'echo-clean-person-answer-v7' };
+}
+
 function v6PageAnswer(input: { readonly scope?: unknown } = {}) {
   return {
     schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: input.scope ?? { kind: 'global' }, outcome: 'answered',
@@ -815,33 +820,46 @@ describe("Person client", () => {
     });
   });
 
-  it('uses V5 for --live, preserves the project scope, and validates V6 page citations', async () => {
+  it('uses /v6 for --live, preserves the project scope, and validates page citations in the V7 answer', async () => {
     await withHome(async home => {
       const projectId = 'prj_00000000-0000-4000-8000-000000000019' as `prj_${string}`;
       const client = await signedInClient(home, async (input, init) => {
-        expect(new URL(String(input)).pathname).toBe('/v5/person/ask');
+        expect(new URL(String(input)).pathname).toBe('/v6/person/ask');
         expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'Are we ready for EVT?', project_id: projectId });
-        return json(v6PageAnswer({ scope: { kind: 'project', project_id: projectId } }));
+        return json(v7PageAnswer({ scope: { kind: 'project', project_id: projectId } }));
       });
       await expect(client.askWithLiveSources('Are we ready for EVT?', projectId)).resolves.toMatchObject({
-        kind: 'echo-clean-person-answer-v6', scope: { kind: 'project', project_id: projectId }, citations: [{ kind: 'page', citation: { tool_id: 'confluence', page_id: '12345' } }],
+        kind: 'echo-clean-person-answer-v7', scope: { kind: 'project', project_id: projectId }, citations: [{ kind: 'page', citation: { tool_id: 'confluence', page_id: '12345' } }],
       });
     });
   });
 
-  it('falls back from --live only for an unsupported V5 route, never an Authority error', async () => {
+  it('uses V5 for --live on an Authority with no /v6 route, and validates V6 page citations', async () => {
+    await withHome(async home => {
+      const paths: string[] = [];
+      const client = await signedInClient(home, async input => {
+        const path = new URL(String(input)).pathname; paths.push(path);
+        if (path === '/v6/person/ask') return json({ error: { code: 'not_found', message: 'route absent' } }, 404);
+        return json(v6PageAnswer());
+      });
+      await expect(client.askWithLiveSources('Are we ready for EVT?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v6', citations: [{ kind: 'page' }] });
+      expect(paths.filter(path => path.endsWith('/person/ask'))).toEqual(['/v6/person/ask', '/v5/person/ask']);
+    });
+  });
+
+  it('falls back from --live only for unsupported V6 and V5 routes, never an Authority error', async () => {
     await withHome(async home => {
       const paths: string[] = [];
       const client = fixtureClient(home, async input => {
         const path = new URL(String(input)).pathname; paths.push(path);
         if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
-        if (path === '/v5/person/ask') return json({ error: { code: 'not_found', message: 'route absent' } }, 404);
+        if (path === '/v6/person/ask' || path === '/v5/person/ask') return json({ error: { code: 'not_found', message: 'route absent' } }, 404);
         if (path === '/v4/person/ask') return json({ ...v4Answer({ citations: [RECORD_CITATION] }), kind: 'echo-clean-person-answer-v5', schema_version: 5 });
         throw new Error(`unexpected path ${path}`);
       });
       await client.installSession('https://authority.example', ROTATED_SESSION);
       await expect(client.askWithLiveSources('What is current?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v5' });
-      expect(paths).toEqual(['/v1/authority-descriptor', '/v5/person/ask', '/v4/person/ask']);
+      expect(paths).toEqual(['/v1/authority-descriptor', '/v6/person/ask', '/v5/person/ask', '/v4/person/ask']);
     });
     await withHome(async home => {
       const paths: string[] = [];
@@ -852,33 +870,37 @@ describe("Person client", () => {
       });
       await client.installSession('https://authority.example', ROTATED_SESSION);
       await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code: 'unauthorized', status: 401 });
-      expect(paths).toEqual(['/v1/authority-descriptor', '/v5/person/ask']);
+      expect(paths).toEqual(['/v1/authority-descriptor', '/v6/person/ask']);
     });
   });
 
   it.each([
-    { name: 'a matched-route provider 404', marker: '5', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
+    // `own`: the route header with the refusing route's own number.
+    { name: 'a matched-route provider 404', marker: 'own', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
     { name: 'an unknown route marker', marker: 'future', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
     { name: 'a malformed unmarked 404', marker: undefined, body: { unsupported: true }, code: 'invalid_response' },
     { name: 'an unmarked 404 with another error code', marker: undefined, body: { error: { code: 'unavailable', message: 'request failed' } }, code: 'unavailable' },
-  ])('does not replay live Ask without pages after $name', async ({ marker, body, code }) => {
-    await withHome(async home => {
-      const paths: string[] = [];
-      const client = fixtureClient(home, async input => {
-        const path = new URL(String(input)).pathname; paths.push(path);
-        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
-        expect(path).toBe('/v5/person/ask');
-        const response = json(body, 404);
-        if (marker !== undefined) response.headers.set(PERSON_ANSWER_ROUTE_HEADER_V5, marker);
-        return response;
+  ])('does not replay live Ask on an older route after $name', async ({ marker, body, code }) => {
+    // On /v6, and on /v5 once an Authority without /v6 sent the Ask there.
+    for (const refusing of ['/v6/person/ask', '/v5/person/ask']) {
+      await withHome(async home => {
+        const paths: string[] = [];
+        const client = fixtureClient(home, async input => {
+          const path = new URL(String(input)).pathname; paths.push(path);
+          if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+          if (path !== refusing) return json({ error: { code: 'not_found', message: 'route absent' } }, 404);
+          const response = json(body, 404);
+          if (marker !== undefined) response.headers.set(PERSON_ANSWER_ROUTE_HEADER_V5, marker === 'own' ? refusing.slice(2, 3) : marker);
+          return response;
+        });
+        await client.installSession('https://authority.example', ROTATED_SESSION);
+        await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code, status: 404 });
+        expect(paths).toEqual(['/v1/authority-descriptor', ...(refusing === '/v5/person/ask' ? ['/v6/person/ask'] : []), refusing]);
       });
-      await client.installSession('https://authority.example', ROTATED_SESSION);
-      await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code, status: 404 });
-      expect(paths).toEqual(['/v1/authority-descriptor', '/v5/person/ask']);
-    });
+    }
   });
 
-  it('routes the CLI --live flag to V5 and refuses it with --tickets before transport', async () => {
+  it('routes the CLI --live flag to /v6 and refuses it with --tickets before transport', async () => {
     await withHome(async home => {
       await installFixtureSession(home);
       const result = await runCli(['ask', '--question', 'Are we ready for EVT?', '--live'], {
@@ -886,11 +908,11 @@ describe("Person client", () => {
         fetch: async (input) => {
           const path = new URL(String(input)).pathname;
           if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
-          expect(path).toBe('/v5/person/ask'); return json(v6PageAnswer());
+          expect(path).toBe('/v6/person/ask'); return json(v7PageAnswer());
         },
       });
       expect(result.code).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, result: { kind: 'echo-clean-person-answer-v6' } });
+      expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, result: { kind: 'echo-clean-person-answer-v7' } });
       let called = false;
       const rejected = await runCli(['ask', '--question', 'Are we ready for EVT?', '--live', '--tickets'], {
         home_directory: home, now: () => NOW, fetch: async () => { called = true; throw new Error('must not call'); },
