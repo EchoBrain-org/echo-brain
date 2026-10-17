@@ -141,6 +141,24 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
     expect((await search(askDesk(down, 'mina').desk, 'launch')).items[0]).toMatchObject({ label: 'launch next week' });
   });
 
+  it('never ranks a hit by a ticket key the asker could not open', async () => {
+    const f = await sentFixture();
+    insertRows(f, 53);
+    // Rafael reads the decision but opens none of the tickets: a key next to his words moves nothing, and cuts nothing.
+    const { desk } = askDesk(f, 'rafael');
+    const words = await search(desk, 'launch');
+    expect(words.items).toHaveLength(5);
+    // A ticket whose follow-up the words alone leave out, and the one they return first.
+    const ids = words.items.map(item => item.id);
+    const cut = f.items.inOrganization(f.person.organization_id, { states: ['unsent'], limit: 100 }).find(row => !ids.includes(`follow_up_${row.item_id}`))!;
+    const key = /\/browse\/(ECHO-\d+)$/u.exec(cut.pointer.permalink as string)![1]!;
+    expect(ids[0]).toBe(`follow_up_${f.ticket.item_id}`);
+    for (const query of [`${key} launch`, `launch ${key}`, 'ECHO-12 launch']) {
+      const keyed = await search(desk, query);
+      expect([query, keyed.items.map(item => item.id), keyed.truncated]).toEqual([query, words.items.map(item => item.id), words.truncated]);
+    }
+  });
+
   it('reads a meeting action from ECHO alone, never live', async () => {
     const f = await openItemsFixture({ meetingActions: [{ signal_id: 'act-1', text: 'Send the vendor the pilot plan', owner: 'Rafael Moreno' }] });
     await f.finishImpactRun();

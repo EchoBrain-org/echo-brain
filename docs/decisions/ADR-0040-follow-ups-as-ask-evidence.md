@@ -80,9 +80,11 @@ How an answer could cite one:
   (only where the decision is shown), the `expected` phrase, the owner's
   display name, and a ticket's key read from the item's stored pointer. Never
   a word inside a ticket or page, and never a page's or message's pointer,
-  which can hold a title. A hit matched only by its ticket key is released
-  only if the live read opened it: Home shows the key only with the opened
-  item. A search returns at most 5 hits; only hits are read live.
+  which can hold a title. Hits rank by ECHO-held words alone, so a key never
+  moves or cuts a hit. A hit matched only by its ticket key ranks after every
+  word match and is released only if the live read opened it: Home shows the
+  key only with the opened item. A search returns at most 5 hits; only hits
+  are read live.
 - **List** takes an owner (each word a whole word of the name, ignoring
   case) and a status (`open` or `done`), applied before anything is released
   or read live. An owner of `me`, or the asker's own display name, which

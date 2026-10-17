@@ -348,11 +348,12 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         const words = wordsOf([decision?.title, decision?.first_line, entry.row.expected, openItemNameV1(context.people, entry.row.owner_membership_id)]);
         const matched = terms.filter(term => words.has(term)).length;
         const key = ticketKeyOf(entry.row);
-        const keyed = key !== undefined && keys.includes(key) ? 1 : 0;
-        return matched + keyed === 0 ? [] : [{ entry, score: matched + keyed, keyOnly: matched === 0 }];
+        const keyed = key !== undefined && keys.includes(key);
+        // Ranked by ECHO's words alone: a key, which the asker may not be able to open, never moves or cuts a hit.
+        return matched === 0 && !keyed ? [] : [{ entry, score: matched, keyOnly: matched === 0 }];
       }).sort((left, right) => right.score - left.score || STATE_ORDER[left.entry.row.state] - STATE_ORDER[right.entry.row.state] || newestFirst(left.entry.row, right.entry.row));
-      // Home shows an item's key only with the item opened: a hit its key alone matched is a hit only once the live read opened
-      // it. One that did not is as if it never matched, and never counts toward truncation.
+      // Home shows an item's key only with the item opened: a hit its key alone matched ranks after every word match, and is a hit
+      // only once the live read opened it. One that did not is as if it never matched, and never counts toward truncation.
       const hits: Entry[] = [];
       let next = 0;
       while (hits.length < limit && next < candidates.length) {
