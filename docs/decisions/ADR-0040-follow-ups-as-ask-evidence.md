@@ -78,20 +78,21 @@ How an answer could cite one:
     `items` project scope reads them.
 - **Search matches ECHO-held text only:** the decision's title and first line
   (only where the decision is shown), the `expected` phrase, the owner's
-  display name, each with any word shaped like a ticket key (a build name
-  such as `EVT-2`) as written, and a ticket's key read from the item's stored
+  display name, each with any word shaped like a ticket key (a build name such
+  as `EVT-2`) as written, and a ticket's key read from the item's stored
   pointer. Never a word inside a ticket or page, and never a page's or
   message's pointer, which can hold a title. Hits rank by ECHO-held words
   alone, so a key never moves or cuts a hit. A hit matched only by its ticket
   key ranks after every word match and is released only if the live read
-  opened it: Home shows the key only with the opened item. A search returns
-  at most 5 hits; only hits are read live. A keyword search across sources
-  reads none live, since the desk keeps only some of each source's hits: its
-  follow-ups carry ECHO-held text only, and a ticket key alone finds none
-  there. A search with a ticket key says so in a notice when it ran across
-  sources, or when the request had already made nearly all its live reads; the
-  notice turns on the query and those reads, never on whether a follow-up
-  holds the key.
+  opened it: Home shows the key only with the opened item. A search returns at
+  most 5 hits. It reads live only its hits, and each candidate matched only by
+  its ticket key, to decide whether it is a hit. A keyword search across
+  sources reads none live, since the desk keeps only some of each source's
+  hits: its follow-ups carry ECHO-held text only, and a ticket key alone finds
+  none there. A search with a ticket key says so in a notice when it ran
+  across sources, or when the request had already made nearly all its live
+  reads; the notice turns on the query and those reads, never on whether a
+  follow-up holds the key.
 - **List** takes an owner (each word a whole word of the name, ignoring
   case) and a status (`open` or `done`), applied before anything is released
   or read live. An owner of `me`, or the asker's own display name, which
@@ -102,9 +103,9 @@ How an answer could cite one:
   is opened with the same bound tool source the rest of the Ask uses. Each
   read is that tool's audited live release, counts toward that tool's
   per-request caps, and is rechecked by that tool at every check. At most 20
-  distinct follow-ups are read live in one request, each once; past that, and
-  when a read is refused or fails, a follow-up is released with ECHO-held text
-  only.
+  distinct tool items are read live for follow-ups in one request, each once,
+  so follow-ups on one item share its read; past that, and when a read is
+  refused or fails, a follow-up is released with ECHO-held text only.
 - **What is released.** `PersonFollowUpEvidenceV1`: title, owner, status, due
   date, the latest check (verdict and when, not who), the decision (title,
   first line, meeting ref) and `expected`. `followUpDeskFieldsV1` turns it
@@ -114,15 +115,17 @@ How an answer could cite one:
   when the asker reads it, and is `only_me` when they see the item only as
   its owner. A release whose title or due date was read live is no wider than
   that read: it takes the narrower of the two, so a title from the asker's
-  own Jira read is `only_me`, as the ticket itself is. Never released: the approver, other members, who checked, the
-  relation, run ids, item keys, pointers, `says_now`, or any count of rows
-  the asker cannot see (ADR-0012).
-- **Answer.** The V7 answer (`echo-clean-person-answer-v7`) on the additive
-  `POST /v6/person/ask` adds the citation kind `follow_up`
+  own Jira read is `only_me`, as the ticket itself is. Never released: the
+  approver, other members, who checked, the relation, run ids, item keys,
+  pointers, `says_now`, or any count of rows the asker cannot see
+  (ADR-0012).
+- **Answer.** The V7 answer (`echo-clean-person-answer-v7`), for the
+  additive `POST /v6/person/ask`, adds the citation kind `follow_up`
   (`{ kind, item_id }`) and the open ref `follow_up:<item_id>`, which every
-  follow-up citation carries and which opens the item page. The V3 request
-  is unchanged. `/v3`, `/v4` and `/v5` and their answers are unchanged, and
-  no version below V7 binds or cites follow-ups.
+  follow-up citation carries and which opens the item page. The V7 route is
+  defined but not yet mounted; see the migration below. The V3 request is
+  unchanged. `/v3`, `/v4` and `/v5` and their answers are unchanged, and no
+  version below V7 binds or cites follow-ups.
 - **Checks ([ADR-0038](ADR-0038-incremental-access-check-before-model-calls.md)).**
   Before each model call, the source puts every follow-up it released since
   its last successful check through the policy again: the row is still shown,
@@ -133,10 +136,10 @@ How an answer could cite one:
   the follow-ups its scope shows once, at its first search or list, and the
   checks read each release again from fresh rows: one hidden since that read
   is refused before the next model call, and one shown since appears in the
-  next request. Its state or owner
-  changing while it stays visible is not an access change. ADR-0038's
-  trade-off applies unchanged: an item revoked after its check may reach
-  later model calls in that request, never the answer.
+  next request. Its state or owner changing while it stays visible is not an
+  access change. ADR-0038's trade-off applies unchanged: an item revoked
+  after its check may reach later model calls in that request, never the
+  answer.
 - **Audit.** Every search, list and open is audited before its bytes leave
   Layer 3: one content-free row in the read-decision audit
   (`echo-person-follow-up-release-audit-v1`) with the request context, the
@@ -148,11 +151,17 @@ How an answer could cite one:
 ## Migration, rollback, and evidence
 
 No schema or stored-state change: follow-ups are read, never written, and
-nothing new is kept after the request. The V7 route is mounted, and the
-Person client and desktop prefer it, with the Ask change that follows
-ADR-0039, since that change reworks the Ask route. A client falls back from
-`/v6` to `/v5` only when the Authority has no `/v6` route. Rollback is a code
-revert; older clients never reach V7.
+nothing new is kept after the request. This change defines the V7 route
+(`createPersonLiveAnswerRouteV1(options, 7)`) but mounts nothing: no
+Authority serves `/v6` yet. The route is mounted, and the Person client and
+desktop prefer it, with the Ask change that follows ADR-0039, since that
+change reworks the Ask route. That mount must pass the runtime's follow-up
+sources as `follow_ups` (the runs store, open items, people and record
+search), and its streamed path must pass the request's `response_version`
+and answer V7 with `createAgenticAskV4`; without them a V7 desk binds no
+follow-ups and raises no error. A client falls back from `/v6` to `/v5` only
+when the Authority has no `/v6` route. Rollback is a code revert; older
+clients never reach V7.
 
 Negative disclosure tests, required by
 [INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md):
@@ -163,7 +172,11 @@ Negative disclosure tests, required by
   or ref, and decision words do not find their item;
 - words inside a ticket or page title never match;
 - a match on a ticket key alone is not released when the live read is refused
-  or fails;
+  or fails, and a key never moves or cuts a hit for an asker who cannot open
+  its ticket;
+- a search across sources reads nothing live and finds nothing by a key
+  alone, and a key notice is the same whether or not a follow-up holds that
+  key;
 - no tool title or due date appears without a live open in this request;
 - a follow-up hidden, or its decision made unreadable, mid-run makes the
   release check refuse the answer;

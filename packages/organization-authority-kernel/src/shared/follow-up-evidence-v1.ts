@@ -27,9 +27,9 @@ export const FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 = 7 as const;
 export type FollowUpListStatusV1 = 'open' | 'done';
 /**
  * Per-request bounds: the hits one search returns, the rows one list page
- * returns, and the distinct follow-ups read live in their tools in one
- * request (each at most once). Past the last, a follow-up is released with
- * ECHO-held text only.
+ * returns, and the distinct tool items read live for follow-ups in one
+ * request (each at most once, so follow-ups on one item share its read).
+ * Past the last, a follow-up is released with ECHO-held text only.
  */
 export const FOLLOW_UPS_LIMITS_V1 = Object.freeze({ search_hits: 5, list_page: 10, live_reads: 20 });
 

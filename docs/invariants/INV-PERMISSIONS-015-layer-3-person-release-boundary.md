@@ -161,21 +161,23 @@ transaction, not inside it: access another process revokes in that instant is
 not seen, a known gap of open items and Home v1.
 
 [ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md) adds open
-items to Ask, as follow-ups, on the additive `POST /v6/person/ask` (V7
-answers). The follow-ups source decides what it releases with the same
-open-items policy and assessment path as the runs API's `items`, so the asker
-gets exactly what that policy shows them, and nothing in Mine, in trigger
-research or in V4 to V6 answers. Its search matches only words ECHO holds and
-the policy shows the asker: the decision's title and first line, the
+items to Ask, as follow-ups, on V7 answers. Their route, the additive
+`POST /v6/person/ask`, is defined but not yet mounted (ADR-0040, migration),
+so no Authority serves it yet. The follow-ups source decides what it releases
+with the same open-items policy and assessment path as the runs API's `items`,
+so the asker gets exactly what that policy shows them, and nothing in Mine, in
+trigger research or in V4 to V6 answers. Its search matches only words ECHO
+holds and the policy shows the asker: the decision's title and first line, the
 `expected` phrase, the owner's name and a ticket key, the key only when the
 item was opened live. Outside titles and due dates come only from a live open
 in that request, through the request's own tool source, so they are that
-tool's audited releases and its checks recheck them. Every follow-up release
-is audited before its bytes leave Layer 3 with item ids and digests only. Each
-check before a model call puts the follow-ups released since the last check
-through the policy again, and the release check puts all of them through it;
-one the asker can no longer see refuses the answer. Its negative disclosure
-tests are `services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`
+tool's audited releases and its checks recheck them; a search across sources
+reads none live. Every follow-up release is audited before its bytes leave
+Layer 3 with item ids and digests only. Each check before a model call puts
+the follow-ups released since the last check through the policy again, and the
+release check puts all of them through it; one the asker can no longer see
+refuses the answer. Its negative disclosure tests are
+`services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`
 and `person-follow-ups-ask-integration.test.ts`.
 
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
