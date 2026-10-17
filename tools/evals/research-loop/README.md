@@ -17,7 +17,11 @@ Three triggers run the same loop:
 
 The report keeps the loop and the renderers apart. **Research loop**: every
 trigger, graded on its research result (needs, found, read, handed,
-established, verdicts). **Renderers**: Ask's writer on its answer; the
+established, verdicts). A sweep has no planner (open items ruling R77): it
+re-reads its findings' items and stops, so planner needs, invented needs,
+items handed over, noise and distractors handed are not applicable to it and
+stay unknown, never zero, and a Sweep case names no expected needs or gaps
+(`validate` refuses one that does). **Renderers**: Ask's writer on its answer; the
 impact card on affected items listed, relations and owners correct (of the
 listed items), invented items or people, and gaps reported; and the sweep
 result on verdicts right out of findings, and findings not assessed.
@@ -32,8 +36,9 @@ Sweep cases; a failed run's findings all count as wrong.
 across that change, so an Ask baseline taken before or after it measures the
 same thing. Grading changed, though: the judge's prompt now covers the impact
 card, and the summary's Ask-writer `gaps_reported` now averages Ask cases only
-(the card's gaps and Sweep's plan gaps have their own rows). Regrade an older
-Ask baseline with the current `grade` before comparing it. Approved-record and
+(the card's gaps have their own row; Sweep's plan gaps had one until R77).
+Regrade an older Ask baseline with the current `grade` before comparing it.
+Approved-record and
 Sweep baselines must be taken after the change: their task text changed, and
 approved-record runs now return the impact card (a saved approved-record run
 without one is graded as failed). Sweep runs now also return the sweep result,
@@ -42,6 +47,13 @@ take Sweep baselines on an endpoint that returns it. A run graded as failed
 for a missing result is still scanned for restricted leaks, so regrading an
 older approved-record run without its card can report a leak that grading
 used to hide (it counts in "runs with restricted leaks").
+
+**Baselines across R77 (2026-10-16).** Sweeps no longer run the planner, so a
+Sweep baseline taken before R77 measures different research: retake it on an
+endpoint built after R77. The Sweep cases no longer carry expected needs or a
+gap, and the cross-case planner and handed-over averages now leave Sweep cases
+out, so regrade any earlier baseline with the current `grade` before comparing
+those numbers.
 
 A case whose start request cannot be built (a meeting not bound, or a finding
 that cites only a transcript, which cannot start research in v1) is saved as a

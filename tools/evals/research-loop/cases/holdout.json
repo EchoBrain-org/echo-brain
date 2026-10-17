@@ -653,11 +653,7 @@
           ]
         }
       ],
-      "expected_needs": [
-        "current MRD-02 epic text",
-        "current Jira record of the BUG-412 fix owner",
-        "current GATE-DVT text"
-      ],
+      "expected_needs": [],
       "gaps": [],
       "must_not": [
         "reports THERM-2 updated",

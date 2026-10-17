@@ -387,3 +387,13 @@ and within budget.
   read from the items research read, stay a separate measure
   (`tools/evals/research-loop/README.md`). "Round one grades Check and Sweep
   on the research result only" above describes round one.
+- Implementation note, 2026-10-16: sweeps no longer run the planner
+  ([open items and Home v1](2026-10-08-open-items-and-home-v1.md), ruling
+  R77): research re-reads each finding's items and stops. The evaluation no longer grades a Sweep on planner needs, invented
+  needs, items handed over (cited by a plan), noise or distractors handed, or
+  gaps reported in the plan: they stay unknown for a Sweep, never zero, and
+  the cross-case averages leave Sweep cases out. The Sweep cases no longer
+  carry expected needs or a gap, and `validate` refuses a Sweep case that
+  does; the delivery-date gap of `sweep-bug-412-and-gate` stays covered by
+  its `no_evidence` verdict and its must-not rule. Sweep baselines taken
+  before R77 must be retaken.

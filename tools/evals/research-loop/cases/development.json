@@ -1368,11 +1368,7 @@
           ]
         }
       ],
-      "expected_needs": [
-        "current SW-22b text",
-        "current TC-D-06 text and procedure",
-        "current PRD display requirement"
-      ],
+      "expected_needs": [],
       "gaps": [],
       "must_not": [
         "reports TC-D-06 updated because its status is Done",
@@ -1469,16 +1465,8 @@
           ]
         }
       ],
-      "expected_needs": [
-        "current BUG-412 status and closure criteria",
-        "current DVT-R2 and TC-D-03 status",
-        "current TRACE-01 text",
-        "current GATE-DVT status",
-        "any record of a confirmed sample delivery date"
-      ],
-      "gaps": [
-        "a confirmed delivery date for the reworked DVT sample boards"
-      ],
+      "expected_needs": [],
+      "gaps": [],
       "must_not": [
         "reports BUG-412 resolved or verified because its status is Done",
         "reports the DVT gate cleared or the hold lifted",
