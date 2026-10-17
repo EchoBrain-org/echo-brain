@@ -27,8 +27,9 @@ import type { PersonRecordAnchorV1 } from './person-record-search-route.js';
  * then those checked longest ago. Each becomes a finding with the item first
  * and, for a decision reader only, the decision after it (R33). The run stores
  * the counts by verdict; each item keeps only its verdict as the shared last
- * check, replaced only by a newer one, and only on an item the caller still
- * sees as the run finishes. A sweep never changes an item's state.
+ * check, replaced only by a newer one (and an unreadable one never replaces
+ * anyone's judged verdict), and only on an item the caller still sees as the
+ * run finishes. A sweep never changes an item's state.
  */
 
 /** What a finished sweep stores: how many of its findings had each verdict, nothing else. */
