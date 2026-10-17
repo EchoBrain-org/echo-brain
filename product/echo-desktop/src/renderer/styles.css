@@ -218,6 +218,8 @@ button.marker:hover { background: rgba(240, 236, 230, 0.18); }
 /* A name opens its item beside Ask; the one the pane shows is lit. */
 .step-name { padding: 0; border: 0; font-size: inherit; text-align: left; color: var(--accent-text); background: transparent; }
 .step-name:hover, .step-name.on { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+/* How many of a place's items Ask read, after its name: dim, never underlined. */
+.step-name .count { display: inline-block; margin-left: 1px; color: var(--faint); }
 /* After the answer: one dim receipt line above it, which opens its rows. */
 .receipt { display: flex; flex-direction: column; gap: 6px; margin-top: -4px; }
 .receipt-line { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; margin-left: -6px; padding: 2px 6px; border: 0; border-radius: 6px; font-size: 12.5px; color: var(--faint); background: transparent; }

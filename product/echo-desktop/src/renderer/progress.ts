@@ -1,6 +1,5 @@
 import type { AnswerSource, AskRead, AskReceipt, AskSearched, AskSearchedSource, AskStage, AskStep, ConnectedTool } from '../shared/protocol.js';
 import { groupKey } from './answer.js';
-import { sourceKey } from './openers.js';
 
 /**
  * What Ask shows while it works (Ask progress and internal links v1,
@@ -37,7 +36,11 @@ function sameSource(a: AskSearchedSource, b: AskSearchedSource): boolean {
   return a.kind === b.kind && ('tool_id' in a ? 'tool_id' in b && a.tool_id === b.tool_id : !('tool_id' in b));
 }
 
-/** One step more. A read names each item once: one already named is not named again. */
+/**
+ * One step more. A read's items all stay, so a row counts what the Authority
+ * counts: it names each citation once, and two the page shows alike (two
+ * sections of one page) are two items read.
+ */
 export function withStep(progress: AskProgress, step: AskStep): AskProgress {
   if (step.type === 'stage') return { ...progress, stage: step.stage, pending: step.stage === 'reading' ? step.pending ?? 0 : 0 };
   const rows = progress.rows;
@@ -47,14 +50,8 @@ export function withStep(progress: AskProgress, step: AskStep): AskProgress {
     const sources = [...last.sources, ...step.sources.filter(source => !last.sources.some(known => sameSource(known, source)))];
     return { ...progress, rows: [...rows.slice(0, -1), { type: 'searched', sources, found: last.found + step.found }] };
   }
-  const named = new Set(rows.flatMap(row => row.type === 'read' ? row.items.map(sourceKey) : []));
-  const items: AnswerSource[] = [];
-  for (const item of step.items) {
-    if (named.has(sourceKey(item))) continue;
-    named.add(sourceKey(item));
-    items.push(item);
-  }
-  const pending = Math.max(0, progress.pending - step.items.length);
+  const items = step.items;
+  const pending = Math.max(0, progress.pending - items.length);
   if (items.length === 0) return { ...progress, pending };
   return {
     ...progress, pending,
@@ -104,25 +101,33 @@ export function searchedWords(row: AskSearched, tools?: readonly ConnectedTool[]
   return `Searched ${listWords(row.sources.map(source => sourceWords(source, tools)))} · ${row.found === 0 ? 'nothing new' : `${row.found} found`}`;
 }
 
+/** A place Ask read, as one name: the first of its items read stands for it, and how many of its items were read. */
+export interface NamedPlace {
+  readonly source: AnswerSource;
+  readonly count: number;
+}
+
 /**
  * Names as a person reads them: one per place, as an answer's sources are
  * grouped. Two decisions of one meeting, or two sections of one page, carry
- * the same name and open the same place, so the first read stands for both.
+ * the same name and open the same place: one name, counting both, so the
+ * names account for every item read.
  */
-export function distinctNames(items: readonly AnswerSource[]): AnswerSource[] {
-  const places = new Set<string>();
-  return items.filter(item => {
-    const place = groupKey(item);
-    if (places.has(place)) return false;
-    places.add(place);
-    return true;
-  });
+export function namedPlaces(items: readonly AnswerSource[]): NamedPlace[] {
+  const places = new Map<string, { source: AnswerSource; count: number }>();
+  for (const item of items) {
+    const key = groupKey(item);
+    const place = places.get(key);
+    if (place) place.count += 1;
+    else places.set(key, { source: item, count: 1 });
+  }
+  return [...places.values()];
 }
 
-/** A read row's names: the first ROW_NAMES of its distinct names, and how many more. */
-export function rowNames(items: readonly AnswerSource[], shown = ROW_NAMES): { names: readonly AnswerSource[]; more: number } {
-  const names = distinctNames(items);
-  return { names: names.slice(0, shown), more: Math.max(0, names.length - shown) };
+/** A read row's names: the first ROW_NAMES places, and how many more items, so "+N" counts what "Reading N items" did. */
+export function rowNames(items: readonly AnswerSource[], shown = ROW_NAMES): { names: readonly NamedPlace[]; more: number } {
+  const names = namedPlaces(items).slice(0, shown);
+  return { names, more: items.length - names.reduce((total, place) => total + place.count, 0) };
 }
 
 /** "48s", "1m 12s". */

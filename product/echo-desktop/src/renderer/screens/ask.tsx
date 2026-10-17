@@ -7,7 +7,8 @@ import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, distinctNames, liveRows, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
+  announceAfter, announcement, liveRows, namedPlaces, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
+  type NamedPlace,
 } from '../progress.js';
 import {
   answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject, fullPageOffered,
@@ -383,7 +384,7 @@ function LiveStep({ state, row }: { state: State; row: LiveRow }) {
   const { names, more } = rowNames(row.row.items);
   return (
     <li class={`ask-step${row.done ? ' done' : ''}`} data-testid="ask-step"><Mark done={row.done} />
-      <span class="words">{row.done ? 'Read' : 'Reading'} <Names state={state} items={names} />{more > 0 && <span class="more"> +{more}</span>}</span>
+      <span class="words">{row.done ? 'Read' : 'Reading'} <Names state={state} places={names} />{more > 0 && <span class="more"> +{more}</span>}</span>
     </li>
   );
 }
@@ -393,14 +394,19 @@ function namedLabel(source: AnswerSource): string {
   return source.kind === 'original' ? documentName(source.label).name : source.label;
 }
 
-/** Names, each opening its item beside Ask. The one the pane shows is lit. */
-function Names({ state, items }: { state: State; items: readonly AnswerSource[] }) {
+/**
+ * Names, each opening its place beside Ask, with how many of its items were
+ * read when more than one ("Tuesday sync ×4"). The one the pane shows is lit.
+ */
+function Names({ state, places }: { state: State; places: readonly NamedPlace[] }) {
   const shown = state.sources?.item ? sourceKey(state.sources.item) : null;
-  return <>{items.map((source, index) => {
+  return <>{places.map(({ source, count }, index) => {
     const on = shown === sourceKey(source);
+    const label = namedLabel(source);
     return <span key={sourceKey(source)}>{index > 0 && ', '}
-      <button type="button" class={`step-name${on ? ' on' : ''}`} data-testid="ask-step-name" aria-pressed={on} onClick={() => openNamed(source)}>
-        {namedLabel(source)}</button></span>;
+      <button type="button" class={`step-name${on ? ' on' : ''}`} data-testid="ask-step-name" aria-pressed={on}
+        aria-label={count > 1 ? `${label}, ${count} items` : undefined} onClick={() => openNamed(source)}>
+        {label}{count > 1 && <span class="count"> ×{count}</span>}</button></span>;
   })}</>;
 }
 
@@ -420,7 +426,7 @@ function Receipt({ state, receipt }: { state: State; receipt: AskReceipt }) {
       {open && (
         <ul class="ask-steps" data-testid="receipt-rows">
           {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} />
-            : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} items={distinctNames(row.items)} /></span></li>)}
+            : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
           {unnamed > 0 && <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">and {unnamed} more not listed</span></li>}
         </ul>
       )}

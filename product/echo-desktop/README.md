@@ -11,8 +11,8 @@ While a global or project Ask works (ADR-0039), one line says what it is
 doing (Searching, Reading, Checking access, Writing) beside its timer and
 Cancel. Under it, at most three rows say what it searched ("Searched meetings
 and Jira · 22 found", source kinds, never the words searched) and what it read
-("Read Tuesday sync, ECHO-48 +2"), each item named only after ECHO checked you
-may open it. The first three seconds look as they always did, and an Authority
+("Read Tuesday sync ×3, ECHO-48 +2": a place once, with how many of its items,
+and "+N" more items), each item named only after ECHO checked you may open it. The first three seconds look as they always did, and an Authority
 that sends no steps keeps "Thinking…". When the answer comes, the rows fold
 into one line above it, "Looked through 14 items · 48s", which opens the rows
 the Authority audited. Cancel, a timeout or a refused answer removes them all.

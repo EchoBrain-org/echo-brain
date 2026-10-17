@@ -58,7 +58,7 @@ interface Store {
 interface Views { answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json; atomId(record: string, signal: string): string }
 interface ProgressView {
   PROGRESS_AFTER_MS: number; liveRows(progress: Progress): { type: string; row?: Row; done?: boolean }[]; stageWords(progress: Progress): string;
-  searchedWords(row: Row): string; rowNames(items: readonly Source[]): { names: readonly Source[]; more: number }; receiptWords(receipt: Receipt): string;
+  searchedWords(row: Row): string; rowNames(items: readonly Source[]): { names: readonly { source: Source; count: number }[]; more: number }; receiptWords(receipt: Receipt): string;
 }
 const ok = (value: unknown) => ({ ok: true, value });
 const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) await Promise.resolve(); };
@@ -249,8 +249,8 @@ describe('Ask progress from the Authority through the Person client to the deskt
       const read = live.rows[1]!.items!;
       expect(read).toHaveLength(named.length);
       expect(new Set(read.map(item => item.kind))).toEqual(new Set(['record', 'original', 'ticket', 'slack']));
-      // "Read launchscope.md, #launchscope, Approved meeting +2": three names, the rest as +N.
-      expect(progress.rowNames(read)).toMatchObject({ names: read.slice(0, 3), more: named.length - 3 });
+      // "Read launchscope.md, #launchscope, Approved meeting +2": three names, each one place read once, the rest as +N.
+      expect(progress.rowNames(read)).toEqual({ names: read.slice(0, 3).map(source => ({ source, count: 1 })), more: named.length - 3 });
 
       // --- The page with the answer: the rows folded into the receipt, its names opening the exact item. ---
       const shown = store.getState().ask!.shown!;

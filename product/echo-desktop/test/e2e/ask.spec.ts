@@ -400,7 +400,8 @@ test('Copy answer copies the answer and says so, and main takes no more than an 
 });
 
 // Ask progress and internal links v1 (ADR-0039). The fixture streams a search
-// of meetings, documents and Jira and four reads, then waits for `release-ask`.
+// of meetings, documents and Jira and five reads (two of Tuesday sync's
+// decisions), then waits for `release-ask`.
 const opens = () => run.calls().filter(call => call.path === '/v1/person/open').map(call => call.body?.ref);
 const progressSteps = (page: Page) => page.getByTestId('ask-steps').getByTestId('ask-step');
 
@@ -415,9 +416,11 @@ test('a long Ask shows what it looks through, names that open beside it while it
   await expect.poll(() => run.calls().filter(call => call.path === '/v5/person/ask').map(call => call.progress)).toEqual(['1']);
 
   // Then one live line, the stage now, and the rows: source kinds, never the words searched, and the items read, +N.
+  // A place is named once, counting its items: the names and +N account for all five.
   await expect(progressSteps(page)).toHaveText([
-    'Searched meetings, documents and Jira · 3 found', 'Reading Tuesday sync, Apollo update, Tuesday sync transcript +1',
+    'Searched meetings, documents and Jira · 3 found', 'Reading Tuesday sync ×2, Apollo update, Tuesday sync transcript +1',
   ], { timeout: 10_000 });
+  await expect(page.getByTestId('ask-steps').getByTestId('ask-step-name').nth(0)).toHaveAccessibleName('Tuesday sync, 2 items');
   await expect(page.getByTestId('ask-stage')).toHaveText('Reading');
   // The timer is not read out; a screen reader hears the stage instead.
   await expect(asking.locator('[aria-hidden="true"]')).toHaveText(/^\d+s$/);
@@ -446,7 +449,7 @@ test('a long Ask shows what it looks through, names that open beside it while it
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(asking).toHaveCount(0);
   const receipt = page.getByTestId('ask-receipt');
-  await expect(receipt).toHaveText('Looked through 4 items · 48s');
+  await expect(receipt).toHaveText('Looked through 5 items · 48s');
   await expect(receipt).toHaveAttribute('aria-expanded', 'false');
   await expect(pane).toContainText('Meeting · Transcript');
   await expect(pane.getByTestId('source-open')).toBeVisible();
@@ -454,7 +457,7 @@ test('a long Ask shows what it looks through, names that open beside it while it
   // Opened, the receipt lists every search and read, each name opening beside the answer.
   await receipt.click();
   const rows = page.getByTestId('receipt-rows').getByTestId('ask-step');
-  await expect(rows).toHaveText(['Searched meetings, documents and Jira · 3 found', 'Read Tuesday sync, Apollo update, Tuesday sync transcript, ECHO-7 · Jira launch']);
+  await expect(rows).toHaveText(['Searched meetings, documents and Jira · 3 found', 'Read Tuesday sync ×2, Apollo update, Tuesday sync transcript, ECHO-7 · Jira launch']);
   const named = page.getByTestId('receipt-rows').getByTestId('ask-step-name');
   // A ticket opens only in Jira: it has no page here.
   await named.nth(3).click();

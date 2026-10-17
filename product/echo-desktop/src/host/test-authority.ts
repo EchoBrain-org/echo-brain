@@ -559,7 +559,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }
   /**
    * What the Ask reads, each as a citation: Tuesday sync's decision, a note's
-   * passage, Tuesday sync's transcript, and a Jira ticket.
+   * passage, Tuesday sync's transcript, a Jira ticket, and Tuesday sync's
+   * other decision.
    */
   const progressItems = () => {
     const [record, passage] = desktop.answer.citations as { citation: Record<string, unknown>; label: string; visibility: string }[];
@@ -571,6 +572,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         ref: `transcript:${TUESDAY}` },
       { kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: { kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD,
         ticket_id: '10007', permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: sha('ECHO-7: Jira launch') } },
+      { citation: { ...record!.citation, atom_id: atomOf('d0') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
     ];
   };
   /**
