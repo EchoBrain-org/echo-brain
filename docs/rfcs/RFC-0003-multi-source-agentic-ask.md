@@ -251,11 +251,18 @@ the question.
 **Finish check.**
 
 - No need is still open.
-- Every found need cites an item whose full text was read.
+- Every found need cites an item whose full text was read. For Ask,
+  [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md) also
+  accepts a list read to its end, which supports list facts only.
 - Every not-found need has at least two distinct searches, or a `list`, run
   after the need was written.
-- A rejected finish is returned once, with the reason. A second finish is
-  accepted.
+- A rejected finish is returned once, with the reason, as the step's one
+  repair. The repaired reply goes through the same check. If it is again a
+  finish the check refuses, research stops as an unusable step
+  (`unusable_step`, not completed), and the answer is written from what was
+  read. (Corrected 2026-10-17 against the code at `2fc6a05`: this line
+  previously said a second finish is accepted, which the code never did. See
+  [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md).)
 
 **Other stops.**
 
@@ -303,7 +310,10 @@ items research read in full and cited first, then other items it read in full,
 then remaining search hits with text already released by the desk. The
 writer receives each admitted item's full released text. A search preview
 alone does not limit the writer to that preview or exclude the item because
-research never opened it. Inventory entries without text remain excluded.
+research never opened it. Inventory entries without text remain excluded,
+except list members, which
+[ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md) sends to
+Ask's writer as rows without text.
 
 The research scratchpad and finish check are unchanged: research may mark a
 need `found` only with evidence whose full text it read. The writer may cite
