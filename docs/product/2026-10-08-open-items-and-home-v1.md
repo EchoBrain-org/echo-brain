@@ -10,7 +10,12 @@ same day; rulings 18–23 were added while planning. Implementation plan
 executed; see the plan's
 [As built](../superpowers/plans/2026-10-08-open-items-and-home.md#as-built)
 section. Every section but Rulings describes what was built, including the
-rulings made during execution that change behavior.
+rulings made during execution that change behavior. Updated 2026-10-16 for
+the research ROI fixes the founder approved that day (R77–R81): sweeps skip
+the planner, take only items in tools the caller has connected, never let
+`unreadable` replace a judged verdict, ground `landed` and `changed` in the
+finding's own items and withhold a screened line without a repair; an
+affected row no model assessed makes no open item.
 Decision record: [ADR-0033](../decisions/ADR-0033-shared-open-items.md).
 Builds on
 [runs store and impact card v1](2026-10-07-runs-store-and-impact-card-v1.md),
@@ -112,7 +117,7 @@ One row per affected item, written when its impact run finishes.
 | `record_sha256` | The approved record (the decision). |
 | `organization_id` | |
 | `approver_principal_id`, `approver_membership_id` | The run's actor. |
-| `relation` | `conflicts`, `needs_updating`, or empty when the card was not assessed. |
+| `relation` | `conflicts` or `needs_updating`. Empty only on an item made before 2026-10-16 from a card that was not assessed (section 3). |
 | `expected` | ECHO's short phrase (at most 120 characters): what the decision requires of this item, written from the decision (section 3). Empty when not assessed, and also when the card gave no usable phrase. |
 | `owner_membership_id` | The person it waits on. Never empty: the matched owner, or the approver. |
 | `owner_match` | `jira_account`, `name`, `picked`, `approver` (no match), `reassigned`. |
@@ -167,14 +172,18 @@ week", "two decimals from DVT"), never what the item says now ("due Oct 30").
 Rows show it beside the item's live details ("due Oct 30 → next week"). It
 passes the same screens as the card's other lines: no instructions or
 suggested edits, no ownership claims, and every outside title replaced by "a
-cited item". Because it is written from the decision, anyone who can read the
+cited item". A screened word it quotes from the approved record's own text
+("owner approval") is excused; the item's own title and text never excuse
+it. Because it is written from the decision, anyone who can read the
 decision may see it.
 
 When the run finishes, in the same transaction that stores the card:
 
 - One open item per affected row whose relation is `conflicts` or
-  `needs_updating`, or that was not assessed. `confirms` rows make no item:
-  they already agree.
+  `needs_updating`. `confirms` rows make no item: they already agree. A row
+  no model assessed (the card's fallback) is only possibly affected and makes
+  no item either. Neither the meeting's own record nor the transcript its
+  approver shared is ever an item.
 - **Owner matching**, exact only:
   - A Jira assignee: the run reads the affected tickets' assignee account ids
     in one bulk read with the approver's Jira connection. The owner is the
@@ -286,7 +295,11 @@ storage rules. It acts as the person who asked, with their access.
   or document. An item on a Slack message is left out, and the `sweep`
   trigger refuses a Slack message citation: no reader in ECHO can open one
   yet, so a sweep could only record it `unreadable` (see "Not in this
-  round"). `mine`: those the caller sent or owns. `record` or `project`:
+  round"). An item on a ticket or a page counts only when the caller has
+  connected its tool: one of the live sources a desk binds is for that tool,
+  and the caller's link to it is live (a local read of the link, never a
+  provider call). Otherwise a sweep could only record it `unreadable`.
+  `mine`: those the caller sent or owns. `record` or `project`:
   those there that the caller can see, as `items` shows them. At start, the
   server reads the scope again and takes up to 20 items the caller still
   sees: never checked first, then the oldest last check, then the oldest
@@ -297,12 +310,17 @@ storage rules. It acts as the person who asked, with their access.
   only when the policy shows the caller the decision (`see_decision`).
   `expected` is the item's own phrase; else, for a caller shown the decision,
   its first decided line cut to 120 characters; else "the approved
-  decision". The citations are the item's pointer first, then the decision's
+  decision". When a finding carries that placeholder and research read its
+  decision, the renderer shows the judge the decision's current text in its
+  place. The citations are the item's pointer first, then the decision's
   record citation, again only for a caller shown the decision. So an owner
   sent an item without access to its decision never gets the decision in
   their run. The existing `sweep` trigger definition turns the findings into
-  the brief; research reads the items again fresh, and an item that cannot be
-  read is reported, not fatal.
+  the brief, with no planner (R77): research re-reads every finding's
+  citations in full as its starting evidence and stops. It does not search
+  for newer related items. An item that cannot be read is reported, not
+  fatal. The renderer's one judge call then decides the verdicts, and a sweep
+  whose items are all unreadable makes no model call.
 - **Where research reads** (R75). A decision's or a project's sweep reads in
   one project only when every item it checks comes from a decision the
   caller is shown that is in exactly that one project, the rule the impact
@@ -324,17 +342,24 @@ storage rules. It acts as the person who asked, with their access.
     current items show the whole expected change; `changed` when a current
     item changed in a way that differs from it; `still_open` when nothing
     shows the change. A finding where only some of its items moved is not
-    `landed`; it is meant to be answered `still_open`.
+    `landed`; it is meant to be answered `still_open`. A change shows in the
+    item itself, so `landed` and `changed` cite at least one of the finding's
+    own items (R80); `still_open` may cite its decision alone.
   - A finding is never judged blind. It goes to the model only together with
     all of its own items. A finding whose own items do not all fit the
     prompt, or that research holds in no form, gets no verdict (null, "Not
-    assessed.").
+    assessed."). The model is shown each finding's own items, the other
+    sections of those pages and the finding's decision, while they fit, and
+    nothing else research came across.
   - A usable reply gives one verdict for each finding shown, each citing at
     least one item the model was shown. A reply that misses or repeats a
-    finding, cites nothing, or has a line that fails a screen (instructions
-    or suggested edits, ownership claims) is sent back once. In the repaired
-    reply, a line that still fails a screen reads "ECHO withheld this line."
-    and its verdict stands. With no usable reply, no finding is assessed.
+    finding, cites nothing or an item it was not shown, or gives a `landed`
+    or `changed` verdict that cites none of the finding's own items, is sent
+    back once. With no usable reply after that, no finding is assessed.
+  - A line that fails a screen (instructions or suggested edits, ownership
+    claims) costs no repair (R81): it reads "ECHO withheld this line." and its
+    verdict stands. The screen excuses words the line quotes from the items it
+    cites.
   - The line is never stored or shown in the product: it serves the
     evaluation and the staging endpoint. Unlike the card's stored lines, its
     titles are not replaced. The product stores only the verdict.
@@ -346,26 +371,35 @@ storage rules. It acts as the person who asked, with their access.
   transaction: the decision check behind it reads the person's project grants
   in a transaction of its own, and transactions do not nest. The check
   carries the time the attempt started, so a check someone else made
-  meanwhile stays newer. A null verdict leaves the last check as it is: the
-  item stays oldest, and the next sweep takes it first. The run's stored
-  result is the counts by verdict, not assessed included, and nothing else:
-  no line, title or citation. A sweep never sets `state`. With no item left
+  meanwhile stays newer. A judged verdict (`landed`, `still_open`,
+  `changed`) outranks `unreadable` (R79): it replaces an older check, and an
+  `unreadable` one whenever that was made; an `unreadable` verdict is
+  recorded only while the item has no judged check, from anyone. The
+  database lets a last check only move forward, so a judged check that
+  replaces a later unreadable one is stamped 1 ms after it. A null verdict
+  leaves the last check as it is: the item stays oldest, and the next sweep
+  takes it first. The run's stored result is the counts by verdict, not
+  assessed included, and the ECHO ids of the items it could not read; no
+  line, title or citation. A sweep never sets `state`. With no item left
   to check at start (all closed, or out of the caller's sight, meanwhile), it
   reads nothing and finishes with zero counts.
 - **When it runs.** Home reports `sweep_due` when all of these hold: the
   caller has an open item they sent or own, of a kind a sweep covers (not a
-  Slack message), whose last check, by anyone, is older than 24 hours or
-  missing; no sweep of theirs is running; and none of their sweeps was
-  created in the last hour, whatever its state. So a sweep that keeps
-  failing, or leaves items not assessed, is not asked for again on every Home
-  load. A sweep left pending for more than an hour does not hold `sweep_due`
-  back, so a stuck sweep cannot stop automatic sweeps. When `sweep_due` is
-  true, the desktop asks for a `mine` sweep; if the stuck sweep is a `mine`
-  sweep, that request returns it. "Check now" on a record or a project asks
-  for a sweep of that scope, and the hour does not limit it. A second request
-  for the same scope while one is pending or running returns that run.
-  Impact runs start before sweeps, enforced by the server: starting a sweep
-  answers `busy` while one of the caller's impact runs is pending or
+  Slack message, and a ticket or page only in a tool they have connected),
+  whose last check, by anyone, is older than 24 hours or missing, and that
+  none of their sweeps of the last day found unreadable (such an item waits a
+  day from that sweep, as its own unreadable check would, while someone else's
+  judged check stays its last check); no sweep of theirs is running; and none
+  of their sweeps was created in the last hour, whatever its state. So a sweep
+  that keeps failing, or leaves items not assessed, is not asked for again on
+  every Home load. A sweep left pending for more than an hour does not hold
+  `sweep_due` back, so a stuck sweep cannot stop automatic sweeps. When
+  `sweep_due` is true, the desktop asks for a `mine` sweep; if the stuck sweep
+  is a `mine` sweep, that request returns it. "Check now" on a record or a
+  project asks for a sweep of that scope, and the hour does not limit it. A
+  second request for the same scope while one is pending or running returns
+  that run. Impact runs start before sweeps, enforced by the server: starting
+  a sweep answers `busy` while one of the caller's impact runs is pending or
   running.
 
 Because the last check is shared, one person's sweep refreshes the item for
@@ -643,13 +677,15 @@ failed · Try again", and Try again asks for a new sweep.
 one at a time, under Part 1's polling backoff. A pending sweep may be one put
 back after a timed-out or rate-limited attempt, one whose attempt stopped
 (listed as `pending`, section 7), or one Check now queued; it is started like
-an impact run. A start answered `busy` is tried again later and never shown
-as an error. When `home` says `sweep_due` and no run is waiting or going, the
-desktop asks for one new `mine` sweep and starts it: at most one new sweep
-request per Home load, spent only when the request is made. A failed runs
-read, or a failed read of what a check found, never skips the start or the
-request; its failure only lengthens the wait before the next look. When a
-sweep ends, Home is read again to show what it found.
+an impact run. A start answered `busy` is tried again later and never shown as
+an error. An impact start the Authority holds `pending` while its search index
+has not caught up with the decision is started again at the next look, every 5
+seconds, not after a failure's backoff. When `home` says `sweep_due` and no
+run is waiting or going, the desktop asks for one new `mine` sweep and starts
+it: at most one new sweep request per Home load, spent only when the request
+is made. A failed runs read, or a failed read of what a check found, never
+skips the start or the request; its failure only lengthens the wait before the
+next look. When a sweep ends, Home is read again to show what it found.
 
 ## 9. Delivery
 
@@ -697,19 +733,24 @@ separate pull request. The plan's As built section records the split.
   leave, on the Home of the leads of the decision's active projects.
 - No stored row or column holds text, a title or a name read from outside ECHO
   (a test seeds distinctive outside text and searches every new row for it).
-- A sweep replaces an item's last check only with a newer one, never changes
-  `state`, and skips items the sweeper no longer sees as it finishes. Its run
-  stores the counts by verdict only.
+- A sweep replaces an item's last check only with a newer one, never with
+  `unreadable` over a judged verdict, never changes `state`, and skips items
+  the sweeper no longer sees as it finishes. Its run stores the counts by
+  verdict and the ids of the items it could not read.
 - An item on a Slack message is not swept and does not make a sweep due; the
-  `sweep` trigger refuses a Slack message citation.
-- No finding is judged without all of its own items. A finding that was not
-  assessed leaves its item's last check as it is. A finding is `unreadable`
-  only when one of its own items could not be read.
+  `sweep` trigger refuses a Slack message citation. Nor is a ticket or page
+  in a tool the caller has not connected.
+- A sweep makes no planner call. No finding is judged without all of its own
+  items, and a `landed` or `changed` verdict cites at least one of them. A
+  finding that was not assessed leaves its item's last check as it is. A
+  finding is `unreadable` only when one of its own items could not be read.
+  A line that fails a screen is withheld without a repair.
 - A sweep finding names the decision, its first line and its record only to
   a caller who can read the decision.
 - `sweep_due` is true only with an open item of the caller's, of a kind a
-  sweep covers, whose last check is over 24 hours old or missing, no running
-  sweep of theirs, and none of their sweeps created in the last hour; a sweep
+  sweep covers, whose last check is over 24 hours old or missing and that no
+  sweep of theirs of the last day found unreadable, no running sweep of
+  theirs, and none of their sweeps created in the last hour; a sweep
   left pending longer than an hour does not block it, and asking again for a
   `mine` sweep returns a stuck `mine` sweep.
 - Starting a sweep answers `busy` while the caller has a pending or running
@@ -762,17 +803,17 @@ separate pull request. The plan's As built section records the split.
 - An open item whose owner left waits on its approver. If the approver is
   still active but can no longer read the decision, the item is on nobody's
   Home. Readers of the decision still see it on its record and project pages.
-- A screened line when no repair is possible. When the run has no model call
-  or time left for the one repair, a sweep reply whose only problem is a line
-  that fails a screen is refused whole, and its findings stay not assessed.
 - A partial landing. A finding where only some of its items moved as
   expected has no verdict of its own: it is not `landed`, and is meant to be
   answered `still_open`. Naming it is a later call.
-- Verdicts that depend on who checked. A sweep reads as the person who asked,
-  so a sweeper who cannot open an item records `unreadable`, and as the
-  newest shared check it replaces a reader's `landed`. Home's footer count
-  ("match their decision now") and Review rows read the shared check. Whether such a check should replace a
-  reader's verdict is a founder call.
+- Verdicts that depend on who checked. A sweep reads as the person who asked.
+  A sweeper who cannot open an item no longer replaces anyone's judged
+  verdict (R79), but two readers' judged checks still replace each other by
+  time, and Home's footer count ("match their decision now") and Review rows
+  read the shared check. A judged check stamped 1 ms after the unreadable
+  check it replaced can make a later judged read of the same item lose; a
+  column keeping each check's own read time would fix that, a schema
+  change.
 - Checking Slack messages. No reader in ECHO can open a Slack message
   citation yet: it names no tool connection, no live Slack reader is
   registered, and ECHO's own desk leaves Slack messages to Slack. A sweep
@@ -807,8 +848,8 @@ separate pull request. The plan's As built section records the split.
 Rulings made while executing the plan are listed in the plan's
 [As built](../superpowers/plans/2026-10-08-open-items-and-home.md#as-built)
 section, not here; those that change behavior are folded into the sections
-above. The exception is those of 2026-10-09 (R63–R76), which are listed at
-the end of this section too.
+above. The exceptions are those of 2026-10-09 (R63–R76) and of 2026-10-16
+(R77–R81), which are listed at the end of this section too.
 
 Made with the founder on 2026-10-08:
 
@@ -917,3 +958,20 @@ copy. R71–R76 were made while finishing Part 2.
   from a decision in exactly that project; otherwise everywhere the caller
   may read.
 - R76. A title that already ends with "meeting" gets no second "meeting".
+
+Made with the founder on 2026-10-16, after the LangSmith audit of 42
+`echo-staging` research traces (its decisions 3 and 4):
+
+- R77. Sweeps skip the planner: the starting items are re-read in full and
+  one judge call decides each verdict.
+- R78. A sweep takes only items in tools the caller has connected.
+- R79. `unreadable` never replaces a verdict someone else judged.
+
+Made while building the fixes the founder approved that day:
+
+- R80. `landed` and `changed` cite at least one of the finding's own items.
+  A reply that breaks this gets the one repair; downgrading it to
+  `still_open` would store a verdict the model never gave.
+- R81. A sweep line that fails a screen is withheld without a repair: lines
+  are never stored, and in the traces a screen repair regenerated and
+  flipped every verdict.

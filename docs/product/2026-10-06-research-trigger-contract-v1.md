@@ -322,3 +322,28 @@ One commit per phase. The golden replay and `npm run check` pass after each.
   item to its owner's Home, and everyone who sees the item sees its last check
   ([ADR-0033](../decisions/ADR-0033-shared-open-items.md)). "Not in this
   round" above describes this round only.
+- Implementation note, 2026-10-16: after the LangSmith audit of 42
+  `echo-staging` research traces, the founder approved these changes. A
+  definition's brief now receives the scope the run reads
+  (`brief(event, scope)`), and briefs have two more options. `planner: false`
+  reads the starting evidence in full and stops, with no planner call:
+  Sweep uses it, so a sweep re-reads its items and its renderer's one judge
+  call decides the verdicts. `list: false` makes research search-only, with
+  no list tool: the approved record uses it unless the run reads in the
+  record's one project, so a record in no project is searched by its own
+  terms and never by listing inventories, and "nothing affected" is a valid
+  result. The approved-record task no longer asks for owners or dates; the
+  card adds them from item details. The gate's check before each model call
+  re-reads only evidence released since the last check, plus the session,
+  membership, grant and connection, and retries a transient failure once;
+  the release step keeps the full check before and after the audit
+  ([ADR-0038](../decisions/ADR-0038-incremental-access-check-before-model-calls.md)).
+  Model calls run at temperature 0, skip the hosts measured as garbling
+  output and record the serving host
+  ([ADR-0037](../decisions/ADR-0037-openrouter-routing-for-research-calls.md)).
+  The impact card's fallback without a usable draft now also lists the
+  record's decisions and actions under what was decided. The sweep renderer
+  withholds a line that fails a screen without a repair, and a `landed` or
+  `changed` verdict must cite one of the finding's own items
+  ([open items and Home v1](2026-10-08-open-items-and-home-v1.md), section
+  6).
