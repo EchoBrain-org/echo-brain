@@ -673,11 +673,36 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     ]);
   });
 
+  it('keeps a named key nothing matched in every relaxed clause, dropping only words', async () => {
+    const literal = (term: string) => `text ~ "\\"${term}\\""`;
+    const key = literal('ECHO\\\\-404');
+    const one = fixture(); one.state.pages = [page([]), page(['10001'])];
+    const single = await one.make();
+    // ECHO-404 does not exist (or is hidden), so its lookup finds nothing.
+    const result = await single.source.search({ query: 'blocks ECHO-404' });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10001']);
+    // With one word, the retry is the key's own text clause: tickets that mention it.
+    expect(one.jqls()).toEqual([
+      `${literal('blocks')} AND ${key} ORDER BY created DESC, id DESC`,
+      `(${key}) ORDER BY created DESC, id DESC`,
+    ]);
+
+    const two = fixture(); two.state.pages = [page([]), page([])];
+    const pair = await two.make();
+    await pair.source.search({ query: 'status of ECHO-404' });
+    expect(two.jqls()).toEqual([
+      `${literal('status')} AND ${literal('of')} AND ${key} ORDER BY created DESC, id DESC`,
+      `(${literal('of')} AND ${key}) OR (${literal('status')} AND ${key}) ORDER BY created DESC, id DESC`,
+    ]);
+  });
+
   it.each([
     ['one term', 'launch', [page([])]],
     ['a match for every term', 'launch connector', [page(['10001'])]],
     ['a further page of matches', 'launch connector', [page([], 'next')]],
     ['seven terms', 'one two three four five six seven', [page([])]],
+    ['seven words and a key', 'one two three four five six seven ECHO-404', [page([])]],
+    ['no word but keys', 'ECHO-404 (ECHO-404),', [page([])]],
   ] as const)('does not relax a search with %s', async (_label, query, pages) => {
     const f = fixture(); f.state.pages = [...pages];
     const { source } = await f.make();

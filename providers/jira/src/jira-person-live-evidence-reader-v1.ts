@@ -36,7 +36,7 @@ function limit(value: number): number {
   return value;
 }
 
-/** A relaxed retry drops one term at a time; past this many terms it would be too broad and too long. */
+/** A relaxed retry drops one word at a time; past this many words it would be too broad and too long. */
 const RELAXED_SEARCH_MAX_TERMS = 6;
 
 interface SearchTerms {
@@ -44,6 +44,8 @@ interface SearchTerms {
   readonly terms: readonly string[];
   /** Distinct issue keys among the terms, ignoring surrounding punctuation. */
   readonly keys: readonly string[];
+  /** Which of `terms` name an issue key, by the same rule as `keys`. */
+  readonly keyed: readonly boolean[];
 }
 
 /** Shared keyword semantics. Never caller-authored JQL or Lucene operators. */
@@ -51,19 +53,23 @@ function searchTerms(query: string): SearchTerms {
   if (typeof query !== 'string' || query.trim() === '' || Buffer.byteLength(query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query)) jiraFailure('invalid_request');
   const terms = [...new Map(query.trim().split(/\s+/u).map(term => [term.toLowerCase(), term])).values()];
   if (terms.length > 32) jiraFailure('invalid_request');
-  const keys = [...new Set(terms.map(term => term.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase()).filter(term => JIRA_TICKET_KEY.test(term)))];
-  return Object.freeze({ terms: Object.freeze(terms), keys: Object.freeze(keys) });
+  const normalized = terms.map(term => term.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase());
+  const keyed = normalized.map(term => JIRA_TICKET_KEY.test(term));
+  const keys = [...new Set(normalized.filter((_, index) => keyed[index]))];
+  return Object.freeze({ terms: Object.freeze(terms), keys: Object.freeze(keys), keyed: Object.freeze(keyed) });
 }
 
 /**
  * Every term as an escaped literal text clause. The relaxed form, for one
- * retry after an empty search, matches all terms but one: an OR of each
- * term dropped in turn. With two terms that is a plain OR.
+ * retry after an empty search, matches all terms but one word: an OR of
+ * each word dropped in turn, with every named key kept in every clause, so a
+ * key nothing matched never falls out of the search. With two words and no
+ * key that is a plain OR; with one word and a key, the key's clause alone.
  */
-function textJql(terms: readonly string[], relaxed: boolean, projectId?: string): string {
+function textJql(terms: readonly string[], keyed: readonly boolean[], relaxed: boolean, projectId?: string): string {
   const clause = (term: string) => `text ~ ${JSON.stringify(`"${term.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&')}"`)}`;
   const expression = relaxed
-    ? terms.map((_, dropped) => `(${terms.filter((_, index) => index !== dropped).map(clause).join(' AND ')})`).join(' OR ')
+    ? terms.flatMap((_, dropped) => (keyed[dropped] ? [] : [`(${terms.filter((_, index) => index !== dropped).map(clause).join(' AND ')})`])).join(' OR ')
     : terms.map(clause).join(' AND ');
   return `${projectId === undefined ? expression : `project = ${projectId} AND (${expression})`} ORDER BY created DESC, id DESC`;
 }
@@ -335,20 +341,21 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = Math.min(limit(input.limit), 5);
-      const { terms, keys } = searchTerms(input.query);
+      const { terms, keys, keyed } = searchTerms(input.query);
       const projectId = pinnedProject?.id;
       const named = keys.slice(0, maximum);
       // A query of only keys is a key lookup. Otherwise named keys match
       // exactly, or as words alongside the rest: key in (...) OR every term.
       const text = keys.length === terms.length ? undefined : terms;
+      const words = keyed.filter(key => !key).length;
       return safe(async () => {
         const origin = await verifyConnection(input.signal);
-        const textPage = (relaxed: boolean) => searchPage({ jql: textJql(text!, relaxed, projectId), maximum, origin, inventory: true, projectId, signal: input.signal });
+        const textPage = (relaxed: boolean) => searchPage({ jql: textJql(text!, keyed, relaxed, projectId), maximum, origin, inventory: true, projectId, signal: input.signal });
         const [byKey, firstText] = await Promise.all([keyIssues(named, origin, input.signal), text === undefined ? undefined : textPage(false)]);
         let byText = firstText;
-        // One bounded retry when nothing at all matched every term.
+        // One bounded retry when nothing at all matched every term; only words are dropped.
         if (byKey.length === 0 && byText !== undefined && byText.selected.length === 0 && byText.token === undefined &&
-            text!.length >= 2 && text!.length <= RELAXED_SEARCH_MAX_TERMS) byText = await textPage(true);
+            text!.length >= 2 && words >= 1 && words <= RELAXED_SEARCH_MAX_TERMS) byText = await textPage(true);
         await verifyConnection(input.signal);
         const seen = new Set(byKey.map(item => item.id));
         const matches = [...byKey, ...(byText?.selected ?? []).filter(item => !seen.has(item.id))];

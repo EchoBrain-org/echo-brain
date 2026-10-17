@@ -137,9 +137,12 @@ result limit) also match that ticket exactly, ahead of text matches, so a
 query means `key in (...) OR` every keyword; a query of only keys is a key
 lookup. Keys are read through the bulk issue read, not JQL, because Jira
 refuses a whole JQL query that names one missing or hidden key; such a key is
-simply no match. When nothing matches and there are two to six keywords, the
-search retries once with every keyword but one (an `OR` of each keyword
-dropped in turn; a plain `OR` for two).
+simply no match. When nothing matches, there are at least two keywords and
+one to six of them are words rather than keys, the search retries once with
+every keyword but one word (an `OR` of each word dropped in turn; a plain `OR`
+for two words). A named key stays in every clause, so a key nothing matched
+narrows the retry to tickets that mention it; with one word, the retry is the
+key's own clause.
 Ask can select `source: "tickets"` for a targeted search, or omit the source to
 search all available evidence. Every selection keeps the current Person and
 project boundary. Open accepts only a handle minted by that reader. List
