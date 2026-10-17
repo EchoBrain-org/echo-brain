@@ -1,15 +1,20 @@
+import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { Answer, AnswerSource, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
+import type { Answer, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import { documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
+import { openerOf, sourceKey } from '../openers.js';
 import {
-  answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject,
-  matchesShown, openCompose, openMatch, openExternalSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, widenScope,
-  type AskTurn, type SourcesState, type State,
+  announceAfter, announcement, liveRows, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
+} from '../progress.js';
+import {
+  answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject, fullPageOffered,
+  matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
+  submitBar, widenScope, type AskTurn, type PaneTarget, type Read, type SourcesState, type State,
 } from '../store.js';
-import { Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
+import { Check, Chevron, Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -104,7 +109,7 @@ export function Bar({ state }: { state: State }) {
 /** What a source is called: a meeting's title once its record is read, a file's name as a person says it. */
 function sourceName(source: AnswerSource, sources: SourcesState | null): string {
   if (source.kind === 'original') return documentName(source.label).name;
-  if ('permalink' in source) return source.label;
+  if (source.kind !== 'record') return source.label;
   const read = sources?.records[source.record.record_sha256];
   return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
@@ -198,7 +203,7 @@ function originalMeta(source: Extract<AnswerSource, { kind: 'original' }>, group
 }
 
 function KindIcon({ kind }: { kind: SourceGroup['kind'] }) {
-  return kind === 'record' ? <Meeting /> : kind === 'slack' ? <Hash /> : <Doc />;
+  return kind === 'record' || kind === 'transcript' ? <Meeting /> : kind === 'slack' ? <Hash /> : <Doc />;
 }
 
 /** One row per source, numbered as the sentences cite it. The one the pane shows is lit. */
@@ -253,6 +258,7 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
     <div class="turn">
       <div class="question selectable" data-testid="question">{turn.question}</div>
       <div class="asked">{turn.scopeName}</div>
+      {turn.receipt && <Receipt state={state} receipt={turn.receipt} />}
       <AgenticAnswer state={state} turn={turn} />
       {foundNothingInProject(turn) && (
         <div class="project-empty" data-testid="project-empty">
@@ -282,10 +288,11 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
 export function AskView({ state }: { state: State }) {
   const thread = state.ask!;
   const scroller = useRef<HTMLElement>(null);
-  // A new question, answer or failure scrolls to the bottom.
+  // A new question, answer or failure scrolls to the bottom, and so does a new row of the question on its way.
+  const progress = thread.asking?.progress;
   useLayoutEffect(() => {
     if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
-  }, [thread.seq, thread.shown, thread.asking, thread.failed]);
+  }, [thread.seq, thread.shown, thread.asking === null, thread.failed, progress?.rows.length, (progress?.pending ?? 0) > 0]);
   const { asking, failed } = thread;
   return (
     <section class="ask" data-testid="ask-view" aria-live="polite" ref={scroller}>
@@ -295,7 +302,7 @@ export function AskView({ state }: { state: State }) {
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>
           <div class="asked">{asking.scopeName}</div>
-          <Asking />
+          <Asking state={state} progress={asking.progress} />
         </div>
       )}
       {failed && (
@@ -314,24 +321,128 @@ export function AskView({ state }: { state: State }) {
   );
 }
 
-function Asking() {
-  const [elapsed, setElapsed] = useState(0);
+/** How often the live line's timer moves. */
+const TICK_MS = 250;
+
+/** `text`, said to a screen reader at most every few seconds: the latest text once the wait is over. */
+function useAnnouncement(text: string): string {
+  const [said, setSaid] = useState<{ text: string; at: number } | null>(null);
   useEffect(() => {
-    const started = Date.now();
-    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 250);
-    return () => clearInterval(timer);
-  }, []);
-  return <div class="asking" data-testid="asking">
-    {/* The section is a live region: the counter would be read out every second. */}
-    <i /><i /><i /><span>Thinking…</span><span aria-hidden="true">{elapsed}s</span>
-    <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
-  </div>;
+    const wait = announceAfter(text, said, Date.now());
+    if (wait === null) return;
+    const timer = setTimeout(() => setSaid({ text, at: Date.now() }), wait);
+    return () => clearTimeout(timer);
+  }, [text, said]);
+  return said?.text ?? '';
 }
 
-/** A decision, action or rationale, and the excerpts that support it. */
-function Item({ item }: { item: RecordItem }) {
+/**
+ * The question on its way: one live line (the stage now, how long, Cancel)
+ * and, once it has worked a few seconds, at most three rows of what it
+ * searched and read. Each name opens beside Ask, which keeps running. The
+ * section is a live region: the line, its timer and its rows are kept out of
+ * it, and a screen reader hears the stage at most every few seconds instead.
+ */
+function Asking({ state, progress }: { state: State; progress: AskProgress }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
+    return () => clearInterval(timer);
+  }, []);
+  const elapsed = Math.max(0, now - progress.started);
+  // A quick Ask shows nothing more than it always did.
+  const live = elapsed >= PROGRESS_AFTER_MS;
+  const rows = live ? liveRows(progress) : [];
+  // Heard at once, as the line always was; then the stage, once it shows, at most every few seconds.
+  const heard = useAnnouncement(live ? announcement(progress) || 'Thinking…' : 'Thinking…');
+  return <>
+    <div class="ask-progress" aria-live="off">
+      <div class="asking" data-testid="asking">
+        <i /><i /><i /><span data-testid="ask-stage">{live ? stageWords(progress) : 'Thinking…'}</span>
+        <span class={`timer${live && progress.stage ? ' dotted' : ''}`} aria-hidden="true">{Math.floor(elapsed / 1000)}s</span>
+        <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
+      </div>
+      {rows.length > 0 && (
+        <ul class="ask-steps" data-testid="ask-steps" aria-label="What Ask has looked through">
+          {rows.map((row, index) => <LiveStep key={index} state={state} row={row} />)}
+        </ul>
+      )}
+    </div>
+    <span class="sr-only" aria-live="polite" data-testid="ask-announcement">{heard}</span>
+  </>;
+}
+
+/** A row's mark: done, or still going. */
+function Mark({ done }: { done: boolean }) {
+  return done ? <span class="mark"><Check /></span> : <span class="mark" aria-hidden="true"><i /></span>;
+}
+
+/** A search: its source kinds, never the words searched, and what it found. */
+function SearchedStep({ state, row }: { state: State; row: AskSearched }) {
+  return <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">{searchedWords(row, state.tools?.items)}</span></li>;
+}
+
+/** One live row: a search, a read with its names (the first few, then +N), or how many are being read. */
+function LiveStep({ state, row }: { state: State; row: LiveRow }) {
+  if (row.type === 'searched') return <SearchedStep state={state} row={row.row} />;
+  if (row.type === 'pending') {
+    return (
+      <li class="ask-step" data-testid="ask-step"><Mark done={false} />
+        <span class="words">Reading {row.count} {row.more ? 'more' : row.count === 1 ? 'item' : 'items'}</span></li>
+    );
+  }
+  const { names, more } = rowNames(row.row.items);
   return (
-    <div class="record-item">
+    <li class={`ask-step${row.done ? ' done' : ''}`} data-testid="ask-step"><Mark done={row.done} />
+      <span class="words">{row.done ? 'Read' : 'Reading'} <Names state={state} items={names} />{more > 0 && <span class="more"> +{more}</span>}</span>
+    </li>
+  );
+}
+
+/** What a named item is called: a file's name as a person says it, otherwise its label. */
+function namedLabel(source: AnswerSource): string {
+  return source.kind === 'original' ? documentName(source.label).name : source.label;
+}
+
+/** Names, each opening its item beside Ask. The one the pane shows is lit. */
+function Names({ state, items }: { state: State; items: readonly AnswerSource[] }) {
+  const shown = state.sources?.item ? sourceKey(state.sources.item) : null;
+  return <>{items.map((source, index) => {
+    const on = shown === sourceKey(source);
+    return <span key={sourceKey(source)}>{index > 0 && ', '}
+      <button type="button" class={`step-name${on ? ' on' : ''}`} data-testid="ask-step-name" aria-pressed={on} onClick={() => openNamed(source)}>
+        {namedLabel(source)}</button></span>;
+  })}</>;
+}
+
+/**
+ * Above an answer that took a while: one dim line, "Looked through 14 items
+ * · 48s ›", that opens the searches and reads the Authority audited, each
+ * name opening beside the answer.
+ */
+function Receipt({ state, receipt }: { state: State; receipt: AskReceipt }) {
+  const [open, setOpen] = useState(false);
+  const unnamed = receiptUnnamed(receipt);
+  return (
+    <div class="receipt">
+      <button type="button" class={`receipt-line${open ? ' open' : ''}`} data-testid="ask-receipt" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span>{receiptWords(receipt)}</span><Chevron />
+      </button>
+      {open && (
+        <ul class="ask-steps" data-testid="receipt-rows">
+          {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} />
+            : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} items={row.items} /></span></li>)}
+          {unnamed > 0 && <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">and {unnamed} more not listed</span></li>}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** A decision, action or rationale, and the excerpts that support it. One an answer cites is lit (`on`). */
+function Item({ item, on = false }: { item: RecordItem; on?: boolean }) {
+  return (
+    <div class={`record-item${on ? ' on' : ''}`} data-cited={on ? 'true' : undefined}>
       {item.status && <div class="status">{item.status === 'proposed' ? 'Proposed' : 'Unresolved'}</div>}
       <div>{item.text}</div>
       {item.owner && <div class="owner" data-testid="record-owner">Owner: {item.owner}</div>}
@@ -354,12 +465,19 @@ const VISIBILITY: Record<ApprovedRecord['visibility'], string> = {
 /**
  * MEETING · APPROVED RECORD: who approved it, who was there, who can read it,
  * and what was approved. In the source pane, and in the reader, whose own
- * head names it and who can read it (`headed` false).
+ * head names it and who can read it (`headed` false). In the pane, the items
+ * an answer or a named item cites are lit (`lit`, by atom id), the first one
+ * scrolled into view.
  */
-export function RecordDetail({ record, headed = true }: { record: ApprovedRecord; headed?: boolean }) {
+export function RecordDetail({ record, headed = true, lit }: { record: ApprovedRecord; headed?: boolean; lit?: ReadonlySet<string> }) {
   const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];
+  const detail = useRef<HTMLDivElement>(null);
+  const first = SECTIONS.flatMap(([key]) => record[key].items).find(item => item.atom_id !== undefined && lit?.has(item.atom_id))?.atom_id;
+  useLayoutEffect(() => {
+    if (first !== undefined) detail.current?.querySelector('[data-cited="true"]')?.scrollIntoView({ block: 'center' });
+  }, [record, first]);
   return (
-    <div class="source-detail selectable" data-testid="record">
+    <div class="source-detail selectable" data-testid="record" ref={detail}>
       {headed && <h2>{record.title ?? UNTITLED}</h2>}
       {record.started_at && <div class="meta">{meetingTime(record.started_at, record.timezone, record.all_day)}</div>}
       <dl class="fields">
@@ -373,7 +491,7 @@ export function RecordDetail({ record, headed = true }: { record: ApprovedRecord
         return (
           <div key={key} class="record-section" data-testid={`record-${key}`}>
             <div class="section-label">{heading}</div>
-            {section.items.map((item, index) => <Item key={index} item={item} />)}
+            {section.items.map((item, index) => <Item key={index} item={item} on={item.atom_id !== undefined && lit?.has(item.atom_id) === true} />)}
             {section.more && <div class="record-item">Additional approved {kind} items are not shown.</div>}
           </div>
         );
@@ -382,12 +500,12 @@ export function RecordDetail({ record, headed = true }: { record: ApprovedRecord
   );
 }
 
-function ExternalSource({ source, index, provider }: { source: ExternalAnswerSource; index: number; provider: string }) {
+function ExternalSource({ source, provider }: { source: ExternalAnswerSource; provider: string }) {
   const [failed, setFailed] = useState(false);
   return <div class="source-detail">
     <h2>{source.label}</h2>
     <button type="button" class="link-button" data-testid={`open-${source.kind}-source`} title={source.permalink}
-      onClick={async () => { setFailed(false); setFailed(!(await openExternalSource(index))); }}>Open in {provider}</button>
+      onClick={async () => { setFailed(false); setFailed(!(await openExternalSource(source))); }}>Open in {provider}</button>
     {failed && <div class="error">The source could not be opened. Try again.</div>}
   </div>;
 }
@@ -409,17 +527,19 @@ export function Passage({ text, label }: { text: string; label: string }) {
 /**
  * An original's cited passages, each its verified evidence at most 2,000
  * characters. A sentence's number lights the passages it cites, when it cites
- * only some of them.
+ * only some of them. A named item's is its one passage.
  */
-function OriginalSource({ state, group, source }: { state: State; group: SourceGroup; source: Extract<AnswerSource, { kind: 'original' }> }) {
+function OriginalSource({ state, target, source }: { state: State; target: PaneTarget; source: Extract<AnswerSource, { kind: 'original' }> }) {
   const sources = state.sources!;
-  const reads = sources.evidence?.group === sources.open ? sources.evidence.reads : {};
-  const count = group.indexes.length;
-  const meta = originalMeta(source, group, 'passages cited');
-  const focused = sentences(state.ask!.shown!.answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [];
-  const lit = group.indexes.filter(index => focused.includes(index));
+  const reads = sources.evidence?.group === target.number ? sources.evidence.reads : {};
+  const places = target.group?.indexes ?? [0];
+  const count = places.length;
+  const meta = target.group ? originalMeta(source, target.group, 'passages cited') : documentName(source.label).version ?? '';
+  const answer = state.ask?.shown?.answer;
+  const focused = target.group && answer ? sentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
+  const lit = places.filter(index => focused.includes(index));
   const light = lit.length > 0 && lit.length < count;
-  const all = group.indexes.map(index => reads[index] ?? { loading: true } as const);
+  const all = places.map(index => reads[index] ?? { loading: true } as const);
   const failure = all.find(read => !read.loading && 'failure' in read);
   return (
     <div class="source-detail">
@@ -431,7 +551,7 @@ function OriginalSource({ state, group, source }: { state: State; group: SourceG
           <button type="button" class="link-button" data-testid="retry-evidence" onClick={retryEvidence}>Try again</button>
         </div>
       )}
-      {group.indexes.map((index, at) => {
+      {places.map((index, at) => {
         const read = all[at]!;
         if (read.loading || !('value' in read)) return null;
         const text = read.value.text.length > MAX_EVIDENCE ? `${read.value.text.slice(0, MAX_EVIDENCE)}…` : read.value.text;
@@ -446,36 +566,81 @@ function OriginalSource({ state, group, source }: { state: State; group: SourceG
   );
 }
 
-/** Beside the answer: an approved record, an original's cited passages, or a link to a live Slack message. */
+/** A record the pane reads: loading, could not be read (with Try again when that can help), or the record. */
+function ReadRecord<T>({ read, children }: { read: Read<T> | undefined; children: (value: T) => ComponentChildren }) {
+  if (!read || read.loading) return <div class="notice">Loading…</div>;
+  if ('failure' in read) {
+    return (
+      <div class="source-failure">
+        <div class="error" data-testid="source-error">{message(read.failure)}</div>
+        {read.failure.retryable && <button type="button" class="link-button" onClick={retryRecord}>Try again</button>}
+      </div>
+    );
+  }
+  return <>{children(read.value)}</>;
+}
+
+/**
+ * The atoms a record source cites, to light: a named item's own; a numbered
+ * source's that the chosen sentence cites, or all of them when a row opened it.
+ */
+function litAtoms(state: State, target: PaneTarget): ReadonlySet<string> {
+  const atoms = (sources: readonly AnswerSource[]) => new Set(sources.flatMap(source => source.kind === 'record' ? [source.atom_id] : []));
+  const answer = state.ask?.shown?.answer;
+  if (!target.group || !answer) return atoms(target.sources);
+  const focused = sentences(answer).find(([id]) => id === state.sources?.focus)?.[1].citation_indexes ?? [];
+  const cited = target.group.indexes.filter(index => focused.includes(index));
+  const all = answerSources(state);
+  return atoms(cited.length > 0 ? cited.map(index => all[index]!) : target.sources);
+}
+
+/** What the pane's head calls an item: its kind, or a live tool's name and kind. */
+function paneHeading(source: AnswerSource, state: State): string {
+  if (source.kind === 'record') return 'Meeting · Approved record';
+  if (source.kind === 'transcript') return 'Meeting · Transcript';
+  if (source.kind === 'original') return 'Original source';
+  return `${externalSourceProvider(source, state.tools?.items)} · ${source.kind === 'slack' ? 'Message' : source.kind === 'ticket' ? 'Ticket' : 'Page'}`;
+}
+
+/**
+ * Beside Ask: one of the answer's sources, or an item Ask named, opened by
+ * its kind (openers.ts): a meeting's approved record with the cited items lit,
+ * a transcript's meeting, an original's cited passages, or Open in its own
+ * app. Once the answer came, Open goes to the item's own page.
+ */
 export function SourcePane({ state }: { state: State }) {
   const sources = state.sources!;
-  const open = sources.open!;
-  const group = answerGroups(state)[open];
-  if (!group) return null;
-  const source = firstSource(state, group);
+  const target = paneTarget(state);
+  if (!target) return null;
+  const source = target.sources[0]!;
+  const opener = openerOf(source);
   let body;
   if (source.kind === 'record') {
-    const read = sources.records[source.record.record_sha256];
-    body = !read || read.loading ? <div class="notice">Loading…</div>
-      : 'failure' in read ? (
-        <div class="source-failure">
-          <div class="error" data-testid="source-error">{message(read.failure)}</div>
-          {read.failure.retryable && <button type="button" class="link-button" onClick={retryRecord}>Try again</button>}
-        </div>
-      ) : <RecordDetail record={read.value} />;
+    body = <ReadRecord read={sources.records[source.record.record_sha256]}>{record => <RecordDetail record={record} lit={litAtoms(state, target)} />}</ReadRecord>;
+  } else if (opener.pane === 'meeting' && opener.meeting !== undefined) {
+    body = (
+      <ReadRecord read={sources.meetings[opener.meeting]}>{meeting => <>
+        <RecordDetail record={meeting.record} />
+        {meeting.more && <div class="notice" data-testid="meeting-more">Additional approved items are not shown.</div>}
+      </>}</ReadRecord>
+    );
   } else if ('permalink' in source) {
-    body = <ExternalSource key={`${source.tool_id}:${source.permalink}`} source={source} index={group.indexes[0]!} provider={externalSourceProvider(source, state.tools?.items)} />;
-  } else {
-    body = <OriginalSource state={state} group={group} source={source} />;
+    body = <ExternalSource key={`${source.tool_id}:${source.permalink}`} source={source} provider={externalSourceProvider(source, state.tools?.items)} />;
+  } else if (source.kind === 'original') {
+    body = <OriginalSource state={state} target={target} source={source} />;
   }
   return (
     <aside class="source-pane" data-testid="source-pane" aria-label="Source">
       <div class="pane-head">
         <div class="pane-kind">
-          <span class="marker on">{open + 1}</span>
-          <span class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : 'permalink' in source ? `${externalSourceProvider(source, state.tools?.items)} · ${source.kind === 'slack' ? 'Message' : source.kind === 'ticket' ? 'Ticket' : 'Page'}` : 'Original source'}</span>
+          {target.number !== null && <span class="marker on">{target.number + 1}</span>}
+          <span class="section-label">{paneHeading(source, state)}</span>
         </div>
-        <button type="button" class="icon-button" aria-label="Close sources" data-testid="source-close" onClick={closeSources}><Close /></button>
+        <div class="pane-actions">
+          {/* While Ask works there is no Open: leaving Ask would cancel it. */}
+          {fullPageOffered(state) && <button type="button" class="link-button" data-testid="source-open" onClick={openFullPage}>Open</button>}
+          <button type="button" class="icon-button" aria-label="Close sources" data-testid="source-close" onClick={closeSources}><Close /></button>
+        </div>
       </div>
       {body}
     </aside>

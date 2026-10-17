@@ -14,6 +14,7 @@ export interface SourceGroup {
 function groupKey(source: AnswerSource): string {
   if (source.kind === 'record') return `record:${source.record.record_sha256}`;
   if (source.kind === 'original') return `original:${source.ref.source_id}`;
+  if (source.kind === 'transcript') return `transcript:${source.meeting}`;
   return `${source.kind}:${source.tool_id}:${source.permalink}`;
 }
 
