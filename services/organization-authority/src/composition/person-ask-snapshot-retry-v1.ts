@@ -1,6 +1,9 @@
 import { AgenticAskDeadlineErrorV1, AGENTIC_ASK_DEADLINE_MS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { PersonRecordSearchSnapshotChangedV1 } from './person-record-search-route.js';
 
+/** Allow the cooperative runner to finish its terminal audit; stalled cleanup stays bounded. */
+export const PERSON_ASK_TERMINAL_GRACE_MS_V1 = 1_000;
+
 /** Restart once with a completely new desk, evidence and model state, within the original deadline. */
 export async function withPersonAskSnapshotRetryV1<T>(input: {
   readonly signal?: AbortSignal;
@@ -17,13 +20,18 @@ export async function withPersonAskSnapshotRetryV1<T>(input: {
       signal.throwIfAborted();
       try {
         return await new Promise<T>((resolve, reject) => {
-          // Let ordinary caller cancellation finish its existing audit/observation path.
-          // The outer deadline also bounds a connector that ignores the supplied signal.
-          const stopped = () => reject(deadline.signal.reason);
+          let fallback: ReturnType<typeof setTimeout> | undefined;
+          // Abort work at the shared deadline, then let its terminal witness finish.
+          // Only a runner that does not settle during cleanup is rejected by this timer.
+          const stopped = () => {
+            fallback = setTimeout(() => reject(deadline.signal.reason), PERSON_ASK_TERMINAL_GRACE_MS_V1);
+            fallback.unref?.();
+          };
+          const cleanup = () => { clearTimeout(fallback); deadline.signal.removeEventListener('abort', stopped); };
           deadline.signal.addEventListener('abort', stopped, { once: true });
           try {
-            input.run(signal).then(resolve, reject).finally(() => deadline.signal.removeEventListener('abort', stopped));
-          } catch (error) { deadline.signal.removeEventListener('abort', stopped); reject(error); }
+            input.run(signal).then(value => { signal.throwIfAborted(); return value; }).then(resolve, reject).finally(cleanup);
+          } catch (error) { cleanup(); reject(error); }
         });
       }
       catch (error) {

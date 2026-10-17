@@ -130,7 +130,7 @@ export function raceAbort<T>(signal: AbortSignal, operation: Promise<T>): Promis
 export function isAbort(error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true || (error instanceof DOMException && error.name === "AbortError");
 }
-export function abort(): never { throw new DOMException("Ask cancelled", "AbortError"); }
+export function abort(signal?: AbortSignal): never { throw signal === undefined ? new DOMException("Ask cancelled", "AbortError") : abortReason(signal); }
 
 /** Content-free span events: entering a call's runtime span, and its model time when it settles. */
 export type AgenticModelGateSpanEventV1 =
@@ -222,7 +222,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
   const invocationDigests: Sha256Digest[] = [];
   const remaining = () => deadline - now();
   const assertLive = () => {
-    if (options.input_signal?.aborted) abort();
+    if (options.input_signal?.aborted) abort(options.input_signal);
     if (options.is_deadline_expired() || now() >= deadline) throw new AgenticAskDeadlineErrorV1();
     if (activeSignal.aborted) throw new DOMException("Ask stopped", "AbortError");
   };

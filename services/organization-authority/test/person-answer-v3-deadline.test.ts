@@ -35,6 +35,31 @@ function fixture() {
 }
 
 describe("Agentic Ask deadline at the Person route boundary", () => {
+  it('awaits the timeout witness after a restarted attempt reaches the shared deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const f = fixture();
+    f.revalidate.mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 60_000));
+      throw new PersonRecordSearchSnapshotChangedV1();
+    });
+    let witnessed = false;
+    f.append.mockImplementation(async () => {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      witnessed = true;
+    });
+    let returned = false;
+    const settled = f.ask().catch((error: unknown) => { returned = true; return error; });
+    await vi.advanceTimersByTimeAsync(AGENTIC_ASK_DEADLINE_MS_V1);
+    expect(returned).toBe(false);
+    expect(f.append).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'timed_out' }));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await settled).toMatchObject({ code: 'unavailable' });
+    expect(witnessed).toBe(true);
+    expect(f.append).toHaveBeenCalledTimes(1);
+    expect(createPersonEvidenceDeskV1).toHaveBeenCalledTimes(2);
+    expect(f.events.filter(event => event.stage === 'research_run' && event.event !== 'started').at(-1)).toMatchObject({ event: 'failed', result: 'timeout' });
+  });
+
   it("exposes a hard deadline as unavailable while retaining timeout telemetry and one terminal audit", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const f = fixture();

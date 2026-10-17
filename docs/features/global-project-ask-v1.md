@@ -251,7 +251,9 @@ submissions stay undated, and capture/approval times never substitute for them.
 If the approved record log advances during Ask, a valid old snapshot is
 classified as unavailable rather than failed authentication. Ordinary Ask
 restarts once with a new desk and research state, within the original 90-second
-deadline. The old evidence never enters the new attempt. Revoked access,
+work deadline. Cooperative timeout auditing finishes before the response returns;
+cleanup has a separate one-second bound if a connector does not settle after cancellation.
+The old evidence never enters the new attempt. Revoked access,
 changed grants, corrupt or foreign pointers and unknown failures are not
 retried. Diagnostic captures remain single-attempt so their content and fence
 cannot mix attempts; a snapshot change returns unavailable and the person may

@@ -1051,6 +1051,12 @@ export function createPersonRecordSearchRouteV1(
     unavailable();
   }
 
+  function assertReleaseSnapshot(previous: PersonRecordSearchReleasePointerV1): void {
+    assertCurrentSnapshot({ organization_id: options.organization_id, generation_id: previous.generation_id,
+      manifest_sha256: previous.manifest_sha256, retrieval_contract_sha256: previous.retrieval_contract_sha256,
+      record_head_position: previous.record_head.position, record_head_hash: previous.record_head.record_sha256 });
+  }
+
   function searchBatch(
     input: PersonRecordSearchBatchInputV1,
   ): PersonRecordSearchBatchResultV1 {
@@ -1060,6 +1066,7 @@ export function createPersonRecordSearchRouteV1(
     });
     assertExpectedOrganization(authorization);
     const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
+    if (input.expected_pointer !== undefined) assertReleaseSnapshot(input.expected_pointer);
     const head = recordHead(options.record);
     const pointer = activeGeneration(options.authority);
     if (
@@ -1116,18 +1123,13 @@ export function createPersonRecordSearchRouteV1(
       access_token: input.access_token,
     });
     if (
-      !samePointer(pointer, activeGeneration(options.authority)) ||
-      !sameHead(pointer, recordHead(options.record))
-    ) {
-      unavailable();
-    }
-    if (
       !samePersonReleaseAuthorizationV1(authorization, released) ||
       captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 ||
       released.organization_id !== options.organization_id
     ) {
       personDenied();
     }
+    assertCurrentSnapshot(pointer);
     const deskSourceItems = input.desk === true
       ? boundedDeskItems(items)
       : undefined;
@@ -1256,6 +1258,7 @@ export function createPersonRecordSearchRouteV1(
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       assertExpectedOrganization(authorization);
       const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
+      if (input.expected_pointer !== undefined) assertReleaseSnapshot(input.expected_pointer);
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
       if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head) || (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer))) unavailable();
@@ -1566,10 +1569,7 @@ export function createPersonRecordSearchRouteV1(
         !samePersonReleaseAuthorizationV1(current, input.release.current_authorization) ||
         current.organization_id !== options.organization_id
       ) personDenied();
-      const previous = input.release.active_pointer;
-      assertCurrentSnapshot({ organization_id: options.organization_id, generation_id: previous.generation_id,
-        manifest_sha256: previous.manifest_sha256, retrieval_contract_sha256: previous.retrieval_contract_sha256,
-        record_head_position: previous.record_head.position, record_head_hash: previous.record_head.record_sha256 });
+      assertReleaseSnapshot(input.release.active_pointer);
       return releaseAuthorization(current);
     },
   });

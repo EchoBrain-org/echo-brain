@@ -26,6 +26,7 @@ import { SqlitePersonRecordReadAuditV1 } from '../src/adapters/persistence/sqlit
 import type { PersonOriginalContextEvidenceDeskPortV1 } from '../src/application/ports/person-original-context-retrieval-v1.js';
 import { createPersonEvidenceDeskV1 } from '../src/composition/person-evidence-desk-v1.js';
 import { createPersonRecordSearchRouteV1, type PersonEvidenceDeskRecordsV1 } from '../src/composition/person-record-search-route.js';
+import * as recordHeadReader from '../src/composition/readable-search-generation-reconciler.js';
 import { meetingWorld, EMP_A, SHARED } from './fixtures/person-meeting-world.js';
 import { COORDINATES, appendInput, database as recordDatabase, protocolAuthority } from '../../../packages/organization-record/test/fixtures/record-append-fixture.js';
 
@@ -105,11 +106,12 @@ function authorityDatabase() {
 }
 
 /** Builds and warms a one-atom readable-search generation, then publishes its active pointer. */
-function publish(authority: ReturnType<typeof openAuthorityDatabase>, state_directory: string, recordAtom: ReadableSearchAtomV1): void {
-  const built = buildReadableSearchGenerationV1(generation(state_directory, [recordAtom]));
-  const active = { generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256, retrieval_contract_sha256: RETRIEVAL_CONTRACT, exact_head: { ...COORDINATES, position: 1, record_sha256: recordAtom.record_sha256 } };
+function publish(authority: ReturnType<typeof openAuthorityDatabase>, state_directory: string, recordAtom: ReadableSearchAtomV1, head = { position: 1, record_sha256: recordAtom.record_sha256 }): void {
+  const exact_head = { ...COORDINATES, ...head };
+  const built = buildReadableSearchGenerationV1({ ...generation(state_directory, [recordAtom]), exact_head });
+  const active = { generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256, retrieval_contract_sha256: RETRIEVAL_CONTRACT, exact_head };
   warmReadableSearchActiveGenerationV1({ state_directory, active_generation: active });
-  authority.prepare('INSERT INTO authority_readable_search_active_generation(singleton,organization_id,generation_id,manifest_sha256,retrieval_contract_sha256,record_head_position,record_head_hash,published_at) VALUES(1,?,?,?,?,?,?,?)').run(COORDINATES.organization_id, active.generation_id, active.manifest_sha256, RETRIEVAL_CONTRACT, 1, recordAtom.record_sha256, '2026-09-27T00:00:00.000Z');
+  authority.prepare('INSERT OR REPLACE INTO authority_readable_search_active_generation(singleton,organization_id,generation_id,manifest_sha256,retrieval_contract_sha256,record_head_position,record_head_hash,published_at) VALUES(1,?,?,?,?,?,?,?)').run(COORDINATES.organization_id, active.generation_id, active.manifest_sha256, RETRIEVAL_CONTRACT, head.position, head.record_sha256, '2026-09-27T00:00:00.000Z');
 }
 
 async function fixture(options: { readonly active?: boolean; readonly corrupt?: boolean; readonly forged_pointer?: boolean; readonly atom_text?: string; readonly atom_envelope_sha256?: Sha256Digest } = {}) {
@@ -137,7 +139,7 @@ async function fixture(options: { readonly active?: boolean; readonly corrupt?: 
     ...(options.corrupt ? { search_generation: () => { throw new Error('corrupt readable index'); } } : {}),
   });
   const makeDesk = () => createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: route });
-  return { authority, record, route, recordAtom, makeDesk, revoke: () => { revoked = true; } };
+  return { authority, record, route, recordAtom, state_directory, makeDesk, revoke: () => { revoked = true; } };
 }
 
 describe('Person evidence desk over the real approved-record route', () => {
@@ -224,6 +226,40 @@ describe('Person evidence desk over the real approved-record route', () => {
     await expect(desk.revalidate({})).rejects.toMatchObject({ name: 'PersonRecordSearchSnapshotChangedV1', code: 'unavailable' });
     value.revoke();
     await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it.each([false, true])('restarts pinned search and list after an append (index published: %s)', async published => {
+    const value = await fixture();
+    const release = value.route.searchBatch({ access_token: 'token', queries: ['Decision'] }).release;
+    const appended = await new OrganizationRecordAppenderV4(value.record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, approval_id: 'approval-2' }));
+    if (published) publish(value.authority, value.state_directory, value.recordAtom, { position: 2, record_sha256: appended.record_sha256 });
+    const input = { access_token: 'token', expected_pointer: release.active_pointer };
+    for (const read of [() => value.route.searchBatch({ ...input, queries: ['Decision'] }), () => value.route.listDeskBatch(input)]) {
+      expect(read).toThrow(expect.objectContaining({ name: 'PersonRecordSearchSnapshotChangedV1' }));
+    }
+    value.revoke();
+    expect(() => value.route.searchBatch({ ...input, queries: ['Decision'] })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+  });
+
+  it('classifies a verified advance observed at the search final fence as retryable', async () => {
+    const value = await fixture();
+    const before = recordHeadReader.readReadableSearchRecordHeadV1(value.record);
+    await new OrganizationRecordAppenderV4(value.record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, approval_id: 'approval-2' }));
+    // The first head read sees the pre-append snapshot; the final fence sees the real new log.
+    const read = vi.spyOn(recordHeadReader, 'readReadableSearchRecordHeadV1').mockReturnValueOnce(before);
+    try {
+      expect(() => value.route.searchBatch({ access_token: 'token', queries: ['Decision'] })).toThrow(expect.objectContaining({ name: 'PersonRecordSearchSnapshotChangedV1' }));
+    } finally { read.mockRestore(); }
+  });
+
+  it('does not retry a pinned generation whose identity changed without a verified append', async () => {
+    const value = await fixture();
+    const release = value.route.searchBatch({ access_token: 'token', queries: ['Decision'] }).release;
+    value.authority.prepare('UPDATE authority_readable_search_active_generation SET manifest_sha256=? WHERE singleton=1').run(digest('unknown-manifest'));
+    const input = { access_token: 'token', expected_pointer: release.active_pointer };
+    for (const read of [() => value.route.searchBatch({ ...input, queries: ['Decision'] }), () => value.route.listDeskBatch(input)]) {
+      expect(read).toThrow(expect.objectContaining({ name: 'AuthorityOperationError', code: 'unavailable' }));
+    }
   });
 
   it('re-reads only original releases made since its last check in an incremental check, while session and record pins run every time', async () => {
