@@ -147,11 +147,15 @@ Ask can select `source: "tickets"` for a targeted search, or omit the source to
 search all available evidence. Every selection keeps the current Person and
 project boundary. Open accepts only a handle minted by that reader. List
 accepts a Jira project key/id, or no project for the caller's visible inventory.
-Dates are inclusive UTC **creation** days. JQL date literals use the Jira
-account's timezone, so the JQL carries only a coarse `created` bound with one
-day of margin either side, and the exact UTC filter runs after the current
-reads. A filtered page can be empty with an advancing continuation; pages run
-newest first, so the walk ends once a page's oldest ticket predates `since`.
+Search and list accept inclusive calendar bounds and `date_field` of `created`
+(the default), `updated`, or `due`. Timestamps use the request's time zone (UTC
+when absent); date-only deadlines keep their calendar date. JQL literals use
+the provider account's zone, so discovery bounds include a margin and exact
+filtering runs on the current permission-checked values. The client-zone path
+uses two days of margin to cover differences between client and provider zones.
+A filtered page can be empty with an advancing continuation; lists sort by the
+selected field and stop once the oldest value precedes `since`. Keyword
+searches retain date filters on the relaxed retry and exact-key lookup.
 This is a live walk, not a pinned Jira snapshot.
 Repeated issue ids or continuation tokens within a walk fail closed. There is
 no search continuation in the shared contract.
@@ -185,7 +189,7 @@ and metadata are never fetched. Unsupported nodes (including media and
 data-backed cards), malformed fields and control bytes
 fail closed. Comments, attachments, custom fields, email addresses and user ids
 are not released. Null description, assignee and due date are supported.
-Optional metadata is limited to assignee display name, status and due date.
+Optional metadata includes assignee display name, status, due date, creation and current update timestamps.
 
 Each direct request has a 15-second timeout and a 1 MiB streamed JSON-body
 limit. There are no retries. HTTP 401/403 deny access, 404 refuses the exact

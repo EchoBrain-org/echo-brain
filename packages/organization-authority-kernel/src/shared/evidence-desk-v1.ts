@@ -1,3 +1,4 @@
+import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "./temporal-query-v1.js";
 import type { PersonAnswerEvidenceCitationV4, PersonAnswerScopeV3, PersonOpenRefV1 } from '@echo-brain/organization-api';
 
 /** Read-only evidence desk contract bound to one authenticated Person request. */
@@ -7,7 +8,7 @@ export type EvidenceDeskCitationV1 = PersonAnswerEvidenceCitationV4;
 /** Where an item came from. Meeting records and documents live in Echo; Slack is read live and never stored. */
 export type EvidenceDeskSourceV1 = 'meeting' | 'document' | 'slack';
 /** Meaning of a provider-supplied date; never inferred from a storage source. */
-export type EvidenceDeskDateKindV1 = 'created' | 'version_created' | 'occurred';
+export type EvidenceDeskDateKindV1 = 'created' | 'version_created' | 'occurred' | 'updated' | 'due' | 'received';
 
 /**
  * A live source that server composition bound to this one request.  A legacy
@@ -20,7 +21,8 @@ export interface EvidenceDeskLiveSourceV1 {
 }
 
 /** The source of an item, from its kind. */
-export function evidenceDeskSourceV1(item: { readonly kind: EvidenceDeskKindV1 }): EvidenceDeskSourceV1 {
+export function evidenceDeskSourceV1(item: { readonly kind: EvidenceDeskKindV1; readonly ref?: string }): EvidenceDeskSourceV1 {
+  if (item.ref?.startsWith('transcript:')) return 'meeting';
   if (item.kind === 'slack_message') return 'slack';
   return item.kind === 'note' || item.kind === 'document_passage' ? 'document' : 'meeting';
 }
@@ -45,6 +47,8 @@ export interface EvidenceDeskItemV1 {
   /** YYYY-MM-DD when the item was said, approved or revised, when the source knows it. */
   readonly occurred_at?: string;
   readonly date_kind?: EvidenceDeskDateKindV1;
+  /** Source-supplied timestamps/calendar dates with explicit meanings. */
+  readonly dates?: EvidenceDatesV1;
   /** SHA-256 receipt for the release that admitted this item into the request. */
   readonly receipt_sha256: `sha256:${string}`;
   /** Server-owned ref for person open. Never shown to a model. */
@@ -62,7 +66,8 @@ export interface EvidenceDeskResultV1 {
   readonly next_cursor?: string;
 }
 
-export interface EvidenceDeskSearchInputV1 {
+export interface EvidenceDeskSearchInputV1 extends EvidenceDateFilterV1 {
+  readonly source?: EvidenceDeskSourceV1;
   readonly query?: string;
   readonly kinds?: readonly EvidenceDeskKindV1[];
   readonly limit?: number;
@@ -76,7 +81,7 @@ export interface EvidenceDeskSearchInputV1 {
  * Meeting and document items carry no text; Slack messages carry their text,
  * which is their only title. Slack requires `channel` (a name the asker can see).
  */
-export interface EvidenceDeskListInputV1 {
+export interface EvidenceDeskListInputV1 extends EvidenceDateFilterV1 {
   readonly source: EvidenceDeskSourceV1;
   readonly kinds?: readonly EvidenceDeskKindV1[];
   readonly channel?: string;

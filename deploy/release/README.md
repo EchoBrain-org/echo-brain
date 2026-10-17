@@ -138,6 +138,15 @@ and open items rulings R77–R82) needs its Person client first, the reverse of
 ADR-0024. Two checks in `packages/organization-api` were widened, and a client
 built before them rejects what the new Authority sends:
 
+The temporal Ask addition in the same candidate uses optional client-time
+headers without changing the Ask body or response schema. Older Authorities
+ignore them; it does not reverse the client-first order below. During staging,
+verify a client-local "yesterday" question and a keyword-plus-date query against
+known, permitted evidence, inspecting the actual model-selected bounds and
+source results. Include a source timestamp near UTC midnight and an older item
+whose update or deadline falls in the requested interval. A scripted planner
+unit test is not evidence that the live model interpreted the question.
+
 - An impact card that fell back to `not_assessed` now carries the record's
   decided lines. An older client fails it as "Impact card status is
   inconsistent": `person runs` `view` fails, and a research-loop evaluation

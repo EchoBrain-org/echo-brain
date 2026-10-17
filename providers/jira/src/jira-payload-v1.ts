@@ -91,6 +91,8 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   const created = new Date(rawCreated);
   if (!Number.isFinite(created.getTime())) jiraFailure('invalid_output');
   const occurred_at = created.toISOString().slice(0, 10);
+  const updated = fields.updated == null ? undefined : jiraString(fields.updated, 64, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/);
+  if (updated !== undefined && !Number.isFinite(Date.parse(updated))) jiraFailure('invalid_output');
   const status = jiraString(jiraRecord(fields.status).name, 128);
   const owner = fields.assignee === null ? undefined : jiraString(jiraRecord(fields.assignee).displayName, 128);
   const due_at = fields.duedate === null ? undefined : jiraDay(fields.duedate);
@@ -103,7 +105,7 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
     ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: sha256Digest(content?.text ?? '') });
   return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(), related_issue_ids: relatedLinks.ids, related_truncated: relatedLinks.truncated,
     truncated: label.truncated || (content?.truncated ?? false),
-    value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created',
+    value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created', dates: Object.freeze({ created: created.toISOString(), ...(updated === undefined ? {} : { updated: new Date(updated).toISOString() }), ...(due_at === undefined ? {} : { due: due_at }) }),
       attributes: Object.freeze({ status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) }),
       ...(content === undefined ? {} : { text: content.text }) }) });
 }

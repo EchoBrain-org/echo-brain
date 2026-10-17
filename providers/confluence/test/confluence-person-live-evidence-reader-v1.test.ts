@@ -504,11 +504,22 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(Buffer.byteLength(opened.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
   });
 
+  it('filters a keyword search by the current revision timestamp in the client zone', async () => {
+    const f = await fixture({ selected: ['42'], pages: [page({ createdAt: '2026-10-17T01:00:00Z' })] });
+    const dates = { since: '2026-10-16', until: '2026-10-16', date_field: 'updated' as const, time_zone: 'America/Los_Angeles' };
+    const result = await f.source.search({ query: 'gate', ...dates });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.dates).toEqual({ updated: '2026-10-17T01:00:00.000Z' });
+    expect((await f.source.search({ query: 'gate', ...dates, time_zone: 'UTC' })).items).toEqual([]);
+    expect(f.calls.filter(call => call.path === '/rest/api/search')[0]!.query.get('cql')).toContain('text ~ "gate"');
+    await f.source.revalidate({});
+  });
+
   it('uses scoped CQL for date-filtered discovery, with an inclusive final day', async () => {
     const f = await fixture({ selected: ['42'] });
     await f.source.list({ since: '2026-10-01', until: '2026-10-05' });
     const query = f.calls.find(call => call.path === '/rest/api/search')!.query;
-    expect(query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-10-01" AND lastmodified < "2026-10-06"');
+    expect(query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-09-29" AND lastmodified < "2026-10-08"');
     expect(f.bodyCalls()).toEqual([]);
   });
 

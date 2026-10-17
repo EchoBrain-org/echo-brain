@@ -171,7 +171,7 @@ describe("research loop: search", () => {
     expect(h.prompt(2).last_results).toEqual([expect.objectContaining({ results: ["E3"], notice: "Live pages could not be searched just now." })]);
     expect(h.prompt(3).last_results).toEqual([expect.objectContaining({ tool: "search", note: "already searched; results are in your scratchpad" })]);
     // The planner is told of the search once.
-    expect(h.prompt(3).searches_done).toEqual([{ query: "THERM-50 status" }]);
+    expect(h.prompt(3).searches_done).toEqual([{ query: "THERM-50 status", time_zone: "UTC" }]);
   });
 });
 
@@ -578,7 +578,7 @@ describe("research loop: prompt layout", () => {
   it("sends a stable head, then the evidence, then what changes every step", async () => {
     const h = harness([reads("open", [{ tool: "search", args: { query: "display" } }]), affects("not_found"), affects("not_found")], { openCitation });
     await h.research.research({ trigger: "approved_record", brief: task });
-    expect(Object.keys(h.prompt(0))).toEqual(["task", "today", "scope", "source_catalog", "opened", "seen", "step", "steps_left", "plan", "inventories", "last_results", "searches_done"]);
+    expect(Object.keys(h.prompt(0))).toEqual(["task", "today", "time_zone", "time_reference", "scope", "source_catalog", "opened", "seen", "step", "steps_left", "plan", "inventories", "last_results", "searches_done"]);
   });
 
   it("repeats each step's head and evidence as the next step's prefix, never re-sorting what it read (F5)", async () => {

@@ -34,7 +34,7 @@ export class AgenticAskOutputErrorV1 extends Error {
 }
 
 export type StepTool = "search" | "open" | "list" | "finish";
-export type StepArgs = Readonly<Partial<Record<"query" | "id" | "source" | "kind" | "status" | "owner" | "channel" | "since" | "until", string>>>;
+export type StepArgs = Readonly<Partial<Record<"query" | "id" | "source" | "kind" | "status" | "owner" | "channel" | "since" | "until" | "date_field", string>>>;
 export type StepAction = { readonly tool: StepTool; readonly args: StepArgs };
 export type NeedStatus = "open" | "found" | "not_found";
 /** `id` is the need's id from the plan the step was shown ("N3"); a new need has none. */
@@ -46,9 +46,9 @@ export type Answer = { readonly sentences: readonly AnswerSentence[]; readonly n
 
 /** Each tool's first argument is required; finish has no arguments. */
 const ACTION_ARGS = {
-  search: ["query", "source"],
+  search: ["query", "source", "since", "until", "date_field"],
   open: ["id"],
-  list: ["source", "kind", "status", "owner", "channel", "since", "until"],
+  list: ["source", "kind", "status", "owner", "channel", "since", "until", "date_field"],
   finish: [],
 } as const satisfies Readonly<Record<StepTool, readonly (keyof StepArgs)[]>>;
 const ids = { type: "array", maxItems: AGENTIC_ASK_MAX_EVIDENCE_IDS_V1, items: { type: "string", maxLength: 16 } } as const;
@@ -298,9 +298,11 @@ function stepPrompt(list: boolean): string { return [
   "",
   "Tools. Each action is {\"tool\": <name>, \"args\": {...}}.",
   "",
-  "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"<source from source_catalog>\"}",
+  "Resolve natural-language dates using today, now and time_zone in the request context. Interpret the person's wording yourself; send explicit YYYY-MM-DD since/until bounds. Yesterday is the preceding local calendar day, not the last 24 hours. Use the dates of cited events for phrases such as the week before launch. If the reference event is unknown, find it first; never invent it.",
+  "Date filtering works with search and list. Choose date_field according to the question and the source: meetings occurred (or action due), local documents/notes received, tickets created/updated/due, knowledge pages created/updated. A source may refuse an unsupported field; disclose that gap. Received is when ECHO captured/uploaded something, not when the events described in it happened. Updated is the current revision's modification time, not a complete activity history. Items without the requested date are excluded; empty dated results do not establish that no activity occurred.",
+  "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"<source from source_catalog>\", \"since\", \"until\", \"date_field\"}",
   "  Purpose: search all available sources, or only source. Scope and permissions still apply.",
-  `  When to use: start with concrete names, codes, features or dates. For an exact identifier supplied by the asker or a result, search the identifier unchanged and on its own. Try different words while a need is open. Use open to read an item${list ? " and list to browse a source" : ""}.`,
+  `  When to use: start with concrete names, codes or features. Use since/until for source/event timestamps. A date mentioned inside document text may instead be a keyword; never substitute its upload date for that content date. For an exact identifier supplied by the asker or a result, search the identifier unchanged and on its own. Try different words while a need is open. Use open to read an item${list ? " and list to browse a source" : ""}.`,
   "  Returns: the ids of up to 8 items, best match first. Read their details and bodies in seen or opened. A seen item with \"full\": true contains the complete released text in text, preserving its lines. This may be one matching passage, not the whole document or conversation. A preview is incomplete; no body means metadata only. Open those items before relying on them.",
   `  Limits: keyword matching, not meaning. Keep identifiers intact; try synonyms. Truncated means incomplete; ${list ? "refine or list" : "refine the query"}. Repeats within one source return nothing new.`,
   `  Query recovery: some sources require every query word to match. Start with one exact identifier or one or two distinctive terms, not a whole question. Scope is applied separately; add a project name as a keyword only when the item's text is expected to contain it. After an empty search, try a known identifier or simpler terms once${list ? ", then list that source and open relevant candidates" : ""}. Empty keyword results do not prove the fact is absent.`,
@@ -316,7 +318,7 @@ function stepPrompt(list: boolean): string { return [
   "  Examples: {\"id\": \"E8\"}",
   "",
   ...(!list ? [] : [
-  "list, args {\"source\": \"<source from source_catalog>\", optional \"kind\", \"status\", \"owner\", \"channel\", \"since\", \"until\"}",
+  "list, args {\"source\": \"<source from source_catalog>\", optional \"kind\", \"status\", \"owner\", \"channel\", \"since\", \"until\", \"date_field\"}",
   "  Purpose: see what exists in one source without keywords.",
   "  When to use: broad questions (an overview, what happened this week, what is still open); questions about a person (what someone owns or is doing: list meeting actions with their owner); when searches keep missing; to be sure you have every item of one kind, such as every action.",
   "  Returns: the ids of one page of items per call. Each item's title and date, plus owner, due date and status for meeting actions, are in seen; bodies, when available, appear in seen or opened. Open metadata-only items you need.",
@@ -361,6 +363,7 @@ export const ANSWER_PROMPT = [
   "- source_catalog describes source capabilities, not extra questions to answer. Do not report an unrequested discussion, document or approval as missing when the requested fact is already supported.",
   "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If none of the evidence answers the question, return {\"sentences\":[],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
   "- Keep each fact's owner, date and status with it.",
+  "- dates carries source-supplied timestamps or calendar dates by meaning (occurred, created, updated, due, received). Interpret timestamps in the request time_zone. Calendar-only dates keep their stated day. Received is capture/upload time, never proof of when the described events happened. Updated describes the current revision, not a complete activity history. Use the supplied now/today to interpret relative wording; client time is query context, not evidence that an event occurred.",
   "- date_kind gives a supplied date's meaning: created is item creation, version_created is page-version creation, occurred is the recorded event, and unspecified has no established meaning. Never call a creation date a status-change date, a retrieval date, or an as-of date for the current status. State decision or completion dates only when the evidence explicitly supports them. provenance identifies the evidence record type; a page version identifies the retrieved version, not its approval status.",
   "- \"asked_by\" is the person asking: \"I\", \"me\" and \"my\" in the question mean them, and you may call them \"you\". Their actions are ones whose \"owner\" is them, or that a transcript shows they said they would do. An action with owner \"none recorded\" is no one's on record: never call it theirs, even when it mentions them (\"send the plan to Zhen\" is not Zhen's action). Without \"asked_by\", do not guess who \"I\" is. \"today\" is today's date: use it to say what is overdue or coming up.",
   "- Approved meeting records (provenance.kind \"approved_record\") establish recorded decisions and commitments. Uploaded documents and live pages establish what their text says; their storage source alone does not make them approved decisions. Discussion messages show what was discussed: say where and when (\"discussed in #channel on Sep 26\"). A discussion message that reports a decision (\"Finance signed off on 60 days\") is still a report: say who said it and where.",

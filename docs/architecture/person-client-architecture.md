@@ -154,6 +154,16 @@ unapproved evidence. The source-card behavior below describes approved
 records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
+Each Ask sends optional `x-echo-client-now` (a canonical UTC instant) and
+`x-echo-time-zone` (the client's IANA time zone) headers. The shared Person
+client supplies them for both desktop and CLI. Authority validates the pair
+and gives the research model and answer writer one request-local `now`,
+`today`, and `time_zone`. The model interprets natural-language dates; there
+is no parser of the user's question. Server deadlines, session expiry and
+audits continue to use server clocks. Older clients receive an explicit UTC
+server-time reference. Older Authorities ignore the optional headers, so this
+addition preserves the client-first transition in the release guide.
+
 With the Mine chip, the desktop sends `person ask --mine`: Ask reads only the
 person's own notes and uploads and the meetings they approved, and no Slack or
 shared transcript. A cited original from that answer is read under global scope,

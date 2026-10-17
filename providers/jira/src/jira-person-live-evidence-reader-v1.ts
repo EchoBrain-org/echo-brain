@@ -1,3 +1,4 @@
+import { evidenceDateFilterV1, evidenceDayV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
@@ -9,7 +10,7 @@ import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { jiraProjectMatches, parseJiraIssueV1, parseJiraProject, verifyJiraConnectionV1, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
-const INVENTORY_FIELDS = 'summary,project,created,status,assignee,duedate';
+const INVENTORY_FIELDS = 'summary,project,created,updated,status,assignee,duedate';
 const TEXT_FIELDS = `${INVENTORY_FIELDS},description`;
 const OPEN_FIELDS = `${TEXT_FIELDS},issuelinks`;
 const REQUEST_MAX_HANDLES = 512;
@@ -87,16 +88,17 @@ function shiftDay(day: string, days: number): string | undefined {
  * coarse, with one day of margin either side; the exact UTC filter stays in code.
  * A bound past four-digit years is left out rather than sent malformed.
  */
-function listJql(projectId: string | undefined, since: string | undefined, until: string | undefined): string {
-  const lower = since === undefined ? undefined : shiftDay(since, -1);
-  const upper = until === undefined ? undefined : shiftDay(until, 2);
+function listJql(projectId: string | undefined, since: string | undefined, until: string | undefined, selection: EvidenceDateFilterV1 = {}): string {
+  const field = selection.date_field ?? "created";
+  const lower = since === undefined ? undefined : shiftDay(since, selection.time_zone === undefined ? -1 : -2);
+  const upper = until === undefined ? undefined : shiftDay(until, selection.time_zone === undefined ? 2 : 3);
   const clauses = [
     ...(projectId === undefined ? [] : [`project = ${projectId}`]),
     // The search endpoint refuses an unbounded query; a site-wide list keeps a created restriction.
-    ...(lower !== undefined ? [`created >= "${lower}"`] : projectId === undefined ? ['created >= "1970-01-01"'] : []),
-    ...(upper === undefined ? [] : [`created < "${upper}"`]),
+    ...(lower !== undefined ? [`${field} >= "${lower}"`] : projectId === undefined ? ['created >= "1970-01-01"'] : []),
+    ...(upper === undefined ? [] : [`${field} < "${upper}"`]),
   ];
-  return `${clauses.join(' AND ')} ORDER BY created DESC, id DESC`;
+  return `${clauses.join(' AND ')} ORDER BY ${field} DESC, id DESC`;
 }
 
 /** Construct once per request from trusted ECHO state, never from model arguments. */
@@ -340,6 +342,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       return Object.freeze({ citation, tool_id: 'jira', external_scope_id: cloudid, coordinates: Object.freeze({ object_id: citation.ticket_id }) });
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
+      validateEvidenceDateFilterV1(input, ["created", "updated", "due"]);
       const maximum = Math.min(limit(input.limit), 5);
       const { terms, keys, keyed } = searchTerms(input.query);
       const projectId = pinnedProject?.id;
@@ -350,7 +353,11 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       const words = keyed.filter(key => !key).length;
       return safe(async () => {
         const origin = await verifyConnection(input.signal);
-        const textPage = (relaxed: boolean) => searchPage({ jql: textJql(text!, keyed, relaxed, projectId), maximum, origin, inventory: true, projectId, signal: input.signal });
+        const textPage = (relaxed: boolean) => {
+          const wordsJql = textJql(text!, keyed, relaxed, projectId);
+          const datesJql = listJql(undefined, input.since, input.until, input);
+          const jql = input.since === undefined && input.until === undefined ? wordsJql : `(${wordsJql.split(' ORDER BY ')[0]}) AND ${datesJql}`;
+          return searchPage({ jql, maximum, origin, inventory: true, projectId, signal: input.signal }); };
         const [byKey, firstText] = await Promise.all([keyIssues(named, origin, input.signal), text === undefined ? undefined : textPage(false)]);
         let byText = firstText;
         // One bounded retry when nothing at all matched every term; only words are dropped.
@@ -358,7 +365,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
             text!.length >= 2 && words >= 1 && words <= RELAXED_SEARCH_MAX_TERMS) byText = await textPage(true);
         await verifyConnection(input.signal);
         const seen = new Set(byKey.map(item => item.id));
-        const matches = [...byKey, ...(byText?.selected ?? []).filter(item => !seen.has(item.id))];
+        const matches = [...byKey, ...(byText?.selected ?? []).filter(item => !seen.has(item.id))].filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
         const selected = matches.slice(0, maximum);
         return Object.freeze({ items: remember(selected),
           truncated: byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated) });
@@ -380,13 +387,14 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       return openIssue(citation.ticket_id, maximum, input.signal, false);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
+      validateEvidenceDateFilterV1(input, ["created", "updated", "due"]);
       const maximum = Math.min(limit(input.limit), LIST_MAX_ITEMS);
       if (input.container !== undefined && (typeof input.container !== 'string' || !(JIRA_ID.test(input.container) || JIRA_PROJECT_KEY.test(input.container)))) jiraFailure('invalid_request');
       if (pinnedProject !== undefined && input.container !== undefined && input.container !== fixedProject && !jiraProjectMatches(pinnedProject, input.container)) jiraFailure('unauthorized');
       if (input.since !== undefined) jiraDay(input.since, 'invalid_request');
       if (input.until !== undefined) jiraDay(input.until, 'invalid_request');
       if (input.since !== undefined && input.until !== undefined && input.since > input.until) jiraFailure('invalid_request');
-      const selection = canonicalSha256({ container: input.container ?? null, since: input.since ?? null, until: input.until ?? null });
+      const selection = canonicalSha256({ container: input.container ?? null, since: input.since ?? null, until: input.until ?? null, ...evidenceDateFilterV1(input) });
       const cursor = input.cursor === undefined ? undefined : cursors.get(input.cursor);
       if (input.cursor !== undefined && (cursor === undefined || cursor.selection !== selection)) jiraFailure('invalid_request');
       return safe(async () => {
@@ -395,13 +403,14 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         input.signal?.throwIfAborted();
         if (project !== undefined && input.container !== undefined && !jiraProjectMatches(project, input.container)) jiraFailure('invalid_output');
         if (cursor !== undefined && cursor.projectId !== project?.id) jiraFailure('stale_access_state');
-        const jql = listJql(project?.id, input.since, input.until);
+        const jql = listJql(project?.id, input.since, input.until, input);
         const page = await searchPage({ jql, maximum, origin, inventory: true, cursor, projectId: project?.id, signal: input.signal });
         // UTC inclusive calendar days; the JQL date bounds are only coarse.
-        const selected = page.selected.filter(item => (input.since === undefined || item.value.occurred_at! >= input.since) && (input.until === undefined || item.value.occurred_at! <= input.until));
+        const selected = page.selected.filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
         // Pages run newest first: once a page's oldest issue predates since, no later page can match.
         const oldest = page.selected.at(-1);
-        const token = input.since !== undefined && oldest !== undefined && oldest.value.occurred_at! < input.since ? undefined : page.token;
+        const oldestDay = evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
+        const token = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since ? undefined : page.token;
         await verifyConnection(input.signal);
         const items = remember(selected);
         let next_cursor: string | undefined;

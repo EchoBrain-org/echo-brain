@@ -1,3 +1,4 @@
+import { calendarDateV1, evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFieldV1, type EvidenceDatesV1 } from "./temporal-query-v1.js";
 import { createHash, randomBytes } from 'node:crypto';
 import { canonicalJsonBytes, canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
@@ -107,7 +108,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     // Copy and validate the whole page before the first await/audit so adapters
     // cannot change the text or metadata while its release is being committed.
     try {
-      closedRecord(value, ['citation', 'handle', 'label', 'visibility'], ['text', 'attributes', 'occurred_at', 'date_kind']);
+      closedRecord(value, ['citation', 'handle', 'label', 'visibility'], ['text', 'attributes', 'occurred_at', 'date_kind', 'dates']);
       const validated = reader.validateCitation(value.citation);
       const citation = validated.citation;
       closedRecord(validated.coordinates, ['object_id'], ['container_id']);
@@ -125,7 +126,19 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       }
       if (value.text === undefined && citation.text_sha256 !== `sha256:${createHash('sha256').update('').digest('hex')}`) invalidOutput();
       if (value.occurred_at !== undefined) day(value.occurred_at);
-      if (value.date_kind !== undefined && (value.occurred_at === undefined || !['created', 'version_created', 'occurred'].includes(value.date_kind))) invalidOutput();
+      if (value.date_kind !== undefined && (value.occurred_at === undefined || !['created', 'version_created', 'occurred', 'updated', 'due', 'received'].includes(value.date_kind))) invalidOutput();
+      let dates: EvidenceDatesV1 | undefined;
+      if (value.dates !== undefined) {
+        closedRecord(value.dates, [], ['occurred', 'created', 'updated', 'due', 'received']);
+        const copied: Partial<Record<EvidenceDateFieldV1, string>> = {};
+        for (const [field, stamp] of Object.entries(value.dates)) {
+          if (typeof stamp !== 'string') invalidOutput();
+          if (stamp.length === 10) calendarDateV1(stamp);
+          else if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(stamp) || !Number.isFinite(Date.parse(stamp)) || new Date(stamp).toISOString() !== stamp) invalidOutput();
+          copied[field as EvidenceDateFieldV1] = stamp;
+        }
+        dates = Object.freeze(copied);
+      }
       let attributes: PersonLiveEvidenceValueV1['attributes'];
       if (value.attributes !== undefined) {
         closedRecord(value.attributes, [], ['owner', 'due_at', 'status']);
@@ -142,7 +155,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       }
       return Object.freeze({ citation: citation as C, coordinates, handle: value.handle, label: value.label, visibility: value.visibility,
         ...(value.text === undefined ? {} : { text: value.text }), ...(attributes === undefined ? {} : { attributes }),
-        ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), ...(value.date_kind === undefined ? {} : { date_kind: value.date_kind }) });
+        ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), ...(value.date_kind === undefined ? {} : { date_kind: value.date_kind }), ...(dates === undefined ? {} : { dates }) });
     } catch { invalidOutput(); }
   };
 
@@ -191,7 +204,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       items: Object.freeze(prepared.map((value, index) => Object.freeze({
         id: ids[index]!, kind: value.citation.kind as C['kind'], citation: value.citation, label: value.label, visibility: value.visibility,
         ...(value.text === undefined ? {} : { text: value.text }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }),
-        ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), ...(value.date_kind === undefined ? {} : { date_kind: value.date_kind }), receipt_sha256: receipt,
+        ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), ...(value.date_kind === undefined ? {} : { date_kind: value.date_kind }), ...(value.dates === undefined ? {} : { dates: value.dates }), receipt_sha256: receipt,
       }))),
       truncated, receipt_digests: Object.freeze([receipt]), ...(nextCursor === undefined ? {} : { next_cursor: nextCursor }),
       ...(page.notice === undefined ? {} : { notice: page.notice }),
@@ -223,7 +236,8 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       const maximum = limit(input.limit);
       if (typeof input.query !== 'string' || input.query.trim().length === 0 || Buffer.byteLength(input.query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.query)) invalid('Live evidence query is invalid');
       current(input.signal);
-      const page = await safeCall(() => reader.search({ query: input.query, limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
+      validateEvidenceDateFilterV1(input);
+      const page = await safeCall(() => reader.search({ ...evidenceDateFilterV1(input), query: input.query, limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
       return release('search', page, maximum, undefined, input.signal);
     },
     async open(input) {
@@ -250,10 +264,11 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       try { if (input.since !== undefined) day(input.since); if (input.until !== undefined) day(input.until); }
       catch { invalid('Live evidence dates must be real YYYY-MM-DD dates'); }
       if (input.since !== undefined && input.until !== undefined && input.since > input.until) invalid('Live evidence date range is reversed');
-      const selection = canonicalSha256({ container: input.container ?? null, since: input.since ?? null, until: input.until ?? null });
+      validateEvidenceDateFilterV1(input);
+      const selection = canonicalSha256({ container: input.container ?? null, since: input.since ?? null, until: input.until ?? null, date_field: input.date_field ?? null, time_zone: input.time_zone ?? null });
       const cursor = input.cursor === undefined ? undefined : cursors.get(input.cursor);
       if (input.cursor !== undefined && (cursor === undefined || cursor.selection !== selection)) invalid('Live evidence cursor is not available for this list');
-      const request: PersonLiveEvidenceListInputV1 = { limit: maximum, ...(input.container === undefined ? {} : { container: input.container }), ...(input.since === undefined ? {} : { since: input.since }), ...(input.until === undefined ? {} : { until: input.until }), ...(cursor === undefined ? {} : { cursor: cursor.provider }), ...(input.signal === undefined ? {} : { signal: input.signal }) };
+      const request: PersonLiveEvidenceListInputV1 = { ...evidenceDateFilterV1(input), limit: maximum, ...(input.container === undefined ? {} : { container: input.container }), ...(input.since === undefined ? {} : { since: input.since }), ...(input.until === undefined ? {} : { until: input.until }), ...(cursor === undefined ? {} : { cursor: cursor.provider }), ...(input.signal === undefined ? {} : { signal: input.signal }) };
       current(input.signal);
       const page = await safeCall(() => reader.list(request), input.signal);
       return release('list', page, maximum, selection, input.signal);

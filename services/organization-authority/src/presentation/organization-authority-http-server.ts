@@ -1,3 +1,4 @@
+import { PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1 } from "@echo-brain/organization-api";
 import {
   PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
@@ -472,10 +473,16 @@ function personSourcePost<Application, Request>(
 }
 
 /** Desk/list reads check the bearer and install cancellation before reading any body bytes. */
+function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | undefined {
+  try { return validatePersonAskTimeContextV1(request.headers[PERSON_ASK_CLIENT_NOW_HEADER_V1], request.headers[PERSON_ASK_TIME_ZONE_HEADER_V1]); }
+  catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
+}
+
 function personCancellablePost<Application, Request>(
   application: Application | undefined,
   validate: (value: unknown) => Request,
-  read: (application: Application, input: { readonly access_token: string; readonly request: Request; readonly signal: AbortSignal }) => Promise<unknown>,
+  read: (application: Application, input: { readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly signal: AbortSignal }) => Promise<unknown>,
+  ask = false,
 ): PersonPostHandler {
   return async (request, response) => {
     if (application === undefined) { fail(response, 503, "unavailable"); return; }
@@ -483,7 +490,7 @@ function personCancellablePost<Application, Request>(
     const disconnect = disconnectSignal(request, response);
     try {
       const requestBody = await personBody(request, validate);
-      json(response, 200, await read(application, { access_token, request: requestBody, signal: disconnect.signal }));
+      json(response, 200, await read(application, { access_token, request: requestBody, ...(ask ? { time_context: askTimeContext(request) } : {}), signal: disconnect.signal }));
     } finally { disconnect.dispose(); }
   };
 }
@@ -715,8 +722,8 @@ export function createOrganizationAuthorityHttpServer(
     options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
-    [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input))],
-    [PERSON_ANSWER_PATH_V5, personCancellablePost(options.person_answer_v5, validatePersonAnswerRequestV3, (application, input) => application.ask(input))],
+    [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
+    [PERSON_ANSWER_PATH_V5, personCancellablePost(options.person_answer_v5, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     ...(options.person_research_eval === undefined ? [] : [
@@ -1120,6 +1127,7 @@ export function createOrganizationAuthorityHttpServer(
         const disconnect = disconnectSignal(request, response);
         try {
           json(response, 200, await options.person_answer_v3.ask({
+            time_context: askTimeContext(request),
             access_token: accessToken(request.headers.authorization),
             request: requestBody,
             signal: disconnect.signal,

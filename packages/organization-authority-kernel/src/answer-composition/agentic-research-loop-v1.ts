@@ -1,3 +1,4 @@
+import { calendarDateV1, evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
 import { askResearchCompletionProblemsV1, type AskResearchObservationV1 } from './agentic-ask-research-state-v1.js';
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
@@ -130,7 +131,7 @@ export interface CreateAgenticResearchLoopV1Options {
   /** The runtime span research steps run in; the audit records them as `step` calls. */
   readonly step_span: AgenticModelCallV1["span"];
   /** Who is asking and today's date (also the base for relative list dates). */
-  readonly context: { readonly asked_by?: string; readonly today: string };
+  readonly context: { readonly asked_by?: string; readonly today: string; readonly now?: string; readonly time_zone?: string; readonly time_reference?: string };
   /** What the model is told the desk reads. */
   readonly scope: string;
   readonly catalog: AgenticResearchCatalogV1;
@@ -260,9 +261,10 @@ function statusGroup(value: string): "open" | "done" | null {
   return null;
 }
 function isoDay(value: Date): string { return value.toISOString().slice(0, 10); }
+/** Legacy structured tool ages remain accepted; natural-language questions are interpreted only by the model. */
 function listDate(value: string, today: string): string | null {
   const text = value.trim().toLowerCase();
-  if (/^\d{4}-\d{2}-\d{2}$/u.test(text)) return Number.isNaN(Date.parse(`${text}T00:00:00Z`)) ? null : text;
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(text)) { try { return calendarDateV1(text); } catch { return null; } }
   const relative = /^(\d{1,3})\s*(d|day|days|w|wk|week|weeks|m|mo|month|months)$/u.exec(text);
   if (relative === null) return null;
   const amount = Number(relative[1]);
@@ -271,7 +273,7 @@ function listDate(value: string, today: string): string | null {
   base.setUTCDate(base.getUTCDate() - amount * unit);
   return isoDay(base);
 }
-type ListArgs = { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
+type ListArgs = EvidenceDateFilterV1 & { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
 /** One inventory per normalized selection: notes never start another, and owner matching ignores case. */
 function listKey({ notes: _notes, status, owner, ...request }: ListArgs): string {
   return JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
@@ -313,9 +315,11 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
   const since = raw.since === undefined ? undefined : listDate(raw.since, today);
   const until = raw.until === undefined ? undefined : listDate(raw.until, today);
   if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21 or an age like 7d or 2w" };
+  try { validateEvidenceDateFilterV1({ since: since ?? undefined, until: until ?? undefined, date_field: raw.date_field as EvidenceDateFieldV1 | undefined }); }
+  catch (error) { return { error: error instanceof Error ? error.message : 'Invalid date filter' }; }
   const defaultSince = descriptor.default_since_days !== undefined && since === undefined ? listDate(`${descriptor.default_since_days}d`, today)! : since ?? undefined;
   return {
-    source, notes,
+    source, notes, ...(raw.date_field === undefined ? {} : { date_field: raw.date_field as EvidenceDateFieldV1 }),
     ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(channel === undefined ? {} : { channel }),
     ...(defaultSince === undefined ? {} : { since: defaultSince }), ...(until === undefined || until === null ? {} : { until }),
   };
@@ -343,7 +347,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const entries = new Map<string, Entry>();
   const retrievedTickets = new Set<string>();
   const byShort = new Map<string, string>();
-  const searchesRun: { readonly query: string; readonly source?: EvidenceDeskSourceV2 }[] = [];
+  const searchesRun: (EvidenceDateFilterV1 & { readonly query: string; readonly source?: EvidenceDeskSourceV2 })[] = [];
   /** Searches whose first result carried a notice: one repeat of each reads the desk again. */
   const noticedSearches = new Set<string>();
   /** Sources a completed search read (null: every source). A noticed or truncated search shows nothing about absence. */
@@ -419,14 +423,17 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
     const source = readSource(args.source);
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
-    const fingerprint = JSON.stringify({ query: query.toLowerCase(), source: source ?? null });
-    const repeat = searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase());
+    if (args.date_field !== undefined && source === undefined) return { tool: 'search', args, error: 'Choose a source when selecting date_field; sources support different date meanings' };
+    const dates = { ...(args.since === undefined ? {} : { since: listDate(args.since, requestDay) ?? args.since }), ...(args.until === undefined ? {} : { until: listDate(args.until, requestDay) ?? args.until }), ...(args.date_field === undefined ? {} : { date_field: args.date_field as EvidenceDateFieldV1 }), ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }) };
+    try { validateEvidenceDateFilterV1(dates); } catch (error) { return { tool: 'search', args, error: error instanceof Error ? error.message : 'Invalid date filter' }; }
+    const fingerprint = JSON.stringify({ query: query.toLowerCase(), source: source ?? null, ...dates });
+    const repeat = searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase() && JSON.stringify(evidenceDateFilterV1(previous)) === JSON.stringify(dates));
     // A source that could not be searched then (a notice) may answer now, so one repeat runs again; a complete or truncated
     // result would come back the same, and a notice that persists (an index still catching up) is not paid for every round.
     if (repeat && !noticedSearches.has(fingerprint)) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
-    if (!repeat) searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
+    if (!repeat) searchesRun.push({ query, ...dates, ...(source === undefined ? {} : { source }) });
     noticedSearches.delete(fingerprint);
-    const result = await raceAbort(signal, desk.search({ query, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: SEARCH_LIMIT, signal }));
+    const result = await raceAbort(signal, desk.search({ query, ...dates, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: SEARCH_LIMIT, signal }));
     const apply = () => {
       observe(result);
       cover('search', source, result);
@@ -497,17 +504,18 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (!listAvailable) return { tool: "list", args, error: LIST_UNAVAILABLE };
     const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource);
     if ("error" in normalized) return { tool: "list", args, error: normalized.error };
-    const { notes, status, owner, ...request } = normalized;
+    const { notes, status, owner, ...selection } = normalized;
+    const request = { ...selection, ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }) };
     const key = listKey(normalized);
     let state = lists.get(key);
     if (state === undefined) {
       const stateArgs: StepArgs = Object.freeze({
-        source: sourcesById.get(request.source)!.selector, ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
+        ...(request.date_field === undefined ? {} : { date_field: request.date_field }), source: sourcesById.get(request.source)!.selector, ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
         ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }),
         ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
       });
       const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
-        request.channel === undefined && request.since === undefined && request.until === undefined;
+        request.channel === undefined && request.since === undefined && request.until === undefined && request.date_field === undefined;
       state = { args: stateArgs, source: request.source, unfiltered, items: [], cursor: undefined, fetched: false, shown: 0, truncated: false, available: true };
       lists.set(key, state);
     }

@@ -259,7 +259,7 @@ describe("agentic Ask: research loop", () => {
     ]);
     await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
     expect(evidence.search).toHaveBeenCalledTimes(2);
-    expect(evidence.search).toHaveBeenNthCalledWith(1, expect.objectContaining({ query: 'launch date', kinds: ['imported_meeting', 'decision', 'action', 'rationale'] }));
+    expect(evidence.search).toHaveBeenNthCalledWith(1, expect.objectContaining({ query: 'launch date', kinds: ['imported_meeting', 'decision', 'action', 'rationale', 'note'] }));
     expect(evidence.search).toHaveBeenNthCalledWith(2, expect.objectContaining({ query: 'launch date', kinds: ['note', 'document_passage'] }));
   });
 
@@ -971,6 +971,19 @@ describe("agentic Ask: research loop", () => {
         for (const ref of [meeting.ref, passage.ref, document_id]) expect(prompt).not.toContain(ref);
       }
     }
+  });
+
+  it('gives the LLM client-local now and executes its date selection without parsing the question', async () => {
+    const evidence = desk({ search: () => [item('dated')] });
+    const script = scripted([
+      step([{}], [{ tool: 'search', args: { query: 'launch', source: 'meetings', since: '2026-10-15', until: '2026-10-15', date_field: 'occurred' } }]),
+      finish([found(['E1'])]), answer([{ text: 'The launch was discussed.', evidence: ['E1'] }]),
+    ]);
+    await createAgenticAskV1({ desk: evidence, model: script.model, generation, audit: { append: () => undefined },
+      time_context: { now: '2026-10-17T04:30:00.000Z', time_zone: 'America/Los_Angeles' },
+    }).answer({ question: 'Remind me what happened yesterday about launch.' });
+    for (const input of script.inputs) expect(JSON.parse(input.user_prompt)).toMatchObject({ today: '2026-10-16', now: '2026-10-17T04:30:00.000Z', time_zone: 'America/Los_Angeles', time_reference: 'client' });
+    expect(evidence.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'launch', since: '2026-10-15', until: '2026-10-15', date_field: 'occurred', time_zone: 'America/Los_Angeles' }));
   });
 
   it("tells every call who is asking and today's date, and no audit keeps the name", async () => {

@@ -1,6 +1,6 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type {
-  PersonAnswerResponseV5,
+  PersonAskTimeContextV1, PersonAnswerResponseV5,
   PersonAnswerResponseV6,
   PersonAnswerResponseV4,
 } from "@echo-brain/organization-api";
@@ -84,6 +84,8 @@ export interface CreateAgenticAskV1Options {
   readonly now_ms?: () => number;
   /** Today's date (YYYY-MM-DD) for relative `list` dates; tests pin it. */
   readonly today?: () => string;
+  /** Captured once by the calling client, used only to interpret temporal questions. */
+  readonly time_context?: PersonAskTimeContextV1;
   /** When the whole readable scope is small, open it all before step 1. */
   readonly small_scope_shortcut?: boolean;
   /**
@@ -192,7 +194,13 @@ export function createAgenticAskV3(options: CreateAgenticAskV2Options) {
 function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersion: 4 | 5 | 6) {
   const tickets = responseVersion >= 5;
   const now = options.now_ms ?? (() => performance.now());
-  const today = options.today ?? (() => new Date().toISOString().slice(0, 10));
+  const temporal = options.time_context;
+  const today = options.today ?? (() => {
+    if (temporal === undefined) return new Date().toISOString().slice(0, 10);
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: temporal.time_zone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(temporal.now));
+    const part = (kind: string) => parts.find(value => value.type === kind)!.value;
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  });
   const askedBy = askerName(options.asker);
   const liveCatalog: AgenticResearchSourceV1[] = (options.desk.live_sources ?? []).flatMap(value => {
     const descriptor = liveSourceDescriptorV2(value);
@@ -202,7 +210,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     return [{ ...descriptor, kinds: [descriptor.kind] }];
   });
   const researchSources: readonly AgenticResearchSourceV1[] = Object.freeze([
-    { source_id: 'meeting', selector: 'meetings', kinds: ['imported_meeting', 'decision', 'action', 'rationale'], description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.' },
+    { source_id: 'meeting', selector: 'meetings', kinds: ['imported_meeting', 'decision', 'action', 'rationale', 'note'], description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.' },
     { source_id: 'document', selector: 'documents', kinds: ['note', 'document_passage'], description: 'Uploaded document passages and notes.' },
     ...liveCatalog,
   ]);
@@ -223,7 +231,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   };
   const catalog: AgenticResearchCatalogV1 = Object.freeze({ entries: sourceCatalog, by_id: sourcesById, resolve: readSource });
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
-  const context = (day: string) => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: day });
+  const context = (day: string) => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: day, ...(temporal === undefined ? { time_zone: "UTC", time_reference: "server" } : { now: temporal.now, time_zone: temporal.time_zone, time_reference: "client" }) });
   const liveGuidance = (list: boolean) => `Live sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only ${list ? "search/list" : "search"} discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.`;
   const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance(true)}`;
   /**

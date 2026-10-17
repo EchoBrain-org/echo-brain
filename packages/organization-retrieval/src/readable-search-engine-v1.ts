@@ -1187,6 +1187,8 @@ export interface SearchReadableSearchGenerationV1Input {
   readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
   /** Authority-derived record narrowing (mine); sorted, unique; never client input; narrows admitted facts only. */
   readonly record_sha256s?: readonly Sha256Digest[];
+  /** Optional Authority-derived atom order selection; applied after ACL and before result limits. */
+  readonly atom_orders?: ReadonlyMap<Sha256Digest, ReadonlySet<number>>;
 }
 
 /**
@@ -1205,6 +1207,8 @@ export interface ListReadableSearchGenerationV1Input {
   readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
   /** Authority-derived record narrowing (mine); sorted, unique; never client input; narrows admitted facts only. */
   readonly record_sha256s?: readonly Sha256Digest[];
+  /** Optional Authority-derived atom order selection; applied after ACL and before result limits. */
+  readonly atom_orders?: ReadonlyMap<Sha256Digest, ReadonlySet<number>>;
 }
 
 /**
@@ -2402,7 +2406,7 @@ export function searchReadableSearchGenerationV1(
     records,
   );
   const candidates = scoreAdmittedCandidates(admitted, terms).filter((candidate) =>
-    input.kinds === undefined || input.kinds.includes(candidate.content.item_kind),
+    (input.kinds === undefined || input.kinds.includes(candidate.content.item_kind)) && (input.atom_orders === undefined || input.atom_orders.get(candidate.fact.record_hash)?.has(candidate.fact.atom_order) === true),
   );
   candidates.sort(compareScoredRows);
   return Object.freeze({
@@ -2440,7 +2444,7 @@ export function listReadableSearchGenerationV1(
   for (const segment of admitted) {
     for (const fact of segment.facts) {
       const content = segment.content_by_atom.get(fact.atom_id);
-      if (content !== undefined && (input.kinds === undefined || input.kinds.includes(content.item_kind))) candidates.push({ fact, content });
+      if (content !== undefined && (input.kinds === undefined || input.kinds.includes(content.item_kind)) && (input.atom_orders === undefined || input.atom_orders.get(fact.record_hash)?.has(fact.atom_order) === true)) candidates.push({ fact, content });
     }
   }
   candidates.sort((left, right) =>

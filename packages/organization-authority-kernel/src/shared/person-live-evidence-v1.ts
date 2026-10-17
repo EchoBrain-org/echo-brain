@@ -1,3 +1,4 @@
+import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "./temporal-query-v1.js";
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import type { EvidenceDeskDateKindV1, EvidenceDeskRevalidationModeV1 } from './evidence-desk-v1.js';
 import type { PersonConnectorAccessV1, PersonEvidenceAttributesV1, PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
@@ -33,6 +34,7 @@ export interface PersonLiveEvidenceValueV1<C extends PersonLiveEvidenceCitationV
   readonly attributes?: PersonEvidenceAttributesV1;
   readonly occurred_at?: string;
   readonly date_kind?: EvidenceDeskDateKindV1;
+  readonly dates?: EvidenceDatesV1;
 }
 
 export interface PersonLiveEvidencePageV1<C extends PersonLiveEvidenceCitationV1 = PersonLiveEvidenceCitationV1> {
@@ -44,7 +46,7 @@ export interface PersonLiveEvidencePageV1<C extends PersonLiveEvidenceCitationV1
   readonly notice?: string;
 }
 
-export interface PersonLiveEvidenceListInputV1 {
+export interface PersonLiveEvidenceListInputV1 extends EvidenceDateFilterV1 {
   /** A provider-scoped collection selector, never a connection id or fetch URL. */
   readonly container?: string;
   readonly since?: string;
@@ -57,11 +59,12 @@ export interface PersonLiveEvidenceListInputV1 {
 /** Created by provider composition for exactly this person's read binding. No method accepts credentials or another actor. */
 export interface PersonLiveEvidenceCoordinatesV1 { readonly object_id: string; readonly container_id?: string }
 
+/** Search/list must apply requested temporal bounds or refuse unsupported fields; never silently ignore them. */
 export interface PersonLiveEvidenceReaderV1<C extends PersonLiveEvidenceCitationV1 = PersonLiveEvidenceCitationV1> {
   readonly binding: PersonConnectorReadBindingV1;
   /** Adapter validates its citation and supplies neutral boundary coordinates. */
   validateCitation(value: unknown): { readonly citation: C; readonly tool_id: string; readonly external_scope_id: string | null; readonly coordinates: PersonLiveEvidenceCoordinatesV1 };
-  search(input: { readonly query: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidencePageV1<C>>;
+  search(input: EvidenceDateFilterV1 & { readonly query: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidencePageV1<C>>;
   open(input: { readonly handle: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidencePageV1<C>>;
   /**
    * Re-reads the current item a citation released earlier names, applying the
@@ -105,6 +108,7 @@ export interface PersonLiveEvidenceItemV1<C extends PersonLiveEvidenceCitationV1
   readonly attributes?: PersonEvidenceAttributesV1;
   readonly occurred_at?: string;
   readonly date_kind?: EvidenceDeskDateKindV1;
+  readonly dates?: EvidenceDatesV1;
   readonly receipt_sha256: Sha256Digest;
 }
 
@@ -121,7 +125,7 @@ export interface PersonLiveEvidenceResultV1<C extends PersonLiveEvidenceCitation
 /** Internal source seam for the V2 evidence desk dispatcher; the V1 desk and Ask V4 schemas still accept only their existing kinds. */
 export interface PersonLiveEvidenceSourceV1<C extends PersonLiveEvidenceCitationV1 = PersonLiveEvidenceCitationV1> {
   readonly tool_id: string;
-  search(input: { readonly query: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceResultV1<C>>;
+  search(input: EvidenceDateFilterV1 & { readonly query: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceResultV1<C>>;
   open(input: { readonly item: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceResultV1<C>>;
   /** Opens a citation released by an earlier request (background trigger starting evidence). */
   openCitation?(input: { readonly citation: unknown; readonly limit?: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceResultV1<C>>;

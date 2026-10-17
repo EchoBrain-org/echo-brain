@@ -5,6 +5,7 @@ import { PERSON_CHANGES_ROUTE_V1, validatePersonChangesV1, type PersonChangesV1 
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
+  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
   PERSON_ANSWER_PATH_V3,
   PERSON_ANSWER_PATH_V4,
   PERSON_ANSWER_PATH_V5,
@@ -1344,6 +1345,7 @@ export class PersonAuthorityClient {
     const request = validatePersonAnswerRequestV3({ schema_version: 3, question,
       ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }) });
     const response = await this.json({ path, body: request,
+      headers: { [PERSON_ASK_CLIENT_NOW_HEADER_V1]: new Date().toISOString(), [PERSON_ASK_TIME_ZONE_HEADER_V1]: Intl.DateTimeFormat().resolvedOptions().timeZone },
       validate_request: validatePersonAnswerRequestV3, validate_response,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
     const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };

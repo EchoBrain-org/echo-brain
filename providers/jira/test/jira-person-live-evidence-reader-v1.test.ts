@@ -96,6 +96,23 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(key.tool_context).toEqual({ tool_call_id: 2, round: 1 });
     expect(JSON.stringify(metadata)).not.toContain('DVT');
   });
+  it('combines keywords with updated/due bounds in the client zone and preserves date meanings', async () => {
+    const f = fixture();
+    f.state.tickets.set('10001', withFields({ created: '2026-09-01T12:00:00Z', updated: '2026-10-17T01:00:00Z', duedate: '2026-10-20' }));
+    const { source } = await f.make();
+    const dates = { since: '2026-10-16', until: '2026-10-16', date_field: 'updated' as const, time_zone: 'America/Los_Angeles' };
+    const result = await source.search({ query: 'ECHO-1', ...dates });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.dates).toEqual({ created: '2026-09-01T12:00:00.000Z', updated: '2026-10-17T01:00:00.000Z', due: '2026-10-20' });
+    expect((await source.search({ query: 'ECHO-1', ...dates, time_zone: 'UTC' })).items).toEqual([]);
+    expect((await source.search({ query: 'ECHO-1', since: '2026-10-20', until: '2026-10-20', date_field: 'due', time_zone: 'Pacific/Auckland' })).items).toHaveLength(1);
+    f.state.pages = [page()];
+    expect((await source.list({ ...dates })).items).toHaveLength(1);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ body: expect.objectContaining({ jql: expect.stringContaining('updated >=') }) }));
+    await expect(source.list({ since: '2026-02-30' })).rejects.toMatchObject({ code: 'invalid_request' });
+    await source.revalidate({});
+  });
+
   it('reads a 25-ticket inventory page with one permission-applying bulk fetch, in discovery order', async () => {
     const f = fixture();
     const ids = Array.from({ length: 25 }, (_, index) => String(10025 - index));
@@ -112,7 +129,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(result.items.every(item => !('text' in item))).toBe(true);
     const reads = f.request.mock.calls.map(([request]) => request).filter(request => request.path.includes('/issue/'));
     expect(reads).toEqual([expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, method: 'POST',
-      body: { issueIdsOrKeys: ids, fields: ['summary', 'project', 'created', 'status', 'assignee', 'duedate'] } })]);
+      body: { issueIdsOrKeys: ids, fields: ['summary', 'project', 'created', 'updated', 'status', 'assignee', 'duedate'] } })]);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 25, fields: ['id'] }) }));
     expect(f.audit.record).toHaveBeenCalledTimes(1);
   });
@@ -210,9 +227,9 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
       expect(item).toMatchObject({ label: `ECHO-${Number(item.citation.ticket_id) - 10000}: Linked ${item.citation.ticket_id}`, attributes: { status: 'In progress' } });
     }
     expect(opened.truncated).toBe(true);
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description,issuelinks' } }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,updated,status,assignee,duedate,description,issuelinks' } }));
     for (const id of ['10002', '10003', '10004', '10005']) {
-      expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/${id}`, query: { fields: 'summary,project,created,status,assignee,duedate' } }));
+      expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/${id}`, query: { fields: 'summary,project,created,updated,status,assignee,duedate' } }));
     }
     expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10006` }));
     const linked = await source.open({ item: opened.items[1]!.id });
@@ -265,7 +282,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
 
     expect(refreshed.items).toHaveLength(1);
     expect(refreshed.items[0]).toMatchObject({ citation: { ticket_id: '10001' }, text: 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex' });
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description' } }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,updated,status,assignee,duedate,description' } }));
     expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10002` }));
   });
 
@@ -455,14 +472,14 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.authorization.assertCurrent).toHaveBeenCalledTimes(3);
     const auditText = JSON.stringify(f.releases);
     for (const hidden of ['Ship connector', 'Launch Friday', 'launch', 'jira_item_', 'never-return', 'emailAddress']) expect(auditText).not.toContain(hidden);
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: { issueIdsOrKeys: ['10001'], fields: ['summary', 'project', 'created', 'status', 'assignee', 'duedate'] } }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: { issueIdsOrKeys: ['10001'], fields: ['summary', 'project', 'created', 'updated', 'status', 'assignee', 'duedate'] } }));
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 5 }) }));
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !(request.body?.fields as string[] | undefined)?.includes('description'))).toBe(true);
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
     const opened = await source.open({ item: item.id });
     const text = 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex';
     expect(opened.items[0]).toMatchObject({ id: item.id, text, citation: { text_sha256: digest(text) } });
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description,issuelinks' } }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,updated,status,assignee,duedate,description,issuelinks' } }));
     expect(f.audit.record).toHaveBeenCalledTimes(2);
     const second = await f.make();
     await expect(second.source.open({ item: item.id })).rejects.toMatchObject({ code: 'not_found' });
@@ -610,7 +627,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(result.truncated).toBe(false);
     expect(f.jqls()).toEqual([]);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, method: 'POST',
-      body: { issueIdsOrKeys: ['ECHO-1'], fields: ['summary', 'project', 'created', 'status', 'assignee', 'duedate'] } }));
+      body: { issueIdsOrKeys: ['ECHO-1'], fields: ['summary', 'project', 'created', 'updated', 'status', 'assignee', 'duedate'] } }));
   });
 
   it('treats a missing or hidden named key as no match rather than failing the search', async () => {

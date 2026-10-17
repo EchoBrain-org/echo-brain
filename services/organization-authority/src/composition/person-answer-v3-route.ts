@@ -1,6 +1,5 @@
 import {
   validatePersonEvidenceDeskResponseV1,
-  type PersonAnswerRequestV3,
   type PersonAnswerResponseV4,
   type PersonEvidenceDeskResponseV1,
   type PersonEvidenceOpenRequestV1,
@@ -94,7 +93,7 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
 /** Composition-only V3 entry point: every operation gets a new request-bound desk. */
 export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOptions): PersonAnswerV3HttpApplication {
   return Object.freeze({
-    async ask(input: { readonly access_token: string; readonly request: PersonAnswerRequestV3; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4> {
+    async ask(input: Parameters<PersonAnswerV3HttpApplication["ask"]>[0]): Promise<PersonAnswerResponseV4> {
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       const requestId = `ask_${randomUUID()}`;
       const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
@@ -108,6 +107,7 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
           const asker = askerOf(options, authorization);
           return createAgenticAskV1({
             ...(asker === undefined ? {} : { asker }),
+            ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
             desk, model: options.model, generation: options.generation,
             audit: options.audit.forRequest({
               authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,

@@ -1,3 +1,4 @@
+import { evidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { validatePersonEvidenceOpenRequestV1, type PersonAnswerCitationV3 } from '@echo-brain/organization-api';
 import type { EvidenceDeskKindV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import { type PersonLiveSourceDescriptorV2, type EvidenceDeskPortV2, type EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
@@ -74,7 +75,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       for (const kind of requestedKinds ?? []) if ((kind === 'ticket' || kind === 'page') && ![...sources.values()].some(value => value.descriptor.kind === kind)) refused();
       if (selectedSource !== undefined && requestedKinds?.some(kind => kind !== selectedSource.descriptor.kind)) refused();
       const liveKinds = new Set([...sources.values()].map(value => value.descriptor.kind));
-      const localKinds = selectedId === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : selectedId === 'slack' ? ['slack_message'] as const : undefined;
+      const localKinds = selectedId === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : selectedId === 'slack' ? ['slack_message'] as const : undefined;
       const kinds = (requestedKinds ?? localKinds)?.filter((kind): kind is EvidenceDeskKindV1 => kind !== 'ticket' && kind !== 'page' && !liveKinds.has(kind as 'slack_message')) ?? (liveKinds.has('slack_message') ? LOCAL_KINDS : undefined);
       type Page = { readonly source: Source; readonly result: EvidenceDeskResultV2 };
       type Unavailable = { readonly source: RegisteredPersonLiveEvidenceSourceV2; readonly result?: undefined; readonly failure: unknown };
@@ -82,14 +83,14 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         Promise.resolve().then(operation).then(result => ({ source, result }));
       const lookups: Promise<Page | Unavailable>[] = [];
       if (selectedSource === undefined && kinds?.length !== 0) {
-        lookups.push(page(base, () => base.search({ ...request, ...(kinds === undefined ? {} : { kinds }) })));
+        lookups.push(page(base, () => base.search({ ...request, ...(selectedId === "meeting" || selectedId === "document" ? { source: selectedId } : {}), ...(kinds === undefined ? {} : { kinds }) })));
       }
       for (const registration of selectedSource === undefined ? (localSource ? [] : sources.values()) : [selectedSource]) {
         const { source, descriptor } = registration;
         if (requestedKinds !== undefined && !requestedKinds.includes(descriptor.kind)) continue;
         const live = page(registration, () => input.query === undefined
-          ? lookup('evidence_list', registration, () => source.list({ limit: Math.min(maximum, LIVE_LIST_MAX), signal: input.signal }))
-          : lookup('evidence_search', registration, () => source.search({ query: input.query!, limit: Math.min(maximum, 5), signal: input.signal })));
+          ? lookup('evidence_list', registration, () => source.list({ ...evidenceDateFilterV1(input), limit: Math.min(maximum, LIVE_LIST_MAX), signal: input.signal }))
+          : lookup('evidence_search', registration, () => source.search({ ...evidenceDateFilterV1(input), query: input.query!, limit: Math.min(maximum, 5), signal: input.signal })));
         // Across sources, one live source's transient failure becomes a
         // coverage notice and the others still answer. A chosen source fails as asked.
         lookups.push(selectedSource !== undefined ? live : live.catch((failure: unknown): Unavailable => {
@@ -148,7 +149,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       }
       const { source, descriptor } = registration;
       if ((input.channel !== undefined && !descriptor.requires_channel) || input.kinds?.some(kind => kind !== descriptor.kind)) refused();
-      const result = await lookup('evidence_list', registration, () => source.list({ ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, LIVE_LIST_MAX), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
+      const result = await lookup('evidence_list', registration, () => source.list({ ...evidenceDateFilterV1(input), ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, LIVE_LIST_MAX), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
       input.signal?.throwIfAborted();
       return remember(result, registration);
     },

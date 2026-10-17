@@ -89,7 +89,7 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
           capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
           const asker = askerOf(options, authorization);
           const create = response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
-          return create({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+          return create({ ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
             ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
           }).answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });
         });

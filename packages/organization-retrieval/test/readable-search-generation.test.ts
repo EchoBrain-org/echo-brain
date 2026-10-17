@@ -756,6 +756,11 @@ describe("immutable readable-search generation v1", () => {
       const onlyA = { record_sha256s: [A0.record_sha256] };
       const texts = (items: readonly { readonly text: string }[]) => items.map((item) => item.text);
       expect(texts(searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch" }).items)).toEqual(["beta launch", "alpha launch"]);
+      const atom_orders = new Map([[A0.record_sha256, new Set([A0.atom_order])], [R0.record_sha256, new Set([R0.atom_order])]]);
+      expect(texts(searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: 'launch', atom_orders, limit: 1 }).items)).toEqual(['alpha launch']);
+      expect(texts(listReadableSearchGenerationV1({ ...active, reader: MEMBER, atom_orders, limit: 1 }).items)).toEqual(['alpha launch']);
+      expect(listReadableSearchGenerationV1({ ...active, reader: MEMBER, atom_orders: new Map([[R0.record_sha256, new Set([R0.atom_order])]]) }).items).toEqual([]);
+
       expect(texts(searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch", ...onlyA }).items)).toEqual(["alpha launch"]);
       expect(texts(listReadableSearchGenerationV1({ ...active, reader: MEMBER, ...onlyA }).items)).toEqual(["alpha launch", "alpha owner"]);
       expect(texts(readReadableSearchGenerationAtomsV1({ ...active, reader: MEMBER, atom_ids: [A0.atom_id, B0.atom_id], ...onlyA }).items)).toEqual(["alpha launch"]);
