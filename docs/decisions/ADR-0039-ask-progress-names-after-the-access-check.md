@@ -117,7 +117,9 @@ the audit write, and the check after the audit. It comes from the run's own
 record and holds:
 
 - `looked_through`, the number of distinct items read in full;
-- `elapsed_ms`, the Authority's time from the start of the run to release;
+- `elapsed_ms`, the Authority's time from the start of the run to release,
+  kept for audit and diagnostics (a client shows the wait it timed itself,
+  which also counts the client and the network);
 - the run's searched and read rows, merged.
 
 Cancellation, the deadline, a refused check or any other failure sends no

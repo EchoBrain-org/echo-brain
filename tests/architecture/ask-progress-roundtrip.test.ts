@@ -50,7 +50,7 @@ interface Store {
   openNamed(items: readonly Source[]): void;
   fullPageOffered(): boolean;
   getState(): {
-    ask: { asking: { progress: Progress } | null; shown: { answer: { sources: readonly Source[]; receipt?: Receipt }; receipt?: Receipt } | null; failed: unknown } | null;
+    ask: { asking: { progress: Progress } | null; shown: { answer: { sources: readonly Source[]; receipt?: Receipt }; receipt?: Receipt; took?: number } | null; failed: unknown } | null;
     sources: { records: Record<string, { loading: boolean; value?: { decisions: { items: { atom_id?: string; text: string }[] } } }>;
       evidence: { reads: Record<number, { loading: boolean; value?: { text: string } }> } | null } | null;
   };
@@ -58,7 +58,7 @@ interface Store {
 interface Views { answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json; atomId(record: string, signal: string): string }
 interface ProgressView {
   PROGRESS_AFTER_MS: number; liveRows(progress: Progress): { type: string; row?: Row; done?: boolean }[]; stageWords(progress: Progress): string;
-  searchedWords(row: Row): string; rowNames(items: readonly Source[]): { names: readonly { source: Source; items: readonly Source[] }[]; more: number }; receiptWords(receipt: Receipt): string;
+  searchedWords(row: Row): string; rowNames(items: readonly Source[]): { names: readonly { source: Source; items: readonly Source[] }[]; more: number }; receiptWords(receipt: Receipt, took: number): string;
 }
 const ok = (value: unknown) => ({ ok: true, value });
 const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) await Promise.resolve(); };
@@ -256,7 +256,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       const shown = store.getState().ask!.shown!;
       expect(store.getState().ask!.asking).toBeNull();
       expect(shown.receipt).toEqual(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).receipt);
-      expect(progress.receiptWords(shown.receipt!)).toMatch(new RegExp(`^Looked through ${named.length} items · \\d+s$`));
+      expect(progress.receiptWords(shown.receipt!, shown.took!)).toMatch(new RegExp(`^Looked through ${named.length} items · \\d+s$`));
       const pageNamed = shown.receipt!.rows.flatMap(row => row.type === 'read' ? row.items! : []);
       expect(pageNamed).toEqual(read);
 

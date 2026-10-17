@@ -252,6 +252,14 @@ describe('the receipt above an answer', () => {
     expect(quick.store.getState().ask?.shown?.receipt).toEqual(receipt);
   });
 
+  it('times the wait by the page\'s clock: an Authority that researched under three seconds still keeps the receipt of a longer wait', async () => {
+    const { store, release } = await asking();
+    vi.advanceTimersByTime(3_400);
+    release(ok({ ...answer(), receipt: { ...receipt, elapsed_ms: 1_800 } }));
+    await flush();
+    expect(store.getState().ask?.shown).toMatchObject({ receipt: { elapsed_ms: 1_800 }, took: 3_400 });
+  });
+
   it('an older Authority sends none, and the answer shows as it always did', async () => {
     const { store, release } = await asking();
     vi.advanceTimersByTime(10_000);

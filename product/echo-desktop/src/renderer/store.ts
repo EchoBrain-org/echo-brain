@@ -38,6 +38,8 @@ export interface AskTurn extends AskQuestion {
   answer: Answer;
   /** What it looked through, above the answer: only when the Authority streamed it and the Ask took long enough to show it. */
   receipt?: AskReceipt;
+  /** How long the person waited for it with a receipt, by the page's clock, as its timer counted: the receipt's time. */
+  took?: number;
 }
 
 /** The question on its way, and what it has done so far (ADR-0039). */
@@ -3320,9 +3322,10 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
     return;
   }
   const earlier = current.previous ? [...current.earlier, current.previous].slice(-MAX_EARLIER) : current.earlier;
-  // Only an Ask that took long enough to show its work keeps its receipt.
-  const receipt = result.value.receipt !== undefined && Date.now() - started >= PROGRESS_AFTER_MS ? result.value.receipt : undefined;
-  set({ ask: { ...current, earlier, previous: null, shown: { id: mine, ...asked, answer: result.value, ...(receipt === undefined ? {} : { receipt }) }, asking: null } });
+  // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
+  const took = Date.now() - started;
+  const receipt = result.value.receipt !== undefined && took >= PROGRESS_AFTER_MS ? result.value.receipt : undefined;
+  set({ ask: { ...current, earlier, previous: null, shown: { id: mine, ...asked, answer: result.value, ...(receipt === undefined ? {} : { receipt, took }) }, asking: null } });
   startSources(true);
 }
 

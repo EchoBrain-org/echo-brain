@@ -7,7 +7,7 @@ import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, liveRows, namedPlaces, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
+  announceAfter, announcement, duration, liveRows, namedPlaces, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
   type NamedPlace,
 } from '../progress.js';
 import {
@@ -248,7 +248,7 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
     <div class="turn">
       <div class="question selectable" data-testid="question">{turn.question}</div>
       <div class="asked">{turn.scopeName}</div>
-      {turn.receipt && <Receipt state={state} receipt={turn.receipt} />}
+      {turn.receipt && <Receipt state={state} receipt={turn.receipt} took={turn.took ?? 0} />}
       <AgenticAnswer state={state} turn={turn} />
       {foundNothingInProject(turn) && (
         <div class="project-empty" data-testid="project-empty">
@@ -349,7 +349,7 @@ function Asking({ state, progress }: { state: State; progress: AskProgress }) {
     <div class="ask-progress" aria-live="off">
       <div class="asking" data-testid="asking">
         <i /><i /><i /><span data-testid="ask-stage">{live ? stageWords(progress) : 'Thinking…'}</span>
-        <span class={`timer${live && progress.stage ? ' dotted' : ''}`} aria-hidden="true">{Math.floor(elapsed / 1000)}s</span>
+        <span class={`timer${live && progress.stage ? ' dotted' : ''}`} aria-hidden="true">{duration(elapsed)}</span>
         <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
       </div>
       {rows.length > 0 && (
@@ -419,13 +419,13 @@ function Names({ state, places }: { state: State; places: readonly NamedPlace[] 
  * · 48s ›", that opens the searches and reads the Authority audited, each
  * name opening beside the answer.
  */
-function Receipt({ state, receipt }: { state: State; receipt: AskReceipt }) {
+function Receipt({ state, receipt, took }: { state: State; receipt: AskReceipt; took: number }) {
   const [open, setOpen] = useState(false);
   const unnamed = receiptUnnamed(receipt);
   return (
     <div class="receipt">
       <button type="button" class={`receipt-line${open ? ' open' : ''}`} data-testid="ask-receipt" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span>{receiptWords(receipt)}</span><Chevron />
+        <span>{receiptWords(receipt, took)}</span><Chevron />
       </button>
       {open && (
         <ul class="ask-steps" data-testid="receipt-rows">

@@ -106,18 +106,21 @@ describe('the receipt', () => {
   const receipt: AskReceipt = { looked_through: 14, elapsed_ms: 48_400, rows: [
     { type: 'searched', sources: [{ kind: 'meetings' }], found: 9 }, { type: 'read', items: [decision('1'), ticket('THERM-48')] },
   ] };
-  it('says how many items it looked through and how long, and how many it does not name', () => {
-    expect(receiptWords(receipt)).toBe('Looked through 14 items · 48s');
-    expect(receiptWords({ ...receipt, looked_through: 1 })).toBe('Looked through 1 item · 48s');
+  it('says how many items it looked through and how long the person waited, and how many it does not name', () => {
+    // The wait is the page's own, as its timer counted it, not the Authority's shorter research time.
+    expect(receiptWords(receipt, 52_900)).toBe('Looked through 14 items · 52s');
+    expect(receiptWords({ ...receipt, looked_through: 1 }, 72_400)).toBe('Looked through 1 item · 1m 12s');
     expect(receiptUnnamed(receipt)).toBe(12);
+    // As the live timer shows it: whole seconds gone.
     expect(duration(72_000)).toBe('1m 12s');
+    expect(duration(33_900)).toBe('33s');
     expect(duration(400)).toBe('0s');
   });
 
   it('accounts for every item it looked through: the names\' counts, and those it does not name', () => {
     const read = [decision('1'), decision('2'), decision('3'), decision('4'), passage('6'), passage('7'), passage('8'), ticket('THERM-48'), ticket('THERM-46')];
     const shown: AskReceipt = { looked_through: 9, elapsed_ms: 31_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 9 }, { type: 'read', items: read }] };
-    expect(receiptWords(shown)).toBe('Looked through 9 items · 31s');
+    expect(receiptWords(shown, 31_000)).toBe('Looked through 9 items · 31s');
     expect(namedPlaces(read)).toEqual([place(...read.slice(0, 4)), place(...read.slice(4, 7)), place(ticket('THERM-48')), place(ticket('THERM-46'))]);
     expect(receiptUnnamed(shown)).toBe(0);
     // Past its bound of names, the rest are counted, not named.

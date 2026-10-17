@@ -130,15 +130,19 @@ export function rowNames(items: readonly AnswerSource[], shown = ROW_NAMES): { n
   return { names, more: items.length - names.reduce((total, place) => total + place.items.length, 0) };
 }
 
-/** "48s", "1m 12s". */
+/** "48s", "1m 12s": whole seconds gone, as the live timer counts them. */
 export function duration(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
+  const seconds = Math.max(0, Math.floor(ms / 1000));
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-/** The receipt's one line: "Looked through 14 items · 48s". */
-export function receiptWords(receipt: AskReceipt): string {
-  return `Looked through ${receipt.looked_through} ${receipt.looked_through === 1 ? 'item' : 'items'} · ${duration(receipt.elapsed_ms)}`;
+/**
+ * The receipt's one line: "Looked through 14 items · 48s". The time is the
+ * wait the person watched (`took`, by the page's clock), never the
+ * Authority's own `elapsed_ms`, which leaves out the client and the network.
+ */
+export function receiptWords(receipt: AskReceipt, took: number): string {
+  return `Looked through ${receipt.looked_through} ${receipt.looked_through === 1 ? 'item' : 'items'} · ${duration(took)}`;
 }
 
 /** Items read that the receipt does not name: past its bound of names. */

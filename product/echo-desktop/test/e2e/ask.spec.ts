@@ -448,7 +448,9 @@ test('a long Ask shows what it looks through, names that open beside it while it
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(asking).toHaveCount(0);
   const receipt = page.getByTestId('ask-receipt');
-  await expect(receipt).toHaveText('Looked through 5 items · 48s');
+  // Its time is the wait the page timed, never the fixture Authority's 48 s of research.
+  await expect(receipt).toHaveText(/^Looked through 5 items · \d+s$/);
+  await expect(receipt).not.toHaveText(/48s/);
   await expect(receipt).toHaveAttribute('aria-expanded', 'false');
   await expect(pane).toContainText('Meeting · Transcript');
   await expect(pane.getByTestId('source-open')).toBeVisible();
