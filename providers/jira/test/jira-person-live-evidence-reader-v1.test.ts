@@ -87,33 +87,71 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(queries.find(query => query.query.includes('ECHO-1'))?.tool_context).toEqual({ tool_call_id: 2, round: 1 });
     expect(JSON.stringify(metadata)).not.toContain('DVT');
   });
-  it('bounds exact inventory reads at four and preserves discovery order', async () => {
-    vi.useFakeTimers();
-    try {
-      const f = fixture();
-      const ids = Array.from({ length: 20 }, (_, index) => String(10001 + index));
-      for (const id of ids) f.state.tickets.set(id, ticket(id));
-      f.state.pages = [page(ids)];
-      const original = f.request.getMockImplementation()!;
-      let active = 0; let maximum = 0;
-      f.request.mockImplementation(async input => {
-        if (input.path.startsWith(`${prefix}/issue/`)) {
-          active++; maximum = Math.max(maximum, active);
-          await new Promise(resolve => setTimeout(resolve, 10));
-          active--;
-        }
-        return original(input);
-      });
-      const { source } = await f.make();
-      const start = Date.now(); let elapsed = 0;
-      const pending = source.list({ limit: 20 }).then(result => { elapsed = Date.now() - start; return result; });
-      await vi.advanceTimersByTimeAsync(300);
-      const result = await pending;
-      expect(elapsed).toBe(50);
-      expect(maximum).toBe(4);
-      expect(result.items.map(item => item.citation.ticket_id)).toEqual(ids);
-      expect(f.audit.record).toHaveBeenCalledTimes(1);
-    } finally { vi.useRealTimers(); }
+  it('reads a 25-ticket inventory page with one permission-applying bulk fetch, in discovery order', async () => {
+    const f = fixture();
+    const ids = Array.from({ length: 25 }, (_, index) => String(10025 - index));
+    for (const id of ids) f.state.tickets.set(id, ticket(id));
+    f.state.pages = [page(ids)];
+    // Jira returns bulk results in ascending id order; discovery order is newest first.
+    f.state.hook = input => {
+      if (input.path === `${prefix}/issue/bulkfetch`) f.state.bulkResponse = { issues: [...input.body!.issueIdsOrKeys as string[]].sort().map(id => ticket(id)), issueErrors: [] };
+    };
+    const { source } = await f.make();
+    f.request.mockClear();
+    const result = await source.list({ limit: 50 });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(ids);
+    expect(result.items.every(item => !('text' in item))).toBe(true);
+    const reads = f.request.mock.calls.map(([request]) => request).filter(request => request.path.includes('/issue/'));
+    expect(reads).toEqual([expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, method: 'POST',
+      body: { issueIdsOrKeys: ids, fields: ['summary', 'project', 'created', 'status', 'assignee', 'duedate'] } })]);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 25, fields: ['id'] }) }));
+    expect(f.audit.record).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a full list page of worst-case metadata inside the shared result bound', async () => {
+    const f = fixture();
+    const ids = Array.from({ length: 30 }, (_, index) => String(10030 - index));
+    // Quotes double under JSON escaping: the largest label, owner and status the parser admits.
+    for (const id of ids) f.state.tickets.set(id, withFields({ summary: '"'.repeat(300), assignee: { displayName: '"'.repeat(128) }, status: { name: '"'.repeat(128) } }, ticket(id)));
+    f.state.pages = [page(ids.slice(0, 25), 'next')];
+    const { source } = await f.make();
+    const result = await source.list({ limit: 50 });
+    expect(result.items).toHaveLength(25);
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(65536);
+  });
+
+  it('gives a hit the bulk fetch omits its own exact read, keeping order and the exact refusal', async () => {
+    const f = fixture();
+    f.state.pages = [page(['10002', '10001'])];
+    f.state.hook = input => {
+      if (input.path === `${prefix}/issue/bulkfetch`) f.state.bulkResponse = { issues: [ticket('10002', 'Review security')], issueErrors: [] };
+    };
+    const { source } = await f.make();
+    f.request.mockClear();
+    const result = await source.list({});
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10002', '10001']);
+    expect(f.request.mock.calls.map(([request]) => request.path).filter(path => path.includes('/issue/'))).toEqual([`${prefix}/issue/bulkfetch`, `${prefix}/issue/10001`]);
+
+    for (const code of ['unauthorized', 'not_found'] as const) {
+      const denied = fixture(); denied.state.pages = [page(['10002', '10001'])]; denied.state.denied.set('10001', code);
+      const made = await denied.make();
+      await expect(made.source.list({})).rejects.toMatchObject({ code });
+      expect(denied.audit.record).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    ['provider error', { issues: [ticket()], issueErrors: [{ id: '10002', errorMessage: 'private provider detail' }] }, 'unavailable'],
+    ['unexpected issue', { issues: [ticket(), ticket('10003')], issueErrors: [] }, 'invalid_output'],
+    ['duplicate issue', { issues: [ticket(), ticket()], issueErrors: [] }, 'invalid_output'],
+    ['other project', { issues: [{ ...withFields({ project: { id: '99999', key: 'OTHER', self: `${origin}/rest/api/3/project/99999` } }), key: 'OTHER-1' }], issueErrors: [] }, 'unauthorized'],
+  ] as const)('withholds a discovered page for a %s bulk response', async (_label, response, code) => {
+    const f = fixture(); f.state.pages = [page(['10001', '10002'])]; f.state.bulkResponse = response;
+    const { source } = await f.make('ECHO');
+    await expect(source.list({})).rejects.toMatchObject({ code, message: 'Live evidence operation could not be completed' });
+    expect(f.audit.record).not.toHaveBeenCalled();
+    expect(JSON.stringify(f.releases)).not.toContain('private provider detail');
   });
   it('shares only queued connection checks and keeps post-read fences independent', async () => {
     const f = fixture(); const { reader } = await f.make('ECHO');
@@ -122,9 +160,10 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     f.request.mockClear();
 
     await Promise.all([reader.search({ query: 'ship', limit: 1 }), reader.search({ query: 'ship', limit: 1 })]);
-    // The two pre-read checks queue together (3 reads). Once provider I/O
-    // starts, each post-read fence is new (3 + 3), never an in-flight cache.
-    expect(verificationReads()).toHaveLength(9);
+    // The two pre-read checks queue together (3 reads). Both single bulk
+    // reads finish in the same turn, so their post-read fences also queue
+    // together and share one check that starts after both reads (3 + 3).
+    expect(verificationReads()).toHaveLength(6);
 
     f.request.mockClear();
     await reader.search({ query: 'ship', limit: 1 });
@@ -370,7 +409,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const f = fixture(); const { source } = await f.make('ECHO');
     const remap = () => { f.state.project = { id: '99999', key: 'ECHO', self: `${origin}/rest/api/3/project/99999` }; };
     if (moment === 'before') remap();
-    else f.state.hook = request => { if (request.path === `${prefix}/issue/10001`) remap(); };
+    else f.state.hook = request => { if (request.path === `${prefix}/issue/bulkfetch`) remap(); };
     await expect(source.search({ query: 'launch' })).rejects.toMatchObject({ code: 'stale_access_state' });
     expect(f.audit.record).not.toHaveBeenCalled();
   });
@@ -396,8 +435,9 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.authorization.assertCurrent).toHaveBeenCalledTimes(3);
     const auditText = JSON.stringify(f.releases);
     for (const hidden of ['Ship connector', 'Launch Friday', 'launch', 'jira_item_', 'never-return', 'emailAddress']) expect(auditText).not.toContain(hidden);
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate' } }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: { issueIdsOrKeys: ['10001'], fields: ['summary', 'project', 'created', 'status', 'assignee', 'duedate'] } }));
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 5 }) }));
+    expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !(request.body?.fields as string[] | undefined)?.includes('description'))).toBe(true);
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
     const opened = await source.open({ item: item.id });
     const text = 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex';
@@ -510,7 +550,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const text = `ECHO-1: Ship connector\n\nRead ${url} before the gate.`;
     expect(opened.items[0]).toMatchObject({ text, citation: { text_sha256: digest(text) } });
     expect(f.request.mock.calls.every(([request]) => request.path === '/oauth/token/accessible-resources' ||
-      request.path === `${prefix}/myself` || request.path === `${prefix}/search/jql` || request.path === `${prefix}/issue/10001`)).toBe(true);
+      request.path === `${prefix}/myself` || request.path === `${prefix}/search/jql` || request.path === `${prefix}/issue/bulkfetch` || request.path === `${prefix}/issue/10001`)).toBe(true);
     await source.revalidate({});
   });
 
@@ -606,20 +646,43 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     await expect(other.source.list({ container: 'ECHO', since: '2026-09-01', until: '2026-10-01', cursor: first.next_cursor })).rejects.toMatchObject({ code: 'invalid_request' });
     const second = await source.list({ container: 'ECHO', since: '2026-09-01', until: '2026-10-01', cursor: first.next_cursor, limit: 1 });
     expect(second.items[0]!.citation.ticket_id).toBe('10002'); expect(second.next_cursor).toBeUndefined();
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ body: { jql: 'project = 10000 ORDER BY created DESC, id DESC', maxResults: 1, fields: ['id'], nextPageToken: 'private-provider-token' } }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ body: { jql: 'project = 10000 AND created >= "2026-08-31" AND created < "2026-10-03" ORDER BY created DESC, id DESC', maxResults: 1, fields: ['id'], nextPageToken: 'private-provider-token' } }));
     await source.open({ item: first.items[0]!.id });
     expect(f.releases.at(-1)!.operation).toBe('open');
   });
 
-  it('filters UTC dates inclusively and audits empty pages while advancing pagination', async () => {
-    const f = fixture(); f.state.pages = [page(['10001'], 'page-2'), page(['10002'])];
+  it('bounds JQL by created with a day of margin, filters UTC days exactly and stops once a page predates since', async () => {
+    const f = fixture();
+    // Newest first, as Jira orders them: after until, inside the UTC day (the previous local day), before since.
+    f.state.tickets.set('10003', withFields({ created: '2026-10-02T01:00:00.000+0000' }, ticket('10003')));
     f.state.tickets.set('10002', withFields({ created: '2026-09-30T23:30:00.000-0700' }, ticket('10002')));
+    f.state.pages = [page(['10003'], 'page-2'), page(['10002', '10001'], 'page-3')];
     const { source } = await f.make();
-    const first = await source.list({ since: '2026-10-01', until: '2026-10-01', limit: 1 });
-    expect(first.items).toEqual([]); expect(first.next_cursor).toBeDefined();
-    const second = await source.list({ since: '2026-10-01', until: '2026-10-01', limit: 1, cursor: first.next_cursor });
-    expect(second.items[0]!.occurred_at).toBe('2026-10-01');
+    const first = await source.list({ since: '2026-10-01', until: '2026-10-01', limit: 2 });
+    expect(first.items).toEqual([]); expect(first.next_cursor).toBeDefined(); expect(first.truncated).toBe(true);
+    const second = await source.list({ since: '2026-10-01', until: '2026-10-01', limit: 2, cursor: first.next_cursor });
+    expect(second.items.map(item => [item.citation.ticket_id, item.occurred_at])).toEqual([['10002', '2026-10-01']]);
+    // Jira still offers page-3, but its issues can only be older than since.
+    expect(second.next_cursor).toBeUndefined(); expect(second.truncated).toBe(false);
+    expect(f.jqls()).toEqual(Array(2).fill('created >= "2026-09-30" AND created < "2026-10-03" ORDER BY created DESC, id DESC'));
     expect(f.releases[0]!.citations).toEqual([]); expect(f.releases).toHaveLength(2);
+  });
+
+  it('keeps paging an inventory with no since, and bounds until alone without dropping the site-wide restriction', async () => {
+    const f = fixture(); f.state.pages = [page(['10001'], 'page-2')];
+    const { source } = await f.make();
+    const unbounded = await source.list({ limit: 1 });
+    expect(unbounded.next_cursor).toBeDefined();
+    f.state.pages = [page(['10001'], 'page-2')];
+    const until = await source.list({ until: '2026-12-31', limit: 1 });
+    expect(until.next_cursor).toBeDefined();
+    f.state.pages = [page(['10001'])];
+    await source.list({ container: 'ECHO', since: '2026-03-01', limit: 1 });
+    expect(f.jqls()).toEqual([
+      'created >= "1970-01-01" ORDER BY created DESC, id DESC',
+      'created >= "1970-01-01" AND created < "2027-01-02" ORDER BY created DESC, id DESC',
+      'project = 10000 AND created >= "2026-02-28" ORDER BY created DESC, id DESC',
+    ]);
   });
 
   it('refuses malformed search pages, repeated cursors/IDs and project mismatches', async () => {

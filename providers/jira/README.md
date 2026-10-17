@@ -65,8 +65,10 @@ is no retained verification result: each caller still checks its local binding
 and cancellation, and post-read checks cannot reuse a pre-read result.
 
 Jira checks Browse Projects, issue security and app access policy under the
-current user. Search results may lag, so every selected ticket is fetched by
-its immutable numeric issue id before release. Search and list release only
+current user. Search results may lag, so every selected ticket is read again by
+its immutable numeric issue id before release: one bulk issue read per page,
+which applies current permissions, and an exact read for any hit it omits, so a
+hidden or deleted hit still stops the page. Search and list release only
 summaries (title, status, owner and due date); open fetches a selected ticket's
 body through its request-owned handle. List resolves a project by id
 or key through Jira, and verifies the returned tickets belong to that project.
@@ -134,15 +136,18 @@ Ask can select `source: "tickets"` for a targeted search, or omit the source to
 search all available evidence. Every selection keeps the current Person and
 project boundary. Open accepts only a handle minted by that reader. List
 accepts a Jira project key/id, or no project for the caller's visible inventory.
-Dates are inclusive UTC **creation** days, applied after exact reads; JQL date
-literals use the Jira account's timezone. A filtered page can be empty with an
-advancing continuation. This is a live walk, not a pinned Jira snapshot.
+Dates are inclusive UTC **creation** days. JQL date literals use the Jira
+account's timezone, so the JQL carries only a coarse `created` bound with one
+day of margin either side, and the exact UTC filter runs after the current
+reads. A filtered page can be empty with an advancing continuation; pages run
+newest first, so the walk ends once a page's oldest ticket predates `since`.
+This is a live walk, not a pinned Jira snapshot.
 Repeated issue ids or continuation tokens within a walk fail closed. There is
 no search continuation in the shared contract.
 
 To stay inside the shared 64 KiB result bound, search pages contain at most
-5 ticket summaries and list pages at most 20, also respecting the requested limit
-(1-50). Labels are NFC and at most 256 UTF-8 bytes; text is NFC and at most
+5 ticket summaries and list pages at most 25, also respecting the requested limit
+(1-50). Twenty-five worst-case summaries fit the bound; fifty would not. Labels are NFC and at most 256 UTF-8 bytes; text is NFC and at most
 3,072 bytes, cut at code-point boundaries before hashing. `truncated` reports
 provider continuation or shortened text/labels. Inventory omits text and uses
 SHA-256 of the empty string. Numeric issue ids are stable citation identities;

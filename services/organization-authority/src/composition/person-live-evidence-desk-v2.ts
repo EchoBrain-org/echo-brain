@@ -7,6 +7,8 @@ import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
 
 const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'];
+/** Live inventory pages match the research loop's list fetch; each reader still applies its own smaller cap. */
+const LIVE_LIST_MAX = 50;
 
 export type { PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 export interface RegisteredPersonLiveEvidenceSourceV2 {
@@ -74,7 +76,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         const { source, descriptor } = registration;
         if (requestedKinds !== undefined && !requestedKinds.includes(descriptor.kind)) continue;
         lookups.push(page(registration, () => input.query === undefined
-          ? lookup('evidence_list', registration, () => source.list({ limit: Math.min(maximum, 20), signal: input.signal }))
+          ? lookup('evidence_list', registration, () => source.list({ limit: Math.min(maximum, LIVE_LIST_MAX), signal: input.signal }))
           : lookup('evidence_search', registration, () => source.search({ query: input.query!, limit: Math.min(maximum, 5), signal: input.signal }))));
       }
       const pages = await Promise.all(lookups);
@@ -123,7 +125,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       }
       const { source, descriptor } = registration;
       if ((input.channel !== undefined && !descriptor.requires_channel) || input.kinds?.some(kind => kind !== descriptor.kind)) refused();
-      const result = await lookup('evidence_list', registration, () => source.list({ ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, 20), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
+      const result = await lookup('evidence_list', registration, () => source.list({ ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, LIVE_LIST_MAX), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
       input.signal?.throwIfAborted();
       return remember(result, registration);
     },

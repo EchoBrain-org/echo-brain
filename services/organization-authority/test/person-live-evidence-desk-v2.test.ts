@@ -147,6 +147,13 @@ describe('thin live ticket dispatcher', () => {
     await expect(desk.list({ source: 'slack', channel: 'launch', kinds: ['ticket'] })).rejects.toMatchObject({ code: 'unauthorized' });
     expect(f.base.list).not.toHaveBeenCalled(); expect(f.ticket.list).not.toHaveBeenCalled();
   });
+  it('passes the research loop\'s 50-item list fetch through to a live reader, which applies its own cap', async () => {
+    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
+    await desk.list({ source: 'ticket', limit: 50 });
+    await desk.list({ source: 'ticket' });
+    await desk.search({ kinds: ['ticket'], limit: 50 });
+    expect(vi.mocked(f.ticket.list).mock.calls.map(([input]) => input.limit)).toEqual([50, 20, 50]);
+  });
   it('opens only request-issued handles through their original source', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.slack);
     await desk.search({ query: 'launch', limit: 3 });
