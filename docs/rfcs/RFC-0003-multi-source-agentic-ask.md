@@ -267,7 +267,9 @@ the question.
 **Other stops.**
 
 - 10 research steps.
-- Two steps in a row that find nothing new.
+- Two steps in a row that find nothing new. (For Ask, a list page that adds
+  members is something new, so research can read a list to its end:
+  [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md).)
 - The 90 s request limit. Cloudflare drops an origin response after 100 s
   (HTTP 524), so the earlier 180 s limit could not reach the client
   ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md)). Each research step
