@@ -113,7 +113,7 @@ export function createAgenticAskProgressRecorderV1(options: {
   const everySource = options.sources.map(source => sourcesById.get(source.source_id)).filter((value): value is PersonAskProgressSourceV1 => value !== undefined);
   let settled = false;
   let lastStage: string | undefined;
-  /** Items any read returned to this person: a later read counts only what none returned before. */
+  /** Items a search or list returned to this person: a later one counts only what none returned before. */
   const returnedKeys = new Set<string>();
   /** Items research read in full (looked through), and the ones it named. */
   const readKeys = new Set<string>();
@@ -146,13 +146,15 @@ export function createAgenticAskProgressRecorderV1(options: {
       stage(searching ? "searching" : "reading");
     },
     returned(tool: "search" | "open" | "list", sourceId: string | undefined, items: readonly EvidenceDeskItemV2[]) {
+      // Found is what searches and lists returned: neighbours an open brought along count once a search or list returns them.
+      if (tool === "open") return;
       let fresh = 0;
       for (const item of items) {
         const key = itemKey(item);
         if (returnedKeys.has(key)) continue;
         returnedKeys.add(key); fresh += 1;
       }
-      if (tool === "open" || batch === undefined) return;
+      if (batch === undefined) return;
       const covered = sourceId === undefined ? everySource : [sourcesById.get(sourceId)].filter((value): value is PersonAskProgressSourceV1 => value !== undefined);
       for (const source of covered) if (batch.sources.size < PERSON_ASK_PROGRESS_SOURCES_MAX_V1) batch.sources.set(canonicalJson(source), source);
       batch.found = bounded(batch.found + fresh);

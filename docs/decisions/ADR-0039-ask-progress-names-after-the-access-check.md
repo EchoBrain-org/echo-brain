@@ -79,8 +79,9 @@ what ECHO ran, never from model output:
 - **One `searched` row per research step** (or for the small-scope preload).
   It lists the step's source kinds from the request's own catalog, with a
   live tool named by its tool id. It also gives the number of distinct items
-  those search and list reads returned to this person that no earlier read
-  in the run had returned.
+  those search and list reads returned to this person that no earlier search
+  or list in the run had returned. What an open returned (an item's
+  neighbours) is counted only once a search or list returns it.
 - **A `reading` count** of items the research model is about to be given in
   full for the first time.
 - **Named items.** A name is sent only for an item whose complete released

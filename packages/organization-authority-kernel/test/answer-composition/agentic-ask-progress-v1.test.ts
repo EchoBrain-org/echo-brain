@@ -340,10 +340,21 @@ describe("agentic Ask progress recorder", () => {
     recorder.research.reads_done();
     expect(events).toEqual([
       { type: "stage", stage: "searching" },
-      // The catalog's underscore source id cannot be shown; the known PRD counts once, its neighbour once.
-      { type: "searched", sources: [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }, { kind: "slack" }], found: 2 },
+      // The catalog's underscore source id cannot be shown. The listed launch review counts once; the PRD an open returned first, and its neighbour, count as the search returns them.
+      { type: "searched", sources: [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }, { kind: "slack" }], found: 3 },
       { type: "stage", stage: "reading" },
     ]);
+  });
+
+  it("counts as found only what a search or list returned first: an open's neighbours count once a search returns them", () => {
+    const events: PersonAskProgressStepEventV1[] = [];
+    const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
+    const step = (reads: () => void) => { recorder.research.reads(true); reads(); recorder.research.reads_done(); };
+    step(() => recorder.research.returned("search", "document", [prd]));
+    // Opening the PRD brings its neighbours; that step searched nothing new.
+    step(() => { recorder.research.returned("open", "document", [before, prd, after]); recorder.research.returned("search", "meeting", [launch]); });
+    step(() => recorder.research.returned("search", "document", [before, after, prd, passage(4, "More.", "Launch PRD")]));
+    expect(events.filter(event => event.type === "searched").map(event => event.type === "searched" ? event.found : null)).toEqual([1, 1, 3]);
   });
 
   it("sends nothing after the run's signal aborts or the run settles, and drops an item its projection refuses", () => {
