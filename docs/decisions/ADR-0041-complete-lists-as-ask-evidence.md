@@ -206,8 +206,13 @@ route, header, database table or client changes.
   checked, code adds "(k of N checked so far)" to that sentence and the part is
   partial. Built: a member's row is checked through the open of that row, whose
   bodies may have new ids, once research read every body it returned. Code
-  adds the note to a sentence that cites a list beside text the writer read; a
-  sentence citing a list with rows only states list facts.
+  finds the claim from what a sentence cites, not how it cites it, since the
+  writer may cite only a member's section: the list's id beside text the
+  writer read; the text of two or more of its members (a section counts as its
+  page); or the text of one member of a list that a found need of the plan
+  rests on beside text of its members ("which pages mention BUG-412", found on
+  L1 and the Traceability section). The note is added whether the list reaches
+  the answer through `lists`, a sentence or code's own statement.
 
 ### The writer and the answer
 
@@ -295,11 +300,19 @@ route, header, database table or client changes.
   is still unused and the request has time and model calls left. If the
   repaired answer still fails, or no repair can run, code writes that list's
   full statement and keeps the writer's sentences. Built: a sentence that
-  cites only members of a list code wrote this way, two or more of them or
-  rows only, is dropped, since it restated part of that list (the October 4 answer's "the pages are A, B, C, D" beside
-  all eight names would contradict them); so is one that names two or more of
-  its members by their rows alone, whatever else it cites. A first reply that fails only the
-  check stays the writer's answer when the repair's reply is unusable.
+  cites only members of a list code wrote this way by their rows, or the text
+  of two or more of them once every member was checked, is dropped, since it
+  restated part of that list (the October 4 answer's "the pages are A, B, C,
+  D" beside all eight names would contradict them); so is one that names two
+  or more of its members by their rows alone, whatever else it cites. A
+  sentence citing the text of two or more members of a list not every member
+  of which was checked stays, with its "(k of N checked so far)" note: code
+  cannot tell "A and B mention BUG-412" from a restated subset, and the note
+  keeps either from reading as complete. For a list a found need claims
+  content across, the repair's reason names both ways on: put the list in
+  `lists` for which items exist, or cite it beside the evidence for what its
+  members say. A first reply that fails only the check stays the writer's
+  answer when the repair's reply is unusable.
 - **One citation per cited object.** The response refuses duplicate
   citations, and a listed ticket's row and its opened body cite the same
   ticket. Code gives them one citation, in first-citation order, so a list

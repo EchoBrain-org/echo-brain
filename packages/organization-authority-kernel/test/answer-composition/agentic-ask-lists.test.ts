@@ -607,9 +607,13 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       const { response } = await h.research.answerWithResearch({ question: OCT4 });
       expect(writerInputs(h)).toHaveLength(2);
       expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 4, cited_by_plan: true });
-      // Code names all 8, and the sentence that named 4 of them by their sections is dropped.
-      expect(response.outcome).toBe("answered");
-      expect(response.parts[0]!.statements).toEqual([{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
+      expect(writerPrompt(h, 1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members; for what its members say, cite L1 beside their evidence');
+      // Code names all 8 first. The sentence cites four members' text, which code cannot tell from what they say, so it
+      // stays with how many were checked, and the part is never an unqualified answer.
+      expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
+      expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+        fullStatement, "The pages created on October 4 are ECHO Product Pipeline, Assumptions and decisions, Gate reviews and Traceability (4 of 8 checked so far).",
+      ]);
     }
   });
 
@@ -695,6 +699,56 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response.citations.map(citation => (citation.citation as { section_id: string }).section_id)).toEqual(["s1"]);
   });
 
+  it("says how many were checked whenever a sentence answers across a list, however the list reaches the answer (addition 4)", async () => {
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, /^(Traceability|Gate reviews)/u.test(row.label) ? "BUG-412 is traced to TC-D-03." : "No defects are discussed.")]) as EvidenceDeskResultV2;
+    });
+    const text = "Which pages created on October 4, 2026 mention BUG-412?";
+    const need = "pages created on 2026-10-04 that mention BUG-412";
+    const one = "Traceability — requirement threads and BUG-412 walkthrough mentions BUG-412.";
+    const two = "Gate reviews and Traceability mention BUG-412.";
+    const four = "The pages created on October 4 are ECHO Product Pipeline, Assumptions and decisions, Gate reviews and Traceability.";
+    const say = (sentence: string, evidence: readonly string[], lists: readonly unknown[] = []) => ({ lists, sentences: [{ text: sentence, evidence }], not_found: [] });
+    const noted = (sentence: string) => sentence.replace(/\.$/u, " (4 of 8 checked so far).");
+    const cases: readonly { readonly plan: readonly string[]; readonly replies: readonly unknown[]; readonly calls: number; readonly said: string }[] = [
+      // The repair moves the list into "lists", or no repair helps and code writes it; the sentence cites only a section.
+      { plan: ["L1", "E12"], replies: [say(one, ["E12"]), say(one, ["E12"], [{ id: "L1" }])], calls: 2, said: one },
+      { plan: ["L1", "E12"], replies: [say(one, ["E12"]), say(one, ["E12"])], calls: 2, said: one },
+      // A section beside its own page's row, with the list in "lists".
+      { plan: ["L1", "E12"], replies: [say(one, ["E12", "E4"], [{ id: "L1" }])], calls: 1, said: one },
+      // Two pages' sections, without the list's id, with the plan on the list or on those sections only: code writes the list.
+      { plan: ["L1", "E11", "E12"], replies: [say(two, ["E11", "E12"]), say(two, ["E11", "E12"])], calls: 2, said: two },
+      { plan: ["E11", "E12"], replies: [say(two, ["E11", "E12"]), say(two, ["E11", "E12"])], calls: 2, said: two },
+      { plan: ["L1", "E9", "E10", "E11", "E12"], replies: [say(two, ["E11", "E12"], [{ id: "L1" }])], calls: 1, said: two },
+      // The October 4 subset beside the list it names: code cannot tell it from content, so it is noted, never answered.
+      { plan: ["L1", "E9", "E10", "E11", "E12"], replies: [say(four, ["E9", "E10", "E11", "E12"], [{ id: "L1" }])], calls: 1, said: four },
+    ];
+    for (const { plan, replies, calls, said } of cases) {
+      const h = harness([
+        ask(text, need, "open", [], [OCT4_LIST]),
+        ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
+        ask(text, need, "found", plan, [finish], "N1"),
+        ...replies,
+      ], october4Desk({ open }));
+      const { response } = await h.research.answerWithResearch({ question: text });
+      expect(writerInputs(h)).toHaveLength(calls);
+      if (calls === 2) expect(writerPrompt(h, 1).validation_error).toContain('put {"id": "L1"} in "lists" so code names its 8 members; for what its members say, cite L1 beside their evidence');
+      expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
+      expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([fullStatement, noted(said)]);
+    }
+    // One page's section, on a plan that rests on it alone, is content about that page: no list, no note.
+    const single = harness([
+      ask(text, need, "open", [], [OCT4_LIST]),
+      ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
+      ask(text, need, "found", ["E12"], [finish], "N1"),
+      say(one, ["E12"]),
+    ], october4Desk({ open }));
+    const { response } = await single.research.answerWithResearch({ question: text });
+    expect(writerInputs(single)).toHaveLength(1);
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: one }] }] });
+  });
+
   it("names only items released to the asker, counts ECHO's own list, and stops when access is revoked before the writer", async () => {
     // A vendor's total is never read: the count is the members the desk released to this person.
     const released = [ticketRow(1), { ...ticketRow(2), visibility: "team" as const }, ticketRow(3)];
@@ -738,9 +792,10 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       expect(view.items.filter(item => item.read_in_full).map(item => item.id)).toEqual(opened);
       expect(writerInputs(h)).toHaveLength(2);
       expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", complete: true, count: 8, checked: 4, cited_by_plan: true });
-      expect(response.outcome).toBe("answered");
+      // Code names all 8; the sentence about the 4 it read stays, saying how many were checked.
+      expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
       expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([
-        `8 actions with owner Mara: ${rows.map(row => row.label).join("; ")}.`,
+        `8 actions with owner Mara: ${rows.map(row => row.label).join("; ")}.`, "Mara owns tasks 1, 2, 3 and 4 (4 of 8 checked so far).",
       ]);
     }
   });

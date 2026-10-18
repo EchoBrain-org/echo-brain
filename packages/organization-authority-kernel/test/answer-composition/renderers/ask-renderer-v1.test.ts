@@ -354,6 +354,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     const research: AgenticEvidenceBundleV1 = Object.freeze({
       ...EMPTY_BUNDLE, lists: [list("L1", ["E1"])],
       plan: [{ part: 1, question: "Which tickets?", notes: "", needs: [{ need: "tickets", status: "found" as const, evidence: ["L1", "E2"] }] }],
+      // Research opened the row, and the open returned its body: the list's one member was checked.
+      rounds: [{ round: 1, elapsed_ms: 0, plan: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"] } }], rejected: [] }],
       items: [
         { short: "E1", source: "tickets", item: rowItem, full: false, opened: false, preloaded: false, touched: 1, cited_by_plan: false },
         { short: "E2", source: "tickets", item: body, full: true, opened: true, preloaded: false, touched: 2, cited_by_plan: true },

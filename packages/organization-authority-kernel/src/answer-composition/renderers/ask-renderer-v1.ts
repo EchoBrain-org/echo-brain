@@ -34,7 +34,6 @@ import {
   agenticOpenReadsV1,
   agenticWriterListMemberV1,
   agenticWriterListV1,
-  parseAgenticListIdV1,
   type AgenticAnswerListUseV1,
   type AgenticListIdV1,
   type AgenticOpenReadsV1,
@@ -171,12 +170,16 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const full = (short: string) => byShort.get(short)?.full === true;
       /** What research's opens read: the same relation its finish check used. */
       const opens = agenticOpenReadsV1(bundle.rounds, full, cleanId);
-      /** Lists a found need of the plan rests on, in the plan's order. */
+      /** Lists a found need of the plan rests on, in the plan's order; and those it claims content across, citing text of their members (addition 4). */
       const relied: AgenticListIdV1[] = [];
+      const across = new Set<AgenticListIdV1>();
       for (const part of bundle.plan) for (const need of part.needs) {
         if (need.status !== "found") continue;
         const support = agenticNeedSupportV1(need.evidence, { list: id => listById.has(id), full, member_of: membership.first, opened: short => opens.clean.get(short) ?? [] });
-        for (const id of support.lists) if (!relied.includes(id)) relied.push(id);
+        for (const id of support.lists) {
+          if (!relied.includes(id)) relied.push(id);
+          if (support.content.some(short => membership.in(id, short) !== undefined)) across.add(id);
+        }
       }
       const checked = checkedItems(bundle, opens);
       // The writer sees at most 5 lists, the plan's first; code names members from every row, past the writer's bound too.
@@ -260,7 +263,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           : [];
         const byRows = subset(new Set(cited.flatMap(shorts => [...rowsOnly(list.id, shorts)])).size);
         if (usesList(answer, list.id)) return byRows;
-        if (list.cited_by_plan) return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members` }];
+        if (list.cited_by_plan) {
+          const content = across.has(list.id) ? `; for what its members say, cite ${list.id} beside their evidence` : "";
+          return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members${content}` }];
+        }
         return byRows.length > 0 ? byRows : subset(membersCited(list.id, cited.flat()).size);
       });
       // A failed check takes the writer's one repair when the first reply fails it and a repair can still run; the
@@ -351,17 +357,27 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // The writer's sentences: cited ids it was given, each list it cites adding no citation of its own. A sentence that
       // names two or more members of a list code wrote after the check by their rows, whatever else it cites, restates
       // part of that list, which code now names in full; so does one that cites only that list's members (or their opened
-      // sections), two or more of them or rows only. A sentence about one member's text stays.
+      // sections) by rows only, or by the text of two or more of them once every member was checked, when no note could
+      // qualify it. One that cites the text of two or more members of a list not every member of which was checked may
+      // say what they say, so it stays, with its note.
       const restates = (shorts: readonly string[]) => forced.some(id => rowsOnly(id, shorts).size >= 2) ||
-        (shorts.every(short => forced.some(id => membership.in(id, short) !== undefined)) &&
-          (new Set(forced.flatMap(id => [...membersCited(id, shorts)])).size >= 2 || !shorts.some(short => textGiven.has(short))));
+        (shorts.every(short => forced.some(id => membership.in(id, short) !== undefined)) && (!shorts.some(short => textGiven.has(short)) ||
+          forced.some(id => membersCited(id, shorts).size >= 2 && agenticListCheckedNoteV1(writerById.get(id)!) === undefined)));
+      /**
+       * The lists a sentence claims content across (addition 4), from what it cites rather than how: the list's id beside
+       * text it read; the text of two or more of its members (an opened section counts as its page); or the text of one
+       * member of a list a found need of the plan claims content across. Whether code names the list does not matter.
+       */
+      const claimsAcross = (evidence: readonly string[], shorts: readonly string[]) => writerLists.filter(list => {
+        const read = membersCited(list.id, shorts.filter(short => textGiven.has(short)));
+        return evidence.includes(list.id) || read.size >= 2 || (read.size === 1 && across.has(list.id));
+      });
       const writerSentences = (answer?.sentences ?? []).flatMap(sentence => {
         const shorts = sentence.evidence.filter(short => allowed.has(short));
         if (shorts.length === 0 || restates(shorts)) return [];
-        // A sentence that claims content across a list cites the list beside text it read: say how much was checked (addition 4).
-        const notes = !shorts.some(short => textGiven.has(short)) ? [] : sentence.evidence.flatMap(id => {
-          const list = writerById.get(parseAgenticListIdV1(id) ?? "L0");
-          const note = list === undefined ? undefined : agenticListCheckedNoteV1(list);
+        // Content claimed across a list says how many of its members were checked, unless every one was (addition 4).
+        const notes = !shorts.some(short => textGiven.has(short)) ? [] : claimsAcross(sentence.evidence, shorts).flatMap(list => {
+          const note = agenticListCheckedNoteV1(list);
           return note === undefined ? [] : [note];
         });
         if (notes.length > 0) listGaps.push(UNCHECKED_GAP);
