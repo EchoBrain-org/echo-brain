@@ -21,6 +21,7 @@ export function runScores(graded) {
   // A run that failed or was rejected delivered nothing: it scores zero on quality, never "unknown".
   if (checks.status !== "completed") {
     return { status: checks.status, complete_and_supported: false, tools_found: 0, tools_read: 0, research_established: 0, ...(planned ? { planner_needs_covered: 0, tools_handed: 0 } : {}),
+      ...(checks.declared_kinds === undefined ? {} : { planner_kinds_declared: 0 }),
       ...(checks.trigger === "ask" ? { writer_parts_correct: 0, ...((checks.list_parts ?? 0) > 0 ? { writer_lists_named: 0 } : {}) } : {}), ...(checks.trigger === "approved_record" ? { card_items_listed: 0 } : {}) };
   }
   const parts = checks.parts.length;
@@ -54,6 +55,8 @@ export function runScores(graded) {
     status: "completed",
     planner_needs_covered: judged === null || !planned ? null : rate(judged.needs.filter(need => need.covered).length, judged.needs.length),
     planner_invented_needs: judged === null || !planned ? null : judged.invented_needs.length,
+    // A code check (ADR-0041): the plan's need kinds, as a set, are the ones its case names.
+    planner_kinds_declared: checks.declared_kinds === undefined ? null : checks.declared_kinds ? 1 : 0,
     tools_found: rate(checks.coverage.found, parts),
     tools_read: rate(checks.coverage.read, parts),
     tools_handed: planned ? rate(checks.coverage.handed, parts) : null,
@@ -82,7 +85,7 @@ export function runScores(graded) {
 }
 
 const METRICS = [
-  "planner_needs_covered", "planner_invented_needs", "tools_found", "tools_read", "tools_handed", "research_established",
+  "planner_needs_covered", "planner_invented_needs", "planner_kinds_declared", "tools_found", "tools_read", "tools_handed", "research_established",
   "verdicts_correct", "writer_parts_correct", "writer_lists_named", "writer_unsupported_claims", "gaps_reported",
   "card_items_listed", "card_relations_correct", "card_owners_correct", "card_invented", "card_gaps_reported", "must_not_violations",
   "leaks", "noise_handed", "distractors_handed", "elapsed_ms", "rounds", "model_calls",
@@ -95,6 +98,8 @@ const JUDGE_METRICS = [
 
 /** Sums one count over entries that have it; null when none does (no sweep was graded). */
 const tally = (entries, key) => (entries.length === 0 ? null : entries.reduce((sum, entry) => sum + entry[key], 0));
+/** An Ask plan's needs by declared kind (ADR-0041); `missing` counts needs saved without one. */
+const KIND_COUNTS = ["which_items", "which_say", "content", "missing"];
 
 /**
  * Per-case means of each metric (unknown runs excluded), then means across
@@ -119,8 +124,11 @@ export function aggregate(gradedRuns) {
     }));
     const verdicts = runs.map(run => run.scores.complete_and_supported);
     const sweeps = runs.map(run => run.graded.checks.sweep).filter(sweep => sweep !== undefined);
+    const kinds = runs.map(run => run.graded.checks.kinds).filter(value => value !== undefined);
     return {
-      case_id: checks.case_id, split: checks.split, trigger: checks.trigger, budget: checks.budget, runs: runs.length,
+      case_id: checks.case_id, split: checks.split, trigger: checks.trigger, budget: checks.budget, runs: runs.length, key_status: checks.key_status ?? null,
+      // Every completed run's needs, by declared kind, summed over the case's runs.
+      kinds: kinds.length === 0 ? null : Object.fromEntries(KIND_COUNTS.map(kind => [kind, kinds.reduce((total, value) => total + value[kind], 0)])),
       failed_runs: runs.length - completed.length,
       not_started: runs.filter(run => run.graded.checks.error?.code === "case_not_startable").length,
       rejected_at_ingress: runs.filter(run => run.scores.status === "rejected_at_ingress").length,
@@ -139,6 +147,7 @@ export function aggregate(gradedRuns) {
     summary: {
       ...summary,
       cases: cases.length,
+      cases_awaiting_key_confirmation: [...new Set(cases.filter(entry => entry.key_status === "awaiting_founder_confirmation").map(entry => entry.case_id))],
       cases_complete_in_every_run: known.filter(entry => entry.complete_in_every_run).length,
       cases_with_unknown_completion: cases.length - known.length,
       runs_failed: cases.reduce((total, entry) => total + entry.failed_runs, 0),
@@ -168,6 +177,8 @@ export function markdownReport(identity, report) {
   const s = report.summary;
   const calibration = identity.judge_calibration;
   const rendered = report.cases.filter(entry => entry.trigger === "ask" || entry.trigger === "approved_record");
+  const asked = report.cases.filter(entry => entry.kinds !== null);
+  const awaiting = s.cases_awaiting_key_confirmation;
   const swept = report.cases.filter(entry => entry.trigger === "sweep");
   const lines = [
     `# Research loop evaluation — ${identity.split} at ${identity.state}`,
@@ -183,6 +194,7 @@ export function markdownReport(identity, report) {
     "",
     "Complete and supported needs research, the renderer's result and every safety check to be right.",
     "",
+    ...(awaiting.length === 0 ? [] : [`Keys drafted from the export and awaiting the founder's confirmation: ${awaiting.join(", ")}.`, ""]),
     "| Case | Trigger | Budget | Runs | Complete and supported |",
     "| --- | --- | --- | --- | --- |",
     ...report.cases.map(entry => `| ${entry.case_id} | ${entry.trigger} | ${entry.budget} | ${entry.runs}${entry.failed_runs > 0 ? ` (${entry.failed_runs} failed${entry.not_started > 0 ? `, ${entry.not_started} not started` : ""})` : ""} | ${entry.complete_in_every_run === null ? "—" : entry.complete_in_every_run ? "yes" : "no"} |`),
@@ -195,6 +207,7 @@ export function markdownReport(identity, report) {
     "| --- | --- | --- |",
     `| Planner | expected needs covered | ${percent(s.planner_needs_covered)} |`,
     `| Planner | invented needs per run | ${number(s.planner_invented_needs)} |`,
+    `| Planner | need kinds as the case expects (code check) | ${percent(s.planner_kinds_declared)} |`,
     `| Tools | required items found | ${percent(s.tools_found)} |`,
     `| Tools | required items read in full | ${percent(s.tools_read)} |`,
     `| Tools | required items handed over | ${percent(s.tools_handed)} |`,
@@ -207,6 +220,12 @@ export function markdownReport(identity, report) {
     "| Case | Trigger | Budget | Found | Read | Handed | Established | Stops |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...report.cases.map(entry => `| ${entry.case_id} | ${entry.trigger} | ${entry.budget} | ${percent(entry.tools_found)} | ${percent(entry.tools_read)} | ${percent(entry.tools_handed)} | ${percent(entry.research_established)} | ${Object.entries(entry.stop_reasons).map(([reason, count]) => `${reason} ${count}`).join(", ")} |`),
+    "",
+    "Each Ask plan's needs by declared kind (ADR-0041), over the case's completed runs. \"As expected\" is the code check for a case that names the kinds its plan should declare.",
+    "",
+    "| Case | Budget | which_items | which_say | content | no kind | As expected |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    ...asked.map(entry => `| ${entry.case_id} | ${entry.budget} | ${KIND_COUNTS.map(kind => entry.kinds[kind]).join(" | ")} | ${percent(entry.planner_kinds_declared)} |`),
     "",
     "## Renderers",
     "",

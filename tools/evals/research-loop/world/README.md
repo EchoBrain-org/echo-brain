@@ -114,7 +114,14 @@ be reverted, but ECHO cannot read either of them.
   Only Ask cases have one. The October 4 case keys every Confluence page the
   test person could read that was created on 2026-10-04: the 7 THERM pages and
   page 589865. Record in the seed log whether the test person can still read
-  page 589865, and that no other page they can read was created that day.
+  page 589865, and that no other page they can read was created that day. The
+  Confluence BUG-412 case tells a list-only answer apart only through page
+  589865, the one October 4 page that does not mention BUG-412.
+- A case with `key_status: awaiting_founder_confirmation` has a key drafted
+  from the export that the founder has not confirmed yet; the two BUG-412 cases
+  are such cases. An Ask case's `expected_kinds` names the need kinds its plan
+  should declare ([ADR-0041](../../../../docs/decisions/ADR-0041-complete-lists-as-ask-evidence.md));
+  a plan that declares any other set of kinds fails the declared-kind check.
 - `never_appears` lists the M6 items in every case. Any trace of them in a
   research result, the notes or an answer fails the run.
 - THERM items carry "SYNTHETIC MOCK" banners. An answer that reports a mock

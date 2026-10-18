@@ -4,18 +4,23 @@ import { itemMatches, leakMarkers, matching, meetingIndex, satisfying, sectionCo
 /**
  * Code checks for one saved run (spec section 5): what research found, read,
  * cited and handed over for each required part, and for a list part whether
- * the answer names its whole list (ADR-0041); restricted leaks; noise;
- * stop and cost; the impact card or sweep result against its key.
- * Meaning-level checks belong to the judge. A sweep run always carries its
- * verdict counts (`sweep`), so failed runs count toward the findings.
+ * the answer names its whole list (ADR-0041); for an Ask run, its plan's
+ * needs by declared kind, and whether they are the kinds its case expects;
+ * restricted leaks; noise; stop and cost; the impact card or sweep result
+ * against its key. Meaning-level checks belong to the judge. A sweep run
+ * always carries its verdict counts (`sweep`), so failed runs count toward
+ * the findings.
  */
 export function codeChecks(testCase, run, dataset) {
   const meetings = meetingIndex(dataset.additions);
   // List parts are counted on every run, so a failed run still scores zero on naming its lists.
   const listParts = testCase.parts.filter(part => part.type === "list").length;
-  const base = { case_id: testCase.id, split: testCase.split, trigger: testCase.trigger, trial: run.trial, budget: run.budget, ...(listParts === 0 ? {} : { list_parts: listParts }) };
-  // A run that delivered nothing scores zero: a sweep's findings all count as wrong.
-  const nothing = { parts: [], leaks: [], stop: null, cost: null, ...(testCase.trigger === "sweep" ? { sweep: gradeSweep(testCase, { findings: [] }) } : {}) };
+  const base = {
+    case_id: testCase.id, split: testCase.split, trigger: testCase.trigger, trial: run.trial, budget: run.budget, ...(listParts === 0 ? {} : { list_parts: listParts }),
+    ...(testCase.key_status === undefined ? {} : { key_status: testCase.key_status }),
+  };
+  // A run that delivered nothing scores zero: a sweep's findings all count as wrong, and a plan it never wrote declares no kind.
+  const nothing = { parts: [], leaks: [], stop: null, cost: null, ...(testCase.trigger === "sweep" ? { sweep: gradeSweep(testCase, { findings: [] }) } : {}), ...(testCase.expected_kinds === undefined ? {} : { declared_kinds: false }) };
   if (run.outcome !== "completed" || run.result?.status !== "completed") {
     return { ...base, status: run.outcome === "rejected" ? "rejected_at_ingress" : "failed", error: run.error ?? run.result?.error ?? null, ...nothing };
   }
@@ -39,7 +44,7 @@ export function codeChecks(testCase, run, dataset) {
   const card = testCase.trigger === "approved_record" ? rendered : null;
   const handedIds = new Set(testCase.trigger === "ask" ? ask?.writer_evidence ?? [] : items.filter(item => item.cited_by_plan).map(item => item.id));
   const answer = ask?.response ?? null;
-  const lists = listIndex(research, items);
+  const lists = listIndex(research);
   // Ask's writer also sees every list research read as rows without text (ADR-0041). A row carries an item's title,
   // dates, status and owner only, so it hands over a part of those types, never other content, and is never noise.
   // The writer answers such a part by selecting the member: code states its row facts, citing the row.
@@ -62,7 +67,7 @@ export function codeChecks(testCase, run, dataset) {
   const supportingIds = new Set(parts.flatMap(part => part.item_ids));
   const distractorItems = items.filter(item => (testCase.distractors ?? []).some(ref => itemMatches(item, ref, meetings)));
   const noise = items.filter(item => textHanded(item) && !supportingIds.has(item.id)).map(item => item.id);
-  // An answer cites what research read in full, or a list member's row (ADR-0041): a list supports which items exist.
+  // An answer cites what research read in full, or a member's row of a list research read (ADR-0041): a list supports which items exist.
   const answer_citation_violations = (answer?.citations ?? []).flatMap((entry, item_index) =>
     items.some(item => (item.read_in_full || lists.of(item.id).length > 0) && isDeepStrictEqual(item.citation, entry.citation)) ? [] : [{ item_index, label: entry.label }]);
   return {
@@ -95,81 +100,49 @@ export function codeChecks(testCase, run, dataset) {
     },
     card: card === null ? null : cardChecks(testCase, card, items, meetings),
     ...(testCase.trigger === "sweep" ? { sweep: { status: rendered.status, ...gradeSweep(testCase, rendered) } } : {}),
+    ...(testCase.trigger === "ask" ? { kinds: kindsOf(research.plan) } : {}),
+    ...(testCase.expected_kinds === undefined ? {} : { declared_kinds: declaredKinds(research.plan, testCase.expected_kinds) }),
   };
+}
+
+/** The kinds an Ask need declares (ADR-0041). */
+const NEED_KINDS = ["which_items", "which_say", "content"];
+
+/** A run's final plan's needs by declared kind; a need saved without one (a run from before ADR-0041) is `missing`. */
+function kindsOf(plan) {
+  const kinds = { which_items: 0, which_say: 0, content: 0, missing: 0 };
+  for (const need of plan.flatMap(part => part.needs)) kinds[NEED_KINDS.includes(need.kind) ? need.kind : "missing"] += 1;
+  return kinds;
+}
+
+/** Whether the kinds a run's final plan declares, as a set, are the case's: a need without a kind is content, as Ask reads it. */
+function declaredKinds(plan, expected) {
+  const declared = [...new Set(plan.flatMap(part => part.needs.map(need => NEED_KINDS.includes(need.kind) ? need.kind : "content")))].sort();
+  return isDeepStrictEqual(declared, [...expected].sort());
 }
 
 /** Part types a list member's row can carry (ADR-0041): dates, owner and status are row facts. */
 const ROW_FACT_PARTS = new Set(["date", "owner", "status"]);
 
-/** The fields naming the object a citation cites, as Ask's list membership reads them (agenticListMembershipV1). */
-const CITED_OBJECT_FIELDS = {
-  page: ["tool_id", "external_scope_id", "page_id"], ticket: ["tool_id", "external_scope_id", "ticket_id"],
-  slack_message: ["team_id", "channel_id", "message_ts"], approved_record: ["atom_id"], source_revision: ["source_id", "revision_id"], follow_up: ["item_id"],
-};
-function citedObject(citation) {
-  const fields = CITED_OBJECT_FIELDS[citation?.kind];
-  return fields === undefined || fields.some(field => typeof citation[field] !== "string") ? undefined : JSON.stringify([citation.kind, ...fields.map(field => citation[field])]);
-}
-
-/** An open's id as Ask's step protocol reads it ("E4", "e4", "[E4]", "4"; cleanId). */
-function openId(value) {
-  const match = typeof value === "string" || typeof value === "number" ? /^\s*\[?\s*[Ee]?\s*(\d{1,4})\s*\]?\s*$/u.exec(String(value)) : null;
-  return match === null ? null : `E${Number(match[1])}`;
-}
-
 /**
- * The bodies each item's clean open returned, in research's rounds (agenticOpenReadsV1): an open not truncated, with
- * no notice or error, all of whose bodies research read in full. A later limited open undoes it.
+ * The lists a run's research read (ADR-0041; a run from before it has none): the lists holding each item as a member,
+ * and those a found which_items need of the final plan cites by id, which Ask's renderer states. A need without a kind
+ * (a run saved earlier) is content, whose list ids carry no meaning.
  */
-function cleanOpens(rounds, full) {
-  const clean = new Map();
-  for (const action of (Array.isArray(rounds) ? rounds : []).flatMap(round => round.actions ?? [])) {
-    const id = action.tool === "open" ? openId(action.args?.id) : null;
-    if (id === null) continue;
-    const opened = action.result?.opened ?? [];
-    if (action.result?.error !== undefined || action.result?.truncated === true || action.result?.notice === true) clean.delete(id);
-    else if (opened.length > 0 && opened.every(body => full.has(body))) clean.set(id, opened);
-  }
-  return clean;
-}
-
-/**
- * The lists a run's research read (ADR-0041; a run from before it has none): the lists holding each item, and those
- * the plan rests on. An item belongs to a list when it is a member or cites the same object as one (an opened page's
- * section is its page). As Ask's finish check divides support, a found need rests on each list it cites by id, on the
- * first list holding each member row it cites that research never read in full, unless the need also cites a body
- * that row's clean open returned, and on the first list holding two or more of the members it cites, read in full or
- * not.
- */
-function listIndex(research, items) {
+function listIndex(research) {
   const all = Array.isArray(research.lists) ? research.lists : [];
-  const full = new Set(items.filter(item => item.read_in_full).map(item => item.id));
-  const opened = cleanOpens(research.rounds, full);
-  const citation = new Map(items.map(item => [item.id, item.citation]));
-  const memberIn = (list, id) => {
-    if (list.members.includes(id)) return id;
-    const object = citedObject(citation.get(id));
-    return object === undefined ? undefined : list.members.find(member => citedObject(citation.get(member)) === object);
-  };
-  const of = id => all.filter(list => memberIn(list, id) !== undefined);
-  const relied = new Set(research.plan.flatMap(part => part.needs.filter(need => need.status === "found").flatMap(need => {
-    const first = id => of(id).slice(0, 1).map(list => ({ list: list.id, member: memberIn(list, id) }));
-    const members = new Map();
-    for (const { list, member } of need.evidence.flatMap(first)) members.set(list, new Set([...(members.get(list) ?? []), member]));
-    const identity = id => (opened.get(id) ?? []).some(body => need.evidence.includes(body));
-    return need.evidence.flatMap(id => all.some(list => list.id === id) ? [id] : full.has(id) || identity(id) ? [] : first(id).map(value => value.list))
-      .concat([...members].filter(([, cited]) => cited.size >= 2).map(([list]) => list));
-  })));
-  return { of, relied: list => relied.has(list.id) };
+  const of = id => all.filter(list => list.members.includes(id));
+  const stated = new Set(research.plan.flatMap(part => part.needs.filter(need => need.status === "found" && need.kind === "which_items").flatMap(need => need.evidence)));
+  return { of, relied: list => stated.has(list.id) };
 }
 
 /**
  * A list part scores on the whole list (ADR-0041, addition 7): each measure holds only when it holds for every member,
  * so naming some members earns nothing. Found: research came across every member. Read: a complete list research
- * read holds every member. Cited: the plan cites every member or rests on a list holding it. Handed: the writer saw
- * every member. Named: the answer cites every member (any item of it: a page's row or one of its sections), or, for a
- * list longer than the 25 names an answer gives, a statement citing members ends "and N more" and the members the
- * answer cites plus N are exactly the list.
+ * read holds every member. Cited: the plan cites every member, or a found which_items need cites a list holding it.
+ * Handed: the writer saw every member. Named: the answer cites every member (any item of it: a page's row or one of
+ * its sections), or, for a list longer than the 25 names an answer gives, a statement ends "and N more" and the
+ * members it cites plus N are exactly the list.
  */
 function listPart(part, items, meetings, lists, handedIds, answer) {
   const members = part.evidence.map(ref => matching(items, ref, meetings));
@@ -177,10 +150,12 @@ function listPart(part, items, meetings, lists, handedIds, answer) {
   const citedBy = indexes => item => indexes.some(index => isDeepStrictEqual(answer?.citations[index]?.citation, item.citation));
   const inAnswer = citedBy((answer?.citations ?? []).map((_, index) => index));
   const membersNamed = members.filter(found => found.some(inAnswer)).length;
-  // The code-written statement counts the members it does not name, from ECHO's own list (ADR-0041, addition 5).
-  const more = (answer?.parts ?? []).flatMap(value => value.statements).flatMap(statement => {
+  // The code-written statement counts the members it does not name, from ECHO's own list (ADR-0041, addition 5); each
+  // statement is read alone, so members another statement names by id never count twice.
+  const more = (answer?.parts ?? []).flatMap(value => value.statements).some(statement => {
     const counted = /; and (\d+) more\.$/u.exec(statement.text);
-    return counted !== null && members.some(found => found.some(citedBy(statement.citation_indexes))) ? [Number(counted[1])] : [];
+    const cited = members.filter(found => found.some(citedBy(statement.citation_indexes))).length;
+    return counted !== null && cited > 0 && cited + Number(counted[1]) === members.length;
   });
   return {
     id: part.id, type: part.type,
@@ -188,7 +163,7 @@ function listPart(part, items, meetings, lists, handedIds, answer) {
     read: every(item => lists.of(item.id).some(list => list.complete === true)),
     cited_by_plan: every(item => item.cited_by_plan || lists.of(item.id).some(lists.relied)),
     handed: every(item => handedIds.has(item.id)),
-    named: answer !== null && (every(inAnswer) || more.some(rest => membersNamed + rest === members.length)),
+    named: answer !== null && (every(inAnswer) || more),
     // For reading a run, never for its score.
     members: members.length,
     members_named: membersNamed,

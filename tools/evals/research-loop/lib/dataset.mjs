@@ -14,6 +14,10 @@ const OUTCOMES = new Set(["answerable", "partial", "not_found"]);
 const PART_TYPES = new Set(["fact", "date", "owner", "status", "conflict", "change", "list"]);
 const MEETING_ITEMS = new Set(["decision", "action", "rationale", "transcript"]);
 const VERDICTS = new Set(["landed", "not_landed", "no_evidence"]);
+/** The kinds an Ask need declares (ADR-0041): a case may name those its plan should declare. */
+const NEED_KINDS = new Set(["which_items", "which_say", "content"]);
+/** A key drafted from the export that the founder has not confirmed yet. */
+const KEY_STATUSES = new Set(["awaiting_founder_confirmation"]);
 const RELATIONS = new Set(["confirms", "conflicts", "needs_updating"]);
 
 /** Deep-replaces the signed-in person placeholder with their directory display name. */
@@ -102,6 +106,12 @@ export function datasetProblems(dataset) {
     ids.add(entry.id);
     if (!TRIGGERS.has(entry.trigger) || !STATES.has(entry.state) || !BUDGETS.has(entry.budget) || !OUTCOMES.has(entry.expected_outcome)) problems.push(`${where}: trigger, state, budget or outcome is invalid`);
     if (entry.trigger === "ask" && (typeof entry.question !== "string" || entry.question.trim() === "")) problems.push(`${where}: Ask needs a question`);
+    if (entry.expected_kinds !== undefined) {
+      const kinds = entry.expected_kinds;
+      if (entry.trigger !== "ask") problems.push(`${where}: only Ask cases name the need kinds their plan should declare`);
+      if (!Array.isArray(kinds) || kinds.length === 0 || new Set(kinds).size !== kinds.length || kinds.some(kind => !NEED_KINDS.has(kind))) problems.push(`${where}: expected_kinds must be distinct need kinds: which_items, which_say or content`);
+    }
+    if (entry.key_status !== undefined && !KEY_STATUSES.has(entry.key_status)) problems.push(`${where}: key_status can only be awaiting_founder_confirmation`);
     if ((entry.trigger === "approved_record") !== (entry.scope?.kind === "record")) problems.push(`${where}: approved records, and only they, take the record's scope`);
     if (entry.trigger === "approved_record") problems.push(...affectedProblems(entry, meetings, restricted));
     else if (entry.affected !== undefined) problems.push(`${where}: only approved records list affected items`);

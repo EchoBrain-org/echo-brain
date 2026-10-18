@@ -46,16 +46,27 @@ A part of type `list` asks which items exist ("Which Confluence pages were
 created on October 4, 2026?"), and its evidence names every member of the list,
 each a whole item. It scores on the whole list, never item by item: found when
 research came across every member, read when a complete list research read
-holds every member, handed over when the writer saw every member, and correct
-in the answer only when the answer cites every member (a page's row or one of
-its sections). A list longer than the 25 names an answer gives is named in
-full when a statement citing its members ends "and N more" and the members
-the answer cites plus N are exactly the list. Naming 4 of 8 earns nothing,
+holds every member, cited when the plan cites every member or a found
+`which_items` need cites, by id, a list holding it (a need saved without a kind
+is content, whose list ids mean nothing), handed over when the writer saw
+every member, and correct in the answer only when the answer cites every
+member (a page's row or one of its sections). A list longer than the 25 names
+an answer gives is named in full when a statement ends "and N more" and the
+members it cites plus N are exactly the list. Naming 4 of 8 earns nothing,
 whatever the judge says. "Lists
 named in full" is that last check, made by code, so it is reported without a
 judge too, and a run whose answer misses a member is never complete and
-supported. An answer may cite a list member's row, which counts as research
-evidence like an item read in full. Only Ask cases have list parts: impact
+supported. An answer may cite the row of a member of a list research read,
+which counts as research evidence like an item read in full.
+
+Every Ask run reports `kinds`, its final plan's needs by declared kind
+(`which_items`, `which_say`, `content`, and `missing` for a need saved without
+one), and the report shows them beside each Ask case. A case's `expected_kinds`
+is scored by code as `declared_kinds`, beside each run's `kinds`: it passes when
+the set of kinds the final plan declares, a need without a kind counting as
+content, is exactly the case's ("need kinds as the case expects"). A failed run
+of such a case scores zero on it. It is a score of its own, never part of
+complete and supported. Only Ask cases have list parts: impact
 cards and sweeps record no lists. The judge sees research's lists as rows
 (filter, completeness, members' titles, dates and details, never text), and
 for any part may take a member's own title, dates, status or owner from its
