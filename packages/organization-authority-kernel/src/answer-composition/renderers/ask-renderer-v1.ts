@@ -181,10 +181,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const contentCited = needs.filter(need => (need.kind ?? "content") === "content" && need.status !== "not_found").flatMap(need => need.evidence);
       const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, full, cleanId));
       const planLists = [...new Set([...stated, ...checking])];
-      // The writer sees at most 5 lists, the plan's first; code names members from every row, past the writer's bound too.
+      const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short)))]));
+      const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap);
+      /** Every list as code reads it: code states, notes and filters each list the plan's kinds read, past the writer's bound too. */
+      const views = new Map(lists.map(list => [list.id, viewOf(list)]));
+      // The writer sees at most 5 lists, the plan's first.
       const writerOrder = [...planLists.map(id => listById.get(id)!), ...lists.filter(list => !planLists.includes(list.id))].slice(0, AGENTIC_LIST_WRITER_LISTS_MAX_V1);
-      const rows = new Map(writerOrder.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short)))]));
-      const writerListsWith = (cap: number) => writerOrder.map(list => agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap));
+      const writerListsWith = (cap: number) => writerOrder.map(list => viewOf(list, cap));
       /** What a list's members are called: their desk kinds, after the catalog's tool (ADR-0041). */
       const nounOf = (list: AgenticWriterListV1) => {
         const tool = options.source_catalog.find(entry => entry.source === list.source)?.tool_id;
@@ -298,8 +301,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** List-end gaps (a list not read to its end is never absence: the part is partial, whatever it names), then the rest. */
       const endGaps: string[] = [], listGaps: string[] = [];
       const selectionNotFound: string[] = [];
-      /** The lists the answer uses, in the order of their first use, then the stated lists the writer did not use. */
-      const usedLists = [...new Set([...uses.map(use => use.id), ...stated])].flatMap(id => writerById.get(id) ?? []);
+      /** The lists the answer uses: those the writer saw, in the order of its first use, then every stated list it did not use. */
+      const usedLists = [...new Set([...uses.map(use => use.id).filter(id => writerById.has(id)), ...stated])].map(id => views.get(id)!);
       const naming: Naming[] = usedLists.flatMap(list => {
         const id = list.id, all = rows.get(id)!, noun = nounOf(list);
         const byId = uses.find(use => use.id === id && use.members !== undefined);
@@ -324,7 +327,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const first = agenticListNameSharesV1(naming.map(value => value.by_id ? value.selected.length : 0));
       const namedById = new Set(naming.flatMap((value, index) => value.selected.slice(0, first[index]).map(member => member.id)));
       const rest = agenticListNameSharesV1(naming.map(value => value.by_id ? 0 : value.selected.filter(member => !namedById.has(member.id)).length), AGENTIC_LIST_NAMED_MAX_V1 - namedById.size);
-      const listStatements: Statement[] = naming.map((value, index) => {
+      const listStatements = naming.map((value, index) => {
         // An owner or status reads as the first selected member records it; a date range as the writer gave it.
         const where = value.where === undefined || !("value" in value.where) ? value.where : { field: value.where.field, value: value.selected[0]![value.where.field]! };
         const statement = agenticListStatementV1({
@@ -334,12 +337,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(value.by_id ? {} : { free: new Set(value.selected.flatMap((member, at) => namedById.has(member.id) ? [at] : [])) }),
         });
         // Each named member cites its own row.
-        return statementOf(statement.text, statement.cited.map(at => value.selected[at]!.id));
+        return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id) };
       });
 
       // ---- the writer's sentences (W1, W3, W4, W5) ---------------------------
       // A which_say list whose members were not all checked qualifies every sentence citing its members' text (W5).
-      const unchecked = checking.flatMap(id => writerById.get(id) ?? []).filter(list => agenticListCheckedNoteV1(list) !== undefined);
+      const unchecked = checking.map(id => views.get(id)!).filter(list => agenticListCheckedNoteV1(list) !== undefined);
       if (unchecked.length > 0) listGaps.push(UNCHECKED_GAP);
       if (unlisted) listGaps.push(WHICH_GAP);
       const sentences = answer?.sentences ?? [];
@@ -358,19 +361,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const notes = unchecked.filter(list => shorts.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
         return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts }];
       });
-      // List statements come first; the writer's sentences fill the room left, dropped from the end to fit.
-      const statements: Statement[] = [...listStatements];
-      const contentUsed: Entry[] = [];
+      // List statements come first, then the writer's sentences, all dropped from the end to fit the response's bounds (W6).
+      const statements: Statement[] = [];
       let dropped = false;
-      for (const sentence of writerSentences) {
+      for (const sentence of [...listStatements, ...writerSentences]) {
         const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !usedKeys.has(key)));
         if (statements.length >= MAX_STATEMENTS || used.length + fresh.size > MAX_CITATIONS) { dropped = true; break; }
         statements.push(statementOf(sentence.text, sentence.shorts));
-        for (const short of sentence.shorts) { const entry = byShort.get(short)!; if (!contentUsed.includes(entry)) contentUsed.push(entry); }
       }
       const notFound = [...(answer?.not_found ?? []), ...selectionNotFound];
       // A list statement cites rows for which items exist; only what the writer's sentences cite can be limited coverage.
-      const coverageLimited = coverageIsLimitedFor(bundle, contentUsed);
+      const coverageLimited = coverageIsLimitedFor(bundle, writerSentences.slice(0, Math.max(0, statements.length - listStatements.length)).flatMap(sentence => sentence.shorts.map(short => byShort.get(short)!)));
       const incomplete = (answer === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
       const dateCoverageMissing = bundle.coverage.notices.some(notice => notice.includes(MISSING_EVENT_DATE_NOTICE_V1));
       const incompleteGap = dateCoverageMissing ? MISSING_DATE_GAP : INCOMPLETE_SEARCH_GAP;
@@ -402,7 +403,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
       // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
-      const filterNotices = [...new Set([...usedLists, ...checking.flatMap(id => writerById.get(id) ?? [])])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
+      const filterNotices = [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
       // A completed answer can retain source coverage as a notice. A stop
       // becomes a notice only when the rendered answer has no existing gap.
       const responseNotices = [

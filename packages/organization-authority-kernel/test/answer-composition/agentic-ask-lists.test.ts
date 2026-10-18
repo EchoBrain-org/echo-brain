@@ -746,6 +746,45 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(none.response).toMatchObject({ outcome: "not_found", parts: [{ status: "not_found", gap: "I couldn't find this in the sources you can access." }] });
   });
 
+  it("states, notes and filters every list the plan's kinds read, past the writer's five, within the response's bounds (X26)", async () => {
+    // One list of Confluence pages a day, each its own: the writer sees five lists, and code reads every one.
+    const day = (n: number) => `2026-10-${String(n).padStart(2, "0")}`;
+    const page = (n: number) => pageRow([String(2_000_000 + n), `Day ${n} plan`, `${day(n)}T18:00:00.000Z`, `${day(n)}T18:00:00.000Z`, "1"]);
+    const text = "Which Confluence pages were created on each day of October 2026 so far?";
+    const need = "pages created on each day of October 2026";
+    /** Lists days 1 to `days`, four a step, the `owner` day with an owner filter pages cannot apply; then opens `opened` and finishes on every list and `cited`. */
+    const run = async (days: number, kind: string, writer: unknown, extra: { readonly owner?: number; readonly pages?: (n: number) => readonly EvidenceDeskItemV2[]; readonly opened?: readonly string[]; readonly cited?: readonly string[] } = {}) => {
+      const ids = Array.from({ length: days }, (_, index) => `L${index + 1}`);
+      const reads = Array.from({ length: Math.ceil(days / 4) }, (_, step) => Array.from({ length: Math.min(4, days - step * 4) }, (_, index) => step * 4 + index + 1)
+        .map(n => ({ tool: "list", args: { source: "pages", date_field: "created", since: day(n), until: day(n), ...(n === extra.owner ? { owner: "Dana" } : {}) } })));
+      const h = harness([
+        ...reads.map((actions, step) => ask(text, need, "open", [], actions, step === 0 ? undefined : "N1", kind)),
+        ...(extra.opened === undefined ? [] : [ask(text, need, "open", ids, opens(extra.opened), "N1", kind)]),
+        ask(text, need, "found", [...ids, ...(extra.cited ?? [])], [finish], "N1", kind), writer,
+      ], {
+        live_sources: [CONFLUENCE], list: vi.fn(async (input: EvidenceDeskListInputV2) => result((extra.pages ?? (n => [page(n)]))(Number(String(input.since).slice(8, 10)))) as EvidenceDeskResultV2),
+        open: vi.fn(async (input: { readonly item: string }) => result([section(page(Number(/\d+/u.exec(input.item)![0]) - 2_000_000), "It traces BUG-412 to TC-D-03.")]) as EvidenceDeskResultV2),
+      });
+      const { response, research: view } = await h.research.answerWithResearch({ question: text });
+      expect(view.stop).toEqual({ reason: "finished", completed: true });
+      expect(view.lists).toHaveLength(days);
+      expect(writerPrompt(h).lists.map((list: { id: string }) => list.id)).toEqual(ids.slice(0, 5));
+      return response;
+    };
+    const statementOf = (n: number) => `1 Confluence page created on October ${n}, 2026: Day ${n} plan.`;
+    // A which_items need on six lists: six statements, the sixth list's filter notice too, whatever the writer saw.
+    const six = await run(6, WI, { lists: [], sentences: [], not_found: [] }, { owner: 6 });
+    expect(six).toMatchObject({ outcome: "answered", notice: "Confluence pages could not be filtered by owner, so this list is not limited to that owner." });
+    expect(six.parts[0]!.statements.map(statement => statement.text)).toEqual([1, 2, 3, 4, 5, 6].map(statementOf));
+    // On eleven lists, the response's ten statements hold the first ten, and the part says what did not fit.
+    const eleven = await run(11, WI, { lists: [], sentences: [], not_found: [] });
+    expect(eleven).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Some evidence could not fit in this response." }] });
+    expect(eleven.parts[0]!.statements.map(statement => statement.text)).toEqual(Array.from({ length: 10 }, (_, index) => statementOf(index + 1)));
+    // A which_say need checks six lists; the sixth has two pages, one opened (E6 releases E8): its note and gap.
+    const checking = await run(6, WS, { lists: [], sentences: [{ text: "Day 6 plan traces BUG-412 to TC-D-03.", evidence: ["E8"] }], not_found: [] }, { pages: n => n === 6 ? [page(6), page(7)] : [page(n)], opened: ["E6"], cited: ["E8"] });
+    expect(checking).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: "Day 6 plan traces BUG-412 to TC-D-03 (1 of 2 checked so far)." }], gap: UNCHECKED }] });
+  });
+
   it("answers 'which are assigned to me' with only the members that owner records, and none as not found (X1)", async () => {
     const assigned = [ticketRow(1, "Zhen Ye"), ticketRow(2, "Dana Lee", "Done"), ticketRow(3, "zhen ye"), ticketRow(4, "Tobias Lund")];
     const text = "Which of the Jira tickets created on October 4, 2026 are assigned to Zhen Ye?";

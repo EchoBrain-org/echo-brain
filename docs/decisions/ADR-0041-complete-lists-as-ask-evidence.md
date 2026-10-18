@@ -247,6 +247,9 @@ route, header, database table or client changes.
   members past 100. Built: the rows take at most half of the writer's prompt
   room; a smaller context window halves how many members of each list it
   shows, never how many lists, and code still names members from every row.
+  The 5-list bound is the writer's view only: code reads every list research
+  read, so it states, notes and filters each list the plan's kinds read, past
+  the five the writer sees too.
   This changes the documented rule that items without text
   never reach the writer, for list members only. Related references and
   continuation metadata still never reach it.
@@ -318,8 +321,9 @@ route, header, database table or client changes.
   costing nothing when it is named again (`agenticListNameSharesV1`).
   Each statement ends "and N more" for the rest. Names stop early if the
   statement would pass the 4 KiB statement bound. The 40-citation, 10-statement
-  and 64 KiB response bounds are unchanged: list statements come first, and the
-  writer's sentences fill the room left, dropped from the end.
+  and 64 KiB response bounds are unchanged: list statements come first, then
+  the writer's sentences, all dropped from the end to fit, and a part that
+  drops one says "Some evidence could not fit in this response."
 - **Filters are never silently widened (addition 3).** The response notice
   names a requested filter that a source ignored, or applied only where items
   record it, for example "Jira tickets could not be filtered by owner, so this
