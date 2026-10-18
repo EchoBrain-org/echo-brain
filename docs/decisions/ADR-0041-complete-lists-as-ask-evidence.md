@@ -240,8 +240,9 @@ audit or public door sees it.
 - **Research can finish on a complete list** without opening any member, by
   citing its id for a `which_items` need, within the existing 12-id cap. Past
   the cap a need keeps its list ids, which the finish check reads, and item ids
-  fill the rest; a writer's sentence, whose list ids cite nothing, keeps its
-  first 12 ids, so a list id never takes the place of a row it cites.
+  fill the rest; in a writer's sentence a list id cites nothing and takes no
+  item's slot, so the sentence keeps its first 12 item ids wherever its list
+  ids stand, and a list id never takes the place of a row it cites.
 - **Content across a list (addition 4).** A `which_say` need declares it. A
   member is checked when research read its text in full, or opened its row
   through an open that left its own text whole, carried no notice or error,

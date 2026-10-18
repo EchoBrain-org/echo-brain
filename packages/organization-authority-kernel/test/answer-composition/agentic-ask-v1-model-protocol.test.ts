@@ -198,13 +198,18 @@ describe("agentic Ask model protocol parity", () => {
     // A list id after 12 item ids is never the one cut: research cited the rows, was asked for the list's id, and appended it.
     const appended = { ...value, parts: [{ question: "q", needs: [{ need: "n", status: "found", evidence: [...Array.from({ length: 15 }, (_, index) => `E${index + 1}`), "L1"] }], notes: "" }] };
     expect(parseStep(appended, { lists: true }).parts[0]!.needs[0]!.evidence).toEqual([...Array.from({ length: 11 }, (_, index) => `E${index + 1}`), "L1"]);
-    // A sentence's list ids cite nothing (W1): past 12 ids it keeps its first 12, never a list id over an item it cites.
-    expect(parseAnswer({ sentences: [{ text: "x", evidence: [...Array.from({ length: 13 }, (_, index) => `E${index + 1}`), "L2"] }], not_found: [] }).sentences[0]!.evidence)
-      .toEqual(Array.from({ length: 12 }, (_, index) => `E${index + 1}`));
-    expect(parseAnswer({ sentences: [{ text: "x", evidence: [...Array.from({ length: 12 }, (_, index) => `E${index + 1}`), "L1"] }], not_found: [] }).sentences[0]!.evidence)
-      .toEqual(Array.from({ length: 12 }, (_, index) => `E${index + 1}`));
-    expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", ...Array.from({ length: 12 }, (_, index) => `E${index + 1}`)] }], not_found: [] }).sentences[0]!.evidence)
-      .toEqual(["L1", ...Array.from({ length: 11 }, (_, index) => `E${index + 1}`)]);
+    // A sentence's list ids cite nothing (W1), so a list id is no item and takes no item's slot: the first 12 item ids
+    // stay wherever its list ids stand, and the list ids beside them, which only the writer's repair reads.
+    const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
+    const sentence = (evidence: readonly string[]) => parseAnswer({ sentences: [{ text: "x", evidence }], not_found: [] }).sentences[0]!.evidence;
+    expect(sentence([...items(1, 13), "L2"])).toEqual([...items(1, 12), "L2"]);
+    expect(sentence([...items(1, 12), "L1"])).toEqual([...items(1, 12), "L1"]);
+    expect(sentence(["L1", ...items(1, 12)])).toEqual(["L1", ...items(1, 12)]);
+    expect(sentence([...items(1, 6), "L1", ...items(7, 7)])).toEqual([...items(1, 6), "L1", ...items(7, 6)]);
+    // The same twelve items whatever the list ids' positions.
+    for (const evidence of [["L1", ...items(9, 11), "E1"], [...items(9, 11), "E1", "L1"], [...items(9, 5), "L1", ...items(14, 6), "E1"]]) {
+      expect(sentence(evidence).filter(id => id.startsWith("E"))).toEqual([...items(9, 11), "E1"]);
+    }
     // The writer's evidence keeps list ids beside item ids.
     expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }).sentences[0]!.evidence).toEqual(["L1", "E2"]);
   });

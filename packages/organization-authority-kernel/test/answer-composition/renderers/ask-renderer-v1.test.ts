@@ -278,13 +278,16 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(listId.result.response.parts[0]!.statements).toEqual([{ text: "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.", citation_indexes: [0], private: false }]);
   });
 
-  it("keeps a sentence's first 12 ids past the cap, so a list id never takes the place of a private row it cites", async () => {
-    // Eleven team records (E9..E19) and one only_me row (E1), then L1: thirteen ids, over the schema's 12. A list id
-    // cites nothing in a sentence (W1), so the row it cites stays and the sentence is private (W6).
-    const sentence = { text: "THERM-1 waits on the approved records.", evidence: [...ids(9, 11), "E1", "L1"] };
-    const rendered = await alone({ bundle: listBundle(8, 11, [list("L1", ids(1, 8))], [C(ids(9, 11))]), replies: [{ lists: [], sentences: [sentence], not_found: [] }], version: 6 }).render("What waits on the approved records?");
-    expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: sentence.text, citation_indexes: Array.from({ length: 12 }, (_, index) => index), private: true }]);
-    expect(rendered.cited).toEqual([...ids(9, 11), "E1"]);
+  it("keeps a sentence's first 12 item ids past the cap wherever its list id stands, so a list id never takes the place of a private row it cites", async () => {
+    // Eleven team records (E9..E19) and one only_me row (E1), with L1 before, among or after them: thirteen ids, over the
+    // schema's 12. A list id cites nothing in a sentence (W1) and takes no item's slot, so the row it cites stays and the
+    // sentence is private (W6), whatever the list id's position.
+    for (const evidence of [[...ids(9, 11), "E1", "L1"], ["L1", ...ids(9, 11), "E1"], [...ids(9, 5), "L1", ...ids(14, 6), "E1"]]) {
+      const sentence = { text: "THERM-1 waits on the approved records.", evidence };
+      const rendered = await alone({ bundle: listBundle(8, 11, [list("L1", ids(1, 8))], [C(ids(9, 11))]), replies: [{ lists: [], sentences: [sentence], not_found: [] }], version: 6 }).render("What waits on the approved records?");
+      expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: sentence.text, citation_indexes: Array.from({ length: 12 }, (_, index) => index), private: true }]);
+      expect(rendered.cited).toEqual([...ids(9, 11), "E1"]);
+    }
   });
 
   it("leaves out a rows sentence beside a content sentence after one repair, and notes only a which_say list's members", async () => {

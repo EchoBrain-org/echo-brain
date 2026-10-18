@@ -168,23 +168,24 @@ export function cleanId(value: unknown): string | null {
 /** Raw entries read from one evidence array before the cap. */
 const EVIDENCE_IDS_READ = 64;
 /**
- * Evidence ids, each once, at most 12. With `lists` (Ask, ADR-0041), list ids such as L1 are read beside item ids.
- * With `listsFirst`, where a list id carries meaning (an Ask need's evidence, which the finish check reads), list ids
- * are never the ones the cap cuts: past 12 ids, every list id stays and item ids fill the rest, in their order.
- * Otherwise (a task's need, a writer's sentence, whose list ids cite nothing) the first 12 ids are kept.
+ * Evidence ids, each once. Without `lists` (a task's need) the first 12 ids are kept, as before ADR-0041. With `lists`
+ * (Ask), list ids such as L1 are read beside item ids from a bounded read, and a list id never takes an item's place.
+ * With `listsFirst`, where a list id carries meaning (an Ask need's evidence, which the finish check reads), past 12
+ * ids every list id stays and item ids fill the rest, in their order. Otherwise (a writer's sentence, whose list ids
+ * cite nothing, W1) a list id is no item and takes no item's slot: the first 12 item ids stay, and the list ids beside
+ * them, which only the writer's repair reads.
  */
 function cleanIds(value: unknown, lists = false, listsFirst = lists): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
-  // Without listsFirst the first 12 ids are kept, as before ADR-0041; with it a bounded read finds a list id past them.
-  for (const raw of listsFirst ? value.slice(0, EVIDENCE_IDS_READ) : value) {
+  for (const raw of lists ? value.slice(0, EVIDENCE_IDS_READ) : value) {
     const id = (lists ? parseAgenticListIdV1(raw) : null) ?? cleanId(raw);
     if (id !== null && !result.includes(id)) result.push(id);
-    if (!listsFirst && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) break;
+    if (!lists && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) break;
   }
-  if (result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return Object.freeze(result);
-  const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, AGENTIC_ASK_MAX_EVIDENCE_IDS_V1);
-  let items = AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 - listIds.length;
+  if (listsFirst && result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return Object.freeze(result);
+  const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, listsFirst ? AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 : undefined);
+  let items = AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 - (listsFirst ? listIds.length : 0);
   return Object.freeze(result.filter(id => listIds.includes(id) || (parseAgenticListIdV1(id) === null && items-- > 0)));
 }
 function needStatus(value: unknown): NeedStatus {
@@ -362,7 +363,7 @@ export function parseAnswer(value: unknown): Answer {
     const entry = object(raw);
     if (entry === null) continue;
     const text = stripEvidenceIds(cleanLine(entry.text, SENTENCE_CHARS), true);
-    // A sentence's list ids cite nothing (W1), so its first 12 ids are kept, rows it cites included.
+    // A sentence's list ids cite nothing (W1), so they take no item's slot: its first 12 item ids are kept, rows included.
     if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry.evidence, true, false) }));
     if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) break;
   }
