@@ -30,8 +30,8 @@ import {
   agenticListSelectionNotFoundV1,
   agenticListSelectV1,
   agenticListStatementV1,
-  agenticNeedSupportV1,
   agenticOpenReadsV1,
+  agenticPlanListsV1,
   agenticWriterListMemberV1,
   agenticWriterListV1,
   parseAgenticListIdV1,
@@ -171,19 +171,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** Which list member an item is, or is part of: an opened page's section is its page. */
       const membership = agenticListMembershipV1(lists, bundle.items);
       const full = (short: string) => byShort.get(short)?.full === true;
-      /** What research's opens read: the same relation its finish check used. */
+      /** What research's opens read: a member is checked through its clean open (addition 4). */
       const opens = agenticOpenReadsV1(bundle.rounds, full, cleanId);
-      /** Lists a found need of the plan rests on, in the plan's order; and those it claims content across, citing text of their members (addition 4). */
-      const relied: AgenticListIdV1[] = [];
-      const across = new Set<AgenticListIdV1>();
-      for (const part of bundle.plan) for (const need of part.needs) {
-        if (need.status !== "found") continue;
-        const support = agenticNeedSupportV1(need.evidence, { list: id => listById.has(id), full, member_of: membership.first, opened: short => opens.clean.get(short) ?? [] });
-        for (const id of support.lists) {
-          if (!relied.includes(id)) relied.push(id);
-          if (support.content.some(short => membership.in(id, short) !== undefined)) across.add(id);
-        }
-      }
+      // The lists the plan's declared kinds read: those its which_items needs answer with, then those its which_say needs
+      // check, which it claims content across (addition 4). They stand for the lists the plan rests on until the writer's
+      // rules read the kinds themselves.
+      const { stated, checking } = agenticPlanListsV1(bundle.plan.flatMap(part => part.needs), id => listById.has(id));
+      const relied: readonly AgenticListIdV1[] = [...new Set([...stated, ...checking])];
+      const across: ReadonlySet<AgenticListIdV1> = new Set(checking);
       const checked = checkedItems(bundle, opens);
       // The writer sees at most 5 lists, the plan's first; code names members from every row, past the writer's bound too.
       const writerOrder = [...relied.map(id => listById.get(id)!), ...lists.filter(list => !relied.includes(list.id))].slice(0, AGENTIC_LIST_WRITER_LISTS_MAX_V1);

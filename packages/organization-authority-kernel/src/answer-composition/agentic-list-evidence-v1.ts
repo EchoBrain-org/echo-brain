@@ -238,41 +238,18 @@ export function agenticNeedReadsListV1(need: Pick<AgenticResearchNeedV1, "kind" 
   return need.kind === "which_say" || (need.kind === "which_items" && need.status !== "not_found");
 }
 
-// ---- support kinds ----------------------------------------------------
-// Two kinds support a found need: a list gives list facts (which items exist, and each member's title, dates, status
-// and owner), never what a member says; an item read in full gives content.
-
-/** How one found need's cited ids divide into support. */
-export interface AgenticNeedSupportV1 {
-  /**
-   * Lists cited by id, then the list of each cited member row (a member research never read in full, cited without a
-   * body its clean open returned), then each list two or more of whose members the need cites, read in full or not;
-   * each once. List facts.
-   */
-  readonly lists: readonly AgenticListIdV1[];
-  /** Cited items research read in full. Content. */
-  readonly content: readonly string[];
-  /** Cited ids that support nothing: an unknown list, or an item neither read in full nor a list member. */
-  readonly unsupported: readonly string[];
-}
-
-/** A list member an item is, or is part of. */
-export interface AgenticListMemberRefV1 {
-  readonly list: AgenticListIdV1;
-  /** The member's E id: the item itself, or the member row it is part of. */
-  readonly member: string;
-}
-
-/** What the request knows about a cited id. */
-export interface AgenticNeedSupportLookupV1 {
-  /** A list with this id was read in this request. */
-  readonly list: (id: AgenticListIdV1) => boolean;
-  /** Research read this item's complete released text. */
-  readonly full: (id: string) => boolean;
-  /** The first list, in id order, holding this item as a member or holding the member it is part of (agenticListMembershipV1). */
-  readonly member_of: (id: string) => AgenticListMemberRefV1 | undefined;
-  /** The bodies a clean open of this item returned, every one read in full (agenticOpenReadsV1); none when it had no clean open. */
-  readonly opened: (id: string) => readonly string[];
+/**
+ * The lists a plan's declared kinds read (ADR-0041), each once in plan order, from the needs code reads a list for:
+ * those its which_items needs cite by id, which code states, and those its which_say needs cite, which research
+ * checks. `known` says which ids name a list research read.
+ */
+export function agenticPlanListsV1(
+  needs: readonly Pick<AgenticResearchNeedV1, "kind" | "status" | "evidence">[],
+  known: (id: AgenticListIdV1) => boolean,
+): { readonly stated: readonly AgenticListIdV1[]; readonly checking: readonly AgenticListIdV1[] } {
+  const cited = (kind: "which_items" | "which_say") => Object.freeze([...new Set(needs.filter(need => need.kind === kind && agenticNeedReadsListV1(need)).flatMap(need =>
+    need.evidence.flatMap(id => { const list = parseAgenticListIdV1(id); return list !== null && known(list) ? [list] : []; })))]);
+  return Object.freeze({ stated: cited("which_items"), checking: cited("which_say") });
 }
 
 // ---- opens: what research read by opening an item ------------------------
@@ -295,9 +272,8 @@ export interface AgenticOpenReadsV1 {
 /**
  * What research read by opening items, from its rounds in order (ADR-0041). An open is clean when it was not
  * truncated, carried no notice or error, and returned only bodies research then read in full. A limited open undoes
- * an item's clean open until a later clean one. The finish check, the loop, the renderer and the evaluation read the
- * same relation: a list member is checked through its clean open (addition 4), and a row cited beside a body its clean
- * open returned is that body's identity, not its list. `id_of` reads an open's id as the step protocol does.
+ * an item's clean open until a later clean one. The renderer and the evaluation read the same relation: a list member
+ * is checked through its clean open (addition 4). `id_of` reads an open's id as the step protocol does.
  */
 export function agenticOpenReadsV1(
   rounds: readonly { readonly actions: readonly AgenticOpenActionV1[] }[],
@@ -337,8 +313,6 @@ function citedObject(citation: unknown): string | undefined {
 
 /** Which list member an item is (ADR-0041). */
 export interface AgenticListMembershipV1 {
-  /** The first list, in id order, holding the item as a member or holding the member it is part of; and that member. */
-  readonly first: (id: string) => AgenticListMemberRefV1 | undefined;
   /** The member of `list` the item is, or is part of. */
   readonly in: (list: AgenticListIdV1, id: string) => string | undefined;
 }
@@ -347,8 +321,9 @@ export interface AgenticListMembershipV1 {
  * An item belongs to a list when it is a member, or when it cites the same
  * object as a member: opening a Confluence row releases its sections as new
  * items, and opening a ticket row releases its body. So "the pages are A, B, C
- * and D" citing four opened sections names four of the list's members. `lists`
- * in id order; `items` every item the request registered.
+ * and D" citing four opened sections names four of the list's members. It is
+ * identity only: it never says what a need asks. `items` every item the
+ * request registered.
  */
 export function agenticListMembershipV1(
   lists: readonly { readonly id: AgenticListIdV1; readonly members: readonly string[] }[],
@@ -363,58 +338,15 @@ export function agenticListMembershipV1(
     }
     return [list.id, { members: new Set(list.members), byObject }] as const;
   }));
-  const memberIn = (list: AgenticListIdV1, id: string): string | undefined => {
-    const known = objects.get(list);
-    if (known === undefined) return undefined;
-    if (known.members.has(id)) return id;
-    const object = citedObject(citationOf.get(id));
-    return object === undefined ? undefined : known.byObject.get(object);
-  };
   return Object.freeze({
-    in: memberIn,
-    first: (id: string) => {
-      for (const list of lists) {
-        const member = memberIn(list.id, id);
-        if (member !== undefined) return Object.freeze({ list: list.id, member });
-      }
-      return undefined;
+    in: (list: AgenticListIdV1, id: string): string | undefined => {
+      const known = objects.get(list);
+      if (known === undefined) return undefined;
+      if (known.members.has(id)) return id;
+      const object = citedObject(citationOf.get(id));
+      return object === undefined ? undefined : known.byObject.get(object);
     },
   });
-}
-
-/**
- * Divides a found need's evidence (ADR-0041). The finish check then refuses a
- * need whose lists can still be read further ("keep reading the list"), and a
- * need with no list and no content (today's rule for content needs).
- *
- * One member research read in full is content about that item. Two or more
- * members of one list are a selection of it, read in full or not, so the need
- * also rests on that list: a follow-up row carries its text, and an opened
- * meeting record keeps its row's id, so "my open follow-ups" citing the first
- * page's ten members still has to read the list to its end. An opened section
- * counts as the member it is part of.
- *
- * A member row cited beside a body its clean open returned names that body's
- * item: "what does the gate review page say" citing the page's row and its
- * section is content, not its list. A row cited without such a body still
- * gives list support.
- */
-export function agenticNeedSupportV1(evidence: readonly string[], lookup: AgenticNeedSupportLookupV1): AgenticNeedSupportV1 {
-  const lists: AgenticListIdV1[] = []; const content: string[] = []; const unsupported: string[] = [];
-  const add = <T>(values: T[], value: T) => { if (!values.includes(value)) values.push(value); };
-  const members = new Map<AgenticListIdV1, Set<string>>();
-  for (const id of evidence) {
-    const list = parseAgenticListIdV1(id);
-    if (list !== null) { if (lookup.list(list)) add(lists, list); else add(unsupported, id); continue; }
-    const member = lookup.member_of(id);
-    // Two sections of one page are one member, and so are a row and its opened body.
-    if (member !== undefined) members.set(member.list, (members.get(member.list) ?? new Set()).add(member.member));
-    if (lookup.full(id)) { add(content, id); continue; }
-    if (member !== undefined && lookup.opened(id).some(body => evidence.includes(body))) continue;
-    if (member !== undefined) add(lists, member.list); else add(unsupported, id);
-  }
-  for (const [list, cited] of members) if (cited.size >= 2) add(lists, list);
-  return Object.freeze({ lists: Object.freeze(lists), content: Object.freeze(content), unsupported: Object.freeze(unsupported) });
 }
 
 // ---- the writer -------------------------------------------------------

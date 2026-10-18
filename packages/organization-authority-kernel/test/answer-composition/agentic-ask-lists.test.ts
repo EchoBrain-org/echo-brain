@@ -714,7 +714,9 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       expect(view.rounds.at(-1)!.rejected).toEqual(plan[0] === "L1" ? [] : [expect.stringContaining("cites no list: cite the id of the list that holds its items (L1). ")]);
       expect(writerInputs(h)).toHaveLength(2);
       expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 4, cited_by_plan: true });
-      expect(writerPrompt(h, 1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members; for what its members say, cite L1 beside their evidence');
+      // A which_items need claims nothing about what its members say, so the repair offers no way to say it.
+      expect(writerPrompt(h, 1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members');
+      expect(writerPrompt(h, 1).validation_error).not.toContain("for what its members say");
       // Code names all 8. The sentence cites only members, four by their sections, and not the list's id, so it restated
       // part of the list: it is dropped, and the list answers which pages exist in full.
       expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
@@ -953,14 +955,14 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const rows = Array.from({ length: 8 }, (_, index) => listed(`a${index + 1}`, action));
     const bodies = new Map(rows.map((row, index) => [row.id, record(`a${index + 1}`, `Mara will do task ${index + 1}.`, action)]));
     const open = vi.fn(async (input: { readonly item: string }) => result([bodies.get(input.item)!]) as EvidenceDeskResultV2);
-    const text = "Which actions does Mara own?";
     const opened = ["E1", "E2", "E3", "E4"];
-    const run = async (evidence: readonly string[]) => {
+    // Research declares what the question asks: which actions Mara owns (a list answers it), or which of them say something.
+    const run = async (text: string, kind: string, plan: readonly string[], evidence: readonly string[]) => {
       const subset = { lists: [], sentences: [{ text: "Mara owns tasks 1, 2, 3 and 4.", evidence }], not_found: [] };
       const h = harness([
         ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
         ask(text, "actions owned by Mara", "open", [], opened.map(id => ({ tool: "open", args: { id } })), "N1"),
-        ask(text, "actions owned by Mara", "found", opened, [finish], "N1"),
+        ask(text, "actions owned by Mara", "found", plan, [finish], "N1", kind),
         subset, subset,
       ], { list: vi.fn(async () => result(rows) as EvidenceDeskResultV2), open });
       const { response, research: view } = await h.research.answerWithResearch({ question: text });
@@ -969,14 +971,14 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       return { h, response };
     };
     // An opened meeting record keeps its row's id: four of them without the list name 4 of 8.
-    const { h, response } = await run(opened);
+    const { h, response } = await run("Which actions does Mara own?", WI, ["L1"], opened);
     expect(writerInputs(h)).toHaveLength(2);
     // Code names all 8, and the sentence that restated 4 of them is dropped.
     expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([`8 actions with owner Mara: ${rows.map(row => row.label).join("; ")}.`]);
-    // The plan claims content across the list, so the list's id beside their text says what those 4 say: it uses the
-    // list, as an opened page's sections would, and the note keeps it from reading as complete.
-    const across = await run(["L1", ...opened]);
+    // A which_say need checks the list, so the list's id beside their text says what those 4 say: it uses the list, as
+    // an opened page's sections would, and the note keeps it from reading as complete.
+    const across = await run("Which of Mara's actions name a numbered task?", WS, ["L1", ...opened], ["L1", ...opened]);
     expect(writerInputs(across.h)).toHaveLength(1);
     expect(across.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
     expect(across.response.parts[0]!.statements.map(statement => statement.text)).toEqual(["Mara owns tasks 1, 2, 3 and 4 (4 of 8 checked so far)."]);
@@ -997,15 +999,17 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       [["L1", "E11", "E12"], [say(["E11", "E12"]), say(["L1", "E11", "E12"])], 2],
       [["E11", "E12"], [say(["E11", "E12"]), say(["L1", "E11", "E12"])], 2],
     ] as const) {
+      // A which_say need cites the list it checks; the same sections declared content give the same answer.
+      const kind = plan[0] === "L1" ? WS : "content";
       const h = harness([
         ask(text, need, "open", [], [OCT4_LIST]),
         ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
         ask(text, need, "open", [], ["E5", "E6", "E7", "E8"].map(id => ({ tool: "open", args: { id } })), "N1"),
-        ask(text, need, "found", plan, [finish], "N1"),
+        ask(text, need, "found", plan, [finish], "N1", kind),
         ...replies,
       ], october4Desk({ open }));
       const { response } = await h.research.answerWithResearch({ question: text });
-      expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 8, complete: true, cited_by_plan: true });
+      expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 8, complete: true, cited_by_plan: kind === WS });
       expect(writerInputs(h)).toHaveLength(calls);
       expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: two, citation_indexes: [0, 1] }] }] });
       expect(response.parts[0]!.statements).toHaveLength(1);
@@ -1039,10 +1043,9 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([fullStatement, "Gate reviews and Traceability mention BUG-412."]);
   });
 
-  it("notes a one-ticket answer when the plan cites the list beside that ticket: a trade-off kept for content across a list", async () => {
-    // "When is THERM-3 due?" cited on L1 beside the opened ticket reads like "which of these mention BUG-412" cited on L1
-    // beside the one that does (confirmed finding 4): code cannot tell them apart, so it notes both. On the ticket alone,
-    // the answer is that ticket's content.
+  it("reads a content need's list id as nothing: a one-ticket answer beside its list adds no note", async () => {
+    // "When is THERM-3 due?" is a fact about one item: content, whose list ids carry no meaning (round-2 finding 11).
+    // Only a which_say need's list gets the checked note.
     const open = vi.fn(async () => result([ticketBody(3, "THERM-3 is due October 9, 2026.")]) as EvidenceDeskResultV2);
     const text = "When is THERM-3 due?";
     const need = "THERM-3 due date";
@@ -1057,11 +1060,9 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(writerInputs(alone.h)).toHaveLength(1);
     expect(alone.response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: "THERM-3 is due October 9, 2026." }] }] });
     const beside = await run(["L1", "E3"]);
-    expect(writerInputs(beside.h)).toHaveLength(2);
-    expect(beside.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
-    expect(beside.response.parts[0]!.statements.map(statement => statement.text)).toEqual([
-      `8 Jira tickets created on October 4, 2026: ${ticketNames(1, 8).join("; ")}.`, "THERM-3 is due October 9, 2026 (1 of 8 checked so far).",
-    ]);
+    expect(writerInputs(beside.h)).toHaveLength(1);
+    expect(beside.response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: "THERM-3 is due October 9, 2026." }] }] });
+    expect(beside.response.parts[0]!.statements).toHaveLength(1);
   });
 
   it("takes the list's id beside opened members that keep their row ids as content across the list: tickets, actions and follow-ups alike", async () => {
@@ -1208,6 +1209,17 @@ describe("Ask research: the finish check follows each need's declared kind (ADR-
     expect(desk.list).toHaveBeenCalledOnce();
     expect(writer.research).toMatchObject({ completed: false, stop_reason: "unusable_step" });
     expect(left).toEqual([]);
+  });
+
+  it("follows a content declaration on ten follow-up rows: it finishes without reading on, on no list (Known limits)", async () => {
+    // A which-question declared content gets content's rules: the declaration decides, and nothing checks it.
+    const text = "What are my open follow-ups?";
+    const need = "my open follow-ups";
+    const { desk, steps, writer } = await followUpAsk(text, [ask(text, need, "open", [], [FOLLOW_UPS]), ask(text, need, "found", ids(10), [finish], "N1", "content")]);
+    expect(steps).toHaveLength(2);
+    expect(desk.list).toHaveBeenCalledOnce();
+    expect(writer.research).toMatchObject({ completed: true, stop_reason: "finished" });
+    expect(writer.lists).toEqual([expect.objectContaining({ id: "L1", complete: false, count: 10, cited_by_plan: false })]);
   });
 
   it("never waits for the end of a which_say list, and refuses a not_found one until absence is shown", async () => {

@@ -37,8 +37,7 @@ import {
   agenticListIdV1,
   agenticListMembershipV1,
   agenticListMembersNounV1,
-  agenticNeedSupportV1,
-  agenticOpenReadsV1,
+  agenticPlanListsV1,
   createAgenticListEvidenceV1,
   type AgenticListEvidenceV1,
   type AgenticListFilterApplicationV1,
@@ -900,11 +899,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   }));
   /** Which list member each item is, or is part of: an opened page's section is its page (ADR-0041). */
   const listMembership = (lists: readonly { readonly id: AgenticListIdV1; readonly members: readonly string[] }[]) => agenticListMembershipV1(lists, [...entries.values()]);
-  /** The bodies each item's clean open returned, read in full: a row cited beside one is that body's item (ADR-0041). */
-  const openedBodies = () => {
-    const { clean } = agenticOpenReadsV1(rounds, citable, cleanId);
-    return (id: string) => clean.get(id) ?? [];
-  };
   /** A question goal's finish check, by each need's declared kind; membership only words a refusal (ADR-0041). */
   const questionCompletionProblems = (parts: readonly { readonly needs: readonly NeedState[] }[]) => {
     const checked = listsForCheck();
@@ -1252,14 +1246,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       full: entry.full, opened: entry.opened, preloaded: entry.preloaded === true, touched: entry.touched,
       ...(entry.query === undefined ? {} : { query: entry.query }), cited_by_plan: cited.has(entry.short),
     }));
-    // A question goal's lists, and what the person is told about the filters of those a found need rests on (ADR-0041).
+    // A question goal's lists, and what the person is told about the filters of those its needs' declared kinds read:
+    // the lists code states and the lists research checks (ADR-0041).
     const listed = ask ? listsInOrder() : [];
     const listRecords = listed.map(state => listEvidence(state));
-    const membership = listMembership(listRecords);
-    const opened = openedBodies();
-    const relied = new Set(plan.flatMap(part => part.needs.filter(need => need.status === "found").flatMap(need => agenticNeedSupportV1(need.evidence, {
-      list: id => listRecords.some(list => list.id === id), full: citable, member_of: membership.first, opened,
-    }).lists)));
+    const { stated, checking } = agenticPlanListsV1(plan.flatMap(part => part.needs), id => listRecords.some(list => list.id === id));
+    const relied = new Set([...stated, ...checking]);
     const filterNotices = listed.flatMap((state, index) => {
       if (!relied.has(state.id)) return [];
       const source = sourcesById.get(state.source);

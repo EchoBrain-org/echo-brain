@@ -22,8 +22,9 @@ import {
   agenticListSelectV1,
   agenticListStatementV1,
   agenticListMembershipV1,
-  agenticNeedSupportV1,
+  agenticNeedReadsListV1,
   agenticOpenReadsV1,
+  agenticPlanListsV1,
   agenticWriterListMemberV1,
   agenticWriterListV1,
   createAgenticListEvidenceV1,
@@ -33,7 +34,6 @@ import {
   type AgenticListEvidenceV1,
   type AgenticListFilterApplicationV1,
   type AgenticListIdV1,
-  type AgenticNeedSupportLookupV1,
   type AgenticOpenActionV1,
   type AgenticWriterListMemberV1,
 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
@@ -199,82 +199,44 @@ describe("list membership", () => {
 
   it("reads an opened section of a listed page as that page, never as another member", () => {
     const membership = agenticListMembershipV1(lists, [...pages, section("E9", pages[0]!.item, "s1"), section("E10", pages[0]!.item, "s2"), section("E11", pages[1]!.item, "s1"), section("E12", pageRow("999", "Other"), "s1")]);
-    expect(membership.first("E2")).toEqual({ list: "L1", member: "E2" });
-    expect(membership.first("E9")).toEqual({ list: "L1", member: "E1" });
-    expect(membership.first("E10")).toEqual({ list: "L1", member: "E1" });
+    expect(membership.in("L1", "E2")).toBe("E2");
+    expect(membership.in("L2", "E2")).toBe("E2");
+    expect(membership.in("L1", "E9")).toBe("E1");
+    expect(membership.in("L1", "E10")).toBe("E1");
     expect(membership.in("L2", "E11")).toBe("E2");
     expect(membership.in("L2", "E9")).toBeUndefined();
-    // A page no list holds, and an id nothing knows, belong to no list.
-    expect(membership.first("E12")).toBeUndefined();
-    expect(membership.first("E40")).toBeUndefined();
+    // A page no list holds, an id nothing knows, and a list nobody read hold nothing.
+    for (const list of ["L1", "L2"] as const) for (const id of ["E12", "E40"]) expect(membership.in(list, id)).toBeUndefined();
+    expect(membership.in("L3", "E1")).toBeUndefined();
   });
 
   it("reads a ticket's opened body as its listed row, and keeps each meeting record its own", () => {
     const ticket = (short: string, id: string, ticket_id: string) => ({ short, item: { id, citation: { kind: "ticket", tool_id: "jira", external_scope_id: "cloud-one", ticket_id, permalink: `https://tickets.example.test/browse/T-${ticket_id}`, text_sha256: sha256Digest(id) } } });
     const atom = (short: string, atom_id: string) => ({ short, item: { id: atom_id, citation: { kind: "approved_record", atom_id, record_sha256: canonicalSha256({ record: 1 }) } } });
     const membership = agenticListMembershipV1([{ id: "L1", members: ["E1", "E3"] }], [ticket("E1", "row", "100"), ticket("E2", "body", "100"), atom("E3", canonicalSha256({ atom: 1 })), atom("E4", canonicalSha256({ atom: 2 }))]);
-    expect(membership.first("E2")).toEqual({ list: "L1", member: "E1" });
-    expect(membership.first("E4")).toBeUndefined();
+    expect(membership.in("L1", "E2")).toBe("E1");
+    expect(membership.in("L1", "E4")).toBeUndefined();
   });
 });
 
-describe("support kinds", () => {
-  const membership = (id: string) => OCTOBER_4.members.includes(id) ? { list: "L1" as const, member: id } : undefined;
-  const lookup: AgenticNeedSupportLookupV1 = {
-    list: id => id === "L1",
-    // E9 to E12 are sections research opened; rows E1 to E8 have no text.
-    full: id => ["E9", "E10", "E11", "E12"].includes(id),
-    member_of: membership,
-    opened: () => [],
-  };
+describe("what a need's declared kind asks of lists", () => {
+  const need = (kind: "which_items" | "which_say" | "content" | undefined, status: "open" | "found" | "not_found", evidence: readonly string[] = []) =>
+    ({ need: "n", ...(kind === undefined ? {} : { kind }), status, evidence });
 
-  it("reads the refused round-2 finish of the October 4 run as the list", () => {
-    const support = agenticNeedSupportV1(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"], lookup);
-    expect(support).toEqual({ lists: ["L1"], content: [], unsupported: [] });
+  it("reads a list for a which_items need research has not given up on, and for a which_say need of any status", () => {
+    expect(["open", "found", "not_found"].map(status => agenticNeedReadsListV1(need("which_items", status as "open")))).toEqual([true, true, false]);
+    expect(["open", "found", "not_found"].map(status => agenticNeedReadsListV1(need("which_say", status as "open")))).toEqual([true, true, true]);
+    // A content need's list ids carry no meaning, and a need without a kind is content.
+    for (const status of ["open", "found", "not_found"] as const) for (const kind of ["content", undefined] as const) expect(agenticNeedReadsListV1(need(kind, status))).toBe(false);
   });
 
-  it("reads the accepted round-3 finish as the list plus four sections of content", () => {
-    // The protocol's 12-id cap cut that finish to E1..E12.
-    const support = agenticNeedSupportV1(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10", "E11", "E12"], lookup);
-    expect(support).toEqual({ lists: ["L1"], content: ["E9", "E10", "E11", "E12"], unsupported: [] });
-  });
-
-  it("takes a cited list id, and names what supports nothing", () => {
-    expect(agenticNeedSupportV1(["L1", "E1", "L1"], lookup)).toEqual({ lists: ["L1"], content: [], unsupported: [] });
-    expect(agenticNeedSupportV1(["L5", "E40", "E9", "E9"], lookup)).toEqual({ lists: [], content: ["E9"], unsupported: ["L5", "E40"] });
-    expect(agenticNeedSupportV1(["E40"], lookup)).toEqual({ lists: [], content: [], unsupported: ["E40"] });
-  });
-
-  it("counts one member read in full as content, not as its list", () => {
-    const opened: AgenticNeedSupportLookupV1 = { ...lookup, full: id => id === "E3" };
-    expect(agenticNeedSupportV1(["E3"], opened)).toEqual({ lists: [], content: ["E3"], unsupported: [] });
-  });
-
-  it("rests a need on a list when it cites two or more of its members, read in full or not", () => {
-    // Follow-up rows carry text, and an opened meeting record keeps its row's id: such members are read in full.
-    const opened: AgenticNeedSupportLookupV1 = { ...lookup, full: id => ["E2", "E3", "E9"].includes(id) };
-    expect(agenticNeedSupportV1(["E2", "E3"], opened)).toEqual({ lists: ["L1"], content: ["E2", "E3"], unsupported: [] });
-    expect(agenticNeedSupportV1(["E9", "E3"], opened)).toEqual({ lists: [], content: ["E9", "E3"], unsupported: [] });
-  });
-
-  it("counts an opened section as the member it is part of: four pages' sections rest on their list, one page's do not", () => {
-    // E9 to E12 are sections of E1 to E4; E13 is a second section of E1.
-    const parts: Readonly<Record<string, string>> = { E9: "E1", E10: "E2", E11: "E3", E12: "E4", E13: "E1" };
-    const sections: AgenticNeedSupportLookupV1 = { ...lookup, full: id => id in parts, member_of: id => membership(parts[id] ?? id) };
-    expect(agenticNeedSupportV1(["E9", "E10", "E11", "E12"], sections)).toEqual({ lists: ["L1"], content: ["E9", "E10", "E11", "E12"], unsupported: [] });
-    expect(agenticNeedSupportV1(["E9", "E13"], sections)).toEqual({ lists: [], content: ["E9", "E13"], unsupported: [] });
-  });
-
-  it("reads a row cited beside a body its clean open returned as that body's item, never as its list", () => {
-    // Opening E3 returned its section E11; opening E4 returned E12. E5 was never opened.
-    const parts: Readonly<Record<string, string>> = { E11: "E3", E12: "E4" };
-    const opens: Readonly<Record<string, readonly string[]>> = { E3: ["E11"], E4: ["E12"] };
-    const pages: AgenticNeedSupportLookupV1 = { ...lookup, full: id => id in parts, member_of: id => membership(parts[id] ?? id), opened: id => opens[id] ?? [] };
-    expect(agenticNeedSupportV1(["E3", "E11"], pages)).toEqual({ lists: [], content: ["E11"], unsupported: [] });
-    // A row whose own body is not cited still names its list, and two pages are two members.
-    expect(agenticNeedSupportV1(["E5", "E11"], pages)).toEqual({ lists: ["L1"], content: ["E11"], unsupported: [] });
-    expect(agenticNeedSupportV1(["E4", "E11"], pages)).toEqual({ lists: ["L1"], content: ["E11"], unsupported: [] });
-    expect(agenticNeedSupportV1(["E3", "E11", "E4", "E12"], pages)).toEqual({ lists: ["L1"], content: ["E11", "E12"], unsupported: [] });
+  it("names the lists code states and the lists research checks, each once in plan order, never a content need's", () => {
+    const known = (id: AgenticListIdV1) => id !== "L9";
+    expect(agenticPlanListsV1([
+      need("content", "found", ["L4", "E1"]), need("which_say", "found", ["L2", "E9", "L1"]), need("which_items", "found", ["L3", "L1", "L9"]),
+      need("which_items", "open", ["l5"]), need("which_items", "not_found", ["L6"]), need("which_say", "not_found", ["L7"]), need(undefined, "found", ["L8"]), need("which_items", "found", ["E1", "E2"]),
+    ], known)).toEqual({ stated: ["L3", "L1", "L5"], checking: ["L2", "L1", "L7"] });
+    expect(agenticPlanListsV1([], known)).toEqual({ stated: [], checking: [] });
   });
 });
 
