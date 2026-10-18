@@ -370,7 +370,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
         for (const page of PAGES) for (const hidden of [page.id, page.receipt_sha256, (page.citation as { permalink: string }).permalink]) expect(prompt).not.toContain(hidden);
       } },
     ...[EMPTY, useL1].map((writer): Row => ({
-      id: "C1", name: `states all 8 October 4 pages after the trace's own step 2 is refused once, the writer using ${writer.lists.length} lists`, ...O4,
+      id: "C1", name: `states all 8 October 4 pages after the trace's own step 2 is refused once, the writer using ${writer.lists.length ? "L1" : "no list"}`, ...O4,
       steps: [read([OCT4_LIST]), fin(WI, ...ids(1, 8)), fin(WI, "L1")], w: [writer], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [cite(FULL8, 8)],
     })),
     { id: "C2", name: "notes a which_say need's sentence and states no list, the writer seeing the list as checked, not stated", ...B4, steps: [...READ4, fin(WS, "L1", "E12")], w: [say(TRACE, ["E12"])],
@@ -486,10 +486,8 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     })),
     { id: "R4b", name: "states the list first, then four pages selected by id with their facts: 8 members named", ...R4, w: [use({ id: "L1", members: ids(1, 4) })], out: "answered", citations: 8,
       says: [FULL8, `4 of the 8 Confluence pages created on October 4, 2026: ${[pageFacts(OCT4_TITLES[0]!, "October 5, 2026"), ...OCT4_TITLES.slice(1, 4).map(title => pageFacts(title))].join("; ")}.`] },
-    ...["All eight are current pages."].map((text): Row => ({
-      id: "R6, R10", name: `leaves out "${text}", citing only the list's id, after one repair, and says a claim was left out`, ...O4,
-      steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say(text, ["L1"], [{ id: "L1" }]), say(text, ["L1"], [{ id: "L1" }])], repaired: true, out: "partial", says: [FULL8], gap: UNSUPPORTED,
-    })),
+    { id: "R6, R10", name: "leaves out a sentence citing only the list's id after one repair, and says a claim was left out", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")],
+      w: [say("All eight are current pages.", ["L1"], [{ id: "L1" }]), say("All eight are current pages.", ["L1"], [{ id: "L1" }])], repaired: true, out: "partial", says: [FULL8], gap: UNSUPPORTED },
     { id: "R6", name: "answers with the list alone once the writer drops a list-id sentence after its repair", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say("All eight are current pages.", ["L1"]), useL1], repaired: true, out: "answered", says: [FULL8] },
     { id: "R7 (R2a)", name: "answers which tickets mention BUG-412 once all 8 were opened, the list's id beside the two: no note", q: "Which Jira tickets created on October 4, 2026 mention BUG-412?", need: "tickets created on 2026-10-04 that mention BUG-412",
       desk: () => jira(tickets(1, 8), { body: bodyText }), steps: [read([TICKETS_LIST]), read(opens(ids(1, 4))), read(opens(ids(5, 4))), fin(WS, "L1", "E3", "E5")], w: [say("THERM-3 and THERM-5 mention BUG-412.", ["L1", "E3", "E5"])],
