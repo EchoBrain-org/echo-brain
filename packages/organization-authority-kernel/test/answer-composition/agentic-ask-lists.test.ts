@@ -572,6 +572,34 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(writerInputs(repeated)).toHaveLength(2);
   });
 
+  it("writes a list in full beside a selection of its members by id, in either order, and never takes part of it selected by id for the list", async () => {
+    const text = "Which Confluence pages were created on October 4, 2026, and when was the PRD last updated?";
+    const run = (writer: readonly unknown[]) => harness([ask(text, OCT4_NEED, "open", [], [OCT4_LIST]), ask(text, OCT4_NEED, "found", ["L1"], [finish], "N1"), ...writer], october4Desk());
+    const facts = (title: string, updated = "October 4, 2026") => `${title} (status current, created October 4, 2026, updated ${updated})`;
+    const prd = `1 of the 8 Confluence pages created on October 4, 2026: ${facts(OCT4_NAMES[4]!)}.`;
+    for (const [lists, said] of [
+      [[{ id: "L1", members: ["E5"] }, { id: "L1" }], [prd, fullStatement]],
+      [[{ id: "L1" }, { id: "L1", members: ["E5"] }], [fullStatement, prd]],
+    ] as const) {
+      const h = run([{ lists, sentences: [], not_found: [] }]);
+      const { response } = await h.research.answerWithResearch({ question: text });
+      expect(writerInputs(h)).toHaveLength(1);
+      expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+      expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual(said);
+      // The PRD's row is cited once, by both statements.
+      expect(response.citations).toHaveLength(8);
+    }
+    // Four pages selected by id answer "which" with part of the list: sent back once, then code writes the list before them.
+    const four = { lists: [{ id: "L1", members: ["E1", "E2", "E3", "E4"] }], sentences: [], not_found: [] };
+    const h = run([four, four]);
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(writerInputs(h)).toHaveLength(2);
+    expect(writerPrompt(h, 1).validation_error).toContain('research found this answer in list L1, which the answer uses only to select some of its members by id: put {"id": "L1"} in "lists" too so code names its 8 members');
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+      fullStatement, `4 of the 8 Confluence pages created on October 4, 2026: ${[facts(OCT4_NAMES[0]!, "October 5, 2026"), ...OCT4_NAMES.slice(1, 4).map(title => facts(title))].join("; ")}.`,
+    ]);
+  });
+
   it("writes the list itself when the writer gives no usable reply", async () => {
     const h = research([{ wrong: true }, { still: "wrong" }]);
     const { response } = await h.research.answerWithResearch({ question: OCT4 });

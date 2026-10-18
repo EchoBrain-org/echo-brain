@@ -253,6 +253,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
        */
       const foundNothing = (answer: Answer) => answer.sentences.length === 0 && (answer.lists ?? []).length === 0 && answer.not_found.length > 0;
       /**
+       * The answer uses a list through "lists": all its members, those one owner or status selects, or members selected
+       * by id, every one, or one for its row facts ("who owns THERM-46", which research may find on the list's id). Two
+       * or more of them, not all, selected by id name part of the list, as citing them would.
+       */
+      const listsUse = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id &&
+        (use.members === undefined || use.members.length === 1 || use.members.length === (listById.get(id)?.members.length ?? 0)));
+      /**
        * The answer uses a list when it names it in "lists", or when a sentence claims content across it: the list's id
        * beside text the writer read that is not one of the list's own rows (an opened section, or an item outside the
        * list), or, for a list a found need of the plan claims content across, beside its members' own text (an opened
@@ -263,7 +270,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
        * beside four opened sections, or "you have 10 open follow-ups" citing L1 and ten of them, on a plan that found
        * the need on L1, are subsets too.
        */
-      const usesList = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id) ||
+      const usesList = (answer: Answer, id: AgenticListIdV1) => listsUse(answer, id) ||
         (!(relied.includes(id) && !across.has(id)) &&
           keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short) && (across.has(id) || membership.in(id, short) !== short))));
       /**
@@ -271,10 +278,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
        * member counts whether the writer has its text or only its row (a follow-up's row carries its text), and an
        * opened section counts as its page. Rows are list facts only, so a sentence naming two or more members by their
        * rows names part of the list whatever else it cites: only "lists" uses the list then. `final` is true for the
-       * reply code keeps (no repair follows it), which alone may answer nothing over the plan's list.
+       * reply code keeps (no repair follows it), which alone may answer nothing over the plan's list. Any use in "lists"
+       * is enough for a list the plan does not rest on; one it rests on needs more than part of it selected by id.
        */
       const listProblems = (answer: Answer, final: boolean): readonly { readonly id: AgenticListIdV1; readonly reason: string }[] => writerLists.flatMap(list => {
-        if (list.count === 0 || (answer.lists ?? []).some(use => use.id === list.id)) return [];
+        const selected = (answer.lists ?? []).some(use => use.id === list.id);
+        if (list.count === 0 || listsUse(answer, list.id) || (selected && !list.cited_by_plan)) return [];
         const cited = keptSentences(answer).map(sentence => sentence.evidence.filter(short => allowed.has(short)));
         const subset = (count: number) => count >= 2 && count < list.count
           ? [{ id: list.id, reason: `the answer cites ${count} of the ${list.count} members of list ${list.id} without the list: put {"id": "${list.id}"} in "lists", with "where" to select by owner or status, so code names every matching member; for what those members say, cite ${list.id} beside their evidence` }]
@@ -286,7 +295,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           if (nothing && final) return [];
           const content = across.has(list.id) ? `; for what its members say, cite ${list.id} beside their evidence` : "";
           const keep = nothing ? `; keep "not_found" only if that list does not answer the question` : "";
-          return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members${content}${keep}` }];
+          const use = selected ? `uses only to select some of its members by id: put {"id": "${list.id}"} in "lists" too` : `does not use: put {"id": "${list.id}"} in "lists"`;
+          return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer ${use} so code names its ${list.count} members${content}${keep}` }];
         }
         return byRows.length > 0 ? byRows : subset(membersCited(list.id, cited.flat()).size);
       });
@@ -374,12 +384,18 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const forced: readonly AgenticListIdV1[] = answer === null
         ? relied.filter(id => (writerById.get(id)?.count ?? 0) > 0)
         : listProblems(answer, last.final).map(problem => problem.id);
+      // A list may be used once in full or by a selection and once by members' ids; each use is a statement.
       const uses: { readonly list: AgenticWriterListV1; readonly where?: AgenticAnswerListUseV1["where"]; readonly members?: readonly string[] }[] = [];
       for (const use of answer?.lists ?? []) {
         const list = writerById.get(use.id);
-        if (list !== undefined && !uses.some(value => value.list.id === use.id)) uses.push({ list, ...(use.where === undefined ? {} : { where: use.where }), ...(use.members === undefined ? {} : { members: use.members }) });
+        if (list !== undefined && !uses.some(value => value.list.id === use.id && (value.members === undefined) === (use.members === undefined))) uses.push({ list, ...(use.where === undefined ? {} : { where: use.where }), ...(use.members === undefined ? {} : { members: use.members }) });
       }
-      for (const id of forced) if (!uses.some(value => value.list.id === id)) uses.push({ list: writerById.get(id)! });
+      // A list code writes goes before the answer's selection of its members by id.
+      for (const id of forced) {
+        if (uses.some(value => value.list.id === id && value.members === undefined)) continue;
+        const at = uses.findIndex(value => value.list.id === id);
+        uses.splice(at === -1 ? uses.length : at, 0, { list: writerById.get(id)! });
+      }
       const listGaps: string[] = [];
       const selectionNotFound: string[] = [];
       const naming = uses.flatMap(use => {

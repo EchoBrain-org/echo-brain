@@ -146,7 +146,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }, { lists: true }).sentences[0]!.evidence).toEqual(["L1", "E2"]);
   });
 
-  it("reads the lists Ask's answer uses: each once, by id, with an optional owner or status selection", () => {
+  it("reads the lists Ask's answer uses: each once in full or by an owner or status selection, and once by members' ids", () => {
     const value = {
       lists: ["l2", { id: "L1" }, { id: "[L3]", where: { field: "Owner", value: " Dana  Lee " } }, { id: "L1", where: { field: "owner", value: "x" } },
         { id: "L4", where: { field: "title", value: "PRD" } }, { id: "L5", where: { field: "status", value: " " } }, { id: "E6" }, 7, { id: "L8" }, { id: "L9" }],
@@ -164,6 +164,12 @@ describe("agentic Ask model protocol parity", () => {
     ], sentences: [], not_found: [] }, { lists: true }).lists!;
     expect(members.slice(0, 2)).toEqual([{ id: "L1", members: ["E5", "E7", "E9"] }, { id: "L2", where: { field: "status", value: "open" } }]);
     expect(members[2]!.members).toEqual(Array.from({ length: 25 }, (_, index) => `E${index + 1}`));
+    // A list may be used once in full or by a selection and once by id, in the writer's order; still at most 5 lists.
+    const both = parseAnswer({ lists: [
+      { id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L1", where: { field: "owner", value: "Dana" } }, { id: "L1", members: ["E6"] },
+      { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L6" }, { id: "L5", members: ["E2"] },
+    ], sentences: [], not_found: [] }, { lists: true }).lists!;
+    expect(both).toEqual([{ id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L5", members: ["E2"] }]);
     // A list reference in prose is stripped only for Ask's answer; elsewhere "(L2)" stays prose.
     expect(stripEvidenceIds("Support tier (L2) owns it (E4).")).toBe("Support tier (L2) owns it.");
     expect(stripEvidenceIds("Support tier owns it (L2) [E4, L1].", true)).toBe("Support tier owns it.");

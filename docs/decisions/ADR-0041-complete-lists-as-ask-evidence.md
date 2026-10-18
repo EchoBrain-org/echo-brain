@@ -238,7 +238,12 @@ route, header, database table or client changes.
   zone), after "1 of the 8 Confluence pages created ..." when they are not
   every member, or "1 of at least 25 ..." for a list not complete. Their
   facts stand whether or not the list ended, so such a selection adds no
-  list-end gap.
+  list-end gap. A list may be used once in full or by a selection and once
+  by id, and code writes both statements ("which pages were created on
+  October 4, and when was the PRD last updated"). A selection by id of one
+  member, for its row facts, or of every member uses the list; two or more,
+  not all, of a list the plan found a need on name part of it, so the answer
+  goes back once, and then code writes the full statement before them.
 - **Code writes the sentence that names a list's items.** Code writes one
   statement per list the answer uses, first in the part. Each statement cites
   every member it names, by that member's own row:

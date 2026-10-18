@@ -300,8 +300,9 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
 }
 
 /**
- * Ask's answer. With `lists` (ADR-0041) it also reads the lists the answer uses, each once and at most
- * AGENTIC_LIST_WRITER_LISTS_MAX_V1, and keeps list ids such as L1 in a sentence's evidence.
+ * Ask's answer. With `lists` (ADR-0041) it also reads the lists the answer uses, at most
+ * AGENTIC_LIST_WRITER_LISTS_MAX_V1 of them, each at most once in full or by a selection and once by members' ids
+ * ("which pages were created, and when was the PRD updated"), and keeps list ids such as L1 in a sentence's evidence.
  */
 export function parseAnswer(value: unknown, options: { readonly lists?: boolean } = {}): Answer {
   const body = object(value);
@@ -326,8 +327,10 @@ export function parseAnswer(value: unknown, options: { readonly lists?: boolean 
   const uses: AgenticAnswerListUseV1[] = [];
   for (const raw of Array.isArray(body.lists) ? body.lists : []) {
     const use = listUseOf(raw);
-    if (use !== null && !uses.some(existing => existing.id === use.id)) uses.push(use);
-    if (uses.length === AGENTIC_LIST_WRITER_LISTS_MAX_V1) break;
+    if (use === null || uses.some(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined))) continue;
+    if (!uses.some(existing => existing.id === use.id) && new Set(uses.map(existing => existing.id)).size === AGENTIC_LIST_WRITER_LISTS_MAX_V1) continue;
+    uses.push(use);
+    if (uses.length === 2 * AGENTIC_LIST_WRITER_LISTS_MAX_V1) break;
   }
   return Object.freeze({ sentences: Object.freeze(sentences), not_found: Object.freeze(notFound), lists: Object.freeze(uses) });
 }
