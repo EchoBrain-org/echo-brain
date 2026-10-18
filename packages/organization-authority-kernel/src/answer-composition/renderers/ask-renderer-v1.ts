@@ -33,7 +33,6 @@ import {
   agenticListSelectionNotFoundV1,
   agenticListSelectV1,
   agenticListStatementV1,
-  agenticNeedReadsListV1,
   agenticOpenReadsV1,
   agenticPlanListsV1,
   agenticWriterListMemberV1,
@@ -117,9 +116,7 @@ function bytes(value: string | undefined): number { return value === undefined ?
  * it unchecked until a later clean open.
  */
 function checkedItems(bundle: AgenticEvidenceBundleV1, opens: AgenticOpenReadsV1): ReadonlySet<string> {
-  const checked = new Set<string>(opens.clean);
-  for (const entry of bundle.items) if (entry.full && !opens.limited.has(entry.short)) checked.add(entry.short);
-  return checked;
+  return new Set([...opens.clean, ...bundle.items.filter(entry => entry.full && !opens.limited.has(entry.short)).map(entry => entry.short)]);
 }
 
 /** The sentence with code's note before its closing punctuation. */
@@ -177,10 +174,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const full = (short: string) => byShort.get(short)?.full === true;
       const needs = bundle.plan.flatMap(part => part.needs);
       // The lists the plan's declared kinds read: those its which_items needs cite, which code states (W3), and those its
-      // which_say needs cite, which research checks (W5). The kinds alone decide; what a need cites beside them never does.
-      const { stated, checking } = agenticPlanListsV1(needs, id => listById.has(id));
-      /** A need code reads a list for that cites none research read: research stopped before it found its list (W3). */
-      const unlisted = needs.some(need => agenticNeedReadsListV1(need) && !need.evidence.some(id => listById.has(parseAgenticListIdV1(id) ?? "L0")));
+      // which_say needs cite, which research checks (W5), and whether one of them cites none (W3). The kinds alone decide;
+      // what a need cites beside them never does.
+      const { stated, checking, unlisted } = agenticPlanListsV1(needs, id => listById.has(id));
       /** What content needs research has not given up on cite: the members they ask about (W4). */
       const contentCited = needs.filter(need => (need.kind ?? "content") === "content" && need.status !== "not_found").flatMap(need => need.evidence);
       const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, full, cleanId));
@@ -299,9 +295,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** One statement of a list; `which` when it says which items exist (a use in full or by `where`), never for a use by id alone. */
       type Naming = { readonly list: AgenticWriterListV1; readonly noun: AgenticListNounFormsV1; readonly selected: readonly AgenticWriterListMemberV1[]; readonly which: boolean; readonly where?: AgenticListSelectionV1; readonly by_id: boolean };
       const uses = answer?.lists ?? [];
-      /** A list not read to its end is never evidence of absence: its gap marks the part partial, whatever was named. */
-      const endGaps: string[] = [];
-      const listGaps: string[] = [];
+      /** List-end gaps (a list not read to its end is never absence: the part is partial, whatever it names), then the rest. */
+      const endGaps: string[] = [], listGaps: string[] = [];
       const selectionNotFound: string[] = [];
       /** The lists the answer uses, in the order of their first use, then the stated lists the writer did not use. */
       const usedLists = [...new Set([...uses.map(use => use.id), ...stated])].flatMap(id => writerById.get(id) ?? []);
@@ -309,8 +304,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const id = list.id, all = rows.get(id)!, noun = nounOf(list);
         const byId = uses.find(use => use.id === id && use.members !== undefined);
         const picked = byId === undefined ? undefined : all.filter(member => byId.members!.includes(member.id));
-        // Code adds the full use of a stated list the writer gave no use that says which items exist (W3), whatever the reply
-        // and however many members it has.
+        // Code adds the full use of a stated list the writer gave no use saying which items exist (W3), whatever its members.
         const given = uses.find(use => use.id === id && use.members === undefined) ?? (stated.includes(id) ? { id } : undefined);
         const where = given?.where;
         const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
@@ -407,8 +401,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           : { status: "not_found", statements: [], gap: withGaps(gapText ?? (dateCoverageMissing ? MISSING_DATE_GAP : incomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP))! };
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
-      // What the person is told about the filters of the lists the answer uses, whatever they select, and those a which_say
-      // need checks (W7).
+      // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
       const filterNotices = [...new Set([...usedLists, ...checking.flatMap(id => writerById.get(id) ?? [])])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
       // A completed answer can retain source coverage as a notice. A stop
       // becomes a notice only when the rendered answer has no existing gap.

@@ -231,13 +231,19 @@ describe("what a need's declared kind asks of lists", () => {
     for (const status of ["open", "found", "not_found"] as const) for (const kind of ["content", undefined] as const) expect(agenticNeedReadsListV1(need(kind, status))).toBe(false);
   });
 
-  it("names the lists code states and the lists research checks, each once in plan order, never a content need's", () => {
+  it("names the lists code states and the lists research checks, each once in plan order, never a content need's, and a need with none", () => {
     const known = (id: AgenticListIdV1) => id !== "L9";
-    expect(agenticPlanListsV1([
+    const plan = [
       need("content", "found", ["L4", "E1"]), need("which_say", "found", ["L2", "E9", "L1"]), need("which_items", "found", ["L3", "L1", "L9"]),
-      need("which_items", "open", ["l5"]), need("which_items", "not_found", ["L6"]), need("which_say", "not_found", ["L7"]), need(undefined, "found", ["L8"]), need("which_items", "found", ["E1", "E2"]),
-    ], known)).toEqual({ stated: ["L3", "L1", "L5"], checking: ["L2", "L1", "L7"] });
-    expect(agenticPlanListsV1([], known)).toEqual({ stated: [], checking: [] });
+      need("which_items", "open", ["l5"]), need("which_items", "not_found", ["L6"]), need("which_say", "not_found", ["L7"]), need(undefined, "found", ["L8"]),
+    ] as const;
+    expect(agenticPlanListsV1(plan, known)).toEqual({ stated: ["L3", "L1", "L5"], checking: ["L2", "L1", "L7"], unlisted: false });
+    // A need code reads a list for that cites only rows, or only a list research never read, has no list (W3's gap).
+    expect(agenticPlanListsV1([...plan, need("which_items", "found", ["E1", "E2"])], known)).toMatchObject({ stated: ["L3", "L1", "L5"], unlisted: true });
+    expect(agenticPlanListsV1([need("which_say", "not_found", ["L9"])], known)).toEqual({ stated: [], checking: [], unlisted: true });
+    // A not_found which_items need or a content need asks for no list, so it never makes the plan unlisted.
+    expect(agenticPlanListsV1([need("which_items", "not_found"), need("content", "found", ["E1"])], known)).toEqual({ stated: [], checking: [], unlisted: false });
+    expect(agenticPlanListsV1([], known)).toEqual({ stated: [], checking: [], unlisted: false });
   });
 });
 
