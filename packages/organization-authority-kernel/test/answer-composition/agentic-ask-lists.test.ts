@@ -1860,6 +1860,37 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     expect(h.inputs[0]!.system_prompt).toContain("for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.");
     expect(response.parts[0]).toEqual({ question: BUG, status: "answered", statements: [{ text: "Seven of the eight pages mention BUG-412: every page but ECHO Product Pipeline — Start Here.", citation_indexes: [0, 1, 2, 3, 4, 5, 6], private: true }] });
   });
+
+  it("X27: keeps a sentence on a stated list member's text while a need research left declares nothing it asks about (W4)", async () => {
+    const text = "Which Confluence pages were created on October 4, 2026, and is the DVT gate on hold?";
+    const DVT_NEED = "whether the DVT gate is on hold";
+    const DVT = "The Gate reviews page says the DVT gate is on hold pending fixture rework.";
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, /^Gate reviews/u.test(row.label) ? `${row.label}: the DVT gate is on hold pending fixture rework.` : `${row.label}: BUG-412 is traced to TC-D-03.`)]) as EvidenceDeskResultV2;
+    });
+    const run = async (steps: readonly unknown[], writer: unknown) => {
+      const h = harness([askAll(text, [[OCT4_NEED, "open", [], WI], [DVT_NEED, "open", []]], [OCT4_LIST]), ...steps, writer], october4Desk({ open }));
+      return h.research.answerWithResearch({ question: text });
+    };
+    // Research stops with the content need open: it cites nothing, so code cannot tell the Gate reviews sentence restates the list.
+    const stopped = await run([askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [DVT_NEED, "open", [], "content", "N2"]], opens(["E3"])), ...UNUSABLE], say(DVT, ["E9"]));
+    expect(stopped.research.stop).toEqual({ reason: "unusable_step", completed: false });
+    expect(stopped.response).toMatchObject({ outcome: "answered", notice: "Research stopped before it finished, so relevant context may be missing." });
+    expect(stopped.response.parts[0]!.statements.map(statement => statement.text)).toEqual([FULL8, DVT]);
+    // So too a which_say need research left without its list: the sentence stays, and the part says the list was not confirmed.
+    const unlisted = await run([askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [BUG_NEED, "open", [], WS, "N2"]], opens(["E4"])), ...UNUSABLE], say(TRACE, ["E9"]));
+    expect(unlisted.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: WHICH }] });
+    expect(unlisted.response.parts[0]!.statements.map(statement => statement.text)).toEqual([FULL8, TRACE]);
+    // Once every need declares, a content need found on another item asks nothing of Gate reviews: its sentence restates the list (Known limit).
+    const found = await run([
+      askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [DVT_NEED, "open", [], "content", "N2"]], opens(["E3", "E4"])),
+      askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [DVT_NEED, "found", ["E10"], "content", "N2"]], [finish]),
+    ], say(DVT, ["E9"]));
+    expect(found.research.stop).toEqual({ reason: "finished", completed: true });
+    expect(found.response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: FULL8 }] }] });
+    expect(found.response.parts[0]!.statements).toHaveLength(1);
+  });
 });
 
 describe("a task goal keeps the rules before ADR-0041", () => {

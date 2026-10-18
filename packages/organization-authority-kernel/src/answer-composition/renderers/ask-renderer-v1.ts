@@ -177,16 +177,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // which_say needs cite, which research checks (W5), and whether one of them cites none (W3). The kinds alone decide;
       // what a need cites beside them never does.
       const { stated, checking, unlisted } = agenticPlanListsV1(needs, id => listById.has(id));
-      /** What content needs research has not given up on cite: the members they ask about (W4). */
-      const contentCited = needs.filter(need => (need.kind ?? "content") === "content" && need.status !== "not_found").flatMap(need => need.evidence);
+      /** What found content needs cite: the members they ask about (W4). */
+      const contentCited = needs.filter(need => (need.kind ?? "content") === "content" && need.status === "found").flatMap(need => need.evidence);
+      /** Every need research has not given up on declares what it asks about: a list kind its list, a content need what it was found in (W4). */
+      const declared = !unlisted && !needs.some(need => (need.kind ?? "content") === "content" && need.status === "open");
       const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, full, cleanId));
-      const planLists = [...new Set([...stated, ...checking])];
       const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short)))]));
       const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap);
       /** Every list as code reads it: code states, notes and filters each list the plan's kinds read, past the writer's bound too. */
       const views = new Map(lists.map(list => [list.id, viewOf(list)]));
       // The writer sees at most 5 lists, the plan's first.
-      const writerOrder = [...planLists.map(id => listById.get(id)!), ...lists.filter(list => !planLists.includes(list.id))].slice(0, AGENTIC_LIST_WRITER_LISTS_MAX_V1);
+      const writerOrder = [...new Set([...stated, ...checking, ...lists.map(list => list.id)])].slice(0, AGENTIC_LIST_WRITER_LISTS_MAX_V1).map(id => listById.get(id)!);
       const writerListsWith = (cap: number) => writerOrder.map(list => viewOf(list, cap));
       /** What a list's members are called: their desk kinds, after the catalog's tool (ADR-0041). */
       const nounOf = (list: AgenticWriterListV1) => {
@@ -348,9 +349,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const sentences = answer?.sentences ?? [];
       // A sentence the kept reply still rests on rows or list ids is left out, and the part says so, never what it claimed.
       if (sentences.some(restsOnRows)) listGaps.push(UNSUPPORTED_GAP);
-      // A sentence that only restates a stated list (W4): each text item it cites is a member, or part of one, of a list code
-      // states, that no other need asks about: no which_say need's list holds it, and no content need cites it.
-      const restates = (shorts: readonly string[]) => shorts.every(short => stated.some(id => {
+      // A sentence that only restates a stated list (W4), once every need declares: each text item it cites is a member, or
+      // part of one, of a list code states, that no other need asks about: no which_say list holds it, no content need cites it.
+      const restates = (shorts: readonly string[]) => declared && shorts.every(short => stated.some(id => {
         const member = membership.in(id, short);
         return member !== undefined && !checking.some(other => membership.in(other, short) !== undefined) && !contentCited.some(cited => membership.in(id, cited) === member);
       }));
