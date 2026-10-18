@@ -329,8 +329,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const where = value.where === undefined || !("value" in value.where) ? value.where : { field: value.where.field, value: value.selected[0]![value.where.field]! };
         const statement = agenticListStatementV1({
           noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected,
-          // Each statement names at least its first member.
-          share: Math.max(1, shares[index]!.share), free: shares[index]!.free, ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
+          share: shares[index]!.share, free: shares[index]!.free, ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
         });
         // Each named member cites its own row.
         return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id) };

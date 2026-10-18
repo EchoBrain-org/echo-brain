@@ -327,6 +327,10 @@ route, header, database table or client changes.
   items exist. A member costs one name however many statements name it: one
   that another statement names costs nothing where it is named again, so two
   lists of the same 20 pages name all 20 in each (`agenticListNameSharesV1`).
+  The one exception is a statement's first member, which it always names:
+  once the 25 are spent, a first member no other statement names costs one
+  name past them, and that name buys no other member; one another statement
+  names costs nothing, so the statement names no member past the 25.
   Each statement ends "and N more" for the rest. Names stop early if the
   statement would pass the 4 KiB statement bound. The 40-citation, 10-statement
   and 64 KiB response bounds are unchanged: list statements come first, then

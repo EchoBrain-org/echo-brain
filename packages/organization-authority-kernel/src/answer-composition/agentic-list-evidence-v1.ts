@@ -670,7 +670,7 @@ export interface AgenticListStatementInputV1 {
   readonly which?: boolean;
   /** The selected members, in list order: every member without a selection. */
   readonly selected: readonly AgenticListNamedMemberV1[];
-  /** Members this statement may cite: the answer's share (agenticListNameSharesV1). */
+  /** Members this statement may take that cost a name: the answer's share (agenticListNameSharesV1), 0 once its names are spent. */
   readonly share: number;
   /** Indexes of `selected` that cost no share: members another statement of the answer takes (agenticListNameSharesV1). */
   readonly free?: ReadonlySet<number>;
@@ -693,13 +693,15 @@ export interface AgenticListStatementInputV1 {
  * AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free`
  * costs no share. The first name is always written, covering its free members
  * and at most `share` others: a name never covers a member the statement does
- * not cite. `named` is how many of `selected` the names cover, so "and N more"
+ * not cite. It always covers the first member: with `share` 0, a first member
+ * no other statement takes costs one name past the share, which buys no other
+ * member. `named` is how many of `selected` the names cover, so "and N more"
  * is `selected.length - named`; `cited` are their indexes in `selected`, in
  * order, which the caller cites.
  */
 export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly named: number; readonly cited: readonly number[] } {
   const { count, complete, where, selected } = input;
-  if (selected.length === 0 || input.share < 1) throw new RangeError("A list statement names at least one member");
+  if (selected.length === 0 || !Number.isSafeInteger(input.share) || input.share < 0) throw new RangeError("A list statement names at least one member, with a whole, non-negative share");
   const noun = formsOf(input.noun);
   const phrase = phraseAfter(noun, input.filter);
   const k = selected.length;
@@ -713,12 +715,14 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
       : `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`;
   const namesOf = (named: readonly (readonly number[])[]) => byId ? named.map(([index]) => factsName(selected[index!]!, input.filter.time_zone)) : groupNames(selected, named);
   const free = input.free ?? new Set<number>();
+  // Each statement names at least its first member (W6): free, or for one name past a spent share that buys nothing else.
+  const share = free.has(0) ? input.share : Math.max(1, input.share);
   const cost = (group: readonly number[]) => group.filter(index => !free.has(index)).length;
   const [head, ...others] = byId ? selected.map((_, index) => [index]) : nameGroups(selected);
-  const paid = head!.filter(index => !free.has(index)).slice(0, input.share);
+  const paid = head!.filter(index => !free.has(index)).slice(0, share);
   const groups = [head!.filter(index => free.has(index) || paid.includes(index)), ...others];
   let fit = 1;
-  for (let spent = cost(groups[0]!); fit < groups.length && spent + cost(groups[fit]!) <= input.share; fit += 1) spent += cost(groups[fit]!);
+  for (let spent = cost(groups[0]!); fit < groups.length && spent + cost(groups[fit]!) <= share; fit += 1) spent += cost(groups[fit]!);
   for (let shown = fit; shown >= 1; shown -= 1) {
     const named = groups.slice(0, shown);
     const covered = named.reduce((total, group) => total + group.length, 0);

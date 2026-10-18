@@ -445,6 +445,17 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.cited).toEqual(["E1", ...ids(3, 25)]);
   });
 
+  it("names no 26th member for a statement whose first member another statement already names (W6)", async () => {
+    // The writer selects the first 25 of 30 by id, which takes the answer's 25 names; the full statement W3 adds names
+    // them free, its first member among them, so it names no member past them.
+    const run = alone({ bundle: listBundle(30, 0, [list("L1", ids(1, 30))], [WI(["L1"])]), replies: [{ lists: [{ id: "L1", members: ids(1, 25) }], sentences: [], not_found: [] }], version: 6 });
+    const rendered = await run.render("Which tickets were created on October 4?");
+    const [full, byId] = rendered.result.response.parts[0]!.statements;
+    expect(full!.text).toBe(`30 tickets created on October 4, 2026: ${names(1, 25).join("; ")}; and 5 more.`);
+    expect(byId!.text).toMatch(/^25 of the 30 tickets created on October 4, 2026: THERM-1: /u);
+    expect(rendered.cited).toEqual(ids(1, 25));
+  });
+
   it("keeps the 40-citation and ten-statement bounds: list statements first, the writer's sentences dropped from the end", async () => {
     const pairs = Array.from({ length: 10 }, (_, index) => ({ text: `Record ${index + 1} applies.`, evidence: [`E${61 + 2 * index}`, `E${62 + 2 * index}`] }));
     const run = alone({ bundle: listBundle(60, 20, [list("L1", ids(1, 60))], [WI(["L1"])]), replies: [{ lists: [{ id: "L1" }], sentences: pairs, not_found: [] }], version: 6 });

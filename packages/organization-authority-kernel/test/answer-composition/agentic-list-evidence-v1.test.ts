@@ -367,7 +367,7 @@ describe("names across one answer", () => {
 
   it("costs a member one name however many statements name it, by id or not (W6)", () => {
     const named = (shares: ReturnType<typeof agenticListNameSharesV1>, statements: readonly { readonly selected: ReturnType<typeof members>; readonly by_id: boolean }[]) => statements.map((value, index) =>
-      agenticListStatementV1({ noun: "Confluence pages", filter: {}, count: value.selected.length, complete: true, selected: value.selected, share: Math.max(1, shares[index]!.share), free: shares[index]!.free, ...(value.by_id ? { by_id: true } : {}) }).named);
+      agenticListStatementV1({ noun: "Confluence pages", filter: {}, count: value.selected.length, complete: true, selected: value.selected, share: shares[index]!.share, free: shares[index]!.free, ...(value.by_id ? { by_id: true } : {}) }).named);
     // Two lists of the same 20 pages (created that week, updated that week): each takes every other page, and each
     // statement names all 20, the other's pages free; 20 distinct names, within the 25.
     for (const statements of [[which(members(20)), which(members(20))], [byId(members(20)), byId(members(20))]]) {
@@ -387,6 +387,22 @@ describe("names across one answer", () => {
     expect(wideShares.reduce((total, value) => total + value.share, 0)).toBe(AGENTIC_LIST_NAMED_MAX_V1);
     const texts = wide.map((value, index) => agenticListStatementV1({ noun: "Confluence pages", filter: {}, count: value.selected.length, complete: true, selected: value.selected, share: wideShares[index]!.share, free: wideShares[index]!.free }));
     expect(new Set(texts.flatMap((statement, index) => statement.cited.map(at => wide[index]!.selected[at]!.id))).size).toBe(AGENTIC_LIST_NAMED_MAX_V1);
+  });
+
+  it("names a statement's first member past a spent share only when no other statement takes it, and buys nothing else with it (W6)", () => {
+    const statement = (statements: readonly { readonly selected: ReturnType<typeof members>; readonly by_id: boolean }[]) => {
+      const shares = agenticListNameSharesV1(statements);
+      expect(shares[0]!.share).toBe(0);
+      const value = agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 30, complete: true, selected: statements[0]!.selected, share: shares[0]!.share, free: shares[0]!.free });
+      return { ...value, distinct: new Set([...value.cited.map(at => statements[0]!.selected[at]!.id), ...statements.slice(1).flatMap(other => other.selected.map(member => member.id))]).size };
+    };
+    // The first 25 of 30 by id take the answer's 25 names; the list in full names them free, its first member among
+    // them, so it names no 26th.
+    expect(statement([which(members(30)), byId(members(25))])).toMatchObject({ named: 25, distinct: 25, text: expect.stringMatching(/: Page 1; .*; Page 25; and 5 more\.$/u) });
+    // Members 2 to 26 by id: the first member is no other statement's, so it is named past the spent share, and its name
+    // buys no other member: the free ones follow, and the rest are "and N more".
+    expect(statement([which(members(30)), byId(members(25, 2))])).toMatchObject({ named: 26, distinct: 26, text: expect.stringMatching(/: Page 1; Page 2; .*; Page 26; and 4 more\.$/u) });
+    expect(() => agenticListStatementV1({ noun: "pages", filter: {}, count: 1, complete: true, selected: members(1), share: -1 })).toThrow(RangeError);
   });
 });
 
