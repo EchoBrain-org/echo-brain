@@ -49,18 +49,21 @@ export function unwrap(raw: unknown): unknown {
   return value.result;
 }
 
-export function statusView(raw: unknown): AppStatus {
+/** The account signed in, if any; `now` is the host's clock, for how long the weekly sign-in has left. */
+export function statusView(raw: unknown, now: number): AppStatus {
   const value = object(raw);
   if (value.kind !== 'echo-person-client-status-v1') throw new ViewError();
   const version = text(value.installed_version);
   if (value.signed_in !== true) return { signed_in: false, account: null, client_version: version };
   const role = value.membership_type;
   if (role !== 'owner' && role !== 'employee') throw new ViewError();
+  const due = typeof value.hard_reauthentication_at === 'string' ? Date.parse(value.hard_reauthentication_at) : Number.NaN;
   const account: Account = {
     authority: text(value.connected_authority),
     membership_id: text(value.membership_id),
     display_name: text(value.display_name),
     role,
+    ...(Number.isFinite(due) ? { sign_in_due: { at: new Date(due).toISOString(), in_ms: due - now } } : {}),
   };
   return { signed_in: true, account, client_version: version };
 }

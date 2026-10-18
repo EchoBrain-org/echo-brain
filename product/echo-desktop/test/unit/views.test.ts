@@ -91,12 +91,26 @@ describe('view models copy only what the renderer may see', () => {
       client_build: { source_sha: 'a'.repeat(40), source_kind: 'materialized-commit' },
       display_name: 'Ari', membership_id: 'mem_1', membership_type: 'employee', connected_authority: 'https://a.example',
       access_token: 'SECRET',
-    });
+    }, 0);
     expect(view).toEqual({
       signed_in: true, client_version: '1',
       account: { authority: 'https://a.example', membership_id: 'mem_1', display_name: 'Ari', role: 'employee' },
     });
     expect(JSON.stringify(view)).not.toContain('SECRET');
+  });
+
+  it('status says when the weekly sign-in is due, and how long that is by the host\'s clock', () => {
+    const status = (due: unknown) => statusView({
+      schema_version: 1, kind: 'echo-person-client-status-v1', installed_version: '1', signed_in: true,
+      display_name: 'Ari', membership_id: 'mem_1', membership_type: 'employee', connected_authority: 'https://a.example',
+      hard_reauthentication_at: due,
+    }, Date.parse('2026-09-21T22:00:00.000Z'));
+    expect(status('2026-09-22T10:00:00.000Z').account?.sign_in_due).toEqual({ at: '2026-09-22T10:00:00.000Z', in_ms: 12 * 60 * 60_000 });
+    // Already past: what is left is negative, never clamped.
+    expect(status('2026-09-21T21:00:00.000Z').account?.sign_in_due?.in_ms).toBe(-60 * 60_000);
+    // Missing or unreadable: no notice is better than a wrong one.
+    expect(status(undefined).account).not.toHaveProperty('sign_in_due');
+    expect(status('soon').account).not.toHaveProperty('sign_in_due');
   });
 
   it('tools keep each id, name and your connection, never external ids, and only for the account asked about', () => {

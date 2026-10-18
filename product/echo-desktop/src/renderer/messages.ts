@@ -14,6 +14,8 @@ const MESSAGES: Record<string, string> = {
   // The Authority also says this when what you acted on changed meanwhile, with the session still valid.
   stale_access_state: 'That changed meanwhile, or your access did. Refresh and try again.',
   sign_in_required: 'Sign in again to continue.',
+  // The weekly sign-in passed: the session cannot be refreshed any more.
+  reauthentication_required: 'Sign in again: ECHO asks you to sign in once a week.',
   invalid_request: 'That cannot be sent.',
   unsupported_file: 'Choose a TXT, Markdown, PDF or Word file up to 25 MB.',
   host_restarted: 'ECHO restarted. Try again.',

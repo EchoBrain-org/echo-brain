@@ -5,12 +5,12 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
+  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
   NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
   ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, sameExpect } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { answerSentences, sourceGroups, type SourceGroup } from './answer.js';
 import { openerOf, sourceKey } from './openers.js';
@@ -503,6 +503,11 @@ export interface State {
   concealed: boolean;
   /** form: the organization address is being asked for (Sign in with Google…). */
   signin: { phase: 'idle' | 'waiting' | 'failed'; form: boolean; failure?: Failure; browserOpened?: boolean };
+  /**
+   * The weekly sign-in, from a day before it is due: when, and why signing in again now did not start (a save to settle
+   * first, or a sign-out that failed). Null before that day, and signed out.
+   */
+  signInDue: { at: string; failure?: Failure } | null;
   /** A sheet over the window for the account: only one at a time. */
   sheet: Sheet | null;
   /** No status could be read (the host is down): not the same as signed out. */
@@ -547,7 +552,7 @@ let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false },
   archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, toastShown: 0, concealed: false,
-  signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null, employeeWrite: null,
+  signin: { phase: 'idle', form: false }, signInDue: null, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null, employeeWrite: null,
   home: null, decision: null, followUps: null, impactLine: null, projectLine: null, projectReads: null,
   update: { state: 'none' }, updateFailure: null,
 };
@@ -590,6 +595,8 @@ function set(patch: Partial<State>): void {
   }
   // A held update click says what to settle only while it is unsettled, here or in main.
   if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
+  // So does a held sign-in-again click.
+  if (state.signInDue?.failure?.code === 'signout_held' && !signOutHeld()) state = { ...state, signInDue: { at: state.signInDue.at } };
   listeners.forEach(listener => listener());
   // A read owed to what shows may have been waiting on this change: a read of its own that landed, the window seen.
   settleOwed();
@@ -614,7 +621,7 @@ function expect(): Expect | null {
  * Access that was lost or refused. A timeout, an outage or a bad reply says nothing about it, and neither does
  * stale_access_state, which also means only that what was acted on changed meanwhile: the status read settles it.
  */
-const ACCESS_LOST = ['signed_out', 'unauthorized', 'sign_in_required', 'not_found', 'forbidden', 'owner_access_required'];
+const ACCESS_LOST = ['signed_out', 'unauthorized', ...SESSION_ENDED, 'not_found', 'forbidden', 'owner_access_required'];
 
 /**
  * Signed out or switched under us: re-read the account. The page that failed
@@ -623,9 +630,7 @@ const ACCESS_LOST = ['signed_out', 'unauthorized', 'sign_in_required', 'not_foun
  */
 function accountLost(failure: Failure): void {
   if (ACCESS_LOST.includes(failure.code)) emptyBar();
-  if (['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required', 'owner_access_required'].includes(failure.code)) {
-    void refreshStatus();
-  }
+  if (ACCOUNT_GONE.includes(failure.code) || failure.code === 'owner_access_required') void refreshStatus();
 }
 
 // ---- status and sign-in ------------------------------------------------------
@@ -652,6 +657,7 @@ function applyStatus(status: AppStatus): void {
   const before = state.status?.account ?? null;
   const next = status.account;
   set({ status, booting: false, startFailed: false });
+  weeklySignIn(next);
   // Signed out: the sign-in page covers everything until someone signs in. Mine, and what was read in it, goes.
   if (!next) {
     // A sign-out the host lost mid-way did happen: the account goes as it would have.
@@ -687,6 +693,49 @@ function applyStatus(status: AppStatus): void {
     // New project kept through a sign-out goes on with what waited while no one was signed in.
     pumpNewProject();
   }
+}
+
+/** The weekly sign-in shows this long before it is due. */
+const SIGN_IN_NOTICE_MS = 24 * 60 * 60_000;
+/** The longest wait setTimeout keeps; a later notice waits for a status read nearer the day. */
+const LONGEST_TIMER_MS = 2 ** 31 - 1;
+let signInTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * The weekly sign-in a day ahead: due within a day, it shows now; otherwise once that day starts, even with the window
+ * open all along. How long is left comes from the host's clock as status was read.
+ */
+function weeklySignIn(account: Account | null): void {
+  if (signInTimer) { clearTimeout(signInTimer); signInTimer = null; }
+  const due = account?.sign_in_due;
+  const wait = due ? due.in_ms - SIGN_IN_NOTICE_MS : Number.POSITIVE_INFINITY;
+  if (due && wait <= 0) {
+    if (state.signInDue?.at !== due.at) set({ signInDue: { at: due.at } });
+    return;
+  }
+  if (state.signInDue !== null) set({ signInDue: null });
+  if (due && wait <= LONGEST_TIMER_MS) signInTimer = setTimeout(() => { signInTimer = null; set({ signInDue: { at: due.at } }); }, wait);
+}
+
+/**
+ * Sign in again, before the weekly sign-in is due: this session ends and Google signs the same person straight back
+ * in, so their drafts stay, as when the session ends on its own. A save on its way or unconfirmed is settled first.
+ */
+export async function signInAgain(): Promise<void> {
+  const account = expect();
+  const due = state.signInDue;
+  if (!account || !due || state.signin.phase === 'waiting' || signingOut()) return;
+  if (signOutHeld()) { set({ signInDue: { at: due.at, failure: { code: 'signout_held', retryable: true } } }); return; }
+  set({ signin: { phase: 'waiting', form: false }, signInDue: { at: due.at } });
+  const signedOut = await rpc('account.signOut', { expect: account });
+  if (!signedOut.ok) {
+    set({ signin: { phase: 'idle', form: false } });
+    if (state.signInDue) set({ signInDue: { at: state.signInDue.at, failure: signedOut.failure } });
+    accountLost(signedOut.failure);
+    return;
+  }
+  applyStatus(signedOut.value);
+  await signIn(account.authority);
 }
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
@@ -1973,7 +2022,7 @@ async function writeProjectMapping<Tool extends MappingTool>(adapter: MappingAda
 }
 
 /** The sign-in itself is gone or someone else's: a tool's own refusal (not found, not authorized there) is not that. */
-const SIGN_IN_LOST = ['signed_out', 'account_changed', 'stale_access_state', 'sign_in_required'];
+const SIGN_IN_LOST = ['signed_out', 'account_changed', 'stale_access_state', ...SESSION_ENDED];
 
 /** Why a tool's setting on Tools could not be written or read, in the renderer's words; null while nothing failed. */
 export function projectToolFailureWords(settings: ProjectSettingsState, tool: MappingTool, name: string): string | null {

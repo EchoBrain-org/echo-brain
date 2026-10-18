@@ -52,13 +52,24 @@ export interface PersonSessionRefreshClaim {
   readonly stored: StoredPersonClientSessionV1;
 }
 
+/**
+ * Why a refresh ended the session for good, as the CLI prints it: the weekly
+ * sign-in passed (`reauthentication_required`), or the Authority refused the
+ * refresh or answered for another session (`sign_in_required`). Either way the
+ * store is left signed out and only signing in again helps.
+ */
+export type PersonSessionEndedCode = 'reauthentication_required' | 'sign_in_required';
+
 export class PersonClientSessionUnavailableError extends Error {
+  readonly code: PersonSessionEndedCode | undefined;
+
   constructor(
     message = 'Person session is unavailable; sign in again',
-    options?: ErrorOptions,
+    options?: ErrorOptions & { readonly code?: PersonSessionEndedCode },
   ) {
     super(message, options);
     this.name = 'PersonClientSessionUnavailableError';
+    this.code = options?.code;
   }
 }
 

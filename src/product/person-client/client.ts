@@ -92,6 +92,7 @@ export type EmployeeMutationErrorCode =
   | "employee_onboarding_complete"
   | "owner_access_required"
   | "sign_in_required"
+  | "reauthentication_required"
   | "invitation_save_failed"
   | "request_rejected"
   | "outcome_unknown";
@@ -157,12 +158,10 @@ function employeeRequestFailure(
 
 function employeeSessionFailure(error: unknown): EmployeeMutationError {
   if (error instanceof EmployeeMutationError) return error;
-  if (
-    error instanceof PersonClientSessionUnavailableError ||
-    (error instanceof PersonAuthorityClientError &&
-      error.code === "unauthorized" &&
-      error.status === 401)
-  ) {
+  if (error instanceof PersonClientSessionUnavailableError) {
+    return new EmployeeMutationError(error.code ?? "sign_in_required", "not_submitted", error.message);
+  }
+  if (error instanceof PersonAuthorityClientError && error.code === "unauthorized" && error.status === 401) {
     return new EmployeeMutationError("sign_in_required", "not_submitted", error.message);
   }
   return new EmployeeMutationError(
@@ -251,11 +250,11 @@ function assertRefreshIdentity(
     "hard_reauthentication_at",
   ] as const) {
     if (previous[key] !== next[key]) {
-      throw new PersonClientSessionUnavailableError(`Person session refresh changed ${key}; sign in again`);
+      throw new PersonClientSessionUnavailableError(`Person session refresh changed ${key}; sign in again`, { code: "sign_in_required" });
     }
   }
   if (previous.refresh_token === next.refresh_token) {
-    throw new PersonClientSessionUnavailableError("Person session refresh did not rotate its refresh token; sign in again");
+    throw new PersonClientSessionUnavailableError("Person session refresh did not rotate its refresh token; sign in again", { code: "sign_in_required" });
   }
 }
 
@@ -359,6 +358,7 @@ export class PersonClient {
       ) {
         throw new PersonClientSessionUnavailableError(
           "Person session requires authentication again",
+          { code: "reauthentication_required" },
         );
       }
       next = await this.authority(claimed.stored.authority_origin).refresh(
@@ -380,7 +380,7 @@ export class PersonClient {
       if (refused) {
         throw new PersonClientSessionUnavailableError(
           "Person session refresh was refused; sign in again",
-          { cause: error },
+          { cause: error, code: "sign_in_required" },
         );
       }
       throw error;

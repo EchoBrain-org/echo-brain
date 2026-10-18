@@ -11,12 +11,26 @@ export interface Account {
   readonly membership_id: string;
   readonly display_name: string;
   readonly role: 'owner' | 'employee';
+  /**
+   * The weekly sign-in: when this session can no longer be refreshed, and how long until then by the host's clock when
+   * status was read. Past it, only signing in again helps.
+   */
+  readonly sign_in_due?: { readonly at: string; readonly in_ms: number };
+}
+
+/** Why this computer was signed out by a refresh, and the organization it was signed in to. */
+export interface SessionEnded {
+  /** The weekly sign-in passed (`reauthentication_required`), or the Authority refused the refresh (`sign_in_required`). */
+  readonly reason: 'reauthentication_required' | 'sign_in_required';
+  readonly authority: string;
 }
 
 export interface AppStatus {
   readonly signed_in: boolean;
   readonly account: Account | null;
   readonly client_version: string;
+  /** Signed out because a refresh ended the session: until someone signs in again. */
+  readonly session_ended?: SessionEnded;
 }
 
 export interface ProjectSummary {
@@ -442,8 +456,14 @@ export function sameExpect(a: Expect | null | undefined, b: Expect | null | unde
   return a != null && b != null && a.authority === b.authority && a.membership_id === b.membership_id;
 }
 
+/**
+ * A refresh that ended the session for good, signing this computer out: the weekly sign-in passed
+ * (`reauthentication_required`), or the Authority refused the refresh (`sign_in_required`).
+ */
+export const SESSION_ENDED: readonly string[] = ['reauthentication_required', 'sign_in_required'];
+
 /** Failures that say the account on screen is gone (signed out or switched under it), not the call. */
-export const ACCOUNT_GONE: readonly string[] = ['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'];
+export const ACCOUNT_GONE: readonly string[] = ['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', ...SESSION_ENDED];
 
 /** The change check's areas, in the contract's order. */
 export const CHANGE_AREAS: readonly PersonChangesAreaV1[] = ['projects', 'follow_ups', 'reviews'];

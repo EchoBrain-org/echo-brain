@@ -54,7 +54,11 @@ stored Authority origin. Refresh consumes and rotates the refresh credential.
 An ambiguous or refused refresh outcome cannot replay it: the client releases
 its claim and is signed out. Only a refresh that never left the machine (no
 connection was made, for example before the network is up) keeps the stored
-session, since its credential is certainly unused. Logout removes
+session, since its credential is certainly unused. Past the seven-day
+hard-reauthentication deadline the client signs out without sending a refresh.
+That and a refused refresh report why (`reauthentication_required`,
+`sign_in_required`). The desktop then asks the person to sign in again, rather
+than reporting a changed account, and warns a day before the deadline. Logout removes
 local authority even if the remote revocation outcome is unknown. Every Person
 read and integration-link request rechecks the current session, membership, and
 revocation state on the Authority.

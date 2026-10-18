@@ -549,7 +549,7 @@ function contextCliFailure(action: string, error: unknown, values: Record<Option
       : error instanceof PersonClientSessionUnavailableError ? 'Sign in before requesting project context.'
       : 'Project context request is invalid. Check the command help and input bounds.',
     code: error instanceof DocumentFileError ? error.code : error instanceof PersonAuthorityClientError ? error.code
-      : error instanceof PersonClientSessionUnavailableError ? 'sign_in_required' : 'invalid_request',
+      : error instanceof PersonClientSessionUnavailableError ? error.code ?? 'sign_in_required' : 'invalid_request',
     ...(error instanceof PersonAuthorityClientError ? { status: error.status } : {}),
     ...(mutation ? {
       mutation_outcome: error instanceof PersonContextMutationError ? error.mutation_outcome : 'not_submitted',
@@ -1167,6 +1167,8 @@ export async function runPersonClientCli(
             membership_id: session.membership_id,
             membership_type: session.membership_type,
             connected_authority: session.authority_origin,
+            // The weekly sign-in: past it, the session cannot be refreshed.
+            hard_reauthentication_at: session.hard_reauthentication_at,
           });
         } catch (error) {
           if (!(error instanceof PersonClientSessionUnavailableError)) {
@@ -1355,6 +1357,7 @@ export async function runPersonClientCli(
         ? (error as Error).message : "Person request could not be completed",
       ...(error instanceof PersonAuthorityClientError ? { code: error.code, status: error.status } : {}),
       ...(error instanceof PersonQueryInputError ? { code: error.code } : {}),
+      ...(error instanceof PersonClientSessionUnavailableError && error.code !== undefined ? { code: error.code } : {}),
       ...(error instanceof PersonToolOutcomeErrorV1 ? { reason: error.reason } : {}),
       ...(error instanceof EmployeeMutationError
         ? { code: error.code, mutation_outcome: error.mutation_outcome }

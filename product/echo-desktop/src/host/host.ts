@@ -8,11 +8,12 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
-  type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
+  type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result, type SessionEnded,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { askArgv, askProgressLines, askRecordArgv, askSourceArgv, askStreams } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
+import { lost, refreshStops, sessionEnded } from './session.js';
 import {
   abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
@@ -30,7 +31,7 @@ const entry = process.env.ECHO_PERSON_CLIENT_ENTRY;
 const home = process.env.ECHO_HOME;
 if (!entry || !home) throw new Error('The person host needs ECHO_PERSON_CLIENT_ENTRY and ECHO_HOME');
 
-interface SessionStore { read(): { session: { access_expires_at: string } } }
+interface SessionStore { read(): { authority_origin: string; session: { access_expires_at: string } } }
 interface SessionPaths { refresh_claim: string; refreshing: string }
 interface ClientModules {
   cli: PersonCli;
@@ -155,17 +156,23 @@ function expected(expect: Expect): string[] {
 // sign-in time left than it may take. The refresh waits for the calls already
 // running to end (the client's network timeouts bound each) and runs alone: the
 // Authority revokes the old token on rotation, so no call may hold it then.
-// Status is local: it waits out a refresh, never starts one.
+// Status is local: it waits out a refresh, never starts one. A refresh past the
+// weekly sign-in, or one the Authority refused, ends the session: the call that
+// asked for it is not made and says why, never that the account changed.
 let active = 0;
 let exclusive: Promise<void> | null = null;
 const idle: Array<() => void> = [];
+/** Why a refresh here signed the person out: status says so until someone is signed in again. */
+let ended: SessionEnded | null = null;
+
+/** The session as stored, or null when signed out or mid-refresh: the command itself reports that. */
+function stored(store: SessionStore): ReturnType<SessionStore['read']> | null {
+  try { return store.read(); } catch { return null; }
+}
 
 function refreshDue(store: SessionStore, now: number, ahead: number): boolean {
-  try {
-    return now >= Date.parse(store.read().session.access_expires_at) - ahead;
-  } catch {
-    return false; // Signed out or mid-refresh: the command itself reports it.
-  }
+  const live = stored(store);
+  return live !== null && now >= Date.parse(live.session.access_expires_at) - ahead;
 }
 
 async function gated<T>(run: () => Promise<T>, method: HostMethodName, refreshFailed?: (refresh: CliRun) => T): Promise<T> {
@@ -177,13 +184,15 @@ async function gated<T>(run: () => Promise<T>, method: HostMethodName, refreshFa
     exclusive = new Promise(resolve => { release = resolve; });
     try {
       while (active > 0) await new Promise<void>(resolve => idle.push(resolve));
-      // A refresh that failed leaves the client signed out, and the call
-      // reports that; only one that never left the machine (no network yet)
-      // puts the session back. Then the call is not made, since it would start
-      // with too little sign-in time left; the next call tries the refresh again.
+      // A refresh that ended the session, or one that never left the machine,
+      // stops the call (refreshStops); a session it ended is remembered, so
+      // status says why until someone signs in again.
       if (refreshDue(store, now(), ahead)) {
+        const authority = stored(store)?.authority_origin;
         const refresh = await cli(['session-refresh']);
-        if (refresh.exit !== 0 && refreshFailed && refreshDue(store, now(), ahead)) return refreshFailed(refresh);
+        const reason = sessionEnded(refresh);
+        if (reason !== null && authority !== undefined) ended = { reason, authority };
+        if (refreshFailed && refreshStops(refresh, refreshDue(store, now(), ahead))) return refreshFailed(refresh);
       }
     } finally {
       exclusive = null;
@@ -213,8 +222,10 @@ function code(value: string, write = false, requestId?: string): Result<never> {
 async function readStatus(): Promise<AppStatus | null> {
   const run = await cli(['status']);
   if (run.exit !== 0 || run.overflow) return null;
-  try { return statusView(lastJson(run.stdout)); } catch { return null; }
+  const { now } = await modules;
+  try { return statusView(lastJson(run.stdout), now()); } catch { return null; }
 }
+
 
 /**
  * While another process (the terminal CLI) refreshes, the session file is set
@@ -234,11 +245,14 @@ async function refreshRunningElsewhere(): Promise<boolean> {
   }
 }
 
-/** Waits at most 3 s on another process's refresh: well inside app.status's 5 s. */
+/** Waits at most 3 s on another process's refresh: well inside app.status's 5 s. Signed out by a refresh here, it says why. */
 async function status(): Promise<AppStatus | null> {
   for (let attempt = 0; ; attempt += 1) {
     const current = await readStatus();
-    if (current === null || current.signed_in || attempt >= 6 || !(await refreshRunningElsewhere())) return current;
+    if (current?.signed_in) ended = null;
+    if (current === null || current.signed_in || attempt >= 6 || !(await refreshRunningElsewhere())) {
+      return current?.signed_in === false && ended !== null ? { ...current, session_ended: ended } : current;
+    }
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 }
@@ -252,7 +266,8 @@ async function forAccount<T>(
   method: HostMethodName, expect: Expect, argv: readonly string[], view: (stdout: string) => T, requestId?: string, abortSignal?: AbortSignal,
   write = WRITE_METHODS.has(method), onLine?: (line: string) => void,
 ): Promise<Result<T>> {
-  if (!sameAccount(await status(), expect)) return code('account_changed', write, requestId);
+  const before = await status();
+  if (!sameAccount(before, expect)) return code(lost(before), write, requestId);
   if (write && requestId !== undefined) inFlight.add(requestId);
   let run: CliRun;
   try {
@@ -262,8 +277,11 @@ async function forAccount<T>(
   }
   const after = await status();
   if (!sameAccount(after, expect)) {
-    // A write may have gone out before the switch; never call it saved or not.
-    return fail({ code: 'account_changed', retryable: false, ...(write ? { mutation_outcome: 'unknown' as const } : {}),
+    // Signed out by the call's own refresh, it says why. A write may have gone
+    // out before the session ended or switched; never call it saved or not.
+    const reason = after?.signed_in === false ? sessionEnded(run) : null;
+    if (reason !== null) ended = { reason, authority: expect.authority };
+    return fail({ code: reason ?? lost(after), retryable: false, ...(write ? { mutation_outcome: 'unknown' as const } : {}),
       ...(requestId === undefined ? {} : { request_id: requestId }) });
   }
   if (run.overflow) return code('invalid_output', write, requestId);

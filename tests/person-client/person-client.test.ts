@@ -444,6 +444,8 @@ describe("Person client", () => {
       expect(JSON.parse(stdout)).toMatchObject({
         signed_in: true,
         display_name: "Example Person",
+        // When the weekly sign-in is due, so an app can say so ahead of it.
+        hard_reauthentication_at: ROTATED_SESSION.hard_reauthentication_at,
       });
       expect(stdout).not.toContain(ROTATED_SESSION.access_token);
       expect(stdout).not.toContain(ROTATED_SESSION.refresh_token);
@@ -2563,6 +2565,45 @@ describe("Person client", () => {
       expect(calls.refresh).toBe(1);
       const store = new PersonSessionStore(home);
       expect([store.paths.live, store.paths.refresh_claim, store.paths.refreshing].filter(existsSync)).toEqual([]);
+    });
+  });
+
+  it.each([
+    ["the weekly sign-in has passed", SESSION.hard_reauthentication_at, () => { throw new Error("no refresh is sent past the weekly sign-in"); }, "reauthentication_required"],
+    ["the Authority refuses it", NOW, () => json({ error: { code: "unauthorized", message: "person authentication failed" } }, 401), "sign_in_required"],
+    ["the Authority rotates another identity", NOW, () => json({ ...ROTATED_SESSION, membership_id: fixtureId("mem", 2) }), "sign_in_required"],
+  ])("says why a refresh that ends the session failed when %s, so a caller can ask to sign in again", async (_, at, reply, reason) => {
+    await withHome(async (home) => {
+      await installFixtureSession(home, SESSION);
+      const authority = authorityDescriptor();
+      let refreshes = 0;
+      const fetch: typeof globalThis.fetch = async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/v1/authority-descriptor") return json({ authority_descriptor: authority });
+        expect(path).toBe("/v2/session/refresh");
+        refreshes += 1;
+        return reply();
+      };
+
+      const { code, stderr } = await runCli(["session-refresh"], { home_directory: home, now: () => at, fetch });
+      expect(code).toBe(1);
+      expect(JSON.parse(stderr)).toMatchObject({ ok: false, action: "session-refresh", code: reason });
+      expect(refreshes).toBe(reason === "reauthentication_required" ? 0 : 1);
+      const store = new PersonSessionStore(home);
+      expect([store.paths.live, store.paths.refresh_claim, store.paths.refreshing].filter(existsSync)).toEqual([]);
+    });
+  });
+
+  it("names the weekly sign-in when a command's own refresh is past it", async () => {
+    await withHome(async (home) => {
+      await installFixtureSession(home, SESSION);
+      const { code, stderr } = await runCli(["directory"], {
+        home_directory: home,
+        now: () => SESSION.hard_reauthentication_at,
+        fetch: async () => { throw new Error("no request is sent past the weekly sign-in"); },
+      });
+      expect(code).toBe(1);
+      expect(JSON.parse(stderr)).toMatchObject({ ok: false, code: "reauthentication_required" });
     });
   });
 });
