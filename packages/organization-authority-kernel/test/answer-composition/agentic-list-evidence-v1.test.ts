@@ -14,7 +14,6 @@ import {
   agenticListFilterNoticeV1,
   agenticListFilterPhraseV1,
   agenticListIdV1,
-  agenticListMemberNamesV1,
   agenticListMembersNounV1,
   agenticListNameSharesV1,
   agenticListNounV1,
@@ -34,6 +33,7 @@ import {
   type AgenticListEvidenceV1,
   type AgenticListFilterApplicationV1,
   type AgenticListIdV1,
+  type AgenticListNamedMemberV1,
   type AgenticListSelectionV1,
   type AgenticOpenActionV1,
   type AgenticWriterListMemberV1,
@@ -429,6 +429,8 @@ describe("the bundle and the evaluation view", () => {
 describe("the statement code writes for a list (ADR-0041)", () => {
   const titles = ["ECHO Product Pipeline — Start Here", "Assumptions and decisions — source facts versus proposals", "Gate reviews — EVT pass, DVT hold, PVT pending"];
   const page = (title: string) => ({ title, status: "current" });
+  /** A statement naming every one of `members`: the names the renderer writes. */
+  const named = (members: readonly AgenticListNamedMemberV1[]) => agenticListStatementV1({ noun: "items", filter: {}, count: members.length, complete: true, selected: members, share: members.length }).text;
 
   it("reads a filter as applied: dates, channel and fields, never the model's arguments", () => {
     expect(agenticCalendarDayV1("2026-10-04")).toBe("October 4, 2026");
@@ -443,30 +445,33 @@ describe("the statement code writes for a list (ADR-0041)", () => {
   });
 
   it("names members by label, with status, owner and due date only where they differ", () => {
-    expect(agenticListMemberNamesV1(titles.map(page))).toEqual(titles);
-    expect(agenticListMemberNamesV1([
+    expect(named(titles.map(page))).toBe(`3 items: ${titles.join("; ")}.`);
+    expect(named([
       { title: "THERM-1: Fixture", status: "In Progress", owner: "Dana Lee" },
       { title: "THERM-2: Firmware", status: "Done", owner: "Dana Lee", due: "2026-10-09" },
-    ])).toEqual(["THERM-1: Fixture (In Progress)", "THERM-2: Firmware (Done, due October 9, 2026)"]);
-    expect(agenticListMemberNamesV1([{ title: "Check the numbers", owner: "none recorded" }, { title: "Ship it", owner: "Mara" }]))
-      .toEqual(["Check the numbers (no owner recorded)", "Ship it (owner Mara)"]);
-    const [long] = agenticListMemberNamesV1([{ title: `${"x".repeat(200)}\nsecond line` }]);
-    expect([...long!]).toHaveLength(120);
-    expect(long!.endsWith("…")).toBe(true);
+    ])).toBe("2 items: THERM-1: Fixture (In Progress); THERM-2: Firmware (Done, due October 9, 2026).");
+    expect(named([{ title: "Check the numbers", owner: "none recorded" }, { title: "Ship it", owner: "Mara" }]))
+      .toBe("2 items: Check the numbers (no owner recorded); Ship it (owner Mara).");
+    // Whether a fact differs is read among the names the statement writes, not among the members it counts in "and N more".
+    const statuses = [{ title: "Alpha", status: "open" }, { title: "Beta", status: "open" }, { title: "Gamma", status: "done" }];
+    expect(agenticListStatementV1({ noun: "items", filter: {}, count: 3, complete: true, selected: statuses, share: 2 }).text).toBe("3 items: Alpha; Beta; and 1 more.");
+    expect(named(statuses)).toBe("3 items: Alpha (open); Beta (open); Gamma (done).");
+    const long = named([{ title: `${"x".repeat(200)}\nsecond line` }]).slice("1 item: ".length, -1);
+    expect([...long]).toHaveLength(120);
+    expect(long.endsWith("…")).toBe(true);
   });
 
   it("names members that share a label and their row facts once, with their kinds counted", () => {
     const sync = "THERM DVT sync (2026-10-04)";
     // A meeting's records all carry the meeting's label; its action records an owner the others do not.
     const records = [{ title: sync, kind: "imported_meeting" }, { title: sync, kind: "decision" }, { title: "Vendor review (2026-10-04)", kind: "action", owner: "Dana" }, { title: sync, kind: "action", owner: "Dana" }, { title: sync, kind: "rationale" }];
-    expect(agenticListMemberNamesV1(records)).toEqual([`${sync} (1 meeting, 1 decision and 1 rationale)`, "Vendor review (2026-10-04) (1 action, owner Dana)", `${sync} (1 action, owner Dana)`]);
     const statement = agenticListStatementV1({ noun: agenticListMembersNounV1({ selector: "meetings" }, records.map(record => record.kind)), filter: { since: "2026-10-04", until: "2026-10-04" }, count: 5, complete: true, selected: records, share: 25 });
     expect(statement).toEqual({ text: `5 items from meetings dated on October 4, 2026: ${sync} (1 meeting, 1 decision and 1 rationale); Vendor review (2026-10-04) (1 action, owner Dana); ${sync} (1 action, owner Dana).`, named: 5, cited: [0, 1, 2, 3, 4] });
     // A merge never hides a row fact: one meeting's actions due on different days are named apart, each with its date.
     const review = "DVT review (2026-10-01)";
     const due = (date?: string) => ({ title: review, kind: "action", owner: "Mara Quinn", ...(date === undefined ? {} : { due: date }) });
-    expect(agenticListMemberNamesV1([due("2026-10-09"), due("2026-10-12"), due(), due(" 2026-10-09")]))
-      .toEqual([`${review} (2 actions, due October 9, 2026)`, `${review} (due October 12, 2026)`, review]);
+    expect(named([due("2026-10-09"), due("2026-10-12"), due(), due(" 2026-10-09")]))
+      .toBe(`4 items: ${review} (2 actions, due October 9, 2026); ${review} (due October 12, 2026); ${review}.`);
     // A kind filter is the noun, not a phrase; three decisions of one meeting are one name.
     const decisions = Array.from({ length: 3 }, () => ({ title: sync, kind: "decision" }));
     expect(agenticListStatementV1({ noun: agenticListMembersNounV1({ selector: "meetings" }, ["decision"]), filter: { kind: "decision", owner: "Dana" }, count: 3, complete: true, selected: decisions, share: 25 }).text)

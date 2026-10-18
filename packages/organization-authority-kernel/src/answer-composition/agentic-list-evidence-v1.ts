@@ -565,7 +565,13 @@ function nameGroups(members: readonly AgenticListNamedMemberV1[]): readonly (rea
   return [...groups.values()];
 }
 
-/** Names for groups of `members` (nameGroups), in order. */
+/**
+ * Names for groups of `members` (nameGroups), in order, as a code-written statement names them: each title, cut to
+ * AGENTIC_LIST_NAME_CHARS_V1 characters, then its status, owner and due date wherever those differ between the groups
+ * named (ignoring case), and a group's kinds counted ("2 actions"). No source-specific rule: a page reads by title, a
+ * ticket by key and summary, a follow-up by title, a meeting record by a line of its own text and its meeting (its list
+ * label).
+ */
 function groupNames(members: readonly AgenticListNamedMemberV1[], groups: readonly (readonly number[])[]): readonly string[] {
   // A group's status, owner or due date is the value all its members record (nameGroups keeps them apart otherwise).
   const common = (group: readonly number[], field: "status" | "owner" | "due") => members[group[0]!]![field];
@@ -611,21 +617,6 @@ function factsName(member: AgenticListNamedMemberV1, timeZone: string | undefine
   ];
   const label = line(member.title, AGENTIC_LIST_NAME_CHARS_V1);
   return facts.length === 0 ? label : `${label} (${facts.join(", ")})`;
-}
-
-/**
- * Members as a code-written statement names them: each title, cut to
- * AGENTIC_LIST_NAME_CHARS_V1 characters, then its status, owner and due date
- * wherever those differ between the named members (ignoring case). Members
- * that share a title and those row facts are one name with their kinds
- * counted ("2 actions"); members whose row facts differ are named apart, each
- * with its own. No
- * source-specific rule: a page reads by title, a ticket by key and summary, a
- * follow-up by title, a meeting record by a line of its own text and its
- * meeting (its list label).
- */
-export function agenticListMemberNamesV1(members: readonly AgenticListNamedMemberV1[]): readonly string[] {
-  return groupNames(members, nameGroups(members));
 }
 
 /** A member's own date of one field: its named dates, then its due date, then its one dated fact. */
@@ -687,16 +678,16 @@ export interface AgenticListStatementInputV1 {
  * current, created October 4, 2026)", each named alone with every row fact it
  * records; however many it selects, such a statement gives row facts, never
  * which items exist, unless a use of the list in full (`which`) or by `where`
- * selects the same members. Otherwise members that share a label are one name
- * (agenticListMemberNamesV1). Names are taken in list order while the members
- * they cover fit `share`, and stop early when the statement would pass
- * AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free`
- * costs no share. The first name is always written, covering its free members
- * and at most `share` others: a name never covers a member the statement does
- * not cite. It always covers the first member: with `share` 0, a first member
- * no other statement takes costs one name past the share, which buys no other
- * member. `named` is how many of `selected` the names cover, so "and N more"
- * is `selected.length - named`; `cited` are their indexes in `selected`, in
+ * selects the same members. Otherwise members that share a label and row facts
+ * are one name (nameGroups, groupNames). Names are taken in list order while
+ * the members they cover fit `share`, and stop early when the statement would
+ * pass AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free` costs no share. The
+ * first name is always written, covering its free members and at most `share`
+ * others: a name never covers a member the statement does not cite. It always
+ * covers the first member: with `share` 0, a first member no other statement
+ * takes costs one name past the share, which buys no other member. `named` is
+ * how many of `selected` the names cover, so "and N more" is
+ * `selected.length - named`; `cited` are their indexes in `selected`, in
  * order, which the caller cites.
  */
 export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly named: number; readonly cited: readonly number[] } {
