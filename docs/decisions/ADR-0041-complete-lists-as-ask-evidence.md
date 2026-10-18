@@ -448,8 +448,10 @@ Another asks which Jira tickets mention BUG-412 (`content`): it picks no set by
 list facts, so search answers it, and a plan that declares a list kind fails.
 Both keys, drafted from the export, await the founder's confirmation. Every
 held-out Ask case names its kinds too, so the score also measures rule 3 on
-questions that tuning never sees: "Which THERM tickets are assigned to me, and
-when are they due?" is `which_items`, and the others ask what items say.
+questions that tuning never sees. Their questions, ids and kinds stay in the
+held-out file: no other file quotes a held-out question or names a held-out
+case, and a test that needs their kinds reads them from that file
+(`tests/architecture/research-loop-holdout-isolation.test.ts`).
 
 ### Safety rules kept
 

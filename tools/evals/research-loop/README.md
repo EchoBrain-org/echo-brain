@@ -129,7 +129,7 @@ staging; an approved-record capture can start an existing pending ECHO run.
 | --- | --- |
 | `world/` | The THERM additions and S1 edits to seed by hand (see `world/README.md`). |
 | `cases/development.json` | Cases used while improving the loop. |
-| `cases/holdout.json` | Held-out cases. Open them only for the final check. |
+| `cases/holdout.json` | Held-out cases. Open them only for the final check. No other file quotes their questions, names them or gives their keys. |
 | `cli.mjs` | `validate`, `bindings`, `run`, `grade`, `report`, `calibrate`, `trace`. |
 | `lib/` | Reference matching, code checks, judge, report, calibration. |
 

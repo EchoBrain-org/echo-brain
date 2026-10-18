@@ -92,9 +92,6 @@ test("approved-record keys give every affected item a relation and an owner, tak
   // TRACE-01 states the demoted SW-14c hypothesis and must record the fix owner; the change-management rule M4 goes against is not replaced.
   const t3Key = Object.fromEntries(records.find(entry => entry.id === "approved-record-t3-bug-412-likely-cause").affected.map(item => [item.id, item.relation]));
   assert.deepEqual([t3Key.a4, t3Key.a11], [["conflicts", "needs_updating"], "conflicts"]);
-  // M3 agrees the regression scope and gate authority are open and gives them owners and dates the registers lack.
-  const t2Key = Object.fromEntries(records.find(entry => entry.id === "approved-record-t2-dvt-review-decisions").affected.map(item => [item.id, item.relation]));
-  for (const id of ["a12", "a13", "a14", "a15", "a16", "a17"]) assert.deepEqual(t2Key[id], ["confirms", "needs_updating"], id);
   // The keyed items and their owners follow from the parts and the Jira assignees (world/README.md, "Reading the keys"): recompute them.
   const assignees = Object.fromEntries(dataset.additions.jira_updates.filter(update => update.set.assignee !== undefined).map(update => [update.key, update.set.assignee]));
   for (const entry of records) {
@@ -532,26 +529,27 @@ test("reports count sweep verdicts per case and over all sweep cases, among the 
     { verdict: "still_open", line: "PRD-D01 still shows one decimal place.", cites: [1] },
   ])), dataset);
   const failed = codeChecks(propagation, { trial: 2, budget: "background", outcome: "failed", result: { status: "failed", error: { code: "timed_out", message: "late" } } }, dataset);
-  // Key: not landed, landed, not landed; all three right.
-  const followups = caseById("sweep-owner-and-requirement-followups");
-  const tickets = [ticket("THERM-2", { id: "E1" }), ticket("THERM-47", { id: "E2" }), ticket("THERM-50", { id: "E3" })];
-  const allRight = codeChecks(followups, completedRun(followups, tickets, undefined, sweepResult(tickets, [
-    { verdict: "still_open", line: "THERM-2 acceptance still says one decimal.", cites: [0] },
-    { verdict: "landed", line: "TRACE-01 now records Hardware as the fix owner role.", cites: [1] },
-    { verdict: "changed", line: "GATE-DVT now names a review board, not a gate authority.", cites: [2] },
+  // Key: not landed, landed, not landed, no evidence; all four right.
+  const gate = caseById("sweep-bug-412-and-gate");
+  const tickets = [ticket("THERM-46", { id: "E1" }), ticket("THERM-47", { id: "E2" }), ticket("THERM-50", { id: "E3" })];
+  const allRight = codeChecks(gate, completedRun(gate, tickets, undefined, sweepResult(tickets, [
+    { verdict: "still_open", line: "BUG-412 is still open.", cites: [0] },
+    { verdict: "landed", line: "TRACE-01 now records the fix owner.", cites: [1] },
+    { verdict: "changed", line: "GATE-DVT is on hold under a new review board.", cites: [2] },
+    { verdict: "unreadable", line: "No current item says when the reworked samples arrive." },
   ])), dataset);
   const report = aggregate([{ checks: assessed, judge: null }, { checks: failed, judge: null }, { checks: allRight, judge: null }]);
   const counts = entry => [entry.sweep_verdicts_right, entry.sweep_findings, entry.sweep_not_assessed];
   assert.deepEqual(counts(report.cases.find(entry => entry.case_id === propagation.id)), [2, 6, 1]);
-  assert.deepEqual(counts(report.cases.find(entry => entry.case_id === followups.id)), [3, 3, 0]);
-  assert.deepEqual(counts(report.summary), [5, 9, 1]);
+  assert.deepEqual(counts(report.cases.find(entry => entry.case_id === gate.id)), [4, 4, 0]);
+  assert.deepEqual(counts(report.summary), [6, 10, 1]);
   const identity = { split: "development+holdout", state: "S1", source_sha: "commit-a", model: "loop", world: "therm-v1", judge: null, graded_at: "2026-10-08T00:00:00.000Z" };
   const [loop, renderers] = markdownReport(identity, report).split("## Renderers");
   assert.doesNotMatch(loop, /verdicts right|not assessed|Sweep result/u, "the sweep result's numbers are renderer numbers");
-  assert.match(renderers, /\| Sweep result \| verdicts right \/ findings \| 5 \/ 9 \|/u);
+  assert.match(renderers, /\| Sweep result \| verdicts right \/ findings \| 6 \/ 10 \|/u);
   assert.match(renderers, /\| Sweep result \| findings not assessed \| 1 \|/u);
   assert.match(renderers, /\| sweep-two-decimal-propagation \| background \| 2 \| 2 \/ 6 \| 1 \|/u);
-  assert.match(renderers, /\| sweep-owner-and-requirement-followups \| background \| 1 \| 3 \/ 3 \| 0 \|/u);
+  assert.match(renderers, /\| sweep-bug-412-and-gate \| background \| 1 \| 4 \/ 4 \| 0 \|/u);
   assert.match(renderers, /"Sweep verdicts correct" under Research loop is a different measure: the judge's reading of the items research read\./u, "the two verdict measures are told apart");
   // Without a sweep case the counts are unknown, not zero.
   const askCase = caseById("bug-fix-dates-vs-dvt-review");
@@ -771,14 +769,15 @@ test("each Ask run reports its plan's needs by declared kind, and a case may nam
   };
   assert.deepEqual([declared(jira, [need("content", ["E1"])]), declared(jira, [need(undefined, ["E1"])]), declared(jira, [need("which_say")])], [true, true, false]);
   assert.deepEqual([declared(confluence, [need("which_say")]), declared(confluence, [need("which_items"), need("which_say")])], [true, false]);
-  // Every held-out Ask case names its kinds, so the score also measures rule 3 on questions tuning never sees: a set one
-  // owner holds is which_items; the rest ask what items say.
-  const held = dataset.cases.filter(entry => entry.split === "holdout" && entry.trigger === "ask");
+  // Every held-out Ask case names its kinds, so the score also measures rule 3 on questions tuning never sees. The keys
+  // are read from the file and restated nowhere (tests/architecture/research-loop-holdout-isolation.test.ts): each case's
+  // check passes a plan declaring exactly its kinds and fails one declaring only the kinds it does not name.
+  const held = dataset.cases.filter(entry => entry.split === "holdout" && entry.trigger === "ask").map(entry => caseById(entry.id));
   assert.ok(held.length > 0);
-  assert.deepEqual(held.filter(entry => entry.expected_kinds === undefined).map(entry => entry.id), []);
-  assert.deepEqual(held.filter(entry => entry.expected_kinds.includes("which_items")).map(entry => [entry.id, entry.expected_kinds]), [["my-assigned-therm-tickets", ["which_items"]]]);
-  const assigned = caseById("my-assigned-therm-tickets");
-  assert.deepEqual([declared(assigned, [need("which_items")]), declared(assigned, [need("which_items"), need("content", ["E1"])])], [true, false]);
+  assert.equal(held.filter(entry => entry.expected_kinds === undefined).length, 0, "every held-out Ask case names its kinds");
+  const plan = kinds => kinds.map(kind => need(kind, kind === "content" ? ["E1"] : ["L1"]));
+  const others = kinds => ["which_items", "which_say", "content"].filter(kind => !kinds.includes(kind));
+  assert.deepEqual(held.map(entry => [declared(entry, plan(entry.expected_kinds)), declared(entry, plan(others(entry.expected_kinds)))]), held.map(() => [true, false]));
   // A case that names no kinds has no such check, and a failed run of one that does scores zero on it.
   const other = caseById("bug-fix-dates-vs-dvt-review");
   assert.equal("declared_kinds" in codeChecks(other, completedRun(other, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } }), dataset), false);
