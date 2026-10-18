@@ -31,11 +31,13 @@ import {
   agenticListSelectV1,
   agenticListStatementV1,
   agenticNeedSupportV1,
+  agenticOpenReadsV1,
   agenticWriterListMemberV1,
   agenticWriterListV1,
   parseAgenticListIdV1,
   type AgenticAnswerListUseV1,
   type AgenticListIdV1,
+  type AgenticOpenReadsV1,
   type AgenticWriterListMemberV1,
   type AgenticWriterListV1,
 } from "../agentic-list-evidence-v1.js";
@@ -107,17 +109,9 @@ function bytes(value: string | undefined): number { return value === undefined ?
  * the open of that row, whose bodies may have new ids. A limited open leaves
  * it unchecked until a later clean open.
  */
-function checkedItems(bundle: AgenticEvidenceBundleV1): ReadonlySet<string> {
-  const full = new Set(bundle.items.filter(entry => entry.full).map(entry => entry.short));
-  const checked = new Set<string>(); const limited = new Set<string>();
-  for (const round of bundle.rounds) for (const action of round.actions) {
-    if (action.tool !== "open") continue;
-    const id = cleanId(action.args.id);
-    if (id === null) continue;
-    if (action.result.error !== undefined || action.result.truncated === true || action.result.notice === true) { limited.add(id); checked.delete(id); continue; }
-    if (action.result.opened.length > 0 && action.result.opened.every(opened => full.has(opened))) { checked.add(id); limited.delete(id); }
-  }
-  for (const short of full) if (!limited.has(short)) checked.add(short);
+function checkedItems(bundle: AgenticEvidenceBundleV1, opens: AgenticOpenReadsV1): ReadonlySet<string> {
+  const checked = new Set<string>(opens.clean.keys());
+  for (const entry of bundle.items) if (entry.full && !opens.limited.has(entry.short)) checked.add(entry.short);
   return checked;
 }
 
@@ -174,14 +168,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const listById = new Map(lists.map(list => [list.id, list]));
       /** Which list member an item is, or is part of: an opened page's section is its page. */
       const membership = agenticListMembershipV1(lists, bundle.items);
+      const full = (short: string) => byShort.get(short)?.full === true;
+      /** What research's opens read: the same relation its finish check used. */
+      const opens = agenticOpenReadsV1(bundle.rounds, full, cleanId);
       /** Lists a found need of the plan rests on, in the plan's order. */
       const relied: AgenticListIdV1[] = [];
       for (const part of bundle.plan) for (const need of part.needs) {
         if (need.status !== "found") continue;
-        const support = agenticNeedSupportV1(need.evidence, { list: id => listById.has(id), full: short => byShort.get(short)?.full === true, member_of: membership.first });
+        const support = agenticNeedSupportV1(need.evidence, { list: id => listById.has(id), full, member_of: membership.first, opened: short => opens.clean.get(short) ?? [] });
         for (const id of support.lists) if (!relied.includes(id)) relied.push(id);
       }
-      const checked = checkedItems(bundle);
+      const checked = checkedItems(bundle, opens);
       // The writer sees at most 5 lists, the plan's first; code names members from every row, past the writer's bound too.
       const writerOrder = [...relied.map(id => listById.get(id)!), ...lists.filter(list => !relied.includes(list.id))].slice(0, AGENTIC_LIST_WRITER_LISTS_MAX_V1);
       const rows = new Map(writerOrder.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short)))]));

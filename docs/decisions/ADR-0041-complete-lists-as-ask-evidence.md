@@ -170,7 +170,15 @@ route, header, database table or client changes.
   item belongs to a list when it is a member or cites the same object as one
   (`agenticListMembershipV1`): Confluence releases an opened row's sections as
   new items, so four opened sections are four of the list's members, for the
-  finish check and the writer's check alike.
+  finish check and the writer's check alike. A member row cited beside a body
+  its own clean open returned (an open that was not truncated, carried no
+  notice or error, and returned only bodies research read in full) names that
+  body's item, so it is content, not its list (`agenticOpenReadsV1`): "what
+  does the gate review page say", citing the page's row and its section, never
+  has to read the page's list to its end or name it. A row cited without such
+  a body still gives list support. The finish check, the loop's and the
+  renderer's lists a need rests on, and the evaluation read the same relation
+  from research's rounds.
 - **The finish check** replaces `need.evidence.some(citable)` for a question
   goal:
   - A need with list support is checked against those lists. A list that can

@@ -1,7 +1,7 @@
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { validatePersonFollowUpEvidenceV1 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
-import { askQuestionCompletionProblemsV1, type AskResearchListV1 } from "../../src/answer-composition/agentic-ask-research-state-v1.js";
+import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1 } from "../../src/answer-composition/agentic-ask-research-state-v1.js";
 import { createAgenticAskV4 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
@@ -566,6 +566,66 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     }
   });
 
+  it("answers what one listed page says from its row and opened section: no list is forced in", async () => {
+    // Research cites the gate review's row beside the section its clean open returned: content about that page.
+    const open = vi.fn(async (input: { readonly item: string }) => result([section(PAGES.find(page => page.id === input.item)!, "DVT is on hold pending fixture rework.")]) as EvidenceDeskResultV2);
+    const text = "What does the gate review page created on October 4 say about DVT?";
+    const need = "what the gate review page says about DVT";
+    const reply = { lists: [], sentences: [{ text: "The gate review says DVT is on hold pending fixture rework.", evidence: ["E9"] }], not_found: [] };
+    const h = harness([
+      ask(text, need, "open", [], [OCT4_LIST]),
+      ask(text, need, "open", [], [{ tool: "open", args: { id: "E3" } }], "N1"),
+      ask(text, need, "found", ["E3", "E9"], [finish], "N1"),
+      reply,
+    ], october4Desk({ open }));
+    const { response, research: view } = await h.research.answerWithResearch({ question: text });
+    expect(view.rounds.map(round => round.rejected)).toEqual([[], [], []]);
+    expect(writerInputs(h)).toHaveLength(1);
+    expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", cited_by_plan: false, checked: 1 });
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: "The gate review says DVT is on hold pending fixture rework.", citation_indexes: [0] }] }] });
+  });
+
+  it("accepts a finish on an opened page's row and section while that page's list is unfinished", async () => {
+    // The list has a next page; opening the PRD's row (E5) returned two sections as new items.
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, "Readings within 0.1 C."), { ...section(row, "Probe at 37 C."), id: row.id.replace("inventory", "s2"), citation: { ...(section(row, "x").citation as object), section_id: "s2", text_sha256: sha256Digest("Probe at 37 C.") } } as EvidenceDeskItemV2]) as EvidenceDeskResultV2;
+    });
+    const list = vi.fn(async () => result(PAGES, { next_cursor: "page-2", page_full: false }) as EvidenceDeskResultV2);
+    const text = "What accuracy does the PRD require?";
+    const need = "the PRD's accuracy requirement";
+    const h = harness([
+      ask(text, need, "open", [], [{ tool: "list", args: { source: "pages" } }]),
+      ask(text, need, "open", [], [{ tool: "open", args: { id: "E5" } }], "N1"),
+      ask(text, need, "found", ["E5", "E9"], [finish], "N1"),
+      { lists: [], sentences: [{ text: "The PRD requires readings within 0.1 C.", evidence: ["E9"] }], not_found: [] },
+    ], { live_sources: [CONFLUENCE], list, open });
+    const { response, research: view } = await h.research.answerWithResearch({ question: text });
+    expect(view.lists).toEqual([expect.objectContaining({ id: "L1", ended: false })]);
+    expect(view.rounds.map(round => round.rejected)).toEqual([[], [], []]);
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+    expect(list).toHaveBeenCalledOnce();
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual(["The PRD requires readings within 0.1 C."]);
+  });
+
+  it("still rests the October 4 shape on its list: four opened rows and their sections beside four rows never opened", async () => {
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, `${row.label}: created October 4.`)]) as EvidenceDeskResultV2;
+    });
+    const subset = { lists: [], sentences: [{ text: "The pages created on October 4 are ECHO Product Pipeline, Assumptions and decisions, Gate reviews and Traceability.", evidence: ["E1", "E2", "E3", "E4"] }], not_found: [] };
+    const h = harness([
+      ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
+      ask(OCT4, OCT4_NEED, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
+      ask(OCT4, OCT4_NEED, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1"),
+      subset, subset,
+    ], october4Desk({ open }));
+    const { response } = await h.research.answerWithResearch({ question: OCT4 });
+    expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", cited_by_plan: true, checked: 4 });
+    expect(writerInputs(h)).toHaveLength(2);
+    expect(response.parts[0]!.statements).toEqual([{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
+  });
+
   it("says how many members were checked when a sentence claims content across a list (addition 4)", async () => {
     const open = vi.fn(async (input: { readonly item: string }) => {
       const row = PAGES.find(page => page.id === input.item)!;
@@ -716,8 +776,17 @@ describe("the finish check for a question goal (ADR-0041)", () => {
 
   it("refuses a need on a list that can still be read further", () => {
     expect(problems(["L2"])).toEqual(['part 1 need N1 "which items": list L2 is unfinished: keep reading the list (repeat list with {"source":"tickets"})']);
-    // A member row of an unfinished list, cited beside a read text, still rests on that list.
+    // A member row of an unfinished list, cited beside a read text that no open of it returned, still rests on that list.
     expect(problems(["E9", "E5"])).toEqual(['part 1 need N1 "which items": list L2 is unfinished: keep reading the list (repeat list with {"source":"tickets"})']);
+  });
+
+  it("reads a row cited beside the body its clean open returned as that item, exactly as the task rule does", () => {
+    // Opening E5 returned E9, a new item (a page's section); E5 is a member of the unfinished L2.
+    const opened = (id: string) => id === "E5" ? ["E9"] : [];
+    expect(askQuestionCompletionProblemsV1(found(["E5", "E9"]), [], lists, full, true, { opened })).toEqual([]);
+    expect(askResearchCompletionProblemsV1(found(["E5", "E9"]), [], full)).toEqual([]);
+    // E4 was never opened: beside E9 it still names its list.
+    expect(askQuestionCompletionProblemsV1(found(["E4", "E5", "E9"]), [], lists, id => id === "E9", true, { opened })).toEqual(['part 1 need N1 "which items": list L2 is unfinished: keep reading the list (repeat list with {"source":"tickets"})']);
   });
 
   it("keeps \"one cited item read in full\" for content, and asks for the list's id beside rows alone", () => {

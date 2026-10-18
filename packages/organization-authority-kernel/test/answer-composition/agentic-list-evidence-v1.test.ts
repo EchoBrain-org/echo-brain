@@ -23,6 +23,7 @@ import {
   agenticListStatementV1,
   agenticListMembershipV1,
   agenticNeedSupportV1,
+  agenticOpenReadsV1,
   agenticWriterListMemberV1,
   agenticWriterListV1,
   createAgenticListEvidenceV1,
@@ -33,6 +34,7 @@ import {
   type AgenticListFilterApplicationV1,
   type AgenticListIdV1,
   type AgenticNeedSupportLookupV1,
+  type AgenticOpenActionV1,
   type AgenticWriterListMemberV1,
 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
 import type { AgenticResearchResultV1 } from "../../src/answer-composition/agentic-research-v1.js";
@@ -223,6 +225,7 @@ describe("support kinds", () => {
     // E9 to E12 are sections research opened; rows E1 to E8 have no text.
     full: id => ["E9", "E10", "E11", "E12"].includes(id),
     member_of: membership,
+    opened: () => [],
   };
 
   it("reads the refused round-2 finish of the October 4 run as the list", () => {
@@ -260,6 +263,36 @@ describe("support kinds", () => {
     const sections: AgenticNeedSupportLookupV1 = { ...lookup, full: id => id in parts, member_of: id => membership(parts[id] ?? id) };
     expect(agenticNeedSupportV1(["E9", "E10", "E11", "E12"], sections)).toEqual({ lists: ["L1"], content: ["E9", "E10", "E11", "E12"], unsupported: [] });
     expect(agenticNeedSupportV1(["E9", "E13"], sections)).toEqual({ lists: [], content: ["E9", "E13"], unsupported: [] });
+  });
+
+  it("reads a row cited beside a body its clean open returned as that body's item, never as its list", () => {
+    // Opening E3 returned its section E11; opening E4 returned E12. E5 was never opened.
+    const parts: Readonly<Record<string, string>> = { E11: "E3", E12: "E4" };
+    const opens: Readonly<Record<string, readonly string[]>> = { E3: ["E11"], E4: ["E12"] };
+    const pages: AgenticNeedSupportLookupV1 = { ...lookup, full: id => id in parts, member_of: id => membership(parts[id] ?? id), opened: id => opens[id] ?? [] };
+    expect(agenticNeedSupportV1(["E3", "E11"], pages)).toEqual({ lists: [], content: ["E11"], unsupported: [] });
+    // A row whose own body is not cited still names its list, and two pages are two members.
+    expect(agenticNeedSupportV1(["E5", "E11"], pages)).toEqual({ lists: ["L1"], content: ["E11"], unsupported: [] });
+    expect(agenticNeedSupportV1(["E4", "E11"], pages)).toEqual({ lists: ["L1"], content: ["E11"], unsupported: [] });
+    expect(agenticNeedSupportV1(["E3", "E11", "E4", "E12"], pages)).toEqual({ lists: ["L1"], content: ["E11", "E12"], unsupported: [] });
+  });
+});
+
+describe("what research's opens read", () => {
+  const open = (id: string, opened: readonly string[], result: { readonly error?: string; readonly truncated?: boolean; readonly notice?: boolean } = {}): AgenticOpenActionV1 =>
+    ({ tool: "open", args: { id }, result: { opened, ...result } });
+  const round = (...actions: AgenticOpenActionV1[]) => ({ actions });
+  const id_of = (raw: unknown) => typeof raw === "string" && /^E\d+$/u.test(raw) ? raw : null;
+
+  it("keeps each clean open's bodies, read in full, until a limited open undoes it", () => {
+    const full = (id: string) => ["E9", "E10", "E11", "E12"].includes(id);
+    const reads = agenticOpenReadsV1([
+      round(open("E1", ["E9", "E10"]), open("E2", ["E11"], { truncated: true }), open("E3", ["E12", "E13"]), { tool: "search", args: { query: "E4" }, result: { opened: ["E12"] } }),
+      round(open("E1", [], { error: "unavailable" }), open("E2", ["E11"]), open("E4", []), open("a title", ["E12"])),
+    ], full, id_of);
+    // E1's later open failed; E2's later open was clean; E3 returned a body research did not read; E4 returned none.
+    expect([...reads.clean]).toEqual([["E2", ["E11"]]]);
+    expect([...reads.limited]).toEqual(["E1"]);
   });
 });
 

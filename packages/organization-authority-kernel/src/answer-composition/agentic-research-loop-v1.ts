@@ -38,6 +38,7 @@ import {
   agenticListMembershipV1,
   agenticListMembersNounV1,
   agenticNeedSupportV1,
+  agenticOpenReadsV1,
   createAgenticListEvidenceV1,
   type AgenticListEvidenceV1,
   type AgenticListFilterApplicationV1,
@@ -894,10 +895,15 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   }));
   /** Which list member each item is, or is part of: an opened page's section is its page (ADR-0041). */
   const listMembership = (lists: readonly { readonly id: AgenticListIdV1; readonly members: readonly string[] }[]) => agenticListMembershipV1(lists, [...entries.values()]);
+  /** The bodies each item's clean open returned, read in full: a row cited beside one is that body's item (ADR-0041). */
+  const openedBodies = () => {
+    const { clean } = agenticOpenReadsV1(rounds, citable, cleanId);
+    return (id: string) => clean.get(id) ?? [];
+  };
   /** A question goal's finish check: a found need may rest on a list it read (ADR-0041). */
   const questionCompletionProblems = (parts: readonly { readonly needs: readonly NeedState[] }[]) => {
     const checked = listsForCheck();
-    return askQuestionCompletionProblemsV1(parts, researchObservations, checked, citable, listAvailable, listMembership(checked).first);
+    return askQuestionCompletionProblemsV1(parts, researchObservations, checked, citable, listAvailable, { member_of: listMembership(checked).first, opened: openedBodies() });
   };
 
   // ---- scratchpad ------------------------------------------------------
@@ -1245,8 +1251,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const listed = ask ? listsInOrder() : [];
     const listRecords = listed.map(state => listEvidence(state));
     const membership = listMembership(listRecords);
+    const opened = openedBodies();
     const relied = new Set(plan.flatMap(part => part.needs.filter(need => need.status === "found").flatMap(need => agenticNeedSupportV1(need.evidence, {
-      list: id => listRecords.some(list => list.id === id), full: citable, member_of: membership.first,
+      list: id => listRecords.some(list => list.id === id), full: citable, member_of: membership.first, opened,
     }).lists)));
     const filterNotices = listed.flatMap((state, index) => {
       if (!relied.has(state.id)) return [];

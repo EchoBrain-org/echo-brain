@@ -232,8 +232,9 @@ export function agenticListFilterNoticeV1(list: Pick<AgenticListEvidenceV1, "fil
 /** How one found need's cited ids divide into support. */
 export interface AgenticNeedSupportV1 {
   /**
-   * Lists cited by id, then the list of each cited member row (a member research never read in full), then each list
-   * two or more of whose members the need cites, read in full or not; each once. List facts.
+   * Lists cited by id, then the list of each cited member row (a member research never read in full, cited without a
+   * body its clean open returned), then each list two or more of whose members the need cites, read in full or not;
+   * each once. List facts.
    */
   readonly lists: readonly AgenticListIdV1[];
   /** Cited items research read in full. Content. */
@@ -257,6 +258,48 @@ export interface AgenticNeedSupportLookupV1 {
   readonly full: (id: string) => boolean;
   /** The first list, in id order, holding this item as a member or holding the member it is part of (agenticListMembershipV1). */
   readonly member_of: (id: string) => AgenticListMemberRefV1 | undefined;
+  /** The bodies a clean open of this item returned, every one read in full (agenticOpenReadsV1); none when it had no clean open. */
+  readonly opened: (id: string) => readonly string[];
+}
+
+// ---- opens: what research read by opening an item ------------------------
+
+/** An open as research's rounds record it: the id it asked for and what it returned. */
+export interface AgenticOpenActionV1 {
+  readonly tool: string;
+  readonly args: Readonly<Record<string, string>>;
+  readonly result: { readonly opened: readonly string[]; readonly error?: string; readonly truncated?: boolean; readonly notice?: boolean };
+}
+
+/** What research's opens read (agenticOpenReadsV1). */
+export interface AgenticOpenReadsV1 {
+  /** Each item whose open was clean, with the bodies that open returned: an opened page's sections are new items. */
+  readonly clean: ReadonlyMap<string, readonly string[]>;
+  /** Each item whose latest open was limited: truncated, with a notice or with an error. */
+  readonly limited: ReadonlySet<string>;
+}
+
+/**
+ * What research read by opening items, from its rounds in order (ADR-0041). An open is clean when it was not
+ * truncated, carried no notice or error, and returned only bodies research then read in full. A limited open undoes
+ * an item's clean open until a later clean one. The finish check, the loop, the renderer and the evaluation read the
+ * same relation: a list member is checked through its clean open (addition 4), and a row cited beside a body its clean
+ * open returned is that body's identity, not its list. `id_of` reads an open's id as the step protocol does.
+ */
+export function agenticOpenReadsV1(
+  rounds: readonly { readonly actions: readonly AgenticOpenActionV1[] }[],
+  full: (id: string) => boolean,
+  id_of: (raw: unknown) => string | null,
+): AgenticOpenReadsV1 {
+  const clean = new Map<string, readonly string[]>(); const limited = new Set<string>();
+  for (const round of rounds) for (const action of round.actions) {
+    if (action.tool !== "open") continue;
+    const id = id_of(action.args.id);
+    if (id === null) continue;
+    if (action.result.error !== undefined || action.result.truncated === true || action.result.notice === true) { limited.add(id); clean.delete(id); continue; }
+    if (action.result.opened.length > 0 && action.result.opened.every(full)) { clean.set(id, Object.freeze([...action.result.opened])); limited.delete(id); }
+  }
+  return Object.freeze({ clean, limited });
 }
 
 // ---- membership: an item is a member, or part of one --------------------
@@ -337,6 +380,11 @@ export function agenticListMembershipV1(
  * meeting record keeps its row's id, so "my open follow-ups" citing the first
  * page's ten members still has to read the list to its end. An opened section
  * counts as the member it is part of.
+ *
+ * A member row cited beside a body its clean open returned names that body's
+ * item: "what does the gate review page say" citing the page's row and its
+ * section is content, not its list. A row cited without such a body still
+ * gives list support.
  */
 export function agenticNeedSupportV1(evidence: readonly string[], lookup: AgenticNeedSupportLookupV1): AgenticNeedSupportV1 {
   const lists: AgenticListIdV1[] = []; const content: string[] = []; const unsupported: string[] = [];
@@ -346,9 +394,10 @@ export function agenticNeedSupportV1(evidence: readonly string[], lookup: Agenti
     const list = parseAgenticListIdV1(id);
     if (list !== null) { if (lookup.list(list)) add(lists, list); else add(unsupported, id); continue; }
     const member = lookup.member_of(id);
-    // Two sections of one page are one member.
+    // Two sections of one page are one member, and so are a row and its opened body.
     if (member !== undefined) members.set(member.list, (members.get(member.list) ?? new Set()).add(member.member));
     if (lookup.full(id)) { add(content, id); continue; }
+    if (member !== undefined && lookup.opened(id).some(body => evidence.includes(body))) continue;
     if (member !== undefined) add(lists, member.list); else add(unsupported, id);
   }
   for (const [list, cited] of members) if (cited.size >= 2) add(lists, list);

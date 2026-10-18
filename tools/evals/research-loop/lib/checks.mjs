@@ -110,16 +110,40 @@ function citedObject(citation) {
   return fields === undefined || fields.some(field => typeof citation[field] !== "string") ? undefined : JSON.stringify([citation.kind, ...fields.map(field => citation[field])]);
 }
 
+/** An open's id as Ask's step protocol reads it ("E4", "e4", "[E4]", "4"; cleanId). */
+function openId(value) {
+  const match = typeof value === "string" || typeof value === "number" ? /^\s*\[?\s*[Ee]?\s*(\d{1,4})\s*\]?\s*$/u.exec(String(value)) : null;
+  return match === null ? null : `E${Number(match[1])}`;
+}
+
+/**
+ * The bodies each item's clean open returned, in research's rounds (agenticOpenReadsV1): an open not truncated, with
+ * no notice or error, all of whose bodies research read in full. A later limited open undoes it.
+ */
+function cleanOpens(rounds, full) {
+  const clean = new Map();
+  for (const action of (Array.isArray(rounds) ? rounds : []).flatMap(round => round.actions ?? [])) {
+    const id = action.tool === "open" ? openId(action.args?.id) : null;
+    if (id === null) continue;
+    const opened = action.result?.opened ?? [];
+    if (action.result?.error !== undefined || action.result?.truncated === true || action.result?.notice === true) clean.delete(id);
+    else if (opened.length > 0 && opened.every(body => full.has(body))) clean.set(id, opened);
+  }
+  return clean;
+}
+
 /**
  * The lists a run's research read (ADR-0041; a run from before it has none): the lists holding each item, and those
  * the plan rests on. An item belongs to a list when it is a member or cites the same object as one (an opened page's
  * section is its page). As Ask's finish check divides support, a found need rests on each list it cites by id, on the
- * first list holding each member row it cites that research never read in full, and on the first list holding two or
- * more of the members it cites, read in full or not.
+ * first list holding each member row it cites that research never read in full, unless the need also cites a body
+ * that row's clean open returned, and on the first list holding two or more of the members it cites, read in full or
+ * not.
  */
 function listIndex(research, items) {
   const all = Array.isArray(research.lists) ? research.lists : [];
   const full = new Set(items.filter(item => item.read_in_full).map(item => item.id));
+  const opened = cleanOpens(research.rounds, full);
   const citation = new Map(items.map(item => [item.id, item.citation]));
   const memberIn = (list, id) => {
     if (list.members.includes(id)) return id;
@@ -131,7 +155,8 @@ function listIndex(research, items) {
     const first = id => of(id).slice(0, 1).map(list => ({ list: list.id, member: memberIn(list, id) }));
     const members = new Map();
     for (const { list, member } of need.evidence.flatMap(first)) members.set(list, new Set([...(members.get(list) ?? []), member]));
-    return need.evidence.flatMap(id => all.some(list => list.id === id) ? [id] : full.has(id) ? [] : first(id).map(value => value.list))
+    const identity = id => (opened.get(id) ?? []).some(body => need.evidence.includes(body));
+    return need.evidence.flatMap(id => all.some(list => list.id === id) ? [id] : full.has(id) || identity(id) ? [] : first(id).map(value => value.list))
       .concat([...members].filter(([, cited]) => cited.size >= 2).map(([list]) => list));
   })));
   return { of, relied: list => relied.has(list.id) };

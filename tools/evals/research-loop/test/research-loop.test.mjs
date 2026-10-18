@@ -723,6 +723,13 @@ test("the fixed October 4 answer names all 8 pages from a complete list, citing 
   const opened = OCTOBER_4.slice(0, 2).map(pageSection);
   const bySections = evidence => codeChecks(fixed.testCase, october4Run({ items: [...ROWS, ...opened], lists: [OCT4_LIST], evidence, writer: ids, cites: ROWS }).run, dataset).parts[0].cited_by_plan;
   assert.deepEqual([bySections(opened.map(item => item.id)), bySections([opened[0].id])], [true, false]);
+  // A row cited beside the section its clean open returned is that page's content, not its list; a limited open is not.
+  const beside = result => {
+    const { run } = october4Run({ items: [...ROWS, ...opened], lists: [OCT4_LIST], evidence: [ROWS[0].id, opened[0].id], writer: ids, cites: ROWS });
+    run.result.research.rounds = [{ round: 2, actions: [{ tool: "open", args: { id: ROWS[0].id }, result: { items: [], opened: [opened[0].id], ...result } }] }];
+    return codeChecks(fixed.testCase, run, dataset).parts[0].cited_by_plan;
+  };
+  assert.deepEqual([beside({}), beside({ truncated: true })], [false, true]);
 
   const seven = codeChecks(fixed.testCase, october4Run({ lists: [OCT4_LIST], evidence: ["L1"], writer: ids, cites: ROWS.slice(0, 7) }).run, dataset);
   assert.deepEqual([seven.parts[0].named, seven.parts[0].members_named], [false, 7]);
