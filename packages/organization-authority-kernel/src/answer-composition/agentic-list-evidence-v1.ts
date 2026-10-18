@@ -2,6 +2,7 @@ import type { EvidenceDeskDateKindV1 } from "../shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
 import { evidenceDayV1, type EvidenceDateFieldV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
 import { attributesOf } from "./agentic-evidence-bundle-v1.js";
+import type { AgenticResearchNeedV1 } from "./agentic-research-v1.js";
 
 /**
  * List evidence (ADR-0041). For a question goal (Ask), a list research read is
@@ -223,6 +224,18 @@ export function agenticListFilterNoticeV1(list: Pick<AgenticListEvidenceV1, "fil
     ...(partial.length === 0 ? [] : [`${sentence(noun)} were filtered by ${partial.join(" and ")} only where they record ${partial.length === 1 ? "one" : "them"}, so this list also includes items that record none.`]),
   ];
   return notices.length === 0 ? undefined : notices.join(" ");
+}
+
+// ---- what a need's declared kind asks of lists --------------------------
+
+/**
+ * Whether code reads a list for a need (ADR-0041), from its declared kind alone: a which_items need research has not
+ * given up on (found, or open when research stopped), whose lists code states, or a which_say need of any status, whose
+ * list code counts, since "k of N checked" qualifies "none of them" as much as "these". A content need's list ids, and
+ * a need without a kind, carry no meaning. The finish check and the answer read this one definition.
+ */
+export function agenticNeedReadsListV1(need: Pick<AgenticResearchNeedV1, "kind" | "status">): boolean {
+  return need.kind === "which_say" || (need.kind === "which_items" && need.status !== "not_found");
 }
 
 // ---- support kinds ----------------------------------------------------

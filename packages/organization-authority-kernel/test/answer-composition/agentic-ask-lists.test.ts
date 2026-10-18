@@ -135,8 +135,10 @@ describe("Ask research: the October 4 Confluence list (trace ee2f0973)", () => {
       useL1,
     ], october4Desk());
     const view = await h.research.research({ trigger: "ask", brief: question(OCT4) });
-    expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining('need N1 "list of Confluence pages created on 2026-10-04" is found but cites no item whose full text you have read: cite L1 for which items exist, or open the items for what they say')]);
-    expect(h.prompt(2).validation_error).toContain("cite L1 for which items exist");
+    // A which_items need cites its list by id; the refusal names the list that holds the rows. L1 ended, so nothing asks to read on.
+    expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining('need N1 "list of Confluence pages created on 2026-10-04" cites no list: cite the id of the list that holds its items (L1). ')]);
+    expect(view.rounds[1]!.rejected[0]).not.toContain("keep reading");
+    expect(h.prompt(2).validation_error).toContain("cite the id of the list that holds its items (L1)");
     expect(view.stop).toEqual({ reason: "finished", completed: true });
     expect(view.rounds).toHaveLength(2);
     expect(view.lists![0]).toMatchObject({ id: "L1", members: MEMBERS, complete: true });
@@ -395,7 +397,7 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
     expect(replies).toEqual([]);
   });
 
-  it("asks to keep reading a follow-up list research cited by its members, though their rows carry text, then names all 12", async () => {
+  it("asks a which_items need citing ten follow-up rows to cite their list and keep reading it, then names all 12", async () => {
     // A follow-up row always carries its text, so research reads it in full; the desk pages 10 at a time.
     const items = Array.from({ length: 12 }, (_, index) => followUpItem(index + 1));
     const list = vi.fn(async (input: EvidenceDeskListInputV2) => (input.cursor === undefined
@@ -413,7 +415,7 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
       ask(text, need, "open", [], [LIST]),
       ask(text, need, "found", Array.from({ length: 10 }, (_, index) => `E${index + 1}`), [finish], "N1", WI),
       ask(text, need, "open", [], [LIST], "N1"),
-      ask(text, need, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1", WI),
+      ask(text, need, "found", ["L1"], [finish], "N1", WI),
       { lists: [], sentences: [{ text: "You have 12 open follow-ups.", evidence: Array.from({ length: 12 }, (_, index) => `E${index + 1}`) }], not_found: [] },
       { lists: [{ id: "L1" }], sentences: [], not_found: [] },
     ];
@@ -422,7 +424,8 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
       model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift(); } },
     }).answer({ question: text });
     const steps = inputs.filter(input => input.system_prompt.startsWith("You are Echo's research agent"));
-    expect(JSON.parse(steps[2]!.user_prompt).validation_error).toContain('need N1 "my open follow-ups": list L1 is unfinished: keep reading the list (repeat list with {"source":"follow_ups","status":"open","owner":"Mara Lind"})');
+    // One refusal says both: cite the list that holds the rows, and read it on, since it has a next page.
+    expect(JSON.parse(steps[2]!.user_prompt).validation_error).toContain('need N1 "my open follow-ups" cites no list: cite the id of the list that holds its items (L1); part 1 need N1 "my open follow-ups": list L1 is unfinished: keep reading the list (repeat list with {"source":"follow_ups","status":"open","owner":"Mara Lind"})');
     expect(list).toHaveBeenCalledTimes(2);
     // The plan rests on the list, so the writer's count without it is sent back once.
     const writers = inputs.filter(input => input.system_prompt.startsWith("You write"));
@@ -699,13 +702,16 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const sections = ["E9", "E10", "E11", "E12"];
     const subset = { lists: [], sentences: [{ text: "The pages created on October 4 are ECHO Product Pipeline, Assumptions and decisions, Gate reviews and Traceability.", evidence: sections }], not_found: [] };
     for (const plan of [sections, ["L1", ...sections]]) {
+      // A which_items finish on the sections alone is refused once, naming the list whose members they belong to.
       const h = harness([
         ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
         ask(OCT4, OCT4_NEED, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
         ask(OCT4, OCT4_NEED, "found", plan, [finish], "N1", WI),
+        ...(plan[0] === "L1" ? [] : [ask(OCT4, OCT4_NEED, "found", ["L1", ...sections], [finish], "N1", WI)]),
         subset, subset,
       ], october4Desk({ open }));
-      const { response } = await h.research.answerWithResearch({ question: OCT4 });
+      const { response, research: view } = await h.research.answerWithResearch({ question: OCT4 });
+      expect(view.rounds.at(-1)!.rejected).toEqual(plan[0] === "L1" ? [] : [expect.stringContaining("cites no list: cite the id of the list that holds its items (L1). ")]);
       expect(writerInputs(h)).toHaveLength(2);
       expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 4, cited_by_plan: true });
       expect(writerPrompt(h, 1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members; for what its members say, cite L1 beside their evidence');
@@ -753,9 +759,12 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]),
       ask(TICKETS, TICKETS_NEED, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
       ask(TICKETS, TICKETS_NEED, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1", WI),
+      ask(TICKETS, TICKETS_NEED, "found", ["L1", ...Array.from({ length: 12 }, (_, index) => `E${index + 1}`)], [finish], "N1", WI),
       subset, subset,
     ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 12), { page_full: false }) as EvidenceDeskResultV2), open });
-    const { response } = await h.research.answerWithResearch({ question: TICKETS });
+    const { response, research: view } = await h.research.answerWithResearch({ question: TICKETS });
+    // The finish on rows and bodies alone is refused once, naming their list; the repair cites it.
+    expect(view.rounds.at(-1)!.rejected).toEqual([expect.stringContaining("cites no list: cite the id of the list that holds its items (L1). ")]);
     expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 12, checked: 4, complete: true, cited_by_plan: true });
     expect(writerInputs(h)).toHaveLength(2);
     expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
@@ -804,7 +813,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual(["The PRD requires readings within 0.1 C."]);
   });
 
-  it("still rests the October 4 shape on its list: four opened rows and their sections beside four rows never opened", async () => {
+  it("asks the October 4 shape for its list once: four opened rows and their sections beside four rows never opened", async () => {
     const open = vi.fn(async (input: { readonly item: string }) => {
       const row = PAGES.find(page => page.id === input.item)!;
       return result([section(row, `${row.label}: created October 4.`)]) as EvidenceDeskResultV2;
@@ -814,9 +823,11 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
       ask(OCT4, OCT4_NEED, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
       ask(OCT4, OCT4_NEED, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1", WI),
+      ask(OCT4, OCT4_NEED, "found", ["L1", ...Array.from({ length: 12 }, (_, index) => `E${index + 1}`)], [finish], "N1", WI),
       subset, subset,
     ], october4Desk({ open }));
-    const { response } = await h.research.answerWithResearch({ question: OCT4 });
+    const { response, research: view } = await h.research.answerWithResearch({ question: OCT4 });
+    expect(view.rounds.at(-1)!.rejected).toEqual([expect.stringContaining("cites no list: cite the id of the list that holds its items (L1). ")]);
     expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", cited_by_plan: true, checked: 4 });
     expect(writerInputs(h)).toHaveLength(2);
     expect(response.parts[0]!.statements).toEqual([{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
@@ -882,12 +893,14 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     // Two pages' sections, with the plan on the list or on those sections only. Without the list's id the sentence
     // cites only members, which code cannot tell from a restated subset: the repair asks for the id, and a writer that
     // gives it says what those two say, noted. One that never does has its sentence replaced by code's list.
+    // A which_say finish on those sections alone is refused once, naming their list; its repair cites it.
     for (const plan of [["L1", "E11", "E12"], ["E11", "E12"]]) {
       const run = async (replies: readonly unknown[]) => {
         const h = harness([
           ask(text, need, "open", [], [OCT4_LIST]),
           ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
           ask(text, need, "found", plan, [finish], "N1", WS),
+          ...(plan[0] === "L1" ? [] : [ask(text, need, "found", ["L1", ...plan], [finish], "N1", WS)]),
           ...replies,
         ], october4Desk({ open }));
         return { h, response: (await h.research.answerWithResearch({ question: text })).response };
@@ -1158,6 +1171,91 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
   });
 });
 
+describe("Ask research: the finish check follows each need's declared kind (ADR-0041)", () => {
+  const followUps = Array.from({ length: 12 }, (_, index) => followUpItem(index + 1));
+  const FOLLOW_UPS = { tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } } as const;
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => `E${index + 1}`);
+  /** Scripted research steps in order, and one writer reply for whatever the answer is. */
+  const scripted = (steps: unknown[], writer: unknown = { lists: [], sentences: [], not_found: ["the requested fact"] }) =>
+    (input: StructuredGenerationInput) => input.system_prompt.startsWith("You write") ? writer : steps.shift();
+  /** Ask over ECHO's follow-ups, 10 a page (the V4 core, whose V7 answers cite them): what each step and the writer were shown. */
+  const followUpAsk = async (text: string, steps: unknown[]) => {
+    const desk = {
+      scope: { kind: "global" as const }, live_sources: [FOLLOW_UPS_SOURCE_DESCRIPTOR_V1],
+      list: vi.fn(async (input: EvidenceDeskListInputV2) => (input.cursor === undefined
+        ? { ...result(followUps.slice(0, 10)), next_cursor: "page-2", page_full: false }
+        : { ...result(followUps.slice(10)), page_full: false }) as EvidenceDeskResultV2),
+      search: vi.fn(async () => result([]) as EvidenceDeskResultV2), open: vi.fn(async () => result([]) as EvidenceDeskResultV2), revalidate: vi.fn(async () => checked),
+    } satisfies EvidenceDeskPortV2;
+    const inputs: StructuredGenerationInput[] = [];
+    const reply = scripted(steps);
+    await createAgenticAskV4({
+      desk, generation, audit: { append: () => undefined }, asker: { display_name: "Mara Lind" }, wall_ms: () => Date.parse(LIST_READ_AT),
+      model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return reply(input); } },
+    }).answer({ question: text });
+    const prompts = (writer: boolean) => inputs.filter(input => input.system_prompt.startsWith("You write") === writer).map(input => JSON.parse(input.user_prompt) as Record<string, any>);
+    return { desk, steps: prompts(false), writer: prompts(true)[0]!, left: steps };
+  };
+
+  it("refuses a which_items finish on ten follow-up rows once, naming their list and asking to read it on", async () => {
+    // A repair that only cites L1 is refused again, since L1 has a next page: research stops with the need still open.
+    const text = "What are my open follow-ups?";
+    const need = "my open follow-ups";
+    const { desk, steps, writer, left } = await followUpAsk(text, [ask(text, need, "open", [], [FOLLOW_UPS], undefined, WI), ask(text, need, "found", ids(10), [finish], "N1", WI), ask(text, need, "found", ["L1"], [finish], "N1", WI)]);
+    const reading = `list L1 is unfinished: keep reading the list (repeat list with {"source":"follow_ups","status":"open","owner":"Mara Lind"})`;
+    expect(steps).toHaveLength(3);
+    expect(steps[2]!.validation_error).toContain(`need N1 "${need}" cites no list: cite the id of the list that holds its items (L1); part 1 need N1 "${need}": ${reading}`);
+    expect(desk.list).toHaveBeenCalledOnce();
+    expect(writer.research).toMatchObject({ completed: false, stop_reason: "unusable_step" });
+    expect(left).toEqual([]);
+  });
+
+  it("never waits for the end of a which_say list, and refuses a not_found one until absence is shown", async () => {
+    // Every follow-up row carries its text and is read in full once shown.
+    const fan = "Which of my open follow-ups are about the fan curve?";
+    const fanNeed = "my open follow-ups about the fan curve";
+    const found = await followUpAsk(fan, [ask(fan, fanNeed, "open", [], [FOLLOW_UPS], undefined, WS), ask(fan, fanNeed, "found", ["L1", "E2", "E4"], [finish], "N1", WS)]);
+    expect(found.steps).toHaveLength(2);
+    expect(found.desk.list).toHaveBeenCalledOnce();
+    expect(found.writer.research).toMatchObject({ completed: true, stop_reason: "finished" });
+    // None of the first ten is about the oven, and the list has a next page: absence waits for its end, as for every kind.
+    const oven = "Which of my open follow-ups are about the oven?";
+    const ovenNeed = "my open follow-ups about the oven";
+    const absent = await followUpAsk(oven, [
+      ask(oven, ovenNeed, "open", [], [FOLLOW_UPS], undefined, WS), ask(oven, ovenNeed, "not_found", ["L1"], [finish], "N1", WS),
+      ask(oven, ovenNeed, "open", [], [FOLLOW_UPS], "N1", WS), ask(oven, ovenNeed, "not_found", ["L1"], [finish], "N1", WS),
+    ]);
+    expect(absent.steps).toHaveLength(4);
+    expect(absent.steps[2]!.validation_error).toContain(`need N1 "${ovenNeed}" is not_found after fewer than two completed searches or a completed list`);
+    expect(absent.steps[2]!.validation_error).not.toContain("cites no list");
+    expect(absent.desk.list).toHaveBeenCalledTimes(2);
+    expect(absent.writer.research).toMatchObject({ completed: true, stop_reason: "finished" });
+    expect(absent.writer.lists).toEqual([expect.objectContaining({ id: "L1", complete: true, count: 12, checked: 12 })]);
+  });
+
+  it("asks a not_found which_say finish that cites no list for the list it checked, once", async () => {
+    const text = "Which pages created on October 4, 2026 mention BUG-999?";
+    const need = "pages created on 2026-10-04 that mention BUG-999";
+    const open = vi.fn(async (input: { readonly item: string }) => result([section(PAGES.find(page => page.id === input.item)!, "No defects are discussed.")]) as EvidenceDeskResultV2);
+    const run = (finishes: readonly unknown[]) => harness(scripted([
+      ask(text, need, "open", [], [OCT4_LIST], undefined, WS), ask(text, need, "open", [], MEMBERS.slice(0, 4).map(id => ({ tool: "open", args: { id } })), "N1", WS), ...finishes,
+    ]), october4Desk({ open })).research.research({ trigger: "ask", brief: question(text) });
+    const unlisted = `need N1 "${need}" cites no list: cite the id of the list that holds its items`;
+    // The repair cites the list it checked: "none of them" is qualified by how many were read, as "these" is.
+    const repaired = await run([ask(text, need, "not_found", [], [finish], "N1", WS), ask(text, need, "not_found", ["L1"], [finish], "N1", WS)]);
+    expect(repaired.rounds.at(-1)!.rejected).toEqual([expect.stringContaining(`${unlisted} (from lists), or list them first. `)]);
+    expect(repaired.stop).toEqual({ reason: "finished", completed: true });
+    expect(repaired.plan[0]!.needs).toEqual([{ need, kind: "which_say", status: "not_found", evidence: ["L1"] }]);
+    // Citing the pages it opened instead, the refusal names their list.
+    const opened = await run([ask(text, need, "not_found", MEMBERS.slice(0, 4), [finish], "N1", WS), ask(text, need, "not_found", ["L1"], [finish], "N1", WS)]);
+    expect(opened.rounds.at(-1)!.rejected).toEqual([expect.stringContaining(`${unlisted} (L1). `)]);
+    // A repair that repeats the shape ends research; the plan keeps the last accepted step's need, which cites no list.
+    const repeated = await run([ask(text, need, "not_found", [], [finish], "N1", WS), ask(text, need, "not_found", [], [finish], "N1", WS)]);
+    expect(repeated.stop).toEqual({ reason: "unusable_step", completed: false });
+    expect(repeated.plan[0]!.needs).toEqual([{ need, kind: "which_say", status: "open", evidence: [] }]);
+  });
+});
+
 describe("a task goal keeps the rules before ADR-0041", () => {
   it("sees inventories, never lists, cites no list id and records none", async () => {
     const approved = record("approved", "Approved: ship the DVT fixture.");
@@ -1189,49 +1287,79 @@ describe("the finish check for a question goal (ADR-0041)", () => {
     { id: "L2", ended: false, args: { source: "tickets" }, members: ["E4", "E5"] },
   ];
   const full = (id: string) => id === "E9" || id === "E4";
-  const found = (evidence: readonly string[]) => [{ needs: [{ id: "N1", need: "which items", status: "found" as const, evidence, observations_before: 0 }] }];
-  const problems = (evidence: readonly string[]) => askQuestionCompletionProblemsV1(found(evidence), [], lists, full);
+  const settled = (kind: string | undefined, status: "found" | "not_found", evidence: readonly string[]) =>
+    [{ needs: [{ id: "N1", need: "the need", ...(kind === undefined ? {} : { kind: kind as "which_items" }), status, evidence, observations_before: 0 }] }];
+  const problems = (kind: string | undefined, evidence: readonly string[], options: { readonly lists?: readonly AskResearchListV1[]; readonly list?: boolean; readonly member_in?: (list: `L${number}`, id: string) => string | undefined } = {}) =>
+    askQuestionCompletionProblemsV1(settled(kind, "found", evidence), [], options.lists ?? lists, full, options.list ?? true, ...(options.member_in === undefined ? [] : [options.member_in]));
+  const label = 'part 1 need N1 "the need"';
+  const unlisted = (holders?: string) => `${label} cites no list: cite the id of the list that holds its items${holders === undefined ? " (from lists), or list them first" : ` (${holders})`}`;
+  const unfinished = (id: string, source: string) => `${label}: list ${id} is unfinished: keep reading the list (repeat list with {"source":"${source}"})`;
+  const unread = `${label} is found but cites no item whose full text you have read: a list shows which items exist and each member's title, dates, status and owner, never what an item says; open the items for what they say`;
 
-  it("accepts a need on a list read to its end, with or without its members", () => {
-    expect(problems(["L1"])).toEqual([]);
-    expect(problems(["L1", "E1", "E2"])).toEqual([]);
+  it("accepts a which_items need on a list read to its end, waits for one that is not, and asks for a list it does not cite", () => {
+    expect(problems(WI, ["L1"])).toEqual([]);
+    expect(problems(WI, ["L1", "E1", "E9"])).toEqual([]);
+    expect(problems(WI, ["L2"])).toEqual([unfinished("L2", "tickets")]);
+    // Rows alone: the refusal names the list that holds them, and asks to read it on when it has not ended.
+    expect(problems(WI, ["E1", "E2"])).toEqual([unlisted("L1")]);
+    expect(problems(WI, ["E1", "E2"], { lists: [{ ...lists[0]!, ended: false }, lists[1]!] })).toEqual([unlisted("L1"), unfinished("L1", "pages")]);
+    expect(problems(WI, ["E1", "E4"])).toEqual([unlisted("L1 or L2"), unfinished("L2", "tickets")]);
+    expect(problems(WI, ["L9"])).toEqual([unlisted()]);
+    expect(problems(WI, ["E9"])).toEqual([unlisted()]);
   });
 
-  it("refuses a need on a list that can still be read further", () => {
-    expect(problems(["L2"])).toEqual(['part 1 need N1 "which items": list L2 is unfinished: keep reading the list (repeat list with {"source":"tickets"})']);
-    // A member row of an unfinished list, cited beside a read text that no open of it returned, still rests on that list.
-    expect(problems(["E9", "E5"])).toEqual(['part 1 need N1 "which items": list L2 is unfinished: keep reading the list (repeat list with {"source":"tickets"})']);
+  it("asks a which_say need for the list it checks, never waits for that list's end, and needs text read in full", () => {
+    expect(problems(WS, ["L1", "E9"])).toEqual([]);
+    expect(problems(WS, ["L2", "E9"])).toEqual([]);
+    // E9 is part of L2's member E5, as an opened page's section is its page: the refusal names L2, and never asks to read on.
+    const section = (list: `L${number}`, id: string) => list === "L2" && id === "E9" ? "E5" : lists.find(value => value.id === list)?.members.includes(id) === true ? id : undefined;
+    expect(problems(WS, ["E9"], { member_in: section })).toEqual([unlisted("L2")]);
+    expect(problems(WS, ["E9"])).toEqual([unlisted()]);
+    expect(problems(WS, ["L1"])).toEqual([unread]);
   });
 
-  it("reads a row cited beside the body its clean open returned as that item, exactly as the task rule does", () => {
-    // Opening E5 returned E9, a new item (a page's section); E5 is a member of the unfinished L2.
-    const opened = (id: string) => id === "E5" ? ["E9"] : [];
-    expect(askQuestionCompletionProblemsV1(found(["E5", "E9"]), [], lists, full, true, { opened })).toEqual([]);
-    expect(askResearchCompletionProblemsV1(found(["E5", "E9"]), [], full)).toEqual([]);
-    // E4 was never opened: beside E9 it still names its list.
-    expect(askQuestionCompletionProblemsV1(found(["E4", "E5", "E9"]), [], lists, id => id === "E9", true, { opened })).toEqual(['part 1 need N1 "which items": list L2 is unfinished: keep reading the list (repeat list with {"source":"tickets"})']);
+  it("keeps \"one cited item read in full\" for content, whose list ids carry no meaning", () => {
+    expect(problems(undefined, ["E9"])).toEqual([]);
+    expect(problems("content", ["E9"])).toEqual([]);
+    // A row of the unfinished L2 beside a read text, or L2 itself, neither refuses nor makes it wait.
+    expect(problems("content", ["E5", "E9"])).toEqual([]);
+    expect(problems("content", ["L2", "E9"])).toEqual([]);
+    expect(problems("content", ["E4"])).toEqual([]);
+    // Rows or a list alone: the refusal says what each kind of support is, never which kind the need should be.
+    for (const evidence of [["L1"], ["E1", "E2"], []]) expect(problems("content", evidence)).toEqual([unread]);
+    for (const word of ["which_items", "which_say", "kind"]) expect(unread).not.toContain(word);
+    expect(problems("content", ["L1"], { list: false })).toEqual([`${label} is found but cites no item whose full text you have read`]);
   });
 
-  it("keeps \"one cited item read in full\" for content, and asks for the list's id beside rows alone", () => {
-    expect(problems(["E9"])).toEqual([]);
-    // E4 is a member read in full: content, so its unfinished list is not what the need rests on.
-    expect(problems(["E4"])).toEqual([]);
-    expect(problems(["E1", "E2"])).toEqual(['part 1 need N1 "which items" is found but cites no item whose full text you have read: cite L1 for which items exist, or open the items for what they say']);
-    expect(problems(["E7", "L9"])).toEqual(['part 1 need N1 "which items" is found but cites no item whose full text you have read']);
-  });
-
-  it("asks to keep reading a list two of whose members a need cites, even when research read them in full", () => {
-    const read = (id: string) => ["E1", "E2", "E4", "E5"].includes(id);
-    expect(askQuestionCompletionProblemsV1(found(["E4", "E5"]), [], lists, read)).toEqual(['part 1 need N1 "which items": list L2 is unfinished: keep reading the list (repeat list with {"source":"tickets"})']);
-    // One member read in full is content; two of a list read to its end are accepted.
-    expect(askQuestionCompletionProblemsV1(found(["E5"]), [], lists, read)).toEqual([]);
-    expect(askQuestionCompletionProblemsV1(found(["E1", "E2"]), [], lists, read)).toEqual([]);
+  it("asks a not_found which_say need for its list, and keeps the not-found rules for every kind", () => {
+    const afterList = [{ operation: "list" as const, fingerprint: "k", complete: true }];
+    const notFound = (kind: string | undefined, evidence: readonly string[], observations: readonly { readonly operation: "list" | "search"; readonly fingerprint: string; readonly complete: boolean }[] = afterList) =>
+      askQuestionCompletionProblemsV1(settled(kind, "not_found", evidence), observations, lists, full);
+    expect(notFound(WS, [])).toEqual([unlisted()]);
+    expect(notFound(WS, ["E1", "E2"])).toEqual([unlisted("L1")]);
+    expect(notFound(WS, ["L1"])).toEqual([]);
+    // Absence is never read from an unfinished page, whatever the kind; the need cites its list, so only that is said.
+    expect(notFound(WS, ["L2"], [])).toEqual([`${label} is not_found after fewer than two completed searches or a completed list`]);
+    expect(notFound(WI, [])).toEqual([]);
+    expect(notFound(WI, ["E1"])).toEqual([]);
+    expect(notFound("content", [])).toEqual([]);
+    expect(notFound(undefined, [], [])).toEqual([`${label} is not_found after fewer than two completed searches or a completed list`]);
   });
 
   it("keeps the not_found and open rules", () => {
     expect(askQuestionCompletionProblemsV1([{ needs: [{ need: "x", status: "not_found", evidence: [], observations_before: 0 }] }], [{ operation: "list", fingerprint: "k", complete: true }], lists, full)).toEqual([]);
     expect(askQuestionCompletionProblemsV1([{ needs: [{ need: "x", status: "not_found", evidence: [], observations_before: 0 }] }], [], lists, full, false)).toEqual(['part 1 need "x" is not_found after fewer than two completed searches']);
     expect(askQuestionCompletionProblemsV1([{ needs: [{ need: "x", status: "open", evidence: [], observations_before: 0 }] }], [], lists, full)).toEqual(['part 1 need "x" is still open']);
+    expect(askQuestionCompletionProblemsV1([{ needs: [{ need: "x", kind: "which_items", status: "open", evidence: [], observations_before: 0 }] }], [], lists, full)).toEqual(['part 1 need "x" is still open']);
     expect(askQuestionCompletionProblemsV1([], [], lists, full)).toEqual(["no parts were written"]);
+  });
+
+  it("keeps a task goal's rule for every need, whatever kind it names", () => {
+    const searches = [{ operation: "search" as const, fingerprint: "a", complete: true }, { operation: "search" as const, fingerprint: "b", complete: true }];
+    expect(askResearchCompletionProblemsV1(settled(undefined, "found", ["E5", "E9"]), [], full)).toEqual([]);
+    expect(askResearchCompletionProblemsV1(settled(undefined, "found", ["E1"]), [], full)).toEqual([`${label} is found but cites no item whose full text you have read`]);
+    expect(askResearchCompletionProblemsV1(settled(WI, "found", ["L1"]), [], full)).toEqual([`${label} is found but cites no item whose full text you have read`]);
+    expect(askResearchCompletionProblemsV1(settled(undefined, "not_found", []), searches, full)).toEqual([]);
+    expect(askResearchCompletionProblemsV1(settled(undefined, "not_found", ["E1"]), searches.slice(0, 1), full, false)).toEqual([`${label} is not_found after fewer than two completed searches`]);
   });
 });

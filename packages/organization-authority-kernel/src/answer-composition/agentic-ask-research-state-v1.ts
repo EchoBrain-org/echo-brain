@@ -1,4 +1,5 @@
-import { agenticNeedSupportV1, type AgenticListIdV1, type AgenticListMemberRefV1, type AgenticNeedSupportLookupV1 } from "./agentic-list-evidence-v1.js";
+import { agenticNeedReadsListV1, parseAgenticListIdV1, type AgenticListIdV1 } from "./agentic-list-evidence-v1.js";
+import type { AgenticResearchNeedKindV1 } from "./agentic-research-v1.js";
 
 /** Request-local retrieval observations. No provider payload is stored here. */
 export interface AskResearchObservationV1 {
@@ -12,6 +13,8 @@ export interface AskResearchNeedV1 {
   /** The need's id the planner sees ("N3"), so a rejected finish names it. */
   readonly id?: string;
   readonly need: string;
+  /** Ask's declared kind (ADR-0041); a need without one is content. */
+  readonly kind?: AgenticResearchNeedKindV1;
   readonly status: 'open' | 'found' | 'not_found';
   readonly evidence: readonly string[];
   readonly observations_before: number;
@@ -31,7 +34,7 @@ export function askResearchCompletionProblemsV1(
   list = true,
 ): readonly string[] {
   return completionProblems(parts, observations, list, (need, label) =>
-    need.evidence.some(citable) ? [] : [`${label} is found but cites no item whose full text you have read`]);
+    need.status !== 'found' || need.evidence.some(citable) ? [] : [`${label} is found but cites no item whose full text you have read`]);
 }
 
 /** A list research read in a question's request, as the finish check sees it (ADR-0041). */
@@ -45,77 +48,62 @@ export interface AskResearchListV1 {
   readonly members: readonly string[];
 }
 
+/** What a refusal adds with the list tool: what each kind of support is, never a change of kind (ADR-0041). */
+const CONTENT_HINT = ": a list shows which items exist and each member's title, dates, status and owner, never what an item says; open the items for what they say";
+
 /**
- * The finish check for a question goal (Ask, ADR-0041). A found need's
- * evidence divides into list support (lists cited by id, the list of a cited
- * member row research never read in full, or a list two or more of whose
- * members it cites) and content (items read in full). A need with list support is checked against its lists: one that can
- * still be read further refuses the finish ("keep reading the list"); one
- * that cannot (truncated, unavailable or an unverified end) is accepted, and
- * the answer says "at least". A need without list support still needs at
- * least one cited item read in full. The other rules are the task goal's.
- *
- * Member rows alone are not support: a need must also cite a list by its id,
- * or an item read in full. Otherwise a content need ("when is launch?") that
- * cites a list's row would finish before research read the item, and the
- * writer, which never sees a row's text, could not answer it. The refusal
- * names both ways on: cite the list for which items exist, or open the items.
- *
- * `items.member_of` says which list member an item is, or is part of (an
- * opened page's section is its page: agenticListMembershipV1); by default an
- * item belongs only to the lists whose members include it. `items.opened`
- * gives the bodies an item's clean open returned (agenticOpenReadsV1): a row
- * cited beside one of them is content, so "what does this page say" never
- * has to read the page's list to its end. By default nothing was opened.
+ * The finish check for a question goal (Ask, ADR-0041), from each settled need's declared kind alone. A need code
+ * reads a list for (agenticNeedReadsListV1) cites, by its id, a list research read; otherwise it is refused once with
+ * the ids of the lists that hold what it cites (`member_in`: an opened page's section is its page), which word the
+ * refusal and never support the need. A found which_items need waits for each list it cites, or would have cited, to
+ * end ("keep reading the list"); one that cannot be read further (truncated, unavailable or an unverified end) is
+ * accepted, and the answer says "at least". A found which_say or content need cites an item read in full, as before
+ * ADR-0041; a which_say need never waits for its list's end, and a content need's list ids carry no meaning. The
+ * not_found and open rules are the task goal's, for every kind. By default an item is only itself.
  */
 export function askQuestionCompletionProblemsV1(
   parts: readonly { readonly needs: readonly AskResearchNeedV1[] }[],
   observations: readonly AskResearchObservationV1[],
   lists: readonly AskResearchListV1[],
-  full: (id: string) => boolean,
+  citable: (id: string) => boolean,
   list = true,
-  items: Partial<Pick<AgenticNeedSupportLookupV1, "member_of" | "opened">> = {},
+  member_in: (list: AgenticListIdV1, id: string) => string | undefined = (id, item) => lists.find(value => value.id === id)?.members.includes(item) === true ? item : undefined,
 ): readonly string[] {
-  const byId = new Map(lists.map(value => [value.id, value]));
-  const member_of = items.member_of ?? ((id: string): AgenticListMemberRefV1 | undefined => {
-    const holder = lists.find(value => value.members.includes(id));
-    return holder === undefined ? undefined : { list: holder.id, member: id };
-  });
-  const lookup: AgenticNeedSupportLookupV1 = { list: (id: AgenticListIdV1) => byId.has(id), full, member_of, opened: items.opened ?? (() => []) };
   return completionProblems(parts, observations, list, (need, label) => {
-    const support = agenticNeedSupportV1(need.evidence, lookup);
-    const named = support.lists.some(id => need.evidence.some(cited => cited === id));
-    if (support.content.length === 0 && !named) {
-      const unread = `${label} is found but cites no item whose full text you have read`;
-      return [support.lists.length === 0 ? unread : `${unread}: cite ${support.lists.join(" or ")} for which items exist, or open the items for what they say`];
-    }
-    return support.lists.flatMap(id => {
-      const state = byId.get(id)!;
-      return state.ended ? [] : [`${label}: list ${id} is unfinished: keep reading the list (repeat list with ${JSON.stringify(state.args)})`];
-    });
+    const kind = need.kind ?? "content";
+    // A found which_say or content need needs text read in full.
+    const read = need.status !== "found" || kind === "which_items" || need.evidence.some(citable) ? [] : [`${label} is found but cites no item whose full text you have read${list ? CONTENT_HINT : ""}`];
+    if (!agenticNeedReadsListV1(need)) return read;
+    const cited = lists.filter(value => need.evidence.some(id => parseAgenticListIdV1(id) === value.id));
+    const holders = cited.length > 0 ? [] : lists.filter(value => need.evidence.some(id => member_in(value.id, id) !== undefined));
+    const unlisted = cited.length > 0 ? [] : [`${label} cites no list: cite the id of the list that holds its items${holders.length === 0 ? " (from lists), or list them first" : ` (${holders.map(value => value.id).join(" or ")})`}`];
+    // Only which_items waits for its lists' end.
+    const unfinished = kind !== "which_items" ? [] : [...cited, ...holders].flatMap(value => value.ended ? [] : [`${label}: list ${value.id} is unfinished: keep reading the list (repeat list with ${JSON.stringify(value.args)})`]);
+    return [...unlisted, ...unfinished, ...read];
   });
 }
 
+/** The open and not_found rules every goal shares; each settled need then goes to its goal's own rule. */
 function completionProblems(
   parts: readonly { readonly needs: readonly AskResearchNeedV1[] }[],
   observations: readonly AskResearchObservationV1[],
   list: boolean,
-  found: (need: AskResearchNeedV1, label: string) => readonly string[],
+  settled: (need: AskResearchNeedV1, label: string) => readonly string[],
 ): readonly string[] {
   if (parts.length === 0) return ['no parts were written'];
   const problems: string[] = [];
   for (const [index, part] of parts.entries()) {
     for (const need of part.needs) {
       const label = `part ${index + 1} need ${need.id === undefined ? "" : `${need.id} `}"${need.need}"`;
-      if (need.status === 'open') problems.push(`${label} is still open`);
-      else if (need.status === 'found') problems.push(...found(need, label));
-      else if (need.status === 'not_found') {
+      if (need.status === 'open') { problems.push(`${label} is still open`); continue; }
+      if (need.status === 'not_found') {
         const completed = observations.slice(need.observations_before).filter(value => value.complete);
         const searches = new Set(completed.filter(value => value.operation === 'search').map(value => value.fingerprint));
         if (searches.size < 2 && !completed.some(value => value.operation === 'list')) {
           problems.push(`${label} is not_found after fewer than two completed searches${list ? " or a completed list" : ""}`);
         }
       }
+      problems.push(...settled(need, label));
     }
   }
   return problems;

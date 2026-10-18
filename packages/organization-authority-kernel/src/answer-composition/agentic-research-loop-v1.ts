@@ -905,10 +905,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const { clean } = agenticOpenReadsV1(rounds, citable, cleanId);
     return (id: string) => clean.get(id) ?? [];
   };
-  /** A question goal's finish check: a found need may rest on a list it read (ADR-0041). */
+  /** A question goal's finish check, by each need's declared kind; membership only words a refusal (ADR-0041). */
   const questionCompletionProblems = (parts: readonly { readonly needs: readonly NeedState[] }[]) => {
     const checked = listsForCheck();
-    return askQuestionCompletionProblemsV1(parts, researchObservations, checked, citable, listAvailable, { member_of: listMembership(checked).first, opened: openedBodies() });
+    return askQuestionCompletionProblemsV1(parts, researchObservations, checked, citable, listAvailable, listMembership(checked).in);
   };
 
   // ---- scratchpad ------------------------------------------------------
@@ -1161,7 +1161,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           }
           if (parsed.actions.every(action => action.tool === 'finish')) {
             const completionPlan = proposedPlan(parsed.parts);
-            // A question goal's found need may rest on a list it read (ADR-0041); a task goal's needs an item read in full.
+            // A question goal's needs are checked by their declared kinds (ADR-0041); a task goal's need an item read in full.
             const problems = [...(ask
               ? questionCompletionProblems(completionPlan)
               : askResearchCompletionProblemsV1(completionPlan, researchObservations, citable, listAvailable))];
