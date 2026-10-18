@@ -181,7 +181,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const contentCited = needs.filter(need => (need.kind ?? "content") === "content" && need.status === "found").flatMap(need => need.evidence);
       /** Every need research has not given up on declares what it asks about: a list kind its list, a content need what it was found in (W4). */
       const declared = !unlisted && !needs.some(need => (need.kind ?? "content") === "content" && need.status === "open");
-      const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, full, cleanId));
+      const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, full));
       const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short)))]));
       const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap);
       /** Every list as code reads it: code states, notes and filters each list the plan's kinds read, past the writer's bound too. */

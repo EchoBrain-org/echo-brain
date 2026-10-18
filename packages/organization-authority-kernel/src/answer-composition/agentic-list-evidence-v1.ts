@@ -255,11 +255,10 @@ export function agenticPlanListsV1(
 
 // ---- opens: what research read by opening an item ------------------------
 
-/** An open as research's rounds record it: the id it asked for and what it returned. */
+/** An open as research's rounds record it: the item it resolved to and what it returned. */
 export interface AgenticOpenActionV1 {
   readonly tool: string;
-  readonly args: Readonly<Record<string, string>>;
-  readonly result: { readonly opened: readonly string[]; readonly error?: string; readonly truncated?: boolean; readonly notice?: boolean };
+  readonly result: { readonly id?: string; readonly opened: readonly string[]; readonly error?: string; readonly truncated?: boolean; readonly notice?: boolean };
 }
 
 /** What research's opens read (agenticOpenReadsV1). */
@@ -273,19 +272,15 @@ export interface AgenticOpenReadsV1 {
 /**
  * What research read by opening items, from its rounds in order (ADR-0041). An open is clean when it was not
  * truncated, carried no notice or error, and returned only bodies research then read in full. A limited open undoes
- * an item's clean open until a later clean one. The renderer reads it: a list member is checked through its clean open
- * (addition 4). `id_of` reads an open's id as the step protocol does.
+ * an item's clean open until a later clean one. Each open counts for the item it resolved to, whatever form the model
+ * gave its id; one that resolved to none counts for nothing. The renderer reads it: a list member is checked through
+ * its clean open (addition 4).
  */
-export function agenticOpenReadsV1(
-  rounds: readonly { readonly actions: readonly AgenticOpenActionV1[] }[],
-  full: (id: string) => boolean,
-  id_of: (raw: unknown) => string | null,
-): AgenticOpenReadsV1 {
+export function agenticOpenReadsV1(rounds: readonly { readonly actions: readonly AgenticOpenActionV1[] }[], full: (id: string) => boolean): AgenticOpenReadsV1 {
   const clean = new Set<string>(); const limited = new Set<string>();
   for (const round of rounds) for (const action of round.actions) {
-    if (action.tool !== "open") continue;
-    const id = id_of(action.args.id);
-    if (id === null) continue;
+    const id = action.result.id;
+    if (action.tool !== "open" || id === undefined) continue;
     if (action.result.error !== undefined || action.result.truncated === true || action.result.notice === true) { limited.add(id); clean.delete(id); continue; }
     if (action.result.opened.length > 0 && action.result.opened.every(full)) { clean.add(id); limited.delete(id); }
   }

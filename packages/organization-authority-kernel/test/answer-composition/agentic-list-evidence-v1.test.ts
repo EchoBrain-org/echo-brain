@@ -248,20 +248,27 @@ describe("what a need's declared kind asks of lists", () => {
 });
 
 describe("what research's opens read", () => {
-  const open = (id: string, opened: readonly string[], result: { readonly error?: string; readonly truncated?: boolean; readonly notice?: boolean } = {}): AgenticOpenActionV1 =>
-    ({ tool: "open", args: { id }, result: { opened, ...result } });
+  /** An open as the loop records it: `id` is the item it resolved to, absent when it resolved to none. */
+  const open = (id: string | undefined, opened: readonly string[], result: { readonly error?: string; readonly truncated?: boolean; readonly notice?: boolean } = {}): AgenticOpenActionV1 =>
+    ({ tool: "open", result: { ...(id === undefined ? {} : { id }), opened, ...result } });
   const round = (...actions: AgenticOpenActionV1[]) => ({ actions });
-  const id_of = (raw: unknown) => typeof raw === "string" && /^E\d+$/u.test(raw) ? raw : null;
 
   it("keeps each item whose open was clean, its bodies read in full, until a limited open undoes it", () => {
     const full = (id: string) => ["E9", "E10", "E11", "E12"].includes(id);
     const reads = agenticOpenReadsV1([
-      round(open("E1", ["E9", "E10"]), open("E2", ["E11"], { truncated: true }), open("E3", ["E12", "E13"]), { tool: "search", args: { query: "E4" }, result: { opened: ["E12"] } }),
-      round(open("E1", [], { error: "unavailable" }), open("E2", ["E11"]), open("E4", []), open("a title", ["E12"])),
-    ], full, id_of);
-    // E1's later open failed; E2's later open was clean; E3 returned a body research did not read; E4 returned none.
+      round(open("E1", ["E9", "E10"]), open("E2", ["E11"], { truncated: true }), open("E3", ["E12", "E13"]), { tool: "search", result: { opened: ["E12"] } }),
+      round(open("E1", [], { error: "unavailable" }), open("E2", ["E11"]), open("E4", []), open(undefined, ["E12"], { error: "unknown id; pass an id such as E4 from your scratchpad" })),
+    ], full);
+    // E1's later open failed; E2's later open was clean; E3 returned a body research did not read; E4 returned none; an
+    // open that resolved to no item counts for none.
     expect([...reads.clean]).toEqual(["E2"]);
     expect([...reads.limited]).toEqual(["E1"]);
+  });
+
+  it("counts an open for the item it resolved to, whatever form the model gave its id", () => {
+    // The loop resolves a title to its item and records that item's id beside the model's own arguments.
+    const reads = agenticOpenReadsV1([round({ tool: "open", result: { id: "E5", opened: ["E12"] } })], id => id === "E12");
+    expect([...reads.clean]).toEqual(["E5"]);
   });
 });
 

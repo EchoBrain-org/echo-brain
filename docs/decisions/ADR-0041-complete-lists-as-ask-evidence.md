@@ -229,7 +229,9 @@ route, header, database table or client changes.
 - **Content across a list (addition 4).** A `which_say` need declares it. A
   member is checked when research read its text in full, or opened its row
   through an open that was not truncated, carried no notice or error, and
-  returned only bodies research read in full. When not every member of a list a
+  returned only bodies research read in full. An open counts for the item it
+  resolved to, whatever form the model gave its id, a title included: Ask's
+  research rounds record that item. When not every member of a list a
   `which_say` need cites was checked, whatever the need's status, the part is
   partial, and each kept sentence citing a member's text gets "(k of N checked
   so far)". No other list gets the note, and citing a list's members never

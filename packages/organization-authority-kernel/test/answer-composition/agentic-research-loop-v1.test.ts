@@ -206,6 +206,8 @@ describe("research loop: open", () => {
     expect(h.prompt(2).last_results).toEqual([{ tool: "open", args: { id: "E2" }, opened: ["E2"] }]);
     expect(h.prompt(3).last_results).toEqual([{ tool: "open", args: { id: "E2" }, note: "already open; its full text is in your scratchpad" }]);
     expect(view.stop).toEqual({ reason: "finished", completed: true });
+    // A task's rounds record its opens as before ADR-0041: only an Ask open records the item it resolved to.
+    expect(view.rounds[1]!.actions[0]!.result).toEqual({ items: [], opened: ["E2"] });
   });
 });
 

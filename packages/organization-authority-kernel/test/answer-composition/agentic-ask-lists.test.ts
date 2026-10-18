@@ -1086,6 +1086,17 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: two, citation_indexes: [0, 1] }] }] });
       expect(response.parts[0]!.statements).toHaveLength(1);
     }
+    // A model may open a page by its title: each open counts for the page it resolved to, so all eight are checked.
+    const byTitle = (rows: readonly EvidenceDeskItemV2[]) => rows.map(row => ({ tool: "open", args: { id: row.label } }));
+    const titled = harness([
+      ask(text, need, "open", [], [OCT4_LIST]), ask(text, need, "open", [], byTitle(PAGES.slice(0, 4)), "N1"), ask(text, need, "open", [], byTitle(PAGES.slice(4)), "N1"),
+      ask(text, need, "found", ["L1", "E11", "E12"], [finish], "N1", WS), { lists: [], sentences: [{ text: two, evidence: ["E11", "E12"] }], not_found: [] },
+    ], october4Desk({ open }));
+    const { response, research: view } = await titled.research.answerWithResearch({ question: text });
+    expect(view.rounds[1]!.actions.map(action => [action.args.id, action.result.id])).toEqual(PAGES.slice(0, 4).map((row, index) => [row.label, MEMBERS[index]]));
+    expect(writerPrompt(titled).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 8 });
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: two }] }] });
+    expect(response.parts[0]!.statements).toHaveLength(1);
   });
 
   it("keeps a sentence about what a which_say list's members say beside the list a which_items need states, and repairs a rows sentence (W4, W1)", async () => {

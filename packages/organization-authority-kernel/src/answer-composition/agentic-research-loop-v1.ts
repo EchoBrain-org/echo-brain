@@ -716,9 +716,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     return withCoreRuntimeDiagnosticToolV1(identity, async () => {
     observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: action.args });
     try {
-      const result = lastResult(action, await (tool === 'search' ? search(action.args, admit, signal) : tool === 'open' ? open(action.args, admit, signal) : list(action.args, admit, signal)));
-      observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result });
-      return result;
+      const value = await (tool === 'search' ? search(action.args, admit, signal) : tool === 'open' ? open(action.args, admit, signal) : list(action.args, admit, signal));
+      observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result: lastResult(action, value) });
+      return value;
     } catch (error) {
       observeCoreRuntimeDiagnosticV1({ kind: 'tool_error', ...identity, error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
       throw error;
@@ -965,11 +965,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   let stepRejections: string[] = [];
   /** Starting citations the brief marked `report` that could not be read. */
   const unreadableStarting: unknown[] = [];
-  const roundView = (tool: string, args: StepArgs, value: ToolResult | undefined): AgenticResearchActionV1 => {
+  /** A read as its round records it, from what the next step sees (`value`); an Ask open adds the item it resolved to (`raw`). */
+  const roundView = (tool: string, args: StepArgs, value: ToolResult | undefined, raw?: ToolResult): AgenticResearchActionV1 => {
     const listed = (key: string) => Array.isArray(value?.[key]) ? (value![key] as readonly unknown[]).map(String) : [];
     const opened = Array.isArray(value?.opened) ? (value!.opened as readonly string[]) : [];
     return Object.freeze({ tool, args: Object.freeze({ ...args }), result: Object.freeze({
-      items: [...listed("results"), ...listed("items")], opened: [...opened],
+      items: [...listed("results"), ...listed("items")], opened: [...opened], ...(ask && typeof raw?.id === "string" ? { id: raw.id } : {}),
       ...(typeof value?.note === "string" ? { note: value.note } : {}), ...(typeof value?.error === "string" ? { error: value.error } : {}),
       ...(value?.truncated === true ? { truncated: true } : {}), ...(typeof value?.more === "boolean" ? { more: value.more } : {}),
       ...(typeof value?.notice === "string" ? { notice: true } : {}),
@@ -1206,9 +1207,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const before = hadCitableEvidence ? novelty() : retrievalProgress;
       const entriesBefore = entries.size;
       report?.reads(reads.some(action => action.tool !== "open"));
-      results = await runReads(reads);
+      const raw = await runReads(reads);
+      results = raw.map((value, index) => lastResult(reads[index]!, value));
       report?.reads_done();
-      const actions = reads.map((action, index) => roundView(action.tool, action.args, results[index]));
+      const actions = reads.map((action, index) => roundView(action.tool, action.args, results[index], raw[index]));
       recordRound(roundStartedAt, actions);
       latest = new Set(actions.flatMap(action => [...action.result.opened, ...action.result.items]));
       const catalogIsExhaustivelyEmpty = entries.size === 0 && sourceCatalog.length > 0 && sourceCatalog.every(source => {

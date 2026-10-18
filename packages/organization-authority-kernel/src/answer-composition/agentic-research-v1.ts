@@ -79,6 +79,8 @@ export interface AgenticResearchActionV1 {
   readonly result: {
     readonly items: readonly string[];
     readonly opened: readonly string[];
+    /** Ask only (ADR-0041): the item an open resolved to, by its short id, whatever form the model gave it (a title too). */
+    readonly id?: string;
     readonly note?: string;
     readonly error?: string;
     readonly truncated?: boolean;
