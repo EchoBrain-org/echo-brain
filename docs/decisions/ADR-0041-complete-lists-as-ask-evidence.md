@@ -329,11 +329,13 @@ route, header, database table or client changes.
     THERM-5 mention BUG-412", citing L1 beside both tickets, uses the list as
     an opened page's sections would. A list id beside rows, or beside members'
     own rows that carry text on any other list, never stands in for code's
-    statement: "you have 10 open follow-ups" citing L1 and ten of its twelve
-    members, on a plan that rests on L1 alone, is a subset. Rows are list
-    facts only, so a sentence that names two or more members by their rows
-    alone is a subset whatever else it cites, and only `lists` uses that list
-    then.
+    statement. A list the plan found a need on for which items exist alone,
+    with no content across it, is used only through `lists`: "you have 10
+    open follow-ups" citing L1 and ten of its twelve members, and "the pages
+    are A, B, C and D" citing L1 beside four opened sections, are subsets
+    there, however many pages research opened. Rows are list facts only, so a
+    sentence that names two or more members by their rows alone is a subset
+    whatever else it cites, and only `lists` uses that list then.
 
   The writer has one repair in total, as today; a failed check uses it if it
   is still unused and the request has time and model calls left. If the

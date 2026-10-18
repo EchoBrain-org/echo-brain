@@ -515,7 +515,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     ], october4Desk({ open }));
     const { response } = await h.research.answerWithResearch({ question: OCT4 });
     expect(writerInputs(h)).toHaveLength(2);
-    expect(writerPrompt(h, 1).validation_error).toContain("the answer cites 3 of the 8 members of list L1 without the list");
+    expect(writerPrompt(h, 1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members');
     expect(response.outcome).toBe("answered");
     expect(response.parts[0]!.statements).toEqual([{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
   });
@@ -658,6 +658,32 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       expect(writerPrompt(h, 1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members; for what its members say, cite L1 beside their evidence');
       // Code names all 8. The sentence cites only members, four by their sections, and not the list's id, so it restated
       // part of the list: it is dropped, and the list answers which pages exist in full.
+      expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+      expect(response.parts[0]!.statements).toEqual([{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
+    }
+  });
+
+  it("never takes the list's id beside four opened sections as using a list research found which pages exist in", async () => {
+    // The plan found the need on L1 alone, so nothing claims content across it: only "lists" uses it, however many
+    // pages research opened on the way.
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, `${row.label}: created October 4.`)]) as EvidenceDeskResultV2;
+    });
+    const subset = { lists: [], sentences: [{ text: "The pages created on October 4 are ECHO Product Pipeline, Assumptions and decisions, Gate reviews and Traceability.", evidence: ["L1", "E9", "E10", "E11", "E12"] }], not_found: [] };
+    for (const opened of [MEMBERS.slice(0, 4), MEMBERS]) {
+      const rounds = [opened.slice(0, 4), opened.slice(4)].filter(ids => ids.length > 0);
+      const h = harness([
+        ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
+        ...rounds.map(ids => ask(OCT4, OCT4_NEED, "open", [], ids.map(id => ({ tool: "open", args: { id } })), "N1")),
+        ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"),
+        subset, subset,
+      ], october4Desk({ open }));
+      const { response } = await h.research.answerWithResearch({ question: OCT4 });
+      expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: opened.length, cited_by_plan: true });
+      expect(writerInputs(h)).toHaveLength(2);
+      expect(writerPrompt(h, 1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members');
+      // Code names all 8, and the sentence that named 4 of them is dropped.
       expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
       expect(response.parts[0]!.statements).toEqual([{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
     }

@@ -258,11 +258,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
        * list), or, for a list a found need of the plan claims content across, beside its members' own text (an opened
        * ticket or meeting record, a follow-up), as "THERM-3 and THERM-5 mention BUG-412" cites it. A list id beside rows,
        * or beside members' own rows that carry text on any other list, never stands in for the statement code writes, so
-       * "the pages are A, B, C and D" citing L1 and four rows, and "you have 10 open follow-ups" citing L1 and ten of
-       * them on a plan that rests on L1 alone, are still subsets.
+       * "the pages are A, B, C and D" citing L1 and four rows is still a subset. A list the plan rests on for which items
+       * exist alone, with no content across it, is used only through "lists": "the pages are A, B, C and D" citing L1
+       * beside four opened sections, or "you have 10 open follow-ups" citing L1 and ten of them, on a plan that found
+       * the need on L1, are subsets too.
        */
       const usesList = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id) ||
-        keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short) && (across.has(id) || membership.in(id, short) !== short)));
+        (!(relied.includes(id) && !across.has(id)) &&
+          keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short) && (across.has(id) || membership.in(id, short) !== short))));
       /**
        * Lists the answer should use but does not: one the plan rests on, or one it cites some, not all, members of. A
        * member counts whether the writer has its text or only its row (a follow-up's row carries its text), and an

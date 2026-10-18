@@ -240,11 +240,15 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   it("never takes a list id beside some rows and other text as using the list: rows name members, so code writes the list", async () => {
     // E9 is text the writer read, outside the list; the sentence still names 4 of the 8 tickets by their rows.
     const subset = { lists: [], sentences: [{ text: "The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", evidence: ["L1", ...ids(1, 4), "E9"] }], not_found: [] };
-    for (const plan of [["L1"], ["E9"]]) {
+    // On a plan that found the need on L1, only "lists" uses it; otherwise the rows make the sentence a subset.
+    for (const [plan, reason] of [
+      [["L1"], 'research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists"'],
+      [["E9"], 'the answer cites 4 of the 8 members of list L1 without the list: put {"id": "L1"} in "lists"'],
+    ] as const) {
       const run = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], plan), replies: [subset, subset], version: 6 });
       const rendered = await run.render("Which tickets were created on October 4?");
       expect(run.trace.filter(step => step === "generate")).toHaveLength(2);
-      expect(run.prompt(1).validation_error).toContain('the answer cites 4 of the 8 members of list L1 without the list: put {"id": "L1"} in "lists"');
+      expect(run.prompt(1).validation_error).toContain(reason);
       // Code names all 8 and drops the sentence that named 4 of them by their rows.
       expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: eight, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
       expect(rendered.outcome).toBe("answered");
@@ -259,7 +263,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     const run = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], ["L1"]), replies: [reply, reply], version: 6 });
     const rendered = await run.render("Which tickets were created on October 4, and what did the review approve?");
     expect(run.trace.filter(step => step === "generate")).toHaveLength(2);
-    expect(run.prompt(1).validation_error).toContain("the answer cites 4 of the 8 members of list L1 without the list");
+    expect(run.prompt(1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members');
     expect(rendered.result.response.parts[0]).toMatchObject({
       status: "partial", gap: "Not every listed item was checked, so others may also match.",
       statements: [{ text: eight }, { text: "The review approved fixture work on them (0 of 8 checked so far).", citation_indexes: [8] }],
