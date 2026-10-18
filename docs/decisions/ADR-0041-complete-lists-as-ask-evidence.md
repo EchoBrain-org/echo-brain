@@ -277,7 +277,8 @@ route, header, database table or client changes.
   - a list that is not complete: "At least 12 ...". The part is partial, with a
     gap saying the list could not be read to its end;
   - a selection that matches nothing becomes a `not_found` phrase, never a
-    statement; an empty list keeps today's not-found answer.
+    statement, and keeps the list-end gap of a list that is not complete; an
+    empty list keeps today's not-found answer.
 
   The noun comes from the source catalog (the tool and the selector). The
   phrase comes from the applied filter. Each name is the member's list label,
@@ -318,8 +319,9 @@ route, header, database table or client changes.
   names a requested filter that a source ignored, or applied only where items
   record it, for example "Jira tickets could not be filtered by owner, so this
   list is not limited to that owner." Code adds it to the response notice for
-  each list the answer names in a statement and each list a `which_say` need
-  checks (`agenticListFilterNoticeV1`, with the noun from the members' kinds).
+  each list the answer uses, whatever the use selects, and each list a
+  `which_say` need checks (`agenticListFilterNoticeV1`, with the noun from the
+  members' kinds).
   A source that cannot apply a requested date field refuses the read. It never
   answers empty and never substitutes another field. A desk asked for an owner
   or status filter a source cannot apply refuses the read too.

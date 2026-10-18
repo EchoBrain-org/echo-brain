@@ -742,6 +742,24 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(nobody).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: "Not found: Jira tickets created on October 4, 2026 that have owner Mara Quinn." }] });
   });
 
+  it("keeps the list-end gap and the filter notice of a where selection that names nothing (W2, W7)", async () => {
+    // 25 tickets of a list cut short, listed with an owner filter Jira cannot apply; the writer selects the blocked ones, of which there are none.
+    const text = "Which of Dana's Jira tickets created on October 4, 2026 are blocked?";
+    const run = async (truncated: boolean) => {
+      const h = harness([
+        ask(text, TICKETS_NEED, "open", [], [{ tool: "list", args: { ...TICKETS_LIST.args, owner: "Dana" } }]),
+        ask(text, TICKETS_NEED, "found", ["L1"], [finish], "N1", WI),
+        { lists: [{ id: "L1", where: { field: "status", value: "Blocked" } }], sentences: [], not_found: [] },
+      ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 25), { truncated }) as EvidenceDeskResultV2) });
+      return (await h.research.answerWithResearch({ question: text })).response;
+    };
+    const notice = "Jira tickets could not be filtered by owner, so this list is not limited to that owner.";
+    const cut = await run(true);
+    expect(cut).toMatchObject({ outcome: "not_found", citations: [], notice, parts: [{ status: "not_found", statements: [], gap: "Not found: Jira tickets created on October 4, 2026 that have status Blocked. The list of Jira tickets could not be read to its end, so more may exist." }] });
+    // A complete list: the plain not-found answer, with the same notice.
+    expect(await run(false)).toMatchObject({ outcome: "not_found", citations: [], notice, parts: [{ status: "not_found", statements: [], gap: "Not found: Jira tickets created on October 4, 2026 that have status Blocked." }] });
+  });
+
   it("states a which_items need's list, and leaves out a sentence naming members from their opened text (CF7, CF9a, CF12c, R3, R5)", async () => {
     // Opening a page row releases its section as a new item: E1..E4 give E9..E12, E5..E8 give E13..E16.
     const open = vi.fn(async (input: { readonly item: string }) => {

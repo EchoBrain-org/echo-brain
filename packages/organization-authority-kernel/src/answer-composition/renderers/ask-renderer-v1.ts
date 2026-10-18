@@ -301,11 +301,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const uses = answer?.lists ?? [];
       const listGaps: string[] = [];
       const selectionNotFound: string[] = [];
-      // Lists in the order of their first use, then the stated lists the writer did not use.
-      const naming: Naming[] = [...new Set([...uses.map(use => use.id), ...stated])].flatMap(id => {
-        const list = writerById.get(id);
-        if (list === undefined || list.count === 0) return [];
-        const all = rows.get(id)!, noun = nounOf(list);
+      /** The lists the answer uses, in the order of their first use, then the stated lists the writer did not use. */
+      const usedLists = [...new Set([...uses.map(use => use.id), ...stated])].flatMap(id => writerById.get(id) ?? []);
+      const naming: Naming[] = usedLists.flatMap(list => {
+        if (list.count === 0) return [];
+        const id = list.id, all = rows.get(id)!, noun = nounOf(list);
         const byId = uses.find(use => use.id === id && use.members !== undefined);
         const picked = byId === undefined ? undefined : all.filter(member => byId.members!.includes(member.id));
         // A selection by id of every member is the list in full; code adds the full use of a stated list the writer gave
@@ -313,6 +313,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const given = uses.find(use => use.id === id && use.members === undefined) ?? (stated.includes(id) || picked?.length === all.length ? { id } : undefined);
         const where = given?.where;
         const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
+        // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
+        if (chosen !== undefined && !list.complete) listGaps.push(listEndGap(noun.plural));
         // Two uses that select the same members are one statement, named by id, with the lead of the one that says which items exist.
         if (chosen !== undefined && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return [{ list, noun, selected: picked, which: true, ...(where === undefined ? {} : { where }), by_id: true }];
         if (chosen?.length === 0) selectionNotFound.push(agenticListSelectionNotFoundV1(noun, list.filter, where!));
@@ -321,8 +323,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(picked === undefined ? [] : [{ list, noun, selected: picked, which: false, by_id: true }]),
         ];
       });
-      // A statement that says which items exist of a list that is not complete reads "at least", and the part says so.
-      for (const value of naming) if (value.which && !value.list.complete) listGaps.push(listEndGap(value.noun.plural));
       // At most 25 distinct members named across the answer (W6): those selected by id first, then the rest shared
       // round-robin, a member already named by id costing nothing; "and N more" counts from the list itself (addition 5).
       const first = agenticListNameSharesV1(naming.map(value => value.by_id ? value.selected.length : 0));
@@ -405,8 +405,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           : { status: "not_found", statements: [], gap: withGaps(gapText ?? (dateCoverageMissing ? MISSING_DATE_GAP : incomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP))! };
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
-      // What the person is told about the filters of the lists the answer names and those a which_say need checks (W7).
-      const filterNotices = [...new Set([...naming.map(value => value.list), ...checking.flatMap(id => writerById.get(id) ?? [])])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
+      // What the person is told about the filters of the lists the answer uses, whatever they select, and those a which_say
+      // need checks (W7).
+      const filterNotices = [...new Set([...usedLists, ...checking.flatMap(id => writerById.get(id) ?? [])])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
       // A completed answer can retain source coverage as a notice. A stop
       // becomes a notice only when the rendered answer has no existing gap.
       const responseNotices = [
