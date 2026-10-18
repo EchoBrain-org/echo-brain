@@ -823,8 +823,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const open = vi.fn(async (input: { readonly item: string }) => result([bodies.get(input.item)!]) as EvidenceDeskResultV2);
     const text = "Which actions does Mara own?";
     const opened = ["E1", "E2", "E3", "E4"];
-    // An opened meeting record keeps its row's id: citing the list's id beside four of them still names 4 of 8.
-    for (const evidence of [opened, ["L1", ...opened]]) {
+    const run = async (evidence: readonly string[]) => {
       const subset = { lists: [], sentences: [{ text: "Mara owns tasks 1, 2, 3 and 4.", evidence }], not_found: [] };
       const h = harness([
         ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
@@ -834,14 +833,118 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       ], { list: vi.fn(async () => result(rows) as EvidenceDeskResultV2), open });
       const { response, research: view } = await h.research.answerWithResearch({ question: text });
       expect(view.items.filter(item => item.read_in_full).map(item => item.id)).toEqual(opened);
-      expect(writerInputs(h)).toHaveLength(2);
       expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", complete: true, count: 8, checked: 4, cited_by_plan: true });
-      // Code names all 8; the sentence about the 4 it read stays, saying how many were checked.
-      expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
-      expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([
-        `8 actions with owner Mara: ${rows.map(row => row.label).join("; ")}.`, "Mara owns tasks 1, 2, 3 and 4 (4 of 8 checked so far).",
-      ]);
-    }
+      return { h, response };
+    };
+    // An opened meeting record keeps its row's id: four of them without the list name 4 of 8.
+    const { h, response } = await run(opened);
+    expect(writerInputs(h)).toHaveLength(2);
+    // Code names all 8; the sentence about the 4 it read stays, saying how many were checked.
+    expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+      `8 actions with owner Mara: ${rows.map(row => row.label).join("; ")}.`, "Mara owns tasks 1, 2, 3 and 4 (4 of 8 checked so far).",
+    ]);
+    // The plan claims content across the list, so the list's id beside their text says what those 4 say: it uses the
+    // list, as an opened page's sections would, and the note keeps it from reading as complete.
+    const across = await run(["L1", ...opened]);
+    expect(writerInputs(across.h)).toHaveLength(1);
+    expect(across.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
+    expect(across.response.parts[0]!.statements.map(statement => statement.text)).toEqual(["Mara owns tasks 1, 2, 3 and 4 (4 of 8 checked so far)."]);
+  });
+
+  it("keeps a sentence citing the list's id beside what its members say when another sentence makes code write the list", async () => {
+    // Every page opened; the second sentence names two pages by their rows alone, so code writes the list.
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, /^(Traceability|Gate reviews)/u.test(row.label) ? "BUG-412 is traced to TC-D-03." : "No defects are discussed.")]) as EvidenceDeskResultV2;
+    });
+    const text = "Which pages created on October 4, 2026 mention BUG-412?";
+    const need = "pages created on 2026-10-04 that mention BUG-412";
+    const reply = { lists: [], sentences: [
+      { text: "Gate reviews and Traceability mention BUG-412.", evidence: ["L1", "E11", "E12"] },
+      { text: "The PRD and the verification plan were also created that day.", evidence: ["E5", "E6"] },
+    ], not_found: [] };
+    const h = harness([
+      ask(text, need, "open", [], [OCT4_LIST]),
+      ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
+      ask(text, need, "open", [], ["E5", "E6", "E7", "E8"].map(id => ({ tool: "open", args: { id } })), "N1"),
+      ask(text, need, "found", ["L1", "E11", "E12"], [finish], "N1"),
+      reply, reply,
+    ], october4Desk({ open }));
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 8, cited_by_plan: true });
+    expect(writerInputs(h)).toHaveLength(2);
+    // Every member was checked, so the content needs no note; the rows sentence is replaced by code's list.
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([fullStatement, "Gate reviews and Traceability mention BUG-412."]);
+  });
+
+  it("takes the list's id beside opened members that keep their row ids as content across the list: tickets, actions and follow-ups alike", async () => {
+    // A Jira open returns the ticket's body under the row's own id, as a meeting open does; a follow-up's row carries its text.
+    const body = (n: number) => {
+      const text = n === 3 || n === 5 ? "Repro steps reference BUG-412." : "No defects referenced.";
+      return Object.freeze({ ...ticketRow(n), text, citation: { ...(ticketRow(n).citation as object), text_sha256: sha256Digest(text) } } as EvidenceDeskItemV2);
+    };
+    const jira = { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 8)) as EvidenceDeskResultV2), open: vi.fn(async (input: { readonly item: string }) => result([body(Number(/THERM-(\d+)/u.exec(input.item)![1]))]) as EvidenceDeskResultV2) };
+    const text = "Which Jira tickets created on October 4, 2026 mention BUG-412?";
+    const need = "tickets created on 2026-10-04 that mention BUG-412";
+    const opens = (ids: readonly string[]) => ids.map(id => ({ tool: "open", args: { id } }));
+    const say = (sentence: string, evidence: readonly string[]) => ({ lists: [], sentences: [{ text: sentence, evidence }], not_found: [] });
+    // Every ticket opened: the answer is complete, and the list's id beside the two that match uses the list.
+    const all = harness([
+      ask(text, need, "open", [], [TICKETS_LIST]), ask(text, need, "open", [], opens(["E1", "E2", "E3", "E4"]), "N1"), ask(text, need, "open", [], opens(["E5", "E6", "E7", "E8"]), "N1"),
+      ask(text, need, "found", ["L1", "E3", "E5"], [finish], "N1"), say("THERM-3 and THERM-5 mention BUG-412.", ["L1", "E3", "E5"]),
+    ], jira);
+    const done = (await all.research.answerWithResearch({ question: text })).response;
+    expect(writerInputs(all)).toHaveLength(1);
+    expect(writerPrompt(all).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 8, cited_by_plan: true });
+    expect(done).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: "THERM-3 and THERM-5 mention BUG-412." }] }] });
+    expect(done.parts[0]!.statements).toHaveLength(1);
+    // Four opened: the same form is noted, never forced into a list nobody asked for.
+    const half = harness([
+      ask(text, need, "open", [], [TICKETS_LIST]), ask(text, need, "open", [], opens(["E1", "E2", "E3", "E4"]), "N1"),
+      ask(text, need, "found", ["L1", "E3"], [finish], "N1"), say("THERM-3 mentions BUG-412.", ["L1", "E3"]),
+    ], jira);
+    const noted = (await half.research.answerWithResearch({ question: text })).response;
+    expect(writerInputs(half)).toHaveLength(1);
+    expect(noted).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match.", statements: [{ text: "THERM-3 mentions BUG-412 (4 of 8 checked so far)." }] }] });
+    expect(noted.parts[0]!.statements).toHaveLength(1);
+
+    // Mara's 8 actions, every one opened.
+    const action = { kind: "action" as const, attributes: { owner: "Mara Quinn" } };
+    const rows = Array.from({ length: 8 }, (_, index) => listed(`a${index + 1}`, action));
+    const bodies = new Map(rows.map((row, index) => [row.id, record(`a${index + 1}`, index === 1 || index === 4 ? `Mara will chase the vendor about fixture ${index + 1}.` : `Mara will do task ${index + 1}.`, action)]));
+    const q = "Which of Mara's actions mention the vendor?";
+    const n = "Mara's actions that mention the vendor";
+    const vendor = say("Two of Mara's actions mention the vendor: fixtures 2 and 5.", ["L1", "E2", "E5"]);
+    const meetings = harness([
+      ask(q, n, "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]), ask(q, n, "open", [], opens(["E1", "E2", "E3", "E4"]), "N1"), ask(q, n, "open", [], opens(["E5", "E6", "E7", "E8"]), "N1"),
+      ask(q, n, "found", ["L1", "E2", "E5"], [finish], "N1"), vendor,
+    ], { list: vi.fn(async () => result(rows) as EvidenceDeskResultV2), open: vi.fn(async (input: { readonly item: string }) => result([bodies.get(input.item)!]) as EvidenceDeskResultV2) });
+    const owned = (await meetings.research.answerWithResearch({ question: q })).response;
+    expect(writerInputs(meetings)).toHaveLength(1);
+    expect(owned).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: vendor.sentences[0]!.text }] }] });
+    expect(owned.parts[0]!.statements).toHaveLength(1);
+
+    // Follow-ups: the rows carry their text, so research reads them in full.
+    const items = Array.from({ length: 4 }, (_, index) => followUpItem(index + 1));
+    const desk = {
+      scope: { kind: "global" as const }, live_sources: [FOLLOW_UPS_SOURCE_DESCRIPTOR_V1], list: vi.fn(async () => ({ ...result(items), page_full: false }) as EvidenceDeskResultV2),
+      search: vi.fn(async () => result([]) as EvidenceDeskResultV2), open: vi.fn(async () => result([]) as EvidenceDeskResultV2), revalidate: vi.fn(async () => checked),
+    } satisfies EvidenceDeskPortV2;
+    const inputs: StructuredGenerationInput[] = [];
+    const fan = "Which of my open follow-ups are about the fan curve?";
+    const fanNeed = "my open follow-ups about the fan curve";
+    const curve = say("THERM-42 follow-up and THERM-44 follow-up say to ship fan curve v2 before DVT.", ["L1", "E2", "E4"]);
+    const replies: unknown[] = [ask(fan, fanNeed, "open", [], [{ tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } }]), ask(fan, fanNeed, "found", ["L1", "E2", "E4"], [finish], "N1"), curve];
+    const followed = await createAgenticAskV4({
+      desk, generation, audit: { append: () => undefined }, asker: { display_name: "Mara Lind" }, wall_ms: () => Date.parse(LIST_READ_AT),
+      model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift(); } },
+    }).answer({ question: fan });
+    expect(inputs.filter(input => input.system_prompt.startsWith("You write"))).toHaveLength(1);
+    expect(followed).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: curve.sentences[0]!.text }] }] });
+    expect(followed.parts[0]!.statements).toHaveLength(1);
+    expect(replies).toEqual([]);
   });
 
   it("names a meeting's records once, by its label with their kinds, never as that many meetings", async () => {

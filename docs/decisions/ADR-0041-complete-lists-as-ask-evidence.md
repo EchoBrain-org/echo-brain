@@ -323,12 +323,17 @@ route, header, database table or client changes.
     its text or only its row, and the answer uses a list only through
     `lists`, or through a sentence that cites the list's id beside text the
     writer read that is not one of the list's own rows (an opened section, or
-    an item outside the list). A list id beside rows, or beside members' own
-    rows that carry text (a follow-up, an opened meeting record), never stands
-    in for code's statement: "you have 10 open follow-ups" citing L1 and ten
-    of its twelve members is a subset. Rows are list facts only, so a sentence
-    that names two or more members by their rows alone is a subset whatever
-    else it cites, and only `lists` uses that list then.
+    an item outside the list). For a list a found need claims content across,
+    its members' own text counts too (an opened ticket or meeting record keeps
+    its row's id, and a follow-up's row carries its text), so "THERM-3 and
+    THERM-5 mention BUG-412", citing L1 beside both tickets, uses the list as
+    an opened page's sections would. A list id beside rows, or beside members'
+    own rows that carry text on any other list, never stands in for code's
+    statement: "you have 10 open follow-ups" citing L1 and ten of its twelve
+    members, on a plan that rests on L1 alone, is a subset. Rows are list
+    facts only, so a sentence that names two or more members by their rows
+    alone is a subset whatever else it cites, and only `lists` uses that list
+    then.
 
   The writer has one repair in total, as today; a failed check uses it if it
   is still unused and the request has time and model calls left. If the
@@ -342,11 +347,13 @@ route, header, database table or client changes.
   sentence citing the text of two or more members of a list not every member
   of which was checked stays, with its "(k of N checked so far)" note: code
   cannot tell "A and B mention BUG-412" from a restated subset, and the note
-  keeps either from reading as complete. For a list a found need claims
-  content across, the repair's reason names both ways on: put the list in
-  `lists` for which items exist, or cite it beside the evidence for what its
-  members say. A first reply that fails only the check stays the writer's
-  answer when the repair's reply is unusable.
+  keeps either from reading as complete. A sentence citing the list's id
+  beside its members' text, for a list a found need claims content across,
+  always stays: it is an explicit claim about what they say. For a list a
+  found need claims content across, the repair's reason names both ways on:
+  put the list in `lists` for which items exist, or cite it beside the
+  evidence for what its members say. A first reply that fails only the check
+  stays the writer's answer when the repair's reply is unusable.
 - **One citation per cited object.** The response refuses duplicate
   citations, and a listed ticket's row and its opened body cite the same
   ticket. Code gives them one citation, in first-citation order, so a list

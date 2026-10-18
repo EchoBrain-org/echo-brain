@@ -255,12 +255,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /**
        * The answer uses a list when it names it in "lists", or when a sentence claims content across it: the list's id
        * beside text the writer read that is not one of the list's own rows (an opened section, or an item outside the
-       * list). A list id beside rows, or beside members' own rows that carry text (a follow-up, an opened meeting record),
-       * never stands in for the statement code writes, so "the pages are A, B, C and D" citing L1 and four rows, and "you
-       * have 10 open follow-ups" citing L1 and ten of them, are still subsets.
+       * list), or, for a list a found need of the plan claims content across, beside its members' own text (an opened
+       * ticket or meeting record, a follow-up), as "THERM-3 and THERM-5 mention BUG-412" cites it. A list id beside rows,
+       * or beside members' own rows that carry text on any other list, never stands in for the statement code writes, so
+       * "the pages are A, B, C and D" citing L1 and four rows, and "you have 10 open follow-ups" citing L1 and ten of
+       * them on a plan that rests on L1 alone, are still subsets.
        */
       const usesList = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id) ||
-        keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short) && membership.in(id, short) !== short));
+        keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short) && (across.has(id) || membership.in(id, short) !== short)));
       /**
        * Lists the answer should use but does not: one the plan rests on, or one it cites some, not all, members of. A
        * member counts whether the writer has its text or only its row (a follow-up's row carries its text), and an
@@ -405,12 +407,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // else it cites, restates part of that list, which code now names in full; so does one citing only members of that
       // list (or their opened sections), the text of two or more of them, once every member was checked: no note could
       // qualify it. One citing the text of two or more members of a list not every member of which was checked may say
-      // what they say, so it stays, with its note.
+      // what they say, so it stays, with its note; so does one citing that list's id beside its members' text when a
+      // found need claims content across it, an explicit claim about what they say.
       const named = uses.map(use => use.list.id);
       let rowsLeftOut = false;
-      const restates = (shorts: readonly string[]) => forced.some(id => rowsOnly(id, shorts).size >= 2) ||
+      const restates = (evidence: readonly string[], shorts: readonly string[]) => forced.some(id => rowsOnly(id, shorts).size >= 2) ||
         (shorts.every(short => forced.some(id => membership.in(id, short) !== undefined)) &&
-          forced.some(id => membersCited(id, shorts).size >= 2 && agenticListCheckedNoteV1(writerById.get(id)!) === undefined));
+          forced.some(id => membersCited(id, shorts).size >= 2 && agenticListCheckedNoteV1(writerById.get(id)!) === undefined && !(across.has(id) && evidence.includes(id))));
       /**
        * The lists a sentence claims content across (addition 4), from what it cites rather than how: the list's id beside
        * text it read; the text of two or more of its members (an opened section counts as its page); the text of one
@@ -428,7 +431,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           if (!named.some(id => rowsOnly(id, shorts).size >= 2)) rowsLeftOut = true;
           return [];
         }
-        if (shorts.length === 0 || restates(shorts)) return [];
+        if (shorts.length === 0 || restates(sentence.evidence, shorts)) return [];
         // Content claimed across a list says how many of its members were checked, unless every one was (addition 4).
         const notes = claimsAcross(sentence.evidence, shorts).flatMap(list => {
           const note = agenticListCheckedNoteV1(list);
