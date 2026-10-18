@@ -1792,11 +1792,12 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       { lists, sentences, not_found: [] },
     ], { now: "2026-10-18T17:00:00.000Z" });
     const lead = "of the 12 follow-ups with owner Mara Lind and status open";
-    // (a) The writer's sentence only restates members of the stated list, so it is left out.
+    // (a) The list's one statement is the where selection, which names 2 of its 12 members, not every member: the writer's
+    // sentence restates no statement that covers the list, so it stays beside it (W4, revision 8; Known limit).
     const a = await run([{ id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } }]);
     expect(a.writers[0]).toMatchObject({ today: "2026-10-18" });
     expect(a.response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
-    expect(a.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`2 ${lead} are due from October 18 to October 24, 2026: THERM-43 follow-up (due October 20, 2026); THERM-47 follow-up (due October 22, 2026).`]);
+    expect(a.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`2 ${lead} are due from October 18 to October 24, 2026: THERM-43 follow-up (due October 20, 2026); THERM-47 follow-up (due October 22, 2026).`, week.text]);
     // (b) The same members by id: the list in full, then their facts; the condition is not said (Known limit).
     const b = await run([{ id: "L1", members: ["E3", "E7"] }]);
     expect(b.response.outcome).toBe("answered");
@@ -1970,6 +1971,34 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     expect(await names([{ id: "L1", where: { field: "status", value: "current" } }, { id: "L2", where: { field: "status", value: "current" } }])).toEqual([20, 20]);
     // Selected by id, each list's use merges with its use in full (W2); its pages still cost one name each.
     expect(await names([{ id: "L1", members: ids }, { id: "L2", members: ids }])).toEqual([20, 20]);
+  });
+
+  it("X31: keeps a sentence on a member's text when the stated list's only statement is a where selection that does not cover every member (W4)", async () => {
+    const text = "Which of my open tasks are due this week?";
+    const need = "my open follow-ups due from 2026-10-18 to 2026-10-24";
+    // THERM-41 (E1) was due October 9, so no selection by this week names it; its row carries its text.
+    const unselected = { text: "THERM-41 follow-up is on the decision to ship fan curve v2 before DVT.", evidence: ["E1"] };
+    const run = async (lists: readonly unknown[]) => (await askV4(pagedDesk(dueItems), text, [
+      ask(text, need, "open", [], [FOLLOW_UPS], undefined, WI), ask(text, need, "open", [], [FOLLOW_UPS], "N1", WI), ask(text, need, "found", ["L1"], [finish], "N1", WI),
+      { lists, sentences: [unselected], not_found: [] },
+    ], { now: "2026-10-18T17:00:00.000Z" })).response;
+    const lead = "of the 12 follow-ups with owner Mara Lind and status open";
+    // (a) A where selection naming some members: its statement names THERM-43 and THERM-47 only, so the sentence stays.
+    const some = await run([{ id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } }]);
+    expect(some).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+    expect(some.parts[0]!.statements.map(statement => statement.text)).toEqual([`2 ${lead} are due from October 18 to October 24, 2026: THERM-43 follow-up (due October 20, 2026); THERM-47 follow-up (due October 22, 2026).`, unselected.text]);
+    // (b) A where selection naming none: no statement says which items exist, the selection is its not-found phrase, and the sentence stays.
+    const none = await run([{ id: "L1", where: { field: "due", since: "2026-10-23", until: "2026-10-29" } }]);
+    expect(none).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not found: follow-ups with owner Mara Lind and status open due from October 23 to October 29, 2026." }] });
+    expect(none.parts[0]!.statements.map(statement => statement.text)).toEqual([unselected.text]);
+    // (c) Stated in full, or (d) by a where selection that selects every member, the statement covers every member, so the sentence restates it.
+    const full = await run([]);
+    expect(full).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+    expect(full.parts[0]!.statements.map(statement => statement.text)).toEqual([FULL12]);
+    const every = await run([{ id: "L1", where: { field: "status", value: "open" } }]);
+    expect(every).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+    expect(every.parts[0]!.statements).toHaveLength(1);
+    expect(every.parts[0]!.statements[0]!.text).toMatch(/^12 of the 12 follow-ups with owner Mara Lind and status open have status open: /u);
   });
 });
 

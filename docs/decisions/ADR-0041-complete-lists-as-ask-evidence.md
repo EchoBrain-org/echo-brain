@@ -362,12 +362,19 @@ route, header, database table or client changes.
   answered.
 - **A sentence that only restates a stated list is left out.** Code leaves out
   a writer's sentence when every text item it cites is a member, or part of
-  one, of a list code states, and no other need asks about it: no `which_say`
-  need's list holds it, and no `content` need research has not given up on
-  (found, or open when research stopped) cites that member. "The pages are A,
-  B, C and D", cited to four opened sections beside the eight names code
-  wrote, is left out. "The PRD requires 0.1 C", cited to the PRD's section for
-  a content need about the PRD, stays. Code reads what a need asks about from
+  one, of a list code states whose statement in the answer covers every
+  member, by name or counted in "and N more", and no other need asks about
+  it: no `which_say` need's list holds it, and no `content` need research has
+  not given up on (found, or open when research stopped) cites that member. A
+  statement in full covers every member, and so does a `where` selection that
+  holds every member; one that leaves a member out does not say which items
+  the list holds, so no sentence restates it, whichever member it cites, and a
+  selection by id says only its members' facts. "The pages are A, B, C and
+  D", cited to four opened sections beside the eight names code wrote, is
+  left out. "The PRD requires 0.1 C", cited to the PRD's section for a content
+  need about the PRD, stays. A sentence on THERM-41's text stays beside "2 of
+  the 12 follow-ups ... are due from October 18 to October 24, 2026: THERM-43
+  ...; THERM-47 ...". Code reads what a need asks about from
   what it cites, whatever its status: a list kind's list, and a content need's
   items. A need that declares nothing (a content need citing no item, its list
   ids carrying no meaning, or a list kind without its list, as when research
@@ -618,9 +625,9 @@ not candidates.
       said. A list id beside one ticket made "When is THERM-3 due?" partial.
     - Replacement: sentences stand only on text, and one left out after its
       repair makes the part partial without saying what it claimed; a sentence
-      is a restatement when it speaks only of members of a stated list that no
-      other need asks about; and the checked note comes from `which_say` needs
-      alone.
+      is a restatement when it speaks only of members of a stated list whose
+      statement covers every member, that no other need asks about; and the
+      checked note comes from `which_say` needs alone.
 
 **Known limits.** Code follows the declaration, and nothing at run time checks
 it: a check would have to read meaning from citations, which Retirements 9 to
@@ -661,6 +668,13 @@ too), "lists named in full" and its two BUG-412 cases.
   condition, and a writer's sentence saying the condition is left out as a
   restatement. A condition on two row facts the list did not filter (an owner
   and a due date) has only this path, since `where` takes one row fact.
+- **A `where` selection that leaves a member out** covers no restatement, so
+  the writer's sentences about the list's members all stay beside its
+  statement, one that only restates the selection included ("THERM-43 and
+  THERM-47 are due this week" after "2 of the 12 follow-ups ... are due from
+  October 18 to October 24, 2026: ..."). Leaving such a sentence out needs
+  telling a restated selection from content about a selected member, the
+  meaning of the cited text.
 - **A list with both a `which_items` and a `which_say` need** keeps every
   sentence that cites its members' text, even one that only restates the list:
   with the note while some member is unchecked, and with none once every
@@ -733,6 +747,9 @@ Tests required before release:
   partial, a not_found `which_say` need included;
 - a `where` date range names the members whose date falls in it, in the list's
   time zone, and the statement says the range;
+- a writer's sentence on a stated list member's text stays when the list's
+  only statement is a `where` selection that leaves a member out, whether it
+  names some members or none;
 - the public evidence search and open doors return a meeting record without
   its list label;
 - a sentence citing only rows or list ids, repeated after its repair, makes the

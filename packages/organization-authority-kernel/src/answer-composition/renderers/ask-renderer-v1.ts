@@ -345,8 +345,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // A sentence the kept reply still rests on rows or list ids is left out, and the part says so, never what it claimed.
       if (sentences.some(restsOnRows)) listGaps.push({ text: UNSUPPORTED_GAP, partial: true });
       // A sentence that only restates a stated list (W4), once every need declares: each text item it cites is a member, or
-      // part of one, of a list code states, that no other need asks about: no which_say list holds it, no content need cites it.
-      const restates = (shorts: readonly string[]) => declared && shorts.every(short => stated.some(id => {
+      // part of one, of a stated list whose statement covers every member (named, or in "and N more"; a where selection that
+      // leaves one out covers none), that no other need asks about: no which_say list holds it, no content need cites it.
+      const covering = naming.filter(value => value.which && stated.includes(value.list.id) && rows.get(value.list.id)!.every(member => value.selected.includes(member))).map(value => value.list.id);
+      const restates = (shorts: readonly string[]) => declared && shorts.every(short => covering.some(id => {
         const member = membership.in(id, short);
         return member !== undefined && !checking.some(other => membership.in(other, short) !== undefined) && !contentCited.some(cited => membership.in(id, cited) === member);
       }));
