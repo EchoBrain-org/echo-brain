@@ -401,8 +401,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const naming = uses.flatMap(use => {
         if (use.list.count === 0) return [];
         const noun = nounOf(use.list);
-        // Members selected by id state their own row facts, which their rows establish whether or not the list ended.
-        if (!use.list.complete && use.members === undefined) listGaps.push(listEndGap(noun.plural));
+        // One member selected by id states its row facts, which its row establishes whether or not the list ended; two
+        // or more, or every member, answer which items exist, which a list not read to its end cannot do in full.
+        if (!use.list.complete && (use.members === undefined || use.members.length >= 2 || use.members.length === use.list.count)) listGaps.push(listEndGap(noun.plural));
         const selected: readonly AgenticWriterListMemberV1[] = use.members === undefined
           ? agenticListSelectV1(rows.get(use.list.id)!, use.where) : rows.get(use.list.id)!.filter(member => use.members!.includes(member.id));
         if (selected.length === 0) { selectionNotFound.push(agenticListSelectionNotFoundV1(noun, use.list.filter, use.where!)); return []; }

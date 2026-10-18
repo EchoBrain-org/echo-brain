@@ -321,6 +321,24 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.result.response.parts[0]).toEqual({ question: "Who owns THERM-2?", status: "answered", statements: [{ text: `1 of at least 25 tickets created on October 4, 2026: ${facts(2)}.`, citation_indexes: [0], private: true }] });
   });
 
+  it("marks a selection by id of two or more members of a list not read to its end partial, as the whole list is", async () => {
+    const facts = (n: number) => `THERM-${n}: Fixture work ${n} (status In Progress, owner Dana Lee, created October 4, 2026)`;
+    const gap = "The list of tickets could not be read to its end, so more may exist.";
+    const open = (members: readonly string[], plan: readonly string[]) => alone({
+      bundle: listBundle(25, 1, [list("L1", ids(1, 25), { ended: false, truncated: true })], plan), replies: [{ lists: [{ id: "L1", members }], sentences: [], not_found: [] }], version: 6,
+    });
+    // Every member by id is the whole list, with its lead and its gap.
+    const every = await open(ids(1, 25), ["L1"]).render("Which tickets were created on October 4?");
+    expect(every.result.response.parts[0]).toMatchObject({ status: "partial", gap, statements: [{ text: `At least 25 tickets created on October 4, 2026: ${Array.from({ length: 25 }, (_, index) => facts(index + 1)).join("; ")}.` }] });
+    expect(every.outcome).toBe("partial");
+    // Ten by id ("which are in review or blocked"): more may match past the unread end.
+    const ten = await open(ids(1, 10), ["E26"]).render("Which tickets created on October 4 are in review or blocked?");
+    expect(ten.result.response.parts[0]).toMatchObject({ status: "partial", gap, statements: [{ text: `10 of at least 25 tickets created on October 4, 2026: ${Array.from({ length: 10 }, (_, index) => facts(index + 1)).join("; ")}.` }] });
+    // One member's row facts stand whether or not the list ended.
+    const one = await open(["E2"], ["E26"]).render("Who owns THERM-2?");
+    expect(one.result.response.parts[0]).toEqual({ question: "Who owns THERM-2?", status: "answered", statements: [{ text: `1 of at least 25 tickets created on October 4, 2026: ${facts(2)}.`, citation_indexes: [0], private: true }] });
+  });
+
   it("never keeps a sentence resting on rows alone: it is sent back once for the code-written row facts, then left out as not found", async () => {
     const rows = { lists: [], sentences: [{ text: "THERM-2 is in progress.", evidence: ["E2"] }], not_found: [] };
     const left = alone({ bundle: listBundle(3, 1, [list("L1", ids(1, 3))], ["E4"]), replies: [rows, rows], version: 6 });

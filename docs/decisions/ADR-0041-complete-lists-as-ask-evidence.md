@@ -236,14 +236,19 @@ route, header, database table or client changes.
   the PRD created"). Code names each alone, with every row fact its row
   records (status, owner, due date and dates, each day in the list's time
   zone), after "1 of the 8 Confluence pages created ..." when they are not
-  every member, or "1 of at least 25 ..." for a list not complete. Their
-  facts stand whether or not the list ended, so such a selection adds no
-  list-end gap. A list may be used once in full or by a selection and once
-  by id, and code writes both statements ("which pages were created on
-  October 4, and when was the PRD last updated"). A selection by id of one
-  member, for its row facts, or of every member uses the list; two or more,
-  not all, of a list the plan found a need on name part of it, so the answer
-  goes back once, and then code writes the full statement before them.
+  every member, or "1 of at least 25 ..." for a list not complete. One
+  member's facts stand whether or not the list ended, so a selection of one
+  member adds no list-end gap. A selection of two or more, or of every
+  member, says which items exist ("which are in review or blocked", which a
+  single "where" cannot select), so for a list not complete it gets the gap
+  and the part is partial, as the whole list is; every member selected by id
+  reads "At least 25 ...". A list may be used once in full or by a
+  selection and once by id, and code writes both statements ("which pages
+  were created on October 4, and when was the PRD last updated"). A
+  selection by id of one member, for its row facts, or of every member uses
+  the list; two or more, not all, of a list the plan found a need on name
+  part of it, so the answer goes back once, and then code writes the full
+  statement before them.
 - **Code writes the sentence that names a list's items.** Code writes one
   statement per list the answer uses, first in the part. Each statement cites
   every member it names, by that member's own row:
