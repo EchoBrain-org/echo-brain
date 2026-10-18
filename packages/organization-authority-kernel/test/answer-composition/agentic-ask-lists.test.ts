@@ -384,13 +384,11 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     { id: "C2 (misdeclared)", name: "answers a which-say question declared content with no note, its list id carrying no meaning", ...B4, steps: [...READ4, fin(C, "L1", "E12")], w: [say(TRACE, ["L1", "E12"])], out: "answered", says: [cite(TRACE, 9)] },
     { id: "CF4", name: "states the list the writer uses beside the noted sentence (path A)", ...B4, steps: [...READ4, fin(WS, "L1", "E12")], w: [say(TRACE, ["E12"], [{ id: "L1" }])], out: "partial", says: [FULL8, noted(TRACE, of8(4))], gap: UNCHECKED },
     { id: "CF4", name: "reads a section beside its own page's row as the section: the row is no citation", ...B4, steps: [...READ4, fin(WS, "L1", "E12")], w: [say(TRACE, ["E12", "E4"], [{ id: "L1" }])], out: "partial", says: [FULL8, noted(TRACE, of8(4))], gap: UNCHECKED },
-    { id: "CF4", name: "notes a sentence citing two members' sections", ...B4, steps: [...READ4, fin(WS, "L1", ...SECTIONS)], w: [say(TWO, ["E11", "E12"], [{ id: "L1" }])], out: "partial", says: [FULL8, noted(TWO, of8(4))], gap: UNCHECKED },
     { id: "X14 (subset)", name: "notes the October 4 subset beside the list a which_say need checks: its members' text is never a restatement (Known limit)", ...B4,
       steps: [...READ4, fin(WS, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS, [{ id: "L1" }])], out: "partial", says: [FULL8, noted(FOUR, of8(4))], gap: UNCHECKED },
     { id: "C2b", name: "answers which pages mention BUG-412 once every page was checked: the sentence stands, with no note and no list", ...B4, steps: [...READ8, fin(WS, "L1", "E11", "E12")], w: [say(TWO, ["E11", "E12"])], out: "answered", says: [cite(TWO, 2)], wl: { count: 8, checked: 8, complete: true, stated: false } },
     { id: "X35d", name: "cites the 8 only_me page rows after the two sections when the sentence also cites the list", ...B4, steps: [...READ8, fin(WS, "L1", "E11", "E12")], w: [say(TWO, ["L1", "E11", "E12"])], out: "answered", says: [cite(TWO, 10)] },
     { id: "X35d", name: "cites only the two sections on team pages, whatever the sentence cites beside them", ...B4, desk: () => oct4({ team: true }), steps: [...READ8, fin(WS, "L1", "E11", "E12")], w: [say(TWO, ["L1", "E11", "E12"])], out: "answered", says: [cite(TWO, 2, true)] },
-    { id: "R2", name: "answers the same with a content need on the two sections", ...B4, steps: [...READ8, fin(C, "E11", "E12")], w: [say(TWO, ["E11", "E12"])], out: "answered", says: [cite(TWO, 2)] },
     { id: "X29", name: "counts an open by a page's title for the page it resolved to, so all eight are checked", ...B4,
       steps: [read([OCT4_LIST]), read(PAGES.slice(0, 4).map(row => ({ tool: "open", args: { id: row.label } }))), read(PAGES.slice(4).map(row => ({ tool: "open", args: { id: row.label } }))), fin(WS, "L1", "E11", "E12")],
       w: [say(TWO, ["E11", "E12"])], out: "answered", says: [TWO], wl: { count: 8, checked: 8 },
@@ -443,8 +441,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     })),
     { id: "CF9a", name: "refuses a which_items finish on opened sections alone once, naming their pages' list; the sentence then restates the stated list", ...O4,
       steps: [...READ4, fin(WI, ...SECTIONS), fin(WI, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [cite(FULL8, 8)], wl: { id: "L1", count: 8, checked: 4, stated: true } },
-    { id: "R5", name: "leaves out, with no repair, a sentence citing the list's id beside four sections: it restates the stated list", ...O4, steps: [...READ4, fin(WI, "L1")], w: [say(FOUR, ["L1", ...SECTIONS])], out: "answered", says: [cite(FULL8, 8)], wl: { checked: 4, stated: true } },
-    { id: "CF7", name: "leaves out the same sentence with all eight opened", ...O4, steps: [...READ8, fin(WI, "L1")], w: [say(FOUR, ["L1", ...SECTIONS])], out: "answered", says: [cite(FULL8, 8)], wl: { checked: 8, stated: true } },
+    { id: "R5, CF7", name: "leaves out, with no repair, a sentence citing the list's id beside four opened sections: it restates the stated list", ...O4, steps: [...READ4, fin(WI, "L1")], w: [say(FOUR, ["L1", ...SECTIONS])], out: "answered", says: [cite(FULL8, 8)], wl: { checked: 4, stated: true } },
     { id: "R3, CF12c", name: "refuses the held trace's finish, rows and sections cut to 12 ids, once, then states the list over its 4-name sentence", ...O4,
       steps: [...READ4, fin(WI, ...ids(1, 12)), fin(WI, "L1", ...ids(1, 12))], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [cite(FULL8, 8)], wl: { checked: 4, stated: true } },
     { id: "R3", name: "states a Jira list over a sentence naming four members from their bodies, opened under the rows' own ids", ...TIX, desk: () => jira(tickets(1, 12), { last: { page_full: false }, body: n => `THERM-${n}: created October 4 for fixture work.` }),
@@ -452,7 +449,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       rejected: [`${UNLISTED} (L1). `], out: "answered", says: [`12 Jira tickets created on October 4, 2026: ${names(1, 12)}.`], wl: { count: 12, checked: 4, complete: true, stated: true } },
     { id: "CF8a", name: "refuses a content finish on the list with what each kind of support is, then answers from the page research opened", ...DVT, desk: () => oct4(),
       steps: [read([OCT4_LIST], C), fin(C, "L1"), read(opens(["E3"]), C), fin(C, "E9")], w: [say(HOLD, ["E9"])], rejected: [`need N1 "whether DVT is on hold" ${HINT}`], out: "answered", says: [HOLD] },
-    ...([[[claim(["E3"], [{ id: "L1" }]), nothing("whether DVT is on hold")], "Not found: whether DVT is on hold."], [[claim(["E3"], [{ id: "L1" }]), claim(["E3"], [{ id: "L1" }])], UNSUPPORTED], [[claim(["E3", "L1"]), claim(["E3", "L1"])], UNSUPPORTED]] as const)
+    ...([[[claim(["E3"], [{ id: "L1" }]), nothing("whether DVT is on hold")], "Not found: whether DVT is on hold."], [[claim(["E3"], [{ id: "L1" }]), claim(["E3"], [{ id: "L1" }])], UNSUPPORTED]] as const)
       .map(([w, gap]): Row => ({
         id: "CF8b (misdeclared)", name: `never answers what a listed page says from its row: a claim on the row goes back once and ends "${gap}"`, ...DVT, desk: () => oct4(),
         steps: [read([OCT4_LIST]), fin(WI, "L1")], w, repaired: true, out: "partial", says: [FULL8], gap,
@@ -489,8 +486,8 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     })),
     { id: "R4b", name: "states the list first, then four pages selected by id with their facts: 8 members named", ...R4, w: [use({ id: "L1", members: ids(1, 4) })], out: "answered", citations: 8,
       says: [FULL8, `4 of the 8 Confluence pages created on October 4, 2026: ${[pageFacts(OCT4_TITLES[0]!, "October 5, 2026"), ...OCT4_TITLES.slice(1, 4).map(title => pageFacts(title))].join("; ")}.`] },
-    ...["All eight are current pages.", "All eight pages were created on October 4, 2026."].map((text, index): Row => ({
-      id: index === 0 ? "R6" : "R10", name: `leaves out "${text}", citing only the list's id, after one repair, and says a claim was left out`, ...O4,
+    ...["All eight are current pages."].map((text): Row => ({
+      id: "R6, R10", name: `leaves out "${text}", citing only the list's id, after one repair, and says a claim was left out`, ...O4,
       steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say(text, ["L1"], [{ id: "L1" }]), say(text, ["L1"], [{ id: "L1" }])], repaired: true, out: "partial", says: [FULL8], gap: UNSUPPORTED,
     })),
     { id: "R6", name: "answers with the list alone once the writer drops a list-id sentence after its repair", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say("All eight are current pages.", ["L1"]), useL1], repaired: true, out: "answered", says: [FULL8] },

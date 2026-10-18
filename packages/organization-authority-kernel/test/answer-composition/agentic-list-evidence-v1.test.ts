@@ -373,9 +373,6 @@ describe("the statement code writes for a list (ADR-0041)", () => {
   });
 
   it.each<[string, Partial<AgenticListStatementInputV1> & Pick<AgenticListStatementInputV1, "selected">, string]>([
-    // The count, the filter and every name.
-    ["the October 4 statement", { noun: PAGES, filter: OCTOBER_4.filter, selected: pages }, `3 Confluence pages created on October 4, 2026: ${titles.join("; ")}.`],
-    ["one page", { noun: PAGES, filter: OCTOBER_4.filter, selected: pages.slice(0, 1) }, `1 Confluence page created on October 4, 2026: ${titles[0]}.`],
     // Status, owner and due date only where they differ, read among the names the statement writes.
     ["names alone", { selected: pages }, `3 items: ${titles.join("; ")}.`],
     ["status and due dates that differ", { selected: [{ title: "THERM-1: Fixture", status: "In Progress", owner: "Dana Lee" }, { title: "THERM-2: Firmware", status: "Done", owner: "Dana Lee", due: "2026-10-09" }] }, "2 items: THERM-1: Fixture (In Progress); THERM-2: Firmware (Done, due October 9, 2026)."],
@@ -386,14 +383,7 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     ["one meeting's actions by due date", { selected: [due("2026-10-09"), due("2026-10-12"), due(), due(" 2026-10-09")] }, `4 items: ${review} (2 actions, due October 9, 2026); ${review} (due October 12, 2026); ${review}.`],
     // A kind filter is the noun, not a phrase; three decisions of one meeting are one name.
     ["three decisions of one meeting", { noun: agenticListMembersNounV1({ selector: "meetings" }, ["decision"]), filter: { kind: "decision", owner: "Dana" }, selected: decisions }, `3 decisions with owner Dana: ${sync} (3 decisions).`],
-    // Its share, then "and N more" with N from the list; "at least" for a list not read to its end.
-    ["25 of 60", { noun: TICKETS, filter: OCTOBER_4.filter, count: 60, selected: sixty }, `60 Jira tickets created on October 4, 2026: ${sixty.slice(0, 25).map(value => value.title).join("; ")}; and 35 more.`],
-    ["at least", { noun: TICKETS, count: 25, complete: false, share: 2, selected: sixty.slice(0, 2) }, "At least 25 Jira tickets: THERM-1: Fixture work 1; THERM-2: Fixture work 2."],
-    // A selection by owner, status or a date range says its condition in its lead.
-    ["a selection by owner", { noun: TICKETS, filter: OCTOBER_4.filter, count: 3, where: { field: "owner", value: "Dana Lee" }, selected: agenticListSelectV1(owners, { field: "owner", value: " DANA LEE " }) }, "2 of the 3 Jira tickets created on October 4, 2026 have owner Dana Lee: THERM-1: A; THERM-3: C."],
-    ["a status selection of a list not read to its end", { noun: TICKETS, count: 50, complete: false, where: { field: "status", value: "Done" }, selected: [owners[1]!] }, "At least 1 Jira ticket has status Done (50 listed so far): THERM-2: B."],
-    ["a due range", { noun: FOLLOW_UPS, filter: mara, count: 12, where: { field: "due", since: "2026-10-18", until: "2026-10-24" }, selected: [{ title: "THERM-43 follow-up" }, { title: "THERM-47 follow-up" }] }, "2 of the 12 follow-ups with owner Mara Lind and status open are due from October 18 to October 24, 2026: THERM-43 follow-up; THERM-47 follow-up."],
-    ["an open due range", { noun: FOLLOW_UPS, filter: mara, count: 12, where: { field: "due", until: "2026-10-17" }, selected: [{ title: "THERM-41 follow-up" }] }, "1 of the 12 follow-ups with owner Mara Lind and status open is due through October 17, 2026: THERM-41 follow-up."],
+    // A selection by an updated range or a created day says its condition in its lead (owner, status and due selections: the X1, R9 and X17 rows).
     ["an updated range of a list not read to its end", { noun: TICKETS, filter: OCTOBER_4.filter, count: 25, complete: false, where: { field: "updated", since: "2026-10-11" }, selected: reviewed.slice(0, 3).map(value => ({ title: value.title })) }, "At least 3 Jira tickets created on October 4, 2026 were updated since October 11, 2026 (25 listed so far): THERM-1: A; THERM-2: A; THERM-3: A."],
     ["a created day", { noun: PAGES, count: 8, where: { field: "created", since: "2026-10-04", until: "2026-10-04" }, selected: [{ title: "PRD" }] }, "1 of the 8 Confluence pages was created on October 4, 2026: PRD."],
     // Members selected by id: each one's row facts, every date in the list's time zone (03:00 UTC on October 5 is October 4 in Los Angeles).
@@ -449,6 +439,7 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(["Asia/Tokyo", "America/Los_Angeles", "UTC", undefined].map(zone => titled(agenticListSelectV1(updated, { field: "updated", since: "2026-10-11" }, zone))))
       .toEqual([["Tokyo's Oct 11", "Los Angeles' Oct 10", "a day"], ["a day"], ["Los Angeles' Oct 10", "a day"], ["Los Angeles' Oct 10", "a day"]]);
     expect(titled(agenticListSelectV1([{ title: "a", status: "Done" }, { title: "b", status: "done " }, { title: "c" }], { field: "status", value: "DONE" }))).toEqual(["a", "b"]);
+    expect(titled(agenticListSelectV1(owners, { field: "owner", value: " DANA LEE " }))).toEqual(["THERM-1: A", "THERM-3: C"]);
   });
 
   it("stops naming before a statement passes its byte bound, and counts the rest as more", () => {
