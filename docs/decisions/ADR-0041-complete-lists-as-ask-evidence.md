@@ -105,6 +105,16 @@ inputs byte for byte, so the impact-card quality baseline does not change.
 Every answer version Ask serves (V4 to V7) gets the change. No answer shape,
 route, header, database table or client changes.
 
+One provider change applies to every goal, because a reader has no goal: the
+Jira list reader marks a page `truncated` only when a next page exists
+(`fd18b33`), as the Confluence reader already did, so a page read to its end
+is no longer cut short because one summary was cut to its 256-byte label
+bound. For the same Jira page, an impact card's research then no longer sees
+`truncated` or "more items exist than list can show; use search", and the
+card no longer says "The tickets list was cut short at 6 items." That claim
+was false. The kernel's task rules, prompts and schemas do not change, and for
+the same desk results a task goal's model inputs are byte for byte.
+
 ### A list is a request-local evidence object
 
 - **One list per selection.** Each `list` read opens or continues one list per
@@ -741,7 +751,11 @@ too), "lists named in full" and its two BUG-412 cases.
 No schema, stored state, route or client changes, and nothing new is kept
 after the request. Rollback is a code revert. The Ask quality baseline is
 re-recorded with `ASK_QUALITY_BASELINE_WRITE=1`; the impact-card baseline must
-not change.
+not change. The one goal-agnostic change is the Jira reader's truncation rule
+("Ask only" above): impact cards and sweeps over a Jira list page with no
+next page that holds a cut summary change as described there. The impact-card baseline has
+no such page, so it does not change; the reader's own test pins the rule
+(`providers/jira/test/jira-person-live-evidence-reader-v1.test.ts`).
 
 Tests required before release:
 
