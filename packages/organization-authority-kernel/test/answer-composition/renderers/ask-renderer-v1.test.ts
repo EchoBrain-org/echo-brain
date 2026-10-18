@@ -372,10 +372,21 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     const rendered = await left.render("Is THERM-2 in progress?");
     expect(generations(left)).toBe(2);
     expect(left.prompt(1).validation_error).toContain(ROWS_REASON);
-    // No statement is left: the record research read stands, as before ADR-0041.
-    expect(rendered.result.response).toMatchObject({ outcome: "partial", parts: [{ status: "records_only", statements: [], records: [{ text: "Approved record 1.", citation_indexes: [0] }], gap: "I found these records, but could not write a verified summary." }] });
+    // No statement is left: the record research read stands, as before ADR-0041, and the part says a claim was left out (W1).
+    expect(rendered.result.response).toMatchObject({ outcome: "partial", parts: [{ status: "records_only", statements: [], records: [{ text: "Approved record 1.", citation_indexes: [0] }], gap: `I found these records, but could not write a verified summary. ${UNSUPPORTED}` }] });
     const fixed = alone({ bundle: listBundle(3, 1, [list("L1", ids(1, 3))], [C(["E4"])]), replies: [rows, { lists: [{ id: "L1", members: ["E2"] }], sentences: [], not_found: [] }], version: 6 });
     expect((await fixed.render("Is THERM-2 in progress?")).result.response.parts[0]).toMatchObject({ status: "answered", statements: [{ text: "1 of the 3 tickets created on October 4, 2026: THERM-2: Fixture work 2 (status In Progress, owner Dana Lee, created October 4, 2026)." }] });
+  });
+
+  it("gives the records a failed writer falls back to the list gaps the part has (W3, W5)", async () => {
+    const failed = (needs: readonly Need[]) => alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], needs), replies: [{ wrong: true }, { still: "wrong" }], version: 6 });
+    const records = "I found these records, but could not write a verified summary.";
+    // A which_say need checked none of the list's 8 members; the record research read stands beside that gap.
+    const checking = await failed([WS(["L1", "E9"])]).render("Which tickets created on October 4 mention BUG-412?");
+    expect(checking.result.response).toMatchObject({ outcome: "partial", parts: [{ status: "records_only", records: [{ text: "Approved record 1." }], gap: `${records} ${UNCHECKED}` }] });
+    // A which_items need research left on rows, citing no list: the part says the full list was not confirmed.
+    const rows = await failed([WI(ids(1, 8))]).render("Which tickets were created on October 4?");
+    expect(rows.result.response).toMatchObject({ outcome: "partial", parts: [{ status: "records_only", records: [{ text: "Approved record 1." }], gap: `${records} I could not confirm the full list of items asked for.` }] });
   });
 
   it("states the list and leaves out a rows sentence without a repair when no model call is left", async () => {

@@ -403,7 +403,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const fallback = notFound.length > 0 ? [] : (answer === null ? evidence.filter(entry => entry.full) : cited.filter(entry => textGiven.has(entry.short))).slice(0, 3);
         const records = fallback.map(entry => statementOf(entry.item.text!, [entry.short]));
         draft = records.length > 0
-          ? { status: "records_only", statements: [], records, gap: RECORDS_GAP }
+          ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
           : { status: "not_found", statements: [], gap: withGaps(gapText ?? (dateCoverageMissing ? MISSING_DATE_GAP : incomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP))! };
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
