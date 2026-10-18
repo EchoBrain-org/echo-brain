@@ -16,6 +16,9 @@ export default defineConfig({
       'tests/person-client/**/*.test.ts',
       'tests/architecture/**/*.test.ts',
     ],
+    // HOME and XDG_DATA_HOME point at one temporary folder per run, never the real home.
+    globalSetup: ['tests/support/isolated-home-global-setup.ts'],
+    setupFiles: ['tests/support/isolated-home.ts'],
     testTimeout: 180_000,
     hookTimeout: 180_000,
     // Keep process-heavy architecture fixtures bounded while other files run.

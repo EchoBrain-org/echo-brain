@@ -84,6 +84,7 @@
       "allowed_external_packages": [],
       "allowed_node_builtins": [
         "fs",
+        "os",
         "process",
         "url"
       ]
