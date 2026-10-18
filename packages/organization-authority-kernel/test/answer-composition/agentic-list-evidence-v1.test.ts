@@ -247,14 +247,14 @@ describe("what research's opens read", () => {
   const round = (...actions: AgenticOpenActionV1[]) => ({ actions });
   const id_of = (raw: unknown) => typeof raw === "string" && /^E\d+$/u.test(raw) ? raw : null;
 
-  it("keeps each clean open's bodies, read in full, until a limited open undoes it", () => {
+  it("keeps each item whose open was clean, its bodies read in full, until a limited open undoes it", () => {
     const full = (id: string) => ["E9", "E10", "E11", "E12"].includes(id);
     const reads = agenticOpenReadsV1([
       round(open("E1", ["E9", "E10"]), open("E2", ["E11"], { truncated: true }), open("E3", ["E12", "E13"]), { tool: "search", args: { query: "E4" }, result: { opened: ["E12"] } }),
       round(open("E1", [], { error: "unavailable" }), open("E2", ["E11"]), open("E4", []), open("a title", ["E12"])),
     ], full, id_of);
     // E1's later open failed; E2's later open was clean; E3 returned a body research did not read; E4 returned none.
-    expect([...reads.clean]).toEqual([["E2", ["E11"]]]);
+    expect([...reads.clean]).toEqual(["E2"]);
     expect([...reads.limited]).toEqual(["E1"]);
   });
 });

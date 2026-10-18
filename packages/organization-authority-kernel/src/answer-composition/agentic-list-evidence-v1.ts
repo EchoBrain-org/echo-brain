@@ -263,8 +263,8 @@ export interface AgenticOpenActionV1 {
 
 /** What research's opens read (agenticOpenReadsV1). */
 export interface AgenticOpenReadsV1 {
-  /** Each item whose open was clean, with the bodies that open returned: an opened page's sections are new items. */
-  readonly clean: ReadonlyMap<string, readonly string[]>;
+  /** Each item a clean open returned bodies for, every one read in full, with no limited open of it since. */
+  readonly clean: ReadonlySet<string>;
   /** Each item whose latest open was limited: truncated, with a notice or with an error. */
   readonly limited: ReadonlySet<string>;
 }
@@ -272,21 +272,21 @@ export interface AgenticOpenReadsV1 {
 /**
  * What research read by opening items, from its rounds in order (ADR-0041). An open is clean when it was not
  * truncated, carried no notice or error, and returned only bodies research then read in full. A limited open undoes
- * an item's clean open until a later clean one. The renderer and the evaluation read the same relation: a list member
- * is checked through its clean open (addition 4). `id_of` reads an open's id as the step protocol does.
+ * an item's clean open until a later clean one. The renderer reads it: a list member is checked through its clean open
+ * (addition 4). `id_of` reads an open's id as the step protocol does.
  */
 export function agenticOpenReadsV1(
   rounds: readonly { readonly actions: readonly AgenticOpenActionV1[] }[],
   full: (id: string) => boolean,
   id_of: (raw: unknown) => string | null,
 ): AgenticOpenReadsV1 {
-  const clean = new Map<string, readonly string[]>(); const limited = new Set<string>();
+  const clean = new Set<string>(); const limited = new Set<string>();
   for (const round of rounds) for (const action of round.actions) {
     if (action.tool !== "open") continue;
     const id = id_of(action.args.id);
     if (id === null) continue;
     if (action.result.error !== undefined || action.result.truncated === true || action.result.notice === true) { limited.add(id); clean.delete(id); continue; }
-    if (action.result.opened.length > 0 && action.result.opened.every(full)) { clean.set(id, Object.freeze([...action.result.opened])); limited.delete(id); }
+    if (action.result.opened.length > 0 && action.result.opened.every(full)) { clean.add(id); limited.delete(id); }
   }
   return Object.freeze({ clean, limited });
 }

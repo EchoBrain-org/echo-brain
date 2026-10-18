@@ -117,7 +117,7 @@ function bytes(value: string | undefined): number { return value === undefined ?
  * it unchecked until a later clean open.
  */
 function checkedItems(bundle: AgenticEvidenceBundleV1, opens: AgenticOpenReadsV1): ReadonlySet<string> {
-  const checked = new Set<string>(opens.clean.keys());
+  const checked = new Set<string>(opens.clean);
   for (const entry of bundle.items) if (entry.full && !opens.limited.has(entry.short)) checked.add(entry.short);
   return checked;
 }
