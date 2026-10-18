@@ -282,8 +282,14 @@ route, header, database table or client changes.
   - the answer cites two or more of the list's members, but not all of them,
     and does not use the list. Built: a member counts whether the writer has
     its text or only its row, and the answer uses a list only through
-    `lists` or a sentence that cites the list's id beside text the writer read;
-    a list id beside rows only never stands in for code's statement.
+    `lists`, or through a sentence that cites the list's id beside text the
+    writer read that is not one of the list's own rows (an opened section, or
+    an item outside the list). A list id beside rows, or beside members' own
+    rows that carry text (a follow-up, an opened meeting record), never stands
+    in for code's statement: "you have 10 open follow-ups" citing L1 and ten
+    of its twelve members is a subset. Rows are list facts only, so a sentence
+    that names two or more members by their rows alone is a subset whatever
+    else it cites, and only `lists` uses that list then.
 
   The writer has one repair in total, as today; a failed check uses it if it
   is still unused and the request has time and model calls left. If the
@@ -291,7 +297,8 @@ route, header, database table or client changes.
   full statement and keeps the writer's sentences. Built: a sentence that
   cites only members of a list code wrote this way, two or more of them or
   rows only, is dropped, since it restated part of that list (the October 4 answer's "the pages are A, B, C, D" beside
-  all eight names would contradict them). A first reply that fails only the
+  all eight names would contradict them); so is one that names two or more of
+  its members by their rows alone, whatever else it cites. A first reply that fails only the
   check stays the writer's answer when the repair's reply is unusable.
 - **One citation per cited object.** The response refuses duplicate
   citations, and a listed ticket's row and its opened body cite the same

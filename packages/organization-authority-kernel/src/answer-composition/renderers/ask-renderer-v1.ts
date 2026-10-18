@@ -230,27 +230,38 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
 
       // ---- code's check of the lists (ADR-0041) -----------------------------
       const keptSentences = (answer: Answer) => answer.sentences.filter(sentence => sentence.evidence.some(short => allowed.has(short)));
-      /**
-       * The answer uses a list when it names it in "lists", or when a sentence claims content across it: the list's id
-       * beside text the writer read. A list id beside rows only, or beside nothing, never stands in for the statement
-       * code writes, so "the pages are A, B, C and D" citing L1 and four rows is still a subset.
-       */
-      const usesList = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id) ||
-        keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short)));
       /** The members of `list` that `shorts` are, or are part of, each once. */
       const membersCited = (list: AgenticListIdV1, shorts: readonly string[]) => new Set(shorts.flatMap(short => membership.in(list, short) ?? []));
+      /** The members of `list` a sentence's `shorts` name by their rows alone: cited as rows without text, and none of their text cited beside. */
+      const rowsOnly = (list: AgenticListIdV1, shorts: readonly string[]) => {
+        const read = membersCited(list, shorts.filter(short => textGiven.has(short)));
+        return new Set([...membersCited(list, shorts.filter(short => !textGiven.has(short)))].filter(member => !read.has(member)));
+      };
+      /**
+       * The answer uses a list when it names it in "lists", or when a sentence claims content across it: the list's id
+       * beside text the writer read that is not one of the list's own rows (an opened section, or an item outside the
+       * list). A list id beside rows, or beside members' own rows that carry text (a follow-up, an opened meeting record),
+       * never stands in for the statement code writes, so "the pages are A, B, C and D" citing L1 and four rows, and "you
+       * have 10 open follow-ups" citing L1 and ten of them, are still subsets.
+       */
+      const usesList = (answer: Answer, id: AgenticListIdV1) => (answer.lists ?? []).some(use => use.id === id) ||
+        keptSentences(answer).some(sentence => sentence.evidence.includes(id) && sentence.evidence.some(short => textGiven.has(short) && membership.in(id, short) !== short));
       /**
        * Lists the answer should use but does not: one the plan rests on, or one it cites some, not all, members of. A
        * member counts whether the writer has its text or only its row (a follow-up's row carries its text), and an
-       * opened section counts as its page.
+       * opened section counts as its page. Rows are list facts only, so a sentence naming two or more members by their
+       * rows names part of the list whatever else it cites: only "lists" uses the list then.
        */
       const listProblems = (answer: Answer): readonly { readonly id: AgenticListIdV1; readonly reason: string }[] => writerLists.flatMap(list => {
-        if (list.count === 0 || usesList(answer, list.id)) return [];
-        if (list.cited_by_plan) return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members` }];
-        const cited = membersCited(list.id, keptSentences(answer).flatMap(sentence => sentence.evidence).filter(short => allowed.has(short)));
-        return cited.size >= 2 && cited.size < list.count
-          ? [{ id: list.id, reason: `the answer cites ${cited.size} of the ${list.count} members of list ${list.id} without the list: put {"id": "${list.id}"} in "lists", with "where" to select by owner or status, so code names every matching member; for what those members say, cite ${list.id} beside their evidence` }]
+        if (list.count === 0 || (answer.lists ?? []).some(use => use.id === list.id)) return [];
+        const cited = keptSentences(answer).map(sentence => sentence.evidence.filter(short => allowed.has(short)));
+        const subset = (count: number) => count >= 2 && count < list.count
+          ? [{ id: list.id, reason: `the answer cites ${count} of the ${list.count} members of list ${list.id} without the list: put {"id": "${list.id}"} in "lists", with "where" to select by owner or status, so code names every matching member; for what those members say, cite ${list.id} beside their evidence` }]
           : [];
+        const byRows = subset(new Set(cited.flatMap(shorts => [...rowsOnly(list.id, shorts)])).size);
+        if (usesList(answer, list.id)) return byRows;
+        if (list.cited_by_plan) return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members` }];
+        return byRows.length > 0 ? byRows : subset(membersCited(list.id, cited.flat()).size);
       });
       // A failed check takes the writer's one repair when the first reply fails it and a repair can still run; the
       // repaired reply, or a first reply no repair can follow, is kept and code writes the lists it should have used.
@@ -338,10 +349,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       });
 
       // The writer's sentences: cited ids it was given, each list it cites adding no citation of its own. A sentence that
-      // cites only members of a list code wrote after the check (or their opened sections), two or more of them or rows
-      // only, restates part of that list, which code now names in full. A sentence about one member's text stays.
-      const restates = (shorts: readonly string[]) => shorts.every(short => forced.some(id => membership.in(id, short) !== undefined)) &&
-        (new Set(forced.flatMap(id => [...membersCited(id, shorts)])).size >= 2 || !shorts.some(short => textGiven.has(short)));
+      // names two or more members of a list code wrote after the check by their rows, whatever else it cites, restates
+      // part of that list, which code now names in full; so does one that cites only that list's members (or their opened
+      // sections), two or more of them or rows only. A sentence about one member's text stays.
+      const restates = (shorts: readonly string[]) => forced.some(id => rowsOnly(id, shorts).size >= 2) ||
+        (shorts.every(short => forced.some(id => membership.in(id, short) !== undefined)) &&
+          (new Set(forced.flatMap(id => [...membersCited(id, shorts)])).size >= 2 || !shorts.some(short => textGiven.has(short))));
       const writerSentences = (answer?.sentences ?? []).flatMap(sentence => {
         const shorts = sentence.evidence.filter(short => allowed.has(short));
         if (shorts.length === 0 || restates(shorts)) return [];

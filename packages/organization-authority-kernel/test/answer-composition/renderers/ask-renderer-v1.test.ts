@@ -237,6 +237,35 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered).toMatchObject({ outcome: "answered", cited: ids(1, 8) });
   });
 
+  it("never takes a list id beside some rows and other text as using the list: rows name members, so code writes the list", async () => {
+    // E9 is text the writer read, outside the list; the sentence still names 4 of the 8 tickets by their rows.
+    const subset = { lists: [], sentences: [{ text: "The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", evidence: ["L1", ...ids(1, 4), "E9"] }], not_found: [] };
+    for (const plan of [["L1"], ["E9"]]) {
+      const run = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], plan), replies: [subset, subset], version: 6 });
+      const rendered = await run.render("Which tickets were created on October 4?");
+      expect(run.trace.filter(step => step === "generate")).toHaveLength(2);
+      expect(run.prompt(1).validation_error).toContain('the answer cites 4 of the 8 members of list L1 without the list: put {"id": "L1"} in "lists"');
+      // Code names all 8 and drops the sentence that named 4 of them by their rows.
+      expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: eight, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }]);
+      expect(rendered.outcome).toBe("answered");
+    }
+  });
+
+  it("sends back a rows sentence beside a content sentence on the same list: code writes the list, and the content keeps its note", async () => {
+    const reply = { lists: [], sentences: [
+      { text: "The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", evidence: ["L1", ...ids(1, 4)] },
+      { text: "The review approved fixture work on them.", evidence: ["L1", "E9"] },
+    ], not_found: [] };
+    const run = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], ["L1"]), replies: [reply, reply], version: 6 });
+    const rendered = await run.render("Which tickets were created on October 4, and what did the review approve?");
+    expect(run.trace.filter(step => step === "generate")).toHaveLength(2);
+    expect(run.prompt(1).validation_error).toContain("the answer cites 4 of the 8 members of list L1 without the list");
+    expect(rendered.result.response.parts[0]).toMatchObject({
+      status: "partial", gap: "Not every listed item was checked, so others may also match.",
+      statements: [{ text: eight }, { text: "The review approved fixture work on them (0 of 8 checked so far).", citation_indexes: [8] }],
+    });
+  });
+
   it("says 'at least' for a list not read to a confirmed end even when the writer cites its id beside one row", async () => {
     const count = { lists: [], sentences: [{ text: "25 tickets were created on October 4, 2026.", evidence: ["L1", "E1"] }], not_found: [] };
     const run = alone({ bundle: listBundle(25, 0, [list("L1", ids(1, 25), { unverified_end: true })], ["L1"]), replies: [count, count], version: 6 });
