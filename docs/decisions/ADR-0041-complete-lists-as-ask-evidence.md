@@ -468,7 +468,7 @@ audit or public door sees it.
 
 The research-loop evaluation gets a `list` part type, whose evidence names
 every member. A list part scores on naming the whole list: it counts only when
-the answer cites every member, and naming some members earns nothing. A
+the answer names every member, and naming some members earns nothing. A
 citation of a member of a list in the research result resolves like a citation
 of an item read in full. A development case asks the October 4 question, with
 its 8 pages as members. Built: a list part's research measures hold only for
@@ -476,9 +476,16 @@ the whole list too (found; read, when a complete list holds every member;
 cited, when the plan cites every member or a found `which_items` need cites a
 list holding it; handed over), and whether the answer names every member is a
 code check, "lists named in full", that holds without a judge and overrides a
-judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`). Past an answer's 25
-names, a statement that ends "and N more" names the whole list when the members
-it cites plus N are exactly the list. The rows the writer sees are never
+judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`). It reads names as
+the renderer writes statements: a statement code writes cites only list
+members' rows and names each member it cites, and a writer's sentence, which
+stands on text (an item no list holds as a member, such as a page's section),
+names the members whose text it cites, never a row it cites beside that text
+for the row's facts. A writer's sentence that cites only members' rows, as one
+on follow-ups' text does, reads as one code wrote, so every row it cites
+counts and the judge decides. Past an answer's 25 names, a statement code
+wrote that ends "and N more" names the whole list when the members it names
+plus N are exactly the list. The rows the writer sees are never
 counted as noise or distractors handed, and hand over a part only when it is a
 row fact (a date, owner or status). Each run reports its plan's needs by
 declared kind, and a case may name the kinds its plan should declare

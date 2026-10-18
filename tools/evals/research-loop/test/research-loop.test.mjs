@@ -745,6 +745,33 @@ test("the fixed October 4 answer names all 8 pages from a complete list, citing 
   assert.equal(bySection.answer_citations.unresolved, 1, "a section is no member of the list: it resolves only when read in full");
 });
 
+test("a writer's sentence names the members whose text it cites, never the rows it cites beside that text (W1)", () => {
+  // Research stopped with the need found on rows (the X5 shape), so no statement code wrote names the list. The writer
+  // names 4 of the 8 pages, citing their 4 sections, and the 8 rows it saw beside them, which W1 cites for their facts.
+  const ids = ROWS.map(row => row.id);
+  const sections = OCTOBER_4.slice(0, 4).map(pageSection);
+  const sentence = { text: "The pages created on October 4, 2026 include A, B, C and D.", cites: [...sections, ...ROWS] };
+  const run = statements => october4Run({ items: [...ROWS, ...sections], lists: [OCT4_LIST], evidence: ids, kind: "which_items", writer: [...sections.map(item => item.id), ...ids], statements });
+  const beside = run([sentence]);
+  const checks = codeChecks(beside.testCase, beside.run, dataset);
+  assert.deepEqual([checks.parts[0].named, checks.parts[0].members_named, checks.coverage.lists_named], [false, 4, 0]);
+  // Code decides, without a judge and over a judge's yes.
+  assert.equal(runScores({ checks, judge: null }).complete_and_supported, false);
+  assert.deepEqual([runScores({ checks, judge: lenientJudge(beside.testCase) }).writer_lists_named, runScores({ checks, judge: lenientJudge(beside.testCase) }).complete_and_supported], [0, false]);
+  // A statement code wrote cites only list members' rows, and names each member it cites, beside the same sentence too.
+  const stated = codeChecks(beside.testCase, run([{ text: "8 Confluence pages created on October 4, 2026: A; B; C; D; E; F; G; H.", cites: ROWS }, sentence]).run, dataset);
+  assert.deepEqual([stated.parts[0].named, stated.parts[0].members_named], [true, 8]);
+  // A row whose text the writer was given (a follow-up's row carries its text) is text the sentence stands on.
+  const withText = ROWS.map((row, index) => index < 4 ? row : { ...row, text: "SYNTHETIC MOCK" });
+  const own = october4Run({ items: [...withText, ...sections], lists: [OCT4_LIST], evidence: ids, kind: "which_items", writer: [...sections.map(item => item.id), ...ids], statements: [sentence] });
+  assert.deepEqual([codeChecks(own.testCase, own.run, dataset).parts[0].named, codeChecks(own.testCase, own.run, dataset).parts[0].members_named], [true, 8]);
+  // "And N more" is code's count from ECHO's own list (addition 5): a writer's sentence that ends with one counts nothing.
+  const counted = codeChecks(beside.testCase, run([{ ...sentence, text: "The pages include A; B; C; D; and 4 more." }]).run, dataset);
+  assert.equal(counted.parts[0].named, false);
+  const code = codeChecks(beside.testCase, run([{ text: "8 Confluence pages created on October 4, 2026: A; B; C; D; and 4 more.", cites: ROWS.slice(0, 4) }, sentence]).run, dataset);
+  assert.deepEqual([code.parts[0].named, code.parts[0].members_named], [true, 4]);
+});
+
 test("each Ask run reports its plan's needs by declared kind, and a case may name the kinds its plan should declare (ADR-0041)", () => {
   const ids = ROWS.map(row => row.id);
   const kinds = needs => {

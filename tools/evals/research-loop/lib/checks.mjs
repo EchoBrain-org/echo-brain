@@ -50,7 +50,7 @@ export function codeChecks(testCase, run, dataset) {
   // The writer answers such a part by selecting the member: code states its row facts, citing the row.
   const textHanded = item => handedIds.has(item.id) && (item.read_in_full || item.text !== undefined);
   const parts = testCase.parts.map(part => {
-    if (part.type === "list") return listPart(part, items, meetings, lists, handedIds, answer);
+    if (part.type === "list") return listPart(part, items, meetings, lists, handedIds, textHanded, answer);
     // Found: research discovered a supporting item (a page counts once discovered).
     const discovered = part.evidence.flatMap(ref => matching(items, ref, meetings));
     // Read, cited and handed need the item that actually carries the evidence (for a page, its section).
@@ -140,22 +140,21 @@ function listIndex(research) {
  * A list part scores on the whole list (ADR-0041, addition 7): each measure holds only when it holds for every member,
  * so naming some members earns nothing. Found: research came across every member. Read: a complete list research
  * read holds every member. Cited: the plan cites every member, or a found which_items need cites a list holding it.
- * Handed: the writer saw every member. Named: the answer cites every member (any item of it: a page's row or one of
- * its sections), or, for a list longer than the 25 names an answer gives, a statement ends "and N more" and the
- * members it cites plus N are exactly the list.
+ * Handed: the writer saw every member. Named: the answer names every member (`statementOf`), or, for a list longer
+ * than the 25 names an answer gives, a statement code wrote ends "and N more" and the members it names plus N are
+ * exactly the list.
  */
-function listPart(part, items, meetings, lists, handedIds, answer) {
+function listPart(part, items, meetings, lists, handedIds, textHanded, answer) {
   const members = part.evidence.map(ref => matching(items, ref, meetings));
   const every = holds => members.every(found => found.some(holds));
-  const citedBy = indexes => item => indexes.some(index => isDeepStrictEqual(answer?.citations[index]?.citation, item.citation));
-  const inAnswer = citedBy((answer?.citations ?? []).map((_, index) => index));
-  const membersNamed = members.filter(found => found.some(inAnswer)).length;
-  // The code-written statement counts the members it does not name, from ECHO's own list (ADR-0041, addition 5); each
+  const statements = (answer?.parts ?? []).flatMap(value => value.statements).map(statement => statementOf(statement, items, lists, textHanded, answer));
+  const named = found => statements.some(statement => found.some(item => statement.names.has(item)));
+  // Code's statement counts the members it does not name, from ECHO's own list (ADR-0041, addition 5); each
   // statement is read alone, so members another statement names by id never count twice.
-  const more = (answer?.parts ?? []).flatMap(value => value.statements).some(statement => {
+  const more = statements.some(statement => {
     const counted = /; and (\d+) more\.$/u.exec(statement.text);
-    const cited = members.filter(found => found.some(citedBy(statement.citation_indexes))).length;
-    return counted !== null && cited > 0 && cited + Number(counted[1]) === members.length;
+    const names = members.filter(found => found.some(item => statement.names.has(item))).length;
+    return statement.code && counted !== null && names > 0 && names + Number(counted[1]) === members.length;
   });
   return {
     id: part.id, type: part.type,
@@ -163,12 +162,27 @@ function listPart(part, items, meetings, lists, handedIds, answer) {
     read: every(item => lists.of(item.id).some(list => list.complete === true)),
     cited_by_plan: every(item => item.cited_by_plan || lists.of(item.id).some(lists.relied)),
     handed: every(item => handedIds.has(item.id)),
-    named: answer !== null && (every(inAnswer) || more),
+    named: answer !== null && (members.every(named) || more),
     // For reading a run, never for its score.
     members: members.length,
-    members_named: membersNamed,
+    members_named: members.filter(named).length,
     item_ids: [...new Set(members.flat().map(item => item.id))],
   };
+}
+
+/**
+ * What one statement of an answer names (ADR-0041), read as W1 and W6 write statements. A statement code writes cites
+ * only list members' rows, and names each member it cites (`code`). A writer's sentence stands on text: it cites an
+ * item that is no list's member (a page's section, an opened body, a passage), and names the members of what it
+ * cites whose text the writer was given; a row it cites beside that text, one the writer saw without text, carries
+ * the row's facts and names nothing (W1). A writer's sentence citing only members' rows, as one on follow-ups' text
+ * does, reads as code's: every row it cites counts, and the judge decides.
+ */
+function statementOf(statement, items, lists, textHanded, answer) {
+  const cited = statement.citation_indexes.map(index => items.filter(item => isDeepStrictEqual(item.citation, answer.citations[index]?.citation)));
+  const row = item => lists.of(item.id).length > 0;
+  const code = !cited.some(found => found.some(item => !row(item)));
+  return { text: statement.text, code, names: new Set(cited.filter(found => code || found.some(item => !row(item) || textHanded(item))).flat()) };
 }
 
 /** The sweep result's verdicts in the key's terms; a null verdict (not assessed) has none. */
