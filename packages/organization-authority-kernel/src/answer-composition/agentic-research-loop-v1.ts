@@ -561,16 +561,21 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       cover('open', evidenceDeskSourceV2(entry.item), result);
       const anchor = result.items.find(item => item.id === entry.item.id && item.text !== undefined);
       const others = result.items.filter(item => item.id !== entry.item.id && item.text !== undefined);
+      const texts = anchor === undefined ? others : [anchor, ...others];
       const admitted: Entry[] = [];
       let used = 0;
-      for (const item of anchor === undefined ? others : [anchor, ...others]) {
+      for (const item of texts) {
         if (admitted.length > OPEN_EXTRA_ITEMS || (admitted.length > 0 && used + bytes(item.text) > OPEN_BYTES)) break;
         const opened = register(item);
         if (!opened.full || !opened.opened) { retrievalProgress += 1; evidenceNovelty += 1; }
         opened.opened = true; used += bytes(item.text);
         admitted.push(opened);
-        if (result.truncated || result.notice !== undefined) limitedOpens.add(item.id); else limitedOpens.delete(item.id);
       }
+      // For a question goal, an open whose bodies the loop left out to fit its bounds is truncated, as one the desk cut is:
+      // research read less than the desk returned, so the open checks no list member (ADR-0041, addition 4). A task goal
+      // keeps its rule.
+      const truncated = result.truncated || (ask && admitted.length < texts.length);
+      for (const opened of admitted) if (truncated || result.notice !== undefined) limitedOpens.add(opened.item.id); else limitedOpens.delete(opened.item.id);
       // What the open read: its anchor, or the first text read in its place (a page's section); never what came beside it.
       if (admitted[0] !== undefined) admitted[0].direct = true;
       if (anchor !== undefined) anchorsRead.add(anchor.id);
@@ -579,7 +584,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const metadata = result.items
         .filter(item => item.text === undefined && item.id !== entry.item.id)
         .map(item => register(item));
-      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }), ...(truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
     };
     return admit === undefined ? apply() : admit(apply);
   };

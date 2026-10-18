@@ -267,7 +267,8 @@ export interface AgenticOpenReadsV1 {
 
 /**
  * What research read by opening items, from its rounds in order (ADR-0041). An open is clean when it was not
- * truncated, carried no notice or error, and returned only bodies research then read in full. A limited open undoes
+ * truncated, carried no notice or error, and returned only bodies research then read in full; an Ask round records an
+ * open as truncated when the loop left out bodies the desk returned, to fit its bounds. A limited open undoes
  * an item's clean open until a later clean one. Each open counts for the item it resolved to, whatever form the model
  * gave its id; one that resolved to none counts for nothing. The renderer reads it: a list member is checked through
  * its clean open (addition 4).

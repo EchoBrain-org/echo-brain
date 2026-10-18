@@ -229,7 +229,10 @@ route, header, database table or client changes.
 - **Content across a list (addition 4).** A `which_say` need declares it. A
   member is checked when research read its text in full, or opened its row
   through an open that was not truncated, carried no notice or error, and
-  returned only bodies research read in full. An open counts for the item it
+  returned only bodies research read in full. An open whose bodies the loop
+  left out to fit its bounds (24 KiB, or 20 items beside its anchor) returned
+  bodies research never read: Ask's research is told it was truncated, as when
+  the desk cuts an open, and it checks no member. An open counts for the item it
   resolved to, whatever form the model gave its id, a title included: Ask's
   research rounds record that item. When not every member of a list a
   `which_say` need cites was checked, whatever the need's status, the part
@@ -747,6 +750,9 @@ Tests required before release:
 - a `which_say` question across a list says "k of N checked so far" until
   every member is checked, whether or not the writer cites the list; a content
   need beside its list adds no note;
+- a page whose returned sections the loop left out to fit an open is not
+  checked, and research sees that open as truncated; a task goal's open is
+  unchanged;
 - a requested filter the source ignored appears in the response notice;
 - an item whose access is revoked mid-request stops the answer at the next
   check, even when it is only a list member;

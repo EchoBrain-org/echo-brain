@@ -2031,6 +2031,40 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     expect(every.parts[0]!.statements).toHaveLength(1);
     expect(every.parts[0]!.statements[0]!.text).toMatch(/^12 of the 12 follow-ups with owner Mara Lind and status open have status open: /u);
   });
+
+  it("X33: checks no page whose returned sections the loop left out to fit an open, and tells research the open was cut (addition 4)", async () => {
+    // Gate reviews (E3) opens to ten sections of 3,000 bytes, the desk's whole page, not truncated; the loop admits an
+    // open's bodies up to 24 KiB, so it shows research eight (E11..E18), and only the tenth names the defect.
+    const sectionOf = (row: EvidenceDeskItemV2, n: number, body: string): EvidenceDeskItemV2 => Object.freeze({
+      ...row, id: row.id.replace("inventory", `s${n}`), text: body,
+      citation: { ...(row.citation as Extract<EvidenceDeskItemV2["citation"], { kind: "page" }>), section_id: `s${n}`, text_sha256: sha256Digest(body) },
+    });
+    const pageOf = (defect: string, traced: boolean) => vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      if (row.label.startsWith("Gate reviews")) return result(Array.from({ length: 10 }, (_, index) => sectionOf(row, index + 1, `Section ${index + 1}. ${"Gate review narrative. ".repeat(130).slice(0, 2960)}${index === 9 ? ` ${defect} holds the DVT gate.` : ""}`))) as EvidenceDeskResultV2;
+      return result([section(row, traced && row.label.startsWith("Traceability") ? `${defect} is traced to TC-D-03.` : "No defects are discussed.")]) as EvidenceDeskResultV2;
+    });
+    const run = (text: string, need: string, last: unknown, writer: unknown, defect: string) => harness([
+      ask(text, need, "open", [], [OCT4_LIST], undefined, WS), ask(text, need, "open", ["L1"], opens(MEMBERS.slice(0, 4)), "N1", WS),
+      ask(text, need, "open", ["L1"], opens(MEMBERS.slice(4)), "N1", WS), last, writer,
+    ], october4Desk({ open: pageOf(defect, defect === "BUG-412") }));
+    const found = run(BUG, BUG_NEED, ask(BUG, BUG_NEED, "found", ["L1", "E19"], [finish], "N1", WS), say(TRACE, ["E19"]), "BUG-412");
+    const { response, research: view } = await found.research.answerWithResearch({ question: BUG });
+    const cut = { opened: ["E11", "E12", "E13", "E14", "E15", "E16", "E17", "E18"], truncated: true };
+    expect(view.rounds[1]!.actions[2]!.result).toMatchObject({ id: "E3", ...cut });
+    expect((found.prompt(2).last_results as readonly unknown[])[2]).toEqual({ tool: "open", args: { id: "E3" }, ...cut });
+    const writer = JSON.parse(writersOf(found)[0]!.user_prompt) as Record<string, any>;
+    expect(writer.lists[0]).toMatchObject({ id: "L1", count: 8, checked: 7 });
+    expect(writer.lists[0].members[2]).toMatchObject({ id: "E3", checked: false });
+    expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: noted(TRACE, "(7 of 8 checked so far)") }], gap: UNCHECKED }] });
+    // Its absence is qualified as well: the unread tenth section is the one that names BUG-999.
+    const text = "Which pages created on October 4, 2026 mention BUG-999?";
+    const absent = run(text, "pages created on 2026-10-04 that mention BUG-999", ask(text, "pages created on 2026-10-04 that mention BUG-999", "not_found", ["L1"], [finish], "N1", WS),
+      { lists: [], sentences: [], not_found: ["pages created on October 4 that mention BUG-999"] }, "BUG-999");
+    expect((await absent.research.answerWithResearch({ question: text })).response).toMatchObject({
+      outcome: "not_found", parts: [{ status: "not_found", gap: `Not found: pages created on October 4 that mention BUG-999. ${UNCHECKED}` }],
+    });
+  });
 });
 
 describe("a task goal keeps the rules before ADR-0041", () => {
@@ -2060,6 +2094,26 @@ describe("a task goal keeps the rules before ADR-0041", () => {
     expect(view.stop).toEqual({ reason: "unusable_step", completed: false });
     expect(view.plan[0]!.needs[0]!.evidence).toEqual([]);
     expect(view).not.toHaveProperty("lists");
+  });
+
+  it("sees an open the loop cut to fit its bounds as before: only the desk says it was truncated (X33)", async () => {
+    const approved = record("approved", "Approved: ship the DVT fixture.");
+    const task: AgenticBriefV1 = {
+      goal: { kind: "task", task: `Find what ${agenticStartingSlotV1(1)} affects.` }, starting: [{ citation: approved.citation, if_unreadable: "fail" }],
+      budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false },
+    };
+    const gate = PAGES[2]!;
+    const sections = Array.from({ length: 10 }, (_, index) => {
+      const body = `Section ${index + 1}. ${"Gate review narrative. ".repeat(130).slice(0, 2960)}`;
+      return Object.freeze({ ...gate, id: gate.id.replace("inventory", `s${index + 1}`), text: body, citation: { ...(gate.citation as Extract<EvidenceDeskItemV2["citation"], { kind: "page" }>), section_id: `s${index + 1}`, text_sha256: sha256Digest(body) } });
+    });
+    const affects = (actions: readonly unknown[], evidence: readonly string[] = []) => ask("What does E1 affect?", "pages the record affects", evidence.length === 0 ? "open" : "found", evidence, actions);
+    const h = harness([affects([{ tool: "list", args: { source: "pages" } }]), affects([{ tool: "open", args: { id: "E4" } }]), affects([finish], ["E10"])], {
+      live_sources: [CONFLUENCE], openCitation: async () => result([approved]), list: vi.fn(async () => result(PAGES) as EvidenceDeskResultV2), open: vi.fn(async () => result(sections) as EvidenceDeskResultV2),
+    });
+    await h.research.research({ trigger: "approved_record", brief: task });
+    // The rows are E2..E9 and Gate reviews is E4; the loop admits 8 of its 10 sections, and a task goal's step is told nothing more.
+    expect((h.prompt(2).last_results as readonly unknown[])[0]).toEqual({ tool: "open", args: { id: "E4" }, opened: ["E10", "E11", "E12", "E13", "E14", "E15", "E16", "E17"] });
   });
 });
 
