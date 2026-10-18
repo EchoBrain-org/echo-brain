@@ -345,7 +345,9 @@ describe("the writer's view", () => {
     const byTitle: AgenticAnswerListUseV1 = { id: "L1", where: { field: "title", value: "PRD" } };
     // @ts-expect-error the writer names lists, never member names
     const named: AgenticAnswerListUseV1 = { id: "L1", names: ["PRD"] };
-    expect([byTitle, named]).toHaveLength(2);
+    // It selects members for their row facts by id, never by what it would write of them.
+    const prd: AgenticAnswerListUseV1 = { id: "L1", members: ["E5"] };
+    expect([byTitle, named, prd]).toHaveLength(3);
   });
 });
 
@@ -462,6 +464,23 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 50, complete: false, where: { field: "status", value: "Done" }, selected: [rows[1]!], share: 25 }).text)
       .toBe("At least 1 Jira ticket has status Done (50 listed so far): THERM-2: B.");
     expect(agenticListSelectionNotFoundV1("Jira tickets", OCTOBER_4.filter, { field: "owner", value: "Zhen Ye" })).toBe("Jira tickets created on October 4, 2026 that have owner Zhen Ye");
+  });
+
+  it("states the row facts of members selected by id, each alone, with every date in the list's time zone", () => {
+    const prd = { title: "PRD — System and acceptance requirements", kind: "page", status: "current", dates: { created: "2026-10-05T03:00:00.000Z", updated: "2026-10-05T22:11:30.875Z" } };
+    // 03:00 UTC on October 5 is October 4 in Los Angeles: a day is the list's, never UTC's.
+    expect(agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 8, complete: true, by_id: true, selected: [prd], share: 25 }))
+      .toEqual({ text: "1 of the 8 Confluence pages created on October 4, 2026: PRD — System and acceptance requirements (status current, created October 4, 2026, updated October 5, 2026).", named: 1, cited: [0] });
+    // Actions of one meeting share its label, but each keeps its own owner and due date; a calendar day keeps its day.
+    const sync = "DVT review (2026-10-01)";
+    const actions = [
+      { title: sync, kind: "action", owner: "Mara Quinn", due: "2026-10-09", date: "2026-10-01", date_kind: "occurred" as const },
+      { title: sync, kind: "action", owner: "none recorded", dates: { occurred: "2026-10-01", due: "2026-10-12" } },
+    ];
+    expect(agenticListStatementV1({ noun: "actions", filter: { time_zone: "UTC" }, count: 2, complete: false, by_id: true, selected: actions, share: 25 }).text)
+      .toBe(`At least 2 actions: ${sync} (owner Mara Quinn, due October 9, 2026, dated October 1, 2026); ${sync} (no owner recorded, dated October 1, 2026, due October 12, 2026).`);
+    expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: false, by_id: true, selected: [{ title: "THERM-46: Fixture", status: "In Progress", date: "2026-10-04", date_kind: "unspecified" }], share: 25 }).text)
+      .toBe("1 of at least 25 Jira tickets: THERM-46: Fixture (status In Progress).");
   });
 
   it("stops naming before a statement passes its byte bound, and counts the rest as more", () => {

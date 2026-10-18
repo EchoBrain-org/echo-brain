@@ -1,5 +1,5 @@
 import { validatePersonQueryText } from "@echo-brain/organization-api";
-import { AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1 } from "./agentic-list-evidence-v1.js";
+import { AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1 } from "./agentic-list-evidence-v1.js";
 import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.js";
 
 /**
@@ -100,11 +100,15 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
 
 export const stepSchema = createStepSchema(['meetings', 'documents', 'slack']);
 
-/** A list the answer uses (ADR-0041): its id, and optionally the members with one owner or status. Code names them. */
+/**
+ * A list the answer uses (ADR-0041): its id, and optionally the members with one owner or status, or the members it
+ * names by id for their row facts. Code names them.
+ */
 const listUse = {
   type: "object", additionalProperties: false, required: ["id"], properties: {
     id: { type: "string", maxLength: 8 },
     where: { type: "object", additionalProperties: false, required: ["field", "value"], properties: { field: closedString(AGENTIC_LIST_SELECTION_FIELDS_V1), value: { type: "string", maxLength: SELECTION_CHARS } } },
+    members: { type: "array", maxItems: AGENTIC_LIST_NAMED_MAX_V1, items: { type: "string", maxLength: 16 } },
   },
 } as const;
 
@@ -278,11 +282,16 @@ export function stripEvidenceIds(text: string, lists = false): string {
     .trim();
 }
 
-/** A list the answer uses: "L1", {"id": "L1"} or {"id": "L1", "where": {"field": "owner", "value": "Dana Lee"}}. Null for anything else. */
+/**
+ * A list the answer uses: "L1", {"id": "L1"}, {"id": "L1", "where": {"field": "owner", "value": "Dana Lee"}} or
+ * {"id": "L1", "members": ["E5"]}; members, each once, take the place of a selection. Null for anything else.
+ */
 function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
   const entry = object(raw);
   const id = parseAgenticListIdV1(entry === null ? raw : entry.id);
   if (id === null) return null;
+  const members = [...new Set((Array.isArray(entry?.members) ? entry.members : []).slice(0, EVIDENCE_IDS_READ).map(cleanId).filter((value): value is string => value !== null))].slice(0, AGENTIC_LIST_NAMED_MAX_V1);
+  if (members.length > 0) return Object.freeze({ id, members: Object.freeze(members) });
   const where = entry === null ? null : object(entry.where);
   const field = typeof where?.field === "string" ? where.field.trim().toLowerCase() : "";
   const selection = cleanLine(where?.value, SELECTION_CHARS);
@@ -425,8 +434,8 @@ export const ANSWER_PROMPT = [
   "- source_catalog describes source capabilities, not extra questions to answer. Do not report an unrequested discussion, document or approval as missing when the requested fact is already supported.",
   "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If neither the evidence nor a list answers the question, return {\"lists\":[],\"sentences\":[],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
   "- \"lists\" holds each list research read: its id (L1, L2, ...), source, the filter it applied (filter_applied says how each requested filter applied; \"ignored\" means the list is not limited by it), complete, count, checked, read_at, cited_by_plan and its members. A member is a row: id, title, dates, status, owner and due date, never its text. When complete is true, count is exactly how many items match the filter; otherwise at least count exist. read_at is when the list was read; a source's search can lag recent edits.",
-  "- For which or how many items exist, use the list: put {\"id\": \"L1\"} in \"lists\" for all its members, or {\"id\": \"L1\", \"where\": {\"field\": \"owner\", \"value\": \"<an owner exactly as a member records it>\"}} for the members with one owner or status. Code then writes the sentence that counts and names those members, first in the answer, citing each one. Never write that count or those names yourself, and never cite some of a list's members instead of the list. Use every list with cited_by_plan true. A list's id in a sentence's evidence never stands in for \"lists\": a sentence about which items exist or how many must not cite the list's id beside rows.",
-  "- A list shows which items exist and each member's title, dates, status and owner, never what an item says: what items say comes from evidence text. A sentence about what members of a list say (\"which of these mention BUG-412\") cites the list's id beside the evidence it uses; code adds how many members were checked.",
+  "- For which or how many items exist, use the list: put {\"id\": \"L1\"} in \"lists\" for all its members, or {\"id\": \"L1\", \"where\": {\"field\": \"owner\", \"value\": \"<an owner exactly as a member records it>\"}} for the members with one owner or status. For particular members' title, dates, status or owner (\"who owns THERM-46\", \"when was the PRD created\"), put {\"id\": \"L1\", \"members\": [\"E5\"]} in \"lists\". Code then writes the sentence that counts and names those members, first in the answer, citing each one, with the row facts of members selected by id. Never write that count, those names or those row facts yourself, and never cite some of a list's members instead of the list. Use every list with cited_by_plan true. A list's id in a sentence's evidence never stands in for \"lists\": a sentence about which items exist or how many must not cite the list's id beside rows.",
+  "- A list shows which items exist and each member's title, dates, status and owner, never what an item says: what items say comes from evidence text. Each of your sentences cites evidence text; one that cites only rows or list ids is left out. A sentence about what members of a list say (\"which of these mention BUG-412\") cites the list's id beside the evidence it uses; code adds how many members were checked.",
   "- Keep each fact's owner, date and status with it.",
   "- dates carries source-supplied timestamps or calendar dates by meaning (occurred, created, updated, due, received). Interpret timestamps in the request time_zone. Calendar-only dates keep their stated day. Received is capture/upload time, never proof of when the described events happened. Updated describes the current revision, not a complete activity history. Use the supplied now/today to interpret relative wording; client time is query context, not evidence that an event occurred.",
   "- date_kind gives a supplied date's meaning: created is item creation, version_created is page-version creation, occurred is the recorded event, and unspecified has no established meaning. Never call a creation date a status-change date, a retrieval date, or an as-of date for the current status. State decision or completion dates only when the evidence explicitly supports them. provenance identifies the evidence record type; a page version identifies the retrieved version, not its approval status.",

@@ -524,6 +524,34 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([fullStatement]);
   });
 
+  it("never answers what a listed page says from its row: \"Is DVT on hold?\" ends partial or not found, never answered", async () => {
+    // E3's title reads "Gate reviews — EVT pass, DVT hold, PVT pending", but research never opened it.
+    const text = "Is DVT on hold?";
+    const need = "whether DVT is on hold";
+    const claim = (evidence: readonly string[], lists: readonly unknown[] = []) => ({ lists, sentences: [{ text: "Yes, DVT is on hold, and EVT passed.", evidence }], not_found: [] });
+    const run = async (replies: readonly unknown[]) => {
+      const h = harness([ask(text, need, "open", [], [OCT4_LIST]), ask(text, need, "found", ["L1"], [finish], "N1"), ...replies], october4Desk());
+      return { h, ...(await h.research.answerWithResearch({ question: text })) };
+    };
+    // With the list in "lists"; citing the row beside the list's id; and a repair that moves the list into "lists".
+    for (const replies of [
+      [claim(["E3"], [{ id: "L1" }]), claim(["E3"], [{ id: "L1" }])],
+      [claim(["E3", "L1"]), claim(["E3", "L1"])],
+      [claim(["E3"]), claim(["E3"], [{ id: "L1" }])],
+    ]) {
+      const { h, response } = await run(replies);
+      expect(writerInputs(h)).toHaveLength(2);
+      expect(writerPrompt(h, 1).validation_error).toContain('a sentence cites only list rows or list ids, never text');
+      // The claim is left out; code's list is all that stands, and the part says what was not found.
+      expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not found: what the listed items say, since they were listed but not opened." }] });
+      expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([fullStatement]);
+    }
+    // A writer that says it found nothing is honored: code names no list it did not use.
+    const { h, response } = await run([{ lists: [], sentences: [], not_found: ["whether DVT is on hold"] }]);
+    expect(writerInputs(h)).toHaveLength(1);
+    expect(response).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: "Not found: whether DVT is on hold." }] });
+  });
+
   it("writes the list itself when the writer gives no usable reply", async () => {
     const h = research([{ wrong: true }, { still: "wrong" }]);
     const { response } = await h.research.answerWithResearch({ question: OCT4 });

@@ -64,7 +64,9 @@ row, never what the item says.
 Ask's writer now also sees every list research read as rows without text. A
 row hands over a date, owner or status part, never other content, and rows
 count as neither noise nor distractors handed, so those numbers keep their
-meaning across ADR-0041.
+meaning across ADR-0041. The writer answers such a part by selecting the
+member, and code states its row facts, citing the row: Ask leaves out a
+writer's sentence that cites only rows or list ids.
 
 **Baselines across ADR-0041 (2026-10-17).** Ask's research and writer changed:
 a complete list is evidence, and code names its members. Ask baselines taken

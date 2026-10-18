@@ -274,7 +274,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.result.response.parts[0]).toEqual({
       question: "Which tickets were created on October 4?", status: "partial",
       statements: [{ text: `At least 25 tickets created on October 4, 2026: ${names(1, 25).join("; ")}.`, citation_indexes: Array.from({ length: 25 }, (_, index) => index), private: true }],
-      gap: "The list of tickets could not be read to its end, so more may exist.",
+      // The count rested on one row and the list's id, so it is left out like any claim a list cannot make.
+      gap: "Not found: what the listed items say, since they were listed but not opened. The list of tickets could not be read to its end, so more may exist.",
     });
     expect(rendered.outcome).toBe("partial");
   });
@@ -298,13 +299,34 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     ]);
   });
 
-  it("accepts a list's rows cited in full or by one, without the list", async () => {
-    for (const evidence of [ids(1, 3), ["E2"]]) {
-      const run = alone({ bundle: listBundle(3, 1, [list("L1", ids(1, 3))], ["E4"]), replies: [{ sentences: [{ text: "Those are in progress.", evidence }], not_found: [] }], version: 6 });
+  it("states the row facts of members the writer selects by id, all of them or one, from their own rows", async () => {
+    const facts = (n: number) => `THERM-${n}: Fixture work ${n} (status In Progress, owner Dana Lee, created October 4, 2026)`;
+    for (const [members, text] of [
+      [ids(1, 3), `3 tickets created on October 4, 2026: ${[1, 2, 3].map(facts).join("; ")}.`],
+      [["E2", "E9"], `1 of the 3 tickets created on October 4, 2026: ${facts(2)}.`],
+    ] as const) {
+      const run = alone({ bundle: listBundle(3, 1, [list("L1", ids(1, 3))], ["E4"]), replies: [{ lists: [{ id: "L1", members }], sentences: [], not_found: [] }], version: 6 });
       const rendered = await run.render("Which tickets are in progress?");
       expect(run.trace.filter(step => step === "generate")).toHaveLength(1);
-      expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: "Those are in progress.", citation_indexes: evidence.map((_, index) => index), private: true }]);
+      expect(rendered.result.response.parts[0]!.statements).toEqual([{ text, citation_indexes: members.filter(id => id !== "E9").map((_, index) => index), private: true }]);
+      expect(rendered.outcome).toBe("answered");
     }
+    // On a list not read to a confirmed end, the members' facts stand, and the lead says "at least".
+    const open = alone({ bundle: listBundle(25, 0, [list("L1", ids(1, 25), { unverified_end: true })], ["L1"]), replies: [{ lists: [{ id: "L1", members: ["E2"] }], sentences: [], not_found: [] }], version: 6 });
+    const rendered = await open.render("Who owns THERM-2?");
+    expect(rendered.result.response.parts[0]).toEqual({ question: "Who owns THERM-2?", status: "answered", statements: [{ text: `1 of at least 25 tickets created on October 4, 2026: ${facts(2)}.`, citation_indexes: [0], private: true }] });
+  });
+
+  it("never keeps a sentence resting on rows alone: it is sent back once for the code-written row facts, then left out as not found", async () => {
+    const rows = { lists: [], sentences: [{ text: "THERM-2 is in progress.", evidence: ["E2"] }], not_found: [] };
+    const left = alone({ bundle: listBundle(3, 1, [list("L1", ids(1, 3))], ["E4"]), replies: [rows, rows], version: 6 });
+    const rendered = await left.render("Is THERM-2 in progress?");
+    expect(left.trace.filter(step => step === "generate")).toHaveLength(2);
+    expect(left.prompt(1).validation_error).toContain('a sentence cites only list rows or list ids, never text: a list shows which items exist and each member\'s title, dates, status and owner, never what it says, so put {"id": "L1", "members": ["E2"]} in "lists" for those facts');
+    // The research-read record stays out of it: the writer's no-match is honored.
+    expect(rendered.result.response).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: "Not found: what the listed items say, since they were listed but not opened." }] });
+    const fixed = alone({ bundle: listBundle(3, 1, [list("L1", ids(1, 3))], ["E4"]), replies: [rows, { lists: [{ id: "L1", members: ["E2"] }], sentences: [], not_found: [] }], version: 6 });
+    expect((await fixed.render("Is THERM-2 in progress?")).result.response.parts[0]).toMatchObject({ status: "answered", statements: [{ text: "1 of the 3 tickets created on October 4, 2026: THERM-2: Fixture work 2 (status In Progress, owner Dana Lee, created October 4, 2026)." }] });
   });
 
   it("writes the list without a repair when no model call is left", async () => {

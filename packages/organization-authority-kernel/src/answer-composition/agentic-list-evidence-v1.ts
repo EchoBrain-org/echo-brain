@@ -1,6 +1,6 @@
 import type { EvidenceDeskDateKindV1 } from "../shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
-import type { EvidenceDateFieldV1, EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
+import { evidenceDayV1, type EvidenceDateFieldV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
 import { attributesOf } from "./agentic-evidence-bundle-v1.js";
 
 /**
@@ -487,13 +487,16 @@ export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readon
 export const AGENTIC_LIST_SELECTION_FIELDS_V1 = Object.freeze(["owner", "status"] as const);
 
 /**
- * The writer's use of a list: code names its members, all of them or those
- * whose row field equals `value` (ignoring case). The writer never writes the
- * names itself.
+ * The writer's use of a list: code names its members, all of them, those
+ * whose row field equals `value` (ignoring case), or those `members` names by
+ * id, each with every row fact it records ("who owns THERM-46"). The writer
+ * never writes the names or the row facts itself.
  */
 export interface AgenticAnswerListUseV1 {
   readonly id: AgenticListIdV1;
   readonly where?: { readonly field: (typeof AGENTIC_LIST_SELECTION_FIELDS_V1)[number]; readonly value: string };
+  /** Members selected by their E ids, at most AGENTIC_LIST_NAMED_MAX_V1; set instead of `where`. */
+  readonly members?: readonly string[];
 }
 
 /**
@@ -581,7 +584,7 @@ function phraseAfter(noun: AgenticListNounFormsV1, filter: AgenticListFilterV1):
 }
 
 /** The row facts a code-written statement names; `kind` is the member's desk kind. */
-export type AgenticListNamedMemberV1 = Pick<AgenticWriterListMemberV1, "title" | "status" | "owner" | "due"> & { readonly kind?: string };
+export type AgenticListNamedMemberV1 = Pick<AgenticWriterListMemberV1, "title" | "status" | "owner" | "due" | "dates" | "date" | "date_kind"> & { readonly kind?: string };
 
 /** Members that share a label (ignoring case and spacing) are one name: indexes in list order, by first member. */
 function nameGroups(members: readonly AgenticListNamedMemberV1[]): readonly (readonly number[])[] {
@@ -622,6 +625,30 @@ function groupNames(members: readonly AgenticListNamedMemberV1[], groups: readon
   }));
 }
 
+/** How a member's dates read in its row facts, in this order. A due date the member's attributes record is said once. */
+const FACT_DATES: readonly (readonly [EvidenceDateFieldV1, string])[] = Object.freeze([["created", "created"], ["updated", "updated"], ["occurred", "dated"], ["due", "due"], ["received", "received"]]);
+const DATE_KIND_WORDS: Readonly<Partial<Record<EvidenceDeskDateKindV1, string>>> = Object.freeze({ created: "created", version_created: "version created", occurred: "dated", updated: "updated", due: "due", received: "received" });
+/**
+ * One member named with every row fact it records: its label, then its status, owner, due date and dates, each day
+ * in the list's time zone. "PRD — System and acceptance requirements (status current, created October 4, 2026, updated
+ * October 4, 2026)". A date with no stated meaning is left out.
+ */
+function factsName(member: AgenticListNamedMemberV1, timeZone: string | undefined): string {
+  const day = (value: string) => agenticCalendarDayV1(evidenceDayV1(line(value, 40), timeZone ?? "UTC") ?? line(value, 40));
+  const dated = member.dates === undefined || Object.keys(member.dates).length === 0
+    ? (member.date === undefined || member.date_kind === undefined || member.date_kind === "unspecified" || DATE_KIND_WORDS[member.date_kind] === undefined
+      ? [] : [`${DATE_KIND_WORDS[member.date_kind]} ${day(member.date)}`])
+    : FACT_DATES.flatMap(([field, word]) => member.dates?.[field] === undefined || (field === "due" && member.due !== undefined) ? [] : [`${word} ${day(member.dates[field]!)}`]);
+  const facts = [
+    ...(member.status === undefined ? [] : [`status ${line(member.status, 60)}`]),
+    ...(member.owner === undefined ? [] : [member.owner === "none recorded" ? "no owner recorded" : `owner ${line(member.owner, 80)}`]),
+    ...(member.due === undefined ? [] : [`due ${day(member.due)}`]),
+    ...dated,
+  ];
+  const label = line(member.title, AGENTIC_LIST_NAME_CHARS_V1);
+  return facts.length === 0 ? label : `${label} (${facts.join(", ")})`;
+}
+
 /**
  * Members as a code-written statement names them: each label, cut to
  * AGENTIC_LIST_NAME_CHARS_V1 characters, then its status, owner and due date
@@ -653,6 +680,8 @@ export interface AgenticListStatementInputV1 {
   readonly complete: boolean;
   /** The writer's selection; `value` as the selected members record it. */
   readonly where?: NonNullable<AgenticAnswerListUseV1["where"]>;
+  /** The writer selected `selected` by id: each is named alone, with every row fact it records. */
+  readonly by_id?: boolean;
   /** The selected members, in list order: every member without a selection. */
   readonly selected: readonly AgenticListNamedMemberV1[];
   /** Members this statement may cite: the answer's share (agenticListNameSharesV1). */
@@ -664,8 +693,11 @@ export interface AgenticListStatementInputV1 {
  * its filter and its names, then "and N more" with N from the list.
  * A complete list: "8 Confluence pages created on October 4, 2026: A; B; ...".
  * A selection: "3 of the 60 Jira tickets created ... have owner Dana Lee: A; B; C".
- * A list that is not complete: "At least 12 Jira tickets ...". Members that
- * share a label are one name (agenticListMemberNamesV1). Names are taken in
+ * A list that is not complete: "At least 12 Jira tickets ...". Members the
+ * writer selected by id: "1 of the 8 Confluence pages created ...: PRD (status
+ * current, created October 4, 2026)", each named alone with every row fact it
+ * records. Otherwise members that share a label are one name
+ * (agenticListMemberNamesV1). Names are taken in
  * list order while the members they cover fit `share` (the first always, citing
  * at most `share` of its members), and stop early when the statement would pass
  * AGENTIC_LIST_STATEMENT_BYTES_V1. `named` is how many of `selected` the names
@@ -678,18 +710,22 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
   const noun = formsOf(input.noun);
   const phrase = phraseAfter(noun, input.filter);
   const k = selected.length;
-  const lead = where === undefined
-    ? `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`
-    : complete
-      ? `${k} of the ${count} ${counted(noun, count)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)}`
-      : `At least ${k} ${counted(noun, k)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)} (${count} listed so far)`;
-  const groups = nameGroups(selected);
+  const byId = input.by_id === true;
+  const lead = byId && k < count
+    ? `${k} of ${complete ? "the" : "at least"} ${count} ${counted(noun, count)}${phrase}`
+    : where === undefined || byId
+      ? `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`
+      : complete
+        ? `${k} of the ${count} ${counted(noun, count)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)}`
+        : `At least ${k} ${counted(noun, k)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)} (${count} listed so far)`;
+  const groups = byId ? selected.map((_, index) => [index]) : nameGroups(selected);
+  const namesOf = (named: readonly (readonly number[])[]) => byId ? named.map(([index]) => factsName(selected[index!]!, input.filter.time_zone)) : groupNames(selected, named);
   let fit = 1;
   for (let covered = groups[0]!.length; fit < groups.length && covered + groups[fit]!.length <= input.share; fit += 1) covered += groups[fit]!.length;
   for (let shown = fit; shown >= 1; shown -= 1) {
     const named = groups.slice(0, shown);
     const covered = named.reduce((total, group) => total + group.length, 0);
-    const text = `${lead}: ${groupNames(selected, named).join("; ")}${covered < k ? `; and ${k - covered} more` : ""}.`;
+    const text = `${lead}: ${namesOf(named).join("; ")}${covered < k ? `; and ${k - covered} more` : ""}.`;
     if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || shown === 1) {
       const cited = named.flatMap(group => group).slice(0, Math.max(input.share, 1));
       return Object.freeze({ text, named: covered, cited: Object.freeze([...cited].sort((left, right) => left - right)) });

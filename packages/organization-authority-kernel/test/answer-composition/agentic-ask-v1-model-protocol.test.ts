@@ -157,6 +157,13 @@ describe("agentic Ask model protocol parity", () => {
     expect(parsed.sentences).toEqual([{ text: "Two pages mention BUG-412.", evidence: ["L1", "E4"] }]);
     expect(parseAnswer(value)).not.toHaveProperty("lists");
     expect(parseAnswer({ sentences: [], not_found: [] }, { lists: true }).lists).toEqual([]);
+    // Members selected by id take the place of a selection, each once and at most 25; none left keeps the plain use.
+    const members = parseAnswer({ lists: [
+      { id: "L1", members: ["e5", "E5", "[E7]", "L2", 9], where: { field: "owner", value: "Dana" } }, { id: "L2", members: ["x"], where: { field: "status", value: "open" } },
+      { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) },
+    ], sentences: [], not_found: [] }, { lists: true }).lists!;
+    expect(members.slice(0, 2)).toEqual([{ id: "L1", members: ["E5", "E7", "E9"] }, { id: "L2", where: { field: "status", value: "open" } }]);
+    expect(members[2]!.members).toEqual(Array.from({ length: 25 }, (_, index) => `E${index + 1}`));
     // A list reference in prose is stripped only for Ask's answer; elsewhere "(L2)" stays prose.
     expect(stripEvidenceIds("Support tier (L2) owns it (E4).")).toBe("Support tier (L2) owns it.");
     expect(stripEvidenceIds("Support tier owns it (L2) [E4, L1].", true)).toBe("Support tier owns it.");

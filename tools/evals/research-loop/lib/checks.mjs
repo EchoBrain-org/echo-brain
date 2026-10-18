@@ -42,6 +42,7 @@ export function codeChecks(testCase, run, dataset) {
   const lists = listIndex(research, items);
   // Ask's writer also sees every list research read as rows without text (ADR-0041). A row carries an item's title,
   // dates, status and owner only, so it hands over a part of those types, never other content, and is never noise.
+  // The writer answers such a part by selecting the member: code states its row facts, citing the row.
   const textHanded = item => handedIds.has(item.id) && (item.read_in_full || item.text !== undefined);
   const parts = testCase.parts.map(part => {
     if (part.type === "list") return listPart(part, items, meetings, lists, handedIds, answer);

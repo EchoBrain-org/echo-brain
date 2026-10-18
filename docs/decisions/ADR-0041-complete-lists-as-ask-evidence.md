@@ -231,7 +231,14 @@ route, header, database table or client changes.
 - **The writer says which lists answer the question**
   (`AgenticAnswerListUseV1`): a list id, with an optional selection by one row
   field, owner or status, for questions such as "which are assigned to me?". It
-  does not write the names itself.
+  does not write the names itself. Built: or members it selects by id
+  (`members`), for those members' row facts ("who owns THERM-46", "when was
+  the PRD created"). Code names each alone, with every row fact its row
+  records (status, owner, due date and dates, each day in the list's time
+  zone), after "1 of the 8 Confluence pages created ..." when they are not
+  every member, or "1 of at least 25 ..." for a list not complete. Their
+  facts stand whether or not the list ended, so such a selection adds no
+  list-end gap.
 - **Code writes the sentence that names a list's items.** Code writes one
   statement per list the answer uses, first in the part. Each statement cites
   every member it names, by that member's own row:
@@ -279,11 +286,27 @@ route, header, database table or client changes.
 - **A list id in a sentence** adds no citation of its own: the sentence cites
   the members or texts it also names, and a sentence left with no citation is
   dropped, as today.
+- **A writer's sentence rests on text.** Built: a list never says what an
+  item says, and code cannot tell a row fact from a claim about content, so
+  the guarantee is code's, not the prompt's. A writer's sentence is kept only
+  when it cites text the writer read; rows and list ids may sit beside that
+  text. One citing only rows or list ids is left out, and, unless it restated
+  two or more members of a list code names, the part gains the not-found
+  phrase "what the listed items say, since they were listed but not opened":
+  "Is DVT on hold?" answered from the Gate reviews page's title ("EVT pass,
+  DVT hold, PVT pending") ends partial or not found, never answered. Row facts
+  stay answerable through a selection by id, which code states. The check
+  sends such a sentence back once, pointing at that selection. A kept sentence
+  citing a member's row beside other text claims content across that list and
+  gets its checked note. A reply that answers nothing and says what it could
+  not find is honored: the plan's list is neither sent back for nor written
+  ("Is DVT on hold?" researched on a list alone is not found, not the list).
 - **Code checks the answer.** For each list the writer saw, the answer goes
   back to the writer once, with the reason, if either:
   - the plan found a need on the list (that need's support includes it), but
     the answer does not use it: no `lists` entry for it and no kept sentence
-    citing it; or
+    citing it, unless the reply answers nothing and says what it could not
+    find; or
   - the answer cites two or more of the list's members, but not all of them,
     and does not use the list. Built: a member counts whether the writer has
     its text or only its row, and the answer uses a list only through

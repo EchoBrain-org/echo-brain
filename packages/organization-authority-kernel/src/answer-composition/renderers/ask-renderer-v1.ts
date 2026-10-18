@@ -34,6 +34,7 @@ import {
   agenticOpenReadsV1,
   agenticWriterListMemberV1,
   agenticWriterListV1,
+  parseAgenticListIdV1,
   type AgenticAnswerListUseV1,
   type AgenticListIdV1,
   type AgenticOpenReadsV1,
@@ -63,6 +64,8 @@ const INCOMPLETE_SEARCH_NOTICE = "Research stopped before it finished, so releva
 const LIMITED_COVERAGE_GAP = "Some source coverage was incomplete, so relevant context may be missing.";
 const LIST_FALLBACK_GAP = "I found these items, but could not write the rest of the answer.";
 const UNCHECKED_GAP = "Not every listed item was checked, so others may also match.";
+/** What a writer's sentence that rested on list rows alone claimed: a list never says what an item says (ADR-0041). */
+const ROWS_NOT_FOUND = "what the listed items say, since they were listed but not opened";
 const FIT_GAP = "Some evidence could not fit in this response.";
 /** A list that is not complete: its statement says "at least" (ADR-0041). */
 function listEndGap(noun: string): string { return `The list of ${noun} could not be read to its end, so more may exist.`; }
@@ -240,6 +243,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const read = membersCited(list, shorts.filter(short => textGiven.has(short)));
         return new Set([...membersCited(list, shorts.filter(short => !textGiven.has(short)))].filter(member => !read.has(member)));
       };
+      /** A sentence resting on list rows or list ids alone: it cites one of them and no text the writer read. */
+      const restsOnRows = (evidence: readonly string[]) => !evidence.some(short => textGiven.has(short)) &&
+        evidence.some(id => allowed.has(id) || writerById.has(parseAgenticListIdV1(id) ?? "L0"));
+      /** A reply that answers nothing and says what it could not find: code honors it and names no list it did not use. */
+      const foundNothing = (answer: Answer) => answer.sentences.length === 0 && (answer.lists ?? []).length === 0 && answer.not_found.length > 0;
       /**
        * The answer uses a list when it names it in "lists", or when a sentence claims content across it: the list's id
        * beside text the writer read that is not one of the list's own rows (an opened section, or an item outside the
@@ -264,10 +272,34 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const byRows = subset(new Set(cited.flatMap(shorts => [...rowsOnly(list.id, shorts)])).size);
         if (usesList(answer, list.id)) return byRows;
         if (list.cited_by_plan) {
+          if (foundNothing(answer)) return [];
           const content = across.has(list.id) ? `; for what its members say, cite ${list.id} beside their evidence` : "";
           return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members${content}` }];
         }
         return byRows.length > 0 ? byRows : subset(membersCited(list.id, cited.flat()).size);
+      });
+      /**
+       * Sentences resting on rows or list ids alone, other than one restating two or more members of a list code names
+       * (`named`): code leaves them out, since a row gives an item's title, dates, status and owner but never what it says.
+       */
+      const rowClaims = (answer: Answer, named: readonly AgenticListIdV1[]) => answer.sentences.filter(sentence =>
+        restsOnRows(sentence.evidence) && !named.some(id => rowsOnly(id, sentence.evidence.filter(short => allowed.has(short))).size >= 2));
+      /** Why such a sentence goes back: those facts come from the list, which code states; what an item says needs its text. */
+      const rowClaimReason = (sentence: Answer["sentences"][number]) => {
+        const shorts = sentence.evidence.filter(short => allowed.has(short));
+        // The sentence cites a row the writer saw, or a list it saw, by its id.
+        const list = writerLists.find(value => sentence.evidence.includes(value.id) || shorts.some(short => membership.in(value.id, short) !== undefined))!.id;
+        const members = [...rowsOnly(list, shorts)];
+        return `a sentence cites only list rows or list ids, never text: a list shows which items exist and each member's title, dates, status and owner, never what it says, so put {"id": "${list}"${members.length === 0 ? "" : `, "members": ${JSON.stringify(members)}`}} in "lists" for those facts, and what no evidence text says in "not_found"`;
+      };
+      /** The reply with each by-id selection kept to its list's members; one that names none of them is no use of the list. */
+      const withMembers = (answer: Answer): Answer => answer.lists === undefined ? answer : Object.freeze({
+        ...answer, lists: Object.freeze(answer.lists.flatMap(use => {
+          if (use.members === undefined) return [use];
+          const members = listById.get(use.id)?.members ?? [];
+          const kept = use.members.filter(id => members.includes(id));
+          return kept.length === 0 ? [] : [Object.freeze({ id: use.id, members: Object.freeze(kept) })];
+        })),
       });
       // A failed check takes the writer's one repair when the first reply fails it and a repair can still run; the
       // repaired reply, or a first reply no repair can follow, is kept and code writes the lists it should have used.
@@ -278,10 +310,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return stats.calls === callsBefore + 1 && stats.calls < bundle.budget.max_model_calls && input.remaining() >= AGENTIC_ASK_MIN_ANSWER_MS_V1;
       };
       const parse = (value: unknown): Answer => {
-        const parsed = parseAnswer(value, { lists: true });
+        const parsed = withMembers(parseAnswer(value, { lists: true }));
         last.answer = parsed;
         const problems = listProblems(parsed);
-        if (problems.length > 0 && repairable()) throw new AgenticAskOutputErrorV1(problems.map(problem => problem.reason).join("; "));
+        const claims = rowClaims(parsed, [...(parsed.lists ?? []).map(use => use.id), ...problems.map(problem => problem.id)]);
+        const reasons = [...problems.map(problem => problem.reason), ...claims.slice(0, 1).map(rowClaimReason)];
+        if (reasons.length > 0 && repairable()) throw new AgenticAskOutputErrorV1(reasons.join("; "));
         return parsed;
       };
 
@@ -326,10 +360,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const forced: readonly AgenticListIdV1[] = answer === null
         ? relied.filter(id => (writerById.get(id)?.count ?? 0) > 0)
         : listProblems(answer).map(problem => problem.id);
-      const uses: { readonly list: AgenticWriterListV1; readonly where?: AgenticAnswerListUseV1["where"] }[] = [];
+      const uses: { readonly list: AgenticWriterListV1; readonly where?: AgenticAnswerListUseV1["where"]; readonly members?: readonly string[] }[] = [];
       for (const use of answer?.lists ?? []) {
         const list = writerById.get(use.id);
-        if (list !== undefined && !uses.some(value => value.list.id === use.id)) uses.push({ list, ...(use.where === undefined ? {} : { where: use.where }) });
+        if (list !== undefined && !uses.some(value => value.list.id === use.id)) uses.push({ list, ...(use.where === undefined ? {} : { where: use.where }), ...(use.members === undefined ? {} : { members: use.members }) });
       }
       for (const id of forced) if (!uses.some(value => value.list.id === id)) uses.push({ list: writerById.get(id)! });
       const listGaps: string[] = [];
@@ -337,8 +371,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const naming = uses.flatMap(use => {
         if (use.list.count === 0) return [];
         const noun = nounOf(use.list);
-        if (!use.list.complete) listGaps.push(listEndGap(noun.plural));
-        const selected: readonly AgenticWriterListMemberV1[] = agenticListSelectV1(rows.get(use.list.id)!, use.where);
+        // Members selected by id state their own row facts, which their rows establish whether or not the list ended.
+        if (!use.list.complete && use.members === undefined) listGaps.push(listEndGap(noun.plural));
+        const selected: readonly AgenticWriterListMemberV1[] = use.members === undefined
+          ? agenticListSelectV1(rows.get(use.list.id)!, use.where) : rows.get(use.list.id)!.filter(member => use.members!.includes(member.id));
         if (selected.length === 0) { selectionNotFound.push(agenticListSelectionNotFoundV1(noun, use.list.filter, use.where!)); return []; }
         return [{ ...use, noun, selected }];
       });
@@ -348,35 +384,44 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const field = value.where?.field;
         const statement = agenticListStatementV1({
           noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected, share: shares[index]!,
-          ...(field === undefined ? {} : { where: { field, value: value.selected[0]![field]! } }),
+          ...(field === undefined ? {} : { where: { field, value: value.selected[0]![field]! } }), ...(value.members === undefined ? {} : { by_id: true }),
         });
         // Each named member cites its own row.
         return statementOf(statement.text, statement.cited.map(index => value.selected[index]!.id));
       });
 
-      // The writer's sentences: cited ids it was given, each list it cites adding no citation of its own. A sentence that
-      // names two or more members of a list code wrote after the check by their rows, whatever else it cites, restates
-      // part of that list, which code now names in full; so does one that cites only that list's members (or their opened
-      // sections) by rows only, or by the text of two or more of them once every member was checked, when no note could
-      // qualify it. One that cites the text of two or more members of a list not every member of which was checked may
-      // say what they say, so it stays, with its note.
+      // The writer's sentences: cited ids it was given, each list it cites adding no citation of its own. A sentence
+      // resting on rows or list ids alone is left out: a list never says what an item says, and code states row facts
+      // itself. A sentence that names two or more members of a list code wrote after the check by their rows, whatever
+      // else it cites, restates part of that list, which code now names in full; so does one citing only members of that
+      // list (or their opened sections), the text of two or more of them, once every member was checked: no note could
+      // qualify it. One citing the text of two or more members of a list not every member of which was checked may say
+      // what they say, so it stays, with its note.
+      const named = uses.map(use => use.list.id);
+      let rowsLeftOut = false;
       const restates = (shorts: readonly string[]) => forced.some(id => rowsOnly(id, shorts).size >= 2) ||
-        (shorts.every(short => forced.some(id => membership.in(id, short) !== undefined)) && (!shorts.some(short => textGiven.has(short)) ||
-          forced.some(id => membersCited(id, shorts).size >= 2 && agenticListCheckedNoteV1(writerById.get(id)!) === undefined)));
+        (shorts.every(short => forced.some(id => membership.in(id, short) !== undefined)) &&
+          forced.some(id => membersCited(id, shorts).size >= 2 && agenticListCheckedNoteV1(writerById.get(id)!) === undefined));
       /**
        * The lists a sentence claims content across (addition 4), from what it cites rather than how: the list's id beside
-       * text it read; the text of two or more of its members (an opened section counts as its page); or the text of one
-       * member of a list a found need of the plan claims content across. Whether code names the list does not matter.
+       * text it read; the text of two or more of its members (an opened section counts as its page); the text of one
+       * member of a list a found need of the plan claims content across; or a member's row beside other text, which says
+       * nothing of what that member says. Whether code names the list does not matter.
        */
       const claimsAcross = (evidence: readonly string[], shorts: readonly string[]) => writerLists.filter(list => {
         const read = membersCited(list.id, shorts.filter(short => textGiven.has(short)));
-        return evidence.includes(list.id) || read.size >= 2 || (read.size === 1 && across.has(list.id));
+        return evidence.includes(list.id) || read.size >= 2 || (read.size === 1 && across.has(list.id)) || rowsOnly(list.id, shorts).size > 0;
       });
       const writerSentences = (answer?.sentences ?? []).flatMap(sentence => {
         const shorts = sentence.evidence.filter(short => allowed.has(short));
+        if (restsOnRows(sentence.evidence)) {
+          // Unless it restated two or more members of a list code names, what it claimed was not found.
+          if (!named.some(id => rowsOnly(id, shorts).size >= 2)) rowsLeftOut = true;
+          return [];
+        }
         if (shorts.length === 0 || restates(shorts)) return [];
         // Content claimed across a list says how many of its members were checked, unless every one was (addition 4).
-        const notes = !shorts.some(short => textGiven.has(short)) ? [] : claimsAcross(sentence.evidence, shorts).flatMap(list => {
+        const notes = claimsAcross(sentence.evidence, shorts).flatMap(list => {
           const note = agenticListCheckedNoteV1(list);
           return note === undefined ? [] : [note];
         });
@@ -393,7 +438,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         statements.push(statementOf(sentence.text, sentence.shorts));
         for (const short of sentence.shorts) { const entry = byShort.get(short)!; if (!contentUsed.includes(entry)) contentUsed.push(entry); }
       }
-      const notFound = [...(answer?.not_found ?? []), ...selectionNotFound];
+      const notFound = [...(answer?.not_found ?? []), ...selectionNotFound, ...(rowsLeftOut ? [ROWS_NOT_FOUND] : [])];
       // A list statement cites rows for which items exist; only what the writer's sentences cite can be limited coverage.
       const coverageLimited = coverageIsLimitedFor(bundle, contentUsed);
       const incomplete = (answer === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
