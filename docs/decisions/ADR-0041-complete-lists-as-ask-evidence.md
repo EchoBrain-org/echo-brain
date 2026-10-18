@@ -348,7 +348,14 @@ route, header, database table or client changes.
   members' kinds).
   A source that cannot apply a requested date field refuses the read. It never
   answers empty and never substitutes another field. A desk asked for an owner
-  or status filter a source cannot apply refuses the read too.
+  or status filter a source cannot apply refuses the read too. A filter ECHO
+  applies itself, to meeting records after each page, is `applied` only when
+  every member meets it as the statement words it: an owner matches by whole
+  words, the rule follow-ups' owners follow (`followUpOwnerMatchesV1`), so
+  "Dan" never keeps Dana's or Jordan's actions; and a member whose status is in
+  neither the open nor the done group (a decision's "decided") is kept as one
+  with no status is, so the status filter is `partial` and the notice says so.
+  A task goal keeps its rule.
 - **Code states every list a `which_items` need cites,** with or without
   members, in full unless the writer selected it by `where`, whatever the writer
   replies: no list, a selection by id only, not_found, or no usable reply. No
@@ -754,6 +761,9 @@ Tests required before release:
   checked, and research sees that open as truncated; a task goal's open is
   unchanged;
 - a requested filter the source ignored appears in the response notice;
+- a meeting list's owner filter keeps only the owners it names by whole words,
+  and a status filter over members whose status is in neither group is
+  partial, with the notice;
 - an item whose access is revoked mid-request stops the answer at the next
   check, even when it is only a list member;
 - the same cases for Jira tickets, meetings and follow-ups;

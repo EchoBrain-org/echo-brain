@@ -351,6 +351,40 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     expect(response.notice).toBe("Actions were filtered by status only where they record one, so this list also includes items that record none.");
   });
 
+  it("keeps only the actions an owner filter names by whole words, as a follow-up's owner is matched, so the statement's owner is every member's (X34)", async () => {
+    const actions = [
+      record("a1", "Dan will publish the dashboard.", { kind: "action", attributes: { owner: "Dan Ruiz" } }),
+      record("a2", "Dana will order samples.", { kind: "action", attributes: { owner: "Dana Lee" } }),
+      record("a3", "Jordan will review the PRD.", { kind: "action", attributes: { owner: "Jordan Park" } }),
+    ];
+    const text = "Which actions does Dan own?";
+    const h = harness([
+      ask(text, "actions owned by Dan", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Dan" } }]),
+      ask(text, "actions owned by Dan", "found", ["L1"], [finish], "N1", WI),
+      { lists: [], sentences: [], not_found: [] },
+    ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
+    const { response, research: view } = await h.research.answerWithResearch({ question: text });
+    // "Dan" is a whole word of Dan Ruiz alone: Dana Lee and Jordan Park are never members, so "applied" is true of every one.
+    expect(view.lists).toEqual([expect.objectContaining({ id: "L1", members: ["E1"], filter_applied: { owner: "applied" }, complete: true })]);
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: "1 action with owner Dan: Meeting a1." }] }] });
+    expect(response.notice).toBeUndefined();
+  });
+
+  it("says a status filter is partial when a member's status is in neither group, as when it records none (X34)", async () => {
+    const decisions = ["decided", "proposed", "unresolved"].map((status, index) => record(`d${index + 1}`, `Decision ${index + 1}.`, { kind: "decision", attributes: { status } }));
+    const text = "Which decisions are still open?";
+    const h = harness([
+      ask(text, "open decisions", "open", [], [{ tool: "list", args: { source: "meetings", kind: "decision", status: "open" } }]),
+      ask(text, "open decisions", "found", ["L1"], [finish], "N1", WI),
+      { lists: [], sentences: [], not_found: [] },
+    ], { list: vi.fn(async () => result(decisions) as EvidenceDeskResultV2) });
+    const { response, research: view } = await h.research.answerWithResearch({ question: text });
+    expect(view.lists).toEqual([expect.objectContaining({ id: "L1", members: ["E1", "E2", "E3"], filter_applied: { kind: "applied", status: "partial" } })]);
+    expect((h.prompt(1).last_results as readonly { readonly note?: string }[])[0]!.note).toContain("some items do not record open or done; they are included");
+    expect(response.parts[0]!.statements[0]!.text).toMatch(/^3 decisions with status open: /u);
+    expect(response.notice).toBe("Decisions were filtered by status only where they record one, so this list also includes items that record none.");
+  });
+
   it("tells the person the filter of a list a which_say need checks, and never of one a content need cites", async () => {
     // A content need's list ids carry no meaning (ADR-0041); no statement names the list, so only a which_say need's adds a notice (W7).
     const text = "Which of Dana's tickets mention the vendor?";

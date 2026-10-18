@@ -10,7 +10,7 @@ import {
   type EvidenceDeskResultV2,
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
-import { FOLLOW_UP_EVIDENCE_KIND_V1 } from "../shared/follow-up-evidence-v1.js";
+import { FOLLOW_UP_EVIDENCE_KIND_V1, followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
 import {
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
@@ -652,12 +652,17 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         // due date but not completion, so an item without a status is kept (never silently dropped as "not open").
         const statusOf = (item: EvidenceDeskItemV2) => item.attributes?.status === undefined ? null : statusGroup(item.attributes.status);
         const wanted = owner?.toLowerCase().split(/\s+/u).filter(Boolean) ?? [];
+        // For a question goal, every member meets an owner filter as its statement words it (ADR-0041): by whole words, the
+        // rule follow-ups' owners follow, so "Dan" never keeps Dana's or Jordan's actions. A task goal keeps its rule.
         const ownerMatches = (item: EvidenceDeskItemV2) => {
-          const recorded = item.attributes?.owner?.toLowerCase();
-          return recorded !== undefined && wanted.every(part => recorded.includes(part));
+          const recorded = item.attributes?.owner;
+          return recorded !== undefined && (ask ? followUpOwnerMatchesV1(recorded, owner!) : wanted.every(part => recorded.toLowerCase().includes(part)));
         };
-        currentState.items.push(...result.items.filter(item => deskFilters || ((status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item)))));
-        if (!deskFilters && status !== undefined && result.items.some(item => item.attributes?.status === undefined)) {
+        const kept = result.items.filter(item => deskFilters || ((status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item))));
+        currentState.items.push(...kept);
+        // For a question goal, a kept member whose status is in neither group (a decision's "decided") meets a status filter
+        // no more than one with none: either leaves the filter partial, and research is told. A task goal keeps its rule.
+        if (!deskFilters && status !== undefined && (ask ? kept.some(item => statusOf(item) === null) : result.items.some(item => item.attributes?.status === undefined))) {
           currentState.note = "some items do not record open or done; they are included";
           currentState.filter_applied.status = "partial";
         }

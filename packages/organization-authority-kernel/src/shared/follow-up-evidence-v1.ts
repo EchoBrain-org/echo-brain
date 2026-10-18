@@ -102,7 +102,9 @@ function nameWords(value: string): readonly string[] {
 /**
  * Whether an owner filter names this owner: case-insensitive, a leading `@`
  * ignored, and every word of the filter one whole word of the owner's display
- * name, so "Ari" never names "Maria Gomez".
+ * name, so "Ari" never names "Maria Gomez". It is the one owner rule ECHO
+ * applies itself: follow-ups at the desk, and meeting actions in Ask's lists
+ * (ADR-0041).
  */
 export function followUpOwnerMatchesV1(owner: string, filter: string): boolean {
   const recorded = new Set(nameWords(owner));
