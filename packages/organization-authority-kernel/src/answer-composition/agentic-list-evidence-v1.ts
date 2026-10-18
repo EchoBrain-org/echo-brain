@@ -676,12 +676,13 @@ export interface AgenticListStatementInputV1 {
  * current, created October 4, 2026)", each named alone with every row fact it
  * records. Otherwise members that share a label are one name
  * (agenticListMemberNamesV1). Names are taken in
- * list order while the members they cover fit `share` (the first always, citing
- * at most `share` of its members), and stop early when the statement would pass
- * AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free` costs no share, and is
- * cited wherever it is named. `named` is how many of `selected` the names
- * cover, so "and N more" is `selected.length - named`; `cited` are the indexes
- * of `selected`, in order, the caller cites.
+ * list order while the members they cover fit `share`, and stop early when the
+ * statement would pass AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free`
+ * costs no share. The first name is always written, covering its free members
+ * and at most `share` others: a name never covers a member the statement does
+ * not cite. `named` is how many of `selected` the names cover, so "and N more"
+ * is `selected.length - named`; `cited` are their indexes in `selected`, in
+ * order, which the caller cites.
  */
 export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly named: number; readonly cited: readonly number[] } {
   const { count, complete, where, selected } = input;
@@ -697,10 +698,12 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
     : byId && k < count
       ? `${k} of ${complete ? "the" : "at least"} ${count} ${counted(noun, count)}${phrase}`
       : `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`;
-  const groups = byId ? selected.map((_, index) => [index]) : nameGroups(selected);
   const namesOf = (named: readonly (readonly number[])[]) => byId ? named.map(([index]) => factsName(selected[index!]!, input.filter.time_zone)) : groupNames(selected, named);
   const free = input.free ?? new Set<number>();
   const cost = (group: readonly number[]) => group.filter(index => !free.has(index)).length;
+  const [head, ...others] = byId ? selected.map((_, index) => [index]) : nameGroups(selected);
+  const paid = head!.filter(index => !free.has(index)).slice(0, input.share);
+  const groups = [head!.filter(index => free.has(index) || paid.includes(index)), ...others];
   let fit = 1;
   for (let spent = cost(groups[0]!); fit < groups.length && spent + cost(groups[fit]!) <= input.share; fit += 1) spent += cost(groups[fit]!);
   for (let shown = fit; shown >= 1; shown -= 1) {
@@ -708,9 +711,7 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
     const covered = named.reduce((total, group) => total + group.length, 0);
     const text = `${lead}: ${namesOf(named).join("; ")}${covered < k ? `; and ${k - covered} more` : ""}.`;
     if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || shown === 1) {
-      const members = named.flatMap(group => group);
-      const cited = [...members.filter(index => free.has(index)), ...members.filter(index => !free.has(index)).slice(0, Math.max(input.share, 1))];
-      return Object.freeze({ text, named: covered, cited: Object.freeze(cited.sort((left, right) => left - right)) });
+      return Object.freeze({ text, named: covered, cited: Object.freeze(named.flat().sort((left, right) => left - right)) });
     }
   }
   throw new RangeError("unreachable");

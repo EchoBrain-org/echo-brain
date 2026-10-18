@@ -411,9 +411,9 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     const decisions = Array.from({ length: 3 }, () => ({ title: sync, kind: "decision" }));
     expect(agenticListStatementV1({ noun: agenticListMembersNounV1({ selector: "meetings" }, ["decision"]), filter: { kind: "decision", owner: "Dana" }, count: 3, complete: true, selected: decisions, share: 25 }).text)
       .toBe(`3 decisions with owner Dana: ${sync} (3 decisions).`);
-    // A share smaller than a name's members cites the first of them; "and N more" counts members, from the list.
+    // A share smaller than a name's members names as many of them as it cites; "and N more" counts the rest, from the list.
     const two = agenticListStatementV1({ noun: "decisions", filter: {}, count: 4, complete: true, selected: [...decisions, { title: "Other (2026-10-05)", kind: "decision" }], share: 2 });
-    expect(two).toEqual({ text: `4 decisions: ${sync} (3 decisions); and 1 more.`, named: 3, cited: [0, 1] });
+    expect(two).toEqual({ text: `4 decisions: ${sync} (2 decisions); and 2 more.`, named: 2, cited: [0, 1] });
   });
 
   it("writes the October 4 statement: the count, the filter and every name", () => {
@@ -510,9 +510,10 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(all).toEqual({ text: `At least 25 Jira tickets: ${tickets.map(ticket => ticket.title).join("; ")}.`, named: 25, cited: Array.from({ length: 25 }, (_, index) => index) });
     // Without them free, the same share names 15, and cites those 15.
     expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: false, selected: tickets, share: 15 })).toMatchObject({ named: 15, cited: Array.from({ length: 15 }, (_, index) => index) });
-    // A merged group cites every free member it names, and at most `share` of the others.
+    // A merged group names its free members and at most `share` of the others, and cites every member it names (W6).
     const sync = Array.from({ length: 4 }, () => ({ title: "THERM DVT sync (2026-10-04)", kind: "decision" }));
-    expect(agenticListStatementV1({ noun: "decisions", filter: {}, count: 4, complete: true, selected: sync, share: 1, free: new Set([2, 3]) })).toMatchObject({ named: 4, cited: [0, 2, 3] });
+    expect(agenticListStatementV1({ noun: "decisions", filter: {}, count: 4, complete: true, selected: sync, share: 1, free: new Set([2, 3]) }))
+      .toEqual({ text: "4 decisions: THERM DVT sync (2026-10-04) (3 decisions); and 1 more.", named: 3, cited: [0, 2, 3] });
     // A where use and a selection by id of the same members: the condition's lead, each member named with its facts.
     expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: true, where: { field: "status", value: "In Review" }, by_id: true, selected: tickets.slice(0, 2), share: 25 }).text)
       .toBe("2 of the 25 Jira tickets have status In Review: THERM-1: A (status In Review); THERM-2: A (status In Review).");

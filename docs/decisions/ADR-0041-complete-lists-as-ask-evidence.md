@@ -308,7 +308,9 @@ route, header, database table or client changes.
   named dates: the public evidence search and open doors strip it, and their
   contract is unchanged. The count and "and N more" still count members, from
   the list itself; a name is cited by each member it covers, within the
-  answer's share.
+  answer's share. That holds for a statement's first name too, which is always
+  written: when it merges more members than the share allows, it covers only
+  those it cites, and the rest are in "and N more".
 - **Long lists.** One answer names at most 25 distinct members across all its
   lists: members selected by id first, then the rest shared round-robin
   between the statements that say which items exist, a member named by id

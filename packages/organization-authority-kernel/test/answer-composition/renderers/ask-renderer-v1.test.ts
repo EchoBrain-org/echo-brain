@@ -425,6 +425,22 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.result.response.citations).toHaveLength(25);
   });
 
+  it("names no member a statement does not cite, so a merged name never covers a private member uncited (W6)", async () => {
+    // E1, E2 and E8 share a title and row facts, so they are one name; E2 alone is private. The writer selects E3..E27 by
+    // id, which takes the answer's 25 names, so the full statement may name only one member that by-id statement did not.
+    const research = listBundle(27, 0, [list("L1", ids(1, 27))], [WI(["L1"])]);
+    const shared: AgenticEvidenceBundleV1 = Object.freeze({ ...research, items: research.items.map((entry, index) => Object.freeze({
+      ...entry, item: { ...entry.item, visibility: index === 1 ? "only_me" as const : "team" as const, ...(index < 2 ? { label: "THERM-8: Fixture work 8" } : {}) },
+    })) });
+    const run = alone({ bundle: shared, replies: [{ lists: [{ id: "L1" }, { id: "L1", members: ids(3, 25) }], sentences: [], not_found: [] }], version: 6 });
+    const rendered = await run.render("Which tickets were created on October 4?");
+    const [full, byId] = rendered.result.response.parts[0]!.statements;
+    // The shared name covers E1, which it cites, and E8, which the by-id statement named; E2 is one of the "1 more".
+    expect(full).toEqual({ text: `27 tickets created on October 4, 2026: THERM-8: Fixture work 8 (2 tickets); ${[...names(3, 5), ...names(9, 19)].join("; ")}; and 1 more.`, citation_indexes: Array.from({ length: 26 }, (_, index) => index), private: false });
+    expect(byId).toMatchObject({ text: expect.stringMatching(/^25 of the 27 tickets created on October 4, 2026: THERM-3: /u), private: false });
+    expect(rendered.cited).toEqual(["E1", ...ids(3, 25)]);
+  });
+
   it("keeps the 40-citation and ten-statement bounds: list statements first, the writer's sentences dropped from the end", async () => {
     const pairs = Array.from({ length: 10 }, (_, index) => ({ text: `Record ${index + 1} applies.`, evidence: [`E${61 + 2 * index}`, `E${62 + 2 * index}`] }));
     const run = alone({ bundle: listBundle(60, 20, [list("L1", ids(1, 60))], [WI(["L1"])]), replies: [{ lists: [{ id: "L1" }], sentences: pairs, not_found: [] }], version: 6 });
