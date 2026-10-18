@@ -54,7 +54,16 @@ export function statusView(raw: unknown, now: number): AppStatus {
   const value = object(raw);
   if (value.kind !== 'echo-person-client-status-v1') throw new ViewError();
   const version = text(value.installed_version);
-  if (value.signed_in !== true) return { signed_in: false, account: null, client_version: version };
+  if (value.signed_in !== true) {
+    // Signed out by a refresh (the weekly sign-in, or a refused one): why, and the organization to sign in to again.
+    const ended = value.session_ended !== null && typeof value.session_ended === 'object' ? value.session_ended as Json : {};
+    const { reason, connected_authority: authority } = ended;
+    return {
+      signed_in: false, account: null, client_version: version,
+      ...((reason === 'reauthentication_required' || reason === 'sign_in_required') && typeof authority === 'string'
+        ? { session_ended: { reason, authority } } : {}),
+    };
+  }
   const role = value.membership_type;
   if (role !== 'owner' && role !== 'employee') throw new ViewError();
   const due = typeof value.hard_reauthentication_at === 'string' ? Date.parse(value.hard_reauthentication_at) : Number.NaN;

@@ -113,6 +113,19 @@ describe('view models copy only what the renderer may see', () => {
     expect(status('soon').account).not.toHaveProperty('sign_in_due');
   });
 
+  it('signed out, status says why a refresh ended the session, and where to sign in again; anything else says nothing', () => {
+    const status = (ended: unknown) => statusView({
+      schema_version: 1, kind: 'echo-person-client-status-v1', installed_version: '1', signed_in: false,
+      display_name: null, membership_type: null, connected_authority: null, session_ended: ended,
+    }, 0);
+    expect(status({ reason: 'reauthentication_required', connected_authority: 'https://a.example' }))
+      .toEqual({ signed_in: false, account: null, client_version: '1', session_ended: { reason: 'reauthentication_required', authority: 'https://a.example' } });
+    expect(status({ reason: 'sign_in_required', connected_authority: 'https://a.example' }).session_ended?.reason).toBe('sign_in_required');
+    for (const ended of [null, undefined, [], { reason: 'account_changed', connected_authority: 'https://a.example' }, { reason: 'sign_in_required' }]) {
+      expect(status(ended)).toEqual({ signed_in: false, account: null, client_version: '1' });
+    }
+  });
+
   it('tools keep each id, name and your connection, never external ids, and only for the account asked about', () => {
     const tool = (tool_id: string, availability: string, personal_status: string) => ({ tool_id, display_name: tool_id.toUpperCase(), availability,
       personal_status, external_scope_id: availability === 'enabled' ? 'T0SECRET' : null,

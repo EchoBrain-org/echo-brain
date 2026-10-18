@@ -48,10 +48,12 @@ describe('a refresh the host ran before a call', () => {
 describe('a call that cannot run as the account the page shows', () => {
   const account = { authority: 'https://authority.example', membership_id: 'mem_2', display_name: 'Kim', role: 'employee' } as const;
 
-  it('says signed out when no one is, and account changed only when someone else is', () => {
+  it('says why no one is signed in, and account changed only when someone else is', () => {
     const signedOut: AppStatus = { signed_in: false, account: null, client_version: '1' };
     expect(lost(signedOut)).toBe('signed_out');
-    expect(lost({ ...signedOut, session_ended: { reason: 'reauthentication_required', authority: 'https://authority.example' } })).toBe('signed_out');
+    // A refresh ended the session (here or in another process): every call says so, not just the one that asked for it.
+    expect(lost({ ...signedOut, session_ended: { reason: 'reauthentication_required', authority: 'https://authority.example' } })).toBe('reauthentication_required');
+    expect(lost({ ...signedOut, session_ended: { reason: 'sign_in_required', authority: 'https://authority.example' } })).toBe('sign_in_required');
     expect(lost({ signed_in: true, account, client_version: '1' })).toBe('account_changed');
     // No status could be read: nothing says no one is signed in.
     expect(lost(null)).toBe('account_changed');

@@ -25,7 +25,11 @@ export function refreshStops(refresh: CliRun, stillDue: boolean): boolean {
   return refresh.exit !== 0 && (sessionEnded(refresh) !== null || stillDue);
 }
 
-/** Why a call cannot run as the account the page shows: no one is signed in now, or someone else is. */
-export function lost(current: AppStatus | null): 'signed_out' | 'account_changed' {
-  return current?.signed_in === false ? 'signed_out' : 'account_changed';
+/**
+ * Why a call cannot run as the account the page shows: no one is signed in now (and why, when a refresh ended the
+ * session), or someone else is.
+ */
+export function lost(current: AppStatus | null): SessionEnded['reason'] | 'signed_out' | 'account_changed' {
+  if (current?.signed_in !== false) return 'account_changed';
+  return current.session_ended?.reason ?? 'signed_out';
 }

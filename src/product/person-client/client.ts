@@ -51,6 +51,7 @@ import {
 import {
   PersonClientSessionUnavailableError,
   PersonSessionStore,
+  type PersonSessionEndedCode,
   type StoredPersonClientSessionV1,
 } from "./session-store.js";
 import {
@@ -348,6 +349,12 @@ export class PersonClient {
     return summary(this.store.read());
   }
 
+  /** Signed out by a refresh here: why, and the organization it was for. Null otherwise. */
+  sessionEnded(): { readonly reason: PersonSessionEndedCode; readonly authority_origin: string } | null {
+    const ended = this.store.readEnded();
+    return ended === null ? null : Object.freeze({ reason: ended.reason, authority_origin: ended.authority_origin });
+  }
+
   async refresh(): Promise<PersonClientSessionSummary> {
     const claimed = this.store.claimRefresh();
     let next: OrganizationPersonSessionV2;
@@ -376,7 +383,11 @@ export class PersonClient {
         ((error.code === "unauthorized" && error.status === 401) ||
           (error.code === "invalid_request" && error.status === 400));
       const unsent = error instanceof PersonAuthorityClientError && error.unsent;
-      this.store.releaseRefresh(claimed, unsent);
+      // The weekly sign-in passed, or the Authority refused or answered for
+      // another session: status says why until someone signs in or out.
+      const ended = refused ? "sign_in_required"
+        : error instanceof PersonClientSessionUnavailableError ? error.code : undefined;
+      this.store.releaseRefresh(claimed, unsent, ended);
       if (refused) {
         throw new PersonClientSessionUnavailableError(
           "Person session refresh was refused; sign in again",

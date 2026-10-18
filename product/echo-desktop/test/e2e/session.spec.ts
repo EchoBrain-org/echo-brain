@@ -136,7 +136,7 @@ for (const [mode, why] of [['refresh-refused', 'is refused'], ['refresh-fails', 
 
 test('past the weekly sign-in, ECHO asks to sign in again in plain words, never that the account changed, and Sign in again works', async () => {
   run = await launch('weekly-passed');
-  const { page, userData } = run;
+  const { page, app, userData } = run;
   await expect(page.getByTestId('signed-out')).toBeVisible();
   await expect(page.getByTestId('signed-out')).toContainText('Sign in again to use ECHO');
   await expect(page.getByTestId('signin-reason')).toHaveText('ECHO asks you to sign in once a week.');
@@ -154,7 +154,12 @@ test('past the weekly sign-in, ECHO asks to sign in again in plain words, never 
     ok: true, value: { signed_in: false, session_ended: { reason: 'reauthentication_required', authority: 'https://authority.example' } },
   });
   const ari = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
-  expect(await host('changes.read', { expect: ari })).toMatchObject({ ok: false, failure: { code: 'signed_out' } });
+  expect(await host('changes.read', { expect: ari })).toMatchObject({ ok: false, failure: { code: 'reauthentication_required' } });
+  // The client keeps why: a host started again (or ECHO restarted) still says so, and still offers the same organization.
+  await emit(app, 'echo-test:kill-host');
+  await expect.poll(async () => (await host('app.status', {})).value?.session_ended, { timeout: 10_000 })
+    .toEqual({ reason: 'reauthentication_required', authority: 'https://authority.example' });
+  await expect(page.getByTestId('signin-reason')).toHaveText('ECHO asks you to sign in once a week.');
   // One click: Google in the browser (the fixture's), for the same organization, and a new week.
   await page.getByTestId('signin-again').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);

@@ -1174,6 +1174,7 @@ export async function runPersonClientCli(
           if (!(error instanceof PersonClientSessionUnavailableError)) {
             throw error;
           }
+          const ended = client.sessionEnded();
           print(stdout, {
             schema_version: 1,
             kind: "echo-person-client-status-v1",
@@ -1183,6 +1184,8 @@ export async function runPersonClientCli(
             display_name: null,
             membership_type: null,
             connected_authority: null,
+            // Signed out by a refresh: the weekly sign-in, or a refused refresh.
+            session_ended: ended === null ? null : { reason: ended.reason, connected_authority: ended.authority_origin },
           });
         }
         break;
