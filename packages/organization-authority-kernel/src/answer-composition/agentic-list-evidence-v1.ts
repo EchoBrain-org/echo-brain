@@ -446,21 +446,19 @@ export interface AgenticAnswerListUseV1 {
 }
 
 /**
- * What each statement of one answer may name (W6): at most `budget` distinct members across the answer, statements
- * selecting by id first, round-robin between them, then the rest round-robin. Each turn a statement takes its next
- * member in the order its names take; a member another statement already took costs nothing, wherever it is named
- * again. `share` is how many members the statement takes and `free` the indexes of `selected` others took
+ * What each statement of one answer may name (W6): at most AGENTIC_LIST_NAMED_MAX_V1 distinct members across the
+ * answer, statements selecting by id first, round-robin between them, then the rest round-robin. Each turn a statement
+ * takes its next member in the order its names take; a member another statement already took costs nothing, wherever
+ * it is named again. `share` is how many members the statement takes and `free` the indexes of `selected` others took
  * (agenticListStatementV1); its statement ends "and N more" for the members neither reaches.
  */
 export function agenticListNameSharesV1(
   statements: readonly { readonly selected: readonly (AgenticListNamedMemberV1 & { readonly id: string })[]; readonly by_id: boolean }[],
-  budget: number = AGENTIC_LIST_NAMED_MAX_V1,
 ): readonly { readonly share: number; readonly free: ReadonlySet<number> }[] {
-  if (!Number.isSafeInteger(budget) || budget < 0) throw new RangeError("Name shares need a whole, non-negative budget");
   const orders = statements.map(value => (value.by_id ? value.selected.map((_, index) => [index]) : nameGroups(value.selected)).flat().map(index => value.selected[index]!.id));
   const taker = new Map<string, number>();
   const next = statements.map(() => 0);
-  let left = budget;
+  let left = AGENTIC_LIST_NAMED_MAX_V1;
   for (const byId of [true, false]) for (let gave = true; left > 0 && gave;) {
     gave = false;
     for (let index = 0; index < statements.length && left > 0; index += 1) {

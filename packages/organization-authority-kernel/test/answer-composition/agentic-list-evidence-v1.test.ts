@@ -372,8 +372,6 @@ describe("names across one answer", () => {
   it("takes 'and N more' from the list itself: 60 members, 25 named, 35 more", () => {
     const [value] = agenticListNameSharesV1([which(members(60))]);
     expect(60 - value!.share).toBe(35);
-    expect(agenticListNameSharesV1([which(members(3))], 0)).toEqual([{ share: 0, free: new Set() }]);
-    expect(() => agenticListNameSharesV1([which(members(3))], -1)).toThrow(RangeError);
   });
 
   it("costs a member one name however many statements name it, by id or not (W6)", () => {
