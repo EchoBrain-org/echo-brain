@@ -251,9 +251,10 @@ the question.
 **Finish check.**
 
 - No need is still open.
-- Every found need cites an item whose full text was read. For Ask,
-  [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md) also
-  accepts a list read to its end, which supports list facts only.
+- Every found need cites an item whose full text was read, or, for Ask's
+  `which_items` needs, a list read to its end
+  ([ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md)),
+  which supports list facts only.
 - Every not-found need has at least two distinct searches, or a `list`, run
   after the need was written.
 - A rejected finish is returned once, with the reason, as the step's one
@@ -320,8 +321,8 @@ Ask's writer as rows without text.
 The research scratchpad and finish check are unchanged: research may mark a
 need `found` only with evidence whose full text it read. The writer may cite
 any item whose full text is in its own prompt. (For Ask,
-[ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md) also lets
-it cite a list member's row it sees, and code names a list's members.) Desk
+[ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md) has code
+name a list's members; the writer's sentences still cite only text.) Desk
 receipts, revalidation before model calls, and the final permission check
 still cover these items.
 Adding search hits to the writer's input does not add them to the

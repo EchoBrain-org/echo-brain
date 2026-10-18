@@ -252,8 +252,8 @@ least N" and a partial answer. A requested filter the source cannot apply,
 such as an owner on pages, is named in the response notice rather than
 silently widening the list; a date field the source lacks is refused. A list
 supports titles, dates, status and owner only: what an item says still needs
-the item opened, and an answer about what several listed items say notes how
-many were checked.
+the item opened, and a question about which listed items say something notes
+how many were checked.
 
 An upload date is not an event date inside a document, a due date is not a
 completion date, and the current revision's update timestamp is not a complete

@@ -7,8 +7,8 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERMISSIONS
 created_at: 2026-10-17
-reviewed_at: 2026-10-17
-reviewed_ref: 2fc6a05e2fc06c2b93092f5ff448e2d796e7e45d
+reviewed_at: 2026-10-18
+reviewed_ref: 6d71eef973d4547688222e83ba3c9e939c67eea8
 status: accepted
 supersedes: []
 superseded_by: []
@@ -29,7 +29,19 @@ below are build calls within that design. Acceptance does not mean the change
 is built, deployed or qualified. Code paths are at `reviewed_ref`, relative to
 `packages/organization-authority-kernel/src/answer-composition/` (tests to
 `packages/organization-authority-kernel/test/answer-composition/`) unless
-shown in full.
+shown in full. Line numbers are at `2fc6a05`, the first build, unless a
+passage names another commit.
+
+**Amended 2026-10-18 (restructure, founder decisions "Restructure" and the
+answers of 2026-10-18).** As built, code inferred from a sentence's or a need's
+citations whether it stated which items exist or what items say. The same
+citations can mean either: "which pages were created on October 4" and "which
+pages mention BUG-412" can cite the same four opened sections. Each review
+round found a shape the inference got wrong, and each fix added a rule.
+Research now declares each need's kind, and code follows the declaration. The
+rules that guessed are retired (Retirements 9 to 11). The seven additions are
+kept. Code never checks a declaration; the Known limits below say what a wrong
+one costs.
 
 ## Context and options
 
@@ -156,70 +168,80 @@ route, header, database table or client changes.
 
 ### What a list supports
 
-- **Two kinds of support.** A list supports list facts only: which items
-  exist, plus each member's title, dates, status and owner. It never supports
-  what an item says. That still needs the item's text, read in full.
-- **How a found need's evidence divides** (`agenticNeedSupportV1`). The lists
-  it cites by id, plus the list of each cited member row (a member research
-  never read in full), give list facts. Cited items read in full give content.
-  Any other cited id supports nothing. Built: a need that cites two or more
-  members of one list also rests on that list, read in full or not. A
-  follow-up's row carries its text, and an opened meeting record keeps its
-  row's id, so "my open follow-ups" citing a first page of ten members must
-  still read the list to its end. One member read in full stays content. An
-  item belongs to a list when it is a member or cites the same object as one
-  (`agenticListMembershipV1`): Confluence releases an opened row's sections as
-  new items, so four opened sections are four of the list's members, for the
-  finish check and the writer's check alike. A member row cited beside a body
-  its own clean open returned (an open that was not truncated, carried no
-  notice or error, and returned only bodies research read in full) names that
-  body's item, so it is content, not its list (`agenticOpenReadsV1`): "what
-  does the gate review page say", citing the page's row and its section, never
-  has to read the page's list to its end or name it. A row cited without such
-  a body still gives list support. The finish check, the loop's and the
-  renderer's lists a need rests on, and the evaluation read the same relation
-  from research's rounds.
+- **Two kinds of support.** A list supports list facts only: which items exist,
+  plus each member's title, dates, status and owner. It never supports what an
+  item says, which still needs the item's text, read in full.
+- **Research declares each need's kind.** In an Ask step with the list tool,
+  every need has `kind`:
+  - `which_items`: which or how many items exist in a source, or in a set of
+    its items picked by list facts (a date, owner, status, kind or channel). A
+    list answers it, and code states the list, naming every member with its row
+    facts.
+  - `which_say`: which members of a set picked by list facts say something
+    ("which of the pages created on October 4 mention BUG-412"). It cites the
+    list it checks, and its members' text read in full. It is the only kind
+    that adds "(k of N checked so far)".
+  - `content`: what items say; which items say something when the question
+    picks no set by list facts ("which Jira tickets mention BUG-412"), which
+    search finds; or any fact about one particular item. Its list ids mean
+    nothing.
+
+  A `which_say` set needs a list fact beyond its source because its answer is
+  only as complete as the share of the set research read: across a whole
+  source, search is the research that can finish, and a member-by-member check
+  would only report how little was read.
+
+  The step schema requires the kind, and the reply shape and example show all
+  three. A missing or unknown kind is `content`, the finish rule from before
+  this record. A task goal, and an Ask brief without the list tool, have no
+  kind; their schema, prompts and plan view are unchanged.
+- **One item's row facts are content.** "Who owns THERM-46" and "when was the
+  PRD created" are content needs: research opens the item, one open, as before
+  this record, and the writer answers from its text or selects it by id for
+  code to state its row facts. This narrows "a list supports owner" to the
+  members a `which_items` statement names; its cost is one open per such
+  question.
 - **The finish check** replaces `need.evidence.some(citable)` for a question
-  goal:
-  - A need with list support is checked against those lists. A list that can
-    still be read further (`ended` is false) refuses the finish with "list Ln
-    is unfinished: keep reading the list (repeat list with {args})". A list
-    that cannot be read further (truncated, unavailable or an unverified end)
-    is accepted, and the answer will say "at least N".
-  - A need without list support still needs at least one cited item read in
-    full, exactly as today.
-  - Member rows alone are not enough: a need that cites rows of a list must
-    also cite the list by its id, or an item read in full. Otherwise a content
-    need ("when is launch?") that cites a listed row would finish before its
-    item is read, and the writer, which never sees a row's text, could not
-    answer it. The refusal names both ways on: "cite L1 for which items
-    exist, or open the items for what they say".
+  goal (`askQuestionCompletionProblemsV1`):
+  - A need code reads a list for must cite, by its id, a list research read: a
+    found `which_items` need, whose lists code states, and a `which_say` need
+    whatever its status, whose list code counts ("none of them" is qualified by
+    the count as much as "these"). Otherwise it is refused once with everything
+    the repair needs: the ids of the lists holding what it cites ("cite the id
+    of the list that holds its items (L1)"). A not_found `which_items` need
+    states nothing, so only the not-found rules decide it.
+  - A found `which_items` need waits for each list it cites: "keep reading the
+    list (repeat list with {args})" while a next page exists, in the same
+    refusal when the need named no list. A list that cannot be read further
+    (truncated, unavailable, or with an unverified end) is accepted, and the
+    answer says "at least N".
+  - A found `which_say` or `content` need needs at least one cited item read in
+    full, exactly as before. A `which_say` need never waits for its list's end
+    to be found. The refusal says what each kind of support is ("a list shows
+    which items exist ..., never what an item says; open the items for what
+    they say") and never offers a change of kind.
   - A task goal keeps `askResearchCompletionProblemsV1` unchanged. The
-    not-found rules are unchanged for every goal.
-- **Research can finish on a complete list** without opening any member. The
-  step protocol accepts `L` ids beside `E` ids in a need's evidence, within the
-  existing 12-id cap.
-- **Content across a list (addition 4).** "Which of these pages mention X"
-  needs each member checked. A member is checked when research read its text
-  through an open that was not truncated and carried no notice. A sentence that
-  claims content across a list cites the list. When fewer than all members were
-  checked, code adds "(k of N checked so far)" to that sentence and the part is
-  partial. Built: a member's row is checked through the open of that row, whose
-  bodies may have new ids, once research read every body it returned. Code
-  finds the claim from what a sentence cites, not how it cites it, since the
-  writer may cite only a member's section: the list's id beside text the
-  writer read; the text of two or more of its members (a section counts as its
-  page); or the text of one member of a list that a found need of the plan
-  rests on beside text of its members ("which pages mention BUG-412", found on
-  L1 and the Traceability section). The note is added whether the list reaches
-  the answer through `lists`, a sentence or code's own statement.
+    not-found rules are unchanged for every goal and kind: a not_found need, a
+    `which_say` need included, still needs two completed searches or a
+    completed list.
+- **Research can finish on a complete list** without opening any member, by
+  citing its id for a `which_items` need, within the existing 12-id cap.
+- **Content across a list (addition 4).** A `which_say` need declares it. A
+  member is checked when research read its text in full, or opened its row
+  through an open that was not truncated, carried no notice or error, and
+  returned only bodies research read in full. When not every member of a list a
+  `which_say` need cites was checked, whatever the need's status, the part is
+  partial, and each kept sentence citing a member's text gets "(k of N checked
+  so far)". No other list gets the note, and citing a list's members never
+  makes a need content across.
 
 ### The writer and the answer
 
 - **The writer sees lists as rows** (`AgenticWriterListV1`). It gets each list
-  research read, at most 5, with the lists the plan cites first. Each shows its
-  id, source, filter, `filter_applied`, `complete`, count, checked count,
-  `read_at`, whether the plan cites it, and up to 100 members
+  research read, at most 5, with the lists the plan's `which_items` and
+  `which_say` needs cite first. Each shows its id, source, filter,
+  `filter_applied`, `complete`, count, checked count, `read_at`, whether it is
+  stated (a found or open `which_items` need cites it), and up to 100 members
   (`AgenticWriterListMemberV1`: id, kind, title, dates, status, owner, due
   date, checked). Members never carry text; `members_omitted` counts any
   members past 100. Built: the rows take at most half of the writer's prompt
@@ -228,27 +250,23 @@ route, header, database table or client changes.
   This changes the documented rule that items without text
   never reach the writer, for list members only. Related references and
   continuation metadata still never reach it.
-- **The writer says which lists answer the question**
-  (`AgenticAnswerListUseV1`): a list id, with an optional selection by one row
-  field, owner or status, for questions such as "which are assigned to me?". It
-  does not write the names itself. Built: or members it selects by id
-  (`members`), for those members' row facts ("who owns THERM-46", "when was
-  the PRD created"). Code names each alone, with every row fact its row
-  records (status, owner, due date and dates, each day in the list's time
-  zone), after "1 of the 8 Confluence pages created ..." when they are not
-  every member, or "1 of at least 25 ..." for a list not complete. One
-  member's facts stand whether or not the list ended, so a selection of one
-  member adds no list-end gap. A selection of two or more, or of every
-  member, says which items exist ("which are in review or blocked", which a
-  single "where" cannot select), so for a list not complete it gets the gap
-  and the part is partial, as the whole list is; every member selected by id
-  reads "At least 25 ...". A list may be used once in full or by a
-  selection and once by id, and code writes both statements ("which pages
-  were created on October 4, and when was the PRD last updated"). A
-  selection by id of one member, for its row facts, or of every member uses
-  the list; two or more, not all, of a list the plan found a need on name
-  part of it, so the answer goes back once, and then code writes the full
-  statement before them.
+- **The writer chooses how code states a list** (`AgenticAnswerListUseV1`): in
+  full (`{id}`), by one row fact (`where`: an owner or status by value, or a
+  due, created, updated, received or occurred date within an inclusive range,
+  matched as the desk matches a list's date filter, in the list's time zone),
+  or by members' ids (`members`), for those members' row facts. Code writes a
+  `where` selection's condition into the statement ("2 of the 12 follow-ups
+  with owner Mara Lind and status open are due from October 18 to October 24,
+  2026: ..."); a selection by id states its members' facts, never a condition.
+  A list may be used once in full or by `where`, and once by id. It never
+  writes names, counts or row facts itself. A use in full, by `where`, or by id
+  of every member says which items exist; for a list that is not complete it
+  reads "at least", and the part gets the list-end gap. A by-id statement of
+  some members gives row facts only ("1 of the 8 Confluence pages created ...:
+  PRD (status current, created October 4, 2026, updated October 4, 2026)") and
+  adds no gap. Two uses that select the same members are one statement, named
+  by id. A list's statement saying which items exist comes before its by-id
+  statement.
 - **Code writes the sentence that names a list's items.** Code writes one
   statement per list the answer uses, first in the part. Each statement cites
   every member it names, by that member's own row:
@@ -262,29 +280,36 @@ route, header, database table or client changes.
     statement; an empty list keeps today's not-found answer.
 
   The noun comes from the source catalog (the tool and the selector). The
-  phrase comes from the applied filter. Each name is the member's label, cut to
-  120 characters, followed by its status, owner and due date wherever those
-  differ between the named members. There is no source-specific branch:
-  Confluence pages read by title; Jira tickets by key and summary, with status
-  and assignee; meetings by their record's label; follow-ups by title, with
-  owner and due date. Built: the noun says what the members are, from their
-  desk kinds after the catalog's tool (`agenticListMembersNounV1`): "Jira
-  tickets", "Slack messages", and "decisions" or "actions" for a meeting list
-  of those records, never "meetings". A kind filter the noun names has no
-  words of its own ("2 actions with owner Mara"). Members of several kinds are
-  "items from" the source's noun. Members that share a label, and the same
-  status, owner and due date, are one name with their kinds counted, since
-  every record of a meeting carries the meeting's label: "THERM DVT sync
-  (2026-10-04) (1 decision and 2 actions)". Members whose row facts differ are
-  named apart, each with its own, so a merge never hides one: one meeting's
-  actions due on two days are two names, each with its due date. A record is
-  still named by its meeting's label until it is read, as the approved design
-  says; naming it by a line of its own text would need a new desk label, which
-  impact cards and sweeps read too. The count
-  and "and N more" still count members, from the list itself; a name is cited
-  by each member it covers, within the answer's share.
-- **Long lists.** One answer names at most 25 members across all its lists,
-  shared round-robin between the lists it uses (`agenticListNameSharesV1`).
+  phrase comes from the applied filter. Each name is the member's list label,
+  or its label when it has none, cut to 120 characters, followed by its status,
+  owner and due date wherever those differ between the named members. There is
+  no source-specific branch: Confluence pages read by title; Jira tickets by
+  key and summary, with status and assignee; meeting records by a line of their
+  own text; follow-ups by title, with owner and due date. Built: the noun says
+  what the members are, from their desk kinds after the catalog's tool
+  (`agenticListMembersNounV1`): "Jira tickets", "Slack messages", and
+  "decisions" or "actions" for a meeting list of those records, never
+  "meetings". A kind filter the noun names has no words of its own ("2 actions
+  with owner Mara"). Members of several kinds are "items from" the source's
+  noun. Members that share a name, and the same status, owner and due date, are
+  one name with their kinds counted. Members whose row facts differ are named
+  apart, each with its own, so a merge never hides one: one meeting's actions
+  due on two days are two names, each with its due date. A meeting's decision,
+  action or rationale carries the meeting's label, so its row also has a list
+  label: one line of its own text, at most 80 characters, then its meeting
+  ("Send fixture drawings to vendor (THERM DVT sync, 2026-10-04)"). The records
+  route sets it, so it is released, audited and access-checked with the row,
+  which still has no text. Only Ask's list rows and code's statements read it;
+  the research step, citations, impact cards and sweeps read the label, so
+  their inputs do not change. It is internal research metadata, like `ref` and
+  named dates: the public evidence search and open doors strip it, and their
+  contract is unchanged. The count and "and N more" still count members, from
+  the list itself; a name is cited by each member it covers, within the
+  answer's share.
+- **Long lists.** One answer names at most 25 distinct members across all its
+  lists: members selected by id first, then the rest shared round-robin
+  between the statements that say which items exist, a member named by id
+  costing nothing when it is named again (`agenticListNameSharesV1`).
   Each statement ends "and N more" for the rest. Names stop early if the
   statement would pass the 4 KiB statement bound. The 40-citation, 10-statement
   and 64 KiB response bounds are unchanged: list statements come first, and the
@@ -292,93 +317,43 @@ route, header, database table or client changes.
 - **Filters are never silently widened (addition 3).** The response notice
   names a requested filter that a source ignored, or applied only where items
   record it, for example "Jira tickets could not be filtered by owner, so this
-  list is not limited to that owner." Research adds it to the bundle's
-  coverage notices, which reach the writer and the response notice, for each
-  list a found need rests on (`agenticListFilterNoticeV1`, with the noun from
-  `agenticListNounV1`). A source that cannot apply a requested date field
-  refuses the read. It never answers empty and never substitutes another
-  field. A desk asked for an owner or status filter a source cannot apply
-  refuses the read too.
-- **A list id in a sentence** adds no citation of its own: the sentence cites
-  the members or texts it also names, and a sentence left with no citation is
-  dropped, as today.
-- **A writer's sentence rests on text.** Built: a list never says what an
-  item says, and code cannot tell a row fact from a claim about content, so
-  the guarantee is code's, not the prompt's. A writer's sentence is kept only
-  when it cites text the writer read; rows and list ids may sit beside that
-  text. One citing only rows or list ids is left out. When it cites a
-  member's row, unless it restated two or more members of a list code names,
-  the part gains the not-found phrase "what the listed items say, since they
-  were listed but not opened":
-  "Is DVT on hold?" answered from the Gate reviews page's title ("EVT pass,
-  DVT hold, PVT pending") ends partial or not found, never answered. Row facts
-  stay answerable through a selection by id, which code states. The check
-  sends such a sentence back once, pointing at that selection. One citing
-  only ids of lists code names ("All eight pages were created on October 4"
-  beside the list's statement) carries no member's content and says what
-  code's statement says, so it is left out without going back and without
-  the not-found phrase. A kept sentence citing a member's row beside other
-  text claims content across that list and gets its checked note. A reply
-  that answers nothing and says what it could not find goes back once when
-  the plan found a need on a list, with a reason that names both ways on: put
-  the list in `lists`, or keep `not_found` if the list does not answer the
-  question. The reply after that repair, or one no repair can follow, is
-  honored, and the list is not written ("Is DVT on hold?" researched on a
-  list alone is not found after one repair, not the list). Otherwise one
-  writer's misjudgment would bring back the held question as not found.
-- **Code checks the answer.** For each list the writer saw, the answer goes
-  back to the writer once, with the reason, if either:
-  - the plan found a need on the list (that need's support includes it), but
-    the answer does not use it: no `lists` entry for it and no kept sentence
-    citing it. A repaired reply, or one no repair can follow, that answers
-    nothing and says what it could not find is the exception; or
-  - the answer cites two or more of the list's members, but not all of them,
-    and does not use the list. Built: a member counts whether the writer has
-    its text or only its row, and the answer uses a list only through
-    `lists`, or through a sentence that cites the list's id beside text the
-    writer read that is not one of the list's own rows (an opened section, or
-    an item outside the list). For a list a found need claims content across,
-    its members' own text counts too (an opened ticket or meeting record keeps
-    its row's id, and a follow-up's row carries its text), so "THERM-3 and
-    THERM-5 mention BUG-412", citing L1 beside both tickets, uses the list as
-    an opened page's sections would. A list id beside rows, or beside members'
-    own rows that carry text on any other list, never stands in for code's
-    statement. A list the plan found a need on for which items exist alone,
-    with no content across it, is used only through `lists`: "you have 10
-    open follow-ups" citing L1 and ten of its twelve members, and "the pages
-    are A, B, C and D" citing L1 beside four opened sections, are subsets
-    there, however many pages research opened. Rows are list facts only, so a
-    sentence that names two or more members by their rows alone is a subset
-    whatever else it cites, and only `lists` uses that list then.
-
-  The writer has one repair in total, as today; a failed check uses it if it
-  is still unused and the request has time and model calls left. If the
-  repaired answer still fails, or no repair can run, code writes that list's
-  full statement and keeps the writer's sentences. Built: a sentence that
-  cites only members of a list code wrote this way, by their rows or two or
-  more of them by their text or opened sections, is dropped however many
-  members were checked, since it restated part of that list (the October 4
-  answer's "the pages are A, B, C, D" beside all eight names would
-  contradict them, and a note would wrongly make it partial); so is one that
-  names two or more of its members by their rows alone, whatever else it
-  cites. Code cannot tell "A and B mention BUG-412" from a restated subset by
-  the members a sentence cites, so the list's id tells them apart, as the
-  writer prompt asks: a sentence citing the list's id beside its members'
-  text, for a list a found need claims content across, is an explicit claim
-  about what they say and always stays, with its "(k of N checked so far)"
-  note unless every member was checked. For a list a found need claims
-  content across, the repair's reason names both ways on: put the list in
-  `lists` for which items exist, or cite it beside the evidence for what its
-  members say. A first reply that fails only the check stays the writer's
-  answer when the repair's reply is unusable.
+  list is not limited to that owner." Code adds it to the response notice for
+  each list the answer names in a statement and each list a `which_say` need
+  checks (`agenticListFilterNoticeV1`, with the noun from the members' kinds).
+  A source that cannot apply a requested date field refuses the read. It never
+  answers empty and never substitutes another field. A desk asked for an owner
+  or status filter a source cannot apply refuses the read too.
+- **Code states every list a `which_items` need cites,** in full unless the
+  writer selected it by `where`, whatever the writer replies: no list, a
+  selection by id only, not_found, or no usable reply. No repair asks for it.
+  The writer's own not_found phrases stay in the gap. A need code reads a list
+  for (a found or open `which_items` need, or a `which_say` need of any status)
+  that cites no list research read (rows only, or nothing when research stopped
+  early) makes the part partial: "I could not confirm the full list of items
+  asked for."
+- **A writer's sentence stands only on text.** Its citations are the items
+  whose text the writer read. Row ids and list ids in it are not citations. A
+  sentence with no such citation is left out. If it cites a row or a list the
+  writer saw, the reply goes back once first, saying that list facts go through
+  `lists` and what no text says goes in `not_found`; if the reply code keeps
+  still has one, the part is partial: "Part of the answer was left out because
+  no item's text supports it." "Is DVT on hold?" answered from the Gate reviews
+  page's title ends partial or not found, never answered.
+- **A sentence that only restates a stated list is left out.** Code leaves out
+  a writer's sentence when every text item it cites is a member, or part of
+  one, of a list code states, and no other need asks about it: no `which_say`
+  need's list holds it, and no found or open `content` need cites that member.
+  "The pages are A, B, C and D", cited to four opened sections beside the eight
+  names code wrote, is left out. "The PRD requires 0.1 C", cited to the PRD's
+  section for a content need about the PRD, stays.
 - **One citation per cited object.** The response refuses duplicate
   citations, and a listed ticket's row and its opened body cite the same
   ticket. Code gives them one citation, in first-citation order, so a list
   statement and a writer's sentence about the same ticket share it.
-- **No usable writer reply.** When research found a need on a list but the
-  writer gives no usable reply, code still writes that list's statement and the
-  part is partial. For that case only, this replaces the fallback to three
-  released records ([ADR-0022](ADR-0022-agentic-ask-only.md)).
+- **No usable writer reply.** When the writer gives no usable reply, code
+  still states each list a `which_items` need cites, and the part is partial.
+  For that case only, this replaces the fallback to three released records
+  ([ADR-0022](ADR-0022-agentic-ask-only.md)).
 - **Prompts (addition 6).** Ask's research step gets its own wording of rules
   3 and 4. Rule 3 accepts a list's id as support for which items exist. Rule 4
   names `lists`, and says that a question about which or how many items exist
@@ -388,29 +363,47 @@ route, header, database table or client changes.
   already supported" becomes "Stop as soon as every requested fact is
   supported; a question about which items exist is supported only by a complete
   list." Ask's writer prompt gets the list rules above. Task prompts do not
-  change. Built: rule 4 says one thing for which items exist: cite the list
-  by its id once `more` is false; a complete list supports all its items, and
-  one that cannot be read to its end supports "at least" its count. The stop
-  rule reads "Stop as soon as every requested fact is supported; for which
-  items exist, that is once each list you cite has more false." Ask's search
-  and open descriptions say a list's members need no open for which items
-  exist or their row facts, since "open metadata-only items before relying on
-  them" sent the trace's planner to open pages to confirm creation dates.
+  change. Built: Ask's rule 3 gives each need one of three kinds, with
+  examples of each: a `which_items` need is found on a list's id; a `which_say`
+  need cites the list it checks, whatever its status, beside the text read;
+  both list kinds are for a set the question picks by list facts, so which
+  items say something when the question picks no such set is content, found by
+  search; a fact about one item is content. Its examples are provider-neutral,
+  as Ask's prompts must be: "which tickets mention BUG-412: search finds them",
+  and the example step asks "Which tickets were created on October 4, and which
+  of them mention the fixture vendor?". The reply shape names the three kinds,
+  and the example has one need of each. Rule 4 and the stop rule say a
+  `which_items` need is supported once each list it cites has more false, and
+  that research on a `which_say` need stops once it has read every member its
+  list has shown, or can open no other, without waiting for the list's end.
+  Ask's search and open descriptions say a list's members need no open to show
+  which items exist. The writer's prompt says code states every list marked
+  `stated` and adds how many members were checked, and that its own sentences
+  cite evidence text only.
 
 ### Evaluation (addition 7)
 
 The research-loop evaluation gets a `list` part type, whose evidence names
 every member. A list part scores on naming the whole list: it counts only when
 the answer cites every member, and naming some members earns nothing. A
-citation of a member of a list in the research result resolves like a
-citation of an item read in full. A development case asks the October 4
-question, with its 8 pages as members. Built: a list part's research measures
-hold only for the whole list too (found; read, when a complete list holds every
-member; handed over), and whether the answer names every member is a code
-check, "lists named in full", that holds without a judge and overrides a
-judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`). The rows the
-writer sees are never counted as noise or distractors handed, and hand over a
-part only when it is a row fact (a date, owner or status).
+citation of a member of a list in the research result resolves like a citation
+of an item read in full. A development case asks the October 4 question, with
+its 8 pages as members. Built: a list part's research measures hold only for
+the whole list too (found; read, when a complete list holds every member;
+cited, when the plan cites every member or a found `which_items` need cites a
+list holding it; handed over), and whether the answer names every member is a
+code check, "lists named in full", that holds without a judge and overrides a
+judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`). Past an answer's 25
+names, a statement that ends "and N more" names the whole list when the members
+it cites plus N are exactly the list. The rows the writer sees are never
+counted as noise or distractors handed, and hand over a part only when it is a
+row fact (a date, owner or status). Each run reports its plan's needs by
+declared kind, and a case may name the kinds its plan should declare
+(`expected_kinds`), which code checks. A development case asks which October 4
+pages mention BUG-412 (`which_say`), so an answer that is only the list fails.
+Another asks which Jira tickets mention BUG-412 (`content`): it picks no set by
+list facts, so search answers it, and a plan that declares a list kind fails.
+Both keys, drafted from the export, await the founder's confirmation.
 
 ### Safety rules kept
 
@@ -442,10 +435,10 @@ not candidates.
      ([sufficient context](https://research.google/blog/deeper-insights-into-retrieval-augmented-generation-the-role-of-sufficient-context/)).
      Nothing shows the rule failing for a content need, which one supporting
      text answers.
-   - Replacement: `agenticNeedSupportV1` and the finish check above. A need
-     with list support is checked against its lists ("keep reading the list").
-     A need without one keeps "at least one cited item read in full". Task
-     goals keep line 37 unchanged.
+   - Replacement: `agenticNeedSupportV1` (itself retired, item 9) and the
+     finish check above. A need with list support is checked against its lists
+     ("keep reading the list"). A need without one keeps "at least one cited
+     item read in full". Task goals keep line 37 unchanged.
 2. **Items without text never reach the writer.** Retired for list members
    in Ask.
    - Where: `renderers/ask-renderer-v1.ts:115-127` (the writer gets cited
@@ -550,6 +543,90 @@ not candidates.
      status filter a source cannot apply
      (`services/organization-authority/src/composition/person-live-evidence-desk-v2.ts`).
 
+9. **Inferring a need's support from its citations.** Retired; research
+   declares the kind.
+   - Where (at `026f60d`): `agenticNeedSupportV1`, which read a cited member
+     row, or two or more cited members, as the list, and a row beside its
+     opened body as content (`agentic-list-evidence-v1.ts:372-405`); its
+     lookups (`:228-263`, `first`); the finish check's division
+     (`agentic-ask-research-state-v1.ts:71-97`); the loop's and the
+     evaluation's copies (`agentic-research-loop-v1.ts:896-907`, `:1253-1265`;
+     `tools/evals/research-loop/lib/checks.mjs:104-164`).
+   - Evidence: review rounds 1 and 2 found that one division gave wrong
+     answers both ways. "When is THERM-41 due?" was made to read its list to
+     its end. "What does the gate review page say?" got the full list stated in
+     front of it. Four opened sections of the October 4 list passed as content.
+   - Replacement: the declared kind and the finish check above. Membership
+     still words a refusal; it never supports a need.
+10. **Code's check of the writer's list use, and its repair.** Retired; code
+    states the lists research declared.
+    - Where: `usesList`, `listsUse`, `listProblems` with `final` and
+      `foundNothing`, and the forced lists
+      (`renderers/ask-renderer-v1.ts:249-302`, `:394-409`).
+    - Evidence: each shape of list use the check accepted was a way past it. A
+      list id beside rows, beside sections or beside members' own text; a
+      selection by id; a not_found reply: each let 4 of 8 through, or replaced a
+      correct content answer with the full list.
+    - Replacement: code states every list a `which_items` need cites, and a
+      list-kind need with no list makes the part partial.
+11. **Reading meaning from what a writer's sentence cites.** Retired.
+    - Where: `restates`, `claimsAcross`, `rowsOnly`, `membersCited`,
+      `rowClaims`, `onlyNamed`, `rowClaimReason`, and `ROWS_NOT_FOUND` with
+      `rowsLeftOut` (`renderers/ask-renderer-v1.ts:67-68`, `:238-327`,
+      `:435-474`, `:485`), and the member-count rule for a by-id selection's
+      gap (`:415-417`).
+    - Evidence: the same citations mean a restated subset or a content claim.
+      Each rule that told them apart by shape (a list id beside text, two or
+      more members' text, every member checked) failed on a shape another round
+      found. The not-found phrase claimed something a summary sentence never
+      said. A list id beside one ticket made "When is THERM-3 due?" partial.
+    - Replacement: sentences stand only on text, and one left out after its
+      repair makes the part partial without saying what it claimed; a sentence
+      is a restatement when it speaks only of members of a stated list that no
+      other need asks about; and the checked note comes from `which_say` needs
+      alone.
+
+**Known limits.** Code follows the declaration, and nothing at run time checks
+it: a check would have to read meaning from citations, which Retirements 9 to
+11 retire. The guards are the required kind, the shape that names all three
+kinds, rule 3 with an example need of each, the content refusal that offers no
+change of kind, and the evaluation's declared-kind score (`expected_kinds`),
+"lists named in full" and its two BUG-412 cases.
+
+- **A which-question declared `content`, or left without a kind,** gets
+  content's rules: no list is stated unless the writer uses it. The held answer
+  (4 of the 8 pages, marked answered) comes back this way, as does "you have 10
+  open follow-ups" on a first page of 10 (confirmed findings 9 and 11).
+- **A content question declared `which_items`** gets the list stated, and a
+  writer's sentence about its members' text is left out as a restatement, so
+  the answer can be the list alone, marked answered.
+- **A `which_say` question declared `content`** is answered with no checked
+  note, however few members were read (confirmed finding 4).
+- **A which-question or one-item question declared `which_say`** gets the
+  checked note and is partial, and no list is stated unless the writer uses it.
+- **A question about which items of a whole source say something** ("which
+  Jira tickets mention BUG-412") declared a list kind: as `which_say`, it is
+  refused until it cites a list, so research lists the source and the answer
+  is partial with a checked note that measures little ("4 of at least 25
+  checked so far", research being shown 25 rows a list call); as `which_items`,
+  the whole source is stated and the sentences naming the hits are left out as
+  restatements.
+- **A selection by id of the members that meet a condition** ("which of my
+  open tasks are due this week", answered with `members` instead of a `where`
+  date range) states those members' facts and the full list, never the
+  condition, and a writer's sentence saying the condition is left out as a
+  restatement. A condition on two row facts the list did not filter (an owner
+  and a due date) has only this path, since `where` takes one row fact.
+- **A list with both a `which_items` and a `which_say` need** keeps every
+  sentence that cites its members' text, with the note, even one that only
+  restates the list.
+- **A sentence about one member of a `which_say` list** carries that list's
+  note even when it answers a content need about that member.
+- **One item's row facts cost one open** (above).
+- **A writer that repeats a sentence citing only rows or list ids** after its
+  repair makes the part partial, even when the sentence only restated the list
+  ("All eight are current pages.").
+
 **Considered and kept:**
 
 - The 4-action cap (`agentic-ask-v1-model-protocol.ts:15`): raising it only
@@ -575,21 +652,43 @@ Tests required before release:
 
 - the October 4 run, replayed: research finishes on `L1` in two steps and the
   answer names all 8 pages, citing each page's row;
-- an answer that names 4 of 8 without the list is sent back once, then code
-  writes the full list;
+- an answer that names 4 of the 8 pages without the list: code writes the full
+  list anyway, and the restating sentence is left out;
 - a 60-member list names 25 and says "and 35 more";
 - an unfinished list refuses the finish with "keep reading the list"; a list
   that cannot be read further gives "at least N" and a partial part;
 - an exactly full last page with no next link is never complete;
 - "which are assigned to me" names only the members with that owner;
-- a content question across a list cites the list and says "k of N checked so
-  far" until every member is checked;
+- a `which_say` question across a list says "k of N checked so far" until
+  every member is checked, whether or not the writer cites the list; a content
+  need beside its list adds no note;
 - a requested filter the source ignored appears in the response notice;
 - an item whose access is revoked mid-request stops the answer at the next
   check, even when it is only a list member;
 - the same cases for Jira tickets, meetings and follow-ups;
 - task goals: identical model inputs and the unchanged impact-card baseline;
-- the research-loop evaluation's `list` part scores whole lists only.
+- the research-loop evaluation's `list` part scores whole lists only;
+- a found `which_items` need, or a `which_say` need found or not_found, without
+  a list id is refused once, naming the list that holds its items, and a
+  `which_items` need is also asked to keep reading it when it has not ended;
+  `which_say` and `content` needs never wait for a list to be found;
+- a list-kind need left without a list when research stops makes the part
+  partial, a not_found `which_say` need included;
+- a `where` date range names the members whose date falls in it, in the list's
+  time zone, and the statement says the range;
+- the public evidence search and open doors return a meeting record without
+  its list label;
+- a sentence citing only rows or list ids, repeated after its repair, makes the
+  part partial;
+- a missing or unknown kind is content;
+- meeting records in a list are named by their own line, which no task-goal
+  input carries;
+- task goals: identical schema, prompts and model inputs.
+
+Built (2026-10-18): each row of the restructure design's scenario table is a
+test named by its id, in `agentic-ask-lists.test.ts`,
+`renderers/ask-renderer-v1.test.ts` and, for the public doors,
+`services/organization-authority/test/cross-source-ask-e2e.test.ts`.
 
 The live check is a staging rerun of the October 4 question, comparing the
 names in the answer against the list itself.
