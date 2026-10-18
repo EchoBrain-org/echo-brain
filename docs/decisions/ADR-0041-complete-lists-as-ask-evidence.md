@@ -232,10 +232,14 @@ route, header, database table or client changes.
   returned only bodies research read in full. An open counts for the item it
   resolved to, whatever form the model gave its id, a title included: Ask's
   research rounds record that item. When not every member of a list a
-  `which_say` need cites was checked, whatever the need's status, the part is
-  partial, and each kept sentence citing a member's text gets "(k of N checked
-  so far)". No other list gets the note, and citing a list's members never
-  makes a need content across.
+  `which_say` need cites was checked, whatever the need's status, the part
+  says so ("Not every listed item was checked, so others may also match."),
+  and each kept sentence citing a member's text gets "(k of N checked so
+  far)". The note qualifies the answer: a part that states something is
+  partial, and one that names nothing, the need not found, stays not found
+  with the note, its absence having passed the not-found rules. No other list
+  gets the note, and citing a list's members never makes a need content
+  across.
 
 ### The writer and the answer
 
