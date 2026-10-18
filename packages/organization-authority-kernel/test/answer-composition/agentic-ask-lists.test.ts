@@ -546,10 +546,26 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not found: what the listed items say, since they were listed but not opened." }] });
       expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([fullStatement]);
     }
-    // A writer that says it found nothing is honored: code names no list it did not use.
-    const { h, response } = await run([{ lists: [], sentences: [], not_found: ["whether DVT is on hold"] }]);
-    expect(writerInputs(h)).toHaveLength(1);
+    // A writer that says it found nothing goes back once, since research found the need on the list; repeated, it is
+    // honored, and code names no list it did not use.
+    const nothing = { lists: [], sentences: [], not_found: ["whether DVT is on hold"] };
+    const { h, response } = await run([nothing, nothing]);
+    expect(writerInputs(h)).toHaveLength(2);
+    expect(writerPrompt(h, 1).validation_error).toContain('research found this answer in list L1, which the answer does not use: put {"id": "L1"} in "lists" so code names its 8 members; keep "not_found" only if that list does not answer the question');
     expect(response).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: "Not found: whether DVT is on hold." }] });
+  });
+
+  it("sends a reply that found nothing back once when research found the answer in a list: the October 4 question gets its list", async () => {
+    const nothing = { lists: [], sentences: [], not_found: ["Confluence pages created on October 4, 2026"] };
+    const repaired = research([nothing, useL1]);
+    const { response } = await repaired.research.answerWithResearch({ question: OCT4 });
+    expect(writerInputs(repaired)).toHaveLength(2);
+    expect(writerPrompt(repaired, 1).validation_error).toContain('put {"id": "L1"} in "lists" so code names its 8 members; keep "not_found" only if that list does not answer the question');
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7] }] }] });
+    // A writer that repeats it after the repair is honored.
+    const repeated = research([nothing, nothing]);
+    expect((await repeated.research.answerWithResearch({ question: OCT4 })).response).toMatchObject({ outcome: "not_found", parts: [{ status: "not_found", statements: [] }] });
+    expect(writerInputs(repeated)).toHaveLength(2);
   });
 
   it("writes the list itself when the writer gives no usable reply", async () => {

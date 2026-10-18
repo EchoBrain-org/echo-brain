@@ -305,14 +305,19 @@ route, header, database table or client changes.
   sends such a sentence back once, pointing at that selection. A kept sentence
   citing a member's row beside other text claims content across that list and
   gets its checked note. A reply that answers nothing and says what it could
-  not find is honored: the plan's list is neither sent back for nor written
-  ("Is DVT on hold?" researched on a list alone is not found, not the list).
+  not find goes back once when the plan found a need on a list, with a reason
+  that names both ways on: put the list in `lists`, or keep `not_found` if the
+  list does not answer the question. The reply after that repair, or one no
+  repair can follow, is honored, and the list is not written ("Is DVT on hold?"
+  researched on a list alone is not found after one repair, not the list).
+  Otherwise one writer's misjudgment would bring back the held question as not
+  found.
 - **Code checks the answer.** For each list the writer saw, the answer goes
   back to the writer once, with the reason, if either:
   - the plan found a need on the list (that need's support includes it), but
     the answer does not use it: no `lists` entry for it and no kept sentence
-    citing it, unless the reply answers nothing and says what it could not
-    find; or
+    citing it. A repaired reply, or one no repair can follow, that answers
+    nothing and says what it could not find is the exception; or
   - the answer cites two or more of the list's members, but not all of them,
     and does not use the list. Built: a member counts whether the writer has
     its text or only its row, and the answer uses a list only through

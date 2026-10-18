@@ -339,6 +339,15 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered).toMatchObject({ outcome: "answered", fallbacks: 0 });
   });
 
+  it("honors a reply that found nothing over the plan's list when no repair can follow it", async () => {
+    const budget = { ...EMPTY_BUNDLE.budget, max_model_calls: 1 };
+    const nothing = { lists: [], sentences: [], not_found: ["tickets created on October 4"] };
+    const run = alone({ bundle: listBundle(8, 0, [list("L1", ids(1, 8))], ["L1"], budget), replies: [nothing], version: 6 });
+    const rendered = await run.render("Which tickets were created on October 4?");
+    expect(run.trace.filter(step => step === "generate")).toHaveLength(1);
+    expect(rendered.result.response).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: "Not found: tickets created on October 4." }] });
+  });
+
   it("shares 25 names across the lists an answer uses, each ending with 'and N more' from its own list", async () => {
     const run = alone({
       bundle: listBundle(68, 0, [list("L1", ids(1, 8)), list("L2", ids(9, 60))], ["L1", "L2"]),

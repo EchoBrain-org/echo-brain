@@ -246,7 +246,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** A sentence resting on list rows or list ids alone: it cites one of them and no text the writer read. */
       const restsOnRows = (evidence: readonly string[]) => !evidence.some(short => textGiven.has(short)) &&
         evidence.some(id => allowed.has(id) || writerById.has(parseAgenticListIdV1(id) ?? "L0"));
-      /** A reply that answers nothing and says what it could not find: code honors it and names no list it did not use. */
+      /**
+       * A reply that answers nothing and says what it could not find. Over a list the plan rests on it goes back once,
+       * like any reply that does not use that list; the reply after that repair, or one no repair can follow, is honored,
+       * and code names no list it did not use.
+       */
       const foundNothing = (answer: Answer) => answer.sentences.length === 0 && (answer.lists ?? []).length === 0 && answer.not_found.length > 0;
       /**
        * The answer uses a list when it names it in "lists", or when a sentence claims content across it: the list's id
@@ -261,9 +265,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
        * Lists the answer should use but does not: one the plan rests on, or one it cites some, not all, members of. A
        * member counts whether the writer has its text or only its row (a follow-up's row carries its text), and an
        * opened section counts as its page. Rows are list facts only, so a sentence naming two or more members by their
-       * rows names part of the list whatever else it cites: only "lists" uses the list then.
+       * rows names part of the list whatever else it cites: only "lists" uses the list then. `final` is true for the
+       * reply code keeps (no repair follows it), which alone may answer nothing over the plan's list.
        */
-      const listProblems = (answer: Answer): readonly { readonly id: AgenticListIdV1; readonly reason: string }[] => writerLists.flatMap(list => {
+      const listProblems = (answer: Answer, final: boolean): readonly { readonly id: AgenticListIdV1; readonly reason: string }[] => writerLists.flatMap(list => {
         if (list.count === 0 || (answer.lists ?? []).some(use => use.id === list.id)) return [];
         const cited = keptSentences(answer).map(sentence => sentence.evidence.filter(short => allowed.has(short)));
         const subset = (count: number) => count >= 2 && count < list.count
@@ -272,9 +277,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const byRows = subset(new Set(cited.flatMap(shorts => [...rowsOnly(list.id, shorts)])).size);
         if (usesList(answer, list.id)) return byRows;
         if (list.cited_by_plan) {
-          if (foundNothing(answer)) return [];
+          const nothing = foundNothing(answer);
+          if (nothing && final) return [];
           const content = across.has(list.id) ? `; for what its members say, cite ${list.id} beside their evidence` : "";
-          return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members${content}` }];
+          const keep = nothing ? `; keep "not_found" only if that list does not answer the question` : "";
+          return [{ id: list.id, reason: `research found this answer in list ${list.id}, which the answer does not use: put {"id": "${list.id}"} in "lists" so code names its ${list.count} members${content}${keep}` }];
         }
         return byRows.length > 0 ? byRows : subset(membersCited(list.id, cited.flat()).size);
       });
@@ -304,15 +311,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // A failed check takes the writer's one repair when the first reply fails it and a repair can still run; the
       // repaired reply, or a first reply no repair can follow, is kept and code writes the lists it should have used.
       const callsBefore = input.gate.stats().calls;
-      const last: { answer: Answer | null } = { answer: null };
+      // The last reply parsed, and whether it is final: no repair could follow it.
+      const last: { answer: Answer | null; final: boolean } = { answer: null, final: false };
       const repairable = () => {
         const stats = input.gate.stats();
         return stats.calls === callsBefore + 1 && stats.calls < bundle.budget.max_model_calls && input.remaining() >= AGENTIC_ASK_MIN_ANSWER_MS_V1;
       };
       const parse = (value: unknown): Answer => {
         const parsed = withMembers(parseAnswer(value, { lists: true }));
-        last.answer = parsed;
-        const problems = listProblems(parsed);
+        const final = !repairable();
+        last.answer = parsed; last.final = final;
+        const problems = listProblems(parsed, final);
         const claims = rowClaims(parsed, [...(parsed.lists ?? []).map(use => use.id), ...problems.map(problem => problem.id)]);
         const reasons = [...problems.map(problem => problem.reason), ...claims.slice(0, 1).map(rowClaimReason)];
         if (reasons.length > 0 && repairable()) throw new AgenticAskOutputErrorV1(reasons.join("; "));
@@ -359,7 +368,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // Lists the answer uses, then those code writes: after a failed check, or, with no usable reply, those the plan rests on.
       const forced: readonly AgenticListIdV1[] = answer === null
         ? relied.filter(id => (writerById.get(id)?.count ?? 0) > 0)
-        : listProblems(answer).map(problem => problem.id);
+        : listProblems(answer, last.final).map(problem => problem.id);
       const uses: { readonly list: AgenticWriterListV1; readonly where?: AgenticAnswerListUseV1["where"]; readonly members?: readonly string[] }[] = [];
       for (const use of answer?.lists ?? []) {
         const list = writerById.get(use.id);
