@@ -332,9 +332,9 @@ route, header, database table or client changes.
   or status filter a source cannot apply refuses the read too.
 - **Code states every list a `which_items` need cites,** with or without
   members, in full unless the writer selected it by `where`, whatever the
-  writer replies: no list, a
-  selection by id only, not_found, or no usable reply. No repair asks for it.
-  The writer's own not_found phrases stay in the gap. A need code reads a list
+  writer replies: no list, a selection by id only, not_found, or no usable
+  reply. No repair asks for it. The writer's own not_found phrases stay in the
+  gap. A need code reads a list
   for (a found or open `which_items` need, or a `which_say` need of any status)
   that cites no list research read (rows only, or nothing when research stopped
   early) makes the part partial: "I could not confirm the full list of items
@@ -640,9 +640,10 @@ change of kind, and the evaluation's declared-kind score (`expected_kinds`),
   member was checked, when a restated subset ("the pages are A, B, C and D")
   stands unqualified beside the statement naming all eight, and the part is
   answered.
-- **Neither outcome above can change without telling a restatement from a
-  sentence about content**, which needs the meaning of the cited text: the
-  guessing Retirement 11 retires.
+- **Both answered outcomes once every member was checked** (a which-question
+  declared `which_say`, and a list with both kinds of need) can change only by
+  telling a restatement from a sentence about content, which needs the
+  meaning of the cited text: the guessing Retirement 11 retires.
 - **A sentence about one member of a `which_say` list** carries that list's
   note even when it answers a content need about that member.
 - **One item's row facts cost one open** (above).
