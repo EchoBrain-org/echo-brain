@@ -737,7 +737,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(cut.research.lists).toEqual([expect.objectContaining({ id: "L1", members: [], ended: true, truncated: true, complete: false })]);
     expect(cut.response).toMatchObject({ outcome: "partial", citations: [], parts: [{ status: "not_found", statements: [], gap: "I couldn't find this in the sources you can access. The list of meetings could not be read to its end, so more may exist." }] });
     // A source that could not serve the page: no rows, and a notice, so the list is not complete either.
-    const down = await run(result([], { notice: "Meetings are temporarily unavailable." } as Partial<EvidenceDeskResultV2>) as EvidenceDeskResultV2);
+    const down = await run(result([], { notice: "Meetings are temporarily unavailable." }) as EvidenceDeskResultV2);
     expect(down.research.lists).toEqual([expect.objectContaining({ id: "L1", members: [], available: false, complete: false })]);
     expect(down.response).toMatchObject({ outcome: "partial", parts: [{ status: "not_found", gap: "I couldn't find this in the sources you can access. The list of meetings could not be read to its end, so more may exist." }] });
     // A complete list with no member keeps the plain not-found answer.
