@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
@@ -57,13 +60,18 @@ describe('neutral Person tool extension boundary', () => {
     let output = '';
     const run = vi.fn(async (input: PersonToolVerbContextV1) => input.print({ calendar: input.values.calendar }));
     const calendar: PersonToolProviderV1 = { tool_id: 'calendar', verbs: { status: { description: 'Read calendar status.', options: { calendar: { type: 'string' } }, requires: ['calendar'], run } } };
-    const dependencies = { tool_providers: [calendar], stdout: { write: (value: string) => { output += value; return true; } }, stderr: { write: () => true } };
-    expect(await runPersonClientCli(['tools', 'status', '--tool', 'calendar', '--calendar', 'team'], dependencies)).toBe(0);
-    expect(JSON.parse(output)).toEqual({ calendar: 'team' });
-    expect(run).toHaveBeenCalledOnce();
-    expect(await runPersonClientCli(['tools', 'setup', '--tool', 'calendar'], dependencies)).toBe(2);
-    for (const tool_providers of [[calendar, calendar], [{ ...calendar, verbs: { status: { ...calendar.verbs.status!, options: { limit: { type: 'string' as const } }, requires: [] } } }]]) {
-      await expect(runPersonClientCli([], { ...dependencies, tool_providers })).rejects.toThrow('registration');
+    const home = mkdtempSync(join(tmpdir(), 'echo-person-tool-fragments-'));
+    try {
+      const dependencies = { home_directory: home, tool_providers: [calendar], stdout: { write: (value: string) => { output += value; return true; } }, stderr: { write: () => true } };
+      expect(await runPersonClientCli(['tools', 'status', '--tool', 'calendar', '--calendar', 'team'], dependencies)).toBe(0);
+      expect(JSON.parse(output)).toEqual({ calendar: 'team' });
+      expect(run).toHaveBeenCalledOnce();
+      expect(await runPersonClientCli(['tools', 'setup', '--tool', 'calendar'], dependencies)).toBe(2);
+      for (const tool_providers of [[calendar, calendar], [{ ...calendar, verbs: { status: { ...calendar.verbs.status!, options: { limit: { type: 'string' as const } }, requires: [] } } }]]) {
+        await expect(runPersonClientCli([], { ...dependencies, tool_providers })).rejects.toThrow('registration');
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

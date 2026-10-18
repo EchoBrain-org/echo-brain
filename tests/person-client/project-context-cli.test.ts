@@ -365,7 +365,8 @@ describe('frozen project context CLI contract', () => {
     const network = vi.fn(); let output = '';
     // `person directory` is one word; the project families are `<family> <action>`.
     const command = operation.argv.slice(0, operation.argv[0] === 'directory' ? 1 : 2);
-    expect(await runPersonClientCli([...command, '--help'], { fetch: network,
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-project-cli-'))); homes.push(home);
+    expect(await runPersonClientCli([...command, '--help'], { home_directory: home, fetch: network,
       stdout: { write: value => { output += value; } }, stderr: { write: () => {} } })).toBe(0);
     expect(output).toContain(`echo-brain person ${command.join(' ')}`);
     expect(network).not.toHaveBeenCalled();

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { runPersonClientCli, runClientUpdateCli, updateBeforePersonCommand } from './composition.js';
@@ -30,5 +31,5 @@ if (argv.length === 1 && argv[0] === '--version') {
   process.exitCode = 2;
 } else {
   if (!argv.includes('--help')) await updateBeforePersonCommand();
-  process.exitCode = await runPersonClientCli(argv.slice(1));
+  process.exitCode = await runPersonClientCli(argv.slice(1), { home_directory: homedir() });
 }
