@@ -1,6 +1,6 @@
 import type { EvidenceDeskDateKindV1 } from "../shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
-import { evidenceDayV1, type EvidenceDateFieldV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
+import { evidenceDayV1, matchesEvidenceDateV1, type EvidenceDateFieldV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
 import { attributesOf } from "./agentic-evidence-bundle-v1.js";
 import type { AgenticResearchNeedV1 } from "./agentic-research-v1.js";
 
@@ -432,18 +432,22 @@ export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readon
   });
 }
 
-/** The row fields a writer may select members by. */
-export const AGENTIC_LIST_SELECTION_FIELDS_V1 = Object.freeze(["owner", "status"] as const);
+/** The row fields a writer may select members by: an owner or status by value, or one of a row's dates by range. */
+export const AGENTIC_LIST_SELECTION_FIELDS_V1 = Object.freeze(["owner", "status", "due", "created", "updated", "received", "occurred"] as const);
+/** A writer's selection (ADR-0041): members whose owner or status is `value`, or whose date of `field` is within `since` and `until`, inclusive. */
+export type AgenticListSelectionV1 =
+  | { readonly field: "owner" | "status"; readonly value: string }
+  | { readonly field: EvidenceDateFieldV1; readonly since?: string; readonly until?: string };
 
 /**
  * The writer's use of a list: code names its members, all of them, those
- * whose row field equals `value` (ignoring case), or those `members` names by
- * id, each with every row fact it records ("who owns THERM-46"). The writer
- * never writes the names or the row facts itself.
+ * one row fact selects (`where`), or those `members` names by id, each with
+ * every row fact it records ("who owns THERM-46"). The writer never writes
+ * the names or the row facts itself.
  */
 export interface AgenticAnswerListUseV1 {
   readonly id: AgenticListIdV1;
-  readonly where?: { readonly field: (typeof AGENTIC_LIST_SELECTION_FIELDS_V1)[number]; readonly value: string };
+  readonly where?: AgenticListSelectionV1;
   /** Members selected by their E ids, at most AGENTIC_LIST_NAMED_MAX_V1; set instead of `where`. */
   readonly members?: readonly string[];
 }
@@ -615,11 +619,30 @@ export function agenticListMemberNamesV1(members: readonly AgenticListNamedMembe
   return groupNames(members, nameGroups(members));
 }
 
-/** Members whose row field equals the selection's value, ignoring case; every member without one. */
-export function agenticListSelectV1<T extends Pick<AgenticWriterListMemberV1, "owner" | "status">>(members: readonly T[], where: AgenticAnswerListUseV1["where"]): readonly T[] {
+/** A member's own date of one field: its named dates, then its due date, then its one dated fact. */
+function memberDate(member: AgenticListNamedMemberV1, field: EvidenceDateFieldV1): string | undefined {
+  return member.dates?.[field] ?? (field === "due" ? member.due : undefined) ?? (member.date_kind === field ? member.date : undefined);
+}
+
+/**
+ * Members the selection names, in list order; every member without one. An owner or status matches its value,
+ * ignoring case; a date falls within the range as the desk matches a list's date filter, its day in `time_zone`. A
+ * member that records no such fact is not one of them.
+ */
+export function agenticListSelectV1<T extends AgenticListNamedMemberV1>(members: readonly T[], where: AgenticListSelectionV1 | undefined, time_zone?: string): readonly T[] {
   if (where === undefined) return members;
-  const wanted = where.value.trim().toLowerCase();
-  return Object.freeze(members.filter(member => member[where.field]?.trim().toLowerCase() === wanted));
+  if ("value" in where) { const wanted = where.value.trim().toLowerCase(); return Object.freeze(members.filter(member => member[where.field]?.trim().toLowerCase() === wanted)); }
+  return Object.freeze(members.filter(member => {
+    const date = memberDate(member, where.field);
+    return date !== undefined && matchesEvidenceDateV1({ [where.field]: date }, { since: where.since, until: where.until, date_field: where.field, time_zone }, where.field);
+  }));
+}
+
+/** A selection as a statement says it: "have owner Dana Lee", "are due from October 18 to October 24, 2026", "were updated since October 11, 2026". */
+function selectionWords(where: AgenticListSelectionV1, one: boolean): string {
+  if ("value" in where) return `${one ? "has" : "have"} ${where.field} ${line(where.value, 120)}`;
+  const verb = where.field === "due" || where.field === "occurred" ? (one ? "is" : "are") : (one ? "was" : "were");
+  return `${verb} ${DATE_WORDS[where.field]} ${dateRange(where.since, where.until)!}`;
 }
 
 /** What one code-written statement says about a list. */
@@ -630,8 +653,8 @@ export interface AgenticListStatementInputV1 {
   /** Members ECHO listed: the list's own count, never a vendor's total (addition 5). */
   readonly count: number;
   readonly complete: boolean;
-  /** The writer's selection; `value` as the selected members record it. */
-  readonly where?: NonNullable<AgenticAnswerListUseV1["where"]>;
+  /** The writer's selection: an owner or status `value` as the selected members record it, or a date range as given. */
+  readonly where?: AgenticListSelectionV1;
   /** The writer selected `selected` by id: each is named alone, with every row fact it records. */
   readonly by_id?: boolean;
   /** The selected members, in list order: every member without a selection. */
@@ -644,7 +667,8 @@ export interface AgenticListStatementInputV1 {
  * The statement code writes for a list the answer uses (ADR-0041): its count,
  * its filter and its names, then "and N more" with N from the list.
  * A complete list: "8 Confluence pages created on October 4, 2026: A; B; ...".
- * A selection: "3 of the 60 Jira tickets created ... have owner Dana Lee: A; B; C".
+ * A selection: "3 of the 60 Jira tickets created ... have owner Dana Lee: A; B; C",
+ * or "2 of the 12 follow-ups ... are due from October 18 to October 24, 2026: ...".
  * A list that is not complete: "At least 12 Jira tickets ...". Members the
  * writer selected by id: "1 of the 8 Confluence pages created ...: PRD (status
  * current, created October 4, 2026)", each named alone with every row fact it
@@ -663,13 +687,13 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
   const phrase = phraseAfter(noun, input.filter);
   const k = selected.length;
   const byId = input.by_id === true;
-  const lead = byId && k < count
-    ? `${k} of ${complete ? "the" : "at least"} ${count} ${counted(noun, count)}${phrase}`
-    : where === undefined || byId
-      ? `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`
-      : complete
-        ? `${k} of the ${count} ${counted(noun, count)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)}`
-        : `At least ${k} ${counted(noun, k)}${phrase} ${k === 1 ? "has" : "have"} ${where.field} ${line(where.value, 120)} (${count} listed so far)`;
+  const lead = where !== undefined
+    ? complete
+      ? `${k} of the ${count} ${counted(noun, count)}${phrase} ${selectionWords(where, k === 1)}`
+      : `At least ${k} ${counted(noun, k)}${phrase} ${selectionWords(where, k === 1)} (${count} listed so far)`
+    : byId && k < count
+      ? `${k} of ${complete ? "the" : "at least"} ${count} ${counted(noun, count)}${phrase}`
+      : `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`;
   const groups = byId ? selected.map((_, index) => [index]) : nameGroups(selected);
   const namesOf = (named: readonly (readonly number[])[]) => byId ? named.map(([index]) => factsName(selected[index!]!, input.filter.time_zone)) : groupNames(selected, named);
   let fit = 1;
@@ -687,9 +711,10 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
 }
 
 /** The not_found phrase for a selection that matches no member: never a statement (ADR-0041). */
-export function agenticListSelectionNotFoundV1(noun: string | AgenticListNounFormsV1, filter: AgenticListFilterV1, where: NonNullable<AgenticAnswerListUseV1["where"]>): string {
+export function agenticListSelectionNotFoundV1(noun: string | AgenticListNounFormsV1, filter: AgenticListFilterV1, where: AgenticListSelectionV1): string {
   const forms = formsOf(noun);
-  return `${forms.plural}${phraseAfter(forms, filter)} that have ${where.field} ${line(where.value, 120)}`;
+  const condition = "value" in where ? `that have ${where.field} ${line(where.value, 120)}` : `${DATE_WORDS[where.field]} ${dateRange(where.since, where.until)!}`;
+  return `${forms.plural}${phraseAfter(forms, filter)} ${condition}`;
 }
 
 /**

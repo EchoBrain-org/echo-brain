@@ -34,6 +34,7 @@ import {
   type AgenticListEvidenceV1,
   type AgenticListFilterApplicationV1,
   type AgenticListIdV1,
+  type AgenticListSelectionV1,
   type AgenticOpenActionV1,
   type AgenticWriterListMemberV1,
 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
@@ -306,12 +307,14 @@ describe("the writer's view", () => {
     expect(() => agenticWriterListV1(list, [...rows].reverse(), true)).toThrow(/the list's members, in order/u);
   });
 
-  it("lets the writer choose a list and select by owner or status, never write names", () => {
-    expect(AGENTIC_LIST_SELECTION_FIELDS_V1).toEqual(["owner", "status"]);
+  it("lets the writer choose a list and select by one row fact other than its title, never write names", () => {
+    expect(AGENTIC_LIST_SELECTION_FIELDS_V1).toEqual(["owner", "status", "due", "created", "updated", "received", "occurred"]);
     const mine: AgenticAnswerListUseV1 = { id: "L1", where: { field: "owner", value: "Dana Lee" } };
-    expect(mine.where?.field).toBe("owner");
-    expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>["field"]>().toEqualTypeOf<"owner" | "status">();
-    // @ts-expect-error a selection is by owner or status only
+    const week: AgenticAnswerListUseV1 = { id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } };
+    expect([mine.where?.field, week.where?.field]).toEqual(["owner", "due"]);
+    expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>>().toEqualTypeOf<AgenticListSelectionV1>();
+    expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>["field"]>().toEqualTypeOf<"owner" | "status" | "due" | "created" | "updated" | "received" | "occurred">();
+    // @ts-expect-error a selection is never by title
     const byTitle: AgenticAnswerListUseV1 = { id: "L1", where: { field: "title", value: "PRD" } };
     // @ts-expect-error the writer names lists, never member names
     const named: AgenticAnswerListUseV1 = { id: "L1", names: ["PRD"] };
@@ -439,6 +442,48 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 50, complete: false, where: { field: "status", value: "Done" }, selected: [rows[1]!], share: 25 }).text)
       .toBe("At least 1 Jira ticket has status Done (50 listed so far): THERM-2: B.");
     expect(agenticListSelectionNotFoundV1("Jira tickets", OCTOBER_4.filter, { field: "owner", value: "Zhen Ye" })).toBe("Jira tickets created on October 4, 2026 that have owner Zhen Ye");
+  });
+
+  it("selects by a row date within an inclusive range, each day the list's, and leaves out a member that records none", () => {
+    const titles = (members: readonly { readonly title: string }[]) => members.map(member => member.title);
+    // A member's due date: its named dates first, then its due date, then its one dated fact when that is a due date.
+    const rows = [
+      { title: "named", dates: { due: "2026-10-20" }, due: "2026-11-30" }, { title: "attribute", due: "2026-10-24" }, { title: "dated", date: "2026-10-18", date_kind: "due" as const },
+      { title: "later", due: "2026-10-25" }, { title: "none" }, { title: "created", date: "2026-10-19", date_kind: "created" as const },
+    ];
+    expect(titles(agenticListSelectV1(rows, { field: "due", since: "2026-10-18", until: "2026-10-24" }))).toEqual(["named", "attribute", "dated"]);
+    expect(titles(agenticListSelectV1(rows, { field: "due", since: "2026-10-24" }))).toEqual(["attribute", "later"]);
+    expect(titles(agenticListSelectV1(rows, { field: "due", until: "2026-10-18" }))).toEqual(["dated"]);
+    expect(titles(agenticListSelectV1(rows, { field: "created", since: "2026-10-19", until: "2026-10-19" }))).toEqual(["created"]);
+    // A timestamp is placed in the list's time zone, as the desk's own date filter places it; a calendar day keeps its day.
+    const updated = [
+      { title: "Tokyo's Oct 11", dates: { updated: "2026-10-10T23:30:00.000Z" } }, { title: "Los Angeles' Oct 10", dates: { updated: "2026-10-11T03:00:00.000Z" } },
+      { title: "a day", dates: { updated: "2026-10-11" } },
+    ];
+    const since = { field: "updated", since: "2026-10-11" } as const;
+    expect(titles(agenticListSelectV1(updated, since, "Asia/Tokyo"))).toEqual(["Tokyo's Oct 11", "Los Angeles' Oct 10", "a day"]);
+    expect(titles(agenticListSelectV1(updated, since, "America/Los_Angeles"))).toEqual(["a day"]);
+    expect(titles(agenticListSelectV1(updated, since, "UTC"))).toEqual(["Los Angeles' Oct 10", "a day"]);
+    expect(titles(agenticListSelectV1(updated, since))).toEqual(["Los Angeles' Oct 10", "a day"]);
+    // An owner or status selection is unchanged.
+    expect(titles(agenticListSelectV1([{ title: "a", status: "Done" }, { title: "b", status: "done " }, { title: "c" }], { field: "status", value: "DONE" }))).toEqual(["a", "b"]);
+  });
+
+  it("says a date selection's range in its lead and its not-found phrase, and an owner or status as before", () => {
+    const followUps = { plural: "follow-ups", singular: "follow-up", kind: "follow_up" };
+    const mara = { owner: "Mara Lind", status: "open" as const };
+    const due = { field: "due", since: "2026-10-18", until: "2026-10-24" } as const;
+    expect(agenticListStatementV1({ noun: followUps, filter: mara, count: 12, complete: true, where: due, selected: [{ title: "THERM-43 follow-up" }, { title: "THERM-47 follow-up" }], share: 25 }).text)
+      .toBe("2 of the 12 follow-ups with owner Mara Lind and status open are due from October 18 to October 24, 2026: THERM-43 follow-up; THERM-47 follow-up.");
+    expect(agenticListStatementV1({ noun: followUps, filter: mara, count: 12, complete: true, where: { field: "due", until: "2026-10-17" }, selected: [{ title: "THERM-41 follow-up" }], share: 25 }).text)
+      .toBe("1 of the 12 follow-ups with owner Mara Lind and status open is due through October 17, 2026: THERM-41 follow-up.");
+    const three = Array.from({ length: 3 }, (_, index) => ({ title: `THERM-${index + 1}: A` }));
+    expect(agenticListStatementV1({ noun: "Jira tickets", filter: OCTOBER_4.filter, count: 25, complete: false, where: { field: "updated", since: "2026-10-11" }, selected: three, share: 25 }).text)
+      .toBe("At least 3 Jira tickets created on October 4, 2026 were updated since October 11, 2026 (25 listed so far): THERM-1: A; THERM-2: A; THERM-3: A.");
+    expect(agenticListStatementV1({ noun: "Confluence pages", filter: {}, count: 8, complete: true, where: { field: "created", since: "2026-10-04", until: "2026-10-04" }, selected: [{ title: "PRD" }], share: 25 }).text)
+      .toBe("1 of the 8 Confluence pages was created on October 4, 2026: PRD.");
+    expect(agenticListSelectionNotFoundV1(followUps, mara, due)).toBe("follow-ups with owner Mara Lind and status open due from October 18 to October 24, 2026");
+    expect(agenticListSelectionNotFoundV1("Confluence pages", OCTOBER_4.filter, { field: "updated", since: "2026-10-11" })).toBe("Confluence pages created on October 4, 2026 updated since October 11, 2026");
   });
 
   it("states the row facts of members selected by id, each alone, with every date in the list's time zone", () => {

@@ -231,6 +231,28 @@ describe("agentic Ask model protocol parity", () => {
     expect(stripEvidenceIds("Support tier owns it (L2) [E4, L1].", true)).toBe("Support tier owns it.");
   });
 
+  it("reads a where selection by owner, status or a date range, and anything else as the list in full (ADR-0041)", () => {
+    const where = (value: unknown) => parseAnswer({ lists: [{ id: "L1", where: value }], sentences: [], not_found: [] }, { lists: true }).lists![0];
+    expect(where({ field: "due", since: "2026-10-18", until: "2026-10-24" })).toEqual({ id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } });
+    expect(where({ field: "Updated", since: " 2026-10-11 " })).toEqual({ id: "L1", where: { field: "updated", since: "2026-10-11" } });
+    expect(where({ field: "created", until: "2026-10-04", value: "x" })).toEqual({ id: "L1", where: { field: "created", until: "2026-10-04" } });
+    expect(where({ field: "occurred", since: "2026-10-04", until: "2026-10-04" })).toEqual({ id: "L1", where: { field: "occurred", since: "2026-10-04", until: "2026-10-04" } });
+    // A date field with no bound, a bound that is not a real day, or a reversed range: the list in full.
+    for (const value of [
+      { field: "due" }, { field: "due", value: "2026-10-18" }, { field: "received", since: "2026-02-30" }, { field: "due", since: "next week" }, { field: "due", until: "2026-10-18T00:00:00Z" },
+      { field: "due", since: "2026-10-24", until: "2026-10-18" }, { field: "due", since: "2026-10-18", until: "soon" },
+    ]) expect(where(value)).toEqual({ id: "L1" });
+    // An owner or status reads its value, as before; an empty one is the list in full.
+    expect(where({ field: "status", value: " Open ", since: "2026-10-18" })).toEqual({ id: "L1", where: { field: "status", value: "Open" } });
+    expect(where({ field: "owner", value: "" })).toEqual({ id: "L1" });
+    expect(where({ field: "title", value: "PRD" })).toEqual({ id: "L1" });
+    // The answer schema names each selection field, and either bound.
+    const listUse = ((answerSchema.properties as Schema).lists as Schema).items as Schema;
+    expect((listUse.properties as Schema).where).toEqual({ type: "object", additionalProperties: false, required: ["field"], properties: {
+      field: { type: "string", enum: ["owner", "status", "due", "created", "updated", "received", "occurred"] }, value: { type: "string", maxLength: 120 }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
+    } });
+  });
+
   it("binds each action's argument schema to the selected tool", () => {
     const argumentsByTool: Record<string, readonly string[]> = {
       search: ["query", "source", "since", "until", "date_field"], open: ["id"],

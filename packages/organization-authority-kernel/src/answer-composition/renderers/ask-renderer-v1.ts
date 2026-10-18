@@ -411,17 +411,18 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // or more, or every member, answer which items exist, which a list not read to its end cannot do in full.
         if (!use.list.complete && (use.members === undefined || use.members.length >= 2 || use.members.length === use.list.count)) listGaps.push(listEndGap(noun.plural));
         const selected: readonly AgenticWriterListMemberV1[] = use.members === undefined
-          ? agenticListSelectV1(rows.get(use.list.id)!, use.where) : rows.get(use.list.id)!.filter(member => use.members!.includes(member.id));
+          ? agenticListSelectV1(rows.get(use.list.id)!, use.where, use.list.filter.time_zone) : rows.get(use.list.id)!.filter(member => use.members!.includes(member.id));
         if (selected.length === 0) { selectionNotFound.push(agenticListSelectionNotFoundV1(noun, use.list.filter, use.where!)); return []; }
         return [{ ...use, noun, selected }];
       });
       // At most 25 names across the answer, then "and N more", N from the list itself (addition 5).
       const shares = agenticListNameSharesV1(naming.map(value => value.selected.length));
       const listStatements: Statement[] = naming.map((value, index) => {
-        const field = value.where?.field;
+        // An owner or status reads as the first selected member records it; a date range as the writer gave it.
+        const where = value.where === undefined || !("value" in value.where) ? value.where : { field: value.where.field, value: value.selected[0]![value.where.field]! };
         const statement = agenticListStatementV1({
           noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected, share: shares[index]!,
-          ...(field === undefined ? {} : { where: { field, value: value.selected[0]![field]! } }), ...(value.members === undefined ? {} : { by_id: true }),
+          ...(where === undefined ? {} : { where }), ...(value.members === undefined ? {} : { by_id: true }),
         });
         // Each named member cites its own row.
         return statementOf(statement.text, statement.cited.map(index => value.selected[index]!.id));

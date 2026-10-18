@@ -1,5 +1,6 @@
 import { validatePersonQueryText } from "@echo-brain/organization-api";
-import { AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1 } from "./agentic-list-evidence-v1.js";
+import { calendarDateV1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
+import { AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1, type AgenticListSelectionV1 } from "./agentic-list-evidence-v1.js";
 import { AGENTIC_RESEARCH_NEED_KINDS_V1, type AgenticResearchNeedKindV1 } from "./agentic-research-v1.js";
 import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.js";
 
@@ -107,13 +108,15 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
 export const stepSchema = createStepSchema(['meetings', 'documents', 'slack']);
 
 /**
- * A list the answer uses (ADR-0041): its id, and optionally the members with one owner or status, or the members it
- * names by id for their row facts. Code names them.
+ * A list the answer uses (ADR-0041): its id, and optionally the members one row fact selects (an owner or status by
+ * value, or a date within since and until), or the members it names by id for their row facts. Code names them.
  */
 const listUse = {
   type: "object", additionalProperties: false, required: ["id"], properties: {
     id: { type: "string", maxLength: 8 },
-    where: { type: "object", additionalProperties: false, required: ["field", "value"], properties: { field: closedString(AGENTIC_LIST_SELECTION_FIELDS_V1), value: { type: "string", maxLength: SELECTION_CHARS } } },
+    where: { type: "object", additionalProperties: false, required: ["field"], properties: {
+      field: closedString(AGENTIC_LIST_SELECTION_FIELDS_V1), value: { type: "string", maxLength: SELECTION_CHARS }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
+    } },
     members: { type: "array", maxItems: AGENTIC_LIST_NAMED_MAX_V1, items: { type: "string", maxLength: 16 } },
   },
 } as const;
@@ -299,9 +302,39 @@ export function stripEvidenceIds(text: string, lists = false): string {
     .trim();
 }
 
+/** A real YYYY-MM-DD calendar day, or undefined ("2026-02-30" and "next week" are none). */
+function calendarDay(value: string): string | undefined {
+  try { return calendarDateV1(value); } catch { return undefined; }
+}
+
 /**
- * A list the answer uses: "L1", {"id": "L1"}, {"id": "L1", "where": {"field": "owner", "value": "Dana Lee"}} or
- * {"id": "L1", "members": ["E5"]}; members, each once, take the place of a selection. Null for anything else.
+ * A writer's selection: an owner or status with a non-empty value, or a date field with at least one of since and
+ * until, each a real day, since not after until. Null for anything else, which uses the list in full.
+ */
+function selectionOf(where: Record<string, unknown> | null): AgenticListSelectionV1 | null {
+  const field = typeof where?.field === "string" ? where.field.trim().toLowerCase() : "";
+  if (where === null || !(AGENTIC_LIST_SELECTION_FIELDS_V1 as readonly string[]).includes(field)) return null;
+  if (field === "owner" || field === "status") {
+    const value = cleanLine(where.value, SELECTION_CHARS);
+    return value.length === 0 ? null : Object.freeze({ field, value });
+  }
+  const bounds: { since?: string; until?: string } = {};
+  for (const bound of ["since", "until"] as const) {
+    const text = cleanLine(where[bound], 10);
+    if (text.length === 0) continue;
+    const day = calendarDay(text);
+    if (day === undefined) return null;
+    bounds[bound] = day;
+  }
+  if (bounds.since === undefined && bounds.until === undefined) return null;
+  if (bounds.since !== undefined && bounds.until !== undefined && bounds.since > bounds.until) return null;
+  return Object.freeze({ field: field as EvidenceDateFieldV1, ...bounds });
+}
+
+/**
+ * A list the answer uses: "L1", {"id": "L1"}, {"id": "L1", "where": {"field": "owner", "value": "Dana Lee"}},
+ * {"id": "L1", "where": {"field": "due", "since": "2026-10-18", "until": "2026-10-24"}} or {"id": "L1", "members":
+ * ["E5"]}; members, each once, take the place of a selection. Null for anything else.
  */
 function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
   const entry = object(raw);
@@ -309,11 +342,8 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
   if (id === null) return null;
   const members = [...new Set((Array.isArray(entry?.members) ? entry.members : []).slice(0, EVIDENCE_IDS_READ).map(cleanId).filter((value): value is string => value !== null))].slice(0, AGENTIC_LIST_NAMED_MAX_V1);
   if (members.length > 0) return Object.freeze({ id, members: Object.freeze(members) });
-  const where = entry === null ? null : object(entry.where);
-  const field = typeof where?.field === "string" ? where.field.trim().toLowerCase() : "";
-  const selection = cleanLine(where?.value, SELECTION_CHARS);
-  if (where === null || !(AGENTIC_LIST_SELECTION_FIELDS_V1 as readonly string[]).includes(field) || selection.length === 0) return Object.freeze({ id });
-  return Object.freeze({ id, where: Object.freeze({ field: field as NonNullable<AgenticAnswerListUseV1["where"]>["field"], value: selection }) });
+  const where = selectionOf(entry === null ? null : object(entry.where));
+  return Object.freeze(where === null ? { id } : { id, where });
 }
 
 /**
