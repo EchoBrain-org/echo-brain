@@ -497,8 +497,11 @@ describe("the statement code writes for a list (ADR-0041)", () => {
       { title: sync, kind: "action", owner: "Mara Quinn", due: "2026-10-09", date: "2026-10-01", date_kind: "occurred" as const },
       { title: sync, kind: "action", owner: "none recorded", dates: { occurred: "2026-10-01", due: "2026-10-12" } },
     ];
-    expect(agenticListStatementV1({ noun: "actions", filter: { time_zone: "UTC" }, count: 2, complete: false, by_id: true, selected: actions, share: 25 }).text)
-      .toBe(`At least 2 actions: ${sync} (owner Mara Quinn, due October 9, 2026, dated October 1, 2026); ${sync} (no owner recorded, dated October 1, 2026, due October 12, 2026).`);
+    const named = `${sync} (owner Mara Quinn, due October 9, 2026, dated October 1, 2026); ${sync} (no owner recorded, dated October 1, 2026, due October 12, 2026).`;
+    // However many it selects, a selection by id states row facts, never which items exist (W2).
+    expect(agenticListStatementV1({ noun: "actions", filter: { time_zone: "UTC" }, count: 2, complete: false, by_id: true, selected: actions, share: 25 }).text).toBe(`2 of at least 2 actions: ${named}`);
+    // Merged with a use of the list in full, it leads with the list's count.
+    expect(agenticListStatementV1({ noun: "actions", filter: { time_zone: "UTC" }, count: 2, complete: false, by_id: true, which: true, selected: actions, share: 25 }).text).toBe(`At least 2 actions: ${named}`);
     expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: false, by_id: true, selected: [{ title: "THERM-46: Fixture", status: "In Progress", date: "2026-10-04", date_kind: "unspecified" }], share: 25 }).text)
       .toBe("1 of at least 25 Jira tickets: THERM-46: Fixture (status In Progress).");
   });

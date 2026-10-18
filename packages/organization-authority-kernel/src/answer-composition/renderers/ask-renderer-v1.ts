@@ -296,7 +296,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const question = partQuestion(askedQuestion);
 
       // ---- statements (W2, W3): each list's use that says which items exist, then its use by id ----
-      /** One statement of a list; `which` when it says which items exist: a use in full or by `where`, or by id of every member. */
+      /** One statement of a list; `which` when it says which items exist (a use in full or by `where`), never for a use by id alone. */
       type Naming = { readonly list: AgenticWriterListV1; readonly noun: AgenticListNounFormsV1; readonly selected: readonly AgenticWriterListMemberV1[]; readonly which: boolean; readonly where?: AgenticListSelectionV1; readonly by_id: boolean };
       const uses = answer?.lists ?? [];
       /** A list not read to its end is never evidence of absence: its gap marks the part partial, whatever was named. */
@@ -309,9 +309,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const id = list.id, all = rows.get(id)!, noun = nounOf(list);
         const byId = uses.find(use => use.id === id && use.members !== undefined);
         const picked = byId === undefined ? undefined : all.filter(member => byId.members!.includes(member.id));
-        // A selection by id of every member is the list in full; code adds the full use of a stated list the writer gave
-        // no use that says which items exist (W3), whatever the reply and however many members it has.
-        const given = uses.find(use => use.id === id && use.members === undefined) ?? (stated.includes(id) || picked?.length === all.length ? { id } : undefined);
+        // Code adds the full use of a stated list the writer gave no use that says which items exist (W3), whatever the reply
+        // and however many members it has.
+        const given = uses.find(use => use.id === id && use.members === undefined) ?? (stated.includes(id) ? { id } : undefined);
         const where = given?.where;
         const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
         // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
@@ -336,7 +336,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const statement = agenticListStatementV1({
           noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected,
           // Each statement names at least its first member.
-          share: Math.max(1, (value.by_id ? first : rest)[index]!), ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true } : {}),
+          share: Math.max(1, (value.by_id ? first : rest)[index]!), ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
           ...(value.by_id ? {} : { free: new Set(value.selected.flatMap((member, at) => namedById.has(member.id) ? [at] : [])) }),
         });
         // Each named member cites its own row.

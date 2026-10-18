@@ -259,14 +259,15 @@ route, header, database table or client changes.
   with owner Mara Lind and status open are due from October 18 to October 24,
   2026: ..."); a selection by id states its members' facts, never a condition.
   A list may be used once in full or by `where`, and once by id. It never
-  writes names, counts or row facts itself. A use in full, by `where`, or by id
-  of every member says which items exist; for a list that is not complete it
-  reads "at least", and the part gets the list-end gap. A by-id statement of
-  some members gives row facts only ("1 of the 8 Confluence pages created ...:
-  PRD (status current, created October 4, 2026, updated October 4, 2026)") and
-  adds no gap. Two uses that select the same members are one statement, named
-  by id. A list's statement saying which items exist comes before its by-id
-  statement.
+  writes names, counts or row facts itself. A use in full or by `where` says
+  which items exist; for a list that is not complete it reads "at least", and
+  the part gets the list-end gap. A by-id statement gives row facts only,
+  however many members it selects ("1 of the 8 Confluence pages created ...:
+  PRD (status current, created October 4, 2026, updated October 4, 2026)", or
+  "25 of at least 25 ..."), and adds no gap. Two uses that select the same
+  members are one statement, named by id, with the lead and gap of the use
+  that says which items exist. A list's statement saying which items exist
+  comes before its by-id statement.
 - **Code writes the sentence that names a list's items.** Code writes one
   statement per list the answer uses, first in the part. Each statement cites
   every member it names, by that member's own row:
@@ -581,7 +582,9 @@ not candidates.
       `rowClaims`, `onlyNamed`, `rowClaimReason`, and `ROWS_NOT_FOUND` with
       `rowsLeftOut` (`renderers/ask-renderer-v1.ts:67-68`, `:238-327`,
       `:435-474`, `:485`), and the member-count rule for a by-id selection's
-      gap (`:415-417`).
+      gap (`:415-417`), with the statement lead's matching rule
+      (`agentic-list-evidence-v1.ts:717`, a selection by id of every member
+      reading as the list in full).
     - Evidence: the same citations mean a restated subset or a content claim.
       Each rule that told them apart by shape (a list id beside text, two or
       more members' text, every member checked) failed on a shape another round

@@ -323,7 +323,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   it("states the row facts of members the writer selects by id, all of them or one, from their own rows", async () => {
     const facts = (n: number) => `THERM-${n}: Fixture work ${n} (status In Progress, owner Dana Lee, created October 4, 2026)`;
     for (const [members, text] of [
-      [ids(1, 3), `3 tickets created on October 4, 2026: ${[1, 2, 3].map(facts).join("; ")}.`],
+      // Every member by id is still a selection by id: their row facts, never which items exist (W2).
+      [ids(1, 3), `3 of the 3 tickets created on October 4, 2026: ${[1, 2, 3].map(facts).join("; ")}.`],
       [["E2", "E9"], `1 of the 3 tickets created on October 4, 2026: ${facts(2)}.`],
     ] as const) {
       const run = alone({ bundle: listBundle(3, 1, [list("L1", ids(1, 3))], [C(["E4"])]), replies: [{ lists: [{ id: "L1", members }], sentences: [], not_found: [] }], version: 6 });
@@ -342,13 +343,13 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(stated.citations).toHaveLength(25);
   });
 
-  it("says which items exist, with the list-end gap, only for a use in full, by where or by id of every member (R9 iii to v)", async () => {
+  it("says which items exist, with the list-end gap, only for a use in full or by where, never for a selection by id alone (R9 iii to v)", async () => {
     const facts = (n: number) => `THERM-${n}: Fixture work ${n} (status In Progress, owner Dana Lee, created October 4, 2026)`;
     const gap = "The list of tickets could not be read to its end, so more may exist.";
     const open = (members: readonly string[], needs: readonly Need[]) => alone({
       bundle: listBundle(25, 1, [list("L1", ids(1, 25), { ended: false, truncated: true })], needs), replies: [{ lists: [{ id: "L1", members }], sentences: [], not_found: [] }], version: 6,
     });
-    // Every member by id is the whole list, with its lead and its gap: one statement.
+    // Every member by id of a stated list is one statement with the list's full use code adds (W3), its lead and its gap.
     const every = await open(ids(1, 25), [WI(["L1"])]).render("Which tickets were created on October 4?");
     expect(every.result.response.parts[0]).toMatchObject({ status: "partial", gap, statements: [{ text: `At least 25 tickets created on October 4, 2026: ${Array.from({ length: 25 }, (_, index) => facts(index + 1)).join("; ")}.` }] });
     expect(every.result.response.parts[0]!.statements).toHaveLength(1);
@@ -362,6 +363,9 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     // Ten, or one, by id beside a content need: their row facts only, which say nothing of which items exist, so no gap.
     const facts10 = await open(ids(1, 10), [C(["E26"])]).render("Which tickets created on October 4 are in review or blocked?");
     expect(facts10.result.response.parts[0]).toEqual({ question: "Which tickets created on October 4 are in review or blocked?", status: "answered", statements: [{ text: `10 of at least 25 tickets created on October 4, 2026: ${Array.from({ length: 10 }, (_, index) => facts(index + 1)).join("; ")}.`, citation_indexes: ids(1, 10).map((_, index) => index), private: true }] });
+    // Every member by id beside a content need is a selection by id too: their row facts, answered, whatever its size.
+    const all25 = await open(ids(1, 25), [C(["E26"])]).render("Which tickets created on October 4 are in review or blocked?");
+    expect(all25.result.response.parts[0]).toEqual({ question: "Which tickets created on October 4 are in review or blocked?", status: "answered", statements: [{ text: `25 of at least 25 tickets created on October 4, 2026: ${Array.from({ length: 25 }, (_, index) => facts(index + 1)).join("; ")}.`, citation_indexes: ids(1, 25).map((_, index) => index), private: true }] });
     const one = await open(["E2"], [C(["E26"])]).render("Who owns THERM-2?");
     expect(one.result.response.parts[0]).toEqual({ question: "Who owns THERM-2?", status: "answered", statements: [{ text: `1 of at least 25 tickets created on October 4, 2026: ${facts(2)}.`, citation_indexes: [0], private: true }] });
   });

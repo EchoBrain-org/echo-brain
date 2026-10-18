@@ -657,6 +657,8 @@ export interface AgenticListStatementInputV1 {
   readonly where?: AgenticListSelectionV1;
   /** The writer selected `selected` by id: each is named alone, with every row fact it records. */
   readonly by_id?: boolean;
+  /** With `by_id`: the same members are a use in full of the list (W2's merge), so the statement says which items exist. */
+  readonly which?: boolean;
   /** The selected members, in list order: every member without a selection. */
   readonly selected: readonly AgenticListNamedMemberV1[];
   /** Members this statement may cite: the answer's share (agenticListNameSharesV1). */
@@ -674,7 +676,9 @@ export interface AgenticListStatementInputV1 {
  * A list that is not complete: "At least 12 Jira tickets ...". Members the
  * writer selected by id: "1 of the 8 Confluence pages created ...: PRD (status
  * current, created October 4, 2026)", each named alone with every row fact it
- * records. Otherwise members that share a label are one name
+ * records; however many it selects, such a statement gives row facts, never
+ * which items exist, unless a use of the list in full or by `where` selects
+ * the same members (`which`, or `where`). Otherwise members that share a label are one name
  * (agenticListMemberNamesV1). Names are taken in
  * list order while the members they cover fit `share`, and stop early when the
  * statement would pass AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free`
@@ -695,7 +699,7 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
     ? complete
       ? `${k} of the ${count} ${counted(noun, count)}${phrase} ${selectionWords(where, k === 1)}`
       : `At least ${k} ${counted(noun, k)}${phrase} ${selectionWords(where, k === 1)} (${count} listed so far)`
-    : byId && k < count
+    : byId && input.which !== true
       ? `${k} of ${complete ? "the" : "at least"} ${count} ${counted(noun, count)}${phrase}`
       : `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`;
   const namesOf = (named: readonly (readonly number[])[]) => byId ? named.map(([index]) => factsName(selected[index!]!, input.filter.time_zone)) : groupNames(selected, named);
