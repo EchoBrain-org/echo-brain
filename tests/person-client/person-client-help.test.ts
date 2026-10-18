@@ -1,11 +1,19 @@
 import { runPersonClientCli } from "../../src/product/person-client/composition.js";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+// Help and refusals never reach the store, but they still run against a home of their own.
+const home = mkdtempSync(join(tmpdir(), "echo-person-help-"));
+afterAll(() => rmSync(home, { recursive: true, force: true }));
 
 async function help(argv: readonly string[]): Promise<string> {
   let stdout = "";
   let stderr = "";
   await expect(
     runPersonClientCli(argv, {
+      home_directory: home,
       stdout: { write: (value) => ((stdout += String(value)), true) },
       stderr: { write: (value) => ((stderr += String(value)), true) },
     }),
@@ -99,6 +107,7 @@ describe("Person client help", () => {
       let stderr = "";
       const network = vi.fn();
       await expect(runPersonClientCli(argv, {
+        home_directory: home,
         fetch: network,
         stdout: { write: (value) => ((stdout += String(value)), true) },
         stderr: { write: (value) => ((stderr += String(value)), true) },

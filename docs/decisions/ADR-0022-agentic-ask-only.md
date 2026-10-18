@@ -117,3 +117,10 @@ evidence fallback and slow permission checks; `agentic-ask-v1-finalization.test.
 keeps the final authorization and audit boundaries terminal;
 `agentic-ask-openrouter-timeout-contract.test.ts` drives the real kernel and
 provider adapter with local scripted responses and a fractional clock.
+
+## Later decisions
+
+[ADR-0041](ADR-0041-complete-lists-as-ask-evidence.md) (2026-10-17) changes
+the fallback for one case. When research found a need on a list and the writer
+gives no usable reply, code still writes that list's statement, and the part
+is partial, instead of showing up to three released records.

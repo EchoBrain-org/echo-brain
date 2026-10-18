@@ -150,6 +150,17 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.length).toBe(2048);
   });
 
+  it('says when a last list page was exactly full, so its end is unverified (ADR-0041)', async () => {
+    const f = await fixture({ pages: Array.from({ length: 20 }, (_, index) => page({ id: String(100 + index) })) });
+    expect(await f.source.list({ limit: 20 })).toMatchObject({ truncated: false, page_full: true });
+    f.state.pages.delete('119');
+    expect(await f.source.list({ limit: 20 })).toMatchObject({ truncated: false, page_full: false });
+    // A next link says more exist; the page is then continued, not unverified.
+    f.state.list = () => ({ results: [...f.state.pages.values()].map(value => metadata(value)), _links: { next: `/wiki/api/v2/pages?cursor=more&limit=20` } });
+    expect(await f.source.list({ limit: 20 })).toMatchObject({ truncated: true, page_full: false, next_cursor: expect.any(String) });
+    expect(JSON.stringify(f.audits)).not.toContain('page_full');
+  });
+
   it('lists, searches, opens, and revalidates a mapped page with the minimal granular resource grant', async () => {
     const f = await fixture({ selected: ['42'], scopes: ['read:page:confluence', 'read:space:confluence', 'read:content-details:confluence'] });
     const listed = await f.source.list({ limit: 20 });
@@ -521,6 +532,13 @@ describe('Confluence live reader through the audited evidence source', () => {
     const query = f.calls.find(call => call.path === '/rest/api/search')!.query;
     expect(query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-09-29" AND lastmodified < "2026-10-08"');
     expect(f.bodyCalls()).toEqual([]);
+    // A date field pages do not record is refused, never answered empty or swapped for another (ADR-0041, addition 3).
+    const calls = f.calls.length;
+    for (const date_field of ['occurred', 'due', 'received'] as const) {
+      await expect(f.source.list({ since: '2026-10-01', until: '2026-10-05', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
+      await expect(f.source.search({ query: 'gate', since: '2026-10-01', until: '2026-10-05', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(f.calls.length).toBe(calls);
   });
 
   it('reports truncated search discovery when more permission-visible matches exist', async () => {

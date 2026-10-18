@@ -27,6 +27,10 @@ Mutable Git fixtures use `tests/fixtures/coherent-worktree.ts` to give each case
 an isolated checkout of the original dirty and untracked inputs.
 Every root suite, including the stateful workspace suites, runs under the root
 `vitest.config.ts`. The focused `test:*` commands pass it a path filter.
+That config points `HOME` and `XDG_DATA_HOME` at one temporary folder per run
+(`tests/support/isolated-home.ts`), so no test reads or writes the real Person
+store. Person CLI tests still pass their own `home_directory`:
+`runPersonClientCli` refuses a call without one.
 
 The desktop app and the `node --test` suites are outside that config and run
 separately, as CI does:

@@ -339,7 +339,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       else if (input.since !== undefined || input.until !== undefined) {
         if (container !== undefined) confluenceFailure('invalid_request');
         const expression = await cql(undefined, input.since, input.until, input.signal, input);
-        if (expression === undefined) { await verify(input.signal); return Object.freeze({ items: Object.freeze([]), truncated: false }); }
+        if (expression === undefined) { await verify(input.signal); return Object.freeze({ items: Object.freeze([]), truncated: false, page_full: false }); }
         path = '/rest/api/search'; query = { cql: expression, limit: String(maximum), includeArchivedSpaces: 'true' };
       } else query = { limit: String(maximum), status: LIST_STATUSES, ...(container === undefined ? selected === undefined ? {} : { 'space-id': selected } : { 'space-id': container }) };
       const result = await discover(path, query, maximum, input.signal);
@@ -351,7 +351,9 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         const { cursor: _cursor, ...stable } = query;
         cursors.set(next_cursor, Object.freeze({ selection, path, query: Object.freeze(stable), token: result.token }));
       }
-      return Object.freeze({ items: Object.freeze(result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(page => remember(inventory(page)))), truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }) });
+      // A last page with no next link can still be exactly full (ADR-0041): counted before ECHO's own date filter.
+      const page_full = next_cursor === undefined && result.pages.length >= maximum;
+      return Object.freeze({ items: Object.freeze(result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(page => remember(inventory(page)))), truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full });
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
       const maximum = limit(input.limit, 8);

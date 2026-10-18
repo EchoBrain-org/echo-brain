@@ -15,6 +15,9 @@ import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } fro
  */
 export const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
 export const checked = { checked_at: "2026-10-06T00:00:00.000Z" };
+/** The pinned wall clock: when a fixture's lists are read (ADR-0041). */
+export const LIST_READ_AT = "2026-10-06T09:30:00.000Z";
+const wall_ms = () => Date.parse(LIST_READ_AT);
 
 export function record(id: string, text: string | undefined = `Approved record ${id}: the review decided ${id}.`, options: Partial<EvidenceDeskItemV1> = {}): EvidenceDeskItemV1 {
   return Object.freeze({
@@ -255,7 +258,7 @@ export async function replay(name: string, scenario: Scenario, hooks: { readonly
   };
   const options = {
     desk: scenario.desk(), model, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); hooks.on_append?.(entry); } },
-    now_ms: () => time, today: () => "2026-10-06",
+    now_ms: () => time, today: () => "2026-10-06", wall_ms,
     ...(scenario.asker === undefined ? {} : { asker: { display_name: scenario.asker } }),
     ...(scenario.shortcut === true ? { small_scope_shortcut: true } : {}),
   };
@@ -271,7 +274,7 @@ export async function replay(name: string, scenario: Scenario, hooks: { readonly
  * With `usage`, the model also reports each call's token usage (call numbers start at 1).
  */
 export function researchHarness(replies: readonly unknown[] | ((input: StructuredGenerationInput, index: number) => unknown), desk: Partial<EvidenceDeskPortV2> = {}, core: {
-  readonly small_scope_shortcut?: true; readonly now_ms?: () => number; readonly usage?: (call: number) => StructuredGenerationUsageV1;
+  readonly small_scope_shortcut?: true; readonly now_ms?: () => number; readonly usage?: (call: number) => StructuredGenerationUsageV1; readonly wall_ms?: () => number;
 } = {}) {
   const inputs: StructuredGenerationInput[] = [];
   const audit: AgenticAskAuditEntryV1[] = [];
@@ -290,7 +293,7 @@ export function researchHarness(replies: readonly unknown[] | ((input: Structure
   const model: StructuredGenerationPort = usage === undefined ? { generate } : {
     generate, generate_with_observation: async input => ({ value: await generate(input), finish_reason: "stop", provider_latency_ms: null, usage: usage(inputs.length) }),
   };
-  const research = createAgenticResearchV1({ desk: port, model, generation, audit: { append: entry => { audit.push(entry); } }, today: () => "2026-10-06", ...options });
+  const research = createAgenticResearchV1({ desk: port, model, generation, audit: { append: entry => { audit.push(entry); } }, today: () => "2026-10-06", wall_ms, ...options });
   return { research, port, inputs, audit, generate, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, unknown> };
 }
 

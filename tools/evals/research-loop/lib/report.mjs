@@ -21,10 +21,17 @@ export function runScores(graded) {
   // A run that failed or was rejected delivered nothing: it scores zero on quality, never "unknown".
   if (checks.status !== "completed") {
     return { status: checks.status, complete_and_supported: false, tools_found: 0, tools_read: 0, research_established: 0, ...(planned ? { planner_needs_covered: 0, tools_handed: 0 } : {}),
-      ...(checks.trigger === "ask" ? { writer_parts_correct: 0 } : {}), ...(checks.trigger === "approved_record" ? { card_items_listed: 0 } : {}) };
+      ...(checks.declared_kinds === undefined ? {} : { planner_kinds_declared: 0 }),
+      ...(checks.trigger === "ask" ? { writer_parts_correct: 0, ...((checks.list_parts ?? 0) > 0 ? { writer_lists_named: 0 } : {}) } : {}), ...(checks.trigger === "approved_record" ? { card_items_listed: 0 } : {}) };
   }
   const parts = checks.parts.length;
   const ask = checks.trigger === "ask";
+  // A list part counts only on its whole list (ADR-0041): established when a complete list holds every member, and
+  // correct in the answer only when it names every member, whatever the judge says. Code decides; the judge may still refuse.
+  const codePart = new Map(checks.parts.map(part => [part.id, part]));
+  const wholeList = (id, holds) => codePart.get(id)?.type !== "list" || holds(codePart.get(id));
+  const listParts = checks.parts.filter(part => part.type === "list");
+  const listMissed = ask && listParts.some(part => part.named !== true);
   // The impact card: relations and owners are judged on the key items it lists.
   const card = checks.card ?? null;
   const cardCorrect = card === null || (card.listed === card.expected && card.relations_correct === card.listed && card.owners_correct === card.listed);
@@ -32,14 +39,14 @@ export function runScores(graded) {
   const sweep = checks.sweep ?? null;
   const sweepCorrect = sweep === null || sweep.right === sweep.total;
   const judged = judge ?? null;
-  const established = judged === null ? null : judged.parts.filter(part => part.established_by_research).length;
-  const answerCorrect = judged === null || !ask ? null : judged.parts.filter(part => part.answer_correct === "yes").length;
+  const established = judged === null ? null : judged.parts.filter(part => part.established_by_research && wholeList(part.id, value => value.read)).length;
+  const answerCorrect = judged === null || !ask ? null : judged.parts.filter(part => part.answer_correct === "yes" && wholeList(part.id, value => value.named === true)).length;
   const verdictsCorrect = judged === null || judged.verdicts.length === 0 ? null : rate(judged.verdicts.filter(verdict => verdict.matches_expected).length, judged.verdicts.length);
   const violations = judged === null ? null : judged.must_not.filter(entry => entry.violated).length;
   const gapsReported = judged === null ? null : judged.gaps.length === (checks.expected_gaps?.length ?? 0) && judged.gaps.every(gap => gap.reported);
   // Gaps are reported by the run's output: Ask's answer or the card. A Sweep case names none (it has no plan to report them in).
   const gapRate = judged === null || judged.gaps.length === 0 ? null : rate(judged.gaps.filter(gap => gap.reported).length, judged.gaps.length);
-  const complete = checks.leaks.length > 0 || (checks.answer_citation_violations?.length ?? 0) > 0 || (card?.invented.length ?? 0) > 0 ? false : judged === null ? null
+  const complete = checks.leaks.length > 0 || (checks.answer_citation_violations?.length ?? 0) > 0 || (card?.invented.length ?? 0) > 0 || listMissed ? false : judged === null ? null
     : established === parts && violations === 0 &&
       (!ask || (answerCorrect === parts && judged.unsupported_claims === 0 && !judged.false_abstention)) &&
       cardCorrect && sweepCorrect && gapsReported &&
@@ -48,12 +55,15 @@ export function runScores(graded) {
     status: "completed",
     planner_needs_covered: judged === null || !planned ? null : rate(judged.needs.filter(need => need.covered).length, judged.needs.length),
     planner_invented_needs: judged === null || !planned ? null : judged.invented_needs.length,
+    // A code check (ADR-0041): the plan's need kinds, as a set, are the ones its case names.
+    planner_kinds_declared: checks.declared_kinds === undefined ? null : checks.declared_kinds ? 1 : 0,
     tools_found: rate(checks.coverage.found, parts),
     tools_read: rate(checks.coverage.read, parts),
     tools_handed: planned ? rate(checks.coverage.handed, parts) : null,
     research_established: established === null ? null : rate(established, parts),
     verdicts_correct: verdictsCorrect,
     writer_parts_correct: answerCorrect === null ? null : rate(answerCorrect, parts),
+    writer_lists_named: ask ? rate(listParts.filter(part => part.named === true).length, listParts.length) : null,
     writer_unsupported_claims: judged === null || !ask ? null : judged.unsupported_claims,
     writer_false_abstention: judged === null || !ask ? null : judged.false_abstention,
     gaps_reported: ask ? gapRate : null,
@@ -75,8 +85,8 @@ export function runScores(graded) {
 }
 
 const METRICS = [
-  "planner_needs_covered", "planner_invented_needs", "tools_found", "tools_read", "tools_handed", "research_established",
-  "verdicts_correct", "writer_parts_correct", "writer_unsupported_claims", "gaps_reported",
+  "planner_needs_covered", "planner_invented_needs", "planner_kinds_declared", "tools_found", "tools_read", "tools_handed", "research_established",
+  "verdicts_correct", "writer_parts_correct", "writer_lists_named", "writer_unsupported_claims", "gaps_reported",
   "card_items_listed", "card_relations_correct", "card_owners_correct", "card_invented", "card_gaps_reported", "must_not_violations",
   "leaks", "noise_handed", "distractors_handed", "elapsed_ms", "rounds", "model_calls",
 ];
@@ -88,6 +98,8 @@ const JUDGE_METRICS = [
 
 /** Sums one count over entries that have it; null when none does (no sweep was graded). */
 const tally = (entries, key) => (entries.length === 0 ? null : entries.reduce((sum, entry) => sum + entry[key], 0));
+/** An Ask plan's needs by declared kind (ADR-0041); `missing` counts needs saved without one. */
+const KIND_COUNTS = ["which_items", "which_say", "content", "missing"];
 
 /**
  * Per-case means of each metric (unknown runs excluded), then means across
@@ -112,8 +124,11 @@ export function aggregate(gradedRuns) {
     }));
     const verdicts = runs.map(run => run.scores.complete_and_supported);
     const sweeps = runs.map(run => run.graded.checks.sweep).filter(sweep => sweep !== undefined);
+    const kinds = runs.map(run => run.graded.checks.kinds).filter(value => value !== undefined);
     return {
-      case_id: checks.case_id, split: checks.split, trigger: checks.trigger, budget: checks.budget, runs: runs.length,
+      case_id: checks.case_id, split: checks.split, trigger: checks.trigger, budget: checks.budget, runs: runs.length, key_status: checks.key_status ?? null,
+      // Every completed run's needs, by declared kind, summed over the case's runs.
+      kinds: kinds.length === 0 ? null : Object.fromEntries(KIND_COUNTS.map(kind => [kind, kinds.reduce((total, value) => total + value[kind], 0)])),
       failed_runs: runs.length - completed.length,
       not_started: runs.filter(run => run.graded.checks.error?.code === "case_not_startable").length,
       rejected_at_ingress: runs.filter(run => run.scores.status === "rejected_at_ingress").length,
@@ -132,6 +147,7 @@ export function aggregate(gradedRuns) {
     summary: {
       ...summary,
       cases: cases.length,
+      cases_awaiting_key_confirmation: [...new Set(cases.filter(entry => entry.key_status === "awaiting_founder_confirmation").map(entry => entry.case_id))],
       cases_complete_in_every_run: known.filter(entry => entry.complete_in_every_run).length,
       cases_with_unknown_completion: cases.length - known.length,
       runs_failed: cases.reduce((total, entry) => total + entry.failed_runs, 0),
@@ -161,6 +177,8 @@ export function markdownReport(identity, report) {
   const s = report.summary;
   const calibration = identity.judge_calibration;
   const rendered = report.cases.filter(entry => entry.trigger === "ask" || entry.trigger === "approved_record");
+  const asked = report.cases.filter(entry => entry.kinds !== null);
+  const awaiting = s.cases_awaiting_key_confirmation;
   const swept = report.cases.filter(entry => entry.trigger === "sweep");
   const lines = [
     `# Research loop evaluation — ${identity.split} at ${identity.state}`,
@@ -176,18 +194,20 @@ export function markdownReport(identity, report) {
     "",
     "Complete and supported needs research, the renderer's result and every safety check to be right.",
     "",
+    ...(awaiting.length === 0 ? [] : [`Keys drafted from the export and awaiting the founder's confirmation: ${awaiting.join(", ")}.`, ""]),
     "| Case | Trigger | Budget | Runs | Complete and supported |",
     "| --- | --- | --- | --- | --- |",
     ...report.cases.map(entry => `| ${entry.case_id} | ${entry.trigger} | ${entry.budget} | ${entry.runs}${entry.failed_runs > 0 ? ` (${entry.failed_runs} failed${entry.not_started > 0 ? `, ${entry.not_started} not started` : ""})` : ""} | ${entry.complete_in_every_run === null ? "—" : entry.complete_in_every_run ? "yes" : "no"} |`),
     "",
     "## Research loop",
     "",
-    "Graded on the research result of every trigger. A sweep has no planner, so the planner and handed-over measures leave Sweep cases out (— in their rows).",
+    "Graded on the research result of every trigger. A sweep has no planner, so the planner and handed-over measures leave Sweep cases out (— in their rows). A list part counts only on its whole list: found when research came across every member, read when a complete list holds every member, handed over when the writer saw every member.",
     "",
     "| Stage | Measure | Value |",
     "| --- | --- | --- |",
     `| Planner | expected needs covered | ${percent(s.planner_needs_covered)} |`,
     `| Planner | invented needs per run | ${number(s.planner_invented_needs)} |`,
+    `| Planner | need kinds as the case expects (code check) | ${percent(s.planner_kinds_declared)} |`,
     `| Tools | required items found | ${percent(s.tools_found)} |`,
     `| Tools | required items read in full | ${percent(s.tools_read)} |`,
     `| Tools | required items handed over | ${percent(s.tools_handed)} |`,
@@ -201,6 +221,12 @@ export function markdownReport(identity, report) {
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...report.cases.map(entry => `| ${entry.case_id} | ${entry.trigger} | ${entry.budget} | ${percent(entry.tools_found)} | ${percent(entry.tools_read)} | ${percent(entry.tools_handed)} | ${percent(entry.research_established)} | ${Object.entries(entry.stop_reasons).map(([reason, count]) => `${reason} ${count}`).join(", ")} |`),
     "",
+    "Each Ask plan's needs by declared kind (ADR-0041), over the case's completed runs. \"As expected\" is the code check for a case that names the kinds its plan should declare.",
+    "",
+    "| Case | Budget | which_items | which_say | content | no kind | As expected |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    ...asked.map(entry => `| ${entry.case_id} | ${entry.budget} | ${KIND_COUNTS.map(kind => entry.kinds[kind]).join(" | ")} | ${percent(entry.planner_kinds_declared)} |`),
+    "",
     "## Renderers",
     "",
     "Graded on what each renderer made from the research it was given.",
@@ -208,6 +234,7 @@ export function markdownReport(identity, report) {
     "| Renderer | Measure | Value |",
     "| --- | --- | --- |",
     `| Ask writer | parts correct in the answer | ${percent(s.writer_parts_correct)} |`,
+    `| Ask writer | lists named in full (code check) | ${percent(s.writer_lists_named)} |`,
     `| Ask writer | unsupported claims per run | ${number(s.writer_unsupported_claims)} |`,
     `| Ask writer | gaps reported | ${percent(s.gaps_reported)} |`,
     `| Impact card | affected items listed | ${percent(s.card_items_listed)} |`,
@@ -219,9 +246,11 @@ export function markdownReport(identity, report) {
     `| Sweep result | verdicts right / findings | ${outOf(s.sweep_verdicts_right, s.sweep_findings)} |`,
     `| Sweep result | findings not assessed | ${number(s.sweep_not_assessed)} |`,
     "",
-    "| Case | Trigger | Budget | Answer | Listed | Relations | Owners | Invented |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...rendered.map(entry => `| ${entry.case_id} | ${entry.trigger} | ${entry.budget} | ${percent(entry.writer_parts_correct)} | ${percent(entry.card_items_listed)} | ${percent(entry.card_relations_correct)} | ${percent(entry.card_owners_correct)} | ${number(entry.card_invented)} |`),
+    "A list part is correct in the answer only when the answer names every member of its list; naming some earns nothing.",
+    "",
+    "| Case | Trigger | Budget | Answer | Listed | Relations | Owners | Invented | Lists named |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...rendered.map(entry => `| ${entry.case_id} | ${entry.trigger} | ${entry.budget} | ${percent(entry.writer_parts_correct)} | ${percent(entry.card_items_listed)} | ${percent(entry.card_relations_correct)} | ${percent(entry.card_owners_correct)} | ${number(entry.card_invented)} | ${percent(entry.writer_lists_named)} |`),
     "",
     "The sweep result's own verdicts, checked by code against the key: landed is landed, still open or changed is not landed, unreadable is no evidence. A verdict not assessed (null) is wrong, and so is every finding of a failed run. \"Sweep verdicts correct\" under Research loop is a different measure: the judge's reading of the items research read.",
     "",

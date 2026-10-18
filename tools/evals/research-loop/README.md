@@ -41,6 +41,61 @@ Approved-record keys carry a relation and an owner per affected item
 verdicts are counted, not averaged: per case over all its runs, then over all
 Sweep cases; a failed run's findings all count as wrong.
 
+**List parts ([ADR-0041](../../../docs/decisions/ADR-0041-complete-lists-as-ask-evidence.md)).**
+A part of type `list` asks which items exist ("Which Confluence pages were
+created on October 4, 2026?"), and its evidence names every member of the list,
+each a whole item. It scores on the whole list, never item by item: found when
+research came across every member, read when a complete list research read
+holds every member, cited when the plan cites every member or a found
+`which_items` need cites, by id, a list holding it (a need saved without a kind
+is content, whose list ids mean nothing), handed over when the writer saw
+every member, and correct in the answer only when the answer names every
+member: a statement code wrote cites its row (code's statements cite only list
+members' rows), or a writer's sentence cites its own text (a page's section);
+a row a writer's sentence cites beside its text, for the row's facts, names
+nothing, and nor does a private row its list id brings, unless the writer was
+given that row's text (an opened ticket's), which the response cannot tell from
+a row the sentence cites by id, so it reads as named. A list longer than the
+25 names an answer gives is named in full when a statement code wrote ends
+"and N more" and the members it names plus N are
+exactly the list. Naming 4 of 8 earns nothing,
+whatever the judge says. "Lists
+named in full" is that last check, made by code, so it is reported without a
+judge too, and a run whose answer misses a member is never complete and
+supported. An answer may cite the row of a member of a list research read,
+which counts as research evidence like an item read in full.
+
+Every Ask run reports `kinds`, its final plan's needs by declared kind
+(`which_items`, `which_say`, `content`, and `missing` for a need saved without
+one), and the report shows them beside each Ask case. A case's `expected_kinds`
+is scored by code as `declared_kinds`, beside each run's `kinds`: it passes when
+the set of kinds the final plan declares, a need without a kind counting as
+content, is exactly the case's ("need kinds as the case expects"). A failed run
+of such a case scores zero on it. It is a score of its own, never part of
+complete and supported. Every held-out Ask case names its kinds, so the score
+also measures the step prompt's kind rule on questions tuning never sees, and
+its examples name nothing any case asks about
+(`tests/architecture/ask-kind-examples-eval-independence.test.ts`), so the
+score never measures recall of an example. Only Ask cases have list parts: impact
+cards and sweeps record no lists. The judge sees research's lists as rows
+(filter, completeness, members' titles, dates and details, never text), and
+for any part may take a member's own title, dates, status or owner from its
+row, never what the item says.
+
+Ask's writer now also sees every list research read as rows without text. A
+row hands over a date, owner or status part, never other content, and rows
+count as neither noise nor distractors handed, so those numbers keep their
+meaning across ADR-0041. The writer answers such a part by selecting the
+member, and code states its row facts, citing the row: Ask leaves out a
+writer's sentence that cites only rows or list ids.
+
+**Baselines across ADR-0041 (2026-10-17).** Ask's research and writer changed:
+a complete list is evidence, and code names its members. Ask baselines taken
+before it measure the old loop, and their saved runs carry no lists, so a list
+part in them is never read. Take Ask baselines again on an endpoint built
+after ADR-0041, and regrade any earlier one with the current `grade` before
+comparing it. Approved-record and Sweep runs are unchanged.
+
 **Baselines across the research trigger contract.** Ask is byte-identical
 across that change, so an Ask baseline taken before or after it measures the
 same thing. Grading changed, though: the judge's prompt now covers the impact
@@ -80,7 +135,7 @@ staging; an approved-record capture can start an existing pending ECHO run.
 | --- | --- |
 | `world/` | The THERM additions and S1 edits to seed by hand (see `world/README.md`). |
 | `cases/development.json` | Cases used while improving the loop. |
-| `cases/holdout.json` | Held-out cases. Open them only for the final check. |
+| `cases/holdout.json` | Held-out cases. Open them only for the final check. No other file quotes their questions, names them or gives their keys. |
 | `cli.mjs` | `validate`, `bindings`, `run`, `grade`, `report`, `calibrate`, `trace`. |
 | `lib/` | Reference matching, code checks, judge, report, calibration. |
 
@@ -268,6 +323,12 @@ delete traces already uploaded.
   much hedging it causes.
 - The global cross-project cases meet the ECHO distractors only if the test
   person can reach Jira project ECHO or page 589865 through a mapped project.
+- `confluence-pages-created-on-october-4-global` keys the 8 pages the founder's
+  October 4 list returned on staging on 2026-10-17 (trace `ee2f0973`), page
+  589865 among them, outside the THERM space. Its key holds only while the test
+  person can read those 8 pages and no other page created that day. The
+  evaluation's Ask sends no time zone, so it reads dates in UTC; all 8 were
+  created on October 4 in UTC as well as in the trace's Los Angeles time.
 - History-only facts (when a ticket moved to Done) are expected to be not
   found: Ask cannot read Jira history today.
 - Questions over 240 characters are rejected at ingress, as in the product;

@@ -20,6 +20,7 @@ import { createSyntheticMeetingToolV1 } from './synthetic-meeting-tool.js';
 export { runClientUpdateCli, updateBeforePersonCommand } from './client-update-cli.js';
 
 /** The shipped Person CLI selects its tool providers only at this entrypoint. */
-export function runPersonClientCli(argv: readonly string[], dependencies: PersonClientCliDependencies = {}): Promise<number> {
-  return runCli(argv, { ...dependencies, tool_providers: dependencies.tool_providers ?? [granolaTool(), createSyntheticMeetingToolV1(), createSlackPersonToolProviderV1(), createJiraPersonToolProviderV1(), createConfluencePersonToolProviderV1()] });
+export function runPersonClientCli(argv: readonly string[], dependencies: PersonClientCliDependencies): Promise<number> {
+  // A call without dependencies reaches the CLI's own refusal of a missing home.
+  return runCli(argv, { ...dependencies, tool_providers: dependencies?.tool_providers ?? [granolaTool(), createSyntheticMeetingToolV1(), createSlackPersonToolProviderV1(), createJiraPersonToolProviderV1(), createConfluencePersonToolProviderV1()] });
 }

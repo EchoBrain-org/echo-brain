@@ -327,8 +327,11 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         await verifyConnection(signal);
       }
       const visibleRelated = related.filter((item): item is ParsedJiraIssueV1 => item !== undefined);
+      // Truncated covers what the open left out beside the ticket too (a link, a hidden link, a label cut); the
+      // ticket's own text was cut only when its released text was (ADR-0041).
       return Object.freeze({ items: remember([selected, ...visibleRelated]),
-        truncated: selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || relatedIds.length !== selected.related_issue_ids.length });
+        truncated: selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || relatedIds.length !== selected.related_issue_ids.length,
+        anchor_truncated: selected.text_truncated });
     }, signal);
   }
 
@@ -410,7 +413,8 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         // Pages run newest first: once a page's oldest issue predates since, no later page can match.
         const oldest = page.selected.at(-1);
         const oldestDay = evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
-        const token = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since ? undefined : page.token;
+        const passedSince = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since;
+        const token = passedSince ? undefined : page.token;
         await verifyConnection(input.signal);
         const items = remember(selected);
         let next_cursor: string | undefined;
@@ -419,7 +423,12 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
           next_cursor = `jira_cursor_${randomUUID()}`;
           cursors.set(next_cursor, { selection, token, projectId: project?.id, tokens: page.tokens, ids: page.ids });
         }
-        return Object.freeze({ items, truncated: token !== undefined || selected.some(item => item.truncated), ...(next_cursor === undefined ? {} : { next_cursor }) });
+        // Jira's last page can be exactly full (ADR-0041): its end is confirmed only when the page held fewer issues than
+        // asked for, or when the newest-first order passed since. Counted before ECHO's own date filter.
+        const page_full = !passedSince && page.token === undefined && page.selected.length >= maximum;
+        // Only a next page means more items exist. A summary cut to its label bound is one row's title, never a sign that
+        // the list did not reach its end (ADR-0041).
+        return Object.freeze({ items, truncated: token !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full });
       }, input.signal);
     },
     async revalidate(input): Promise<void> {

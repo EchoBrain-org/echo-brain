@@ -10,9 +10,14 @@ const TRIGGERS = new Set(["ask", "approved_record", "sweep"]);
 const STATES = new Set(["S0", "S1"]);
 const BUDGETS = new Set(["live", "background"]);
 const OUTCOMES = new Set(["answerable", "partial", "not_found"]);
-const PART_TYPES = new Set(["fact", "date", "owner", "status", "conflict", "change"]);
+/** `list` (ADR-0041): which items exist; its evidence names every member, and it scores only on naming them all. */
+const PART_TYPES = new Set(["fact", "date", "owner", "status", "conflict", "change", "list"]);
 const MEETING_ITEMS = new Set(["decision", "action", "rationale", "transcript"]);
 const VERDICTS = new Set(["landed", "not_landed", "no_evidence"]);
+/** The kinds an Ask need declares (ADR-0041): a case may name those its plan should declare. */
+const NEED_KINDS = new Set(["which_items", "which_say", "content"]);
+/** A key drafted from the export that the founder has not confirmed yet. */
+const KEY_STATUSES = new Set(["awaiting_founder_confirmation"]);
 const RELATIONS = new Set(["confirms", "conflicts", "needs_updating"]);
 
 /** Deep-replaces the signed-in person placeholder with their directory display name. */
@@ -75,6 +80,19 @@ function affectedProblems(entry, meetings, restricted) {
   return problems;
 }
 
+/**
+ * A list part (ADR-0041) names every member of the list its question asks for, each once and each a whole item: a
+ * ticket, a page without a section, or a meeting item. Only Ask records lists; a task goal keeps the rules before it.
+ */
+function listPartProblems(entry, part, where) {
+  const evidence = Array.isArray(part.evidence) ? part.evidence : [];
+  const problems = [];
+  if (entry.trigger !== "ask") problems.push(`${where}: only Ask cases have list parts`);
+  if (evidence.some(ref => ref?.section !== undefined || ref?.jira_project !== undefined)) problems.push(`${where}: a list part names whole items, never a section or a Jira project`);
+  if (new Set(evidence.map(ref => JSON.stringify(ref))).size !== evidence.length) problems.push(`${where}: a list part names each member once`);
+  return problems;
+}
+
 /** Structural checks every committed case must pass; the export-based checks live in the dataset README. */
 export function datasetProblems(dataset) {
   const problems = [];
@@ -88,6 +106,12 @@ export function datasetProblems(dataset) {
     ids.add(entry.id);
     if (!TRIGGERS.has(entry.trigger) || !STATES.has(entry.state) || !BUDGETS.has(entry.budget) || !OUTCOMES.has(entry.expected_outcome)) problems.push(`${where}: trigger, state, budget or outcome is invalid`);
     if (entry.trigger === "ask" && (typeof entry.question !== "string" || entry.question.trim() === "")) problems.push(`${where}: Ask needs a question`);
+    if (entry.expected_kinds !== undefined) {
+      const kinds = entry.expected_kinds;
+      if (entry.trigger !== "ask") problems.push(`${where}: only Ask cases name the need kinds their plan should declare`);
+      if (!Array.isArray(kinds) || kinds.length === 0 || new Set(kinds).size !== kinds.length || kinds.some(kind => !NEED_KINDS.has(kind))) problems.push(`${where}: expected_kinds must be distinct need kinds: which_items, which_say or content`);
+    }
+    if (entry.key_status !== undefined && !KEY_STATUSES.has(entry.key_status)) problems.push(`${where}: key_status can only be awaiting_founder_confirmation`);
     if ((entry.trigger === "approved_record") !== (entry.scope?.kind === "record")) problems.push(`${where}: approved records, and only they, take the record's scope`);
     if (entry.trigger === "approved_record") problems.push(...affectedProblems(entry, meetings, restricted));
     else if (entry.affected !== undefined) problems.push(`${where}: only approved records list affected items`);
@@ -104,6 +128,7 @@ export function datasetProblems(dataset) {
     if (!Array.isArray(entry.parts) || (entry.parts.length === 0 && entry.expected_outcome !== "not_found")) problems.push(`${where}: parts are required unless nothing should be found`);
     for (const part of entry.parts ?? []) {
       if (!PART_TYPES.has(part.type) || typeof part.requirement !== "string" || !Array.isArray(part.evidence) || part.evidence.length === 0) problems.push(`${where}/${part.id}: part is invalid`);
+      if (part.type === "list") problems.push(...listPartProblems(entry, part, `${where}/${part.id}`));
       for (const ref of part.evidence ?? []) {
         problems.push(...refProblems(ref, meetings, `${where}/${part.id}`));
         if (restricted.has(ref.meeting)) problems.push(`${where}/${part.id}: restricted meeting used as evidence`);

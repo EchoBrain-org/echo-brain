@@ -6,7 +6,7 @@ const stepSchema = Object.freeze({ properties: Object.freeze({ parts: Object.fre
 const answerSchema = Object.freeze({ properties: Object.freeze({ sentences: Object.freeze({}), not_found: Object.freeze({}) }) });
 
 const step = (port, prompt) => port.generate({ schema: stepSchema, user_prompt: JSON.stringify(prompt) });
-const answer = (port, evidence) => port.generate({ schema: answerSchema, user_prompt: JSON.stringify({ question: "What did the team decide?", evidence }) });
+const answer = (port, evidence, lists) => port.generate({ schema: answerSchema, user_prompt: JSON.stringify({ question: "What did the team decide?", ...(lists === undefined ? {} : { lists }), evidence }) });
 
 test("deterministic agent searches, then completes a bounded inventory before reporting absence", async () => {
   const port = createCoreDeterministicStructuredGenerationPort();
@@ -14,13 +14,16 @@ test("deterministic agent searches, then completes a bounded inventory before re
   assert.deepEqual(first.actions, [{ tool: "search", args: { query: "what decision governs the active checkpoint" } }]);
   const found = await step(port, { question: "What decision governs the active checkpoint?", step: 2, seen: [{ id: "E1", full: true }], last_results: [{ tool: "search", results: ["E1"] }] });
   assert.deepEqual(found.actions, [{ tool: "finish", args: {} }]);
-  assert.deepEqual(found.parts[0].needs[0], { need: "the answer", status: "found", evidence: ["E1"] });
+  // Its one need asks what an item says: content, never a list kind (ADR-0041).
+  assert.deepEqual(found.parts[0].needs[0], { need: "the answer", kind: "content", status: "found", evidence: ["E1"] });
   const absentSearch = await step(port, { question: "What decision governs the active checkpoint?", step: 2, last_results: [{ tool: "search", results: [] }] });
   assert.deepEqual(absentSearch.actions, [{ tool: "list", args: { source: "meetings" } }]);
   assert.equal(absentSearch.parts[0].needs[0].status, "open");
+  assert.equal(absentSearch.parts[0].needs[0].kind, "content");
   const missing = await step(port, { question: "What decision governs the active checkpoint?", step: 3, last_results: [{ tool: "list", items: [], more: false }] });
   assert.deepEqual(missing.actions, [{ tool: "finish", args: {} }]);
   assert.equal(missing.parts[0].needs[0].status, "not_found");
+  assert.equal(missing.parts[0].needs[0].kind, "content");
 });
 
 test("deterministic agent finishes on the highest-ranked full result, not the lowest id", async () => {
@@ -48,8 +51,19 @@ test("deterministic answer output is grounded in the current released evidence a
   const port = createCoreDeterministicStructuredGenerationPort();
   const first = await answer(port, [{ id: "E1", text: "Use the durable checkpoint." }]);
   const second = await answer(port, [{ id: "E7", text: "Use the active release fence." }]);
-  assert.deepEqual(first, { sentences: [{ text: "Use the durable checkpoint.", evidence: ["E1"] }], not_found: [] });
-  assert.deepEqual(second, { sentences: [{ text: "Use the active release fence.", evidence: ["E7"] }], not_found: [] });
+  assert.deepEqual(first, { lists: [], sentences: [{ text: "Use the durable checkpoint.", evidence: ["E1"] }], not_found: [] });
+  assert.deepEqual(second, { lists: [], sentences: [{ text: "Use the active release fence.", evidence: ["E7"] }], not_found: [] });
   await assert.rejects(answer(port, []), /no released evidence/);
+  await assert.rejects(answer(port, [], []), /no released evidence/);
   await assert.rejects(answer(port, [{ id: "", text: "unbound" }]), /invalid released evidence/);
+});
+
+test("deterministic answer chooses no list and never writes a list's names (ADR-0041)", async () => {
+  const port = createCoreDeterministicStructuredGenerationPort();
+  const rows = [{ id: "E1", kind: "decision", title: "Checkpoint review", checked: false }];
+  const list = (id) => ({ id, source: "meetings", complete: true, count: 1, checked: 0, members: rows });
+  // Rows only: no sentence of its own, and no list, since its planner's content need rests on none.
+  assert.deepEqual(await answer(port, [], [list("L1"), list("L2")]), { lists: [], sentences: [], not_found: [] });
+  // Beside released text, it quotes only that text.
+  assert.deepEqual(await answer(port, [{ id: "E3", text: "Use the durable checkpoint." }], [list("L1")]), { lists: [], sentences: [{ text: "Use the durable checkpoint.", evidence: ["E3"] }], not_found: [] });
 });

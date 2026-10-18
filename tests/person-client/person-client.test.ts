@@ -255,7 +255,7 @@ async function withHome(run: (home: string) => Promise<void>): Promise<void> {
 
 async function runCli(
   argv: readonly string[],
-  dependencies: Omit<PersonClientCliDependencies, "stdout" | "stderr"> = {},
+  dependencies: Omit<PersonClientCliDependencies, "stdout" | "stderr">,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   let stdout = "";
   let stderr = "";
@@ -346,8 +346,8 @@ describe('shared Jira tool commands', () => {
 
   it('rejects bad shared-tool inputs before a request', async () => {
     const fetchImpl = vi.fn();
-    expect((await runCli(['tools', 'connect', '--tool', 'jira', '--membership-id', ORGANIZATION_IDS.membership], { fetch: fetchImpl, tool_providers: providers })).code).toBe(2);
     await withHome(async home => {
+      expect((await runCli(['tools', 'connect', '--tool', 'jira', '--membership-id', ORGANIZATION_IDS.membership], { home_directory: home, fetch: fetchImpl, tool_providers: providers })).code).toBe(2);
       await installFixtureSession(home);
       const invalid = await runCli(['tools', 'status', '--tool', 'jira', '--attempt-id', 'bad\nlocator'], {
         home_directory: home, now: () => NOW, fetch: fetchImpl, tool_providers: providers,
@@ -676,10 +676,13 @@ describe("Person client", () => {
       ["records", "--record-sha256", `sha256:${"a".repeat(64)}`, "--query", "x"],
     ]) {
       let called = false;
-      const { code: status } = await runCli(argv, {
-        fetch: async () => { called = true; throw new Error("unexpected network"); },
+      await withHome(async home => {
+        const { code: status } = await runCli(argv, {
+          home_directory: home,
+          fetch: async () => { called = true; throw new Error("unexpected network"); },
+        });
+        expect(status).toBe(2);
       });
-      expect(status).toBe(2);
       expect(called).toBe(false);
     }
   });
@@ -2751,11 +2754,13 @@ describe('Person updates CLI', () => {
     });
   });
   it('requires a request ID and explains organizational custody in help', async () => {
-    let help = ''; const network = vi.fn();
-    expect(await runPersonClientCli(['updates', 'submit-v3', '--help'], { fetch: network, stdout: { write: value => { help += value; } } })).toBe(0);
-    expect(help).toContain('Saves one UTF-8 text original'); expect(help).toContain('Only me and no association are the defaults'); expect(help).toContain('same request ID');
-    expect(await runPersonClientCli(['updates', 'submit-v3', '--title', 'Release', '--file', '/unused'], { fetch: network, stderr: { write: () => {} } })).toBe(2);
-    expect(network).not.toHaveBeenCalled();
+    await withHome(async home => {
+      let help = ''; const network = vi.fn();
+      expect(await runPersonClientCli(['updates', 'submit-v3', '--help'], { home_directory: home, fetch: network, stdout: { write: value => { help += value; } } })).toBe(0);
+      expect(help).toContain('Saves one UTF-8 text original'); expect(help).toContain('Only me and no association are the defaults'); expect(help).toContain('same request ID');
+      expect(await runPersonClientCli(['updates', 'submit-v3', '--title', 'Release', '--file', '/unused'], { home_directory: home, fetch: network, stderr: { write: () => {} } })).toBe(2);
+      expect(network).not.toHaveBeenCalled();
+    });
   });
   it('uses an explicit Team selection and searches only validated upload responses', async () => {
     await withHome(async home => {

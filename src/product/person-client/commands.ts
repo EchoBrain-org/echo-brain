@@ -11,7 +11,6 @@ import { validatePersonAskProgressLineV2, validatePersonAskProgressResultLineV2 
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbNameV1, type PersonToolVerbV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { EmployeeMutationError, PersonClient } from "./client.js";
@@ -32,7 +31,8 @@ export interface PersonClientCliDependencies {
   readonly tool_providers?: readonly PersonToolProviderV1[];
   readonly stdout?: Output;
   readonly stderr?: Output;
-  readonly home_directory?: string;
+  /** The folder holding this person's store; only the shipped CLI entry passes the real home. */
+  readonly home_directory: string;
   readonly fetch?: typeof fetch;
   readonly allow_insecure_loopback?: boolean;
   readonly now?: () => string;
@@ -817,8 +817,12 @@ function requireSignedOut(client: PersonClient): void {
 
 export async function runPersonClientCli(
   argv: readonly string[],
-  dependencies: PersonClientCliDependencies = {},
+  dependencies: PersonClientCliDependencies,
 ): Promise<number> {
+  // No fallback to the real home: a caller that forgets one must fail, not read or write it.
+  if (typeof dependencies?.home_directory !== "string") {
+    throw new TypeError("runPersonClientCli needs an explicit home_directory");
+  }
   const stdout = dependencies.stdout ?? process.stdout;
   const stderr = dependencies.stderr ?? process.stderr;
   const toolProviders = dependencies.tool_providers ?? [];
@@ -987,7 +991,7 @@ export async function runPersonClientCli(
   }
 
   const client = new PersonClient({
-    home_directory: dependencies.home_directory ?? homedir(),
+    home_directory: dependencies.home_directory,
     ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
     allow_insecure_loopback: dependencies.allow_insecure_loopback === true,
     ...(dependencies.now === undefined ? {} : { now: dependencies.now }),

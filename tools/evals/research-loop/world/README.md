@@ -17,7 +17,7 @@ paraphrases, never copies of export pages.
 | `additions.json` | The S0 additions: the ECHO project mapping, the restricted project, Jira due dates and assignments (`jira_updates`), one Confluence paragraph (`confluence_updates`) and six meetings (`meetings`). Each meeting has notes, a transcript (one array entry per `Name: text` line) and the records the approved version must contain (`expected_records`). |
 | `s1.json` | S1, the partial fixes the Sweep cases run against. `apply` moves S0 to S1 and `revert` restores S0. Description edits are exact find-and-replace pairs on the Jira description text, and `status` names the target workflow status. |
 | `../cases/development.json` | Cases that tuning sessions may open. |
-| `../cases/holdout.json` | Held-out cases. Tuning sessions do not open this file. That is a working rule, not access control. |
+| `../cases/holdout.json` | Held-out cases. Tuning sessions do not open this file. That is a working rule, not access control. No other file quotes a held-out question, names a held-out case or gives its key: a test that needs them reads them from this file, and `npm run test:architecture` fails on a file that quotes one. |
 
 The meetings are:
 
@@ -107,6 +107,25 @@ be reverted, but ECHO cannot read either of them.
     relation.
   - Owner: the Jira assignee from `additions.json` (only THERM-47, 52, 53 and
     54 have one), and `null` for every other ticket and every page.
+- A `list` part asks which items exist. Its `evidence` names every member
+  of that list, each a whole item (a ticket, a page without a section, or a
+  meeting item) and each once, and it scores only when the answer names all
+  of them ([ADR-0041](../../../../docs/decisions/ADR-0041-complete-lists-as-ask-evidence.md)).
+  Only Ask cases have one. The October 4 case keys every Confluence page the
+  test person could read that was created on 2026-10-04: the 7 THERM pages and
+  page 589865. Record in the seed log whether the test person can still read
+  page 589865, and that no other page they can read was created that day. The
+  Confluence BUG-412 case tells a list-only answer apart only through page
+  589865, the one October 4 page that does not mention BUG-412.
+- A case with `key_status: awaiting_founder_confirmation` has a key drafted
+  from the export that the founder has not confirmed yet; the two BUG-412 cases
+  are such cases. An Ask case's `expected_kinds` names the need kinds its plan
+  should declare ([ADR-0041](../../../../docs/decisions/ADR-0041-complete-lists-as-ask-evidence.md));
+  a plan that declares any other set of kinds fails the declared-kind check.
+  Every held-out Ask case names them. Ask's step prompt teaches the kinds with
+  examples that name nothing a case asks about: a new question that shares a
+  name or a run of four words with them fails `npm run test:architecture`
+  until one of them is reworded.
 - `never_appears` lists the M6 items in every case. Any trace of them in a
   research result, the notes or an answer fails the run.
 - THERM items carry "SYNTHETIC MOCK" banners. An answer that reports a mock

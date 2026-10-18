@@ -42,7 +42,8 @@ describe('synthetic meeting CLI', () => {
   });
   it('registers the shipped command and its help without option collisions', async () => {
     let output = '';
-    expect(await runPersonClientCli(['tools', 'meetings', '--help'], { stdout: { write: value => { output += value; return true; } } })).toBe(0);
+    const home = mkdtempSync(join(tmpdir(), 'echo-custom-meeting-home-')); dirs.push(home);
+    expect(await runPersonClientCli(['tools', 'meetings', '--help'], { home_directory: home, stdout: { write: value => { output += value; return true; } } })).toBe(0);
     expect(output).toContain('--tool synthetic'); expect(output).toContain('--meeting-file'); expect(output).toContain('--retain');
   });
   it('requires file submission even when a valid submit payload is supplied through --request', async () => {

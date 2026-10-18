@@ -16,9 +16,12 @@ export function judgeChecks(testCase, judge) {
   const checks = [];
   judge.needs.forEach((need, index) => checks.push({ id: `need:${index}`, question: `Does the plan ask for: "${need.expected}"?`, judge: need.covered }));
   judge.parts.forEach(part => {
-    const requirement = testCase.parts.find(entry => entry.id === part.id)?.requirement ?? part.id;
-    checks.push({ id: `established:${part.id}`, question: `Do the items research read establish: "${requirement}"?`, judge: part.established_by_research });
-    if (part.answer_correct !== "not_applicable") checks.push({ id: `answer:${part.id}`, question: `Does the answer state this correctly, supported by its citations: "${requirement}"?`, judge: part.answer_correct === "yes" });
+    const key = testCase.parts.find(entry => entry.id === part.id);
+    const requirement = key?.requirement ?? part.id;
+    // A list part is judged on its whole list (ADR-0041), so its questions ask about every member.
+    const list = key?.type === "list";
+    checks.push({ id: `established:${part.id}`, question: list ? `Does a complete list research read hold every item in: "${requirement}"?` : `Do the items research read establish: "${requirement}"?`, judge: part.established_by_research });
+    if (part.answer_correct !== "not_applicable") checks.push({ id: `answer:${part.id}`, question: list ? `Does the answer name every item in this list, supported by its citations: "${requirement}"?` : `Does the answer state this correctly, supported by its citations: "${requirement}"?`, judge: part.answer_correct === "yes" });
   });
   judge.gaps.forEach((gap, index) => checks.push({ id: `gap:${index}`, question: `Does the answer or plan report this expected gap: "${gap.gap}"?`, judge: gap.reported }));
   judge.must_not.forEach((entry, index) => checks.push({ id: `must_not:${index}`, question: `Does the answer or plan violate: "${entry.rule}"?`, judge: entry.violated }));

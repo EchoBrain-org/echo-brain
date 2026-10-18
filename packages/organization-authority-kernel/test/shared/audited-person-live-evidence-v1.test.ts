@@ -216,6 +216,41 @@ describe('shared audited live evidence source V1', () => {
     }
   });
 
+  it('passes a list page_full through, keeps it out of the audit, and refuses it on any other read (ADR-0041)', async () => {
+    const full = (value: unknown) => ({ ...page([ticket()]), page_full: value }) as PersonLiveEvidencePageV1<PersonTicketCitationV1>;
+    const f = fixture('tickets', full(true));
+    expect((await f.make().list({ container: 'ECHO' })).page_full).toBe(true);
+    expect(JSON.stringify(f.releases)).not.toContain('page_full');
+    f.select(full(false));
+    expect((await f.make().list({ container: 'ECHO' })).page_full).toBe(false);
+    f.select(page([ticket()]));
+    expect(await f.make().list({ container: 'ECHO' })).not.toHaveProperty('page_full');
+    f.select(full(true));
+    await expect(f.make().search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+    f.select(full('yes'));
+    await expect(f.make().list({ container: 'ECHO' })).rejects.toMatchObject({ code: 'invalid_output' });
+  });
+
+  it('passes an open\'s anchor_truncated through, and refuses it on any other read or without truncated (ADR-0041)', async () => {
+    const opened = (value: unknown, truncated = true) => ({ ...page([ticket()]), truncated, anchor_truncated: value }) as PersonLiveEvidencePageV1<PersonTicketCitationV1>;
+    const f = fixture('tickets', page([ticket()]));
+    const source = f.make();
+    const found = await source.search({ query: 'ship' });
+    f.select(opened(false));
+    expect(await source.open({ item: found.items[0]!.id })).toMatchObject({ truncated: true, anchor_truncated: false });
+    f.select(opened(true));
+    expect(await source.open({ item: found.items[0]!.id })).toMatchObject({ truncated: true, anchor_truncated: true });
+    expect(JSON.stringify(f.releases)).not.toContain('anchor_truncated');
+    // A reader never reports the item's own cut without the open's truncated, nor on a search or list.
+    for (const [value, truncated] of [[true, false], ['yes', true]] as const) {
+      f.select(opened(value, truncated));
+      await expect(source.open({ item: found.items[0]!.id })).rejects.toMatchObject({ code: 'invalid_output' });
+    }
+    f.select(opened(false));
+    await expect(source.search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+    await expect(source.list({ container: 'ECHO' })).rejects.toMatchObject({ code: 'invalid_output' });
+  });
+
   it('commits empty releases without exposing the query or provider cursor and scopes continuations to their list', async () => {
     const f = fixture('tickets', page<PersonTicketCitationV1>([], 'private-provider-cursor'));
     const source = f.make();

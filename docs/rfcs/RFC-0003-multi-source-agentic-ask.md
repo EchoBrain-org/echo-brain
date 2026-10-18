@@ -251,16 +251,26 @@ the question.
 **Finish check.**
 
 - No need is still open.
-- Every found need cites an item whose full text was read.
+- Every found need cites an item whose full text was read, or, for Ask's
+  `which_items` needs, a list read to its end
+  ([ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md)),
+  which supports list facts only.
 - Every not-found need has at least two distinct searches, or a `list`, run
   after the need was written.
-- A rejected finish is returned once, with the reason. A second finish is
-  accepted.
+- A rejected finish is returned once, with the reason, as the step's one
+  repair. The repaired reply goes through the same check. If it is again a
+  finish the check refuses, research stops as an unusable step
+  (`unusable_step`, not completed), and the answer is written from what was
+  read. (Corrected 2026-10-17 against the code at `2fc6a05`: this line
+  previously said a second finish is accepted, which the code never did. See
+  [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md).)
 
 **Other stops.**
 
 - 10 research steps.
-- Two steps in a row that find nothing new.
+- Two steps in a row that find nothing new. (For Ask, a list page that adds
+  members is something new, so research can read a list to its end:
+  [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md).)
 - The 90 s request limit. Cloudflare drops an origin response after 100 s
   (HTTP 524), so the earlier 180 s limit could not reach the client
   ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md)). Each research step
@@ -303,12 +313,18 @@ items research read in full and cited first, then other items it read in full,
 then remaining search hits with text already released by the desk. The
 writer receives each admitted item's full released text. A search preview
 alone does not limit the writer to that preview or exclude the item because
-research never opened it. Inventory entries without text remain excluded.
+research never opened it. Inventory entries without text remain excluded,
+except list members, which
+[ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md) sends to
+Ask's writer as rows without text.
 
 The research scratchpad and finish check are unchanged: research may mark a
 need `found` only with evidence whose full text it read. The writer may cite
-any item whose full text is in its own prompt. Desk receipts, revalidation
-before model calls, and the final permission check still cover these items.
+any item whose full text is in its own prompt. (For Ask,
+[ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md) has code
+name a list's members; the writer's sentences still cite only text.) Desk
+receipts, revalidation before model calls, and the final permission check
+still cover these items.
 Adding search hits to the writer's input does not add them to the
 records-only fallback: its eligibility remains limited to evidence research
 read in full, with the existing citation-based selection rules preserved.
@@ -319,7 +335,9 @@ sentences. This is the V4 bound on statements per part, raised from five: in
 the first smoke run a five-sentence cap made the writer list facts that
 research had found as "not found". The prompt asks for 2 to 6 sentences
 usually, and up to 10 when the question asks several things. Code removes
-evidence ids that leak into sentence text.
+evidence ids that leak into sentence text. (Ask's writer also returns `lists`,
+the lists whose members code names first:
+[ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md).)
 
 **What code does with it.**
 
