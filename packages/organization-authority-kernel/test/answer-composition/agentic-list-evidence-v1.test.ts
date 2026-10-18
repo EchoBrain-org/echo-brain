@@ -195,9 +195,12 @@ describe("a list's noun and its filter notice (addition 3)", () => {
     expect(agenticListFilterNoticeV1({ filter_applied: { owner: "ignored", status: "ignored", since: "applied" } }, "Confluence pages"))
       .toBe("Confluence pages could not be filtered by owner or status, so this list is not limited to those filters.");
     expect(agenticListFilterNoticeV1({ filter_applied: { status: "partial", owner: "applied" } }, "meetings"))
-      .toBe("Meetings were filtered by status only where they record one, so this list also includes items that record none.");
+      .toBe("Meetings were filtered by status only where they record one the filter can match, so this list also includes items it could not filter.");
     expect(agenticListFilterNoticeV1({ filter_applied: { kind: "ignored", status: "partial" } }, "follow-ups"))
-      .toBe("Follow-ups could not be filtered by kind, so this list is not limited to that kind. Follow-ups were filtered by status only where they record one, so this list also includes items that record none.");
+      .toBe("Follow-ups could not be filtered by kind, so this list is not limited to that kind. Follow-ups were filtered by status only where they record one the filter can match, so this list also includes items it could not filter.");
+    // One text for every partial field, whatever kept an item: no value, or one the filter cannot match (a decision's "decided").
+    expect(agenticListFilterNoticeV1({ filter_applied: { owner: "partial", status: "partial" } }, "actions"))
+      .toBe("Actions were filtered by owner and status only where they record ones the filters can match, so this list also includes items they could not filter.");
     expect(agenticListFilterNoticeV1({ filter_applied: { since: "applied", until: "applied", date_field: "applied" } }, "Confluence pages")).toBeUndefined();
     expect(agenticListFilterNoticeV1({ filter_applied: {} }, "meetings")).toBeUndefined();
   });

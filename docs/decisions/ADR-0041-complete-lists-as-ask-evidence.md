@@ -131,8 +131,8 @@ audit or public door sees it.
     arguments. A default the catalog declares, such as Slack's 14 days, is in
     `filter` but not in `filter_applied`.
   - `filter_applied`: for each field the model asked for, `applied`; or
-    `partial` (applied only to members that record the field, the others kept,
-    as meeting-action status works today); or `ignored` (the source cannot
+    `partial` (applied only to members that record a value it can match, the
+    others kept, as meeting-action status works today); or `ignored` (the source cannot
     apply it, so the list is wider than asked). A field named here is
     `ignored` exactly when it is absent from `filter`.
   - `members`: the E-ids of the rows the list released, after ECHO's own
@@ -376,8 +376,10 @@ audit or public door sees it.
   words, the rule follow-ups' owners follow (`followUpOwnerMatchesV1`), so
   "Dan" never keeps Dana's or Jordan's actions; and a member whose status is in
   neither the open nor the done group (a decision's "decided") is kept as one
-  with no status is, so the status filter is `partial` and the notice says so.
-  A task goal keeps its rule.
+  with no status is, so the status filter is `partial` and the notice says so,
+  in one text for every partial filter, whatever kept an item: "Decisions were
+  filtered by status only where they record one the filter can match, so this
+  list also includes items it could not filter." A task goal keeps its rule.
 - **Code states every list a `which_items` need cites,** with or without
   members, in full unless the writer selected it by `where`, whatever the writer
   replies: no list, a selection by id only, not_found, or no usable reply. No

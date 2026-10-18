@@ -349,7 +349,7 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     const { response, research: view } = await h.research.answerWithResearch({ question: text });
     expect(view.lists).toEqual([expect.objectContaining({ id: "L1", filter: { kind: "action", status: "open", time_zone: "UTC" }, filter_applied: { status: "partial" }, members: ["E1", "E2"], complete: true })]);
     expect(view.coverage.notices).toEqual([]);
-    expect(response.notice).toBe("Actions were filtered by status only where they record one, so this list also includes items that record none.");
+    expect(response.notice).toBe("Actions were filtered by status only where they record one the filter can match, so this list also includes items it could not filter.");
   });
 
   it("keeps only the actions an owner filter names by whole words, as a follow-up's owner is matched, so the statement's owner is every member's (X34)", async () => {
@@ -383,7 +383,7 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     expect(view.lists).toEqual([expect.objectContaining({ id: "L1", members: ["E1", "E2", "E3"], filter_applied: { kind: "applied", status: "partial" } })]);
     expect((h.prompt(1).last_results as readonly { readonly note?: string }[])[0]!.note).toContain("some items do not record open or done; they are included");
     expect(response.parts[0]!.statements[0]!.text).toMatch(/^3 decisions with status open: /u);
-    expect(response.notice).toBe("Decisions were filtered by status only where they record one, so this list also includes items that record none.");
+    expect(response.notice).toBe("Decisions were filtered by status only where they record one the filter can match, so this list also includes items it could not filter.");
   });
 
   it("tells the person the filter of a list a which_say need checks, and never of one a content need cites", async () => {
@@ -1661,7 +1661,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     };
     const chosen = await run([{ id: "L1" }]);
     expect(chosen.parts[0]!.statements.map(statement => statement.text)).toEqual(["2 actions with status open: Meeting a1 (open); Meeting a2.", "Dana will publish the dashboard."]);
-    expect(chosen.notice).toBe("Actions were filtered by status only where they record one, so this list also includes items that record none.");
+    expect(chosen.notice).toBe("Actions were filtered by status only where they record one the filter can match, so this list also includes items it could not filter.");
     expect(await run([])).not.toHaveProperty("notice");
   });
 

@@ -208,7 +208,8 @@ function words(fields: readonly AgenticListFilterFieldV1[]): readonly string[] {
 
 /**
  * What the person is told about a list's filter (addition 3): a requested filter the source ignored, so the list is
- * wider than asked, or one applied only where items record the field. Undefined when every requested filter applied.
+ * wider than asked, or one applied only where items record a value it can match (an item that records none, or a
+ * status in neither group, is kept). One text for every partial field. Undefined when every requested filter applied.
  * A date filter is never here: a source that cannot apply one refuses the read.
  */
 export function agenticListFilterNoticeV1(list: Pick<AgenticListEvidenceV1, "filter_applied">, noun: string): string | undefined {
@@ -217,7 +218,7 @@ export function agenticListFilterNoticeV1(list: Pick<AgenticListEvidenceV1, "fil
   const partial = words(fields.filter(([, how]) => how === "partial").map(([field]) => field));
   const notices = [
     ...(ignored.length === 0 ? [] : [`${sentence(noun)} could not be filtered by ${ignored.join(" or ")}, so this list is not limited to ${ignored.length === 1 ? `that ${ignored[0]}` : "those filters"}.`]),
-    ...(partial.length === 0 ? [] : [`${sentence(noun)} were filtered by ${partial.join(" and ")} only where they record ${partial.length === 1 ? "one" : "them"}, so this list also includes items that record none.`]),
+    ...(partial.length === 0 ? [] : [`${sentence(noun)} were filtered by ${partial.join(" and ")} only where they record ${partial.length === 1 ? "one the filter can" : "ones the filters can"} match, so this list also includes items ${partial.length === 1 ? "it" : "they"} could not filter.`]),
   ];
   return notices.length === 0 ? undefined : notices.join(" ");
 }
