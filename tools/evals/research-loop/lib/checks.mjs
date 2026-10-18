@@ -175,8 +175,10 @@ function listPart(part, items, meetings, lists, handedIds, textHanded, answer) {
  * only list members' rows, and names each member it cites (`code`). A writer's sentence stands on text: it cites an
  * item that is no list's member (a page's section, an opened body, a passage), and names the members of what it
  * cites whose text the writer was given; a row it cites beside that text, one the writer saw without text, carries
- * the row's facts and names nothing (W1). A writer's sentence citing only members' rows, as one on follow-ups' text
- * does, reads as code's: every row it cites counts, and the judge decides.
+ * the row's facts and names nothing (W1), as does a private row its list id brings, unless the writer was given that
+ * row's text: the response does not say how a sentence came to cite a row, so such a row reads as named. A writer's
+ * sentence citing only members' rows, as one on follow-ups' text does, reads as code's: every row it cites counts, and
+ * the judge decides.
  */
 function statementOf(statement, items, lists, textHanded, answer) {
   const cited = statement.citation_indexes.map(index => items.filter(item => isDeepStrictEqual(item.citation, answer.citations[index]?.citation)));

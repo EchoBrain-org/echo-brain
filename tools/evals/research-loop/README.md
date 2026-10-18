@@ -53,8 +53,11 @@ every member, and correct in the answer only when the answer names every
 member: a statement code wrote cites its row (code's statements cite only list
 members' rows), or a writer's sentence cites its own text (a page's section);
 a row a writer's sentence cites beside its text, for the row's facts, names
-nothing. A list longer than the 25 names an answer gives is named in full when
-a statement code wrote ends "and N more" and the members it names plus N are
+nothing, and nor does a private row its list id brings, unless the writer was
+given that row's text (an opened ticket's), which the response cannot tell from
+a row the sentence cites by id, so it reads as named. A list longer than the
+25 names an answer gives is named in full when a statement code wrote ends
+"and N more" and the members it names plus N are
 exactly the list. Naming 4 of 8 earns nothing,
 whatever the judge says. "Lists
 named in full" is that last check, made by code, so it is reported without a
