@@ -1,10 +1,10 @@
 import type { ProjectSummary } from '../../shared/protocol.js';
-import { colorFor, initial } from '../format.js';
+import { colorFor, dateTime, initial } from '../format.js';
 import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
 import {
   goHome, installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openMine, openNewProject, openOrganization, openProject, openTools,
-  openYourFollowUps, settleWords, showAccountMenu, type State,
+  openYourFollowUps, settleWords, showAccountMenu, signInAgain, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
 import { Capture, Chevron, FolderPlus, Home as HomeIcon, OnePerson, People, Person, Plug, Ticks, Up } from './icons.js';
@@ -62,9 +62,32 @@ export function UpdateRow({ state }: { state: State }) {
 }
 
 /**
+ * The weekly sign-in, from a day before it is due: a quiet row above the account that signs in again now, at a moment
+ * that suits, rather than when the week runs out mid-work. It takes no drop.
+ */
+export function SignInDueRow({ state }: { state: State }) {
+  const due = state.signInDue;
+  if (!due || !state.status?.signed_in) return null;
+  const noDrop = (event: DragEvent) => event.stopPropagation();
+  const waiting = state.signin.phase === 'waiting';
+  const failure = due.failure;
+  return (
+    <div class="sidebar-rows update-rows" role="status" onDragOver={noDrop} onDrop={noDrop}>
+      <button type="button" class="side-row update-row" data-testid="sidebar-sign-in-again" aria-disabled={waiting ? 'true' : undefined}
+        onClick={waiting ? undefined : () => void signInAgain()}>
+        <Person />{twoPart(`Sign in again by ${dateTime(due.at)}`, 'Sign in')}
+      </button>
+      <p class={`update-note${failure ? ' error' : ''}`} data-testid="sidebar-sign-in-note" aria-live="polite">
+        {!failure ? 'ECHO asks you to sign in once a week.' : failure.code === 'signout_held' ? settleWords(state) : message(failure)}
+      </p>
+    </div>
+  );
+}
+
+/**
  * Always beside the page: Capture, New project, Mine, Follow-ups (everything
  * you sent, own or last handed on), your projects (one click switches), People & invites for
- * owners, Tools, a new version, and who is signed in. It shares the list Home loads. While another app is in front
+ * owners, Tools, a new version, the weekly sign-in once it is a day away, and who is signed in. It shares the list Home loads. While another app is in front
  * the page is covered, but the project rows stay, so a dropped file lands.
  * Mine never takes a drop.
  */
@@ -157,6 +180,7 @@ export function Sidebar({ state }: { state: State }) {
         </div>
       )}
       <UpdateRow state={state} />
+      <SignInDueRow state={state} />
       <button type="button" class="account-row" data-testid="account-row" aria-haspopup="menu"
         aria-label={account ? `Account, ${account.display_name}, ${account.role}` : undefined}
         onClick={event => showAccountMenu(event.currentTarget, 'row')}>

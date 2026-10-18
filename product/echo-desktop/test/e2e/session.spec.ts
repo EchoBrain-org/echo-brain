@@ -77,6 +77,8 @@ test('ten minutes of sign-in serve the reads as they are, and an upload that may
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   expect(refreshes()).toHaveLength(0);
+  // The weekly sign-in is a week away: nothing says so yet.
+  await expect(page.getByTestId('sidebar-sign-in-again')).toHaveCount(0);
   writeFileSync(join(run.userData, 'Brief.md'), 'Annual pricing.');
   await drop(page, page.getByTestId('sidebar-project').nth(1), join(run.userData, 'Brief.md'));
   await page.getByTestId('compose-send').click();
@@ -131,6 +133,61 @@ for (const [mode, why] of [['refresh-refused', 'is refused'], ['refresh-fails', 
     expect(refreshes()).toHaveLength(1);
   });
 }
+
+test('past the weekly sign-in, ECHO asks to sign in again in plain words, never that the account changed, and Sign in again works', async () => {
+  run = await launch('weekly-passed');
+  const { page, app, userData } = run;
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  await expect(page.getByTestId('signed-out')).toContainText('Sign in again to use ECHO');
+  await expect(page.getByTestId('signin-reason')).toHaveText('ECHO asks you to sign in once a week.');
+  // The client knew the week was over: no refresh went out, so no refresh token was spent.
+  expect(refreshes()).toHaveLength(0);
+  // The call that asked for the refresh says why; the calls waiting behind it say signed out. None says the account changed.
+  const log = () => readFileSync(join(userData, 'logs', 'desktop.log'), 'utf8');
+  await expect.poll(log).toMatch(/ reauthentication_required \d+ms/);
+  expect(log()).not.toContain('account_changed');
+  // The host says so on its own: status names why and where, and a call made as the old account says signed out.
+  type Reply = { ok: boolean; value?: Record<string, unknown>; failure?: { code: string } };
+  const host = (method: string, params: object) => page.evaluate(([name, values]) =>
+    (window as unknown as { echo: { rpc(method: string, params: object): Promise<Reply> } }).echo.rpc(name, values), [method, params] as const);
+  expect(await host('app.status', {})).toMatchObject({
+    ok: true, value: { signed_in: false, session_ended: { reason: 'reauthentication_required', authority: 'https://authority.example' } },
+  });
+  const ari = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
+  expect(await host('changes.read', { expect: ari })).toMatchObject({ ok: false, failure: { code: 'reauthentication_required' } });
+  // The client keeps why: a host started again (or ECHO restarted) still says so, and still offers the same organization.
+  await emit(app, 'echo-test:kill-host');
+  await expect.poll(async () => (await host('app.status', {})).value?.session_ended, { timeout: 10_000 })
+    .toEqual({ reason: 'reauthentication_required', authority: 'https://authority.example' });
+  await expect(page.getByTestId('signin-reason')).toHaveText('ECHO asks you to sign in once a week.');
+  // One click: Google in the browser (the fixture's), for the same organization, and a new week.
+  await page.getByTestId('signin-again').click();
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await expect(page.getByTestId('signin-reason')).toHaveCount(0);
+  expect((await host('app.status', {})).value).not.toHaveProperty('session_ended');
+});
+
+test('a day before the weekly sign-in a quiet row says so, and signing in again from it keeps the draft', async () => {
+  run = await launch('weekly-soon');
+  const { page, app } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await expect(page.getByTestId('sidebar-sign-in-again')).toContainText(/Sign in again by .+ · Sign in/);
+  await expect(page.getByTestId('sidebar-sign-in-note')).toHaveText('ECHO asks you to sign in once a week.');
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Half a thought');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('sidebar-sign-in-again').click();
+  // This session ends, and the fixture's browser, standing in for Google, signs Ari back in with a new week.
+  await expect(page.getByTestId('sidebar-sign-in-again')).toHaveCount(0);
+  await expect(page.getByTestId('signed-out')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  const paths = run.calls().map(call => call.path);
+  expect(paths.filter(path => path === '/v2/session/revocations')).toHaveLength(1);
+  expect(paths.indexOf('/v2/session/revocations')).toBeLessThan(paths.lastIndexOf('/v2/session/oidc/begin'));
+  // The same person came back: their draft is still there.
+  await emit(app, 'echo-test:capture');
+  await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
+});
 
 test('a host that keeps exiting is given up on, and the page says ECHO could not start', async () => {
   run = await launch('host-crash');

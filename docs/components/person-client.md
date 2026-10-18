@@ -92,6 +92,14 @@ or imply that server-side provider processing is ready. `status` reads only
 the local session: it makes no Authority request, prints no token or private
 path, and reports a session written by an older release as signed out
 ([`person-client.test.ts`](../../tests/person-client/person-client.test.ts)).
+Signed in, it also prints `hard_reauthentication_at`, the weekly sign-in, so an
+app can say ahead of time when the person must sign in again. A refresh that
+ends the session prints why as its `code`: `reauthentication_required` when the
+weekly sign-in has passed (no refresh is sent), or `sign_in_required` when the
+Authority refused it. The client also keeps that reason and the organization,
+token-free, in `session.v1.ended.json` beside the session until the next
+sign-in or sign-out, and signed-out `status` prints it as `session_ended`, so
+an app restarted meanwhile still knows why.
 `INV-PERMISSIONS-013` does not govern this output. The Person client holds no
 pending approval work, and that invariant's diagnostic clause has no current
 enforcement point.

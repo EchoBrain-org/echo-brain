@@ -11,6 +11,8 @@ const IDENTITY_PROVIDER = 'https://accounts.example';
 const NOW = '2026-09-21T22:01:00.000Z';
 /** Past the access token's expiry, still inside the week. */
 const LATER = '2026-09-21T22:30:00.000Z';
+/** Half an hour past the weekly sign-in of the session the fixture installs. */
+const WEEK_LATER = '2026-09-28T22:30:00.000Z';
 
 interface Operation { id: string; http: { method: string; status: number; response: Record<string, unknown> } }
 interface Note { context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
@@ -226,7 +228,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
   const store = new SessionStore(realpathSync(home)) as Store;
   const expired = mode === 'expired-claim';
-  const clock = mode.startsWith('refresh-') ? LATER : NOW;
+  const clock = mode.startsWith('refresh-') ? LATER : mode === 'weekly-passed' ? WEEK_LATER : NOW;
   const session = {
     organization_id: 'org_00000000-0000-4000-8000-000000000001',
     principal_id: 'prn_00000000-0000-4000-8000-000000000001',
@@ -245,6 +247,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         access_expires_at: '2026-09-20T12:00:00.000Z', refresh_expires_at: '2026-09-21T00:00:00.000Z',
         hard_reauthentication_at: '2026-09-21T00:00:00.000Z',
       } : {}),
+      // The weekly sign-in is twelve hours away.
+      ...(mode === 'weekly-soon' ? { refresh_expires_at: '2026-09-22T10:00:00.000Z', hard_reauthentication_at: '2026-09-22T10:00:00.000Z' } : {}),
     });
     if (expired) {
       // What an older client's weekly expiry left behind: the session set aside under a claim.
@@ -366,6 +370,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     },
   };
   const handoffs = new Map<string, { url: string; token: string }>();
+  // Signing in starts a new week, from the fixture's clock.
+  const signedIn = mode === 'weekly-passed'
+    ? { ...session, access_expires_at: '2026-09-29T10:30:00.000Z', refresh_expires_at: '2026-10-05T22:30:00.000Z', hard_reauthentication_at: '2026-10-05T22:30:00.000Z' }
+    : session;
   // The browser, never a real one: past Google, the Authority's callback page
   // posts the new session to the loopback receiver the sign-in began with.
   const openAuthorizationUrl = (address: string): boolean => {
@@ -378,7 +386,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     handoffs.delete(state);
     // signed-out-not-bound: a Google account the organization never invited; the callback page says so instead.
     const form = new URLSearchParams(mode === 'signed-out-not-bound' ? { token: handoff.token, error: 'identity_not_bound' }
-      : { token: handoff.token, session: Buffer.from(JSON.stringify(session)).toString('base64url') });
+      : { token: handoff.token, session: Buffer.from(JSON.stringify(signedIn)).toString('base64url') });
     const post = () => { globalThis.fetch(handoff.url, { method: 'POST', body: form }).catch(() => undefined); };
     // Still in the browser when a slow sign-out finishes.
     if (mode === 'signout-slow-browser') setTimeout(post, 4_000); else post();

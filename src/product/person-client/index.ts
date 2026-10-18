@@ -44,6 +44,8 @@ export {
   personSessionStorePaths,
   PersonClientSessionUnavailableError,
   PersonSessionStore,
+  type PersonSessionEndedCode,
+  type PersonSessionEndedV1,
   type PersonSessionStorePaths,
   type PersonSessionRefreshClaim,
   type StoredPersonClientSessionV1,

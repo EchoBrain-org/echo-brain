@@ -45,6 +45,8 @@ export interface PersonSessionStorePaths {
   readonly refresh_claim: string;
   readonly logging_out: string;
   readonly logout_claim: string;
+  /** Why a refresh here signed this computer out: token-free, kept until someone signs in or out. */
+  readonly ended: string;
 }
 
 export interface PersonSessionRefreshClaim {
@@ -52,13 +54,32 @@ export interface PersonSessionRefreshClaim {
   readonly stored: StoredPersonClientSessionV1;
 }
 
+/**
+ * Why a refresh ended the session for good, as the CLI prints it: the weekly
+ * sign-in passed (`reauthentication_required`), or the Authority refused the
+ * refresh or answered for another session (`sign_in_required`). Either way the
+ * store is left signed out and only signing in again helps.
+ */
+export type PersonSessionEndedCode = 'reauthentication_required' | 'sign_in_required';
+
+/** What `ended` holds: why the session ended, and the organization it was for. */
+export interface PersonSessionEndedV1 {
+  readonly schema_version: 1;
+  readonly kind: 'echo-person-client-session-ended';
+  readonly reason: PersonSessionEndedCode;
+  readonly authority_origin: string;
+}
+
 export class PersonClientSessionUnavailableError extends Error {
+  readonly code: PersonSessionEndedCode | undefined;
+
   constructor(
     message = 'Person session is unavailable; sign in again',
-    options?: ErrorOptions,
+    options?: ErrorOptions & { readonly code?: PersonSessionEndedCode },
   ) {
     super(message, options);
     this.name = 'PersonClientSessionUnavailableError';
+    this.code = options?.code;
   }
 }
 
@@ -80,6 +101,7 @@ export function personSessionStorePaths(
     refresh_claim: join(directory, 'session.v1.refresh.claim'),
     logging_out: join(directory, 'session.v1.logging-out.json'),
     logout_claim: join(directory, 'session.v1.logout.claim'),
+    ended: join(directory, 'session.v1.ended.json'),
   });
 }
 
@@ -235,6 +257,29 @@ function parseStoredSession(contents: string): StoredPersonClientSessionV1 {
   }
 }
 
+/** A session-ended record, or null for anything else: it only ever explains a sign-out, so a bad one is ignored. */
+function parseSessionEnded(contents: string): PersonSessionEndedV1 | null {
+  try {
+    const record = JSON.parse(contents) as Record<string, unknown>;
+    if (
+      record === null || typeof record !== 'object' || Array.isArray(record) ||
+      Object.keys(record).sort().join(',') !== 'authority_origin,kind,reason,schema_version' ||
+      record.schema_version !== 1 || record.kind !== 'echo-person-client-session-ended' ||
+      (record.reason !== 'reauthentication_required' && record.reason !== 'sign_in_required')
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      schema_version: 1,
+      kind: 'echo-person-client-session-ended',
+      reason: record.reason,
+      authority_origin: exactAuthorityOrigin(record.authority_origin),
+    });
+  } catch {
+    return null;
+  }
+}
+
 function removeIfPresent(path: string): boolean {
   try {
     unlinkSync(path);
@@ -256,6 +301,11 @@ export class PersonSessionStore {
     value: StoredPersonClientSessionV1,
     exclusive = false,
   ): void {
+    this.writePrivate(this.paths.live, value, exclusive);
+  }
+
+  /** One private file in the session folder, whole or not at all. */
+  private writePrivate(target: string, value: unknown, exclusive = false): void {
     ensurePrivateDirectory(this.paths.directory);
     const bytes = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8');
     if (bytes.byteLength > MAXIMUM_SESSION_FILE_BYTES) {
@@ -279,13 +329,13 @@ export class PersonSessionStore {
       fsyncSync(descriptor);
       closeSync(descriptor);
       if (exclusive) {
-        linkSync(temporary, this.paths.live);
+        linkSync(temporary, target);
         unlinkSync(temporary);
       } else {
-        renameSync(temporary, this.paths.live);
+        renameSync(temporary, target);
       }
       fsyncDirectory(this.paths.directory);
-      assertPrivateFile(this.paths.live);
+      assertPrivateFile(target);
       installed = true;
     } finally {
       if (!installed) {
@@ -338,7 +388,22 @@ export class PersonSessionStore {
     });
     this.writeLive(value);
     this.cleanupTransitions();
+    this.forgetEnded();
     return value;
+  }
+
+  /** Why the last refresh here ended the session, until someone signs in or out; null otherwise. */
+  readEnded(): PersonSessionEndedV1 | null {
+    if (!existsSync(this.paths.ended)) return null;
+    try {
+      return parseSessionEnded(readPrivateFile(this.paths.ended));
+    } catch {
+      return null;
+    }
+  }
+
+  private forgetEnded(): void {
+    if (removeIfPresent(this.paths.ended)) fsyncDirectory(this.paths.directory);
   }
 
   read(): StoredPersonClientSessionV1 {
@@ -472,10 +537,11 @@ export class PersonSessionStore {
 
   /**
    * Ends a refresh that installed nothing. With `restore`, the claimed session
-   * becomes live again; otherwise the store is left signed out. A claim that
-   * changed hands (a sign-in meanwhile) is left alone.
+   * becomes live again; otherwise the store is left signed out, and `ended`
+   * says why, for whoever reads status next. A claim that changed hands (a
+   * sign-in meanwhile) is left alone.
    */
-  releaseRefresh(claimed: PersonSessionRefreshClaim, restore: boolean): void {
+  releaseRefresh(claimed: PersonSessionRefreshClaim, restore: boolean, ended?: PersonSessionEndedCode): void {
     if (!this.ownsRefresh(claimed)) return;
     if (restore) {
       try {
@@ -484,6 +550,15 @@ export class PersonSessionStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
         throw error;
+      }
+    } else if (ended !== undefined) {
+      const record: PersonSessionEndedV1 = {
+        schema_version: 1, kind: 'echo-person-client-session-ended', reason: ended, authority_origin: claimed.stored.authority_origin,
+      };
+      try {
+        this.writePrivate(this.paths.ended, record);
+      } catch {
+        // Only an explanation: signing out never waits on it.
       }
     }
     this.releaseOwnClaim(claimed);
@@ -513,7 +588,7 @@ export class PersonSessionStore {
   finishLogout(): void {
     ensurePrivateDirectory(this.paths.directory);
     let changed = false;
-    for (const path of [this.paths.logging_out, this.paths.logout_claim]) {
+    for (const path of [this.paths.logging_out, this.paths.logout_claim, this.paths.ended]) {
       changed = removeIfPresent(path) || changed;
     }
     if (changed) fsyncDirectory(this.paths.directory);

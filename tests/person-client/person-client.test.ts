@@ -444,6 +444,8 @@ describe("Person client", () => {
       expect(JSON.parse(stdout)).toMatchObject({
         signed_in: true,
         display_name: "Example Person",
+        // When the weekly sign-in is due, so an app can say so ahead of it.
+        hard_reauthentication_at: ROTATED_SESSION.hard_reauthentication_at,
       });
       expect(stdout).not.toContain(ROTATED_SESSION.access_token);
       expect(stdout).not.toContain(ROTATED_SESSION.refresh_token);
@@ -2566,6 +2568,104 @@ describe("Person client", () => {
       expect(calls.refresh).toBe(1);
       const store = new PersonSessionStore(home);
       expect([store.paths.live, store.paths.refresh_claim, store.paths.refreshing].filter(existsSync)).toEqual([]);
+    });
+  });
+
+  it.each([
+    ["the weekly sign-in has passed", SESSION.hard_reauthentication_at, () => { throw new Error("no refresh is sent past the weekly sign-in"); }, "reauthentication_required"],
+    ["the Authority refuses it", NOW, () => json({ error: { code: "unauthorized", message: "person authentication failed" } }, 401), "sign_in_required"],
+    ["the Authority rotates another identity", NOW, () => json({ ...ROTATED_SESSION, membership_id: fixtureId("mem", 2) }), "sign_in_required"],
+  ])("says why a refresh that ends the session failed when %s, so a caller can ask to sign in again", async (_, at, reply, reason) => {
+    await withHome(async (home) => {
+      await installFixtureSession(home, SESSION);
+      const authority = authorityDescriptor();
+      let refreshes = 0;
+      const fetch: typeof globalThis.fetch = async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/v1/authority-descriptor") return json({ authority_descriptor: authority });
+        expect(path).toBe("/v2/session/refresh");
+        refreshes += 1;
+        return reply();
+      };
+
+      const { code, stderr } = await runCli(["session-refresh"], { home_directory: home, now: () => at, fetch });
+      expect(code).toBe(1);
+      expect(JSON.parse(stderr)).toMatchObject({ ok: false, action: "session-refresh", code: reason });
+      expect(refreshes).toBe(reason === "reauthentication_required" ? 0 : 1);
+      const store = new PersonSessionStore(home);
+      expect([store.paths.live, store.paths.refresh_claim, store.paths.refreshing].filter(existsSync)).toEqual([]);
+      // Status says why, from any process, until someone signs in or out: an app restarted meanwhile still knows.
+      const status = await runCli(["status"], { home_directory: home, now: () => at, fetch });
+      expect(JSON.parse(status.stdout)).toMatchObject({
+        signed_in: false, session_ended: { reason, connected_authority: "https://authority.example" },
+      });
+      const kept = readFileSync(store.paths.ended, "utf8");
+      for (const token of [SESSION.access_token, SESSION.refresh_token, ROTATED_SESSION.access_token]) expect(kept).not.toContain(token);
+      expect(lstatSync(store.paths.ended).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it.each([
+    ["never left the machine", (): Response => { throw new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED", syscall: "connect" }) }); }],
+    ["may have reached the Authority", () => json({ error: { code: "unavailable", message: "unavailable" } }, 503)],
+  ])("gives no reason for a refresh that %s: nothing a sign-in would fix is known", async (_, reply) => {
+    await withHome(async (home) => {
+      const { client } = refreshingClient(home, reply);
+      await client.installSession("https://authority.example", SESSION);
+      await expect(client.refresh()).rejects.toThrow();
+      expect(client.sessionEnded()).toBeNull();
+      expect(existsSync(new PersonSessionStore(home).paths.ended)).toBe(false);
+    });
+  });
+
+  it("forgets why the session ended once someone signs in, or signs out", async () => {
+    await withHome(async (home) => {
+      const { client } = refreshingClient(home, () => { throw new Error("no refresh is sent past the weekly sign-in"); });
+      await client.installSession("https://authority.example", SESSION);
+      const late = new PersonClient({ home_directory: home, now: () => SESSION.hard_reauthentication_at, fetch: async () => { throw new Error("unexpected request"); } });
+      await expect(late.refresh()).rejects.toThrow(/authentication again/);
+      expect(late.sessionEnded()).toEqual({ reason: "reauthentication_required", authority_origin: "https://authority.example" });
+
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      expect(client.sessionEnded()).toBeNull();
+
+      // Ended again, then an explicit sign-out (as after signing in with an older client): no stale reason survives it.
+      const store = new PersonSessionStore(home);
+      store.releaseRefresh(store.claimRefresh(), false, "sign_in_required");
+      expect(client.sessionEnded()).toEqual({ reason: "sign_in_required", authority_origin: "https://authority.example" });
+      store.finishLogout();
+      expect(client.sessionEnded()).toBeNull();
+    });
+  });
+
+  it("ignores a session-ended record it cannot trust", async () => {
+    await withHome(async (home) => {
+      const store = new PersonSessionStore(home);
+      mkdirSync(store.paths.directory, { recursive: true, mode: 0o700 });
+      for (const record of [
+        { schema_version: 1, kind: "echo-person-client-session-ended", reason: "account_changed", authority_origin: "https://authority.example" },
+        { schema_version: 1, kind: "echo-person-client-session-ended", reason: "sign_in_required", authority_origin: "http://authority.example" },
+        { schema_version: 1, kind: "echo-person-client-session-ended", reason: "sign_in_required", authority_origin: "https://authority.example", access_token: "A".repeat(43) },
+      ]) {
+        writeFileSync(store.paths.ended, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+        expect(store.readEnded()).toBeNull();
+      }
+      chmodSync(store.paths.ended, 0o644);
+      writeFileSync(store.paths.ended, `${JSON.stringify({ schema_version: 1, kind: "echo-person-client-session-ended", reason: "sign_in_required", authority_origin: "https://authority.example" })}\n`);
+      expect(store.readEnded()).toBeNull();
+    });
+  });
+
+  it("names the weekly sign-in when a command's own refresh is past it", async () => {
+    await withHome(async (home) => {
+      await installFixtureSession(home, SESSION);
+      const { code, stderr } = await runCli(["directory"], {
+        home_directory: home,
+        now: () => SESSION.hard_reauthentication_at,
+        fetch: async () => { throw new Error("no request is sent past the weekly sign-in"); },
+      });
+      expect(code).toBe(1);
+      expect(JSON.parse(stderr)).toMatchObject({ ok: false, code: "reauthentication_required" });
     });
   });
 });

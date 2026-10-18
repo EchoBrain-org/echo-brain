@@ -8,19 +8,33 @@ function remembered(): string {
   try { return localStorage.getItem(LAST_AUTHORITY) ?? ''; } catch { return ''; }
 }
 
-/** Signed out: "Sign in to use ECHO". Sign in… opens the Account menu, as the sidebar's Account row does. */
+/**
+ * Signed out: "Sign in to use ECHO". Sign in… opens the Account menu, as the sidebar's Account row does. Signed out by
+ * the weekly sign-in, or by a refresh the Authority refused, it says so, and Sign in again goes straight to Google for
+ * the same organization.
+ */
 export function SignedOut({ state }: { state: State }) {
   if (state.signin.form) return <SignInForm state={state} />;
   const { phase, failure, browserOpened } = state.signin;
   const waiting = phase === 'waiting';
+  const ended = state.status?.session_ended;
   return (
     <div class="page">
       <div class="signin" data-testid="signed-out">
-        <p class="lead">Sign in to use ECHO</p>
-        <button type="button" class="primary-button small" data-testid="signin-open" disabled={waiting} aria-haspopup="menu"
-          onClick={event => showAccountMenu(event.currentTarget, 'below')}>
-          {waiting ? 'Waiting for your browser' : 'Sign in…'}
-        </button>
+        <p class="lead">{ended ? 'Sign in again to use ECHO' : 'Sign in to use ECHO'}</p>
+        {ended && (
+          <p data-testid="signin-reason">{ended.reason === 'reauthentication_required' ? 'ECHO asks you to sign in once a week.' : 'Your sign-in ended.'}</p>
+        )}
+        {ended ? (
+          <button type="button" class="primary-button small" data-testid="signin-again" disabled={waiting} onClick={() => void signIn(ended.authority)}>
+            {waiting ? 'Waiting for your browser' : 'Sign in again'}
+          </button>
+        ) : (
+          <button type="button" class="primary-button small" data-testid="signin-open" disabled={waiting} aria-haspopup="menu"
+            onClick={event => showAccountMenu(event.currentTarget, 'below')}>
+            {waiting ? 'Waiting for your browser' : 'Sign in…'}
+          </button>
+        )}
         {waiting && <p>{browserOpened === false ? 'Open the sign-in page from your browser.' : 'Finish signing in in your browser.'}</p>}
         {phase === 'failed' && failure && <p class="error" data-testid="signin-error">{message(failure)}</p>}
       </div>
