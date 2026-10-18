@@ -681,16 +681,16 @@ function lenientJudge(testCase) {
 
 test("the October 4 case keys the trace's 8 pages as one list part, and list parts name whole items, once, in Ask cases only", () => {
   const testCase = caseById(OCT4_CASE);
-  assert.deepEqual([testCase.trigger, testCase.scope, testCase.question], ["ask", { kind: "global" }, "Which Confluence pages were created on October 4, 2026?"]);
-  assert.deepEqual(testCase.parts.map(part => part.type), ["list"]);
-  assert.deepEqual(testCase.parts[0].evidence, OCTOBER_4.map(([page]) => ({ page })));
+  assert.deepEqual([testCase.trigger, testCase.scope, testCase.question, testCase.parts.map(part => part.type), testCase.parts[0].evidence],
+    ["ask", { kind: "global" }, "Which Confluence pages were created on October 4, 2026?", ["list"], OCTOBER_4.map(([page]) => ({ page }))]);
   for (const [, title] of OCTOBER_4) assert.ok(testCase.parts[0].requirement.includes(title), title);
   const entry = dataset.cases.find(value => value.id === OCT4_CASE);
   const problems = part => datasetProblems({ ...dataset, cases: [{ ...entry, parts: [{ ...entry.parts[0], ...part }] }] });
   assert.deepEqual(problems({}), []);
-  assert.ok(problems({ evidence: [{ page: "1441793", section: "Gate policy" }] }).some(problem => problem.includes("whole items")), "a section is not a member");
-  assert.ok(problems({ evidence: [{ jira_project: "THERM" }] }).some(problem => problem.includes("whole items")), "a project is not a member");
-  assert.ok(problems({ evidence: [{ page: "589865" }, { page: "589865" }] }).some(problem => problem.includes("each member once")));
+  // A section and a project are no members, and a list names each member once.
+  for (const [evidence, problem] of [[[{ page: "1441793", section: "Gate policy" }], "whole items"], [[{ jira_project: "THERM" }], "whole items"], [[{ page: "589865" }, { page: "589865" }], "each member once"]]) {
+    assert.ok(problems({ evidence }).some(value => value.includes(problem)), JSON.stringify(evidence));
+  }
   // A task goal records no lists, so an approved record or a sweep has no list part.
   const record = dataset.cases.find(value => value.id === "approved-record-t1-two-decimal-display");
   assert.ok(datasetProblems({ ...dataset, cases: [{ ...record, parts: [...record.parts, { id: "p9", type: "list", requirement: "x", evidence: [{ ticket: "THERM-2" }] }] }] }).some(problem => problem.includes("only Ask cases have list parts")));
@@ -703,12 +703,10 @@ test("the October 4 answer that named 4 of the 8 pages earns nothing on its list
   const { testCase, run } = october4Run({ items: [...ROWS, ...sections], evidence: [...ROWS, ...sections].map(item => item.id), writer: sections.map(item => item.id), cites: sections });
   const checks = codeChecks(testCase, run, dataset);
   const [part] = checks.parts;
-  assert.deepEqual([part.found, part.read, part.cited_by_plan, part.handed, part.named, part.members, part.members_named], [true, false, false, false, false, 8, 4]);
-  assert.deepEqual([checks.coverage.lists_named, checks.answer_citations.unresolved], [0, 0]);
+  assert.deepEqual([part.found, part.read, part.cited_by_plan, part.handed, part.named, part.members, part.members_named, checks.coverage.lists_named, checks.answer_citations.unresolved], [true, false, false, false, false, 8, 4, 0, 0]);
   const judged = runScores({ checks, judge: lenientJudge(testCase) });
-  assert.deepEqual([judged.writer_parts_correct, judged.writer_lists_named, judged.research_established, judged.complete_and_supported], [0, 0, 0, false]);
   // Code decides without a judge too: the list was not named, so the run is not complete.
-  assert.equal(runScores({ checks, judge: null }).complete_and_supported, false);
+  assert.deepEqual([judged.writer_parts_correct, judged.writer_lists_named, judged.research_established, judged.complete_and_supported, runScores({ checks, judge: null }).complete_and_supported], [0, 0, 0, false, false]);
 });
 
 test("the fixed October 4 answer names all 8 pages from a complete list, citing each page's row, and scores; 7 of 8 earns nothing", () => {
@@ -723,22 +721,17 @@ test("the fixed October 4 answer names all 8 pages from a complete list, citing 
   assert.deepEqual([scores.tools_read, scores.tools_handed, scores.research_established, scores.writer_parts_correct, scores.writer_lists_named, scores.complete_and_supported], [1, 1, 1, 1, 1, true]);
   // Cited follows the declared kind alone (ADR-0041): a found which_items need citing the list by id. A content need's
   // list id, or its rows, never make the list cited; a need saved without a kind is content.
-  const cited = (evidence, kind) => codeChecks(fixed.testCase, october4Run({ lists: [OCT4_LIST], evidence, kind, writer: ids, cites: ROWS }).run, dataset).parts[0].cited_by_plan;
+  const run = (options, cites = ROWS) => codeChecks(fixed.testCase, october4Run({ lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ids, cites, ...options }).run, dataset);
+  const cited = (evidence, kind) => run({ evidence, kind }).parts[0].cited_by_plan;
   assert.deepEqual([cited(["L1"], "which_items"), cited(["L1"], "content"), cited(ids, "content"), cited(["L1"], undefined), cited(["E3"], "which_items"), cited(["L1"], "which_say")], [true, false, false, false, false, false]);
-
-  const seven = codeChecks(fixed.testCase, october4Run({ lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ids, cites: ROWS.slice(0, 7) }).run, dataset);
-  assert.deepEqual([seven.parts[0].named, seven.parts[0].members_named], [false, 7]);
+  const seven = run({}, ROWS.slice(0, 7));
   const sevenScores = runScores({ checks: seven, judge: lenientJudge(fixed.testCase) });
-  assert.deepEqual([sevenScores.writer_parts_correct, sevenScores.writer_lists_named, sevenScores.complete_and_supported], [0, 0, false]);
-
+  assert.deepEqual([seven.parts[0].named, seven.parts[0].members_named, sevenScores.writer_parts_correct, sevenScores.writer_lists_named, sevenScores.complete_and_supported], [false, 7, 0, 0, false]);
   // A list not read to a confirmed end holds the members but is not read: research did not establish the whole list.
-  const unverified = { ...OCT4_LIST, unverified_end: true, complete: false };
-  const partial = codeChecks(fixed.testCase, october4Run({ lists: [unverified], evidence: ["L1"], kind: "which_items", writer: ids, cites: ROWS }).run, dataset);
-  assert.deepEqual([partial.parts[0].read, partial.parts[0].named], [false, true]);
-  assert.equal(runScores({ checks: partial, judge: lenientJudge(fixed.testCase) }).research_established, 0);
-
+  const partial = run({ lists: [{ ...OCT4_LIST, unverified_end: true, complete: false }] });
+  assert.deepEqual([partial.parts[0].read, partial.parts[0].named, runScores({ checks: partial, judge: lenientJudge(fixed.testCase) }).research_established], [false, true, 0]);
   // Without the list, a row's citation resolves to nothing research read; an opened section resolves only as text read in full.
-  const unlisted = codeChecks(fixed.testCase, october4Run({ evidence: ids, writer: ids, cites: ROWS }).run, dataset);
+  const unlisted = run({ lists: undefined, evidence: ids, kind: undefined });
   assert.deepEqual([unlisted.answer_citations.unresolved, unlisted.parts[0].read], [8, false]);
   const section = OCTOBER_4.slice(0, 1).map(pageSection);
   const bySection = codeChecks(fixed.testCase, october4Run({ items: [...ROWS, { ...section[0], read_in_full: false }], lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ids, cites: section }).run, dataset);
@@ -794,24 +787,23 @@ test("each Ask run reports its plan's needs by declared kind, and a case may nam
     run.result.research = { ...run.result.research, plan: [{ part: 1, question: testCase.question, notes: "", needs }] };
     return codeChecks(testCase, run, dataset).declared_kinds;
   };
-  assert.deepEqual([declared(jira, [need("content", ["E1"])]), declared(jira, [need(undefined, ["E1"])]), declared(jira, [need("which_say")])], [true, true, false]);
-  assert.deepEqual([declared(confluence, [need("which_say")]), declared(confluence, [need("which_items"), need("which_say")])], [true, false]);
+  assert.deepEqual([declared(jira, [need("content", ["E1"])]), declared(jira, [need(undefined, ["E1"])]), declared(jira, [need("which_say")]), declared(confluence, [need("which_say")]), declared(confluence, [need("which_items"), need("which_say")])],
+    [true, true, false, true, false]);
   // Every held-out Ask case names its kinds, so the score also measures rule 3 on questions tuning never sees. The keys
   // are read from the file and restated nowhere (tests/architecture/research-loop-holdout-isolation.test.ts): each case's
   // check passes a plan declaring exactly its kinds and fails one declaring only the kinds it does not name.
   const held = dataset.cases.filter(entry => entry.split === "holdout" && entry.trigger === "ask").map(entry => caseById(entry.id));
   assert.ok(held.length > 0);
   assert.equal(held.filter(entry => entry.expected_kinds === undefined).length, 0, "every held-out Ask case names its kinds");
-  const plan = kinds => kinds.map(kind => need(kind, kind === "content" ? ["E1"] : ["L1"]));
-  const others = kinds => ["which_items", "which_say", "content"].filter(kind => !kinds.includes(kind));
+  const plan = values => values.map(kind => need(kind, kind === "content" ? ["E1"] : ["L1"]));
+  const others = values => ["which_items", "which_say", "content"].filter(kind => !values.includes(kind));
   assert.deepEqual(held.map(entry => [declared(entry, plan(entry.expected_kinds)), declared(entry, plan(others(entry.expected_kinds)))]), held.map(() => [true, false]));
   // A case that names no kinds has no such check, and a failed run of one that does scores zero on it.
   const other = caseById("bug-fix-dates-vs-dvt-review");
-  assert.equal("declared_kinds" in codeChecks(other, completedRun(other, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } }), dataset), false);
+  const unnamed = codeChecks(other, completedRun(other, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } }), dataset);
   const failed = codeChecks(jira, { trial: 1, budget: "live", outcome: "failed", result: { status: "failed", error: { code: "timed_out" } } }, dataset);
-  assert.deepEqual([failed.declared_kinds, runScores({ checks: failed, judge: null }).planner_kinds_declared], [false, 0]);
-  assert.equal(runScores({ checks: kinds([need("which_items")]), judge: null }).planner_kinds_declared, 1);
-  assert.equal(runScores({ checks: codeChecks(other, completedRun(other, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } }), dataset), judge: null }).planner_kinds_declared, null);
+  assert.deepEqual(["declared_kinds" in unnamed, failed.declared_kinds, runScores({ checks: failed, judge: null }).planner_kinds_declared, runScores({ checks: kinds([need("which_items")]), judge: null }).planner_kinds_declared, runScores({ checks: unnamed, judge: null }).planner_kinds_declared],
+    [false, false, 0, 1, null]);
 });
 
 test("the report shows each Ask case's need kinds beside the declared-kind check, and the keys awaiting the founder", () => {
@@ -824,22 +816,18 @@ test("the report shows each Ask case's need kinds beside the declared-kind check
   const report = aggregate([run("content"), run("which_say")]);
   assert.deepEqual([report.cases[0].kinds, report.cases[0].planner_kinds_declared, report.summary.cases_awaiting_key_confirmation], [{ which_items: 0, which_say: 1, content: 1, missing: 0 }, 0.5, [jira.id]]);
   const markdown = markdownReport({ split: "development", state: "S0", world: "therm-v1", graded_at: "2026-10-18" }, report);
-  assert.match(markdown, /Keys drafted from the export and awaiting the founder's confirmation: jira-tickets-mentioning-bug-412-global\./u);
-  assert.match(markdown, /\| Planner \| need kinds as the case expects \(code check\) \| 50% \|/u);
-  assert.match(markdown, /\| jira-tickets-mentioning-bug-412-global \| live \| 0 \| 1 \| 1 \| 0 \| 50% \|/u);
+  for (const line of [/Keys drafted from the export and awaiting the founder's confirmation: jira-tickets-mentioning-bug-412-global\./u, /\| Planner \| need kinds as the case expects \(code check\) \| 50% \|/u, /\| jira-tickets-mentioning-bug-412-global \| live \| 0 \| 1 \| 1 \| 0 \| 50% \|/u]) assert.match(markdown, line);
 });
 
 test("the dataset accepts expected kinds only on Ask cases and a key awaiting confirmation as its only status", () => {
   const entry = dataset.cases.find(value => value.id === "jira-tickets-mentioning-bug-412-global");
   const problems = changed => datasetProblems({ ...dataset, cases: [{ ...entry, ...changed }] });
-  assert.deepEqual(problems({}), []);
-  assert.deepEqual(datasetProblems({ ...dataset, cases: dataset.cases.filter(value => value.id === "confluence-pages-october-4-mentioning-bug-412") }), []);
+  const { key_status: _status, ...confirmed } = entry;
+  assert.deepEqual([problems({}), datasetProblems({ ...dataset, cases: dataset.cases.filter(value => value.id === "confluence-pages-october-4-mentioning-bug-412") }), datasetProblems({ ...dataset, cases: [confirmed] })], [[], [], []]);
   for (const expected_kinds of [[], ["content", "content"], ["list"], "content"]) assert.ok(problems({ expected_kinds }).some(problem => problem.includes("expected_kinds must be distinct need kinds")), JSON.stringify(expected_kinds));
   const record = dataset.cases.find(value => value.id === "approved-record-t1-two-decimal-display");
   assert.ok(datasetProblems({ ...dataset, cases: [{ ...record, expected_kinds: ["content"] }] }).some(problem => problem.includes("only Ask cases name the need kinds")));
   for (const key_status of ["confirmed", "draft", ""]) assert.ok(problems({ key_status }).some(problem => problem.includes("key_status can only be awaiting_founder_confirmation")));
-  const { key_status: _status, ...confirmed } = entry;
-  assert.deepEqual(datasetProblems({ ...dataset, cases: [confirmed] }), []);
 });
 
 test("a list longer than an answer's 25 names scores as named when its statement counts the rest from the list", () => {
@@ -861,11 +849,9 @@ test("a list longer than an answer's 25 names scores as named when its statement
 test("a failed run of a list case scores zero on naming its list, and reports show lists named apart from parts correct", () => {
   const testCase = caseById(OCT4_CASE);
   const failed = codeChecks(testCase, { trial: 2, budget: "live", outcome: "failed", result: { status: "failed", error: { code: "timed_out" } } }, dataset);
-  assert.equal(failed.list_parts, 1);
-  assert.equal(runScores({ checks: failed, judge: null }).writer_lists_named, 0);
   // A case without list parts has no such measure.
   const other = caseById("bug-fix-dates-vs-dvt-review");
-  assert.equal("writer_lists_named" in runScores({ checks: codeChecks(other, { trial: 1, budget: "live", outcome: "failed", error: { code: "unavailable" } }, dataset), judge: null }), false);
+  assert.deepEqual([failed.list_parts, runScores({ checks: failed, judge: null }).writer_lists_named, "writer_lists_named" in runScores({ checks: codeChecks(other, { trial: 1, budget: "live", outcome: "failed", error: { code: "unavailable" } }, dataset), judge: null })], [1, 0, false]);
   const fixed = october4Run({ lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ROWS.map(row => row.id), cites: ROWS });
   const report = aggregate([{ checks: codeChecks(testCase, fixed.run, dataset), judge: null }, { checks: failed, judge: null }]);
   assert.equal(report.cases[0].writer_lists_named, 0.5);
@@ -878,39 +864,33 @@ test("a failed run of a list case scores zero on naming its list, and reports sh
 test("list rows the writer saw are never noise, and hand over row facts but not other content (ADR-0041)", () => {
   const testCase = caseById("bug-fix-dates-vs-dvt-review");
   // Research read SW-14c in full, and listed DVT-R2 and 60 ECHO tickets (distractors) as rows; the writer saw all of them.
-  const read = ticket("THERM-12", { id: "E1", text: "SW-14c is due 2026-10-20." });
   const row = (key, id) => ({ ...ticket(key, { id, read: false, cited: false }), attributes: { status: "In Progress" } });
   const rows = [row("THERM-48", "E2"), ...Array.from({ length: 60 }, (_, index) => row(`ECHO-${index + 1}`, `E${index + 3}`))];
-  const items = [read, ...rows];
+  const items = [ticket("THERM-12", { id: "E1", text: "SW-14c is due 2026-10-20." }), ...rows];
   const run = completedRun(testCase, items, { writer_evidence: items.map(item => item.id), response: { outcome: "answered", parts: [{ statements: [] }], citations: [] } });
   run.result.research = { ...run.result.research, lists: [{ ...OCT4_LIST, source: "tickets", members: rows.map(item => item.id) }] };
   const checks = codeChecks(testCase, run, dataset);
-  const part = id => checks.parts.find(entry => entry.id === id);
   // DVT-R2's row carries its date (p4), but not why the hold stands (p6, a conflict); SW-14c's text hands over p3.
-  assert.deepEqual([part("p3").handed, part("p4").handed, part("p6").handed], [true, true, false]);
-  assert.deepEqual([checks.noise_handed, checks.distractors.found, checks.distractors.handed], [0, 60, 0]);
+  assert.deepEqual([...["p3", "p4", "p6"].map(id => checks.parts.find(entry => entry.id === id).handed), checks.noise_handed, checks.distractors.found, checks.distractors.handed], [true, true, false, 0, 60, 0]);
 });
 
 test("saved runs keep Ask's lists, and the judge sees them as rows without text and grades a list part on the whole list", () => {
   const research = { schema_version: 1, kind: "echo-agentic-research-result-v1", trigger: "ask", goal: { kind: "question", question: "q" }, plan: [], items: ROWS, lists: [OCT4_LIST], rounds: [], coverage: {}, stop: {}, cost: {} };
   assert.deepEqual(savedResult({ status: "completed", research: { ...research, server: { receipts: [] } } }).research.lists, [OCT4_LIST]);
-  const sections = OCTOBER_4.slice(0, 1).map(pageSection);
-  const { testCase, run } = october4Run({ items: [...ROWS, ...sections], lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ROWS.map(row => row.id), cites: ROWS });
+  const { testCase, run } = october4Run({ items: [...ROWS, ...OCTOBER_4.slice(0, 1).map(pageSection)], lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ROWS.map(row => row.id), cites: ROWS });
   const input = judgeInput(testCase, run);
   assert.deepEqual(input.research.lists.map(list => [list.id, list.complete, list.count, list.filter.date_field]), [["L1", true, 8, "created"]]);
   assert.deepEqual(input.research.lists[0].members[0], { id: "E1", kind: "page", title: "ECHO Product Pipeline — Start Here", dates: { created: "2026-10-04T23:20:00.000Z" }, attributes: { status: "current" } });
   assert.equal(JSON.stringify(input.research.lists).includes("SYNTHETIC MOCK"), false, "a list shows rows, never text");
   assert.deepEqual(input.key.parts.map(part => part.type), ["list"]);
-  assert.match(JUDGE_SYSTEM, /A part of type list names a set of items/u);
-  assert.match(JUDGE_SYSTEM, /Naming some of them otherwise is no\./u);
   // Past an answer's 25 names, "and N more" counts the rest, as the code check does.
-  assert.match(JUDGE_SYSTEM, /ends 'and N more' names the whole set when the items it names plus N are every one of them/u);
+  for (const rule of [/A part of type list names a set of items/u, /Naming some of them otherwise is no\./u, /ends 'and N more' names the whole set when the items it names plus N are every one of them/u]) assert.match(JUDGE_SYSTEM, rule);
   // A run without lists shows the judge none.
-  assert.equal("lists" in judgeInput(caseById("bug-fix-dates-vs-dvt-review"), completedRun(caseById("bug-fix-dates-vs-dvt-review"), [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } })).research, false);
+  const other = caseById("bug-fix-dates-vs-dvt-review");
+  assert.equal("lists" in judgeInput(other, completedRun(other, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } })).research, false);
   // The founder's blind sheet asks about every member of a list part.
   const questions = judgeChecks(testCase, lenientJudge(testCase)).map(check => check.question);
-  assert.ok(questions.some(question => question.startsWith("Does a complete list research read hold every item in:")));
-  assert.ok(questions.some(question => question.startsWith("Does the answer name every item in this list")));
+  for (const start of ["Does a complete list research read hold every item in:", "Does the answer name every item in this list"]) assert.ok(questions.some(question => question.startsWith(start)), start);
 });
 
 test("results may not be written inside the repository", () => {
