@@ -99,33 +99,26 @@ describe("Ask renderer", () => {
       research: {
         ...bundle([{ item: record("jira-anchor", "THERMO-17 reports that the pilot may proceed after the gate."), full: true, touched: 1 }], ["E1"]),
         rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E1"], truncated: true } }] }],
-        coverage: { reads: [{ tool: "open" as const, source: "tickets", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [], notices: [] },
-      },
-      text: "THERMO-17 reports that the pilot may proceed after the gate.", cited: "E1", notice: LIMITED_COVERAGE,
-    },
+        coverage: { reads: [{ tool: "open" as const, source: "tickets", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [], notices: [] } },
+      text: "THERMO-17 reports that the pilot may proceed after the gate.", cited: "E1", notice: LIMITED_COVERAGE },
     {
       name: "notes a limited open when it returns a different cited body id",
       research: {
         ...contextThenBody(),
         rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"], truncated: true } }] }],
-        coverage: { reads: [{ tool: "open" as const, source: "pages", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [], notices: [] },
-      },
-      text: "The pilot may proceed after the gate.", cited: "E2", notice: LIMITED_COVERAGE,
-    },
+        coverage: { reads: [{ tool: "open" as const, source: "pages", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [], notices: [] } },
+      text: "The pilot may proceed after the gate.", cited: "E2", notice: LIMITED_COVERAGE },
     {
       name: "keeps a fully supported stopped-research answer answered with a neutral notice",
       research: bundle([{ item: gate(), full: true, touched: 1 }], ["E1"], false),
-      text: "The pilot may proceed after the gate.", cited: "E1", notice: "Research stopped before it finished, so relevant context may be missing.",
-    },
+      text: "The pilot may proceed after the gate.", cited: "E1", notice: "Research stopped before it finished, so relevant context may be missing." },
     {
       name: "keeps a completed answer answered when an unrelated source was truncated",
       research: {
         ...bundle([{ item: gate(), full: true, touched: 1 }], ["E1"]),
         rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "search", args: { query: "unrelated history" }, result: { items: ["E2"], opened: [], truncated: true } }] }],
-        coverage: { reads: [{ tool: "search" as const, source: "documents", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [{ source: "documents", truncated: true }], notices: ["An unrelated document search was cut short."] },
-      },
-      text: "The pilot may proceed after the gate.", cited: "E1", notice: "An unrelated document search was cut short.",
-    },
+        coverage: { reads: [{ tool: "search" as const, source: "documents", returned_items: 1, truncated: true, notice: false, unavailable: false }], inventories: [{ source: "documents", truncated: true }], notices: ["An unrelated document search was cut short."] } },
+      text: "The pilot may proceed after the gate.", cited: "E1", notice: "An unrelated document search was cut short." },
     {
       name: "keeps a fully opened cited record answered after a limited inventory",
       research: {
@@ -134,10 +127,8 @@ describe("Ask renderer", () => {
           { round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "list", args: { source: "meetings" }, result: { items: ["E1"], opened: [], more: true } }] },
           { round: 2, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E1"] } }] },
         ],
-        coverage: { reads: [{ tool: "list" as const, source: "meetings", returned_items: 1, truncated: false, notice: false, unavailable: false }], inventories: [{ source: "meetings", more: true }], notices: [] },
-      },
-      text: "The pilot may proceed after the gate.", cited: "E1", notice: null,
-    },
+        coverage: { reads: [{ tool: "list" as const, source: "meetings", returned_items: 1, truncated: false, notice: false, unavailable: false }], inventories: [{ source: "meetings", more: true }], notices: [] } },
+      text: "The pilot may proceed after the gate.", cited: "E1", notice: null },
     {
       name: "clears a limited returned body notice after a later clean open of that body",
       research: {
@@ -146,10 +137,8 @@ describe("Ask renderer", () => {
           { round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"], truncated: true } }] },
           { round: 2, elapsed_ms: 0, plan: [], rejected: [], actions: [{ tool: "open", args: { id: "E1" }, result: { items: [], opened: ["E2"] } }] },
         ],
-        coverage: { reads: [], inventories: [], notices: [] },
-      },
-      text: "The pilot may proceed after the gate.", cited: "E2", notice: null,
-    },
+        coverage: { reads: [], inventories: [], notices: [] } },
+      text: "The pilot may proceed after the gate.", cited: "E2", notice: null },
     {
       name: "does not turn an unfulfilled planner need into a missing user requirement",
       research: {
@@ -157,10 +146,8 @@ describe("Ask renderer", () => {
         plan: [{ part: 1, question: "Can the pilot proceed?", notes: "", needs: [
           { need: "pilot decision", status: "found" as const, evidence: ["E1"] },
           { need: "an unrelated optional context item", status: "not_found" as const, evidence: [] },
-        ] }],
-      },
-      text: "The pilot may proceed after the gate.", cited: "E1", notice: null,
-    },
+        ] }] },
+      text: "The pilot may proceed after the gate.", cited: "E1", notice: null },
   ])("$name", async ({ research, text, cited, notice }) => {
     const rendered = await alone({ bundle: research, replies: [{ sentences: [{ text, evidence: [cited] }], not_found: [] }], version: 6 }).render("Can the pilot proceed?");
     expect(rendered.outcome).toBe("answered");
@@ -259,16 +246,13 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   }); };
 
   rows([
-    {
-      id: "W1, W3", name: "leaves out a sentence naming some of a list's rows after its one repair, keeps the others, and states no list for a content plan", bundle: eightAnd1([C(["E9"])]),
+    { id: "W1, W3", name: "leaves out a sentence naming some of a list's rows after its one repair, keeps the others, and states no list for a content plan", bundle: eightAnd1([C(["E9"])]),
       replies: Array.from({ length: 2 }, () => say({ text: "THERM-1, THERM-2 and THERM-3 are in progress.", evidence: ids(1, 3) }, REVIEW)), calls: 2, status: "partial", gap: UNSUPPORTED, says: [st(REVIEW.text, 1, true)], cited: ["E9"],
       check: (rendered, run) => {
         expect(run.trace).toEqual([`context:E9,${ids(1, 8).join(",")}`, "revalidate", "generate", "revalidate", "generate"]);
         expect(run.prompt(0).lists[0]).toMatchObject({ id: "L1", stated: false, count: 8 });
         expect(run.prompt(1).validation_error).toBe(`Your previous reply could not be used: ${ROWS_REASON}. Reply again with only the JSON object, in exactly the shape your instructions show.`);
-        expect(rendered.result.writer_evidence).toEqual(["E9", ...ids(1, 8)]);
-      },
-    },
+        expect(rendered.result.writer_evidence).toEqual(["E9", ...ids(1, 8)]); } },
     { id: "CF2", name: "leaves out a repeated rows sentence beside a stated list whose need also cites text", bundle: eightAnd1([WI(["L1", "E9"])]), replies: [say(FOUR), say(FOUR)], calls: 2, repaired: true, status: "partial", gap: UNSUPPORTED, says: [EIGHT] },
     // E9 is text the writer read, outside the list: the sentence stands on it (W1). The rows it cites beside it are cited
     // too, since it may carry their facts (W6); its list id supports nothing and brings the list's private rows the writer saw.
@@ -302,10 +286,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     })),
     { id: "W1, W5", name: "leaves out a rows sentence beside a content sentence after one repair, the kept one citing L1's rows after its text", bundle: eightAnd1([WI(["L1"])]), replies: [say(FOUR, ON_THEM), say(FOUR, ON_THEM)], calls: 2, repaired: true, q: "Which tickets were created on October 4, and what did the review approve?", status: "partial", gap: UNSUPPORTED, says: [EIGHT, st(ON_THEM.text, [8, 0, 1, 2, 3, 4, 5, 6, 7])] },
     { id: "W1, W5", name: "adds a which_say need's unchecked gap and notes no sentence citing no member's text", bundle: eightAnd1([WI(["L1"]), WS(["L1", "E9"])]), replies: [say(FOUR, ON_THEM), say(FOUR, ON_THEM)], calls: 2, q: "Which tickets were created on October 4, and what did the review approve?", status: "partial", gap: `${UNCHECKED} ${UNSUPPORTED}`, says: [EIGHT, st(ON_THEM.text, [8, 0, 1, 2, 3, 4, 5, 6, 7])] },
-    {
-      id: "CF5b", name: "says 'at least' for a list not read to a confirmed end, and leaves out a count resting on one row and the list's id", bundle: listBundle(25, 0, [list("L1", ids(1, 25), { unverified_end: true })], [WI(["L1"])]),
-      replies: Array.from({ length: 2 }, () => say({ text: "25 tickets were created on October 4, 2026.", evidence: ["L1", "E1"] })), calls: 2, status: "partial", gap: `${LEG} ${UNSUPPORTED}`, says: [st(`At least 25 tickets created on October 4, 2026: ${names(1, 25)}.`, 25)],
-    },
+    { id: "CF5b", name: "says 'at least' for a list not read to a confirmed end, and leaves out a count resting on one row and the list's id", bundle: listBundle(25, 0, [list("L1", ids(1, 25), { unverified_end: true })], [WI(["L1"])]),
+      replies: Array.from({ length: 2 }, () => say({ text: "25 tickets were created on October 4, 2026.", evidence: ["L1", "E1"] })), calls: 2, status: "partial", gap: `${LEG} ${UNSUPPORTED}`, says: [st(`At least 25 tickets created on October 4, 2026: ${names(1, 25)}.`, 25)] },
     // Opened ticket rows carry their text: citing it is citing text, whatever it says.
     ...([[[C(["E1"])], ["THERM-1 and THERM-2 were created on October 4.", "THERM-1 is in progress."]], [[WI(["L1"])], [`5 tickets created on October 4, 2026: ${names(1, 5)}.`]], [[WI(["L1"]), C(["E1"])], [`5 tickets created on October 4, 2026: ${names(1, 5)}.`, "THERM-1 and THERM-2 were created on October 4.", "THERM-1 is in progress."]]] as const)
       .map(([needs, says]): Row => ({
@@ -329,11 +311,9 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     })),
     { id: "R9 (i)", name: "says 'at least' with the list-end gap for a stated list in full", bundle: reviewed(), replies: [use({ id: "L1" })], status: "partial", gap: LEG, says: [`At least 25 tickets created on October 4, 2026: ${[...names(1, 5).split("; ").map(name => `${name} (In Review)`), ...names(6, 20).split("; ").map(name => `${name} (In Progress)`)].join("; ")}.`] },
     { id: "R9 (ii)", name: "says how many were listed for a where selection", bundle: reviewed(), replies: [use({ id: "L1", where: { field: "status", value: "in review" } })], q: "Which tickets created on October 4 are in review?", status: "partial", gap: LEG, says: [`At least 5 tickets created on October 4, 2026 have status In Review (25 listed so far): ${names(1, 5)}.`] },
-    {
-      id: "X24c", name: "leaves out a sentence resting on rows alone after its repair, and falls back to the record a content need read", bundle: listBundle(3, 1, [list("L1", ids(1, 3))], [C(["E4"])]),
+    { id: "X24c", name: "leaves out a sentence resting on rows alone after its repair, and falls back to the record a content need read", bundle: listBundle(3, 1, [list("L1", ids(1, 3))], [C(["E4"])]),
       replies: Array.from({ length: 2 }, () => say({ text: "THERM-2 is in progress.", evidence: ["E2"] })), calls: 2, repaired: true, q: "Is THERM-2 in progress?", status: "records_only", says: [], gap: `${RECORDS} ${UNSUPPORTED}`,
-      check: rendered => expect(rendered.result.response.parts[0]!.records).toEqual([expect.objectContaining({ text: "Approved record 1.", citation_indexes: [0] })]),
-    },
+      check: rendered => expect(rendered.result.response.parts[0]!.records).toEqual([expect.objectContaining({ text: "Approved record 1.", citation_indexes: [0] })]) },
     { id: "X24c", name: "answers the repair's selection by id", bundle: listBundle(3, 1, [list("L1", ids(1, 3))], [C(["E4"])]), replies: [say({ text: "THERM-2 is in progress.", evidence: ["E2"] }), use({ id: "L1", members: ["E2"] })], calls: 2, q: "Is THERM-2 in progress?", status: "answered", says: [`1 of the 3 tickets created on October 4, 2026: ${facts(2)}.`] },
     ...([["X24a", WS(["L1", "E9"]), UNCHECKED], ["X24b", WI(ids(1, 8)), "I could not confirm the full list of items asked for."]] as const).map(([id, need, gap]): Row => ({
       id, name: `gives the records a failed writer falls back to ${id === "X24a" ? "a which_say list's unchecked gap" : "the gap of a which_items need left on rows"}`, bundle: eightAnd1([need]), replies: [{ wrong: true }, { still: "wrong" }], calls: 2,
@@ -350,28 +330,21 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       id: "X25", name: "names no member a statement does not cite, so a merged name never covers a private member uncited (W6)", replies: [use({ id: "L1" }, { id: "L1", members: ids(3, 25) })], status: "answered",
       bundle: (research => Object.freeze({ ...research, items: research.items.map((entry, index) => Object.freeze({ ...entry, item: { ...entry.item, visibility: index === 1 ? "only_me" as const : "team" as const, ...(index < 2 ? { label: "THERM-8: Fixture work 8" } : {}) } })) }))(listBundle(27, 0, [list("L1", ids(1, 27))], [WI(["L1"])])),
       says: [st(`27 tickets created on October 4, 2026: THERM-8: Fixture work 8 (2 tickets); ${names(3, 5)}; ${names(9, 19)}; and 1 more.`, 26, true), { text: expect.stringMatching(/^25 of the 27 tickets created on October 4, 2026: THERM-3: /u), citation_indexes: expect.any(Array), private: false }],
-      cited: ["E1", ...ids(3, 25)],
-    },
-    {
-      id: "W6", name: "keeps the 40-citation bound: list statements first, the writer's sentences dropped from the end", bundle: listBundle(60, 20, [list("L1", ids(1, 60))], [WI(["L1"])]), q: "Which tickets were created on October 4, and what applies?",
+      cited: ["E1", ...ids(3, 25)] },
+    { id: "W6", name: "keeps the 40-citation bound: list statements first, the writer's sentences dropped from the end", bundle: listBundle(60, 20, [list("L1", ids(1, 60))], [WI(["L1"])]), q: "Which tickets were created on October 4, and what applies?",
       replies: [{ lists: [{ id: "L1" }], sentences: Array.from({ length: 10 }, (_, index) => ({ text: `Record ${index + 1} applies.`, evidence: [`E${61 + 2 * index}`, `E${62 + 2 * index}`] })), not_found: [] }],
       // 25 named rows, then seven sentences of two citations each: the eighth would make 41.
       status: "partial", gap: FIT, citations: 39, cited: [...ids(1, 25), ...ids(61, 14)],
-      check: rendered => expect(rendered.result.response.parts[0]!.statements.map(value => value.text)).toEqual([expect.stringMatching(/; and 35 more\.$/u), ...Array.from({ length: 7 }, (_, index) => `Record ${index + 1} applies.`)]),
-    },
-    {
-      id: "W6", name: "keeps the ten-statement bound", bundle: listBundle(63, 10, [list("L1", ids(1, 60)), list("L2", ids(61, 3))], [WI(["L1", "L2"])]), q: "Which tickets?", status: "partial", gap: FIT,
+      check: rendered => expect(rendered.result.response.parts[0]!.statements.map(value => value.text)).toEqual([expect.stringMatching(/; and 35 more\.$/u), ...Array.from({ length: 7 }, (_, index) => `Record ${index + 1} applies.`)]) },
+    { id: "W6", name: "keeps the ten-statement bound", bundle: listBundle(63, 10, [list("L1", ids(1, 60)), list("L2", ids(61, 3))], [WI(["L1", "L2"])]), q: "Which tickets?", status: "partial", gap: FIT,
       replies: [{ lists: [{ id: "L1" }, { id: "L2" }], sentences: Array.from({ length: 10 }, (_, index) => ({ text: `Record ${index + 1} applies.`, evidence: [`E${64 + index}`] })), not_found: [] }],
-      check: rendered => expect(rendered.result.response.parts[0]!.statements.map(value => value.text).slice(2)).toEqual(Array.from({ length: 8 }, (_, index) => `Record ${index + 1} applies.`)),
-    },
+      check: rendered => expect(rendered.result.response.parts[0]!.statements.map(value => value.text).slice(2)).toEqual(Array.from({ length: 8 }, (_, index) => `Record ${index + 1} applies.`)) },
     {
       // E9 is a record outside L1: the sentence cites no member's text, so it carries no note; none of the 8 was checked.
       id: "CF5c", name: "adds the unchecked gap for a which_say list even when no sentence cites its members, and notes no sentence", bundle: eightAnd1([WS(["L1", "E9"])]), replies: [say({ text: "THERM-1 mentions BUG-412.", evidence: ["L1", "E9"] })],
       q: "Which tickets created on October 4 mention BUG-412?", status: "partial", gap: UNCHECKED, says: [st("THERM-1 mentions BUG-412.", 9)], cited: ["E9", ...ids(1, 8)],
-      check: (_, run) => expect(run.prompt(0).lists[0]).toMatchObject({ id: "L1", stated: false, checked: 0 }),
-    },
-    {
-      id: "W6", name: "gives a listed ticket's row and its opened body one citation", q: "Which tickets were created on October 4, and why is DVT blocked?", status: "answered", citations: 1,
+      check: (_, run) => expect(run.prompt(0).lists[0]).toMatchObject({ id: "L1", stated: false, checked: 0 }) },
+    { id: "W6", name: "gives a listed ticket's row and its opened body one citation", q: "Which tickets were created on October 4, and why is DVT blocked?", status: "answered", citations: 1,
       bundle: Object.freeze({
         ...EMPTY_BUNDLE, lists: [list("L1", ["E1"])], plan: planOf([WI(["L1"]), C(["E2"])]),
         // Research opened the row, and the open returned its body: the list's one member was checked.
@@ -382,7 +355,6 @@ describe("Ask renderer: lists (ADR-0041)", () => {
         ],
       }),
       replies: [{ lists: [{ id: "L1" }], sentences: [{ text: "THERM-46 is blocked by BUG-412.", evidence: ["E2"] }], not_found: [] }],
-      says: [st("1 ticket created on October 4, 2026: THERM-46: Fixture work 46.", 1), st("THERM-46 is blocked by BUG-412.", 1)],
-    },
+      says: [st("1 ticket created on October 4, 2026: THERM-46: Fixture work 46.", 1), st("THERM-46 is blocked by BUG-412.", 1)] },
   ]);
 });
