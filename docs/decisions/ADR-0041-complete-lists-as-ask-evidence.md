@@ -731,6 +731,23 @@ too), "lists named in full" and its two BUG-412 cases.
 - **A writer that repeats a sentence citing only rows or list ids** after its
   repair makes the part partial, even when the sentence only restated the list
   ("All eight are current pages.").
+- **A member opened through a window of a larger object counts as checked.** A
+  document's or transcript's open returns its passage and at most two passages
+  on each side, not truncated, whatever the object's length. A document listed
+  by one passage and opened once is checked though most of it was never read,
+  so a `which_say` answer over documents, a not_found one included, can come
+  back with no note. Checking a member only once its object was read to its
+  end needs every desk to say whether an open reached that end: the Confluence
+  reader does (`truncated` and its `continue:` item), the document and
+  transcript windows do not.
+- **A page read to its end through its continuation, or one with no readable
+  text, is never checked.** An open counts only for the item it resolved to:
+  a clean open of a page's continuation checks the continuation, while the
+  page's own open stays truncated, and a clean open that released no text
+  checks nothing. The answer stays partial with "(k of N checked so far)"
+  though every page was read; the error is toward partial, never a false
+  "answered". Counting such opens for the member needs the same end-of-object
+  signal.
 
 **Considered and kept:**
 
