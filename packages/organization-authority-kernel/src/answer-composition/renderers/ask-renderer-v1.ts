@@ -236,7 +236,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const restsOnRows = (sentence: AnswerSentence) => !sentence.evidence.some(short => textGiven.has(short)) &&
         sentence.evidence.some(id => shownRows.has(id) || writerById.has(parseAgenticListIdV1(id) ?? "L0"));
       /** The reply with each by-id selection kept to its list's members; one that names none of them is no use of the list. */
-      const withMembers = (answer: Answer): Answer => answer.lists === undefined ? answer : Object.freeze({ ...answer, lists: Object.freeze(answer.lists.flatMap(use => {
+      const withMembers = (answer: Answer): Answer => Object.freeze({ ...answer, lists: Object.freeze(answer.lists.flatMap(use => {
         const kept = use.members?.filter(id => listById.get(use.id)?.members.includes(id) === true);
         return kept === undefined ? [use] : kept.length === 0 ? [] : [Object.freeze({ id: use.id, members: Object.freeze(kept) })];
       })) });
@@ -250,7 +250,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return stats.calls === callsBefore + 1 && stats.calls < bundle.budget.max_model_calls && input.remaining() >= AGENTIC_ASK_MIN_ANSWER_MS_V1;
       };
       const parse = (value: unknown): Answer => {
-        const parsed = withMembers(parseAnswer(value, { lists: true }));
+        const parsed = withMembers(parseAnswer(value));
         last.answer = parsed;
         if (parsed.sentences.some(restsOnRows) && repairable()) throw new AgenticAskOutputErrorV1(ROWS_REASON);
         return parsed;

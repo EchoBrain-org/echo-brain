@@ -198,10 +198,9 @@ describe("agentic Ask model protocol parity", () => {
     // A list id after 12 item ids is never the one cut: research cited the rows, was asked for the list's id, and appended it.
     const appended = { ...value, parts: [{ question: "q", needs: [{ need: "n", status: "found", evidence: [...Array.from({ length: 15 }, (_, index) => `E${index + 1}`), "L1"] }], notes: "" }] };
     expect(parseStep(appended, { lists: true }).parts[0]!.needs[0]!.evidence).toEqual([...Array.from({ length: 11 }, (_, index) => `E${index + 1}`), "L1"]);
-    expect(parseAnswer({ sentences: [{ text: "x", evidence: [...Array.from({ length: 13 }, (_, index) => `E${index + 1}`), "L2"] }], not_found: [] }, { lists: true }).sentences[0]!.evidence.at(-1)).toBe("L2");
-    // Without lists the writer's evidence keeps item ids only; Ask's writer parses with lists.
-    expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }).sentences[0]!.evidence).toEqual(["E2"]);
-    expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }, { lists: true }).sentences[0]!.evidence).toEqual(["L1", "E2"]);
+    expect(parseAnswer({ sentences: [{ text: "x", evidence: [...Array.from({ length: 13 }, (_, index) => `E${index + 1}`), "L2"] }], not_found: [] }).sentences[0]!.evidence.at(-1)).toBe("L2");
+    // The writer's evidence keeps list ids beside item ids.
+    expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }).sentences[0]!.evidence).toEqual(["L1", "E2"]);
   });
 
   it("reads the lists Ask's answer uses: each once in full or by an owner or status selection, and once by members' ids", () => {
@@ -210,23 +209,22 @@ describe("agentic Ask model protocol parity", () => {
         { id: "L4", where: { field: "title", value: "PRD" } }, { id: "L5", where: { field: "status", value: " " } }, { id: "E6" }, 7, { id: "L8" }, { id: "L9" }],
       sentences: [{ text: "Two pages mention BUG-412 (L1, E4).", evidence: ["L1", "E4"] }], not_found: [],
     };
-    const parsed = parseAnswer(value, { lists: true });
+    const parsed = parseAnswer(value);
     expect(parsed.lists).toEqual([{ id: "L2" }, { id: "L1" }, { id: "L3", where: { field: "owner", value: "Dana Lee" } }, { id: "L4" }, { id: "L5" }]);
     expect(parsed.sentences).toEqual([{ text: "Two pages mention BUG-412.", evidence: ["L1", "E4"] }]);
-    expect(parseAnswer(value)).not.toHaveProperty("lists");
-    expect(parseAnswer({ sentences: [], not_found: [] }, { lists: true }).lists).toEqual([]);
+    expect(parseAnswer({ sentences: [], not_found: [] }).lists).toEqual([]);
     // Members selected by id take the place of a selection, each once and at most 25; none left keeps the plain use.
     const members = parseAnswer({ lists: [
       { id: "L1", members: ["e5", "E5", "[E7]", "L2", 9], where: { field: "owner", value: "Dana" } }, { id: "L2", members: ["x"], where: { field: "status", value: "open" } },
       { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) },
-    ], sentences: [], not_found: [] }, { lists: true }).lists!;
+    ], sentences: [], not_found: [] }).lists;
     expect(members.slice(0, 2)).toEqual([{ id: "L1", members: ["E5", "E7", "E9"] }, { id: "L2", where: { field: "status", value: "open" } }]);
     expect(members[2]!.members).toEqual(Array.from({ length: 25 }, (_, index) => `E${index + 1}`));
     // A list may be used once in full or by a selection and once by id, in the writer's order; still at most 5 lists.
     const both = parseAnswer({ lists: [
       { id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L1", where: { field: "owner", value: "Dana" } }, { id: "L1", members: ["E6"] },
       { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L6" }, { id: "L5", members: ["E2"] },
-    ], sentences: [], not_found: [] }, { lists: true }).lists!;
+    ], sentences: [], not_found: [] }).lists;
     expect(both).toEqual([{ id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L5", members: ["E2"] }]);
     // A list reference in prose is stripped only for Ask's answer; elsewhere "(L2)" stays prose.
     expect(stripEvidenceIds("Support tier (L2) owns it (E4).")).toBe("Support tier (L2) owns it.");
@@ -234,7 +232,7 @@ describe("agentic Ask model protocol parity", () => {
   });
 
   it("reads a where selection by owner, status or a date range, and anything else as the list in full (ADR-0041)", () => {
-    const where = (value: unknown) => parseAnswer({ lists: [{ id: "L1", where: value }], sentences: [], not_found: [] }, { lists: true }).lists![0];
+    const where = (value: unknown) => parseAnswer({ lists: [{ id: "L1", where: value }], sentences: [], not_found: [] }).lists[0];
     expect(where({ field: "due", since: "2026-10-18", until: "2026-10-24" })).toEqual({ id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } });
     expect(where({ field: "Updated", since: " 2026-10-11 " })).toEqual({ id: "L1", where: { field: "updated", since: "2026-10-11" } });
     expect(where({ field: "created", until: "2026-10-04", value: "x" })).toEqual({ id: "L1", where: { field: "created", until: "2026-10-04" } });
@@ -294,7 +292,6 @@ describe("agentic Ask model protocol parity", () => {
     for (let seed = 1; seed <= 400; seed += 1) {
       const value = generator(seed)(answerSchema);
       expect(() => parseAnswer(value)).not.toThrow();
-      expect(() => parseAnswer(value, { lists: true })).not.toThrow();
     }
   });
 
@@ -309,7 +306,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(parseStep({ parts: [{ question: "Who owns it? ", needs: [{ need: " owner ", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner " } }] }))
       .toEqual({ parts: [{ question: "Who owns it?", needs: [{ need: "owner", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner" } }] });
     expect(parseAnswer({ sentences: [{ text: " Done. ", evidence: ["e2", "[E3]"] }, { text: "", evidence: [] }], not_found: ["", "owner"] }))
-      .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"] }], not_found: ["owner"] });
+      .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"] }], not_found: ["owner"], lists: [] });
   });
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {

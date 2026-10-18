@@ -46,8 +46,8 @@ export type StepNeed = { readonly id?: string; readonly need: string; readonly k
 export type StepPart = { readonly question: string; readonly needs: readonly StepNeed[]; readonly notes: string };
 export type Step = { readonly parts: readonly StepPart[]; readonly actions: readonly StepAction[] };
 export type AnswerSentence = { readonly text: string; readonly evidence: readonly string[] };
-/** `lists` (Ask, ADR-0041): the lists whose members code names, present only when the answer was parsed with lists. */
-export type Answer = { readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[]; readonly lists?: readonly AgenticAnswerListUseV1[] };
+/** `lists` (ADR-0041): the lists whose members code names. */
+export type Answer = { readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[]; readonly lists: readonly AgenticAnswerListUseV1[] };
 
 /** Each tool's first argument is required; finish has no arguments. */
 const ACTION_ARGS = {
@@ -347,21 +347,20 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
 }
 
 /**
- * Ask's answer. With `lists` (ADR-0041) it also reads the lists the answer uses, at most
- * AGENTIC_LIST_WRITER_LISTS_MAX_V1 of them, each at most once in full or by a selection and once by members' ids
- * ("which pages were created, and when was the PRD updated"), and keeps list ids such as L1 in a sentence's evidence.
+ * Ask's answer (ADR-0041): its sentences, keeping list ids such as L1 in a sentence's evidence, and the lists it uses,
+ * at most AGENTIC_LIST_WRITER_LISTS_MAX_V1 of them, each at most once in full or by a selection and once by members'
+ * ids ("which pages were created, and when was the PRD updated").
  */
-export function parseAnswer(value: unknown, options: { readonly lists?: boolean } = {}): Answer {
+export function parseAnswer(value: unknown): Answer {
   const body = object(value);
   if (body === null) throw new AgenticAskOutputErrorV1("the reply was not a JSON object");
   if (!Array.isArray(body.sentences)) throw new AgenticAskOutputErrorV1(`"sentences" must be an array (got ${keysOf(body)})`);
-  const lists = options.lists === true;
   const sentences: AnswerSentence[] = [];
   for (const raw of body.sentences) {
     const entry = object(raw);
     if (entry === null) continue;
-    const text = stripEvidenceIds(cleanLine(entry.text, SENTENCE_CHARS), lists);
-    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry.evidence, lists) }));
+    const text = stripEvidenceIds(cleanLine(entry.text, SENTENCE_CHARS), true);
+    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry.evidence, true) }));
     if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) break;
   }
   const notFound: string[] = [];
@@ -370,7 +369,6 @@ export function parseAnswer(value: unknown, options: { readonly lists?: boolean 
     if (text.length > 0 && !notFound.includes(text)) notFound.push(text);
     if (notFound.length === AGENTIC_ASK_MAX_PARTS_V1) break;
   }
-  if (!lists) return Object.freeze({ sentences: Object.freeze(sentences), not_found: Object.freeze(notFound) });
   const uses: AgenticAnswerListUseV1[] = [];
   for (const raw of Array.isArray(body.lists) ? body.lists : []) {
     const use = listUseOf(raw);
