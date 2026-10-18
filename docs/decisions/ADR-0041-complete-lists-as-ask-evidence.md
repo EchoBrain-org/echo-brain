@@ -357,14 +357,16 @@ route, header, database table or client changes.
 - **A sentence that only restates a stated list is left out.** Code leaves out
   a writer's sentence when every text item it cites is a member, or part of
   one, of a list code states, and no other need asks about it: no `which_say`
-  need's list holds it, and no found `content` need cites that member.
-  "The pages are A, B, C and D", cited to four opened sections beside the eight
-  names code wrote, is left out. "The PRD requires 0.1 C", cited to the PRD's
-  section for a content need about the PRD, stays. Code reads what a need asks
-  about from what it declares: a list kind's list, and a found content need's
-  items. A need research left declaring nothing (a content need still open, or
-  a list kind without its list, when research stopped) could ask about any
-  member, so then no sentence is left out as a restatement.
+  need's list holds it, and no `content` need research has not given up on
+  (found, or open when research stopped) cites that member. "The pages are A,
+  B, C and D", cited to four opened sections beside the eight names code
+  wrote, is left out. "The PRD requires 0.1 C", cited to the PRD's section for
+  a content need about the PRD, stays. Code reads what a need asks about from
+  what it cites, whatever its status: a list kind's list, and a content need's
+  items. A need that declares nothing (a content need citing no item, its list
+  ids carrying no meaning, or a list kind without its list, as when research
+  stopped) could ask about any member, so then no sentence is left out as a
+  restatement.
 - **One citation per cited object.** The response refuses duplicate
   citations, and a listed ticket's row and its opened body cite the same
   ticket. Code gives them one citation, in first-citation order, so a list
@@ -657,12 +659,12 @@ change of kind, and the evaluation's declared-kind score (`expected_kinds`),
   meaning of the cited text: the guessing Retirement 11 retires.
 - **A sentence about one member of a `which_say` list** carries that list's
   note even when it answers a content need about that member.
-- **A content need found on one item, answered from another.** When the
-  writer answers a found content need from the text of a stated list's member
-  the need does not cite (the need cites a meeting record, the sentence the
-  Gate reviews page), the sentence is left out as a restatement and the part
-  is answered without it. Telling which need a sentence answers needs the
-  meaning of its text.
+- **A content need citing one item, answered from another.** When the
+  writer answers a content need from the text of a stated list's member the
+  need does not cite (the need cites a meeting record, the sentence the Gate
+  reviews page), the sentence is left out as a restatement and the part is
+  answered without it, whether the need was found or left open. Telling which
+  need a sentence answers needs the meaning of its text.
 - **One item's row facts cost one open** (above).
 - **A writer that repeats a sentence citing only rows or list ids** after its
   repair makes the part partial, even when the sentence only restated the list

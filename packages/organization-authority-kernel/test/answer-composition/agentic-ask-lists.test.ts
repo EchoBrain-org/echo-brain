@@ -1918,6 +1918,36 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     expect(found.response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: FULL8 }] }] });
     expect(found.response.parts[0]!.statements).toHaveLength(1);
   });
+
+  it("X27d, X27e: reads what a content need declares from the items it cites, whatever its status (W4)", async () => {
+    const text = "Which Confluence pages were created on October 4, 2026, and is the DVT gate on hold?";
+    const DVT_NEED = "whether the DVT gate is on hold";
+    const DVT = "The Gate reviews page says the DVT gate is on hold pending fixture rework.";
+    const RESTATE = "Traceability — requirement threads and BUG-412 walkthrough was created on October 4, 2026.";
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, /^Gate reviews/u.test(row.label) ? `${row.label}: the DVT gate is on hold pending fixture rework.` : `${row.label}: created for the October 4 document set.`)]) as EvidenceDeskResultV2;
+    });
+    // A read step opens Gate reviews (E3, its section E9) and Traceability (E4, E10) with the content need as given; research then stops.
+    const run = async (status: "open" | "found", evidence: readonly string[]) => {
+      const h = harness([
+        askAll(text, [[OCT4_NEED, "open", [], WI], [DVT_NEED, "open", []]], [OCT4_LIST]),
+        askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [DVT_NEED, status, evidence, "content", "N2"]], opens(["E3", "E4"])), ...UNUSABLE,
+        { lists: [], sentences: [{ text: DVT, evidence: ["E9"] }, { text: RESTATE, evidence: ["E10"] }], not_found: [] },
+      ], october4Desk({ open }));
+      const { response, research } = await h.research.answerWithResearch({ question: text });
+      expect(research.stop).toEqual({ reason: "unusable_step", completed: false });
+      return response.parts[0]!.statements.map(statement => statement.text);
+    };
+    // Left open on the section it found the answer in, the need declares Gate reviews, as it does once found: the
+    // restatement of Traceability is left out and the DVT sentence stays.
+    expect(await run("open", ["E9"])).toEqual([FULL8, DVT]);
+    expect(await run("found", ["E9"])).toEqual([FULL8, DVT]);
+    // A content need's list ids carry no meaning: citing only L1 it declares nothing, like one citing nothing, so no
+    // sentence is left out as a restatement.
+    expect(await run("found", ["L1"])).toEqual([FULL8, DVT, RESTATE]);
+    expect(await run("open", [])).toEqual([FULL8, DVT, RESTATE]);
+  });
 });
 
 describe("a task goal keeps the rules before ADR-0041", () => {

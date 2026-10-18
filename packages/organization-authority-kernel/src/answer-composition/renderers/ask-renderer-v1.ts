@@ -176,10 +176,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // which_say needs cite, which research checks (W5), and whether one of them cites none (W3). The kinds alone decide;
       // what a need cites beside them never does.
       const { stated, checking, unlisted } = agenticPlanListsV1(needs, id => listById.has(id));
-      /** What found content needs cite: the members they ask about (W4). */
-      const contentCited = needs.filter(need => (need.kind ?? "content") === "content" && need.status === "found").flatMap(need => need.evidence);
-      /** Every need research has not given up on declares what it asks about: a list kind its list, a content need what it was found in (W4). */
-      const declared = !unlisted && !needs.some(need => (need.kind ?? "content") === "content" && need.status === "open");
+      // Content needs research has not given up on (found, or open when it stopped), and what they cite: the members they ask about (W4).
+      const content = needs.filter(need => (need.kind ?? "content") === "content" && need.status !== "not_found"), contentCited = content.flatMap(need => need.evidence);
+      /** Every need that asks about members declares them by what it cites, whatever its status: a list kind its list, a content need an item (W4). */
+      const declared = !unlisted && content.every(need => need.evidence.some(id => byShort.has(id)));
       const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, short => byShort.get(short)?.full === true));
       const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short)))]));
       const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap);
