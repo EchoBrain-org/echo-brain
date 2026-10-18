@@ -1,3 +1,4 @@
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   AgenticAskOutputErrorV1,
@@ -103,31 +104,86 @@ describe("agentic Ask model protocol parity", () => {
 
   it("gives Ask its own rules 3 and 4, and keeps the task prompt byte for byte (ADR-0041)", () => {
     const rule = (prompt: string, number: number) => prompt.split("\n").find(line => line.startsWith(`${number}. `))!;
-    // A list's id is support for which items exist; Ask sees lists, a task sees inventories.
-    expect(rule(ASK_STEP_PROMPT, 3)).toContain("For which items exist, and each one's title, dates, status and owner, a list's id (such as L1, from lists) is also support.");
+    // The task prompts, and Ask's search-only prompt, are the text of 026f60d byte for byte.
+    expect(canonicalSha256(STEP_PROMPT)).toBe("sha256:8083e4e4f259bd9676bd3a685d30c3fb5b8a797ecd61727552488a31a5014d86");
+    expect(canonicalSha256(SEARCH_ONLY_STEP_PROMPT)).toBe("sha256:d4d67ae7a306adbae70a9f5c2d5ebea59a9c9e69173657f82f7ccfac9e6bccaf");
+    expect(canonicalSha256(ASK_SEARCH_ONLY_STEP_PROMPT)).toBe("sha256:2fe343eaa46666b27ff60f9ea03aef4a517ed0707d08791284f5e2f0e3b3e77b");
+    // Research declares each need's kind, with an example of each; a list's id supports only the list kinds.
+    expect(rule(ASK_STEP_PROMPT, 3)).toMatch(/^3\. Give each need a kind\. "which_items": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel/u);
+    expect(rule(ASK_STEP_PROMPT, 3)).toContain("\"which_say\": which members of such a picked set say something (\"which of the pages created on October 4 mention BUG-412\")");
+    expect(rule(ASK_STEP_PROMPT, 3)).toContain("which items say something when the question picks no set by a date, owner, status, kind or channel (\"which tickets mention BUG-412\": search finds them)");
+    expect(rule(ASK_STEP_PROMPT, 3)).toContain("(\"is DVT on hold\", \"who owns THERM-46\", \"when was the PRD created\")");
+    expect(rule(ASK_STEP_PROMPT, 3)).toContain("Mark a which_items need \"found\" with the id of the list that answers it (such as L1, from lists). Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen");
+    expect(rule(ASK_STEP_PROMPT, 3)).not.toContain("For which items exist, and each one's title, dates, status and owner, a list's id");
+    expect(rule(STEP_PROMPT, 3)).not.toContain("kind");
     expect(ASK_STEP_PROMPT.split("\n")[0]).toContain("then your plan, lists, last_results");
     expect(STEP_PROMPT.split("\n")[0]).toContain("then your plan, inventories, last_results");
-    // Addition 6: early stopping never applies to which items exist, and no list is left unread to save pages.
-    // One rule for which items exist: cite the list by id once it cannot be read further; complete means all, otherwise at least.
-    expect(rule(ASK_STEP_PROMPT, 4)).toContain("A question about which or how many items exist is supported by a list cited by its id, never by some of its items, once more is false: a complete list supports all its items, and one that cannot be read to its end (complete is false) supports \"at least\" its count.");
-    expect(rule(ASK_STEP_PROMPT, 4)).not.toContain("supported only by a complete list");
-    expect(rule(ASK_STEP_PROMPT, 4).endsWith("Stop as soon as every requested fact is supported; for which items exist, that is once each list you cite has more false.")).toBe(true);
-    // Ask's tools never send research to open list members only to confirm their row facts.
+    // Addition 6: early stopping never applies to which items exist; a which_say need reads what its list has shown.
+    expect(rule(ASK_STEP_PROMPT, 4)).toContain("A which_items need is supported once each list it cites has more false: a complete list supports all its items, and one that cannot be read to its end (complete is false) supports \"at least\" its count. A list shows which items exist, never what an item says: open an item for its content, and for a which_say need open as many of the list's members as you can; it need not wait for the list's end.");
+    expect(rule(ASK_STEP_PROMPT, 4)).not.toContain("A question about which or how many items exist");
+    expect(rule(ASK_STEP_PROMPT, 4).endsWith("Stop as soon as every requested fact is supported: for a which_items need, once each list it cites has more false; for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.")).toBe(true);
+    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) expect(prompt).not.toContain("for a which_say need");
+    // Ask's tools never send research to open list members only to show that they exist.
     const line = (prompt: string, start: string) => prompt.split("\n").find(value => value.startsWith(start))!;
-    expect(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("Open those items before relying on what they say; a list's members need no open for which items exist, or for their title, dates, status and owner.");
-    expect(line(ASK_STEP_PROMPT, "  When to use: before relying on")).toContain("never to confirm a list member's title, dates, status or owner");
+    expect(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("Open those items before relying on what they say; a list's members need no open to show which items exist.");
+    expect(line(ASK_STEP_PROMPT, "  When to use: before relying on")).toContain("before relying on what metadata-only items or incomplete previews say, or on a fact about one item; never only to show that a list's members exist or match its filter;");
     expect(line(STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("no body means metadata only. Open those items before relying on them.");
     expect(rule(ASK_SEARCH_ONLY_STEP_PROMPT, 4).endsWith("then open the candidates. Stop as soon as every requested fact is supported.")).toBe(true);
+    // The reply shape names all three kinds and shows none, so a model copying it copies no default; the example has one need of each.
+    const shape = line(ASK_STEP_PROMPT, "{\"parts\":[{\"question\":\"<one part of the question>\"");
+    expect(JSON.parse(shape).parts[0].needs).toEqual([{ id: "N1", need: "<a fact needed>", kind: "<which_items, which_say or content>", status: "open", evidence: [] }]);
+    expect(ASK_STEP_PROMPT).toContain("A need's \"status\" is \"open\", \"found\" or \"not_found\". A need's \"kind\" is \"which_items\", \"which_say\" or \"content\". \"tool\" is");
+    const example = JSON.parse(ASK_STEP_PROMPT.split("\n").at(-1)!) as { parts: { needs: { kind: string; evidence: string[] }[] }[] };
+    expect(example.parts.flatMap(part => part.needs.map(need => [need.kind, need.evidence]))).toEqual([["which_items", ["L1"]], ["which_say", ["L1", "E3"]], ["content", ["E2"]]]);
+    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) expect(prompt).not.toMatch(/which_items|which_say|A need's "kind"/u);
     for (const prompt of [ASK_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) {
       expect(prompt).not.toContain("You may stop early");
       expect(prompt).not.toContain("instead of paging through it");
     }
     for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain("You may stop early when the facts the question asks for are already supported.");
-    // Only the opening line, rules 3 and 4, and what search returns and when to open differ; everything else is the same text.
+    // Only the opening line, rules 3 and 4, what search returns and when to open, the reply shape and the example differ.
     const differing = (left: string, right: string) => left.split("\n").flatMap((line, index) => line === right.split("\n")[index] ? [] : [index]);
     const lines = ASK_STEP_PROMPT.split("\n");
-    expect(differing(ASK_STEP_PROMPT, STEP_PROMPT)).toEqual([0, 5, 6, lines.indexOf(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")), lines.indexOf(line(ASK_STEP_PROMPT, "  When to use: before relying on"))]);
+    expect(differing(ASK_STEP_PROMPT, STEP_PROMPT)).toEqual([0, 5, 6, lines.indexOf(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")), lines.indexOf(line(ASK_STEP_PROMPT, "  When to use: before relying on")),
+      lines.indexOf(shape), lines.indexOf(shape) + 1, lines.length - 1]);
     expect(differing(ASK_SEARCH_ONLY_STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT)).toEqual([6]);
+  });
+
+  it("requires a need kind in Ask's step schema only with the list tool (ADR-0041)", () => {
+    const needOf = (schema: Schema) => (((((schema.properties as Schema).parts as Schema).items as Schema).properties as Schema).needs as Schema).items as Schema;
+    const kinded = needOf(createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true, true));
+    expect(Object.keys(kinded.properties as Schema)).toEqual(["id", "need", "kind", "status", "evidence"]);
+    expect((kinded.properties as Schema).kind).toEqual({ type: "string", enum: ["which_items", "which_say", "content"] });
+    expect(kinded.required).toEqual(["need", "kind", "status", "evidence"]);
+    // Without it, the schema is the one built at 026f60d, byte for byte.
+    expect(canonicalSha256(createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true))).toBe("sha256:89777c72b01f93f9335b2ec8165befe2c15d8fe1f067c8a50753f0e216cb968f");
+    expect(canonicalSha256(createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true, false))).toBe("sha256:89777c72b01f93f9335b2ec8165befe2c15d8fe1f067c8a50753f0e216cb968f");
+    expect(canonicalSha256(createStepSchema(["pages"], undefined, false, false))).toBe("sha256:172f427c99d87ed7a210eba5972be0abdfc6c23d7d96271388934c6753231c3f");
+    expect(canonicalSha256(stepSchema)).toBe("sha256:d2903b4093e32c204330b6e39010d09ca1c2517f5902f6cf7250edd6d345401a");
+    // Every step the kinded schema permits parses, as every step the plain one does.
+    for (let seed = 1; seed <= 200; seed += 1) {
+      const value = generator(seed)(createStepSchema(["meetings"], ["E1"], true, true, true)) as { parts: { question: string }[]; actions: { tool: string; args: Record<string, string> }[] };
+      const empty = (text: string) => text.trim().replace(/[\s\p{Cc}]+/gu, "").length === 0;
+      const primary: Record<string, string> = { search: "query", open: "id", list: "source" };
+      const blank = value.parts.some(part => empty(part.question)) || value.actions.some(action => action.tool !== "finish" && empty(action.args[primary[action.tool]!]!));
+      if (blank) expect(() => parseStep(value, { lists: true, kinds: true })).toThrow(AgenticAskOutputErrorV1);
+      else expect(() => parseStep(value, { lists: true, kinds: true })).not.toThrow();
+    }
+  });
+
+  it("reads a need's kind in common spellings and defaults to content (ADR-0041)", () => {
+    const kinds = (values: readonly unknown[], options: Parameters<typeof parseStep>[1]) => parseStep({
+      parts: [{ question: "q", needs: [...values.map((kind, index) => ({ need: `n${index}`, ...(kind === undefined ? {} : { kind }), status: "open", evidence: [] })), "bare need"], notes: "" }],
+      actions: [{ tool: "finish", args: {} }],
+    }, options).parts[0]!.needs.map(need => need.kind);
+    // At most 6 needs a part: two parts' worth.
+    expect(kinds(["which_items", "Which Items", "which-items", " WHICH_ITEMS ", "which_say"], { lists: true, kinds: true })).toEqual(["which_items", "which_items", "which_items", "which_items", "which_say", "content"]);
+    expect(kinds(["Which-Say", "content", "list", "", 3], { lists: true, kinds: true })).toEqual(["which_say", "content", "content", "content", "content", "content"]);
+    // Without kinds (a task goal, or Ask without the list tool) no need has a kind, whatever the model wrote.
+    for (const options of [{ lists: true }, {}]) {
+      const parsed = parseStep({ parts: [{ question: "q", needs: [{ need: "n", kind: "which_items", status: "found", evidence: ["E1"] }], notes: "" }], actions: [{ tool: "finish", args: {} }] }, options);
+      expect(parsed.parts[0]!.needs[0]).not.toHaveProperty("kind");
+    }
   });
 
   it("keeps list ids in a need's evidence only for Ask, within the 12-id cap", () => {

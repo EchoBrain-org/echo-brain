@@ -311,7 +311,7 @@ describe("agentic Ask: research loop", () => {
       expect(input.user_prompt).not.toContain(launch.citation.kind === "approved_record" ? launch.citation.atom_id : "");
     }
     expect(script.prompt(1).seen[0]).toMatchObject({ id: "E1", source: "meeting", text: "Launch is approved for Tuesday.", full: true });
-    expect(script.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "open", evidence: [] }] }]);
+    expect(script.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", kind: "content", status: "open", evidence: [] }] }]);
   });
 
   it("lists a keyword-free source, opens an item, and cites its full text", async () => {

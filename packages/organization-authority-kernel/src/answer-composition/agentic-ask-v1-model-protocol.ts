@@ -1,5 +1,6 @@
 import { validatePersonQueryText } from "@echo-brain/organization-api";
 import { AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1 } from "./agentic-list-evidence-v1.js";
+import { AGENTIC_RESEARCH_NEED_KINDS_V1, type AgenticResearchNeedKindV1 } from "./agentic-research-v1.js";
 import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.js";
 
 /**
@@ -39,8 +40,8 @@ export type StepTool = "search" | "open" | "list" | "finish";
 export type StepArgs = Readonly<Partial<Record<"query" | "id" | "source" | "kind" | "status" | "owner" | "channel" | "since" | "until" | "date_field", string>>>;
 export type StepAction = { readonly tool: StepTool; readonly args: StepArgs };
 export type NeedStatus = "open" | "found" | "not_found";
-/** `id` is the need's id from the plan the step was shown ("N3"); a new need has none. */
-export type StepNeed = { readonly id?: string; readonly need: string; readonly status: NeedStatus; readonly evidence: readonly string[] };
+/** `id` is the need's id from the plan the step was shown ("N3"); a new need has none. `kind` only when parsed with kinds (ADR-0041). */
+export type StepNeed = { readonly id?: string; readonly need: string; readonly kind?: AgenticResearchNeedKindV1; readonly status: NeedStatus; readonly evidence: readonly string[] };
 export type StepPart = { readonly question: string; readonly needs: readonly StepNeed[]; readonly notes: string };
 export type Step = { readonly parts: readonly StepPart[]; readonly actions: readonly StepAction[] };
 export type AnswerSentence = { readonly text: string; readonly evidence: readonly string[] };
@@ -70,16 +71,21 @@ function closedString(values: readonly string[]): StructuredGenerationJsonSchema
 /** Provider-neutral selectors advertised by the request's source catalog. */
 export type StepSource = string;
 
-/** The planner sees exactly the source selectors advertised by its request's desk, and list only when its brief allows it. */
-export function createStepSchema(sources: readonly StepSource[], openIds?: readonly string[], finishAvailable = true, listAvailable = true): StructuredGenerationJsonSchema { return Object.freeze({
+/**
+ * The planner sees exactly the source selectors advertised by its request's desk, and list only when its brief allows it.
+ * With `needKinds` (an Ask step with the list tool, ADR-0041) every need declares its kind; without it the schema is the
+ * one before ADR-0041.
+ */
+export function createStepSchema(sources: readonly StepSource[], openIds?: readonly string[], finishAvailable = true, listAvailable = true, needKinds = false): StructuredGenerationJsonSchema { return Object.freeze({
   type: "object", additionalProperties: false, required: ["parts", "actions"], properties: {
     parts: { type: "array", minItems: 1, maxItems: AGENTIC_ASK_MAX_PARTS_V1, items: {
       type: "object", additionalProperties: false, required: ["question", "needs", "notes"], properties: {
         question: { type: "string", maxLength: QUESTION_CHARS },
         needs: { type: "array", maxItems: AGENTIC_ASK_MAX_NEEDS_PER_PART_V1, items: {
-          type: "object", additionalProperties: false, required: ["need", "status", "evidence"], properties: {
+          type: "object", additionalProperties: false, required: needKinds ? ["need", "kind", "status", "evidence"] : ["need", "status", "evidence"], properties: {
             id: { type: "string", maxLength: NEED_ID_CHARS },
             need: { type: "string", maxLength: NEED_CHARS },
+            ...(needKinds ? { kind: closedString(AGENTIC_RESEARCH_NEED_KINDS_V1) } : {}),
             status: closedString(["open", "found", "not_found"]),
             evidence: ids,
           },
@@ -182,6 +188,11 @@ function needStatus(value: unknown): NeedStatus {
   if (normalized === "not_found" || normalized === "notfound" || normalized === "missing") return "not_found";
   return "open";
 }
+/** A need's declared kind (ADR-0041): "which_items" or "which_say" in any common spelling; anything else, or nothing, is content. */
+function needKind(value: unknown): AgenticResearchNeedKindV1 {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/gu, "_") : "";
+  return normalized === "which_items" || normalized === "which_say" ? normalized : "content";
+}
 function tool(value: unknown): StepTool | null {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (normalized === "browse") return "list";
@@ -221,7 +232,7 @@ function needId(value: unknown): string | undefined {
   const match = /^\s*\[?\s*[Nn]?\s*(\d{1,3})\s*\]?\s*$/u.exec(String(value));
   return match === null ? undefined : `N${Number(match[1])}`;
 }
-function needs(value: unknown, lists: boolean): readonly StepNeed[] {
+function needs(value: unknown, lists: boolean, kinds: boolean): readonly StepNeed[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: StepNeed[] = [];
   for (const raw of value) {
@@ -229,14 +240,20 @@ function needs(value: unknown, lists: boolean): readonly StepNeed[] {
     const need = entry === null ? cleanLine(raw, NEED_CHARS) : cleanLine(entry.need, NEED_CHARS);
     const id = entry === null ? undefined : needId(entry.id);
     if (need.length === 0 || result.some(existing => existing.need.toLowerCase() === need.toLowerCase() || (id !== undefined && existing.id === id))) continue;
-    result.push(Object.freeze({ ...(id === undefined ? {} : { id }), need, status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists) }));
+    result.push(Object.freeze({
+      ...(id === undefined ? {} : { id }), need, ...(kinds ? { kind: needKind(entry?.kind) } : {}),
+      status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists),
+    }));
     if (result.length === AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) break;
   }
   return Object.freeze(result);
 }
 
-/** With `lists` (a question goal, ADR-0041), a need's evidence may name lists (L1) as well as items. */
-export function parseStep(value: unknown, options: { readonly lists?: boolean } = {}): Step {
+/**
+ * With `lists` (a question goal, ADR-0041), a need's evidence may name lists (L1) as well as items. With `kinds` (an Ask
+ * step with the list tool) every need gets its declared kind, content when it names none or an unknown one.
+ */
+export function parseStep(value: unknown, options: { readonly lists?: boolean; readonly kinds?: boolean } = {}): Step {
   const body = object(value);
   if (body === null) throw new AgenticAskOutputErrorV1("the reply was not a JSON object");
   if (!Array.isArray(body.parts)) throw new AgenticAskOutputErrorV1(`"parts" must be an array (got ${keysOf(body)})`);
@@ -247,7 +264,7 @@ export function parseStep(value: unknown, options: { readonly lists?: boolean } 
     if (entry === null) throw new AgenticAskOutputErrorV1("each item in \"parts\" must be an object with question, needs, notes");
     const question = cleanLine(entry.question, QUESTION_CHARS);
     if (question.length === 0) throw new AgenticAskOutputErrorV1("each part needs a non-empty \"question\"");
-    parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true), notes: cleanLine(entry.notes, NOTES_CHARS) }));
+    parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true, options.kinds === true), notes: cleanLine(entry.notes, NOTES_CHARS) }));
   }
   const actions: StepAction[] = [];
   for (const raw of body.actions) {
@@ -337,9 +354,9 @@ export function parseAnswer(value: unknown, options: { readonly lists?: boolean 
 
 /**
  * The research step's system prompt. Without list (a search-only brief) it names no list tool, no inventory rule and no
- * way to browse a source; everything else is the same text. Ask's question (`ask`, ADR-0041) has its own rules 3 and 4:
- * a list research read is evidence of which items exist, cited by its id, and "which" is supported only by a complete
- * list. A task goal keeps the text before ADR-0041.
+ * way to browse a source; everything else is the same text. Ask's question with the list tool (`ask`, ADR-0041) has its
+ * own rules 3 and 4, reply shape and example: each need declares its kind, a which_items need is supported by the id of
+ * a list read to its end, and a which_say need cites the list it checks. A task goal keeps the text before ADR-0041.
  */
 function stepPrompt(list: boolean, ask: boolean): string { return [
   `You are Echo's research agent. A person asked a question about their organization's work. The supplied source_catalog describes the sources they can read and which connected tools provide them. You work in steps: each step you update your plan and notes and choose up to 4 actions; the system runs them and shows you the results at the next step. Each step shows opened (items you opened, in full) and seen (every other item found so far, with its details and any text or preview), then your plan, ${!list ? "" : ask ? "lists, " : "inventories, "}last_results (what your last actions returned, by item id) and searches_done.`,
@@ -347,9 +364,9 @@ function stepPrompt(list: boolean, ask: boolean): string { return [
   "How to work:",
   "1. In step 1, split the question into its parts (1 to 5, in the asker's order). For each part, list only the facts the asker requested or that are necessary to identify the requested subject, such as \"approved DVT start date\", \"who owns the vendor follow-up\", \"latest discussion status\". Keep the same parts afterwards. The plan gives each need an id (N1, N2, ...): on every later step, write each need again with its id, even when you reword it; a new need has no id. Add a need only when it is necessary to answer that original question. Dates, owners, rationale, and other sources are not requirements unless the question asks for them or the answer depends on them.",
   list ? "2. Search, list and open until every need is found or clearly not available." : "2. Search and open until every need is found or clearly not available.",
-  `3. Mark a need \"found\" only with ids whose full text you have seen: items under \"opened\", or items under \"seen\" marked \"full\": true${list && ask ? ". For which items exist, and each one's title, dates, status and owner, a list's id (such as L1, from lists) is also support" : ""}. Mark a need \"not_found\" after at least two different completed searches${list ? ", or a completed list," : ""} fail to provide it. Do not keep searching the same exhausted source with minor wording changes. ${list ? "An error, availability notice, or an unfinished page" : "An error or availability notice"} is incomplete research, not absence.`,
+  list && ask ? ASK_KIND_RULE : `3. Mark a need \"found\" only with ids whose full text you have seen: items under \"opened\", or items under \"seen\" marked \"full\": true. Mark a need \"not_found\" after at least two different completed searches${list ? ", or a completed list," : ""} fail to provide it. Do not keep searching the same exhausted source with minor wording changes. ${list ? "An error, availability notice, or an unfinished page" : "An error or availability notice"} is incomplete research, not absence.`,
   !list ? `4. There is no list tool in this run: find items by searching distinctive terms and exact identifiers, then open the candidates. ${ask ? "Stop as soon as every requested fact is supported." : "You may stop early when the facts the question asks for are already supported."}`
-    : ask ? `4. The persistent lists field records each list you read: its id (L1, L2, ...), args and member ids. When more is true, repeat list with its args to read the next page; changing filters starts a different list. A question about which or how many items exist is supported by a list cited by its id, never by some of its items, once more is false: a complete list supports all its items, and one that cannot be read to its end (complete is false) supports \"at least\" its count. A list shows which items exist, never what an item says: open an item for its content, and open every member to say which of them mention something. A source with metadata_only_list lists titles and dates only, so its pages cannot show that a fact in an item's text is absent: search that source for such a fact. Before marking a requested fact not_found, finish any other list you were browsing; a complete unfiltered list of a source covers its filtered ones. ${STOP_RULE}`
+    : ask ? `4. The persistent lists field records each list you read: its id (L1, L2, ...), args and member ids. When more is true, repeat list with its args to read the next page; changing filters starts a different list. A which_items need is supported once each list it cites has more false: a complete list supports all its items, and one that cannot be read to its end (complete is false) supports \"at least\" its count. A list shows which items exist, never what an item says: open an item for its content, and for a which_say need open as many of the list's members as you can; it need not wait for the list's end. A source with metadata_only_list lists titles and dates only, so its pages cannot show that a fact in an item's text is absent: search that source for such a fact. Before marking a requested fact not_found, finish any other list you were browsing; a complete unfiltered list of a source covers its filtered ones. ${STOP_RULE}`
     : "4. The persistent inventories field records lists you started. When more is true, repeat list with its args to read the next page; changing filters starts a different inventory. A source with metadata_only_list lists titles and dates only, so its pages cannot show that a fact is absent: search that source for the fact instead of paging through it. Before marking a requested fact not_found, finish any other inventory you were browsing; a complete unfiltered inventory of a source covers its filtered ones. You may stop early when the facts the question asks for are already supported.",
   "5. Call finish, as the only action, when every need is found or not_found.",
   "",
@@ -369,7 +386,7 @@ function stepPrompt(list: boolean, ask: boolean): string { return [
   "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"<source from source_catalog>\", \"since\", \"until\", \"date_field\"}",
   "  Purpose: search all available sources, or only source. Scope and permissions still apply.",
   `  When to use: start with concrete names, codes or features. Use since/until for source/event timestamps. A date mentioned inside document text may instead be a keyword; never substitute its upload date for that content date. For an exact identifier supplied by the asker or a result, search the identifier unchanged and on its own. Try different words while a need is open. Use open to read an item${list ? " and list to browse a source" : ""}.`,
-  `  Returns: the ids of up to 8 items, best match first. Read their details and bodies in seen or opened. A seen item with \"full\": true contains the complete released text in text, preserving its lines. This may be one matching passage, not the whole document or conversation. A preview is incomplete; no body means metadata only. ${list && ask ? "Open those items before relying on what they say; a list's members need no open for which items exist, or for their title, dates, status and owner." : "Open those items before relying on them."}`,
+  `  Returns: the ids of up to 8 items, best match first. Read their details and bodies in seen or opened. A seen item with \"full\": true contains the complete released text in text, preserving its lines. This may be one matching passage, not the whole document or conversation. A preview is incomplete; no body means metadata only. ${list && ask ? "Open those items before relying on what they say; a list's members need no open to show which items exist." : "Open those items before relying on them."}`,
   `  Limits: keyword matching, not meaning. Keep identifiers intact; try synonyms. Truncated means incomplete; ${list ? "refine or list" : "refine the query"}. Repeats within one source return nothing new.`,
   `  Query recovery: some sources require every query word to match. Start with one exact identifier or one or two distinctive terms, not a whole question. Scope is applied separately; add a project name as a keyword only when the item's text is expected to contain it. After an empty search, try a known identifier or simpler terms once${list ? ", then list that source and open relevant candidates" : ""}. Empty keyword results do not prove the fact is absent.`,
   list ? "  Related: open reads a result in full; list shows everything of one kind." : "  Related: open reads a result in full.",
@@ -377,7 +394,7 @@ function stepPrompt(list: boolean, ask: boolean): string { return [
   "",
   "open, args {\"id\": \"<id such as E8>\"}",
   "  Purpose: read one item in full, with its context.",
-  `  When to use: ${list && ask ? "before relying on what metadata-only items or incomplete previews say, never to confirm a list member's title, dates, status or owner" : "before relying on metadata-only items or incomplete previews"}; to read a whole discussion thread or the passages around a document hit.`,
+  `  When to use: ${list && ask ? "before relying on what metadata-only items or incomplete previews say, or on a fact about one item; never only to show that a list's members exist or match its filter" : "before relying on metadata-only items or incomplete previews"}; to read a whole discussion thread or the passages around a document hit.`,
   "  Returns: the ids it opened, whose full text is under opened, plus context: neighbouring document passages, the other records from the same meeting, a discussion thread (up to 20 replies), or a bounded set of related ticket references. Related references without text are metadata only: use their ids in another open before relying on their bodies. Follow only relationships needed to answer an open need; a related item is not itself proof of a conflict or a satisfied prerequisite.",
   "  Limits: one id per action; use several open actions in one step to read several items. Pass the id, not the title.",
   list ? "  Related: ids come from search, list, or a previous open." : "  Related: ids come from search or a previous open.",
@@ -408,15 +425,24 @@ function stepPrompt(list: boolean, ask: boolean): string { return [
   "- Do not repeat a search you already ran.",
   "",
   "Reply with ONLY a JSON object in exactly this shape:",
-  "{\"parts\":[{\"question\":\"<one part of the question>\",\"needs\":[{\"id\":\"N1\",\"need\":\"<a fact needed>\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"<what you found so far>\"}],\"actions\":[{\"tool\":\"search\",\"args\":{\"query\":\"<keywords>\"}}]}",
-  `A need's \"id\" is its id from plan; leave it out in step 1 and for a new need. A need's \"status\" is \"open\", \"found\" or \"not_found\". \"tool\" is ${list ? "\"search\", \"open\", \"list\" or \"finish\"" : "\"search\", \"open\" or \"finish\""}.`,
+  list && ask
+    ? "{\"parts\":[{\"question\":\"<one part of the question>\",\"needs\":[{\"id\":\"N1\",\"need\":\"<a fact needed>\",\"kind\":\"<which_items, which_say or content>\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"<what you found so far>\"}],\"actions\":[{\"tool\":\"search\",\"args\":{\"query\":\"<keywords>\"}}]}"
+    : "{\"parts\":[{\"question\":\"<one part of the question>\",\"needs\":[{\"id\":\"N1\",\"need\":\"<a fact needed>\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"<what you found so far>\"}],\"actions\":[{\"tool\":\"search\",\"args\":{\"query\":\"<keywords>\"}}]}",
+  `A need's \"id\" is its id from plan; leave it out in step 1 and for a new need. A need's \"status\" is \"open\", \"found\" or \"not_found\".${list && ask ? " A need's \"kind\" is \"which_items\", \"which_say\" or \"content\"." : ""} \"tool\" is ${list ? "\"search\", \"open\", \"list\" or \"finish\"" : "\"search\", \"open\" or \"finish\""}.`,
   "",
   "Example:",
-  "{\"parts\":[{\"question\":\"Is the DVT build on track?\",\"needs\":[{\"id\":\"N1\",\"need\":\"approved DVT start date\",\"status\":\"found\",\"evidence\":[\"E2\"]},{\"id\":\"N2\",\"need\":\"latest fixture vendor date\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"E2: Sep 24 review approved DVT start Oct 12. E5 (discussion, preview cut off) mentions a vendor slip.\"}],\"actions\":[{\"tool\":\"open\",\"args\":{\"id\":\"E5\"}},{\"tool\":\"search\",\"args\":{\"query\":\"fixture vendor date\"}}]}",
+  list && ask
+    ? "{\"parts\":[{\"question\":\"Which tickets were created on October 4, and which of them mention the fixture vendor?\",\"needs\":[{\"id\":\"N1\",\"need\":\"tickets created on 2026-10-04\",\"kind\":\"which_items\",\"status\":\"found\",\"evidence\":[\"L1\"]},{\"id\":\"N2\",\"need\":\"tickets created on 2026-10-04 that mention the fixture vendor\",\"kind\":\"which_say\",\"status\":\"open\",\"evidence\":[\"L1\",\"E3\"]}],\"notes\":\"L1: E3 to E6, 4 tickets created Oct 4, more false. E3 (opened) mentions the vendor.\"},{\"question\":\"Is the DVT build on track?\",\"needs\":[{\"id\":\"N3\",\"need\":\"approved DVT start date\",\"kind\":\"content\",\"status\":\"found\",\"evidence\":[\"E2\"]}],\"notes\":\"E2: Sep 24 review approved DVT start Oct 12.\"}],\"actions\":[{\"tool\":\"open\",\"args\":{\"id\":\"E4\"}},{\"tool\":\"open\",\"args\":{\"id\":\"E5\"}},{\"tool\":\"open\",\"args\":{\"id\":\"E6\"}}]}"
+    : "{\"parts\":[{\"question\":\"Is the DVT build on track?\",\"needs\":[{\"id\":\"N1\",\"need\":\"approved DVT start date\",\"status\":\"found\",\"evidence\":[\"E2\"]},{\"id\":\"N2\",\"need\":\"latest fixture vendor date\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"E2: Sep 24 review approved DVT start Oct 12. E5 (discussion, preview cut off) mentions a vendor slip.\"}],\"actions\":[{\"tool\":\"open\",\"args\":{\"id\":\"E5\"}},{\"tool\":\"search\",\"args\":{\"query\":\"fixture vendor date\"}}]}",
 ].join("\n"); }
 
-/** Ask's stop rule (addition 6, ADR-0041): early stopping never applies to which items exist. */
-const STOP_RULE = "Stop as soon as every requested fact is supported; for which items exist, that is once each list you cite has more false.";
+/**
+ * Ask's rule 3 with the list tool (ADR-0041): research declares each need's kind, and each kind's support. Both list
+ * kinds are for a set the question picks by list facts; which items say something across a whole source is content.
+ */
+const ASK_KIND_RULE = "3. Give each need a kind. \"which_items\": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel (\"pages created on October 4\", \"my open follow-ups\", \"my open tasks due this week\"); a list answers it, and the answer names every member with its title, dates, status and owner. \"which_say\": which members of such a picked set say something (\"which of the pages created on October 4 mention BUG-412\"); open its members, and the answer says how many of them you read. \"content\": anything else: what items say; which items say something when the question picks no set by a date, owner, status, kind or channel (\"which tickets mention BUG-412\": search finds them); or a fact about one particular item, its title, dates, status or owner included (\"is DVT on hold\", \"who owns THERM-46\", \"when was the PRD created\"). Mark a which_items need \"found\" with the id of the list that answers it (such as L1, from lists). Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen: items under \"opened\", or items under \"seen\" marked \"full\": true. Mark a need \"not_found\" after at least two different completed searches, or a completed list, fail to provide it. Do not keep searching the same exhausted source with minor wording changes. An error, availability notice, or an unfinished page is incomplete research, not absence.";
+/** Ask's stop rule (addition 6, ADR-0041): early stopping never applies to which items exist, and a which_say need reads what its list has shown. */
+const STOP_RULE = "Stop as soon as every requested fact is supported: for a which_items need, once each list it cites has more false; for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.";
 
 /** A task goal's step prompt (impact cards, sweeps): the text before ADR-0041, byte for byte. */
 export const STEP_PROMPT = stepPrompt(true, false);

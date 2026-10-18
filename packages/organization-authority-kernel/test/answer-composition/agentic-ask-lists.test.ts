@@ -74,8 +74,13 @@ function followUpItem(n: number): EvidenceDeskItemV2 {
 }
 
 const question = (text: string): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false } });
-const ask = (text: string, need: string, status: "open" | "found" | "not_found", evidence: readonly string[], actions: readonly unknown[], id?: string) =>
-  ({ parts: [{ question: text, needs: [{ ...(id === undefined ? {} : { id }), need, status, evidence }], notes: "" }], actions });
+/** One step with one need; `kind` is the need's declared kind (ADR-0041), content when left out. */
+const ask = (text: string, need: string, status: "open" | "found" | "not_found", evidence: readonly string[], actions: readonly unknown[], id?: string, kind?: string) =>
+  ({ parts: [{ question: text, needs: [{ ...(id === undefined ? {} : { id }), need, ...(kind === undefined ? {} : { kind }), status, evidence }], notes: "" }], actions });
+/** Which items exist in a set picked by list facts: a list answers it. */
+const WI = "which_items";
+/** Which members of such a set say something: it cites the list it checks. */
+const WS = "which_say";
 const finish = { tool: "finish", args: {} } as const;
 /** The writer uses list L1: code names its members (ADR-0041). */
 const useL1 = { lists: [{ id: "L1" }], sentences: [], not_found: [] } as const;
@@ -92,7 +97,7 @@ describe("Ask research: the October 4 Confluence list (trace ee2f0973)", () => {
   it("finishes on the complete list in two steps, without opening a page", async () => {
     const h = harness([
       ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
-      ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"),
+      ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], october4Desk());
     const view = await h.research.research({ trigger: "ask", brief: question(OCT4) });
@@ -101,7 +106,7 @@ describe("Ask research: the October 4 Confluence list (trace ee2f0973)", () => {
     expect(view.stop).toEqual({ reason: "finished", completed: true });
     expect(view.rounds.map(round => round.rejected)).toEqual([[], []]);
     expect(view.rounds.flatMap(round => round.actions.map(action => action.tool))).toEqual(["list", "finish"]);
-    expect(view.plan[0]!.needs).toEqual([{ need: OCT4_NEED, status: "found", evidence: ["L1"] }]);
+    expect(view.plan[0]!.needs).toEqual([{ need: OCT4_NEED, kind: "which_items", status: "found", evidence: ["L1"] }]);
     expect(view.lists).toEqual([{
       id: "L1", source: "pages", filter: { since: "2026-10-04", until: "2026-10-04", date_field: "created", time_zone: "UTC" },
       filter_applied: { since: "applied", until: "applied", date_field: "applied" }, members: MEMBERS, shown: 8,
@@ -125,8 +130,8 @@ describe("Ask research: the October 4 Confluence list (trace ee2f0973)", () => {
     // Round 2 of the trace cited E1 to E8 and was refused; round 3 then cited 19 ids, cut to 12, and named 4 pages.
     const h = harness([
       ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
-      ask(OCT4, OCT4_NEED, "found", MEMBERS, [finish], "N1"),
-      ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"),
+      ask(OCT4, OCT4_NEED, "found", MEMBERS, [finish], "N1", WI),
+      ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], october4Desk());
     const view = await h.research.research({ trigger: "ask", brief: question(OCT4) });
@@ -146,7 +151,7 @@ describe("Ask research: the October 4 Confluence list (trace ee2f0973)", () => {
     });
     const h = harness([
       ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
-      ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"),
+      ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1", WI),
     ], october4Desk({ revalidate }));
     await expect(h.research.research({ trigger: "ask", brief: question(OCT4) })).rejects.toMatchObject({ code: "unauthorized" });
     // The check before the second research call covers the rows the list released; no model sees them again.
@@ -167,9 +172,9 @@ describe("Ask research: reading a list to its end", () => {
       : result(tickets(26, 5), { page_full: false })) as EvidenceDeskResultV2);
     const h = harness([
       ask(TICKETS, TICKETS_NEED, "open", [], [LIST]),
-      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1", WI),
       ask(TICKETS, TICKETS_NEED, "open", [], [LIST], "N1"),
-      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { live_sources: [JIRA], ticket_available: true, list });
     const view = await h.research.research({ trigger: "ask", brief: question(TICKETS) });
@@ -186,7 +191,7 @@ describe("Ask research: reading a list to its end", () => {
     const list = vi.fn(async () => result(tickets(1, 25), { page_full: true }) as EvidenceDeskResultV2);
     const h = harness([
       ask(TICKETS, TICKETS_NEED, "open", [], [LIST]),
-      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { live_sources: [JIRA], ticket_available: true, list });
     const view = await h.research.research({ trigger: "ask", brief: question(TICKETS) });
@@ -206,7 +211,7 @@ describe("Ask research: reading a list to its end", () => {
       ask("Which tickets track DVT?", need, "open", [], [{ tool: "search", args: { query: "THERM DVT" } }]),
       relist({ date_field: "created", since: "2026-10-01" }), relist({ date_field: "updated", since: "2026-10-01" }),
       relist({ date_field: "created", since: "2026-09-01" }), relist({ date_field: "updated", since: "2026-09-01" }),
-      ask("Which tickets track DVT?", need, "found", ["L1"], [finish], "N1"),
+      ask("Which tickets track DVT?", need, "found", ["L1"], [finish], "N1", WI),
     ];
     const h = harness(input => input.system_prompt.startsWith("You write") ? useL1 : steps.shift(), {
       live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 3)) as EvidenceDeskResultV2), search: vi.fn(async () => result([launch])),
@@ -244,7 +249,7 @@ describe("Ask research: reading a list to its end", () => {
     const h = harness([
       ask("Which actions does Dana own?", "actions owned by Dana", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Dana" } }]),
       ask("Which actions does Dana own?", "actions owned by Dana", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Dana" } }], "N1"),
-      ask("Which actions does Dana own?", "actions owned by Dana", "found", ["L1"], [finish], "N1"),
+      ask("Which actions does Dana own?", "actions owned by Dana", "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { list });
     const view = await h.research.research({ trigger: "ask", brief: question("Which actions does Dana own?") });
@@ -262,7 +267,7 @@ describe("Ask research: reading a list to its end", () => {
     const h = harness([
       ask("Which tickets track DVT?", need, "open", [], [{ tool: "search", args: { query: "THERM DVT" } }]),
       ...Array.from({ length: 4 }, () => ask("Which tickets track DVT?", need, "open", [], [LIST_ALL], "N1")),
-      ask("Which tickets track DVT?", need, "found", ["L1"], [finish], "N1"),
+      ask("Which tickets track DVT?", need, "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { live_sources: [JIRA], ticket_available: true, list, search: vi.fn(async () => result([launch])) });
     const view = await h.research.research({ trigger: "ask", brief: question("Which tickets track DVT?") });
@@ -279,7 +284,7 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     const text = "Which tickets does Dana own?";
     const h = harness([
       ask(text, "Dana's tickets", "open", [], [{ tool: "list", args: { source: "tickets", owner: "Dana" } }]),
-      ask(text, "Dana's tickets", "found", ["L1"], [finish], "N1"),
+      ask(text, "Dana's tickets", "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { live_sources: [JIRA], ticket_available: true, list });
     const view = await h.research.research({ trigger: "ask", brief: question(text) });
@@ -299,7 +304,7 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     const text = "Which actions are still open?";
     const h = harness([
       ask(text, "open actions", "open", [], [{ tool: "list", args: { source: "meetings", status: "open" } }]),
-      ask(text, "open actions", "found", ["L1"], [finish], "N1"),
+      ask(text, "open actions", "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
     const view = await h.research.research({ trigger: "ask", brief: question(text) });
@@ -344,7 +349,7 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
     const text = "Which actions does Mara own?";
     const h = harness([
       ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
-      ask(text, "actions owned by Mara", "found", ["L1"], [finish], "N1"),
+      ask(text, "actions owned by Mara", "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
     const view = await h.research.research({ trigger: "ask", brief: question(text) });
@@ -370,7 +375,7 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
     const text = "What are my open tasks?";
     const replies: unknown[] = [
       ask(text, "my open follow-ups", "open", [], [{ tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } }]),
-      ask(text, "my open follow-ups", "found", ["L1"], [finish], "N1"),
+      ask(text, "my open follow-ups", "found", ["L1"], [finish], "N1", WI),
       { lists: [{ id: "L1" }], sentences: [{ text: "Both are open.", evidence: ["E1", "E2"] }], not_found: [] },
     ];
     const response = await createAgenticAskV4({
@@ -406,9 +411,9 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
     const LIST = { tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } } as const;
     const replies: unknown[] = [
       ask(text, need, "open", [], [LIST]),
-      ask(text, need, "found", Array.from({ length: 10 }, (_, index) => `E${index + 1}`), [finish], "N1"),
+      ask(text, need, "found", Array.from({ length: 10 }, (_, index) => `E${index + 1}`), [finish], "N1", WI),
       ask(text, need, "open", [], [LIST], "N1"),
-      ask(text, need, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1"),
+      ask(text, need, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1", WI),
       { lists: [], sentences: [{ text: "You have 12 open follow-ups.", evidence: Array.from({ length: 12 }, (_, index) => `E${index + 1}`) }], not_found: [] },
       { lists: [{ id: "L1" }], sentences: [], not_found: [] },
     ];
@@ -445,7 +450,7 @@ describe("Ask research: the same path for meetings and follow-ups", () => {
     const need = "my open follow-ups";
     const LIST = { tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } } as const;
     const count = { lists: [], sentences: [{ text: "You have 10 open follow-ups.", evidence: ["L1", ...Array.from({ length: 10 }, (_, index) => `E${index + 1}`)] }], not_found: [] };
-    const replies: unknown[] = [ask(text, need, "open", [], [LIST]), ask(text, need, "open", [], [LIST], "N1"), ask(text, need, "found", ["L1"], [finish], "N1"), count, count];
+    const replies: unknown[] = [ask(text, need, "open", [], [LIST]), ask(text, need, "open", [], [LIST], "N1"), ask(text, need, "found", ["L1"], [finish], "N1", WI), count, count];
     const response = await createAgenticAskV4({
       desk, generation, audit: { append: () => undefined }, asker: { display_name: "Mara Lind" }, wall_ms: () => Date.parse(LIST_READ_AT),
       model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift(); } },
@@ -466,7 +471,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
   const writerInputs = (h: ReturnType<typeof harness>) => h.inputs.filter(input => input.system_prompt.startsWith("You write"));
   const writerPrompt = (h: ReturnType<typeof harness>, index = 0) => JSON.parse(writerInputs(h)[index]!.user_prompt) as Record<string, any>;
   const research = (writer: readonly unknown[], desk: Partial<EvidenceDeskPortV2> = october4Desk()) =>
-    harness([ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]), ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"), ...writer], desk);
+    harness([ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]), ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1", WI), ...writer], desk);
   const fullStatement = `8 Confluence pages created on October 4, 2026: ${OCT4_NAMES.join("; ")}.`;
 
   it("names all 8 October 4 pages, each citing its own row, from rows the writer saw without their text", async () => {
@@ -510,7 +515,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const h = harness([
       ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
       ask(OCT4, OCT4_NEED, "open", [], [{ tool: "open", args: { id: "E1" } }], "N1"),
-      ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"),
+      ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1", WI),
       subset, subset,
     ], october4Desk({ open }));
     const { response } = await h.research.answerWithResearch({ question: OCT4 });
@@ -534,7 +539,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const need = "whether DVT is on hold";
     const claim = (evidence: readonly string[], lists: readonly unknown[] = []) => ({ lists, sentences: [{ text: "Yes, DVT is on hold, and EVT passed.", evidence }], not_found: [] });
     const run = async (replies: readonly unknown[]) => {
-      const h = harness([ask(text, need, "open", [], [OCT4_LIST]), ask(text, need, "found", ["L1"], [finish], "N1"), ...replies], october4Desk());
+      const h = harness([ask(text, need, "open", [], [OCT4_LIST]), ask(text, need, "found", ["L1"], [finish], "N1", WI), ...replies], october4Desk());
       return { h, ...(await h.research.answerWithResearch({ question: text })) };
     };
     // With the list in "lists"; citing the row beside the list's id; and a repair that moves the list into "lists".
@@ -574,7 +579,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
 
   it("writes a list in full beside a selection of its members by id, in either order, and never takes part of it selected by id for the list", async () => {
     const text = "Which Confluence pages were created on October 4, 2026, and when was the PRD last updated?";
-    const run = (writer: readonly unknown[]) => harness([ask(text, OCT4_NEED, "open", [], [OCT4_LIST]), ask(text, OCT4_NEED, "found", ["L1"], [finish], "N1"), ...writer], october4Desk());
+    const run = (writer: readonly unknown[]) => harness([ask(text, OCT4_NEED, "open", [], [OCT4_LIST]), ask(text, OCT4_NEED, "found", ["L1"], [finish], "N1", WI), ...writer], october4Desk());
     const facts = (title: string, updated = "October 4, 2026") => `${title} (status current, created October 4, 2026, updated ${updated})`;
     const prd = `1 of the 8 Confluence pages created on October 4, 2026: ${facts(OCT4_NAMES[4]!)}.`;
     for (const [lists, said] of [
@@ -640,7 +645,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]),
       ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST], "N1"),
       ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST], "N1"),
-      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { live_sources: [JIRA], ticket_available: true, list });
     const { response, research: view } = await h.research.answerWithResearch({ question: TICKETS });
@@ -657,7 +662,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
   it("says 'at least' for a list whose end could not be confirmed, and marks the part partial", async () => {
     const h = harness([
       ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]),
-      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+      ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 25), { page_full: true }) as EvidenceDeskResultV2) });
     const { response } = await h.research.answerWithResearch({ question: TICKETS });
@@ -672,7 +677,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const run = async (value: string) => {
       const h = harness([
         ask(text, TICKETS_NEED, "open", [], [TICKETS_LIST]),
-        ask(text, TICKETS_NEED, "found", ["L1"], [finish], "N1"),
+        ask(text, TICKETS_NEED, "found", ["L1"], [finish], "N1", WI),
         { lists: [{ id: "L1", where: { field: "owner", value } }], sentences: [], not_found: [] },
       ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(assigned) as EvidenceDeskResultV2) });
       return (await h.research.answerWithResearch({ question: text })).response;
@@ -697,7 +702,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       const h = harness([
         ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
         ask(OCT4, OCT4_NEED, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
-        ask(OCT4, OCT4_NEED, "found", plan, [finish], "N1"),
+        ask(OCT4, OCT4_NEED, "found", plan, [finish], "N1", WI),
         subset, subset,
       ], october4Desk({ open }));
       const { response } = await h.research.answerWithResearch({ question: OCT4 });
@@ -724,7 +729,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       const h = harness([
         ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
         ...rounds.map(ids => ask(OCT4, OCT4_NEED, "open", [], ids.map(id => ({ tool: "open", args: { id } })), "N1")),
-        ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1"),
+        ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1", WI),
         subset, subset,
       ], october4Desk({ open }));
       const { response } = await h.research.answerWithResearch({ question: OCT4 });
@@ -747,7 +752,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const h = harness([
       ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]),
       ask(TICKETS, TICKETS_NEED, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
-      ask(TICKETS, TICKETS_NEED, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1"),
+      ask(TICKETS, TICKETS_NEED, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1", WI),
       subset, subset,
     ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 12), { page_full: false }) as EvidenceDeskResultV2), open });
     const { response } = await h.research.answerWithResearch({ question: TICKETS });
@@ -808,7 +813,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const h = harness([
       ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]),
       ask(OCT4, OCT4_NEED, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
-      ask(OCT4, OCT4_NEED, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1"),
+      ask(OCT4, OCT4_NEED, "found", Array.from({ length: 12 }, (_, index) => `E${index + 1}`), [finish], "N1", WI),
       subset, subset,
     ], october4Desk({ open }));
     const { response } = await h.research.answerWithResearch({ question: OCT4 });
@@ -827,7 +832,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const h = harness([
       ask(text, need, "open", [], [OCT4_LIST]),
       ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
-      ask(text, need, "found", ["L1", "E12"], [finish], "N1"),
+      ask(text, need, "found", ["L1", "E12"], [finish], "N1", WS),
       { lists: [], sentences: [{ text: "Traceability — requirement threads and BUG-412 walkthrough mentions BUG-412.", evidence: ["L1", "E12"] }], not_found: [] },
     ], october4Desk({ open }));
     const { response } = await h.research.answerWithResearch({ question: text });
@@ -865,7 +870,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       const h = harness([
         ask(text, need, "open", [], [OCT4_LIST]),
         ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
-        ask(text, need, "found", plan, [finish], "N1"),
+        ask(text, need, "found", plan, [finish], "N1", WS),
         ...replies,
       ], october4Desk({ open }));
       const { response } = await h.research.answerWithResearch({ question: text });
@@ -882,7 +887,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
         const h = harness([
           ask(text, need, "open", [], [OCT4_LIST]),
           ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
-          ask(text, need, "found", plan, [finish], "N1"),
+          ask(text, need, "found", plan, [finish], "N1", WS),
           ...replies,
         ], october4Desk({ open }));
         return { h, response: (await h.research.answerWithResearch({ question: text })).response };
@@ -911,7 +916,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     // A vendor's total is never read: the count is the members the desk released to this person.
     const released = [ticketRow(1), { ...ticketRow(2), visibility: "team" as const }, ticketRow(3)];
     const list = vi.fn(async () => ({ ...result(released), total: 500 }) as unknown as EvidenceDeskResultV2);
-    const replies = [ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]), ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1"), useL1];
+    const replies = [ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]), ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1", WI), useL1];
     const h = harness(replies, { live_sources: [JIRA], ticket_available: true, list });
     const { response } = await h.research.answerWithResearch({ question: TICKETS });
     expect(response.parts[0]!.statements).toEqual([{ text: `3 Jira tickets created on October 4, 2026: ${released.map(item => item.label).join("; ")}.`, citation_indexes: [0, 1, 2], private: true }]);
@@ -1010,7 +1015,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       ask(text, need, "open", [], [OCT4_LIST]),
       ask(text, need, "open", [], ["E1", "E2", "E3", "E4"].map(id => ({ tool: "open", args: { id } })), "N1"),
       ask(text, need, "open", [], ["E5", "E6", "E7", "E8"].map(id => ({ tool: "open", args: { id } })), "N1"),
-      ask(text, need, "found", ["L1", "E11", "E12"], [finish], "N1"),
+      ask(text, need, "found", ["L1", "E11", "E12"], [finish], "N1", WS),
       reply, reply,
     ], october4Desk({ open }));
     const { response } = await h.research.answerWithResearch({ question: text });
@@ -1060,7 +1065,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     // Every ticket opened: the answer is complete, and the list's id beside the two that match uses the list.
     const all = harness([
       ask(text, need, "open", [], [TICKETS_LIST]), ask(text, need, "open", [], opens(["E1", "E2", "E3", "E4"]), "N1"), ask(text, need, "open", [], opens(["E5", "E6", "E7", "E8"]), "N1"),
-      ask(text, need, "found", ["L1", "E3", "E5"], [finish], "N1"), say("THERM-3 and THERM-5 mention BUG-412.", ["L1", "E3", "E5"]),
+      ask(text, need, "found", ["L1", "E3", "E5"], [finish], "N1", WS), say("THERM-3 and THERM-5 mention BUG-412.", ["L1", "E3", "E5"]),
     ], jira);
     const done = (await all.research.answerWithResearch({ question: text })).response;
     expect(writerInputs(all)).toHaveLength(1);
@@ -1070,7 +1075,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     // Four opened: the same form is noted, never forced into a list nobody asked for.
     const half = harness([
       ask(text, need, "open", [], [TICKETS_LIST]), ask(text, need, "open", [], opens(["E1", "E2", "E3", "E4"]), "N1"),
-      ask(text, need, "found", ["L1", "E3"], [finish], "N1"), say("THERM-3 mentions BUG-412.", ["L1", "E3"]),
+      ask(text, need, "found", ["L1", "E3"], [finish], "N1", WS), say("THERM-3 mentions BUG-412.", ["L1", "E3"]),
     ], jira);
     const noted = (await half.research.answerWithResearch({ question: text })).response;
     expect(writerInputs(half)).toHaveLength(1);
@@ -1086,7 +1091,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const vendor = say("Two of Mara's actions mention the vendor: fixtures 2 and 5.", ["L1", "E2", "E5"]);
     const meetings = harness([
       ask(q, n, "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]), ask(q, n, "open", [], opens(["E1", "E2", "E3", "E4"]), "N1"), ask(q, n, "open", [], opens(["E5", "E6", "E7", "E8"]), "N1"),
-      ask(q, n, "found", ["L1", "E2", "E5"], [finish], "N1"), vendor,
+      ask(q, n, "found", ["L1", "E2", "E5"], [finish], "N1", WS), vendor,
     ], { list: vi.fn(async () => result(rows) as EvidenceDeskResultV2), open: vi.fn(async (input: { readonly item: string }) => result([bodies.get(input.item)!]) as EvidenceDeskResultV2) });
     const owned = (await meetings.research.answerWithResearch({ question: q })).response;
     expect(writerInputs(meetings)).toHaveLength(1);
@@ -1103,7 +1108,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const fan = "Which of my open follow-ups are about the fan curve?";
     const fanNeed = "my open follow-ups about the fan curve";
     const curve = say("THERM-42 follow-up and THERM-44 follow-up say to ship fan curve v2 before DVT.", ["L1", "E2", "E4"]);
-    const replies: unknown[] = [ask(fan, fanNeed, "open", [], [{ tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } }]), ask(fan, fanNeed, "found", ["L1", "E2", "E4"], [finish], "N1"), curve];
+    const replies: unknown[] = [ask(fan, fanNeed, "open", [], [{ tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } }]), ask(fan, fanNeed, "found", ["L1", "E2", "E4"], [finish], "N1", WS), curve];
     const followed = await createAgenticAskV4({
       desk, generation, audit: { append: () => undefined }, asker: { display_name: "Mara Lind" }, wall_ms: () => Date.parse(LIST_READ_AT),
       model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift(); } },
@@ -1126,7 +1131,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const need = "meetings on 2026-10-04";
     const h = harness([
       ask(text, need, "open", [], [{ tool: "list", args: { source: "meetings", since: "2026-10-04", until: "2026-10-04" } }]),
-      ask(text, need, "found", ["L1"], [finish], "N1"),
+      ask(text, need, "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { list: vi.fn(async () => result(items) as EvidenceDeskResultV2) });
     const { response } = await h.research.answerWithResearch({ question: text });
@@ -1142,7 +1147,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const text = "Which actions does Mara own?";
     const h = harness([
       ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
-      ask(text, "actions owned by Mara", "found", ["L1"], [finish], "N1"),
+      ask(text, "actions owned by Mara", "found", ["L1"], [finish], "N1", WI),
       useL1,
     ], { list: vi.fn(async () => result([action("a1", "2026-10-09"), action("a2", "2026-10-12"), action("a3")]) as EvidenceDeskResultV2) });
     const { response } = await h.research.answerWithResearch({ question: text });

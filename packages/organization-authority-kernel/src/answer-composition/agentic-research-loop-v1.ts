@@ -63,6 +63,7 @@ import type {
   AgenticResearchActionV1,
   AgenticResearchAdmissionV1,
   AgenticResearchGoalV1,
+  AgenticResearchNeedKindV1,
   AgenticResearchPartV1,
   AgenticResearchRoundV1,
 } from "./agentic-research-v1.js";
@@ -217,7 +218,7 @@ type OrderedAdmission = (apply: () => ToolResult) => Promise<ToolResult>;
  * Code-owned plan state. A need leaves the plan only by being marked found or not_found. Its id (N1, N2, ...) never
  * changes, so a step can reword a need and still settle it; its wording stays the one first planned.
  */
-type NeedState = { readonly id: string; readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
+type NeedState = { readonly id: string; readonly need: string; kind?: AgenticResearchNeedKindV1; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
 type PartState = { readonly question: string; notes: string; readonly needs: NeedState[] };
 /** How the list applied each filter field the model asked for (ADR-0041). */
 type FilterApplication = Partial<Record<AgenticListFilterFieldV1, AgenticListFilterApplicationV1>>;
@@ -410,6 +411,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const budget = brief.budget;
   /** A question goal (Ask) keeps every list it reads as evidence of which items exist (ADR-0041); a task goal does not. */
   const ask = brief.goal.kind === "question";
+  /** Ask with the list tool declares each need's kind (ADR-0041); a task goal and a search-only brief have no kind. */
+  const needKinds = ask && listAvailable;
   const wallNow = options.wall_now ?? Date.now;
   /** Research steps: the audit records them as `step` calls, in the span the runner names. */
   const stepCall: AgenticModelCallV1 = Object.freeze({ role: "step", span: options.step_span });
@@ -806,20 +809,22 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const next = plan.map(part => ({ ...part, needs: part.needs.map(need => ({ ...need })) }));
     // Needs are never removed, so the next id follows the count.
     let ids = next.reduce((count, part) => count + part.needs.length, 0);
-    const newNeed = (need: string, status: NeedStatus, evidence: readonly string[]): NeedState =>
-      ({ id: `N${++ids}`, need, status, evidence, observations_before: researchObservations.length });
+    const newNeed = (need: string, status: NeedStatus, evidence: readonly string[], kind?: AgenticResearchNeedKindV1): NeedState =>
+      ({ id: `N${++ids}`, need, ...(kind === undefined ? {} : { kind }), status, evidence, observations_before: researchObservations.length });
     const newPart = (part: StepPart): PartState => ({
       question: part.question, notes: part.notes,
       // A part without needs still needs its own answer.
-      needs: part.needs.length > 0 ? part.needs.map(need => newNeed(need.need, need.status, need.evidence)) : [newNeed(part.question, "open", [])],
+      needs: part.needs.length > 0 ? part.needs.map(need => newNeed(need.need, need.status, need.evidence, need.kind)) : [newNeed(part.question, "open", [], needKinds ? "content" : undefined)],
     });
     if (parts.length === 0) return next;
     if (next.length === 0) return parts.map(newPart);
     const updated = new Set<NeedState>();
     const byId = (need: StepNeed) => (need.id === undefined ? undefined : next.flatMap(value => value.needs).find(value => value.id === need.id));
+    // Each step's proposal is the need's declaration of its kind (ADR-0041).
     const settle = (match: NeedState, need: StepNeed) => {
       if (updated.has(match)) return;
       updated.add(match); match.status = need.status; match.evidence = need.evidence;
+      if (need.kind !== undefined) match.kind = need.kind;
     };
     for (const [index, part] of parts.entries()) {
       const existing = next[index];
@@ -840,15 +845,15 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         // with no id left the original open, so a correct finish was refused). The first proposal for a need wins.
         const match = byId(need) ?? existing.needs.find(value => needKey(value.need) === needKey(need.need));
         if (match !== undefined) settle(match, need);
-        else if (existing.needs.length < AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) existing.needs.push(newNeed(need.need, need.status, need.evidence));
+        else if (existing.needs.length < AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) existing.needs.push(newNeed(need.need, need.status, need.evidence, need.kind));
       }
     }
     return next;
   };
-  /** The plan as the bundle and rounds record it; a step is also shown each need's id. */
+  /** The plan as the bundle and rounds record it; a step is also shown each need's id. An Ask need shows its kind (ADR-0041). */
   const planView = (ids = false) => plan.map((part, index) => ({
     part: index + 1, question: part.question, notes: part.notes,
-    needs: part.needs.map(need => ({ ...(ids ? { id: need.id } : {}), need: need.need, status: need.status, evidence: need.evidence })),
+    needs: part.needs.map(need => ({ ...(ids ? { id: need.id } : {}), need: need.need, ...(need.kind === undefined ? {} : { kind: need.kind }), status: need.status, evidence: need.evidence })),
   }));
   /** Listed inventories continue across planner turns without exposing cursors or desk identities. */
   const inventoryView = () => [...lists.values()].filter(state => state.fetched).map(state => Object.freeze({
@@ -1126,7 +1131,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const user = { ...head, opened: pad.opened, seen: pad.seen, ...tailWith(new Set(pad.entries)) };
       const openIds = [...entries.values()].map(entry => entry.short);
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
-      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable);
+      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, needKinds);
       let step: Step;
       // The need holds after the access check too: a check retried after a transient failure can spend the margin, and a
       // step call sent below it would likely time out with no time to repair. No time here is the gate's budget stop. The one
@@ -1137,7 +1142,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       report?.before_check(pad.read.filter(entry => entry.direct === true).map(entry => entry.item));
       try {
         step = await gate.withRepair(stepCall, researchPrompt, user, stepSchema, timeout, value => {
-          const parsed = parseStep(value, { lists: ask });
+          const parsed = parseStep(value, { lists: ask, kinds: needKinds });
           if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
           for (const action of parsed.actions) {
             if (action.tool === 'list' && !listAvailable) throw new AgenticAskOutputErrorV1(LIST_UNAVAILABLE);
