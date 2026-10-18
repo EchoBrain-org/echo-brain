@@ -1021,6 +1021,31 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([fullStatement, "Gate reviews and Traceability mention BUG-412."]);
   });
 
+  it("notes a one-ticket answer when the plan cites the list beside that ticket: a trade-off kept for content across a list", async () => {
+    // "When is THERM-3 due?" cited on L1 beside the opened ticket reads like "which of these mention BUG-412" cited on L1
+    // beside the one that does (confirmed finding 4): code cannot tell them apart, so it notes both. On the ticket alone,
+    // the answer is that ticket's content.
+    const open = vi.fn(async () => result([ticketBody(3, "THERM-3 is due October 9, 2026.")]) as EvidenceDeskResultV2);
+    const text = "When is THERM-3 due?";
+    const need = "THERM-3 due date";
+    const due = { lists: [], sentences: [{ text: "THERM-3 is due October 9, 2026.", evidence: ["E3"] }], not_found: [] };
+    const run = async (plan: readonly string[]) => {
+      const h = harness([
+        ask(text, need, "open", [], [TICKETS_LIST]), ask(text, need, "open", [], [{ tool: "open", args: { id: "E3" } }], "N1"), ask(text, need, "found", plan, [finish], "N1"), due, due,
+      ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 8)) as EvidenceDeskResultV2), open });
+      return { h, response: (await h.research.answerWithResearch({ question: text })).response };
+    };
+    const alone = await run(["E3"]);
+    expect(writerInputs(alone.h)).toHaveLength(1);
+    expect(alone.response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: "THERM-3 is due October 9, 2026." }] }] });
+    const beside = await run(["L1", "E3"]);
+    expect(writerInputs(beside.h)).toHaveLength(2);
+    expect(beside.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not every listed item was checked, so others may also match." }] });
+    expect(beside.response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+      `8 Jira tickets created on October 4, 2026: ${ticketNames(1, 8).join("; ")}.`, "THERM-3 is due October 9, 2026 (1 of 8 checked so far).",
+    ]);
+  });
+
   it("takes the list's id beside opened members that keep their row ids as content across the list: tickets, actions and follow-ups alike", async () => {
     // A Jira open returns the ticket's body under the row's own id, as a meeting open does; a follow-up's row carries its text.
     const open = vi.fn(async (input: { readonly item: string }) => {
