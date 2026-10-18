@@ -2,6 +2,7 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { validatePersonFollowUpEvidenceV1 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1 } from "../../src/answer-composition/agentic-ask-research-state-v1.js";
+import { agenticListMembershipV1 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
 import { createAgenticAskV4 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
@@ -2156,11 +2157,18 @@ describe("the finish check for a question goal (ADR-0041)", () => {
     { id: "L1", ended: true, args: { source: "pages" }, members: ["E1", "E2", "E3"] },
     { id: "L2", ended: false, args: { source: "tickets" }, members: ["E4", "E5"] },
   ];
-  const full = (id: string) => id === "E9" || id === "E4";
+  const page = (page_id: string) => ({ kind: "page", tool_id: "confluence", external_scope_id: "site-one", page_id, section_id: "inventory" });
+  const ticket = (ticket_id: string) => ({ kind: "ticket", tool_id: "jira", external_scope_id: "cloud-one", ticket_id });
+  // The items the request registered, read for membership as the loop reads it (K): E9 is ticket E5's text under its
+  // own id, so part of L2's member E5; E8 is a record, read in full, that no list holds.
+  const items = ([["E1", page("1")], ["E2", page("2")], ["E3", page("3")], ["E4", ticket("4")], ["E5", ticket("5")], ["E9", ticket("5")], ["E8", { kind: "approved_record", atom_id: "a8" }]] as const)
+    .map(([short, citation]) => ({ short, item: { citation } }));
+  const memberIn = (value: readonly AskResearchListV1[]) => agenticListMembershipV1(value, items).in;
+  const full = (id: string) => id === "E9" || id === "E4" || id === "E8";
   const settled = (kind: string | undefined, status: "found" | "not_found", evidence: readonly string[]) =>
     [{ needs: [{ id: "N1", need: "the need", ...(kind === undefined ? {} : { kind: kind as "which_items" }), status, evidence, observations_before: 0 }] }];
-  const problems = (kind: string | undefined, evidence: readonly string[], options: { readonly lists?: readonly AskResearchListV1[]; readonly list?: boolean; readonly member_in?: (list: `L${number}`, id: string) => string | undefined } = {}) =>
-    askQuestionCompletionProblemsV1(settled(kind, "found", evidence), [], options.lists ?? lists, full, options.list ?? true, ...(options.member_in === undefined ? [] : [options.member_in]));
+  const problems = (kind: string | undefined, evidence: readonly string[], options: { readonly lists?: readonly AskResearchListV1[]; readonly list?: boolean } = {}) =>
+    askQuestionCompletionProblemsV1(settled(kind, "found", evidence), [], options.lists ?? lists, full, options.list ?? true, memberIn(options.lists ?? lists));
   const label = 'part 1 need N1 "the need"';
   const unlisted = (holders?: string) => `${label} cites no list: cite the id of the list that holds its items${holders === undefined ? " (from lists), or list them first" : ` (${holders})`}`;
   const unfinished = (id: string, source: string) => `${label}: list ${id} is unfinished: keep reading the list (repeat list with {"source":"${source}"})`;
@@ -2175,16 +2183,17 @@ describe("the finish check for a question goal (ADR-0041)", () => {
     expect(problems(WI, ["E1", "E2"], { lists: [{ ...lists[0]!, ended: false }, lists[1]!] })).toEqual([unlisted("L1"), unfinished("L1", "pages")]);
     expect(problems(WI, ["E1", "E4"])).toEqual([unlisted("L1 or L2"), unfinished("L2", "tickets")]);
     expect(problems(WI, ["L9"])).toEqual([unlisted()]);
-    expect(problems(WI, ["E9"])).toEqual([unlisted()]);
+    expect(problems(WI, ["E8"])).toEqual([unlisted()]);
+    // E9 is part of L2's member E5: the refusal names L2, and asks to read it on.
+    expect(problems(WI, ["E9"])).toEqual([unlisted("L2"), unfinished("L2", "tickets")]);
   });
 
   it("asks a which_say need for the list it checks, never waits for that list's end, and needs text read in full", () => {
     expect(problems(WS, ["L1", "E9"])).toEqual([]);
     expect(problems(WS, ["L2", "E9"])).toEqual([]);
     // E9 is part of L2's member E5, as an opened page's section is its page: the refusal names L2, and never asks to read on.
-    const section = (list: `L${number}`, id: string) => list === "L2" && id === "E9" ? "E5" : lists.find(value => value.id === list)?.members.includes(id) === true ? id : undefined;
-    expect(problems(WS, ["E9"], { member_in: section })).toEqual([unlisted("L2")]);
-    expect(problems(WS, ["E9"])).toEqual([unlisted()]);
+    expect(problems(WS, ["E9"])).toEqual([unlisted("L2")]);
+    expect(problems(WS, ["E8"])).toEqual([unlisted()]);
     expect(problems(WS, ["L1"])).toEqual([unread]);
   });
 
@@ -2204,7 +2213,7 @@ describe("the finish check for a question goal (ADR-0041)", () => {
   it("asks a not_found which_say need for its list, and keeps the not-found rules for every kind", () => {
     const afterList = [{ operation: "list" as const, fingerprint: "k", complete: true }];
     const notFound = (kind: string | undefined, evidence: readonly string[], observations: readonly { readonly operation: "list" | "search"; readonly fingerprint: string; readonly complete: boolean }[] = afterList) =>
-      askQuestionCompletionProblemsV1(settled(kind, "not_found", evidence), observations, lists, full);
+      askQuestionCompletionProblemsV1(settled(kind, "not_found", evidence), observations, lists, full, true, memberIn(lists));
     expect(notFound(WS, [])).toEqual([unlisted()]);
     expect(notFound(WS, ["E1", "E2"])).toEqual([unlisted("L1")]);
     expect(notFound(WS, ["L1"])).toEqual([]);
@@ -2217,11 +2226,13 @@ describe("the finish check for a question goal (ADR-0041)", () => {
   });
 
   it("keeps the not_found and open rules", () => {
-    expect(askQuestionCompletionProblemsV1([{ needs: [{ need: "x", status: "not_found", evidence: [], observations_before: 0 }] }], [{ operation: "list", fingerprint: "k", complete: true }], lists, full)).toEqual([]);
-    expect(askQuestionCompletionProblemsV1([{ needs: [{ need: "x", status: "not_found", evidence: [], observations_before: 0 }] }], [], lists, full, false)).toEqual(['part 1 need "x" is not_found after fewer than two completed searches']);
-    expect(askQuestionCompletionProblemsV1([{ needs: [{ need: "x", status: "open", evidence: [], observations_before: 0 }] }], [], lists, full)).toEqual(['part 1 need "x" is still open']);
-    expect(askQuestionCompletionProblemsV1([{ needs: [{ need: "x", kind: "which_items", status: "open", evidence: [], observations_before: 0 }] }], [], lists, full)).toEqual(['part 1 need "x" is still open']);
-    expect(askQuestionCompletionProblemsV1([], [], lists, full)).toEqual(["no parts were written"]);
+    const check = (parts: Parameters<typeof askQuestionCompletionProblemsV1>[0], observations: Parameters<typeof askQuestionCompletionProblemsV1>[1], list = true) =>
+      askQuestionCompletionProblemsV1(parts, observations, lists, full, list, memberIn(lists));
+    expect(check([{ needs: [{ need: "x", status: "not_found", evidence: [], observations_before: 0 }] }], [{ operation: "list", fingerprint: "k", complete: true }])).toEqual([]);
+    expect(check([{ needs: [{ need: "x", status: "not_found", evidence: [], observations_before: 0 }] }], [], false)).toEqual(['part 1 need "x" is not_found after fewer than two completed searches']);
+    expect(check([{ needs: [{ need: "x", status: "open", evidence: [], observations_before: 0 }] }], [])).toEqual(['part 1 need "x" is still open']);
+    expect(check([{ needs: [{ need: "x", kind: "which_items", status: "open", evidence: [], observations_before: 0 }] }], [])).toEqual(['part 1 need "x" is still open']);
+    expect(check([], [])).toEqual(["no parts were written"]);
   });
 
   it("keeps a task goal's rule for every need, whatever kind it names", () => {

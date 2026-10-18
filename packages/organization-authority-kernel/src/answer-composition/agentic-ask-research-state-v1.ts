@@ -59,15 +59,15 @@ const CONTENT_HINT = ": a list shows which items exist and each member's title, 
  * end ("keep reading the list"); one that cannot be read further (truncated, unavailable or an unverified end) is
  * accepted, and the answer says "at least". A found which_say or content need cites an item read in full, as before
  * ADR-0041; a which_say need never waits for its list's end, and a content need's list ids carry no meaning. The
- * not_found and open rules are the task goal's, for every kind. By default an item is only itself.
+ * not_found and open rules are the task goal's, for every kind.
  */
 export function askQuestionCompletionProblemsV1(
   parts: readonly { readonly needs: readonly AskResearchNeedV1[] }[],
   observations: readonly AskResearchObservationV1[],
   lists: readonly AskResearchListV1[],
   citable: (id: string) => boolean,
-  list = true,
-  member_in: (list: AgenticListIdV1, id: string) => string | undefined = (id, item) => lists.find(value => value.id === id)?.members.includes(item) === true ? item : undefined,
+  list: boolean,
+  member_in: (list: AgenticListIdV1, id: string) => string | undefined,
 ): readonly string[] {
   return completionProblems(parts, observations, list, (need, label) => {
     const kind = need.kind ?? "content";
