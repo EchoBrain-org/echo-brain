@@ -723,6 +723,29 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([`At least 25 Jira tickets created on October 4, 2026: ${ticketNames(1, 25).join("; ")}.`]);
   });
 
+  it("states a which_items need's list with no members by its completeness: one not read to its end is never absence (W2, W3)", async () => {
+    const text = "Which actions does Mara own?";
+    const need = "actions owned by Mara";
+    const run = (page: EvidenceDeskResultV2) => harness([
+      ask(text, need, "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
+      ask(text, need, "found", ["L1"], [finish], "N1", WI),
+    ], { list: vi.fn(async () => page) }).research.answerWithResearch({ question: text });
+    // The desk released 50 actions and cut the rest; none records Mara, so the list research read has no member and no end.
+    const others = Array.from({ length: 50 }, (_, index) => listed(`x${index + 1}`, { kind: "action", attributes: { owner: "Dana Lee" } }));
+    const cut = await run(result(others, { truncated: true }) as EvidenceDeskResultV2);
+    expect(cut.research.stop).toEqual({ reason: "finished", completed: true });
+    expect(cut.research.lists).toEqual([expect.objectContaining({ id: "L1", members: [], ended: true, truncated: true, complete: false })]);
+    expect(cut.response).toMatchObject({ outcome: "partial", citations: [], parts: [{ status: "not_found", statements: [], gap: "I couldn't find this in the sources you can access. The list of meetings could not be read to its end, so more may exist." }] });
+    // A source that could not serve the page: no rows, and a notice, so the list is not complete either.
+    const down = await run(result([], { notice: "Meetings are temporarily unavailable." } as Partial<EvidenceDeskResultV2>) as EvidenceDeskResultV2);
+    expect(down.research.lists).toEqual([expect.objectContaining({ id: "L1", members: [], available: false, complete: false })]);
+    expect(down.response).toMatchObject({ outcome: "partial", parts: [{ status: "not_found", gap: "I couldn't find this in the sources you can access. The list of meetings could not be read to its end, so more may exist." }] });
+    // A complete list with no member keeps the plain not-found answer.
+    const none = await run(result([]) as EvidenceDeskResultV2);
+    expect(none.research.lists).toEqual([expect.objectContaining({ id: "L1", members: [], complete: true })]);
+    expect(none.response).toMatchObject({ outcome: "not_found", parts: [{ status: "not_found", gap: "I couldn't find this in the sources you can access." }] });
+  });
+
   it("answers 'which are assigned to me' with only the members that owner records, and none as not found (X1)", async () => {
     const assigned = [ticketRow(1, "Zhen Ye"), ticketRow(2, "Dana Lee", "Done"), ticketRow(3, "zhen ye"), ticketRow(4, "Tobias Lund")];
     const text = "Which of the Jira tickets created on October 4, 2026 are assigned to Zhen Ye?";
@@ -754,8 +777,9 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       return (await h.research.answerWithResearch({ question: text })).response;
     };
     const notice = "Jira tickets could not be filtered by owner, so this list is not limited to that owner.";
+    // A list not read to its end is never evidence of absence: the part names nothing, and the answer is partial.
     const cut = await run(true);
-    expect(cut).toMatchObject({ outcome: "not_found", citations: [], notice, parts: [{ status: "not_found", statements: [], gap: "Not found: Jira tickets created on October 4, 2026 that have status Blocked. The list of Jira tickets could not be read to its end, so more may exist." }] });
+    expect(cut).toMatchObject({ outcome: "partial", citations: [], notice, parts: [{ status: "not_found", statements: [], gap: "Not found: Jira tickets created on October 4, 2026 that have status Blocked. The list of Jira tickets could not be read to its end, so more may exist." }] });
     // A complete list: the plain not-found answer, with the same notice.
     expect(await run(false)).toMatchObject({ outcome: "not_found", citations: [], notice, parts: [{ status: "not_found", statements: [], gap: "Not found: Jira tickets created on October 4, 2026 that have status Blocked." }] });
   });

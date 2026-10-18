@@ -277,8 +277,10 @@ route, header, database table or client changes.
   - a list that is not complete: "At least 12 ...". The part is partial, with a
     gap saying the list could not be read to its end;
   - a selection that matches nothing becomes a `not_found` phrase, never a
-    statement, and keeps the list-end gap of a list that is not complete; an
-    empty list keeps today's not-found answer.
+    statement; a complete empty list keeps today's not-found answer;
+  - a list that is not complete is never evidence of absence, whatever it
+    names: a selection that matches none of its members, or a list with no
+    member, keeps the list-end gap, and the answer is partial.
 
   The noun comes from the source catalog (the tool and the selector). The
   phrase comes from the applied filter. Each name is the member's list label,
@@ -325,8 +327,9 @@ route, header, database table or client changes.
   A source that cannot apply a requested date field refuses the read. It never
   answers empty and never substitutes another field. A desk asked for an owner
   or status filter a source cannot apply refuses the read too.
-- **Code states every list a `which_items` need cites,** in full unless the
-  writer selected it by `where`, whatever the writer replies: no list, a
+- **Code states every list a `which_items` need cites,** with or without
+  members, in full unless the writer selected it by `where`, whatever the
+  writer replies: no list, a
   selection by id only, not_found, or no usable reply. No repair asks for it.
   The writer's own not_found phrases stay in the gap. A need code reads a list
   for (a found or open `which_items` need, or a `which_say` need of any status)

@@ -299,25 +299,27 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** One statement of a list; `which` when it says which items exist: a use in full or by `where`, or by id of every member. */
       type Naming = { readonly list: AgenticWriterListV1; readonly noun: AgenticListNounFormsV1; readonly selected: readonly AgenticWriterListMemberV1[]; readonly which: boolean; readonly where?: AgenticListSelectionV1; readonly by_id: boolean };
       const uses = answer?.lists ?? [];
+      /** A list not read to its end is never evidence of absence: its gap marks the part partial, whatever was named. */
+      const endGaps: string[] = [];
       const listGaps: string[] = [];
       const selectionNotFound: string[] = [];
       /** The lists the answer uses, in the order of their first use, then the stated lists the writer did not use. */
       const usedLists = [...new Set([...uses.map(use => use.id), ...stated])].flatMap(id => writerById.get(id) ?? []);
       const naming: Naming[] = usedLists.flatMap(list => {
-        if (list.count === 0) return [];
         const id = list.id, all = rows.get(id)!, noun = nounOf(list);
         const byId = uses.find(use => use.id === id && use.members !== undefined);
         const picked = byId === undefined ? undefined : all.filter(member => byId.members!.includes(member.id));
         // A selection by id of every member is the list in full; code adds the full use of a stated list the writer gave
-        // no use that says which items exist (W3), whatever the reply.
+        // no use that says which items exist (W3), whatever the reply and however many members it has.
         const given = uses.find(use => use.id === id && use.members === undefined) ?? (stated.includes(id) || picked?.length === all.length ? { id } : undefined);
         const where = given?.where;
         const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
         // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
-        if (chosen !== undefined && !list.complete) listGaps.push(listEndGap(noun.plural));
+        if (chosen !== undefined && !list.complete) endGaps.push(listEndGap(noun.plural));
         // Two uses that select the same members are one statement, named by id, with the lead of the one that says which items exist.
         if (chosen !== undefined && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return [{ list, noun, selected: picked, which: true, ...(where === undefined ? {} : { where }), by_id: true }];
-        if (chosen?.length === 0) selectionNotFound.push(agenticListSelectionNotFoundV1(noun, list.filter, where!));
+        // A selection that names nothing is its not_found phrase (K); an empty list keeps the plain not-found answer.
+        if (chosen?.length === 0 && where !== undefined) selectionNotFound.push(agenticListSelectionNotFoundV1(noun, list.filter, where));
         return [
           ...(chosen === undefined || chosen.length === 0 ? [] : [{ list, noun, selected: chosen, which: true, ...(where === undefined ? {} : { where }), by_id: false }]),
           ...(picked === undefined ? [] : [{ list, noun, selected: picked, which: false, by_id: true }]),
@@ -383,7 +385,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
       // What the lists add to the gap: a list not read to its end, a which_say list not fully checked, a list kind with no
       // list, a sentence left out for resting on rows, and what did not fit.
-      const extraGaps = [...new Set(listGaps), ...(dropped ? [FIT_GAP] : [])];
+      const extraGaps = [...new Set([...endGaps, ...listGaps]), ...(dropped ? [FIT_GAP] : [])];
       const withGaps = (base: string | undefined) => {
         const gaps = [...(base === undefined ? [] : [base]), ...extraGaps];
         return gaps.length === 0 ? undefined : cleanLine(gaps.join(" "), 600);
@@ -415,7 +417,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         ...(coverageLimited ? [LIMITED_COVERAGE_GAP] : []),
         ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
       ];
-      const outcome = !anyEvidence ? (incomplete ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
+      const outcome = !anyEvidence ? (incomplete || endGaps.length > 0 ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
       const result = Object.freeze({
         schema_version: responseVersion, kind: responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
         parts: Object.freeze([Object.freeze({
