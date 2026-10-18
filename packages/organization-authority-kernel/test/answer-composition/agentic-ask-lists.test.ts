@@ -315,6 +315,25 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     expect(view.coverage.notices).toEqual(["Actions were filtered by status only where they record one, so this list also includes items that record none."]);
   });
 
+  it("tells the person the filter of a list a which_say need checks, and never of one a content need cites", async () => {
+    // A content need's list ids carry no meaning (ADR-0041).
+    const text = "Which of Dana's tickets mention the vendor?";
+    const need = "Dana's tickets that mention the vendor";
+    const run = async (kind: string) => {
+      const h = harness([
+        ask(text, need, "open", [], [{ tool: "list", args: { source: "tickets", owner: "Dana" } }], undefined, kind),
+        ask(text, need, "open", [], [{ tool: "open", args: { id: "E2" } }], "N1", kind),
+        ask(text, need, "found", ["L1", "E2"], [finish], "N1", kind),
+        { lists: [], sentences: [{ text: "THERM-2 mentions the vendor.", evidence: ["L1", "E2"] }], not_found: [] },
+      ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 3)) as EvidenceDeskResultV2), open: vi.fn(async () => result([ticketBody(2, "THERM-2: the vendor slipped the fixture.")]) as EvidenceDeskResultV2) });
+      return h.research.research({ trigger: "ask", brief: question(text) });
+    };
+    const checked = await run(WS);
+    expect(checked.stop).toEqual({ reason: "finished", completed: true });
+    expect(checked.coverage.notices).toEqual(["Jira tickets could not be filtered by owner, so this list is not limited to that owner."]);
+    expect((await run("content")).coverage.notices).toEqual([]);
+  });
+
   it("names no filter a found need does not rest on", async () => {
     const launch = record("launch", "Launch is Tuesday.");
     const h = harness([
@@ -1314,6 +1333,11 @@ describe("a task goal keeps the rules before ADR-0041", () => {
     const view = await h.research.research({ trigger: "approved_record", brief: task });
     expect(h.prompt(1)).not.toHaveProperty("lists");
     expect(h.prompt(1).inventories).toEqual([{ args: { source: "tickets" }, shown_count: 3, more: false, available: true, truncated: false }]);
+    // Its step schema and plan declare no kind (ADR-0041).
+    const needSchema = (h.inputs[0]!.schema as { properties: { parts: { items: { properties: { needs: { items: { required: readonly string[]; properties: object } } } } } } }).properties.parts.items.properties.needs.items;
+    expect(needSchema.required).toEqual(["need", "status", "evidence"]);
+    expect(needSchema.properties).not.toHaveProperty("kind");
+    expect((h.prompt(1).plan as { needs: object[] }[])[0]!.needs[0]).not.toHaveProperty("kind");
     expect(h.prompt(1).last_results).toEqual([{ tool: "list", args: { source: "tickets" }, items: ["E2", "E3", "E4"], more: false }]);
     // A task's need still needs an item read in full; L1 is no id there, so it is dropped.
     expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining("is found but cites no item whose full text you have read"), expect.stringContaining("is found but cites no item whose full text you have read")]);
