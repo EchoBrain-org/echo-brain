@@ -218,6 +218,10 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   const names = (from: number, count: number) => Array.from({ length: count }, (_, index) => `THERM-${from + index}: Fixture work ${from + index}`);
   const eight = `8 tickets created on October 4, 2026: ${names(1, 8).join("; ")}.`;
   const ids = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
+  /** The research with every row team-visible but those in `kept`, which stay only_me. */
+  const teamRows = (research: AgenticEvidenceBundleV1, kept: readonly string[] = []): AgenticEvidenceBundleV1 => Object.freeze({
+    ...research, items: research.items.map(entry => entry.full || kept.includes(entry.short) ? entry : Object.freeze({ ...entry, item: Object.freeze({ ...entry.item, visibility: "team" as const }) })),
+  });
   const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text: code states which items exist, and members' title, dates, status and owner, through \"lists\" (with \"where\" or \"members\"); what no evidence text says belongs in \"not_found\"";
   const UNSUPPORTED = "Part of the answer was left out because no item's text supports it.";
   const UNCHECKED = "Not every listed item was checked, so others may also match.";
@@ -250,41 +254,70 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect((await dropped.render("Which tickets were created on October 4?")).result.response.parts[0]).toEqual({ question: "Which tickets were created on October 4?", status: "answered", statements: [{ text: eight, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }] });
   });
 
-  it("stands a sentence on the text it cites, also cites the rows it names beside it, and counts no list id", async () => {
+  it("stands a sentence on the text it cites, and cites after it the rows it names and its list's private rows, never as support", async () => {
     // E9 is text the writer read, outside the list: the sentence stands on it (W1). The rows it cites beside it are cited
-    // too, since it may carry their facts, so their only_me visibility makes it private (W6); the list's id cites nothing.
+    // too, since it may carry their facts, so their only_me visibility makes it private (W6). Its list id supports nothing
+    // and brings the list's private rows the writer saw, in the order the sentence cites them: here all 8 (W1).
     const sentence = { text: "The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", evidence: ["L1", ...ids(1, 4), "E9"] };
     for (const [needs, statements] of [
-      [[WI(["L1"])], [{ text: eight, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }, { text: sentence.text, citation_indexes: [8, 0, 1, 2, 3], private: true }]],
-      [[C(["E9"])], [{ text: sentence.text, citation_indexes: [0, 1, 2, 3, 4], private: true }]],
+      [[WI(["L1"])], [{ text: eight, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }, { text: sentence.text, citation_indexes: [8, 0, 1, 2, 3, 4, 5, 6, 7], private: true }]],
+      [[C(["E9"])], [{ text: sentence.text, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7, 8], private: true }]],
     ] as const) {
       const run = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], needs), replies: [{ lists: [], sentences: [sentence], not_found: [] }], version: 6 });
       const rendered = await run.render("Which tickets were created on October 4?");
       expect(generations(run)).toBe(1);
       expect(rendered.result.response.parts[0]).toEqual({ question: "Which tickets were created on October 4?", status: "answered", statements });
     }
+    // Only the list's private rows: with THERM-2 the one only_me row, the sentence cites E9, then THERM-1 to THERM-4 by id.
+    const one = await alone({ bundle: teamRows(listBundle(8, 1, [list("L1", ids(1, 8))], [C(["E9"])]), ["E2"]), replies: [{ lists: [], sentences: [sentence], not_found: [] }], version: 6 }).render("Which tickets were created on October 4?");
+    expect(one.result.response.parts[0]!.statements).toEqual([{ text: sentence.text, citation_indexes: [0, 1, 2, 3, 4], private: true }]);
+    expect(one.cited).toEqual(["E9", "E2", "E1", "E3", "E4"]);
   });
 
-  it("makes a sentence private when it cites a private row beside team text, citing the row the person can open", async () => {
-    // E9 is team text; E2 an only_me ticket row the writer saw. The sentence may carry the row's facts, so it cites the row
-    // and is private (W1, W6); before, it cited E9 alone and looked shareable. A list id names no item and cites none, so
-    // what a sentence carries from rows it cites only by their list's id is not locked (a Known limit).
+  it("X35 (a, b): makes a sentence private when it cites a private row beside team text, by id or through its list's id, citing the row the person can open", async () => {
+    // E9 is team text; E2 the one only_me ticket row the writer saw, the other seven team rows. The sentence may carry the
+    // row's facts, so it cites the row and is private (W1, W6); before, it cited E9 alone and looked shareable.
     const sentence = (evidence: readonly string[]) => ({ lists: [], sentences: [{ text: "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.", evidence }], not_found: [] });
-    const row = await alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], [C(["E9"])]), replies: [sentence(["E2", "E9"])], version: 6 }).render("What waits on the approved record?");
-    expect(row.result.response.parts[0]!.statements).toEqual([{ text: "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.", citation_indexes: [0, 1], private: true }]);
-    expect(row.result.response.citations.map(value => [value.kind, value.visibility])).toEqual([["decision", "team"], ["ticket", "only_me"]]);
-    expect(row).toMatchObject({ outcome: "answered", cited: ["E9", "E2"] });
-    const listId = await alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], [C(["E9"])]), replies: [sentence(["L1", "E9"])], version: 6 }).render("What waits on the approved record?");
-    expect(listId.result.response.parts[0]!.statements).toEqual([{ text: "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.", citation_indexes: [0], private: false }]);
+    const research = teamRows(listBundle(8, 1, [list("L1", ids(1, 8))], [C(["E9"])]), ["E2"]);
+    for (const evidence of [["E2", "E9"], ["L1", "E9"], ["E9", "L1"]]) {
+      // Through L1 alone the sentence cites the list's private row, never its seven team rows (the founder's decision, 2026-10-18).
+      const rendered = await alone({ bundle: research, replies: [sentence(evidence)], version: 6 }).render("What waits on the approved record?");
+      expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.", citation_indexes: [0, 1], private: true }]);
+      expect(rendered.result.response.citations.map(value => [value.kind, value.visibility])).toEqual([["decision", "team"], ["ticket", "only_me"]]);
+      expect(rendered).toMatchObject({ outcome: "answered", cited: ["E9", "E2"] });
+    }
+    // A list with no private row the writer saw brings nothing: the sentence cites its text alone, as before.
+    const team = await alone({ bundle: teamRows(listBundle(8, 1, [list("L1", ids(1, 8))], [C(["E9"])])), replies: [sentence(["L1", "E9"])], version: 6 }).render("What waits on the approved record?");
+    expect(team.result.response.parts[0]!.statements).toEqual([{ text: "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.", citation_indexes: [0], private: false }]);
+    expect(team).toMatchObject({ outcome: "answered", cited: ["E9"] });
+  });
+
+  it("X35 (e): brings only the private rows the writer saw of a list it saw, and keeps a sentence whole or leaves it out to fit the answer's 40 citations", async () => {
+    // A list id brings only rows the writer saw: the id of a list it was not shown brings none.
+    const sentence = (text: string, evidence: readonly string[]) => ({ text, evidence });
+    const unseen = await alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], [C(["E9"])]), replies: [{ lists: [], sentences: [sentence("The review approved the fixture work.", ["L7", "E9"])], not_found: [] }], version: 6 }).render("What did the review approve?");
+    expect(unseen.result.response.parts[0]!.statements).toEqual([{ text: "The review approved the fixture work.", citation_indexes: [0], private: false }]);
+    // 45 only_me rows: a sentence citing L1 beside team text would cite 46 items, past the answer's 40. The rows a list id
+    // brings take no slot of the writer's 12 ids; like every statement, the sentence is kept whole or left out with every
+    // one after it (W6), never cut to fit and shown unlocked.
+    const reply = { lists: [], sentences: [sentence("The review approved the fixture work.", ["E46"]), sentence("The fixture work waits on the review.", ["L1", "E47"]), sentence("The review closed.", ["E46"])], not_found: [] };
+    const run = alone({ bundle: listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])]), replies: [reply], version: 6 });
+    const rendered = await run.render("What did the review approve?");
+    expect(run.prompt(0).lists[0].members).toHaveLength(45);
+    expect(rendered.result.response.parts[0]).toEqual({ question: "What did the review approve?", status: "partial", statements: [{ text: "The review approved the fixture work.", citation_indexes: [0], private: false }], gap: "Some evidence could not fit in this response." });
+    // Over team rows the same sentence brings nothing, and all three fit.
+    const team = await alone({ bundle: teamRows(listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])])), replies: [reply], version: 6 }).render("What did the review approve?");
+    expect(team.result.response.parts[0]!.statements.map(statement => statement.citation_indexes)).toEqual([[0], [1], [0]]);
   });
 
   it("keeps a sentence's first 12 item ids past the cap wherever its list id stands, so a list id never takes the place of a private row it cites", async () => {
-    // Eleven team records (E9..E19) and one only_me row (E1), with L1 before, among or after them: thirteen ids, over the
-    // schema's 12. A list id cites nothing in a sentence (W1) and takes no item's slot, so the row it cites stays and the
-    // sentence is private (W6), whatever the list id's position.
+    // Eleven team records (E9..E19) and one only_me row (E1, of L2), with L1 (seven team rows) before, among or after them:
+    // thirteen ids, over the schema's 12. A list id supports nothing in a sentence (W1) and takes no item's slot, so the row
+    // it cites stays and the sentence is private (W6), whatever the list id's position; L1 has no private row to bring.
+    const research = teamRows(listBundle(8, 11, [list("L1", ids(2, 7)), list("L2", ["E1"])], [C(ids(9, 11))]), ["E1"]);
     for (const evidence of [[...ids(9, 11), "E1", "L1"], ["L1", ...ids(9, 11), "E1"], [...ids(9, 5), "L1", ...ids(14, 6), "E1"]]) {
       const sentence = { text: "THERM-1 waits on the approved records.", evidence };
-      const rendered = await alone({ bundle: listBundle(8, 11, [list("L1", ids(1, 8))], [C(ids(9, 11))]), replies: [{ lists: [], sentences: [sentence], not_found: [] }], version: 6 }).render("What waits on the approved records?");
+      const rendered = await alone({ bundle: research, replies: [{ lists: [], sentences: [sentence], not_found: [] }], version: 6 }).render("What waits on the approved records?");
       expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: sentence.text, citation_indexes: Array.from({ length: 12 }, (_, index) => index), private: true }]);
       expect(rendered.cited).toEqual([...ids(9, 11), "E1"]);
     }
@@ -300,11 +333,12 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     const rendered = await stated.render(question);
     expect(generations(stated)).toBe(2);
     expect(stated.prompt(1).validation_error).toContain(ROWS_REASON);
-    expect(rendered.result.response.parts[0]).toMatchObject({ status: "partial", gap: UNSUPPORTED, statements: [{ text: eight }, { text: "The review approved fixture work on them.", citation_indexes: [8] }] });
+    // The kept sentence stands on E9; its list id brings L1's eight only_me rows after it, which the list statement cites (W1).
+    expect(rendered.result.response.parts[0]).toMatchObject({ status: "partial", gap: UNSUPPORTED, statements: [{ text: eight }, { text: "The review approved fixture work on them.", citation_indexes: [8, 0, 1, 2, 3, 4, 5, 6, 7] }] });
     // A which_say need checking L1 adds its gap; E9 is no member of L1, so its sentence carries no note (W5).
     const checking = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], [WI(["L1"]), WS(["L1", "E9"])]), replies: [reply, reply], version: 6 });
     expect((await checking.render(question)).result.response.parts[0]).toMatchObject({
-      status: "partial", gap: `${UNCHECKED} ${UNSUPPORTED}`, statements: [{ text: eight }, { text: "The review approved fixture work on them.", citation_indexes: [8] }],
+      status: "partial", gap: `${UNCHECKED} ${UNSUPPORTED}`, statements: [{ text: eight }, { text: "The review approved fixture work on them.", citation_indexes: [8, 0, 1, 2, 3, 4, 5, 6, 7] }],
     });
   });
 
@@ -512,12 +546,14 @@ describe("Ask renderer: lists (ADR-0041)", () => {
 
   it("CF5c: adds the unchecked gap for a which_say list even when no sentence cites its members, and notes no sentence", async () => {
     // E9 is a record outside L1: the sentence cites no member's text, so it carries no note; none of the 8 was checked.
+    // It names THERM-1, an only_me row it reached through L1: the list id brings L1's private rows, so it is private (W1, W6).
     const reply = { lists: [], sentences: [{ text: "THERM-1 mentions BUG-412.", evidence: ["L1", "E9"] }], not_found: [] };
     const run = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], [WS(["L1", "E9"])]), replies: [reply], version: 6 });
     const rendered = await run.render("Which tickets created on October 4 mention BUG-412?");
     expect(generations(run)).toBe(1);
     expect(run.prompt(0).lists[0]).toMatchObject({ id: "L1", stated: false, checked: 0 });
-    expect(rendered.result.response.parts[0]).toEqual({ question: "Which tickets created on October 4 mention BUG-412?", status: "partial", statements: [{ text: "THERM-1 mentions BUG-412.", citation_indexes: [0], private: false }], gap: UNCHECKED });
+    expect(rendered.result.response.parts[0]).toEqual({ question: "Which tickets created on October 4 mention BUG-412?", status: "partial", statements: [{ text: "THERM-1 mentions BUG-412.", citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7, 8], private: true }], gap: UNCHECKED });
+    expect(rendered.cited).toEqual(["E9", ...ids(1, 8)]);
   });
 
   it("R9: says 'at least' with the list-end gap for a stated list in full or by where, and for a where selection says how many were listed", async () => {

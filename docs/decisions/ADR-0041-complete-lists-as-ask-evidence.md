@@ -240,9 +240,11 @@ audit or public door sees it.
 - **Research can finish on a complete list** without opening any member, by
   citing its id for a `which_items` need, within the existing 12-id cap. Past
   the cap a need keeps its list ids, which the finish check reads, and item ids
-  fill the rest; in a writer's sentence a list id cites nothing and takes no
-  item's slot, so the sentence keeps its first 12 item ids wherever its list
-  ids stand, and a list id never takes the place of a row it cites.
+  fill the rest; in a writer's sentence a list id supports nothing and takes
+  no item's slot, so the sentence keeps its first 12 item ids wherever its list
+  ids stand, and a list id never takes the place of a row it cites. The
+  private rows a list id brings into a sentence's citations (below) are code's
+  citations, not the writer's ids, and take no slot either.
 - **Content across a list (addition 4).** A `which_say` need declares it. A
   member is checked when research read its text in full, or opened its row
   through an open that left its own text whole, carried no notice or error,
@@ -396,8 +398,29 @@ audit or public door sees it.
   text the writer read. A row the writer saw that it cites beside them is cited
   too, never as its support: the sentence may carry that row's facts, so a
   private row makes the statement private and gives the person the row to
-  open, as for a statement code writes. A list id names no item and cites
-  nothing. A sentence citing no text the writer read is left out. If it cites a
+  open, as for a statement code writes. A list id names no item and supports
+  nothing, but the sentence may carry the facts of any row of a list it was
+  shown, so a list id the writer saw brings that list's private rows the
+  writer saw into the sentence's citations, after its text and never as
+  support: only the private ones, never the whole list. The statement's
+  private flag is then right for every row the sentence may carry from that
+  list, and the person can open those rows (the founder's decision of
+  2026-10-18). A list with no private row the writer saw brings nothing: on
+  team pages "Gate reviews and Traceability mention BUG-412", citing the list
+  beside the two pages' sections, cites the two sections. The accepted cost is
+  that such a sentence can show a private source it did not use; over a live
+  Jira or Confluence list, whose rows are all `only_me`, its list id brings
+  every row the writer saw (all eight October 4 pages beside the two
+  sections). Those rows take no slot of the 12 ids that bound what the writer
+  cites. Like every statement, the sentence counts toward the answer's 40
+  citations and 10 statements, and one that does not fit is left out whole,
+  with every statement after it, and the part says "Some evidence could not
+  fit in this response." A statement is never cut to fit, so a sentence in
+  the answer cites every private row its list ids bring and is private, and
+  one whose rows do not fit is never shown unlocked: over a list with more
+  private rows the writer saw than the answer's citations still have room
+  for, a sentence citing its id, and every statement after it, is left out. A
+  sentence citing no text the writer read is left out. If it cites a
   row or a list the writer saw, the reply goes back once first, saying that
   list facts go through `lists` and what no text says goes in `not_found`; if
   the reply code keeps still has one, the part is partial: "Part of the answer
@@ -482,7 +505,11 @@ the renderer writes statements: a statement code writes cites only list
 members' rows and names each member it cites, and a writer's sentence, which
 stands on text (an item no list holds as a member, such as a page's section),
 names the members whose text it cites, never a row it cites beside that text
-for the row's facts. A writer's sentence that cites only members' rows, as one
+for the row's facts, a private row its list id brings included (W1). A
+brought row whose text the writer was given (an opened ticket's) still reads
+as named: the response does not say whether a sentence cites a row by id or
+through its list's id. The development list part is of pages, whose rows
+carry no text. A writer's sentence that cites only members' rows, as one
 on follow-ups' text does, reads as one code wrote, so every row it cites
 counts and the judge decides. Past an answer's 25 names, a statement code
 wrote that ends "and N more" names the whole list when the members it names
@@ -755,14 +782,11 @@ too), "lists named in full" and its two BUG-412 cases.
   only restates the list ("Traceability ... was created on October 4, 2026"
   beside the eight names). Leaving out only the second needs the meaning of
   the cited text.
-- **What a sentence carries from rows it does not cite by id is not locked.**
-  A statement is private when an item it cites is, and the writer sees every
-  row of the lists it is shown. A sentence that carries a private row's facts
-  but cites only team text, or team text and the row's list id, is not marked
-  private, as a sentence carrying the text of an item it does not cite never
-  was. Locking such a sentence needs its list id to cite every row of the list,
-  which makes "Gate reviews and Traceability mention BUG-412" cite all eight
-  pages as its sources.
+- **What a sentence carries from an item it does not cite is not locked.** A
+  statement is private when an item it cites is. A sentence that carries a
+  private row's facts but cites only team text, neither the row nor its list,
+  is not marked private, as a sentence carrying the text of an item it does
+  not cite never was. One that cites the row, or the row's list, is (above).
 - **One item's row facts cost one open** (above).
 - **A writer that repeats a sentence citing only rows or list ids** after its
   repair makes the part partial, even when the sentence only restated the list
@@ -857,6 +881,12 @@ Tests required before release:
   its list label;
 - a sentence citing only rows or list ids, repeated after its repair, makes the
   part partial;
+- a writer's sentence citing a list id beside team text cites that list's
+  private rows the writer saw (an `only_me` ticket, an `approver_only` meeting
+  action), never its team rows, and is private; a list with no private row
+  changes nothing, the October 4 BUG-412 sentence on team pages included; a
+  sentence whose rows would pass the answer's 40 citations is left out whole,
+  with every statement after it, and the fit gap;
 - a missing or unknown kind is content;
 - meeting records in a list are named by their own line, which no task-goal
   input carries;

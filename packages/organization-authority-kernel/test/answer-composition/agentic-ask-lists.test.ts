@@ -407,7 +407,8 @@ describe("Ask research: filters are applied, refused or said, never silently wid
     expect(checked.response.parts[0]).toMatchObject({ status: "partial", statements: [{ text: "THERM-2 mentions the vendor (1 of 3 checked so far)." }], gap: "Not every listed item was checked, so others may also match." });
     const content = await run("content");
     expect(content.response).not.toHaveProperty("notice");
-    expect(content.response.parts[0]).toEqual({ question: text, status: "answered", statements: [{ text: "THERM-2 mentions the vendor.", citation_indexes: [0], private: true }] });
+    // The sentence stands on THERM-2's body; its list id brings the list's other only_me rows after it, never as support (W1).
+    expect(content.response.parts[0]).toEqual({ question: text, status: "answered", statements: [{ text: "THERM-2 mentions the vendor.", citation_indexes: [0, 1, 2], private: true }] });
   });
 
   it("names no filter of a list no statement names and no which_say need checks", async () => {
@@ -990,8 +991,10 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
       expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 4, stated: false });
       expect(writerPrompt(h).lists[0].members.map((member: { checked: boolean }) => member.checked)).toEqual([true, true, true, true, false, false, false, false]);
       expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED }] });
-      expect(response.parts[0]!.statements).toEqual([{ text: "Traceability — requirement threads and BUG-412 walkthrough mentions BUG-412 (4 of 8 checked so far).", citation_indexes: [0], private: true }]);
-      expect(response.citations.map(citation => (citation.citation as { section_id: string }).section_id)).toEqual(["s1"]);
+      // Beside L1 the sentence also cites the 8 only_me page rows the writer saw, after its text and never as support (W1).
+      const rows = evidence.includes("L1") ? 8 : 0;
+      expect(response.parts[0]!.statements).toEqual([{ text: "Traceability — requirement threads and BUG-412 walkthrough mentions BUG-412 (4 of 8 checked so far).", citation_indexes: Array.from({ length: 1 + rows }, (_, index) => index), private: true }]);
+      expect(response.citations.map(citation => (citation.citation as { section_id: string }).section_id)).toEqual(["s1", ...Array.from({ length: rows }, () => "inventory")]);
       open.mockClear();
     }
   });
@@ -1098,7 +1101,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(across.parts[0]!.statements.map(statement => statement.text)).toEqual(["Mara owns tasks 1, 2, 3 and 4 (4 of 8 checked so far)."]);
   });
 
-  it("answers which pages mention BUG-412 once every page was checked: the sentence stands, with no note and no list (C2b, R2)", async () => {
+  it("answers which pages mention BUG-412 once every page was checked: the sentence stands, with no note and no list (C2b, R2, X35 (d))", async () => {
     const open = vi.fn(async (input: { readonly item: string }) => {
       const row = PAGES.find(page => page.id === input.item)!;
       return result([section(row, /^(Traceability|Gate reviews)/u.test(row.label) ? "BUG-412 is traced to TC-D-03." : "No defects are discussed.")]) as EvidenceDeskResultV2;
@@ -1107,18 +1110,30 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const need = "pages created on 2026-10-04 that mention BUG-412";
     const two = "Gate reviews and Traceability mention BUG-412.";
     // Opening E1..E8 releases sections E9..E16: Gate reviews is E11, Traceability E12. Declared content, the same answer.
-    for (const [kind, plan, evidence] of [[WS, ["L1", "E11", "E12"], ["L1", "E11", "E12"]], [WS, ["L1", "E11", "E12"], ["E11", "E12"]], ["content", ["E11", "E12"], ["E11", "E12"]]] as const) {
+    // On team pages the sentence cites its two sections whatever it cites beside them; on only_me pages (a live Confluence
+    // read's), its list id also brings the 8 page rows the writer saw, after its text and never as support (W1).
+    const teamPages = PAGES.map(page => Object.freeze({ ...page, visibility: "team" as const }));
+    const teamOpen = vi.fn(async (input: { readonly item: string }) => {
+      const row = teamPages.find(page => page.id === input.item)!;
+      return result([section(row, /^(Traceability|Gate reviews)/u.test(row.label) ? "BUG-412 is traced to TC-D-03." : "No defects are discussed.")]) as EvidenceDeskResultV2;
+    });
+    const teamDesk = october4Desk({ list: vi.fn(async (input: EvidenceDeskListInputV2) => result(input.source === "confluence" ? teamPages : []) as EvidenceDeskResultV2), open: teamOpen });
+    for (const [kind, plan, evidence, desk, citations, shared] of [
+      [WS, ["L1", "E11", "E12"], ["L1", "E11", "E12"], teamDesk, 2, true], [WS, ["L1", "E11", "E12"], ["E11", "E12"], teamDesk, 2, true],
+      [WS, ["L1", "E11", "E12"], ["L1", "E11", "E12"], october4Desk({ open }), 10, false], [WS, ["L1", "E11", "E12"], ["E11", "E12"], october4Desk({ open }), 2, false],
+      ["content", ["E11", "E12"], ["E11", "E12"], october4Desk({ open }), 2, false],
+    ] as const) {
       const h = harness([
         ask(text, need, "open", [], [OCT4_LIST]),
         ask(text, need, "open", [], opens(MEMBERS.slice(0, 4)), "N1"),
         ask(text, need, "open", [], opens(MEMBERS.slice(4)), "N1"),
         ask(text, need, "found", plan, [finish], "N1", kind),
         { lists: [], sentences: [{ text: two, evidence }], not_found: [] },
-      ], october4Desk({ open }));
+      ], desk);
       const { response } = await h.research.answerWithResearch({ question: text });
       expect(writerPrompt(h).lists[0]).toMatchObject({ id: "L1", count: 8, checked: 8, complete: true, stated: false });
       expect(writerInputs(h)).toHaveLength(1);
-      expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: two, citation_indexes: [0, 1] }] }] });
+      expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: two, citation_indexes: Array.from({ length: citations }, (_, index) => index), private: !shared }] }] });
       expect(response.parts[0]!.statements).toHaveLength(1);
     }
     // A model may open a page by its title: each open counts for the page it resolved to, so all eight are checked.
@@ -1471,7 +1486,8 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     ], october4Desk({ open: pageOpen(/^Traceability/u) }));
     const { response } = await h.research.answerWithResearch({ question: BUG });
     expect(response.outcome).toBe("answered");
-    expect(response.parts[0]).toEqual({ question: BUG, status: "answered", statements: [{ text: TRACE, citation_indexes: [0], private: true }] });
+    // The sentence stands on Traceability's section; its list id brings the 8 only_me page rows after it (W1).
+    expect(response.parts[0]).toEqual({ question: BUG, status: "answered", statements: [{ text: TRACE, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7, 8], private: true }] });
   });
 
   it("C3, C3b: answers one follow-up's due date from its text on the list's first page, stating no list, whether or not the need cites it", async () => {
@@ -1755,23 +1771,34 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     expect(response.parts[0]!.statements).toEqual([{ text: "2 actions with owner Mara: Publish the DVT dashboard (DVT review, 2026-10-01); Order fixture spares (DVT review, 2026-10-01).", citation_indexes: [0, 1], private: true }]);
   });
 
-  it("makes a writer's sentence private when it cites an approver_only row it saw beside team text, and cites that row (W1, W6)", async () => {
+  it("X35 (c): makes a writer's sentence private when it cites an approver_only row it saw beside team text, by id or only through its list's id, and cites that row (W1, W6)", async () => {
     // The writer saw the restricted action only as a row, whose list label is a line of its own text; the sentence carries
-    // that line and cites the row beside the team record it stands on. Before, the row was dropped and the statement
-    // looked shareable, citing the team record alone.
+    // that line and cites the row, or only its list L1, beside the team record it stands on. Before, the row was dropped
+    // (and through L1 never cited) and the statement looked shareable, citing the team record alone. Through L1 the
+    // sentence cites the list's private row and never its team action (the founder's decision, 2026-10-18).
+    const shared = listed("dash", { kind: "action", list_label: "Publish the DVT dashboard (Exec vendor review, 2026-10-04)", attributes: { owner: "Mara Quinn" } });
     const restricted = listed("exec", { kind: "action", visibility: "approver_only", list_label: "Replace the fixture vendor if the drawings slip again. (Exec vendor review, 2026-10-04)", attributes: { owner: "Dana Lee" } });
     const team = record("drawings", "Approved: fixture drawings go to the vendor on Friday.");
     const text = "When do the fixture drawings go to the vendor?";
     const sentence = "The drawings go to the vendor on Friday; if they slip again, the vendor is to be replaced.";
-    const h = harness([
-      ask(text, "when the drawings go to the vendor", "open", [], [{ tool: "list", args: { source: "meetings", kind: "action" } }, { tool: "search", args: { query: "fixture drawings vendor" } }]),
-      ask(text, "when the drawings go to the vendor", "found", ["E2"], [finish], "N1", "content"),
-      { lists: [], sentences: [{ text: sentence, evidence: ["E1", "E2"] }], not_found: [] },
-    ], { list: vi.fn(async () => result([restricted]) as EvidenceDeskResultV2), search: vi.fn(async () => result([team]) as EvidenceDeskResultV2) });
-    const { response } = await h.research.answerWithResearch({ question: text });
-    expect(JSON.parse(writersOf(h)[0]!.user_prompt).lists[0].members[0]).toMatchObject({ id: "E1", title: restricted.list_label });
-    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: sentence, citation_indexes: [0, 1], private: true }] }] });
-    expect(response.citations.map(citation => [citation.kind, citation.visibility])).toEqual([["decision", "team"], ["action", "approver_only"]]);
+    const run = async (rows: readonly EvidenceDeskItemV2[], evidence: readonly string[], found: string) => {
+      const h = harness([
+        ask(text, "when the drawings go to the vendor", "open", [], [{ tool: "list", args: { source: "meetings", kind: "action" } }, { tool: "search", args: { query: "fixture drawings vendor" } }]),
+        ask(text, "when the drawings go to the vendor", "found", [found], [finish], "N1", "content"),
+        { lists: [], sentences: [{ text: sentence, evidence }], not_found: [] },
+      ], { list: vi.fn(async () => result(rows) as EvidenceDeskResultV2), search: vi.fn(async () => result([team]) as EvidenceDeskResultV2) });
+      return { h, response: (await h.research.answerWithResearch({ question: text })).response };
+    };
+    for (const evidence of [["E2", "E3"], ["L1", "E3"], ["E3", "L1"]]) {
+      const { h, response } = await run([shared, restricted], evidence, "E3");
+      expect(JSON.parse(writersOf(h)[0]!.user_prompt).lists[0].members[1]).toMatchObject({ id: "E2", title: restricted.list_label });
+      expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: sentence, citation_indexes: [0, 1], private: true }] }] });
+      expect(response.citations.map(citation => [citation.kind, citation.visibility])).toEqual([["decision", "team"], ["action", "approver_only"]]);
+    }
+    // A list with no private row the writer saw brings nothing: the sentence cites the team record alone, as before.
+    const { response: teamOnly } = await run([shared], ["L1", "E2"], "E2");
+    expect(teamOnly).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: sentence, citation_indexes: [0], private: false }] }] });
+    expect(teamOnly.citations.map(citation => [citation.kind, citation.visibility])).toEqual([["decision", "team"]]);
   });
 
   it("X13: notes a content sentence about a member of a which_say list too (Known limit)", async () => {

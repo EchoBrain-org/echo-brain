@@ -172,8 +172,8 @@ const EVIDENCE_IDS_READ = 64;
  * (Ask), list ids such as L1 are read beside item ids from a bounded read, and a list id never takes an item's place.
  * With `listsFirst`, where a list id carries meaning (an Ask need's evidence, which the finish check reads), past 12
  * ids every list id stays and item ids fill the rest, in their order. Otherwise (a writer's sentence, whose list ids
- * cite nothing, W1) a list id is no item and takes no item's slot: the first 12 item ids stay, and the list ids beside
- * them, which only the writer's repair reads.
+ * support nothing, W1) a list id is no item and takes no item's slot: the first 12 item ids stay, and the list ids beside
+ * them, which the writer's repair reads and which bring their lists' private rows into the sentence's citations.
  */
 function cleanIds(value: unknown, lists = false, listsFirst = lists): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
@@ -363,7 +363,7 @@ export function parseAnswer(value: unknown): Answer {
     const entry = object(raw);
     if (entry === null) continue;
     const text = stripEvidenceIds(cleanLine(entry.text, SENTENCE_CHARS), true);
-    // A sentence's list ids cite nothing (W1), so they take no item's slot: its first 12 item ids are kept, rows included.
+    // A sentence's list ids support nothing (W1), so they take no item's slot: its first 12 item ids are kept, rows included.
     if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry.evidence, true, false) }));
     if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) break;
   }

@@ -351,15 +351,16 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const member = membership.in(id, short);
         return member !== undefined && !checking.some(other => membership.in(other, short) !== undefined) && !contentCited.some(cited => membership.in(id, cited) === member);
       }));
-      // It stands on the items whose text the writer read (W1), and also cites each row it cites that the writer saw, whose
-      // facts it may carry, so a private row makes it private (W6); a list id names no item and cites nothing.
+      // It stands on the items whose text the writer read (W1); after them, never as support, it cites the rows whose facts it
+      // may carry: each row it cites that the writer saw, and each private row the writer saw of a list it cites (W6).
+      const rowsOf = (id: string) => shownRows.has(id) ? [id] : writerById.get(parseAgenticListIdV1(id) ?? "L0")?.members.map(member => member.id).filter(short => privateItem(byShort.get(short)!.item)) ?? [];
       const writerSentences = sentences.flatMap(sentence => {
         const read = sentence.evidence.filter(short => textGiven.has(short));
         if (read.length === 0 || restates(read)) return [];
         const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
-        return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.filter(id => shownRows.has(id))], read }];
+        return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read }];
       });
-      // List statements come first, then the writer's sentences, all dropped from the end to fit the response's bounds (W6).
+      // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
       const statements: Statement[] = [];
       let dropped = false;
       for (const sentence of [...listStatements, ...writerSentences]) {

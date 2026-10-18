@@ -198,8 +198,8 @@ describe("agentic Ask model protocol parity", () => {
     // A list id after 12 item ids is never the one cut: research cited the rows, was asked for the list's id, and appended it.
     const appended = { ...value, parts: [{ question: "q", needs: [{ need: "n", status: "found", evidence: [...Array.from({ length: 15 }, (_, index) => `E${index + 1}`), "L1"] }], notes: "" }] };
     expect(parseStep(appended, { lists: true }).parts[0]!.needs[0]!.evidence).toEqual([...Array.from({ length: 11 }, (_, index) => `E${index + 1}`), "L1"]);
-    // A sentence's list ids cite nothing (W1), so a list id is no item and takes no item's slot: the first 12 item ids
-    // stay wherever its list ids stand, and the list ids beside them, which only the writer's repair reads.
+    // A sentence's list ids support nothing (W1), so a list id is no item and takes no item's slot: the first 12 item ids
+    // stay wherever its list ids stand, and the list ids beside them, which the writer's repair and the renderer read.
     const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
     const sentence = (evidence: readonly string[]) => parseAnswer({ sentences: [{ text: "x", evidence }], not_found: [] }).sentences[0]!.evidence;
     expect(sentence([...items(1, 13), "L2"])).toEqual([...items(1, 12), "L2"]);
