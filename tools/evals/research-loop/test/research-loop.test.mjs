@@ -655,6 +655,8 @@ const pageRow = ([id, title, version], index) => ({ id: `E${index + 1}`, source:
 const pageSection = ([id, title, version], index) => ({ id: `E${index + 9}`, source: "pages", kind: "page", title: `${title} · section 1`, citation: pageCitation(id, version, "s1"),
   text: "SYNTHETIC MOCK", read_in_full: true, opened: true, preloaded: false, cited_by_plan: true });
 const ROWS = OCTOBER_4.map(pageRow);
+/** The pages' titles from `from` to `to`, as a statement names them (the code check reads names from the text). */
+const titles = (from, to) => OCTOBER_4.slice(from, to).map(([, title]) => title).join("; ");
 /** The list research read (ADR-0041): its 8 rows, read to a confirmed end and all shown to research. */
 const OCT4_LIST = { id: "L1", source: "pages", filter: { since: "2026-10-04", until: "2026-10-04", date_field: "created", time_zone: "UTC" }, filter_applied: { since: "applied", until: "applied", date_field: "applied" },
   members: ROWS.map(row => row.id), shown: 8, ended: true, unverified_end: false, available: true, truncated: false, read_at: "2026-10-17T06:58:31.000Z", complete: true };
@@ -662,7 +664,7 @@ const OCT4_LIST = { id: "L1", source: "pages", filter: { since: "2026-10-04", un
  * An October 4 run: research's items, lists and found evidence with the need's declared kind (ADR-0041; none is
  * content), the ids the writer saw, and the items the answer cites, in one statement or in several.
  */
-function october4Run({ items = ROWS, lists, evidence, kind, writer, cites, text = "The pages.", statements }) {
+function october4Run({ items = ROWS, lists, evidence, kind, writer, cites, text = `${(cites ?? []).map(item => item.title).join("; ")}.`, statements }) {
   const testCase = caseById(OCT4_CASE);
   const written = statements ?? [{ text, cites }];
   const cited = [...new Set(written.flatMap(statement => statement.cites))];
@@ -738,12 +740,12 @@ test("the fixed October 4 answer names all 8 pages from a complete list, citing 
   assert.equal(bySection.answer_citations.unresolved, 1, "a section is no member of the list: it resolves only when read in full");
 });
 
-test("a writer's sentence names the members whose text it cites, never the rows it cites beside that text (W1)", () => {
+test("a writer's sentence names the members its text names, never every row it cites beside that text (W1)", () => {
   // Research stopped with the need found on rows (the X5 shape), so no statement code wrote names the list. The writer
   // names 4 of the 8 pages, citing their 4 sections, and the 8 rows it saw beside them, which W1 cites for their facts.
   const ids = ROWS.map(row => row.id);
   const sections = OCTOBER_4.slice(0, 4).map(pageSection);
-  const sentence = { text: "The pages created on October 4, 2026 include A, B, C and D.", cites: [...sections, ...ROWS] };
+  const sentence = { text: `The pages created on October 4, 2026 include ${titles(0, 4)}.`, cites: [...sections, ...ROWS] };
   const run = statements => october4Run({ items: [...ROWS, ...sections], lists: [OCT4_LIST], evidence: ids, kind: "which_items", writer: [...sections.map(item => item.id), ...ids], statements });
   const beside = run([sentence]);
   const checks = codeChecks(beside.testCase, beside.run, dataset);
@@ -752,16 +754,16 @@ test("a writer's sentence names the members whose text it cites, never the rows 
   assert.equal(runScores({ checks, judge: null }).complete_and_supported, false);
   assert.deepEqual([runScores({ checks, judge: lenientJudge(beside.testCase) }).writer_lists_named, runScores({ checks, judge: lenientJudge(beside.testCase) }).complete_and_supported], [0, false]);
   // A statement code wrote cites only list members' rows, and names each member it cites, beside the same sentence too.
-  const stated = codeChecks(beside.testCase, run([{ text: "8 Confluence pages created on October 4, 2026: A; B; C; D; E; F; G; H.", cites: ROWS }, sentence]).run, dataset);
+  const stated = codeChecks(beside.testCase, run([{ text: `8 Confluence pages created on October 4, 2026: ${titles(0, 8)}.`, cites: ROWS }, sentence]).run, dataset);
   assert.deepEqual([stated.parts[0].named, stated.parts[0].members_named], [true, 8]);
-  // A row whose text the writer was given (a follow-up's row carries its text) is text the sentence stands on.
+  // A row whose text the writer was given (a follow-up's row carries its text) still names only what the sentence says.
   const withText = ROWS.map((row, index) => index < 4 ? row : { ...row, text: "SYNTHETIC MOCK" });
   const own = october4Run({ items: [...withText, ...sections], lists: [OCT4_LIST], evidence: ids, kind: "which_items", writer: [...sections.map(item => item.id), ...ids], statements: [sentence] });
-  assert.deepEqual([codeChecks(own.testCase, own.run, dataset).parts[0].named, codeChecks(own.testCase, own.run, dataset).parts[0].members_named], [true, 8]);
+  assert.deepEqual([codeChecks(own.testCase, own.run, dataset).parts[0].named, codeChecks(own.testCase, own.run, dataset).parts[0].members_named], [false, 4]);
   // "And N more" is code's count from ECHO's own list (addition 5): a writer's sentence that ends with one counts nothing.
-  const counted = codeChecks(beside.testCase, run([{ ...sentence, text: "The pages include A; B; C; D; and 4 more." }]).run, dataset);
+  const counted = codeChecks(beside.testCase, run([{ ...sentence, text: `The pages include ${titles(0, 4)}; and 4 more.` }]).run, dataset);
   assert.equal(counted.parts[0].named, false);
-  const code = codeChecks(beside.testCase, run([{ text: "8 Confluence pages created on October 4, 2026: A; B; C; D; and 4 more.", cites: ROWS.slice(0, 4) }, sentence]).run, dataset);
+  const code = codeChecks(beside.testCase, run([{ text: `8 Confluence pages created on October 4, 2026: ${titles(0, 4)}; and 4 more.`, cites: ROWS.slice(0, 4) }, sentence]).run, dataset);
   assert.deepEqual([code.parts[0].named, code.parts[0].members_named], [true, 4]);
 });
 
@@ -834,14 +836,14 @@ test("a list longer than an answer's 25 names scores as named when its statement
   // The renderer names at most 25 members, then "and N more" with N from ECHO's own list (ADR-0041, addition 5).
   const ids = ROWS.map(row => row.id);
   const part = text => codeChecks(caseById(OCT4_CASE), october4Run({ lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ids, cites: ROWS.slice(0, 6), text }).run, dataset).parts[0];
-  const counted = part("8 Confluence pages created on October 4, 2026: A; B; C; D; E; F; and 2 more.");
+  const counted = part(`8 Confluence pages created on October 4, 2026: ${titles(0, 6)}; and 2 more.`);
   assert.deepEqual([counted.named, counted.members_named], [true, 6]);
   // A count that leaves members out, or no count at all, is still some of the list.
-  assert.deepEqual([part("8 Confluence pages: A; B; C; D; E; F; and 1 more.").named, part("The pages.").named], [false, false]);
+  assert.deepEqual([part(`8 Confluence pages: ${titles(0, 6)}; and 1 more.`).named, part("The pages.").named], [false, false]);
   // Each statement is read alone: a statement selecting members by id past the full statement's names never counts twice.
   const both = codeChecks(caseById(OCT4_CASE), october4Run({ lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ids, statements: [
-    { text: "8 Confluence pages created on October 4, 2026: A; B; C; D; E; F; and 2 more.", cites: ROWS.slice(0, 6) },
-    { text: "1 of the 8 Confluence pages created on October 4, 2026: G (status current).", cites: ROWS.slice(6, 7) },
+    { text: `8 Confluence pages created on October 4, 2026: ${titles(0, 6)}; and 2 more.`, cites: ROWS.slice(0, 6) },
+    { text: `1 of the 8 Confluence pages created on October 4, 2026: ${titles(6, 7)} (status current).`, cites: ROWS.slice(6, 7) },
   ] }).run, dataset).parts[0];
   assert.deepEqual([both.named, both.members_named], [true, 7]);
 });
