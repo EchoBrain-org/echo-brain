@@ -197,7 +197,7 @@ describe('"What are my open tasks?" through the real Authority composition (ADR-
     // note that either was ignored.
     expect(planner.steps[0]!.asked_by).toBe('Mina Patel');
     expect(planner.steps[1]!.last_results).toEqual([{
-      tool: 'list', args: { source: 'follow_ups', owner: 'Mina Patel', status: 'open' }, items: ['E1'], more: false,
+      tool: 'list', args: { source: 'follow_ups', owner: 'Mina Patel', status: 'open' }, list: 'L1', items: ['E1'], more: false,
     }]);
     expect(planner.steps[2]!.last_results).toEqual([expect.objectContaining({ tool: 'open', opened: ['E1'] })]);
     // The answer cites it as a follow-up, with the open ref that names its item for the desktop.
@@ -228,7 +228,7 @@ describe('"What are my open tasks?" through the real Authority composition (ADR-
     const planner = myOpenTasks();
     const answer = await myTasksRoute(f, planner.model).ask({ access_token: 'ari', request: { schema_version: 3, question: 'What are my open tasks?' } });
     expect(planner.steps[0]!.asked_by).toBe('Ari');
-    expect(planner.steps[1]!.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: 'Ari', status: 'open' }, items: ['E1'], more: false }]);
+    expect(planner.steps[1]!.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: 'Ari', status: 'open' }, list: 'L1', items: ['E1'], more: false }]);
     expect(answer.citations).toEqual([expect.objectContaining({ kind: 'follow_up', citation: { kind: 'follow_up', item_id: f.action.item_id } })]);
     expect(new Set(followUpReleases(f).flatMap(release => release.items.map(item => item.item_id)))).toEqual(new Set([f.action.item_id]));
   });

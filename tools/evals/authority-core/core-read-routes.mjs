@@ -50,13 +50,15 @@ function questionQuery(question) {
  * highest-ranked result whose full text was shown (an approved record item
  * before an unapproved import), otherwise complete a meeting
  * inventory read before reporting no result. It reads only the current prompt:
- * no corpus map, response fixture or caller-controlled citation.
+ * no corpus map, response fixture or caller-controlled citation. Its one need
+ * asks what an item says, so it declares content (ADR-0041) and never finishes
+ * on a list.
  */
 function stepResponse(userPrompt) {
   const prompt = parseJson(userPrompt);
   const question = prompt?.question;
   if (typeof question !== "string") throw new Error("deterministic agent did not receive a question");
-  const part = (status, evidence = []) => ({ question, needs: [{ need: "the answer", status, evidence }], notes: "" });
+  const part = (status, evidence = []) => ({ question, needs: [{ need: "the answer", kind: "content", status, evidence }], notes: "" });
   const lastResults = Array.isArray(prompt.last_results) ? prompt.last_results : [];
   // A search result names its hits by id in rank order; their details and text
   // are in seen, which is in id order, so walk the ids to keep the rank.
@@ -79,9 +81,17 @@ function stepResponse(userPrompt) {
   return Object.freeze({ parts: [part("not_found")], actions: [{ tool: "finish", args: {} }] });
 }
 
+/**
+ * Ask's writer sees released text and, since ADR-0041, the lists research read as rows without text. The
+ * deterministic writer quotes the first released text and chooses no list: its planner declares content, so no list
+ * answers its need, and code states every list a which_items need cites anyway. With only lists, it writes nothing.
+ */
 function answerResponse(userPrompt) {
-  const evidence = parseJson(userPrompt)?.evidence;
-  if (!Array.isArray(evidence) || evidence.length === 0) throw new Error("deterministic answerer received no released evidence");
+  const prompt = parseJson(userPrompt);
+  const evidence = prompt?.evidence;
+  const lists = Array.isArray(prompt?.lists) ? prompt.lists : [];
+  if (!Array.isArray(evidence) || (evidence.length === 0 && lists.length === 0)) throw new Error("deterministic answerer received no released evidence");
+  if (evidence.length === 0) return Object.freeze({ lists: [], sentences: [], not_found: [] });
   const first = record(evidence[0]);
   if (first === null || typeof first.id !== "string" || first.id.length === 0 || typeof first.text !== "string" || first.text.length === 0) {
     throw new Error("deterministic answerer received invalid released evidence");
@@ -89,7 +99,7 @@ function answerResponse(userPrompt) {
   // Return only released text and its released id.
   const text = first.text.slice(0, 500).trim();
   if (text.length === 0) throw new Error("deterministic answerer received empty released evidence");
-  return Object.freeze({ sentences: [{ text, evidence: [first.id] }], not_found: [] });
+  return Object.freeze({ lists: [], sentences: [{ text, evidence: [first.id] }], not_found: [] });
 }
 
 /**

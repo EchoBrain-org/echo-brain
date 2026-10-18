@@ -19,6 +19,8 @@ import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1, withoutCoreRunti
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
+  ASK_SEARCH_ONLY_STEP_PROMPT,
+  ASK_STEP_PROMPT,
   AgenticAskOutputErrorV1,
   FOLLOW_UPS_ANSWER_GUIDANCE,
   SEARCH_ONLY_STEP_PROMPT,
@@ -97,6 +99,8 @@ export interface CreateAgenticAskV1Options {
   readonly audit: AgenticAskAuditPortV1;
   /** Monotonic milliseconds, supplied by tests or the route telemetry clock. */
   readonly now_ms?: () => number;
+  /** Wall-clock epoch milliseconds, for when each list was read (ADR-0041). Defaults to `Date.now`; tests pin it. */
+  readonly wall_ms?: () => number;
   /** Today's date (YYYY-MM-DD) for relative `list` dates; tests pin it. */
   readonly today?: () => string;
   /** Captured once by the calling client, used only to interpret temporal questions. */
@@ -281,13 +285,13 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const guided = (base: string, live: string, followUp: string) => [base, ...(toolSources.length === 0 ? [] : [live]), ...(followUps ? [followUp] : [])].join("\n\n");
   const answerPrompt = guided(ANSWER_PROMPT, liveGuidance(true), FOLLOW_UPS_ANSWER_GUIDANCE);
   /**
-   * The research step's prompts and the scratchpad bytes beside each: Ask's question keeps its prompt exactly, every
-   * task-form goal adds the one shared task rule, and a search-only brief (no list) has its own step prompt.
+   * The research step's prompts and the scratchpad bytes beside each: Ask's question has its own step prompt, with list
+   * evidence (ADR-0041); every task-form goal keeps the step prompt before it and adds the one shared task rule; and a
+   * search-only brief (no list) has its own step prompts.
    */
   const researchPrompts = (list: boolean) => {
-    const base = list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT;
-    const step = guided(base, liveGuidance(list), followUpsStepGuidance(list));
-    const task = `${step}\n\n${TASK_RULE_PROMPT}`;
+    const step = guided(list ? ASK_STEP_PROMPT : ASK_SEARCH_ONLY_STEP_PROMPT, liveGuidance(list), followUpsStepGuidance(list));
+    const task = `${guided(list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT, liveGuidance(list), followUpsStepGuidance(list))}\n\n${TASK_RULE_PROMPT}`;
     const budget = (prompt: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, OUTPUT_TOKENS.step);
     return Object.freeze({ step, step_budget: budget(step), task, task_budget: budget(task) });
   };
@@ -365,7 +369,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         desk, brief: { ...brief, options: { ...brief.options, small_scope_preload: options.small_scope_shortcut === true && brief.options.small_scope_preload } },
         prompt: researchOnly ? stepPrompts.task : stepPrompts.step, prompt_budget: researchOnly ? stepPrompts.task_budget : stepPrompts.step_budget, step_span: "ask_planner",
         context: context(requestDay), scope, catalog,
-        now, remaining, signal: activeSignal, assert_live: assertLive,
+        now, remaining, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),
         observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
         ...(progress === undefined ? {} : { report: progress.research }),
       });

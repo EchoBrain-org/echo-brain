@@ -177,7 +177,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (result.desk_items === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
     return result.desk_items.map((value) => {
       const citation = recordCitation(value);
-      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonOpenRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
+      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, list_label: value.list_label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonOpenRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
     });
   };
   const searchRecords = (query: string, kinds?: readonly EvidenceDeskKindV1[], dates: EvidenceDateFilterV1 = {}): readonly EvidenceDeskItemV1[] => {
@@ -217,6 +217,9 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     readNotices.clear();
     return Object.freeze({ items: Object.freeze(items), truncated, receipt_digests: Object.freeze(all), ...(notices.length > 0 ? { notice: notices.join(" ") } : {}) });
   };
+  /** A record open's result, with whether the anchor's own text was cut (ADR-0041). */
+  const opened = (value: EvidenceDeskResultV1, expanded: { readonly anchor_truncated?: boolean }): EvidenceDeskResultV1 =>
+    expanded.anchor_truncated === undefined ? value : Object.freeze({ ...value, anchor_truncated: expanded.anchor_truncated });
   const search = async (input: EvidenceDeskSearchInputV1): Promise<EvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
     if (input.inventory_mode !== undefined &&
@@ -258,7 +261,8 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (input.source === "slack") return result([], false, []);
     const kinds = input.kinds ?? (input.source === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : ['note', 'document_passage'] as const);
     const page = await search({ ...evidenceDateFilterV1(input), source: input.source, kinds, limit, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-    return page;
+    // The inventory reads one row past its limit and says truncated when more exist, so its end is confirmed (ADR-0041).
+    return Object.freeze({ ...page, page_full: false });
   };
   const open = async (input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
@@ -272,7 +276,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (value.record === undefined || value.record_anchor === undefined) throw new AuthorityOperationError("unavailable", "record evidence open is unavailable");
     const expanded = options.records.openDeskBatch({ access_token: options.access_token, release: value.record, anchor: value.record_anchor });
     latestRecordTruncated = false;
-    return result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]);
+    return opened(result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]), expanded);
   };
   const openCitation = async (input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }) => {
     input.signal?.throwIfAborted();
@@ -281,7 +285,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (input.citation.kind === "approved_record") {
       const expanded = options.records.openDeskCitation({ access_token: options.access_token, atom_id: input.citation.atom_id, record_sha256: input.citation.record_sha256, policy_id: input.citation.policy_id, ...recordScope(options.scope) });
       latestRecordTruncated = false;
-      return result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]);
+      return opened(result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]), expanded);
     }
     const release = options.originals.deskOpen({ access_token: options.access_token, scope: options.scope, citation: input.citation, ...(input.neighbours === undefined ? {} : { neighbours: input.neighbours }) });
     return result(originals(release), release.truncated, [release.receipt]);

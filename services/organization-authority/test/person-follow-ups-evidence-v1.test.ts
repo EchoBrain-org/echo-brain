@@ -242,6 +242,8 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     const second = await list(paged, { cursor: first.next_cursor });
     expect(second.items).toHaveLength(7);
     expect(second).not.toHaveProperty('next_cursor');
+    // This source holds every matching follow-up, so no page leaves its list's end unverified (ADR-0041).
+    expect([first.page_full, second.page_full]).toEqual([false, false]);
     expect(new Set([...first.items, ...second.items].map(item => item.id)).size).toBe(17);
     await expect(list(paged, { cursor: first.next_cursor, owner: 'me' })).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(list(paged, { cursor: 'follow_ups_99' })).rejects.toMatchObject({ code: 'invalid_request' });
@@ -450,9 +452,11 @@ describe('follow-ups on the request desk (ADR-0040)', () => {
     await bound.desk.search({ query: 'launch', kinds: ['follow_up'], limit: 8 });
     expect(bound.audits()).toHaveLength(2);
     expect(bound.base.search).toHaveBeenCalledTimes(3);
-    // Owner and status are never sent to another source.
-    await bound.desk.list({ source: 'meeting', owner: 'me', status: 'open', limit: 10 });
-    expect(bound.base.list).toHaveBeenCalledWith(expect.not.objectContaining({ owner: 'me' }));
+    // Owner and status are never sent to another source: one that cannot apply them refuses the read rather than answer
+    // wider than asked (ADR-0041).
+    await expect(bound.desk.list({ source: 'meeting', owner: 'me', status: 'open', limit: 10 })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source cannot be filtered by owner or status' });
+    await expect(bound.desk.list({ source: 'jira', status: 'open', limit: 10 })).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(bound.base.list).not.toHaveBeenCalled();
 
     const unbound = askDesk(f, 'mina', { followUps: false });
     expect(unbound.desk.live_sources).toEqual([expect.objectContaining({ source_id: 'jira' })]);

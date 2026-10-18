@@ -55,3 +55,11 @@ The RFC's offline checks precede bounded staging testing. Source tests, live
 model quality, deployment and qualification are separate claims. Candidate
 release, human canary approval and final release decisions continue through
 the existing Authority operator playbook. Rollback disables the capability.
+
+## Later decisions
+
+[ADR-0041](ADR-0041-complete-lists-as-ask-evidence.md) (2026-10-17) changes,
+for Ask only, what can support a finding and what the writer reads. A list
+read to its end is evidence of which items exist, the writer sees list members
+as rows without text, and code writes the sentence that names them. Content
+still needs released text, read in full.

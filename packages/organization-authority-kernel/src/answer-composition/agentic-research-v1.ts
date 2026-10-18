@@ -1,3 +1,5 @@
+import type { AgenticListEvidenceV1 } from "./agentic-list-evidence-v1.js";
+
 /**
  * The research loop's types, separate from any one consumer (research loop
  * evaluation v1). Every trigger hands the loop a brief (agentic-brief-v1.ts);
@@ -39,7 +41,17 @@ export type AgenticResearchStopReasonV1 = "finished" | "empty_catalog" | "no_pro
 /** A content-free reason a planner call was not admitted after its access fence. */
 export type AgenticResearchAdmissionV1 = "post_revalidation_no_time";
 
-export interface AgenticResearchNeedV1 { readonly need: string; readonly status: "open" | "found" | "not_found"; readonly evidence: readonly string[] }
+/**
+ * What an Ask need asks (ADR-0041), declared by research: `which_items`, which items exist in a source or in a set
+ * picked by list facts (a list answers it); `which_say`, which members of such a set say something (it cites the list
+ * it checks); `content`, anything else (text read in full answers it). A task goal's needs, and those of an Ask brief
+ * without the list tool, have no kind.
+ */
+export const AGENTIC_RESEARCH_NEED_KINDS_V1 = Object.freeze(["which_items", "which_say", "content"] as const);
+export type AgenticResearchNeedKindV1 = (typeof AGENTIC_RESEARCH_NEED_KINDS_V1)[number];
+
+/** `evidence` holds item ids (`E4`) and, for Ask, list ids (`L1`, ADR-0041). A need without `kind` is content. */
+export interface AgenticResearchNeedV1 { readonly need: string; readonly kind?: AgenticResearchNeedKindV1; readonly status: "open" | "found" | "not_found"; readonly evidence: readonly string[] }
 export interface AgenticResearchPartV1 { readonly part: number; readonly question: string; readonly notes: string; readonly needs: readonly AgenticResearchNeedV1[] }
 
 /** One released item as the eval sees it: no desk id, open ref or receipt. */
@@ -67,9 +79,16 @@ export interface AgenticResearchActionV1 {
   readonly result: {
     readonly items: readonly string[];
     readonly opened: readonly string[];
+    /** Ask only (ADR-0041): the item an open resolved to, by its short id, whatever form the model gave it (a title too). */
+    readonly id?: string;
     readonly note?: string;
     readonly error?: string;
     readonly truncated?: boolean;
+    /**
+     * Ask only (ADR-0041): false when a truncated open left the opened item's own text whole, the cut being only what
+     * came beside it; absent, `truncated` covers the item.
+     */
+    readonly anchor_truncated?: false;
     readonly more?: boolean;
     readonly notice?: boolean;
   };
@@ -99,6 +118,8 @@ export interface AgenticResearchResultV1 {
   readonly budget: AgenticResearchBudgetV1;
   readonly plan: readonly AgenticResearchPartV1[];
   readonly items: readonly AgenticResearchItemV1[];
+  /** Ask only (ADR-0041): every list research read, unchanged from the bundle; absent for a task goal. */
+  readonly lists?: readonly AgenticListEvidenceV1[];
   /** Starting citations the brief marked `report` that could not be read; present only when there are any. */
   readonly unreadable_starting?: readonly unknown[];
   readonly rounds: readonly AgenticResearchRoundV1[];
@@ -130,6 +151,6 @@ export interface AgenticResearchResultV1 {
 export interface AgenticAskWithResearchV1<R> {
   readonly response: R;
   readonly research: AgenticResearchResultV1;
-  /** Short ids handed to the writer, in order; empty when the writer was not called. */
+  /** Short ids handed to the writer, in order: items it read, then list rows it saw (ADR-0041); empty when the writer was not called. */
   readonly writer_evidence: readonly string[];
 }

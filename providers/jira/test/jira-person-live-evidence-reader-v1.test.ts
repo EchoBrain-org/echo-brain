@@ -110,6 +110,13 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect((await source.list({ ...dates })).items).toHaveLength(1);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ body: expect.objectContaining({ jql: expect.stringContaining('updated >=') }) }));
     await expect(source.list({ since: '2026-02-30' })).rejects.toMatchObject({ code: 'invalid_request' });
+    // A date field Jira does not record is refused, never answered empty or swapped for another (ADR-0041, addition 3).
+    const requests = f.request.mock.calls.length;
+    for (const date_field of ['occurred', 'received'] as const) {
+      await expect(source.list({ since: '2026-10-16', until: '2026-10-16', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
+      await expect(source.search({ query: 'ECHO-1', since: '2026-10-16', until: '2026-10-16', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(f.request.mock.calls.length).toBe(requests);
     await source.revalidate({});
   });
 
@@ -132,6 +139,50 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
       body: { issueIdsOrKeys: ids, fields: ['summary', 'project', 'created', 'updated', 'status', 'assignee', 'duedate'] } })]);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 25, fields: ['id'] }) }));
     expect(f.audit.record).toHaveBeenCalledTimes(1);
+  });
+
+  it('says when a last page was exactly full, so its end is unverified, and never when the end is confirmed (ADR-0041)', async () => {
+    const f = fixture();
+    const ids = Array.from({ length: 25 }, (_, index) => String(10025 - index));
+    for (const id of ids) f.state.tickets.set(id, withFields({ created: '2026-10-04T12:00:00Z' }, ticket(id)));
+    // isLast with all 25 asked for, isLast with fewer, and a page with a next token.
+    f.state.pages = [page(ids), page(ids.slice(0, 24)), page(ids, 'next')];
+    const { source } = await f.make();
+    expect(await source.list({ limit: 50 })).toMatchObject({ truncated: false, page_full: true });
+    expect(await source.list({ limit: 50 })).toMatchObject({ truncated: false, page_full: false });
+    const continued = await source.list({ limit: 50 });
+    expect(continued).toMatchObject({ truncated: true, page_full: false, next_cursor: expect.any(String) });
+    // Newest first, a full page whose oldest issue predates since confirms the end without its token.
+    for (const id of ids.slice(-1)) f.state.tickets.set(id, withFields({ created: '2026-10-01T12:00:00Z' }, ticket(id)));
+    f.state.pages = [page(ids, 'next')];
+    const dated = await source.list({ limit: 50, since: '2026-10-03' });
+    expect(dated).toMatchObject({ truncated: false, page_full: false });
+    expect(dated).not.toHaveProperty('next_cursor');
+    expect(dated.items).toHaveLength(24);
+    // So does an exactly full last page: its oldest issue predates since, so no later issue can match.
+    f.state.pages = [page(ids)];
+    expect(await source.list({ limit: 50, since: '2026-10-03' })).toMatchObject({ truncated: false, page_full: false });
+    // The audit never records it.
+    expect(JSON.stringify(f.releases)).not.toContain('page_full');
+  });
+
+  it('never marks a list read to its end truncated because one summary was cut to its label bound (ADR-0041)', async () => {
+    const f = fixture();
+    const ids = ['10006', '10005', '10004', '10003', '10002', '10001'];
+    for (const id of ids) f.state.tickets.set(id, ticket(id));
+    // 85 CJK characters are 255 bytes: the "ECHO-6: ..." label passes its 256-byte bound and is cut.
+    f.state.tickets.set('10006', withFields({ summary: '温度计固件校准流程'.repeat(10).slice(0, 85) }, ticket('10006')));
+    f.state.pages = [page(ids)];
+    const { source } = await f.make();
+    const result = await source.list({ limit: 50 });
+    expect(result.items).toHaveLength(6);
+    const summary = '温度计固件校准流程'.repeat(10).slice(0, 85);
+    expect(result.items[0]!.label.startsWith('ECHO-6: ')).toBe(true);
+    expect(Buffer.byteLength(result.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
+    expect(result.items[0]!.label.length).toBeLessThan(`ECHO-6: ${summary}`.length);
+    // The page has no next token and is not full: the list ended, so a cut title says nothing about more items.
+    expect(result).toMatchObject({ truncated: false, page_full: false });
+    expect(result).not.toHaveProperty('next_cursor');
   });
 
   it('keeps a full list page of worst-case metadata inside the shared result bound', async () => {
@@ -234,6 +285,28 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10006` }));
     const linked = await source.open({ item: opened.items[1]!.id });
     expect(linked.items[0]).toMatchObject({ citation: { ticket_id: '10002' }, text: 'ECHO-2: Linked 10002\n\nLaunch Friday\n@Alex' });
+  });
+
+  it('says an open truncated beside the ticket left its own text whole, and that a cut body cut it (ADR-0041)', async () => {
+    // Five links, one past the four an open admits: truncated, yet the anchor's text is whole.
+    const links = fixture();
+    for (const id of ['10002', '10003', '10004', '10005', '10006']) links.state.tickets.set(id, ticket(id, `Linked ${id}`));
+    links.state.tickets.set('10001', withFields({ issuelinks: ['10002', '10003', '10004', '10005', '10006'].map(id => ({ outwardIssue: { id } })) }));
+    const linked = await links.make('ECHO');
+    const anchor = (await linked.source.search({ query: 'ship' })).items[0]!;
+    expect(await linked.source.open({ item: anchor.id })).toMatchObject({ truncated: true, anchor_truncated: false });
+    // A summary cut to its 256-byte label bound, no links: the label is cut, the text is whole.
+    const label = fixture();
+    label.state.tickets.set('10001', withFields({ summary: '温度计固件校准流程'.repeat(10).slice(0, 85) }));
+    const labelled = await label.make('ECHO');
+    const cut = await labelled.source.open({ item: (await labelled.source.search({ query: 'ship' })).items[0]!.id });
+    expect(cut.items[0]!.text).toContain('温度计固件校准流程'.repeat(10).slice(0, 85));
+    expect(cut).toMatchObject({ truncated: true, anchor_truncated: false });
+    // A description past the 3,072-byte text bound: the ticket's own text was cut.
+    const body = fixture();
+    body.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'word '.repeat(1000) }] }] } }));
+    const long = await body.make('ECHO');
+    expect(await long.source.open({ item: (await long.source.search({ query: 'ship' })).items[0]!.id })).toMatchObject({ truncated: true, anchor_truncated: true });
   });
 
   it('opens an anchor when Jira omits optional link context, without inferring that no relationship exists', async () => {

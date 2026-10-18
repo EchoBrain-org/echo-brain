@@ -160,7 +160,7 @@ function mineFixture() {
   const checked_at = "2026-09-27T00:00:00.000Z";
   const note: OriginalContextDeskItemV1 = Object.freeze({
     kind: "note", text: "I decided to launch on Tuesday.", visibility: "only_me", label: "My launch note",
-    received_at: checked_at, version: "1", ref: `note:ctx_${"a".repeat(64)}`,
+    received_at: checked_at, version: "1", ref: `note:ctx_${"a".repeat(64)}`, dates: { received: checked_at },
     citation: {
       kind: "source_revision" as const, source_id: `source:${"d".repeat(64)}`, revision_id: "revision-1",
       source_sha256: canonicalSha256({ source: 1 }), representation_sha256: canonicalSha256({ representation: 1 }), anchor_sha256: canonicalSha256({ anchor: 1 }),
@@ -250,7 +250,7 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
     } finally { await value.close(); }
   });
 
-  it("strips ref from the evidence search and open doors, whose contract carries none", async () => {
+  it("strips ref and the other internal research metadata from the evidence search and open doors, whose contract carries none", async () => {
     const f = mineFixture();
     const value = await server({ application: f.route });
     try {
@@ -261,7 +261,8 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
       for (const response of [searched, opened]) {
         const desk = validatePersonEvidenceDeskResponseV1(response.body);
         expect(desk.items.map((item) => item.citation)).toEqual([f.cited]);
-        expect(desk.items[0]).not.toHaveProperty("ref");
+        // A meeting record's list label, like named dates, is internal too (ADR-0041); the all-source door test releases one.
+        for (const key of ["ref", "dates", "date_kind", "list_label"]) expect(desk.items[0]).not.toHaveProperty(key);
         expect(JSON.stringify(response.body)).not.toContain(f.note.ref!);
       }
     } finally { await value.close(); }

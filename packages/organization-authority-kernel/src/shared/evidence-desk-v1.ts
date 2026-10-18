@@ -48,6 +48,11 @@ export interface EvidenceDeskItemV1 {
   /** Absent for an inventory item. Present only after an authorized release. */
   readonly text?: string;
   readonly label: string;
+  /**
+   * How Ask's list rows name this item when its label is its container's (a meeting record's is its meeting's): one line
+   * of its own text, then the container (ADR-0041). Released and audited with the item; only Ask's list rows read it.
+   */
+  readonly list_label?: string;
   readonly visibility: EvidenceDeskVisibilityV1;
   readonly attributes?: EvidenceDeskAttributesV1;
   /** YYYY-MM-DD when the item was said, approved or revised, when the source knows it. */
@@ -70,6 +75,16 @@ export interface EvidenceDeskResultV1 {
   readonly notice?: string;
   /** Opaque continuation for `list`; absent when nothing more exists. */
   readonly next_cursor?: string;
+  /**
+   * `list` only: the source's raw page held its full page size. With no `next_cursor` the list's end is unverified
+   * (ADR-0041). A desk that confirmed its end, for example by reading one row past its limit, says false.
+   */
+  readonly page_full?: boolean;
+  /**
+   * `open` only: whether the opened item's own text was cut. `truncated` also reports what an open left out beside the
+   * item (a link, a meeting's other records); a desk that does not say leaves `truncated` to cover the item (ADR-0041).
+   */
+  readonly anchor_truncated?: boolean;
 }
 
 export interface EvidenceDeskSearchInputV1 extends EvidenceDateFilterV1 {

@@ -111,3 +111,11 @@ grant before release, request-local handles),
 that an account has connected or that a release has been deployed; live
 qualification follows the
 [operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md).
+
+## Implementation note, 2026-10-17: page lists as evidence
+
+[ADR-0041](ADR-0041-complete-lists-as-ask-evidence.md) lets a complete page
+list answer which pages exist. A page's inventory row reaches Ask's writer as
+a list member, with its title and dates and never text, and the answer cites
+that row. What a page says still needs an open of its sections. No new page
+data is read or released.
