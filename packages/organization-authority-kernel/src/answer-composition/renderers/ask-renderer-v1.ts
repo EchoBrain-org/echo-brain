@@ -171,7 +171,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const listById = new Map(lists.map(list => [list.id, list]));
       /** Which list member an item is, or is part of: an opened page's section is its page. */
       const membership = agenticListMembershipV1(lists, bundle.items);
-      const full = (short: string) => byShort.get(short)?.full === true;
       const needs = bundle.plan.flatMap(part => part.needs);
       // The lists the plan's declared kinds read: those its which_items needs cite, which code states (W3), and those its
       // which_say needs cite, which research checks (W5), and whether one of them cites none (W3). The kinds alone decide;
@@ -181,7 +180,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const contentCited = needs.filter(need => (need.kind ?? "content") === "content" && need.status === "found").flatMap(need => need.evidence);
       /** Every need research has not given up on declares what it asks about: a list kind its list, a content need what it was found in (W4). */
       const declared = !unlisted && !needs.some(need => (need.kind ?? "content") === "content" && need.status === "open");
-      const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, full));
+      const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, short => byShort.get(short)?.full === true));
       const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short)))]));
       const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap);
       /** Every list as code reads it: code states, notes and filters each list the plan's kinds read, past the writer's bound too. */
