@@ -1950,6 +1950,37 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     expect(await run("open", [])).toEqual([FULL8, DVT, RESTATE]);
   });
 
+  it("X27f: reads what a content need research marked not_found declares from what it cites, as for every other status (W4)", async () => {
+    const text = "Which Confluence pages were created on October 4, 2026, and is the DVT gate on hold?";
+    const DVT_NEED = "whether the DVT gate is on hold";
+    const DVT = "The Gate reviews page says the DVT gate is on hold pending fixture rework.";
+    const RESTATE = "Traceability — requirement threads and BUG-412 walkthrough was created on October 4, 2026.";
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, /^Gate reviews/u.test(row.label) ? `${row.label}: the DVT gate is on hold pending fixture rework.` : `${row.label}: created for the October 4 document set.`)]) as EvidenceDeskResultV2;
+    });
+    const searches = [{ tool: "search", args: { query: "DVT gate hold" } }, { tool: "search", args: { query: "DVT gate status" } }];
+    // Research lists the pages, searches twice, opens Gate reviews (E3, its section E9) and Traceability (E4, E10), and
+    // finishes with the content need not_found; the writer still answers it from E9's text.
+    const run = async (evidence: readonly string[]) => {
+      const h = harness([
+        askAll(text, [[OCT4_NEED, "open", [], WI], [DVT_NEED, "open", []]], [OCT4_LIST, ...searches]),
+        askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [DVT_NEED, "open", [], "content", "N2"]], opens(["E3", "E4"])),
+        askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [DVT_NEED, "not_found", evidence, "content", "N2"]], [finish]),
+        { lists: [], sentences: [{ text: DVT, evidence: ["E9"] }, { text: RESTATE, evidence: ["E10"] }], not_found: [] },
+      ], october4Desk({ open, search: vi.fn(async () => result([]) as EvidenceDeskResultV2) }));
+      const { response, research } = await h.research.answerWithResearch({ question: text });
+      expect(research.stop).toEqual({ reason: "finished", completed: true });
+      expect(response.outcome).toBe("answered");
+      return response.parts[0]!.statements.map(statement => statement.text);
+    };
+    // Not found on the section it checked, the need still asks about Gate reviews: the DVT sentence stays, and the
+    // Traceability restatement is left out, as when the need is found or left open on E9.
+    expect(await run(["E9"])).toEqual([FULL8, DVT]);
+    // Not found citing nothing, it declares nothing, like an open need citing nothing, so no sentence is left out as a restatement.
+    expect(await run([])).toEqual([FULL8, DVT, RESTATE]);
+  });
+
   it("X30: names a page two stated lists hold once against the answer's 25 names, whatever each list's use (W6)", async () => {
     const text = "Which Confluence pages were created from October 1 to 7, 2026, and which were updated that week?";
     const WEEK = Array.from({ length: 20 }, (_, index) => pageRow([String(600_000 + index), `Page ${String(index + 1).padStart(2, "0")}`, "2026-10-02T12:00:00.000Z", "2026-10-03T12:00:00.000Z", "1"]));

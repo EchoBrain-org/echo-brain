@@ -364,8 +364,9 @@ route, header, database table or client changes.
   a writer's sentence when every text item it cites is a member, or part of
   one, of a list code states whose statement in the answer covers every
   member, by name or counted in "and N more", and no other need asks about
-  it: no `which_say` need's list holds it, and no `content` need research has
-  not given up on (found, or open when research stopped) cites that member. A
+  it: no `which_say` need's list holds it, and no `content` need cites that
+  member, whatever its status: one research marked not found still asks about
+  what it cites, and the writer may answer it from that text. A
   statement in full covers every member, and so does a `where` selection that
   holds every member; one that leaves a member out does not say which items
   the list holds, so no sentence restates it, whichever member it cites, and a
@@ -376,10 +377,10 @@ route, header, database table or client changes.
   the 12 follow-ups ... are due from October 18 to October 24, 2026: THERM-43
   ...; THERM-47 ...". Code reads what a need asks about from
   what it cites, whatever its status: a list kind's list, and a content need's
-  items. A need that declares nothing (a content need citing no item, its list
-  ids carrying no meaning, or a list kind without its list, as when research
-  stopped) could ask about any member, so then no sentence is left out as a
-  restatement.
+  items. A need that declares nothing (a content need citing no item, found,
+  open or not found, its list ids carrying no meaning, or a list kind without
+  its list, as when research stopped) could ask about any member, so then no
+  sentence is left out as a restatement.
 - **One citation per cited object.** The response refuses duplicate
   citations, and a listed ticket's row and its opened body cite the same
   ticket. Code gives them one citation, in first-citation order, so a list
@@ -691,8 +692,15 @@ too), "lists named in full" and its two BUG-412 cases.
   writer answers a content need from the text of a stated list's member the
   need does not cite (the need cites a meeting record, the sentence the Gate
   reviews page), the sentence is left out as a restatement and the part is
-  answered without it, whether the need was found or left open. Telling which
-  need a sentence answers needs the meaning of its text.
+  answered without it, whatever the need's status. Telling which need a
+  sentence answers needs the meaning of its text.
+- **A content need that cites no item** declares nothing, whatever its status,
+  so while the plan has one no sentence is left out as a restatement. A need
+  research marked not found citing nothing, beside a stated list, keeps the
+  writer's answer to it from a member's text, and also keeps a sentence that
+  only restates the list ("Traceability ... was created on October 4, 2026"
+  beside the eight names). Leaving out only the second needs the meaning of
+  the cited text.
 - **One item's row facts cost one open** (above).
 - **A writer that repeats a sentence citing only rows or list ids** after its
   repair makes the part partial, even when the sentence only restated the list
@@ -750,6 +758,8 @@ Tests required before release:
 - a writer's sentence on a stated list member's text stays when the list's
   only statement is a `where` selection that leaves a member out, whether it
   names some members or none;
+- a writer's sentence on a stated list member's text stays when a content need
+  research marked not found cites that member;
 - the public evidence search and open doors return a meeting record without
   its list label;
 - a sentence citing only rows or list ids, repeated after its repair, makes the
