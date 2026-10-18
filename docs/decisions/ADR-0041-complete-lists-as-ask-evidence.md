@@ -318,9 +318,11 @@ route, header, database table or client changes.
   written: when it merges more members than the share allows, it covers only
   those it cites, and the rest are in "and N more".
 - **Long lists.** One answer names at most 25 distinct members across all its
-  lists: members selected by id first, then the rest shared round-robin
-  between the statements that say which items exist, a member named by id
-  costing nothing when it is named again (`agenticListNameSharesV1`).
+  lists: members selected by id first, round-robin between those statements,
+  then the rest shared round-robin between the statements that say which
+  items exist. A member costs one name however many statements name it: one
+  that another statement names costs nothing where it is named again, so two
+  lists of the same 20 pages name all 20 in each (`agenticListNameSharesV1`).
   Each statement ends "and N more" for the rest. Names stop early if the
   statement would pass the 4 KiB statement bound. The 40-citation, 10-statement
   and 64 KiB response bounds are unchanged: list statements come first, then

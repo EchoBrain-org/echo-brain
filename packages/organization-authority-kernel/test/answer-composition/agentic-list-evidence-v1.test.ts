@@ -338,6 +338,11 @@ describe("the writer's view", () => {
 });
 
 describe("names across one answer", () => {
+  /** `count` members of one list, E`from`.., each with its own title. */
+  const members = (count: number, from = 1) => Array.from({ length: count }, (_, index) => ({ id: `E${from + index}`, title: `Page ${from + index}` }));
+  const which = (selected: ReturnType<typeof members>) => ({ selected, by_id: false });
+  const byId = (selected: ReturnType<typeof members>) => ({ selected, by_id: true });
+
   it.each([
     [[8], [8]],
     [[60], [25]],
@@ -345,17 +350,43 @@ describe("names across one answer", () => {
     [[60, 60], [13, 12]],
     [[0, 5], [0, 5]],
     [[], []],
-  ] as const)("shares %j as %j, at most 25 in all", (selected, shares) => {
-    const result = agenticListNameSharesV1(selected);
-    expect(result).toEqual(shares);
-    expect(result.reduce((total, share) => total + share, 0)).toBeLessThanOrEqual(AGENTIC_LIST_NAMED_MAX_V1);
+  ] as const)("shares statements of %j distinct members as %j, at most 25 in all", (selected, shares) => {
+    let from = 1;
+    const result = agenticListNameSharesV1(selected.map(count => { const value = which(members(count, from)); from += count; return value; }));
+    expect(result.map(value => value.share)).toEqual(shares);
+    expect(result.every(value => value.free.size === 0)).toBe(true);
+    expect(result.reduce((total, value) => total + value.share, 0)).toBeLessThanOrEqual(AGENTIC_LIST_NAMED_MAX_V1);
   });
 
   it("takes 'and N more' from the list itself: 60 members, 25 named, 35 more", () => {
-    const [share] = agenticListNameSharesV1([60]);
-    expect(60 - share!).toBe(35);
-    expect(agenticListNameSharesV1([3], 0)).toEqual([0]);
-    expect(() => agenticListNameSharesV1([-1])).toThrow(RangeError);
+    const [value] = agenticListNameSharesV1([which(members(60))]);
+    expect(60 - value!.share).toBe(35);
+    expect(agenticListNameSharesV1([which(members(3))], 0)).toEqual([{ share: 0, free: new Set() }]);
+    expect(() => agenticListNameSharesV1([which(members(3))], -1)).toThrow(RangeError);
+  });
+
+  it("costs a member one name however many statements name it, by id or not (W6)", () => {
+    const named = (shares: ReturnType<typeof agenticListNameSharesV1>, statements: readonly { readonly selected: ReturnType<typeof members>; readonly by_id: boolean }[]) => statements.map((value, index) =>
+      agenticListStatementV1({ noun: "Confluence pages", filter: {}, count: value.selected.length, complete: true, selected: value.selected, share: Math.max(1, shares[index]!.share), free: shares[index]!.free, ...(value.by_id ? { by_id: true } : {}) }).named);
+    // Two lists of the same 20 pages (created that week, updated that week): each takes every other page, and each
+    // statement names all 20, the other's pages free; 20 distinct names, within the 25.
+    for (const statements of [[which(members(20)), which(members(20))], [byId(members(20)), byId(members(20))]]) {
+      const shares = agenticListNameSharesV1(statements);
+      expect(shares.map(value => value.share)).toEqual([10, 10]);
+      expect(named(shares, statements)).toEqual([20, 20]);
+    }
+    // Members selected by id come first: 10 of 25 by id, then the list in full takes the other 15 and names all 25.
+    const partly = [byId(members(10)), which(members(25))];
+    const shares = agenticListNameSharesV1(partly);
+    expect(shares.map(value => value.share)).toEqual([10, 15]);
+    expect([...shares[1]!.free]).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(named(shares, partly)).toEqual([10, 25]);
+    // Overlapping lists past the bound: 30 pages and the 20 of them updated that week name 25 distinct pages in all.
+    const wide = [which(members(30)), which(members(20, 11))];
+    const wideShares = agenticListNameSharesV1(wide);
+    expect(wideShares.reduce((total, value) => total + value.share, 0)).toBe(AGENTIC_LIST_NAMED_MAX_V1);
+    const texts = wide.map((value, index) => agenticListStatementV1({ noun: "Confluence pages", filter: {}, count: value.selected.length, complete: true, selected: value.selected, share: wideShares[index]!.share, free: wideShares[index]!.free }));
+    expect(new Set(texts.flatMap((statement, index) => statement.cited.map(at => wide[index]!.selected[at]!.id))).size).toBe(AGENTIC_LIST_NAMED_MAX_V1);
   });
 });
 

@@ -22,7 +22,6 @@ import {
 import { compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
 import {
-  AGENTIC_LIST_NAMED_MAX_V1,
   AGENTIC_LIST_WRITER_LISTS_MAX_V1,
   AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
   agenticListCheckedNoteV1,
@@ -323,18 +322,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         ];
       });
       // At most 25 distinct members named across the answer (W6): those selected by id first, then the rest shared
-      // round-robin, a member already named by id costing nothing; "and N more" counts from the list itself (addition 5).
-      const first = agenticListNameSharesV1(naming.map(value => value.by_id ? value.selected.length : 0));
-      const namedById = new Set(naming.flatMap((value, index) => value.selected.slice(0, first[index]).map(member => member.id)));
-      const rest = agenticListNameSharesV1(naming.map(value => value.by_id ? 0 : value.selected.filter(member => !namedById.has(member.id)).length), AGENTIC_LIST_NAMED_MAX_V1 - namedById.size);
+      // round-robin, a member another statement names costing nothing; "and N more" counts from the list itself (addition 5).
+      const shares = agenticListNameSharesV1(naming);
       const listStatements = naming.map((value, index) => {
         // An owner or status reads as the first selected member records it; a date range as the writer gave it.
         const where = value.where === undefined || !("value" in value.where) ? value.where : { field: value.where.field, value: value.selected[0]![value.where.field]! };
         const statement = agenticListStatementV1({
           noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected,
           // Each statement names at least its first member.
-          share: Math.max(1, (value.by_id ? first : rest)[index]!), ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
-          ...(value.by_id ? {} : { free: new Set(value.selected.flatMap((member, at) => namedById.has(member.id) ? [at] : [])) }),
+          share: Math.max(1, shares[index]!.share), free: shares[index]!.free, ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
         });
         // Each named member cites its own row.
         return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id) };

@@ -1948,6 +1948,29 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     expect(await run("found", ["L1"])).toEqual([FULL8, DVT, RESTATE]);
     expect(await run("open", [])).toEqual([FULL8, DVT, RESTATE]);
   });
+
+  it("X30: names a page two stated lists hold once against the answer's 25 names, whatever each list's use (W6)", async () => {
+    const text = "Which Confluence pages were created from October 1 to 7, 2026, and which were updated that week?";
+    const WEEK = Array.from({ length: 20 }, (_, index) => pageRow([String(600_000 + index), `Page ${String(index + 1).padStart(2, "0")}`, "2026-10-02T12:00:00.000Z", "2026-10-03T12:00:00.000Z", "1"]));
+    const ids = WEEK.map((_, index) => `E${index + 1}`);
+    const list = (date_field: string) => ({ tool: "list", args: { source: "pages", date_field, since: "2026-10-01", until: "2026-10-07" } });
+    const names = async (lists: readonly unknown[]) => {
+      const h = harness([
+        askAll(text, [["pages created that week", "open", [], WI], ["pages updated that week", "open", [], WI]], [list("created"), list("updated")]),
+        askAll(text, [["pages created that week", "found", ["L1"], WI, "N1"], ["pages updated that week", "found", ["L2"], WI, "N2"]], [finish]),
+        { lists, sentences: [], not_found: [] },
+      ], { live_sources: [CONFLUENCE], list: vi.fn(async () => result(WEEK) as EvidenceDeskResultV2) });
+      const { response, research } = await h.research.answerWithResearch({ question: text });
+      expect(research.lists!.map(value => value.members)).toEqual([ids, ids]);
+      expect(response.outcome).toBe("answered");
+      return response.parts[0]!.statements.map(statement => (statement.text.match(/Page \d\d/gu) ?? []).length);
+    };
+    // Both lists hold the same 20 pages, so each statement names all 20: 20 distinct names, within the answer's 25.
+    expect(await names([])).toEqual([20, 20]);
+    expect(await names([{ id: "L1", where: { field: "status", value: "current" } }, { id: "L2", where: { field: "status", value: "current" } }])).toEqual([20, 20]);
+    // Selected by id, each list's use merges with its use in full (W2); its pages still cost one name each.
+    expect(await names([{ id: "L1", members: ids }, { id: "L2", members: ids }])).toEqual([20, 20]);
+  });
 });
 
 describe("a task goal keeps the rules before ADR-0041", () => {

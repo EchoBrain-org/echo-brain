@@ -449,22 +449,35 @@ export interface AgenticAnswerListUseV1 {
 }
 
 /**
- * How many members each used list names, given how many each selects:
- * round-robin in answer order, at most `budget` across the answer. Each list's
- * statement ends "and N more" with N = selected - share.
+ * What each statement of one answer may name (W6): at most `budget` distinct members across the answer, statements
+ * selecting by id first, round-robin between them, then the rest round-robin. Each turn a statement takes its next
+ * member in the order its names take; a member another statement already took costs nothing, wherever it is named
+ * again. `share` is how many members the statement takes and `free` the indexes of `selected` others took
+ * (agenticListStatementV1); its statement ends "and N more" for the members neither reaches.
  */
-export function agenticListNameSharesV1(selected: readonly number[], budget: number = AGENTIC_LIST_NAMED_MAX_V1): readonly number[] {
-  if (!Number.isSafeInteger(budget) || budget < 0 || !selected.every(count => Number.isSafeInteger(count) && count >= 0)) throw new RangeError("Name shares need whole, non-negative counts");
-  const shares = selected.map(() => 0);
+export function agenticListNameSharesV1(
+  statements: readonly { readonly selected: readonly (AgenticListNamedMemberV1 & { readonly id: string })[]; readonly by_id: boolean }[],
+  budget: number = AGENTIC_LIST_NAMED_MAX_V1,
+): readonly { readonly share: number; readonly free: ReadonlySet<number> }[] {
+  if (!Number.isSafeInteger(budget) || budget < 0) throw new RangeError("Name shares need a whole, non-negative budget");
+  const orders = statements.map(value => (value.by_id ? value.selected.map((_, index) => [index]) : nameGroups(value.selected)).flat().map(index => value.selected[index]!.id));
+  const taker = new Map<string, number>();
+  const next = statements.map(() => 0);
   let left = budget;
-  for (let gave = true; left > 0 && gave;) {
+  for (const byId of [true, false]) for (let gave = true; left > 0 && gave;) {
     gave = false;
-    for (let index = 0; index < selected.length && left > 0; index += 1) {
-      if (shares[index]! >= selected[index]!) continue;
-      shares[index] = shares[index]! + 1; left -= 1; gave = true;
+    for (let index = 0; index < statements.length && left > 0; index += 1) {
+      const order = orders[index]!;
+      if (statements[index]!.by_id !== byId) continue;
+      while (next[index]! < order.length && taker.has(order[next[index]!]!)) next[index] = next[index]! + 1;
+      if (next[index]! === order.length) continue;
+      taker.set(order[next[index]!]!, index); next[index] = next[index]! + 1; left -= 1; gave = true;
     }
   }
-  return Object.freeze(shares);
+  return Object.freeze(statements.map((value, index) => Object.freeze({
+    share: [...taker.values()].filter(at => at === index).length,
+    free: new Set(value.selected.flatMap((member, at) => taker.has(member.id) && taker.get(member.id) !== index ? [at] : [])),
+  })));
 }
 
 // ---- the statement code writes ----------------------------------------
@@ -659,7 +672,7 @@ export interface AgenticListStatementInputV1 {
   readonly selected: readonly AgenticListNamedMemberV1[];
   /** Members this statement may cite: the answer's share (agenticListNameSharesV1). */
   readonly share: number;
-  /** Indexes of `selected` that cost no share: members a statement selecting them by id already named. */
+  /** Indexes of `selected` that cost no share: members another statement of the answer takes (agenticListNameSharesV1). */
   readonly free?: ReadonlySet<number>;
 }
 
