@@ -613,7 +613,14 @@ change of kind, and the evaluation's declared-kind score (`expected_kinds`),
 - **A `which_say` question declared `content`** is answered with no checked
   note, however few members were read (confirmed finding 4).
 - **A which-question or one-item question declared `which_say`** gets the
-  checked note and is partial, and no list is stated unless the writer uses it.
+  checked note and is partial while some listed member is unchecked, and no
+  list is stated unless the writer uses it. Once every member was checked,
+  which the stop rule asks research to do and every shown follow-up row
+  already is (its row carries its text), there is no note and no gap: the
+  writer's sentence is answered as it stands. A sentence naming 4 of the 8
+  October 4 pages from their opened text then comes back marked answered,
+  the held answer, and so does "your open follow-ups are THERM-41 and
+  THERM-42" over 12 follow-ups.
 - **A question about which items of a whole source say something** ("which
   Jira tickets mention BUG-412") declared a list kind: as `which_say`, it is
   refused until it cites a list, so research lists the source and the answer
@@ -628,8 +635,14 @@ change of kind, and the evaluation's declared-kind score (`expected_kinds`),
   restatement. A condition on two row facts the list did not filter (an owner
   and a due date) has only this path, since `where` takes one row fact.
 - **A list with both a `which_items` and a `which_say` need** keeps every
-  sentence that cites its members' text, with the note, even one that only
-  restates the list.
+  sentence that cites its members' text, even one that only restates the list:
+  with the note while some member is unchecked, and with none once every
+  member was checked, when a restated subset ("the pages are A, B, C and D")
+  stands unqualified beside the statement naming all eight, and the part is
+  answered.
+- **Neither outcome above can change without telling a restatement from a
+  sentence about content**, which needs the meaning of the cited text: the
+  guessing Retirement 11 retires.
 - **A sentence about one member of a `which_say` list** carries that list's
   note even when it answers a content need about that member.
 - **One item's row facts cost one open** (above).

@@ -1682,6 +1682,14 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining("is found but cites no item whose full text you have read")]);
     expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED }] });
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([noted(FOUR, "(4 of 8 checked so far)")]);
+    // Once all 8 were opened, as the stop rule asks, there is no note and no gap: the 4-name sentence is answered (Known limit).
+    const all = harness([
+      ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST], undefined, WS), ask(OCT4, OCT4_NEED, "open", ["L1"], opens(MEMBERS.slice(0, 4)), "N1", WS),
+      ask(OCT4, OCT4_NEED, "open", ["L1"], opens(MEMBERS.slice(4)), "N1", WS), ask(OCT4, OCT4_NEED, "found", ["L1", ...SECTIONS], [finish], "N1", WS), say(FOUR, SECTIONS),
+    ], october4Desk({ open: pageOpen(NOBODY) }));
+    const checked = (await all.research.answerWithResearch({ question: OCT4 })).response;
+    expect(checked.parts[0]).toEqual({ question: OCT4, status: "answered", statements: [{ text: FOUR, citation_indexes: [0, 1, 2, 3], private: true }] });
+    expect(checked.outcome).toBe("answered");
   });
 
   it("X15: keeps both sentences, noted, when a which_items and a which_say need share a list (Known limit)", async () => {
@@ -1695,6 +1703,17 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     const { response } = await h.research.answerWithResearch({ question: text });
     expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED }] });
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([FULL8, noted(TRACE, "(4 of 8 checked so far)"), noted(FOUR, "(4 of 8 checked so far)")]);
+    // Once all 8 were opened, neither carries a note: the restated subset stands unqualified beside the 8 names (Known limit).
+    const all = harness([
+      askAll(text, [[OCT4_NEED, "open", [], WI], [BUG_NEED, "open", [], WS]], [OCT4_LIST]),
+      askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [BUG_NEED, "open", [], WS, "N2"]], opens(MEMBERS.slice(0, 4))),
+      askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [BUG_NEED, "open", [], WS, "N2"]], opens(MEMBERS.slice(4))),
+      askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [BUG_NEED, "found", ["L1", "E12"], WS, "N2"]], [finish]),
+      { lists: [], sentences: [{ text: TRACE, evidence: ["E12"] }, { text: FOUR, evidence: SECTIONS }], not_found: [] },
+    ], october4Desk({ open: pageOpen(/^Traceability/u) }));
+    const checked = (await all.research.answerWithResearch({ question: text })).response;
+    expect(checked).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+    expect(checked.parts[0]!.statements.map(statement => statement.text)).toEqual([FULL8, TRACE, FOUR]);
   });
 
   it("X17: states a where date range with its condition; a selection by id of the same members states their facts, never the condition", async () => {
