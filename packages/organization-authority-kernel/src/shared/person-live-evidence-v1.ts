@@ -46,6 +46,8 @@ export interface PersonLiveEvidencePageV1<C extends PersonLiveEvidenceCitationV1
   readonly notice?: string;
   /** List only: the raw vendor page, before the adapter's own filtering, held its full page size (ADR-0041). */
   readonly page_full?: boolean;
+  /** Open only: the opened item's own text was cut; `truncated` also covers what came beside it (ADR-0041). Absent: unknown. */
+  readonly anchor_truncated?: boolean;
 }
 
 export interface PersonLiveEvidenceListInputV1 extends EvidenceDateFilterV1 {
@@ -124,6 +126,8 @@ export interface PersonLiveEvidenceResultV1<C extends PersonLiveEvidenceCitation
   readonly notice?: string;
   /** List only: the reader's `page_full`, passed through unchanged. */
   readonly page_full?: boolean;
+  /** Open only: the reader's `anchor_truncated`, passed through unchanged. */
+  readonly anchor_truncated?: boolean;
 }
 
 /** Internal source seam for the V2 evidence desk dispatcher; the V1 desk and Ask V4 schemas still accept only their existing kinds. */

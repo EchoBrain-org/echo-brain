@@ -84,6 +84,11 @@ export interface AgenticResearchActionV1 {
     readonly note?: string;
     readonly error?: string;
     readonly truncated?: boolean;
+    /**
+     * Ask only (ADR-0041): false when a truncated open left the opened item's own text whole, the cut being only what
+     * came beside it; absent, `truncated` covers the item.
+     */
+    readonly anchor_truncated?: false;
     readonly more?: boolean;
     readonly notice?: boolean;
   };

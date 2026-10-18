@@ -160,7 +160,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
   };
 
   const release = async (operation: PersonLiveEvidenceReleaseV1['operation'], page: PersonLiveEvidencePageV1<C>, maximum: number, selection?: string, signal?: AbortSignal): Promise<PersonLiveEvidenceResultV1<C>> => {
-    closedRecord(page, ['items', 'truncated'], ['next_cursor', 'notice', 'page_full']);
+    closedRecord(page, ['items', 'truncated'], ['next_cursor', 'notice', 'page_full', 'anchor_truncated']);
     if (!Array.isArray(page.items) || page.items.length > maximum || typeof page.truncated !== 'boolean') invalidOutput();
     if (Object.getOwnPropertySymbols(page.items).length !== 0 || Object.getOwnPropertyNames(page.items).length !== page.items.length + 1) invalidOutput();
     for (let index = 0; index < page.items.length; index += 1) {
@@ -169,6 +169,8 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     }
     if (page.next_cursor !== undefined && (operation !== 'list' || typeof page.next_cursor !== 'string' || page.next_cursor.length === 0 || page.next_cursor.length > 4096)) invalidOutput();
     if (page.page_full !== undefined && (operation !== 'list' || typeof page.page_full !== 'boolean')) invalidOutput();
+    // An open's own cut is part of what it left out: a reader never reports one without `truncated`.
+    if (page.anchor_truncated !== undefined && (operation !== 'open' || typeof page.anchor_truncated !== 'boolean' || (page.anchor_truncated && !page.truncated))) invalidOutput();
     if (page.notice !== undefined) {
       boundedString(page.notice, 1024);
       if (page.notice.trim() !== page.notice) invalidOutput();
@@ -209,6 +211,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       }))),
       truncated, receipt_digests: Object.freeze([receipt]), ...(nextCursor === undefined ? {} : { next_cursor: nextCursor }),
       ...(page.notice === undefined ? {} : { notice: page.notice }), ...(page.page_full === undefined ? {} : { page_full: page.page_full }),
+      ...(page.anchor_truncated === undefined ? {} : { anchor_truncated: page.anchor_truncated }),
     });
     if (canonicalJsonBytes(withReceipt(`sha256:${'0'.repeat(64)}`)).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) invalidOutput();
     current(signal);

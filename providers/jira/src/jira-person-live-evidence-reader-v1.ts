@@ -327,8 +327,11 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         await verifyConnection(signal);
       }
       const visibleRelated = related.filter((item): item is ParsedJiraIssueV1 => item !== undefined);
+      // Truncated covers what the open left out beside the ticket too (a link, a hidden link, a label cut); the
+      // ticket's own text was cut only when its released text was (ADR-0041).
       return Object.freeze({ items: remember([selected, ...visibleRelated]),
-        truncated: selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || relatedIds.length !== selected.related_issue_ids.length });
+        truncated: selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || relatedIds.length !== selected.related_issue_ids.length,
+        anchor_truncated: selected.text_truncated });
     }, signal);
   }
 

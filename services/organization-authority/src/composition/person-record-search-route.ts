@@ -180,6 +180,8 @@ export interface PersonRecordSearchBatchResultV1 {
   readonly desk_items?: readonly PersonRecordDeskItemV1[];
   readonly notice?: string;
   readonly truncated?: boolean;
+  /** An open only: the anchor record's own text was left out; `truncated` also covers its meeting's other records (ADR-0041). */
+  readonly anchor_truncated?: boolean;
 }
 
 export interface PersonRecordDeskItemV1 {
@@ -1241,7 +1243,10 @@ export function createPersonRecordSearchRouteV1(
       initial_authorization: input.initial_authorization,
       current: released, pointer: input.pointer, projects: input.projects, scope: input, response, desk_items: projection,
     });
-    return Object.freeze({ response, release, desk_items: projection, truncated: approvedRecordAtomCount(options.record, resolvedAnchor.record_position, resolvedAnchor.record_sha256, options.record_input_codecs) > 10 || deskSourceItems.length !== items.length });
+    // A record's text is released whole or not at all, so the anchor is cut only when its bound left it out; truncated
+    // also covers the meeting's other records (ADR-0041).
+    return Object.freeze({ response, release, desk_items: projection, truncated: approvedRecordAtomCount(options.record, resolvedAnchor.record_position, resolvedAnchor.record_sha256, options.record_input_codecs) > 10 || deskSourceItems.length !== items.length,
+      anchor_truncated: !deskSourceItems.includes(resolvedAnchor) });
   }
 
   return Object.freeze({

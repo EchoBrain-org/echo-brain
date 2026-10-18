@@ -287,6 +287,28 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(linked.items[0]).toMatchObject({ citation: { ticket_id: '10002' }, text: 'ECHO-2: Linked 10002\n\nLaunch Friday\n@Alex' });
   });
 
+  it('says an open truncated beside the ticket left its own text whole, and that a cut body cut it (ADR-0041)', async () => {
+    // Five links, one past the four an open admits: truncated, yet the anchor's text is whole.
+    const links = fixture();
+    for (const id of ['10002', '10003', '10004', '10005', '10006']) links.state.tickets.set(id, ticket(id, `Linked ${id}`));
+    links.state.tickets.set('10001', withFields({ issuelinks: ['10002', '10003', '10004', '10005', '10006'].map(id => ({ outwardIssue: { id } })) }));
+    const linked = await links.make('ECHO');
+    const anchor = (await linked.source.search({ query: 'ship' })).items[0]!;
+    expect(await linked.source.open({ item: anchor.id })).toMatchObject({ truncated: true, anchor_truncated: false });
+    // A summary cut to its 256-byte label bound, no links: the label is cut, the text is whole.
+    const label = fixture();
+    label.state.tickets.set('10001', withFields({ summary: '温度计固件校准流程'.repeat(10).slice(0, 85) }));
+    const labelled = await label.make('ECHO');
+    const cut = await labelled.source.open({ item: (await labelled.source.search({ query: 'ship' })).items[0]!.id });
+    expect(cut.items[0]!.text).toContain('温度计固件校准流程'.repeat(10).slice(0, 85));
+    expect(cut).toMatchObject({ truncated: true, anchor_truncated: false });
+    // A description past the 3,072-byte text bound: the ticket's own text was cut.
+    const body = fixture();
+    body.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'word '.repeat(1000) }] }] } }));
+    const long = await body.make('ECHO');
+    expect(await long.source.open({ item: (await long.source.search({ query: 'ship' })).items[0]!.id })).toMatchObject({ truncated: true, anchor_truncated: true });
+  });
+
   it('opens an anchor when Jira omits optional link context, without inferring that no relationship exists', async () => {
     const f = fixture();
     const anchor = ticket();

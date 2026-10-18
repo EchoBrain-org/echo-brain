@@ -2119,6 +2119,79 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       outcome: "not_found", parts: [{ status: "not_found", gap: `Not found: pages created on October 4 that mention BUG-999. ${UNCHECKED}` }],
     });
   });
+
+  it("checks a member whose open was cut only beside it (its links, its meeting's other records), never one whose own text was cut (addition 4)", async () => {
+    // THERM-3 links five tickets: the Jira reader's open returns its whole text and four linked rows, truncated, and says
+    // whether the ticket's own text was cut (anchor_truncated). A desk that does not say leaves truncated to cover it.
+    const text = "Which Jira tickets created on October 4, 2026 mention BUG-412?";
+    const need = "tickets created on 2026-10-04 that mention BUG-412";
+    const jira = (own: { readonly anchor_truncated?: boolean }) => ({
+      live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 4)) as EvidenceDeskResultV2),
+      open: vi.fn(async (input: { readonly item: string }) => {
+        const n = Number(/THERM-(\d+)/u.exec(input.item)![1]);
+        const body = ticketBody(n, `THERM-${n}: Fixture work ${n}\n\n${n === 3 ? "Repro steps reference BUG-412." : "No defects referenced."}`);
+        return (n === 3 ? result([body, ...tickets(11, 4)], { truncated: true, ...own }) : result([body])) as EvidenceDeskResultV2;
+      }),
+    });
+    const run = (own: { readonly anchor_truncated?: boolean }) => harness([
+      ask(text, need, "open", [], [TICKETS_LIST], undefined, WS), ask(text, need, "open", ["L1"], opens(["E1", "E2", "E3", "E4"]), "N1", WS),
+      ask(text, need, "found", ["L1", "E3"], [finish], "N1", WS), say("THERM-3 mentions BUG-412.", ["E3"]),
+    ], jira(own));
+    const beside = run({ anchor_truncated: false });
+    const { response, research: view } = await beside.research.answerWithResearch({ question: text });
+    // The round records that the cut was beside the ticket; research is told only that the open was truncated.
+    expect(view.rounds[1]!.actions[2]!.result).toMatchObject({ id: "E3", opened: ["E3"], truncated: true, anchor_truncated: false });
+    expect((beside.prompt(2).last_results as readonly Record<string, unknown>[])[2]).toEqual({ tool: "open", args: { id: "E3" }, opened: ["E3"], results: ["E5", "E6", "E7", "E8"], truncated: true });
+    expect(JSON.parse(writersOf(beside)[0]!.user_prompt).lists[0]).toMatchObject({ id: "L1", count: 4, checked: 4 });
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: "THERM-3 mentions BUG-412." }] }] });
+    // Its own text cut, or a desk that does not say: unchecked, and the answer says so.
+    for (const own of [{ anchor_truncated: true }, {}]) {
+      const cut = run(own);
+      const { response: partial, research: cutView } = await cut.research.answerWithResearch({ question: text });
+      expect(cutView.rounds[1]!.actions[2]!.result).not.toHaveProperty("anchor_truncated");
+      expect(partial).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED, statements: [{ text: "THERM-3 mentions BUG-412 (3 of 4 checked so far)." }] }] });
+    }
+
+    // Mara's four actions; a4's meeting holds 14 records, so its open returns a4 and nine others, truncated beside it.
+    // In the second run each record is 3,000 bytes, so the loop also leaves out what does not fit: other records, not a4.
+    const action = { kind: "action" as const, attributes: { owner: "Mara Lind" } };
+    const rows = Array.from({ length: 4 }, (_, index) => listed(`a${index + 1}`, action));
+    for (const pad of [0, 2_960]) {
+      const filler = (n: number) => (pad === 0 ? "" : ` ${"Sync narrative. ".repeat(200).slice(0, pad)}`) + ` ${n}`;
+      const bodies = new Map(rows.map((row, index) => [row.id, record(`a${index + 1}`, index === 3 ? `Mara will chase the vendor about the fixture drawings.${filler(0)}` : `Mara will do task ${index + 1}.`, action)]));
+      const others = Array.from({ length: 9 }, (_, index) => record(`dvt-${index + 1}`, `DVT sync item ${index + 1}.${filler(index + 1)}`, { kind: "decision" }));
+      const open = vi.fn(async (input: { readonly item: string }) => {
+        const anchor = bodies.get(input.item)!;
+        return (anchor.label === "Meeting a4" ? result([anchor, ...others], { truncated: true, anchor_truncated: false }) : result([anchor])) as EvidenceDeskResultV2;
+      });
+      const q = "Which of Mara's actions mention the vendor?";
+      const n = "Mara's actions that mention the vendor";
+      const h = harness([
+        ask(q, n, "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }], undefined, WS), ask(q, n, "open", ["L1"], opens(["E1", "E2", "E3", "E4"]), "N1", WS),
+        ask(q, n, "found", ["L1", "E4"], [finish], "N1", WS), say("Mara will chase the vendor about the fixture drawings.", ["E4"]),
+      ], { list: vi.fn(async () => result(rows) as EvidenceDeskResultV2), open });
+      const { response: meeting, research: meetingView } = await h.research.answerWithResearch({ question: q });
+      expect(meetingView.rounds[1]!.actions[3]!.result).toMatchObject({ id: "E4", truncated: true, anchor_truncated: false });
+      if (pad > 0) expect(meetingView.rounds[1]!.actions[3]!.result.opened.length).toBeLessThan(10);
+      expect(JSON.parse(writersOf(h)[0]!.user_prompt).lists[0]).toMatchObject({ id: "L1", count: 4, checked: 4 });
+      expect(meeting).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+    }
+  });
+
+  it("answers a repeated open of an item cut only beside it from the scratchpad, and opens one whose own text was cut again", async () => {
+    const text = "What does THERM-3 say about BUG-412?";
+    const need = "what THERM-3 says about BUG-412";
+    for (const [own, calls] of [[{ anchor_truncated: false }, 1], [{ anchor_truncated: true }, 2]] as const) {
+      const open = vi.fn(async () => result([ticketBody(3, "THERM-3: Fixture work 3\n\nRepro steps reference BUG-412."), ...tickets(11, 4)], { truncated: true, ...own }) as EvidenceDeskResultV2);
+      const h = harness([
+        ask(text, need, "open", [], [TICKETS_LIST]), ask(text, need, "open", [], opens(["E3"]), "N1"), ask(text, need, "open", [], opens(["E3"]), "N1"),
+        ask(text, need, "found", ["E3"], [finish], "N1", "content"), say("THERM-3 references BUG-412 in its repro steps.", ["E3"]),
+      ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(1, 4)) as EvidenceDeskResultV2), open });
+      const { research: view } = await h.research.answerWithResearch({ question: text });
+      expect(open).toHaveBeenCalledTimes(calls);
+      if (calls === 1) expect(view.rounds[2]!.actions[0]!.result).toMatchObject({ note: "already open; its full text is in your scratchpad" });
+    }
+  });
 });
 
 describe("a task goal keeps the rules before ADR-0041", () => {

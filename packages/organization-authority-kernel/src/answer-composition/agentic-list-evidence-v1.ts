@@ -254,31 +254,33 @@ export function agenticPlanListsV1(
 /** An open as research's rounds record it: the item it resolved to and what it returned. */
 export interface AgenticOpenActionV1 {
   readonly tool: string;
-  readonly result: { readonly id?: string; readonly opened: readonly string[]; readonly error?: string; readonly truncated?: boolean; readonly notice?: boolean };
+  readonly result: { readonly id?: string; readonly opened: readonly string[]; readonly error?: string; readonly truncated?: boolean; readonly anchor_truncated?: false; readonly notice?: boolean };
 }
 
 /** What research's opens read (agenticOpenReadsV1). */
 export interface AgenticOpenReadsV1 {
   /** Each item a clean open returned bodies for, every one read in full, with no limited open of it since. */
   readonly clean: ReadonlySet<string>;
-  /** Each item whose latest open was limited: truncated, with a notice or with an error. */
+  /** Each item whose latest open was limited: its own text cut, a notice or an error. */
   readonly limited: ReadonlySet<string>;
 }
 
 /**
- * What research read by opening items, from its rounds in order (ADR-0041). An open is clean when it was not
- * truncated, carried no notice or error, and returned only bodies research then read in full; an Ask round records an
- * open as truncated when the loop left out bodies the desk returned, to fit its bounds. A limited open undoes
- * an item's clean open until a later clean one. Each open counts for the item it resolved to, whatever form the model
- * gave its id; one that resolved to none counts for nothing. The renderer reads it: a list member is checked through
- * its clean open (addition 4).
+ * What research read by opening items, from its rounds in order (ADR-0041). An open is clean when it left the opened
+ * item's own text whole, carried no notice or error, and returned only bodies research then read in full. A truncated
+ * open cut the item's own text unless its round says the cut was only beside it (`anchor_truncated: false`: an omitted
+ * link, a meeting's other records); an Ask round records an open as truncated when the loop left out bodies the desk
+ * returned, to fit its bounds, and as cut beside the item only when none of them is part of the item. A limited open
+ * undoes an item's clean open until a later clean one. Each open counts for the item it resolved to, whatever form the
+ * model gave its id; one that resolved to none counts for nothing. The renderer reads it: a list member is checked
+ * through its clean open (addition 4).
  */
 export function agenticOpenReadsV1(rounds: readonly { readonly actions: readonly AgenticOpenActionV1[] }[], full: (id: string) => boolean): AgenticOpenReadsV1 {
   const clean = new Set<string>(); const limited = new Set<string>();
   for (const round of rounds) for (const action of round.actions) {
     const id = action.result.id;
     if (action.tool !== "open" || id === undefined) continue;
-    if (action.result.error !== undefined || action.result.truncated === true || action.result.notice === true) { limited.add(id); clean.delete(id); continue; }
+    if (action.result.error !== undefined || (action.result.anchor_truncated ?? action.result.truncated) === true || action.result.notice === true) { limited.add(id); clean.delete(id); continue; }
     if (action.result.opened.length > 0 && action.result.opened.every(full)) { clean.add(id); limited.delete(id); }
   }
   return Object.freeze({ clean, limited });
@@ -296,7 +298,8 @@ const CITED_OBJECT_FIELDS: Readonly<Record<string, readonly string[]>> = Object.
   page: ["tool_id", "external_scope_id", "page_id"], ticket: ["tool_id", "external_scope_id", "ticket_id"],
   slack_message: ["team_id", "channel_id", "message_ts"], approved_record: ["atom_id"], source_revision: ["source_id", "revision_id"], follow_up: ["item_id"],
 });
-function citedObject(citation: unknown): string | undefined {
+/** The object a citation cites (ADR-0041): its parts (a page's sections, a ticket's text) cite the same one. */
+export function agenticCitedObjectV1(citation: unknown): string | undefined {
   if (typeof citation !== "object" || citation === null) return undefined;
   const value = citation as Readonly<Record<string, unknown>>;
   const fields = CITED_OBJECT_FIELDS[String(value.kind)];
@@ -326,7 +329,7 @@ export function agenticListMembershipV1(
   const objects = new Map(lists.map(list => {
     const byObject = new Map<string, string>();
     for (const member of list.members) {
-      const object = citedObject(citationOf.get(member));
+      const object = agenticCitedObjectV1(citationOf.get(member));
       if (object !== undefined && !byObject.has(object)) byObject.set(object, member);
     }
     return [list.id, { members: new Set(list.members), byObject }] as const;
@@ -336,7 +339,7 @@ export function agenticListMembershipV1(
       const known = objects.get(list);
       if (known === undefined) return undefined;
       if (known.members.has(id)) return id;
-      const object = citedObject(citationOf.get(id));
+      const object = agenticCitedObjectV1(citationOf.get(id));
       return object === undefined ? undefined : known.byObject.get(object);
     },
   });

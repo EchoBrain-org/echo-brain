@@ -32,6 +32,7 @@ import {
 import { fillAgenticTaskV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import {
+  agenticCitedObjectV1,
   agenticListEndUnverifiedV1,
   agenticListIdV1,
   agenticListMembershipV1,
@@ -444,7 +445,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** Lists whose first page was read, so the next list's id follows the count. */
   let listsRead = 0;
   const lists = new Map<string, ListState>();
-  /** Items whose latest open was truncated or carried a notice. */
+  /** Items whose latest open cut them (for a task goal, was truncated) or carried a notice. */
   const limitedOpens = new Set<string>();
   /**
    * Items whose own read already returned all an open of them can: the anchor of a planner open, and a starting item
@@ -545,8 +546,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const entry = entryOf(raw) ?? entryByTitle(raw);
     if (entry === undefined) return { tool: "open", args, error: "unknown id; pass an id such as E4 from your scratchpad" };
     // Like a repeated search: an item already read around whose full text was in the scratchpad the planner just read is
-    // not read again (the access check before every model call already covers it), and adds nothing new. An item a
-    // truncated or noticed open returned is still read again: only a clean open of it resolves that limit.
+    // not read again (the access check before every model call already covers it), and adds nothing new. An item an open
+    // cut (for a task goal, any truncated open) or noticed is still read again: only a clean open of it resolves that limit.
     if (anchorsRead.has(entry.item.id) && researchPromptEntries.includes(entry) && !limitedOpens.has(entry.item.id)) return { tool: "open", id: entry.short, note: "already open; its full text is in your scratchpad" };
     let result: EvidenceDeskResultV2;
     try { result = await raceAbort(signal, desk.open({ item: entry.item.id, neighbours: OPEN_NEIGHBOURS, signal })); }
@@ -575,7 +576,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // research read less than the desk returned, so the open checks no list member (ADR-0041, addition 4). A task goal
       // keeps its rule.
       const truncated = result.truncated || (ask && admitted.length < texts.length);
-      for (const opened of admitted) if (truncated || result.notice !== undefined) limitedOpens.add(opened.item.id); else limitedOpens.delete(opened.item.id);
+      // For a question goal the open cut the opened item's own text when the desk says so (its truncated, when it does
+      // not say) or the loop left out a body that is part of the item; a cut only beside it (a link, a meeting's other
+      // records) leaves the item whole, read and checked. A task goal keeps its rule.
+      const object = agenticCitedObjectV1(entry.item.citation);
+      const cut = truncated && (!ask || (result.anchor_truncated ?? result.truncated) || texts.slice(admitted.length).some(item => object === undefined || agenticCitedObjectV1(item.citation) === object));
+      for (const opened of admitted) if (cut || result.notice !== undefined) limitedOpens.add(opened.item.id); else limitedOpens.delete(opened.item.id);
       // What the open read: its anchor, or the first text read in its place (a page's section); never what came beside it.
       if (admitted[0] !== undefined) admitted[0].direct = true;
       if (anchor !== undefined) anchorsRead.add(anchor.id);
@@ -584,7 +590,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const metadata = result.items
         .filter(item => item.text === undefined && item.id !== entry.item.id)
         .map(item => register(item));
-      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }), ...(truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }), ...(truncated ? { truncated: true } : {}), ...(truncated && !cut ? { anchor_truncated: false } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -975,15 +981,18 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   let stepRejections: string[] = [];
   /** Starting citations the brief marked `report` that could not be read. */
   const unreadableStarting: unknown[] = [];
-  /** A read as its round records it, from what the next step sees (`value`); an Ask open adds the item it resolved to (`raw`). */
+  /**
+   * A read as its round records it, from what the next step sees (`value`); an Ask open adds the item it resolved to, and
+   * whether a truncated open left that item's own text whole (`raw`).
+   */
   const roundView = (tool: string, args: StepArgs, value: ToolResult | undefined, raw?: ToolResult): AgenticResearchActionV1 => {
     const listed = (key: string) => Array.isArray(value?.[key]) ? (value![key] as readonly unknown[]).map(String) : [];
     const opened = Array.isArray(value?.opened) ? (value!.opened as readonly string[]) : [];
     return Object.freeze({ tool, args: Object.freeze({ ...args }), result: Object.freeze({
       items: [...listed("results"), ...listed("items")], opened: [...opened], ...(ask && typeof raw?.id === "string" ? { id: raw.id } : {}),
       ...(typeof value?.note === "string" ? { note: value.note } : {}), ...(typeof value?.error === "string" ? { error: value.error } : {}),
-      ...(value?.truncated === true ? { truncated: true } : {}), ...(typeof value?.more === "boolean" ? { more: value.more } : {}),
-      ...(typeof value?.notice === "string" ? { notice: true } : {}),
+      ...(value?.truncated === true ? { truncated: true } : {}), ...(raw?.anchor_truncated === false ? { anchor_truncated: false as const } : {}),
+      ...(typeof value?.more === "boolean" ? { more: value.more } : {}), ...(typeof value?.notice === "string" ? { notice: true } : {}),
     }) });
   };
   const recordRound = (startedAt: number, actions: readonly AgenticResearchActionV1[]) => {

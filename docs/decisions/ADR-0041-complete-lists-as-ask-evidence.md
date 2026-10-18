@@ -113,7 +113,10 @@ bound. For the same Jira page, an impact card's research then no longer sees
 `truncated` or "more items exist than list can show; use search", and the
 card no longer says "The tickets list was cut short at 6 items." That claim
 was false. The kernel's task rules, prompts and schemas do not change, and for
-the same desk results a task goal's model inputs are byte for byte.
+the same desk results a task goal's model inputs are byte for byte. Desks also
+say, on an open, whether the opened item's own text was cut
+(`anchor_truncated`, addition 4); only Ask's rounds read it, and no model,
+audit or public door sees it.
 
 ### A list is a request-local evidence object
 
@@ -238,11 +241,20 @@ the same desk results a task goal's model inputs are byte for byte.
   citing its id for a `which_items` need, within the existing 12-id cap.
 - **Content across a list (addition 4).** A `which_say` need declares it. A
   member is checked when research read its text in full, or opened its row
-  through an open that was not truncated, carried no notice or error, and
-  returned only bodies research read in full. An open whose bodies the loop
-  left out to fit its bounds (24 KiB, or 20 items beside its anchor) returned
-  bodies research never read: Ask's research is told it was truncated, as when
-  the desk cuts an open, and it checks no member. An open counts for the item it
+  through an open that left its own text whole, carried no notice or error,
+  and returned only bodies research read in full. An open's `truncated` also
+  reports what it left out beside the item, so a desk says whether the item's
+  own text was cut (`anchor_truncated`): the Jira reader cuts a ticket's text
+  only at its text bound, never for its links or a label cut, and the records
+  route releases a record's text whole, never cut for its meeting's other
+  records. A desk that does not say leaves `truncated` to cover the item. A
+  member read in full stays checked through an open that cut only what came
+  beside it, and becomes unchecked through one that cut its own text. An open
+  whose bodies the loop left out to fit its bounds (24 KiB, or 20 items beside
+  its anchor) returned bodies research never read: Ask's research is told it
+  was truncated, as when the desk cuts an open, and it cut the item's own text
+  when one of them is part of the item (a page's section), so it checks no
+  member then. An open counts for the item it
   resolved to, whatever form the model gave its id, a title included: Ask's
   research rounds record that item. When not every member of a list a
   `which_say` need cites was checked, whatever the need's status, the part
@@ -802,6 +814,10 @@ Tests required before release:
 - a page whose returned sections the loop left out to fit an open is not
   checked, and research sees that open as truncated; a task goal's open is
   unchanged;
+- a ticket opened with more links than an open shows, and an action whose
+  meeting holds more records than an open returns, are checked once read in
+  full; a ticket whose own text was cut, or opened by a desk that does not say,
+  is not;
 - a requested filter the source ignored appears in the response notice;
 - a meeting list's owner filter keeps only the owners it names by whole words,
   and a status filter over members whose status is in neither group is

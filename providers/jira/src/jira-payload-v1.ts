@@ -42,6 +42,8 @@ export interface ParsedJiraIssueV1 {
   readonly related_truncated: boolean;
   readonly value: Omit<PersonLiveEvidenceValueV1<PersonTicketCitationV1>, 'handle'>;
   readonly truncated: boolean;
+  /** The released text itself was cut to its bound; a label cut alone leaves the text whole (ADR-0041). */
+  readonly text_truncated: boolean;
 }
 
 /**
@@ -104,7 +106,7 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   const citation: PersonTicketCitationV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: input.cloudid,
     ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: sha256Digest(content?.text ?? '') });
   return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(), related_issue_ids: relatedLinks.ids, related_truncated: relatedLinks.truncated,
-    truncated: label.truncated || (content?.truncated ?? false),
+    truncated: label.truncated || (content?.truncated ?? false), text_truncated: content?.truncated ?? false,
     value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created', dates: Object.freeze({ created: created.toISOString(), ...(updated === undefined ? {} : { updated: new Date(updated).toISOString() }), ...(due_at === undefined ? {} : { due: due_at }) }),
       attributes: Object.freeze({ status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) }),
       ...(content === undefined ? {} : { text: content.text }) }) });

@@ -80,6 +80,11 @@ export interface EvidenceDeskResultV1 {
    * (ADR-0041). A desk that confirmed its end, for example by reading one row past its limit, says false.
    */
   readonly page_full?: boolean;
+  /**
+   * `open` only: whether the opened item's own text was cut. `truncated` also reports what an open left out beside the
+   * item (a link, a meeting's other records); a desk that does not say leaves `truncated` to cover the item (ADR-0041).
+   */
+  readonly anchor_truncated?: boolean;
 }
 
 export interface EvidenceDeskSearchInputV1 extends EvidenceDateFilterV1 {

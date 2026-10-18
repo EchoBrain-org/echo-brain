@@ -317,8 +317,9 @@ describe('Person evidence desk over the real approved-record route', () => {
     const inventory = await inventoryDesk.search({ limit: 10 });
     const item = inventory.items.find(value => value.citation.kind === 'approved_record');
     expect(item).toBeDefined();
+    // A record's text is released whole: the open says its anchor was not cut (ADR-0041).
     await expect(inventoryDesk.open({ item: item!.id })).resolves.toMatchObject({
-      items: [expect.objectContaining({ text: accepted.recordAtom.text })],
+      items: [expect.objectContaining({ text: accepted.recordAtom.text })], truncated: false, anchor_truncated: false,
     });
 
     for (const bytes of [3_073, 4_096]) {
