@@ -33,11 +33,8 @@ import { fillAgenticTaskV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import {
   agenticListEndUnverifiedV1,
-  agenticListFilterNoticeV1,
   agenticListIdV1,
   agenticListMembershipV1,
-  agenticListMembersNounV1,
-  agenticPlanListsV1,
   createAgenticListEvidenceV1,
   type AgenticListEvidenceV1,
   type AgenticListFilterApplicationV1,
@@ -1246,24 +1243,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       full: entry.full, opened: entry.opened, preloaded: entry.preloaded === true, touched: entry.touched,
       ...(entry.query === undefined ? {} : { query: entry.query }), cited_by_plan: cited.has(entry.short),
     }));
-    // A question goal's lists, and what the person is told about the filters of those its needs' declared kinds read:
-    // the lists code states and the lists research checks (ADR-0041).
-    const listed = ask ? listsInOrder() : [];
-    const listRecords = listed.map(state => listEvidence(state));
-    const { stated, checking } = agenticPlanListsV1(plan.flatMap(part => part.needs), id => listRecords.some(list => list.id === id));
-    const relied = new Set([...stated, ...checking]);
-    const filterNotices = listed.flatMap((state, index) => {
-      if (!relied.has(state.id)) return [];
-      const source = sourcesById.get(state.source);
-      const noun = agenticListMembersNounV1({ selector: source?.selector ?? state.args.source!, ...(source?.tool_id === undefined ? {} : { tool_id: source.tool_id }) }, state.members.map(entry => entry.item.kind));
-      const text = agenticListFilterNoticeV1(listRecords[index]!, noun.plural);
-      return text === undefined || notice.has(text) ? [] : [text];
-    });
+    // A question goal's lists (ADR-0041); the renderer tells the person about the filters of those its answer names.
+    const listRecords = ask ? listsInOrder().map(state => listEvidence(state)) : [];
     return Object.freeze({
       schema_version: 1 as const, kind: "echo-agentic-evidence-bundle-v1" as const, goal, budget,
       plan: planView() as readonly AgenticResearchPartV1[], items: Object.freeze(items), ...(ask ? { lists: Object.freeze(listRecords) } : {}),
       unreadable_starting: Object.freeze([...unreadableStarting]), rounds: Object.freeze([...rounds]),
-      coverage: Object.freeze({ reads: Object.freeze(readCoverage.map(read => Object.freeze({ ...read }))), inventories: Object.freeze(inventoryView().map(({ args, ...inventory }) => Object.freeze({ source: args.source, ...inventory }))), notices: Object.freeze([...notice, ...new Set(filterNotices)]) }),
+      coverage: Object.freeze({ reads: Object.freeze(readCoverage.map(read => Object.freeze({ ...read }))), inventories: Object.freeze(inventoryView().map(({ args, ...inventory }) => Object.freeze({ source: args.source, ...inventory }))), notices: Object.freeze([...notice]) }),
       stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete, ...(researchAdmission === undefined ? {} : { admission: researchAdmission }) }),
       cost: Object.freeze({ rounds: steps, model_calls: calls, repairs, fallbacks, input_tokens: usage("input_tokens"), output_tokens: usage("output_tokens"), total_tokens: usage("total_tokens"),
         model_ms: Math.max(0, Math.round(observed.model_ms)), desk_ms: Math.max(0, Math.round(observed.desk_ms)), elapsed_ms: Math.max(0, Math.round(now() - researchStartedAt)) }),

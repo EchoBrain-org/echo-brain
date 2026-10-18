@@ -1,11 +1,11 @@
 {
   "finish_after_search_and_open": {
     "calls": 4,
-    "prompt_sha256": "sha256:c76bc6803ee3762807beec41cd388d48f7c5964c2a2d2908ed8a19cf09451916",
+    "prompt_sha256": "sha256:927d2aa80102115359c24e3b8bce692ddec939c2ca9131963442843607ffccc4",
     "response_sha256": "sha256:7125009eed78d55abca0ea54d5edd87b631177c8d304075aadc76920399f5001",
-    "model_inputs_sha256": "sha256:7b56bf501b488455b55bd0102fee6ef0f73cbc549d0a42065c448e0c60f0b0ff",
+    "model_inputs_sha256": "sha256:4bfc7e081b1e7097f8ff469a0565927c22991e350942753e93eae66acf382a15",
     "outcome": "answered",
-    "audit_sha256": "sha256:0f0b50662de30b829540ff9355d38981ce6edcfb74f510d231708b8cf31c139d"
+    "audit_sha256": "sha256:f25fef0323f0b6a014cc04d0be338dad5835ad5899071b1368b215de14cfe50e"
   },
   "not_found_after_two_searches": {
     "calls": 2,
@@ -17,19 +17,19 @@
   },
   "repair_after_invalid_step": {
     "calls": 4,
-    "prompt_sha256": "sha256:82b04aba24ba8e15a223ba12a9c608e81284fdc3d5558d0a018e6fd5ab4d22ec",
+    "prompt_sha256": "sha256:dcd17ead08828768edb19e30e80b99be6f760bf79bc6c9c0356528b06f264e23",
     "response_sha256": "sha256:d376799d4d6aee842402c6eab7f4eddd599c6cfd489d27f4aa6cbbe81ea54049",
-    "model_inputs_sha256": "sha256:6236deea845f2f8e96adafda22bdf4ee2ebc362409d94f6be07d28eb1713f8de",
+    "model_inputs_sha256": "sha256:fd704897dd368e7aaebf6087d14457989b1c42896b4fa3af9918fc8ff0c5364a",
     "outcome": "answered",
-    "audit_sha256": "sha256:6679fb155b80e6e424c33bc80c2d8ba9a2daac5b8982f56b9c63a1f18f90c7cc"
+    "audit_sha256": "sha256:a6e12a69d48e9ae5e3318df24dab79ba30f5a817db8fd5db4812a8e807987047"
   },
   "writer_fallback_to_records": {
     "calls": 4,
-    "prompt_sha256": "sha256:c417710d3687a6737146435c89de38064c06f3dbbe06d0cd46e49faf8b0afc60",
+    "prompt_sha256": "sha256:bab420bd6d2c91273f5084e992aa2704dbff9cc1bc34b20252512300d6f3b16b",
     "response_sha256": "sha256:67d974f71cc072dddeb6c857c57e6cee90257872b28b4ed8f24622fa4276ccd5",
-    "model_inputs_sha256": "sha256:0ff1b89b8dede83cc1d2f9975a4106410b70323b93216956415f8277bdfaf9f1",
+    "model_inputs_sha256": "sha256:cea39fe28262c33c2ce10752385194f1c9a406294bb79ccc45fdabc96956e5c9",
     "outcome": "partial",
-    "audit_sha256": "sha256:280db8c76ce58d7142d6472ca7674d8161fab68671530ea588736d85c3c71634"
+    "audit_sha256": "sha256:dd7a7bf005dd1ec055848f68fba997d3b5e06e06f7a8a38334c858a130217a38"
   },
   "no_progress_stop": {
     "calls": 3,
@@ -41,27 +41,27 @@
   },
   "list_pages_and_owner_filter": {
     "calls": 3,
-    "prompt_sha256": "sha256:d4d95a8e195e792fecf744c22519b896c2e40c2c490ac2a0697ff446238b949d",
+    "prompt_sha256": "sha256:093566f1883aca9ae1fc4f27b643bfbde959b0910ec6a56d629e48579c01f4a0",
     "response_sha256": "sha256:613234b0b33ed19b03eec99e5a7a8373d4e57ee9ed8d1305f6a1ff92f72fe3e8",
-    "model_inputs_sha256": "sha256:208a232519cd9133712a990d45e01d83693b7c789ca8cc57e2a7936fd82b5798",
+    "model_inputs_sha256": "sha256:052edf023df24bb04ef973c256b88839117487dd779aafe909d7daff8fd33af4",
     "outcome": "answered",
-    "audit_sha256": "sha256:63fb1abf0e9e98e447eb3547f0235168ed869db1f4101220bfa260706ec558f7"
+    "audit_sha256": "sha256:94d3d4203c13a44408af60fd504ea79f28f648db0326279ee48ddd65dfbe221f"
   },
   "budget_stop_with_slow_clock": {
     "calls": 4,
-    "prompt_sha256": "sha256:9bb63f676c01766ff3a27dc216fb61ac8d7303c2559cbaf3aa05ada358d6cc88",
+    "prompt_sha256": "sha256:8f6e5940505fb4d9bc45cab4098bde3519e862320a309eefcc8060acb1962494",
     "response_sha256": "sha256:58f611778059bb722c05b6014933c4160a533a8a88b0ad965124b515df14fc7e",
-    "model_inputs_sha256": "sha256:42212b8a8f2eed74e85c6ced2bb3c586bc127c87bfacfa0e8db360629a65eec0",
+    "model_inputs_sha256": "sha256:df6342c31180a6625c696e2b053cf4f53cd659ecd5ad1be18311d6a676d6bf6f",
     "outcome": "partial",
-    "audit_sha256": "sha256:47cc36e1d185226c5f8c0bab617712e268a3965f4ee4a5bad4f83db6c52dabc3"
+    "audit_sha256": "sha256:76e20c3d4d11aae09364d549480a724b7b6e43634a601e558b92f456fbde9530"
   },
   "small_scope_preload": {
     "calls": 2,
-    "prompt_sha256": "sha256:06c2dab6597c299e90349dc02869a0f76c5d1da0e3571f4d39693fd35a87e3e5",
+    "prompt_sha256": "sha256:a15cfd649f1096ef58b8bf16f9a2830025f784fb588681f46ea7deb8f64414b5",
     "response_sha256": "sha256:aa9162d4ba214622adb3f3f55cabb4c2822f2d3d6d249b678800de6e227e28f8",
-    "model_inputs_sha256": "sha256:58d17c5ccf974acfcda05d1043524a6b0e5c581b8c534475477ae17a8243b4bc",
+    "model_inputs_sha256": "sha256:94f8bc201d41698ab2e439fd31994a691c79e35ba73a053237da214fc517818b",
     "outcome": "answered",
-    "audit_sha256": "sha256:2bfa75886006651b78a6220a0037f3a662969204036ff10f96f617684a080553"
+    "audit_sha256": "sha256:9e1ce4e203bd02de7494a7191620fbd09938b081abc67e7dbfdeb79e1414a219"
   },
   "unusable_step_stop": {
     "calls": 2,
@@ -73,11 +73,11 @@
   },
   "step_limit_stop": {
     "calls": 11,
-    "prompt_sha256": "sha256:5c036436e8cdd413ed6a39597134e2c5ea42de5647e3d3395c16e488437ed640",
+    "prompt_sha256": "sha256:3e6f6a9dba1540a664822858af94eeb510809fd23e18a09823f511de178d9673",
     "response_sha256": "sha256:ee9e2642bd6820d577639367efaf2857db8e539feb773cc8da5c7337e6d26e70",
-    "model_inputs_sha256": "sha256:e24a4ca3c562f5f6a428652f6580dd4ad62502f5993761b525dfe140e815a281",
+    "model_inputs_sha256": "sha256:016ab3175a4a1a623558208158a7407f80952f51d069c40d30e85adf56ad45c3",
     "outcome": "partial",
-    "audit_sha256": "sha256:6088d6b8119ba729fc0afa9bc8fe17390137454144e2197072ababd433c2998e"
+    "audit_sha256": "sha256:0f4e2db4f833be7ebc584b035c3c63734966025d464223f29374c95f8cbbfd1c"
   },
   "empty_catalog_stop": {
     "calls": 1,
@@ -89,10 +89,10 @@
   },
   "live_ticket_and_page": {
     "calls": 4,
-    "prompt_sha256": "sha256:a9fd9a4f87dcf1cafa0e1d6fea0b98250b7681650893897739090f969f0c6cfb",
+    "prompt_sha256": "sha256:56cc1fd934b27e7660c7c00c3b6a9e12a926480dfc93ce5c6303cf422a69cb06",
     "response_sha256": "sha256:6e98e5995b4c11bd1a934dad0db3945c30d80594e0fd2e762aa949f531d24e88",
-    "model_inputs_sha256": "sha256:58501e42ef20255dd4ab97c78220f5534475945d266c17ef1b9d506879ffa734",
+    "model_inputs_sha256": "sha256:37c2f8e0fc307f88e7dc908509509c6fb14f5c9ac0d06003468b49cb8b50845c",
     "outcome": "answered",
-    "audit_sha256": "sha256:ef43d284dd48c2e29e8f2919cd21bc58e1194fdb6c553d04dedba98c33c16ea3"
+    "audit_sha256": "sha256:a7e99a4957adf1b40cd15a0c73e813e1dc223d4bc7b76f0ce41603242e89da1e"
   }
 }

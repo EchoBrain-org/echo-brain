@@ -82,7 +82,7 @@ describe('synthesis receives observed research coverage', () => {
     // The writer sees the list by id with its rows and filter (ADR-0041); research no longer reports a bare count.
     expect(writer.research).toMatchObject({ completed: true, omitted_evidence_items: 0 });
     expect(writer.research).not.toHaveProperty('inventories');
-    expect(writer.lists).toEqual([expect.objectContaining({ id: 'L1', source: 'pages', complete: false, count: 1, cited_by_plan: false, members: [expect.objectContaining({ id: 'E1', title: 'Gate guide' })] })]);
+    expect(writer.lists).toEqual([expect.objectContaining({ id: 'L1', source: 'pages', complete: false, count: 1, stated: false, members: [expect.objectContaining({ id: 'E1', title: 'Gate guide' })] })]);
     expect(JSON.stringify(writer.lists)).not.toContain(body);
   });
 });

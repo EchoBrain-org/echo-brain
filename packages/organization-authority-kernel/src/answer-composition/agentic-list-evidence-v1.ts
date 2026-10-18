@@ -388,8 +388,8 @@ export interface AgenticWriterListV1 {
   /** Members research checked, out of `count`. */
   readonly checked: number;
   readonly read_at: string;
-  /** Research marked a need found on this list. */
-  readonly cited_by_plan: boolean;
+  /** Code states it: a which_items need research has not given up on cites it (ADR-0041). */
+  readonly stated: boolean;
   /** At most AGENTIC_LIST_WRITER_MEMBERS_MAX_V1 members, in list order. */
   readonly members: readonly AgenticWriterListMemberV1[];
   /** Members past the writer's bound; present only when some were left out. */
@@ -421,13 +421,13 @@ export function agenticWriterListMemberV1(entry: { readonly short: string; reado
  * `max_members` (at most AGENTIC_LIST_WRITER_MEMBERS_MAX_V1; fewer when the
  * writer's prompt has less room).
  */
-export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], cited_by_plan: boolean, max_members: number = AGENTIC_LIST_WRITER_MEMBERS_MAX_V1): AgenticWriterListV1 {
+export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], stated: boolean, max_members: number = AGENTIC_LIST_WRITER_MEMBERS_MAX_V1): AgenticWriterListV1 {
   if (members.length !== list.members.length || members.some((member, index) => member.id !== list.members[index])) invalid("writer members must be the list's members, in order");
   if (!Number.isSafeInteger(max_members) || max_members < 0) invalid("max_members must be a whole, non-negative count");
   const shown = members.slice(0, Math.min(max_members, AGENTIC_LIST_WRITER_MEMBERS_MAX_V1));
   return Object.freeze({
     id: list.id, source: list.source, filter: list.filter, filter_applied: list.filter_applied, complete: list.complete,
-    count: list.members.length, checked: members.filter(member => member.checked).length, read_at: list.read_at, cited_by_plan,
+    count: list.members.length, checked: members.filter(member => member.checked).length, read_at: list.read_at, stated,
     members: Object.freeze(shown), ...(shown.length === members.length ? {} : { members_omitted: members.length - shown.length }),
   });
 }
@@ -661,6 +661,8 @@ export interface AgenticListStatementInputV1 {
   readonly selected: readonly AgenticListNamedMemberV1[];
   /** Members this statement may cite: the answer's share (agenticListNameSharesV1). */
   readonly share: number;
+  /** Indexes of `selected` that cost no share: members a statement selecting them by id already named. */
+  readonly free?: ReadonlySet<number>;
 }
 
 /**
@@ -676,7 +678,8 @@ export interface AgenticListStatementInputV1 {
  * (agenticListMemberNamesV1). Names are taken in
  * list order while the members they cover fit `share` (the first always, citing
  * at most `share` of its members), and stop early when the statement would pass
- * AGENTIC_LIST_STATEMENT_BYTES_V1. `named` is how many of `selected` the names
+ * AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free` costs no share, and is
+ * cited wherever it is named. `named` is how many of `selected` the names
  * cover, so "and N more" is `selected.length - named`; `cited` are the indexes
  * of `selected`, in order, the caller cites.
  */
@@ -696,15 +699,18 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
       : `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`;
   const groups = byId ? selected.map((_, index) => [index]) : nameGroups(selected);
   const namesOf = (named: readonly (readonly number[])[]) => byId ? named.map(([index]) => factsName(selected[index!]!, input.filter.time_zone)) : groupNames(selected, named);
+  const free = input.free ?? new Set<number>();
+  const cost = (group: readonly number[]) => group.filter(index => !free.has(index)).length;
   let fit = 1;
-  for (let covered = groups[0]!.length; fit < groups.length && covered + groups[fit]!.length <= input.share; fit += 1) covered += groups[fit]!.length;
+  for (let spent = cost(groups[0]!); fit < groups.length && spent + cost(groups[fit]!) <= input.share; fit += 1) spent += cost(groups[fit]!);
   for (let shown = fit; shown >= 1; shown -= 1) {
     const named = groups.slice(0, shown);
     const covered = named.reduce((total, group) => total + group.length, 0);
     const text = `${lead}: ${namesOf(named).join("; ")}${covered < k ? `; and ${k - covered} more` : ""}.`;
     if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || shown === 1) {
-      const cited = named.flatMap(group => group).slice(0, Math.max(input.share, 1));
-      return Object.freeze({ text, named: covered, cited: Object.freeze([...cited].sort((left, right) => left - right)) });
+      const members = named.flatMap(group => group);
+      const cited = [...members.filter(index => free.has(index)), ...members.filter(index => !free.has(index)).slice(0, Math.max(input.share, 1))];
+      return Object.freeze({ text, named: covered, cited: Object.freeze(cited.sort((left, right) => left - right)) });
     }
   }
   throw new RangeError("unreachable");
@@ -718,10 +724,10 @@ export function agenticListSelectionNotFoundV1(noun: string | AgenticListNounFor
 }
 
 /**
- * What code adds to a sentence that claims content across a list (addition 4)
- * when not every member was checked: "(4 of 8 checked so far)"; for a list not
- * read to its end, "(4 of at least 8 checked so far)". Undefined once every
- * member of a complete list was checked.
+ * What code adds to a sentence citing the text of members of a list a
+ * which_say need checks (addition 4) when not every member was checked: "(4 of
+ * 8 checked so far)"; for a list not read to its end, "(4 of at least 8
+ * checked so far)". Undefined once every member of a complete list was checked.
  */
 export function agenticListCheckedNoteV1(list: Pick<AgenticWriterListV1, "checked" | "count" | "complete">): string | undefined {
   if (list.complete && list.checked >= list.count) return undefined;
