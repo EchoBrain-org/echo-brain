@@ -48,6 +48,11 @@ export interface EvidenceDeskItemV1 {
   /** Absent for an inventory item. Present only after an authorized release. */
   readonly text?: string;
   readonly label: string;
+  /**
+   * How Ask's list rows name this item when its label is its container's (a meeting record's is its meeting's): one line
+   * of its own text, then the container (ADR-0041). Released and audited with the item; only Ask's list rows read it.
+   */
+  readonly list_label?: string;
   readonly visibility: EvidenceDeskVisibilityV1;
   readonly attributes?: EvidenceDeskAttributesV1;
   /** YYYY-MM-DD when the item was said, approved or revised, when the source knows it. */

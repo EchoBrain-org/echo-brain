@@ -272,6 +272,14 @@ describe("the writer's view", () => {
     expect(withText).toBeDefined();
   });
 
+  it("titles a member by its list label when it has one, and by its label otherwise (ADR-0041)", () => {
+    // Every record of a meeting carries the meeting's label; its list label is one line of its own text, then the meeting.
+    const action = { ...pageRow("7", "THERM DVT sync (2026-10-04)"), kind: "action" as const, list_label: "Send fixture drawings to vendor (THERM DVT sync, 2026-10-04)", attributes: { owner: "Dana Lee" } } as EvidenceDeskItemV2;
+    expect(agenticWriterListMemberV1({ short: "E1", item: action }, false)).toMatchObject({ id: "E1", kind: "action", title: "Send fixture drawings to vendor (THERM DVT sync, 2026-10-04)", owner: "Dana Lee" });
+    expect(agenticWriterListMemberV1({ short: "E2", item: pageRow("8", "PRD — System and acceptance requirements") }, false).title).toBe("PRD — System and acceptance requirements");
+    expect(agenticWriterListMemberV1({ short: "E1", item: action }, false)).not.toHaveProperty("list_label");
+  });
+
   it("keeps a ticket's status, owner and due date, and says when an action has no owner", () => {
     const ticket = { ...pageRow("46", "THERM-46: Display firmware"), kind: "ticket" as const, attributes: { status: "In Progress", owner: "Tobias Lund", due_at: "2026-10-15" } } as EvidenceDeskItemV2;
     expect(agenticWriterListMemberV1({ short: "E1", item: ticket }, true)).toMatchObject({ status: "In Progress", owner: "Tobias Lund", due: "2026-10-15", checked: true });

@@ -396,12 +396,16 @@ export interface AgenticWriterListV1 {
   readonly members_omitted?: number;
 }
 
-/** One member's row facts for the writer. Text is never copied, whatever the item holds. */
+/**
+ * One member's row facts for the writer. Text is never copied, whatever the item holds. A member is titled by its list
+ * label when it has one (a meeting record, named by a line of its own text), and by its label otherwise; only Ask's
+ * list rows and code's statements read it.
+ */
 export function agenticWriterListMemberV1(entry: { readonly short: string; readonly item: EvidenceDeskItemV2 }, checked: boolean): AgenticWriterListMemberV1 {
   const { item } = entry;
   const attributes = attributesOf(item);
   return Object.freeze({
-    id: entry.short, kind: item.kind, title: item.label,
+    id: entry.short, kind: item.kind, title: item.list_label ?? item.label,
     ...(item.dates === undefined ? {} : { dates: item.dates }),
     ...(item.occurred_at === undefined ? {} : { date: item.occurred_at, date_kind: item.date_kind ?? "unspecified" as const }),
     ...(attributes?.status === undefined ? {} : { status: attributes.status }),
@@ -597,15 +601,15 @@ function factsName(member: AgenticListNamedMemberV1, timeZone: string | undefine
 }
 
 /**
- * Members as a code-written statement names them: each label, cut to
+ * Members as a code-written statement names them: each title, cut to
  * AGENTIC_LIST_NAME_CHARS_V1 characters, then its status, owner and due date
  * wherever those differ between the named members (ignoring case). Members
- * that share a label and those row facts are one name with their kinds
- * counted: a meeting's records all carry the meeting's label, so "THERM DVT
- * sync (2026-10-04) (1 decision and 2 actions)"; its actions due on different
- * days are named apart, each with its due date. No source-specific rule: a
- * page reads by title, a ticket by key and summary, a follow-up by title, a
- * meeting record by its meeting.
+ * that share a title and those row facts are one name with their kinds
+ * counted ("2 actions"); members whose row facts differ are named apart, each
+ * with its own. No
+ * source-specific rule: a page reads by title, a ticket by key and summary, a
+ * follow-up by title, a meeting record by a line of its own text and its
+ * meeting (its list label).
  */
 export function agenticListMemberNamesV1(members: readonly AgenticListNamedMemberV1[]): readonly string[] {
   return groupNames(members, nameGroups(members));

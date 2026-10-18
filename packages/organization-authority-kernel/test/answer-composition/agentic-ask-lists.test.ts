@@ -5,6 +5,7 @@ import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type 
 import { createAgenticAskV4 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
+import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
@@ -1133,13 +1134,15 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(replies).toEqual([]);
   });
 
-  it("names a meeting's records once, by its label with their kinds, never as that many meetings", async () => {
-    // Production labels: every record of a meeting carries the meeting's title and date.
+  it("names a meeting and each of its records once, the records by their own lines, never as that many meetings", async () => {
+    // Production rows: every record of a meeting carries the meeting's title and date as its label, and a list label
+    // of its own line (ADR-0041); the meeting itself is named by its label.
     const label = "THERM DVT sync (2026-10-04)";
     const day = { occurred_at: "2026-10-04", label };
+    const line = (text: string) => ({ list_label: `${text} (THERM DVT sync, 2026-10-04)` });
     const items = [
-      listed("meeting", { ...day, kind: "imported_meeting" }), listed("d1", { ...day, kind: "decision" }),
-      listed("a1", { ...day, kind: "action", attributes: { owner: "Dana Lee" } }), listed("r1", { ...day, kind: "rationale" }),
+      listed("meeting", { ...day, kind: "imported_meeting" }), listed("d1", { ...day, ...line("Keep the DVT gate on hold"), kind: "decision" }),
+      listed("a1", { ...day, ...line("Send fixture drawings to vendor"), kind: "action", attributes: { owner: "Dana Lee" } }), listed("r1", { ...day, ...line("Accuracy fails at 42 °C"), kind: "rationale" }),
     ];
     const text = "Which meetings did I have on October 4, 2026?";
     const need = "meetings on 2026-10-04";
@@ -1150,25 +1153,52 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     ], { list: vi.fn(async () => result(items) as EvidenceDeskResultV2) });
     const { response } = await h.research.answerWithResearch({ question: text });
     expect(response.outcome).toBe("answered");
-    // The action records an owner the meeting's other records do not, so it is named apart, with that owner.
-    expect(response.parts[0]!.statements).toEqual([{ text: `4 items from meetings dated on October 4, 2026: ${label} (1 meeting, 1 decision and 1 rationale); ${label} (1 action, owner Dana Lee).`, citation_indexes: [0, 1, 2, 3], private: false }]);
+    // Each name says what its record is; the action records an owner the others do not, so its name says it.
+    expect(response.parts[0]!.statements).toEqual([{ text: "4 items from meetings dated on October 4, 2026: THERM DVT sync (2026-10-04) (1 meeting); Keep the DVT gate on hold (THERM DVT sync, 2026-10-04) (1 decision); Send fixture drawings to vendor (THERM DVT sync, 2026-10-04) (1 action, owner Dana Lee); Accuracy fails at 42 °C (THERM DVT sync, 2026-10-04) (1 rationale).", citation_indexes: [0, 1, 2, 3], private: false }]);
   });
 
-  it("names one meeting's actions as actions, each with its own due date, though they share the meeting's label", async () => {
-    // Production list rows: no text, and every action of the meeting carries its label (deskLabel).
+  it("names one meeting's actions by their own lines, each with its own due date, though they share the meeting's label", async () => {
+    // Production list rows: no text; every action of the meeting carries its label (deskLabel) and its own line (deskListLabel).
     const label = "DVT review (2026-10-01)";
-    const action = (id: string, due_at?: string) => listed(id, { kind: "action", label, attributes: { owner: "Mara Quinn", ...(due_at === undefined ? {} : { due_at }) } });
+    const lines = ["Publish the DVT dashboard (DVT review, 2026-10-01)", "Order fixture spares (DVT review, 2026-10-01)", "Confirm the trace plan (DVT review, 2026-10-01)"];
+    const action = (index: number, due_at?: string) => listed(`a${index + 1}`, { kind: "action", label, list_label: lines[index]!, attributes: { owner: "Mara Quinn", ...(due_at === undefined ? {} : { due_at }) } });
     const text = "Which actions does Mara own?";
     const h = harness([
       ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
       ask(text, "actions owned by Mara", "found", ["L1"], [finish], "N1", WI),
       useL1,
-    ], { list: vi.fn(async () => result([action("a1", "2026-10-09"), action("a2", "2026-10-12"), action("a3")]) as EvidenceDeskResultV2) });
+    ], { list: vi.fn(async () => result([action(0, "2026-10-09"), action(1, "2026-10-12"), action(2)]) as EvidenceDeskResultV2) });
     const { response } = await h.research.answerWithResearch({ question: text });
     expect(response.outcome).toBe("answered");
     expect(response.parts[0]!.statements).toEqual([
-      { text: `3 actions with owner Mara: ${label} (due October 9, 2026); ${label} (due October 12, 2026); ${label}.`, citation_indexes: [0, 1, 2], private: false },
+      { text: `3 actions with owner Mara: ${lines[0]} (due October 9, 2026); ${lines[1]} (due October 12, 2026); ${lines[2]}.`, citation_indexes: [0, 1, 2], private: false },
     ]);
+    // Only Ask's list rows read the line: research steps and citations keep the label.
+    expect(writerPrompt(h).lists[0].members.map((member: { title: string }) => member.title)).toEqual(lines);
+    for (const input of h.inputs.filter(value => value.system_prompt.startsWith("You are Echo's research agent"))) for (const value of lines) expect(input.user_prompt).not.toContain(value);
+    expect(response.citations.map(citation => citation.label)).toEqual([label, label, label]);
+  });
+
+  it("gives a task goal over the same meeting rows the same model inputs, with or without their list labels", async () => {
+    // An impact card reads each row's label; a list label changes none of its research or renderer inputs (ADR-0041).
+    const lines = ["Publish the DVT dashboard", "Order fixture spares"];
+    const rows = (labelled: boolean) => lines.map((value, index) => listed(`a${index + 1}`, { kind: "action", label: "DVT review (2026-10-01)", ...(labelled ? { list_label: `${value} (DVT review, 2026-10-01)` } : {}), attributes: { owner: "Mara Quinn" } }));
+    const approved = record("approved", "Approved: Mara publishes the DVT dashboard.");
+    const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "approved_record")!;
+    const event = definition.parseEvent({ record: approved.citation });
+    const card = async (labelled: boolean) => {
+      const h = harness([
+        ask("What does E1 affect?", "work the record affects", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
+        ask("What does E1 affect?", "work the record affects", "found", ["E1"], [finish], "N1"),
+        { decided: [{ id: "E1", text: "Mara publishes the DVT dashboard." }], affected: [] },
+      ], { openCitation: async () => result([approved]), list: vi.fn(async () => result(rows(labelled)) as EvidenceDeskResultV2) });
+      await h.research.renderWithResearch({ trigger: "approved_record", brief: definition.brief(event, h.port.scope), renderer: definition.renderer!, trigger_input: event });
+      return h.inputs.map(({ signal: _signal, ...input }) => input);
+    };
+    const labelled = await card(true);
+    expect(labelled).toHaveLength(3);
+    expect(labelled).toEqual(await card(false));
+    for (const input of labelled) for (const value of lines) expect(input.user_prompt).not.toContain(value);
   });
 });
 

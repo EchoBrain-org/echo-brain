@@ -193,6 +193,8 @@ export interface PersonRecordDeskItemV1 {
   readonly atom_order: number;
   readonly audience_project_count: number;
   readonly label: string;
+  /** How Ask's list rows name the record (ADR-0041): one line of its own text, then its meeting. Released and audited with the row. */
+  readonly list_label: string;
   readonly visibility: "team" | "project" | "projects" | "approver_only";
   readonly attributes?: Readonly<{ owner?: string; due_at?: string; status?: string }>;
   readonly occurred_at?: string;
@@ -541,9 +543,15 @@ function asResponse(input: {
   });
 }
 
-function deskLabel(title: string | undefined, time: { readonly scheduled_start_at?: string; readonly actual_start_at?: string; readonly scheduled_end_at?: string; readonly actual_end_at?: string } | undefined): string {
-  const date = time?.actual_start_at ?? time?.scheduled_start_at ?? time?.actual_end_at ?? time?.scheduled_end_at;
-  const value = `${title === undefined ? "Approved meeting" : title}${date === undefined ? "" : ` (${date.slice(0, 10)})`}`;
+type DeskMeetingTime = { readonly scheduled_start_at?: string; readonly actual_start_at?: string; readonly scheduled_end_at?: string; readonly actual_end_at?: string } | undefined;
+
+/** The meeting's own time stamp: when it started, or else when it ended. */
+function meetingStamp(time: DeskMeetingTime): string | undefined {
+  return time?.actual_start_at ?? time?.scheduled_start_at ?? time?.actual_end_at ?? time?.scheduled_end_at;
+}
+
+/** A desk label within 1 KiB of UTF-8. */
+function boundedLabel(value: string): string {
   if (Buffer.byteLength(value, "utf8") <= 1024) return value;
   let prefix = "";
   for (const scalar of value) {
@@ -551,6 +559,23 @@ function deskLabel(title: string | undefined, time: { readonly scheduled_start_a
     prefix += scalar;
   }
   return `${prefix}...`;
+}
+
+function deskLabel(title: string | undefined, time: DeskMeetingTime): string {
+  const date = meetingStamp(time);
+  return boundedLabel(`${title === undefined ? "Approved meeting" : title}${date === undefined ? "" : ` (${date.slice(0, 10)})`}`);
+}
+
+/**
+ * How Ask's list rows name a meeting record (ADR-0041): one line of its own text, at most 80 characters, then its
+ * meeting, since every record of a meeting carries the meeting's label. "Send fixture drawings to vendor (THERM DVT
+ * sync, 2026-10-04)". `text` is the record's own text, without the owner the row already states.
+ */
+function deskListLabel(text: string, title: string | undefined, time: DeskMeetingTime): string {
+  const date = meetingStamp(time);
+  const own = [...text.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim()];
+  const line = own.length <= 80 ? own.join("") : `${own.slice(0, 79).join("").trimEnd()}…`;
+  return boundedLabel(`${line} (${title ?? "Approved meeting"}${date === undefined ? "" : `, ${date.slice(0, 10)}`})`);
 }
 
 /** Store-raw: only the list route collapses these tokens (ADR-0024). */
@@ -576,10 +601,10 @@ function deskItems(record: Database.Database, items: readonly ReadableSearchResu
     const attributes = signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) } : undefined;
     const visibility = recordVisibility(item.policy_id, item.audience_project_count);
     const time = brief.meeting.time;
-    const stamp = time?.actual_start_at ?? time?.scheduled_start_at ?? time?.actual_end_at ?? time?.scheduled_end_at;
+    const stamp = meetingStamp(time);
     const occurred_at = meetingDateV1(time);
     const dates = { ...(stamp === undefined ? {} : { occurred: time?.all_day ? stamp.slice(0, 10) : stamp }), ...(signal.kind === 'action' && signal.due_at !== null ? { due: signal.due_at } : {}) };
-    return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), visibility, ...(occurred_at === undefined ? {} : { occurred_at }), ...(Object.keys(dates).length === 0 ? {} : { dates: Object.freeze(dates) }), ...(attributes === undefined || Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
+    return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), list_label: deskListLabel(signal.text, brief.meeting.title, brief.meeting.time), visibility, ...(occurred_at === undefined ? {} : { occurred_at }), ...(Object.keys(dates).length === 0 ? {} : { dates: Object.freeze(dates) }), ...(attributes === undefined || Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
   }));
 }
 
