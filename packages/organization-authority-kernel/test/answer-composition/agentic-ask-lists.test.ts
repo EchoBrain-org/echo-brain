@@ -600,6 +600,26 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     ]);
   });
 
+  it("leaves out a sentence citing only the id of a list code names, with no repair and no not-found phrase", async () => {
+    // Its filter and count are what code's own statement says, and it cites no member's row, which might read like content.
+    const summary = { text: "All eight pages were created on October 4, 2026.", evidence: ["L1"] };
+    const used = research([{ lists: [{ id: "L1" }], sentences: [summary], not_found: [] }]);
+    const { response } = await used.research.answerWithResearch({ question: OCT4 });
+    expect(writerInputs(used)).toHaveLength(1);
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: fullStatement }] }] });
+    expect(response.parts[0]).not.toHaveProperty("gap");
+    expect(response.parts[0]!.statements).toHaveLength(1);
+    // Without the list in "lists", only the list goes back; then code writes it, and the sentence is left out the same way.
+    const unused = { lists: [], sentences: [summary], not_found: [] };
+    const forced = research([unused, unused]);
+    const written = (await forced.research.answerWithResearch({ question: OCT4 })).response;
+    expect(writerInputs(forced)).toHaveLength(2);
+    expect(writerPrompt(forced, 1).validation_error).toContain("research found this answer in list L1, which the answer does not use");
+    expect(writerPrompt(forced, 1).validation_error).not.toContain("a sentence cites only list rows or list ids");
+    expect(written).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: fullStatement }] }] });
+    expect(written.parts[0]).not.toHaveProperty("gap");
+  });
+
   it("writes the list itself when the writer gives no usable reply", async () => {
     const h = research([{ wrong: true }, { still: "wrong" }]);
     const { response } = await h.research.answerWithResearch({ question: OCT4 });

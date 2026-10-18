@@ -301,11 +301,22 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return byRows.length > 0 ? byRows : subset(membersCited(list.id, cited.flat()).size);
       });
       /**
-       * Sentences resting on rows or list ids alone, other than one restating two or more members of a list code names
-       * (`named`): code leaves them out, since a row gives an item's title, dates, status and owner but never what it says.
+       * Every list `evidence` cites is one code names: a sentence citing nothing else says what code's statements say
+       * (its filter and count), and no member's row, which might read like content.
        */
-      const rowClaims = (answer: Answer, named: readonly AgenticListIdV1[]) => answer.sentences.filter(sentence =>
-        restsOnRows(sentence.evidence) && !named.some(id => rowsOnly(id, sentence.evidence.filter(short => allowed.has(short))).size >= 2));
+      const onlyNamed = (evidence: readonly string[], named: readonly AgenticListIdV1[]) => evidence.every(id => {
+        const list = parseAgenticListIdV1(id);
+        return list === null || !writerById.has(list) || named.includes(list);
+      });
+      /**
+       * Sentences resting on rows or list ids alone that go back once: code leaves them out, since a row gives an item's
+       * title, dates, status and owner but never what it says. One restating two or more members of a list code names
+       * (`named`), or citing only ids of lists code names, is left out without going back.
+       */
+      const rowClaims = (answer: Answer, named: readonly AgenticListIdV1[]) => answer.sentences.filter(sentence => {
+        const shorts = sentence.evidence.filter(short => allowed.has(short));
+        return restsOnRows(sentence.evidence) && !named.some(id => rowsOnly(id, shorts).size >= 2) && !(shorts.length === 0 && onlyNamed(sentence.evidence, named));
+      });
       /** Why such a sentence goes back: those facts come from the list, which code states; what an item says needs its text. */
       const rowClaimReason = (sentence: Answer["sentences"][number]) => {
         const shorts = sentence.evidence.filter(short => allowed.has(short));
@@ -447,8 +458,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const writerSentences = (answer?.sentences ?? []).flatMap(sentence => {
         const shorts = sentence.evidence.filter(short => allowed.has(short));
         if (restsOnRows(sentence.evidence)) {
-          // Unless it restated two or more members of a list code names, what it claimed was not found.
-          if (!named.some(id => rowsOnly(id, shorts).size >= 2)) rowsLeftOut = true;
+          // What a sentence citing a member's row claimed was not found, unless it restated two or more members of a list
+          // code names; one citing only list ids carries no member's content, and code states its lists itself.
+          if (shorts.length > 0 && !named.some(id => rowsOnly(id, shorts).size >= 2)) rowsLeftOut = true;
           return [];
         }
         if (shorts.length === 0 || restates(sentence.evidence, shorts)) return [];

@@ -306,13 +306,18 @@ route, header, database table or client changes.
   item says, and code cannot tell a row fact from a claim about content, so
   the guarantee is code's, not the prompt's. A writer's sentence is kept only
   when it cites text the writer read; rows and list ids may sit beside that
-  text. One citing only rows or list ids is left out, and, unless it restated
-  two or more members of a list code names, the part gains the not-found
-  phrase "what the listed items say, since they were listed but not opened":
+  text. One citing only rows or list ids is left out. When it cites a
+  member's row, unless it restated two or more members of a list code names,
+  the part gains the not-found phrase "what the listed items say, since they
+  were listed but not opened":
   "Is DVT on hold?" answered from the Gate reviews page's title ("EVT pass,
   DVT hold, PVT pending") ends partial or not found, never answered. Row facts
   stay answerable through a selection by id, which code states. The check
-  sends such a sentence back once, pointing at that selection. A kept sentence
+  sends such a sentence back once, pointing at that selection. One citing
+  only ids of lists code names ("All eight pages were created on October 4"
+  beside the list's statement) carries no member's content and says what
+  code's statement says, so it is left out without going back and without
+  the not-found phrase. A kept sentence
   citing a member's row beside other text claims content across that list and
   gets its checked note. A reply that answers nothing and says what it could
   not find goes back once when the plan found a need on a list, with a reason
