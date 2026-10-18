@@ -262,9 +262,15 @@ route, header, database table or client changes.
   tickets", "Slack messages", and "decisions" or "actions" for a meeting list
   of those records, never "meetings". A kind filter the noun names has no
   words of its own ("2 actions with owner Mara"). Members of several kinds are
-  "items from" the source's noun. Members that share a label are one name with
-  their kinds counted, since every record of a meeting carries the meeting's
-  label: "THERM DVT sync (2026-10-04) (1 decision and 2 actions)". The count
+  "items from" the source's noun. Members that share a label, and the same
+  status, owner and due date, are one name with their kinds counted, since
+  every record of a meeting carries the meeting's label: "THERM DVT sync
+  (2026-10-04) (1 decision and 2 actions)". Members whose row facts differ are
+  named apart, each with its own, so a merge never hides one: one meeting's
+  actions due on two days are two names, each with its due date. A record is
+  still named by its meeting's label until it is read, as the approved design
+  says; naming it by a line of its own text would need a new desk label, which
+  impact cards and sweeps read too. The count
   and "and N more" still count members, from the list itself; a name is cited
   by each member it covers, within the answer's share.
 - **Long lists.** One answer names at most 25 members across all its lists,

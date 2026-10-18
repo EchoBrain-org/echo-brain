@@ -586,11 +586,18 @@ function phraseAfter(noun: AgenticListNounFormsV1, filter: AgenticListFilterV1):
 /** The row facts a code-written statement names; `kind` is the member's desk kind. */
 export type AgenticListNamedMemberV1 = Pick<AgenticWriterListMemberV1, "title" | "status" | "owner" | "due" | "dates" | "date" | "date_kind"> & { readonly kind?: string };
 
-/** Members that share a label (ignoring case and spacing) are one name: indexes in list order, by first member. */
+/** A row fact as names compare it: values that differ only in case or spacing are the same value. */
+function same(value: string | undefined): string | undefined { return value?.trim().replace(/\s+/gu, " ").toLowerCase(); }
+
+/**
+ * Members that share a label (ignoring case and spacing) and record the same status, owner and due date are one name:
+ * indexes in list order, by first member. Members whose row facts differ stay apart, so a merge never hides one: three
+ * actions of one meeting due on two days are two names.
+ */
 function nameGroups(members: readonly AgenticListNamedMemberV1[]): readonly (readonly number[])[] {
   const groups = new Map<string, number[]>();
   members.forEach((member, index) => {
-    const key = line(member.title, AGENTIC_LIST_NAME_CHARS_V1).toLowerCase();
+    const key = JSON.stringify([line(member.title, AGENTIC_LIST_NAME_CHARS_V1).toLowerCase(), same(member.status), same(member.owner), same(member.due)]);
     groups.set(key, [...(groups.get(key) ?? []), index]);
   });
   return [...groups.values()];
@@ -598,13 +605,8 @@ function nameGroups(members: readonly AgenticListNamedMemberV1[]): readonly (rea
 
 /** Names for groups of `members` (nameGroups), in order. */
 function groupNames(members: readonly AgenticListNamedMemberV1[], groups: readonly (readonly number[])[]): readonly string[] {
-  // A group's status, owner or due date is the value all its members record; values that differ only in case or
-  // spacing are the same value.
-  const same = (value: string | undefined) => value?.trim().toLowerCase();
-  const common = (group: readonly number[], field: "status" | "owner" | "due") => {
-    const values = group.map(index => members[index]![field]);
-    return values.every(value => same(value) === same(values[0])) ? values[0] : undefined;
-  };
+  // A group's status, owner or due date is the value all its members record (nameGroups keeps them apart otherwise).
+  const common = (group: readonly number[], field: "status" | "owner" | "due") => members[group[0]!]![field];
   const differs = (field: "status" | "owner" | "due") => new Set(groups.map(group => same(common(group, field)))).size > 1;
   const show = { status: differs("status"), owner: differs("owner"), due: differs("due") };
   // Several kinds among the members: each name says which kinds it holds.
@@ -653,11 +655,12 @@ function factsName(member: AgenticListNamedMemberV1, timeZone: string | undefine
  * Members as a code-written statement names them: each label, cut to
  * AGENTIC_LIST_NAME_CHARS_V1 characters, then its status, owner and due date
  * wherever those differ between the named members (ignoring case). Members
- * that share a label are one name with their kinds counted: a meeting's
- * records all carry the meeting's label, so "THERM DVT sync (2026-10-04) (1
- * decision and 2 actions)". No source-specific rule: a page reads by title, a
- * ticket by key and summary, a follow-up by title, a meeting record by its
- * meeting.
+ * that share a label and those row facts are one name with their kinds
+ * counted: a meeting's records all carry the meeting's label, so "THERM DVT
+ * sync (2026-10-04) (1 decision and 2 actions)"; its actions due on different
+ * days are named apart, each with its due date. No source-specific rule: a
+ * page reads by title, a ticket by key and summary, a follow-up by title, a
+ * meeting record by its meeting.
  */
 export function agenticListMemberNamesV1(members: readonly AgenticListNamedMemberV1[]): readonly string[] {
   return groupNames(members, nameGroups(members));

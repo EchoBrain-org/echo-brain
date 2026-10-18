@@ -845,25 +845,24 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     ], { list: vi.fn(async () => result(items) as EvidenceDeskResultV2) });
     const { response } = await h.research.answerWithResearch({ question: text });
     expect(response.outcome).toBe("answered");
-    expect(response.parts[0]!.statements).toEqual([{ text: `4 items from meetings dated on October 4, 2026: ${label} (1 meeting, 1 decision, 1 action and 1 rationale).`, citation_indexes: [0, 1, 2, 3], private: false }]);
+    // The action records an owner the meeting's other records do not, so it is named apart, with that owner.
+    expect(response.parts[0]!.statements).toEqual([{ text: `4 items from meetings dated on October 4, 2026: ${label} (1 meeting, 1 decision and 1 rationale); ${label} (1 action, owner Dana Lee).`, citation_indexes: [0, 1, 2, 3], private: false }]);
   });
 
-  it("names a meeting-action list the same way, with a due date where members differ", async () => {
-    const actions = [
-      record("a1", "Mara will publish the dashboard.", { kind: "action", attributes: { owner: "Mara Quinn", due_at: "2026-10-09" } }),
-      record("a2", "Mara will review the PRD.", { kind: "action", attributes: { owner: "Mara Quinn" } }),
-    ];
+  it("names one meeting's actions as actions, each with its own due date, though they share the meeting's label", async () => {
+    // Production list rows: no text, and every action of the meeting carries its label (deskLabel).
+    const label = "DVT review (2026-10-01)";
+    const action = (id: string, due_at?: string) => listed(id, { kind: "action", label, attributes: { owner: "Mara Quinn", ...(due_at === undefined ? {} : { due_at }) } });
     const text = "Which actions does Mara own?";
     const h = harness([
       ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
       ask(text, "actions owned by Mara", "found", ["L1"], [finish], "N1"),
-      { lists: [{ id: "L1" }], sentences: [{ text: "Mara will publish the dashboard first.", evidence: ["E1"] }], not_found: [] },
-    ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
+      useL1,
+    ], { list: vi.fn(async () => result([action("a1", "2026-10-09"), action("a2", "2026-10-12"), action("a3")]) as EvidenceDeskResultV2) });
     const { response } = await h.research.answerWithResearch({ question: text });
     expect(response.outcome).toBe("answered");
     expect(response.parts[0]!.statements).toEqual([
-      { text: "2 actions with owner Mara: Meeting a1 (due October 9, 2026); Meeting a2.", citation_indexes: [0, 1], private: false },
-      { text: "Mara will publish the dashboard first.", citation_indexes: [0], private: false },
+      { text: `3 actions with owner Mara: ${label} (due October 9, 2026); ${label} (due October 12, 2026); ${label}.`, citation_indexes: [0, 1, 2], private: false },
     ]);
   });
 });
