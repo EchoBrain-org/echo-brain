@@ -348,8 +348,10 @@ route, header, database table or client changes.
   writer saw, the reply goes back once first, saying that list facts go through
   `lists` and what no text says goes in `not_found`; if the reply code keeps
   still has one, the part is partial: "Part of the answer was left out because
-  no item's text supports it." "Is DVT on hold?" answered from the Gate reviews
-  page's title ends partial or not found, never answered.
+  no item's text supports it." A part that names nothing is partial too, its
+  status not found, as for a list not read to its end. "Is DVT on hold?"
+  answered from the Gate reviews page's title ends partial or not found, never
+  answered.
 - **A sentence that only restates a stated list is left out.** Code leaves out
   a writer's sentence when every text item it cites is a member, or part of
   one, of a list code states, and no other need asks about it: no `which_say`

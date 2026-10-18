@@ -616,6 +616,22 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     const { h, response } = await run([nothing]);
     expect(writerInputs(h)).toHaveLength(1);
     expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: fullStatement }], gap: "Not found: whether DVT is on hold." }] });
+    // (c) Declared content and not found after the complete list, the opened page saying nothing of DVT: a claim resting on
+    // the row, repeated, is left out, and the part names nothing; its gap makes the answer partial, never not found (W1, X28).
+    const table = vi.fn(async (input: { readonly item: string }) => result([section(PAGES.find(page => page.id === input.item)!, "Gate reviews: the gate summary table.")]) as EvidenceDeskResultV2);
+    for (const [repeated, gap] of [
+      [claim(["E3"]), `I couldn't find this in the sources you can access. ${UNSUPPORTED}`],
+      [{ ...claim(["E3"]), not_found: ["whether DVT is on hold"] }, `Not found: whether DVT is on hold. ${UNSUPPORTED}`],
+    ] as const) {
+      const absent = harness([
+        ask(text, need, "open", [], [OCT4_LIST], undefined, "content"), ask(text, need, "open", [], opens(["E3"]), "N1", "content"),
+        ask(text, need, "not_found", [], [finish], "N1", "content"), repeated, repeated,
+      ], october4Desk({ open: table }));
+      const left = await absent.research.answerWithResearch({ question: text });
+      expect(left.research.stop).toEqual({ reason: "finished", completed: true });
+      expect(writerInputs(absent)).toHaveLength(2);
+      expect(left.response).toMatchObject({ outcome: "partial", citations: [], parts: [{ status: "not_found", statements: [], gap }] });
+    }
   });
 
   it("states the plan's list beside a reply that found nothing, with no repair: the October 4 question gets its list (C6, R1, R8)", async () => {
