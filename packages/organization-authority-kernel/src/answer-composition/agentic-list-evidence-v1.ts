@@ -199,10 +199,6 @@ export function agenticListMembersNounV1(source: { readonly selector: string; re
   const noun = agenticListNounV1(source);
   return Object.freeze(distinct.length < 2 ? { plural: noun, singular: singularOf(noun) } : { plural: `items from ${noun}`, singular: `item from ${noun}` });
 }
-/** A noun as a caller passes it: forms, or a plural whose singular drops its last "s". */
-function formsOf(noun: string | AgenticListNounFormsV1): AgenticListNounFormsV1 {
-  return typeof noun === "string" ? { plural: noun, singular: singularOf(noun) } : noun;
-}
 
 const FILTER_WORDS: Readonly<Record<AgenticListFilterFieldV1, string>> = Object.freeze({
   kind: "kind", status: "status", owner: "owner", channel: "channel", since: "date", until: "date", date_field: "date",
@@ -647,8 +643,8 @@ function selectionWords(where: AgenticListSelectionV1, one: boolean): string {
 
 /** What one code-written statement says about a list. */
 export interface AgenticListStatementInputV1 {
-  /** The list's noun (agenticListMembersNounV1), or a plural ("Confluence pages") whose singular drops its "s". */
-  readonly noun: string | AgenticListNounFormsV1;
+  /** The list's noun (agenticListMembersNounV1). */
+  readonly noun: AgenticListNounFormsV1;
   readonly filter: AgenticListFilterV1;
   /** Members ECHO listed: the list's own count, never a vendor's total (addition 5). */
   readonly count: number;
@@ -685,15 +681,13 @@ export interface AgenticListStatementInputV1 {
  * first name is always written, covering its free members and at most `share`
  * others: a name never covers a member the statement does not cite. It always
  * covers the first member: with `share` 0, a first member no other statement
- * takes costs one name past the share, which buys no other member. `named` is
- * how many of `selected` the names cover, so "and N more" is
- * `selected.length - named`; `cited` are their indexes in `selected`, in
- * order, which the caller cites.
+ * takes costs one name past the share, which buys no other member. `cited`
+ * are the indexes in `selected` of the members the names cover, in order,
+ * which the caller cites; "and N more" counts the rest.
  */
-export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly named: number; readonly cited: readonly number[] } {
-  const { count, complete, where, selected } = input;
+export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly cited: readonly number[] } {
+  const { count, complete, where, selected, noun } = input;
   if (selected.length === 0 || !Number.isSafeInteger(input.share) || input.share < 0) throw new RangeError("A list statement names at least one member, with a whole, non-negative share");
-  const noun = formsOf(input.noun);
   const phrase = phraseAfter(noun, input.filter);
   const k = selected.length;
   const byId = input.by_id === true;
@@ -719,17 +713,16 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
     const covered = named.reduce((total, group) => total + group.length, 0);
     const text = `${lead}: ${namesOf(named).join("; ")}${covered < k ? `; and ${k - covered} more` : ""}.`;
     if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || shown === 1) {
-      return Object.freeze({ text, named: covered, cited: Object.freeze(named.flat().sort((left, right) => left - right)) });
+      return Object.freeze({ text, cited: Object.freeze(named.flat().sort((left, right) => left - right)) });
     }
   }
   throw new RangeError("unreachable");
 }
 
 /** The not_found phrase for a selection that matches no member: never a statement (ADR-0041). */
-export function agenticListSelectionNotFoundV1(noun: string | AgenticListNounFormsV1, filter: AgenticListFilterV1, where: AgenticListSelectionV1): string {
-  const forms = formsOf(noun);
+export function agenticListSelectionNotFoundV1(noun: AgenticListNounFormsV1, filter: AgenticListFilterV1, where: AgenticListSelectionV1): string {
   const condition = "value" in where ? `that have ${where.field} ${line(where.value, 120)}` : `${DATE_WORDS[where.field]} ${dateRange(where.since, where.until)!}`;
-  return `${forms.plural}${phraseAfter(forms, filter)} ${condition}`;
+  return `${noun.plural}${phraseAfter(noun, filter)} ${condition}`;
 }
 
 /**

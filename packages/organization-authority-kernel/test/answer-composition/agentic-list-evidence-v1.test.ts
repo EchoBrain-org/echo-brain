@@ -34,7 +34,9 @@ import {
   type AgenticListFilterApplicationV1,
   type AgenticListIdV1,
   type AgenticListNamedMemberV1,
+  type AgenticListNounFormsV1,
   type AgenticListSelectionV1,
+  type AgenticListStatementInputV1,
   type AgenticOpenActionV1,
   type AgenticWriterListMemberV1,
 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
@@ -55,6 +57,15 @@ const OCTOBER_4: AgenticListEvidenceInputV1 = {
   members: ["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"], shown: 8,
   ended: true, unverified_end: false, available: true, truncated: false, read_at: "2026-10-17T06:58:33.120Z",
 };
+
+/** Nouns as the renderer builds them, from a list's catalog entry and its members' kinds. */
+const PAGES = agenticListMembersNounV1({ selector: "pages", tool_id: "confluence" }, ["page"]);
+const TICKETS = agenticListMembersNounV1({ selector: "tickets", tool_id: "jira" }, ["ticket"]);
+const DECISIONS = agenticListMembersNounV1({ selector: "meetings" }, ["decision"]);
+const ACTIONS = agenticListMembersNounV1({ selector: "meetings" }, ["action"]);
+const FOLLOW_UPS = agenticListMembersNounV1({ selector: "follow_ups" }, ["follow_up"]);
+/** A source's own noun, for members of no one kind. */
+const ITEMS = agenticListMembersNounV1({ selector: "items" }, []);
 
 function pageRow(id: string, label: string): EvidenceDeskItemV2 {
   return Object.freeze({
@@ -367,7 +378,7 @@ describe("names across one answer", () => {
 
   it("costs a member one name however many statements name it, by id or not (W6)", () => {
     const named = (shares: ReturnType<typeof agenticListNameSharesV1>, statements: readonly { readonly selected: ReturnType<typeof members>; readonly by_id: boolean }[]) => statements.map((value, index) =>
-      agenticListStatementV1({ noun: "Confluence pages", filter: {}, count: value.selected.length, complete: true, selected: value.selected, share: shares[index]!.share, free: shares[index]!.free, ...(value.by_id ? { by_id: true } : {}) }).named);
+      agenticListStatementV1({ noun: PAGES, filter: {}, count: value.selected.length, complete: true, selected: value.selected, share: shares[index]!.share, free: shares[index]!.free, ...(value.by_id ? { by_id: true } : {}) }).cited.length);
     // Two lists of the same 20 pages (created that week, updated that week): each takes every other page, and each
     // statement names all 20, the other's pages free; 20 distinct names, within the 25.
     for (const statements of [[which(members(20)), which(members(20))], [byId(members(20)), byId(members(20))]]) {
@@ -385,7 +396,7 @@ describe("names across one answer", () => {
     const wide = [which(members(30)), which(members(20, 11))];
     const wideShares = agenticListNameSharesV1(wide);
     expect(wideShares.reduce((total, value) => total + value.share, 0)).toBe(AGENTIC_LIST_NAMED_MAX_V1);
-    const texts = wide.map((value, index) => agenticListStatementV1({ noun: "Confluence pages", filter: {}, count: value.selected.length, complete: true, selected: value.selected, share: wideShares[index]!.share, free: wideShares[index]!.free }));
+    const texts = wide.map((value, index) => agenticListStatementV1({ noun: PAGES, filter: {}, count: value.selected.length, complete: true, selected: value.selected, share: wideShares[index]!.share, free: wideShares[index]!.free }));
     expect(new Set(texts.flatMap((statement, index) => statement.cited.map(at => wide[index]!.selected[at]!.id))).size).toBe(AGENTIC_LIST_NAMED_MAX_V1);
   });
 
@@ -393,16 +404,16 @@ describe("names across one answer", () => {
     const statement = (statements: readonly { readonly selected: ReturnType<typeof members>; readonly by_id: boolean }[]) => {
       const shares = agenticListNameSharesV1(statements);
       expect(shares[0]!.share).toBe(0);
-      const value = agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 30, complete: true, selected: statements[0]!.selected, share: shares[0]!.share, free: shares[0]!.free });
-      return { ...value, distinct: new Set([...value.cited.map(at => statements[0]!.selected[at]!.id), ...statements.slice(1).flatMap(other => other.selected.map(member => member.id))]).size };
+      const value = agenticListStatementV1({ noun: TICKETS, filter: {}, count: 30, complete: true, selected: statements[0]!.selected, share: shares[0]!.share, free: shares[0]!.free });
+      return { text: value.text, cited: value.cited.length, distinct: new Set([...value.cited.map(at => statements[0]!.selected[at]!.id), ...statements.slice(1).flatMap(other => other.selected.map(member => member.id))]).size };
     };
     // The first 25 of 30 by id take the answer's 25 names; the list in full names them free, its first member among
     // them, so it names no 26th.
-    expect(statement([which(members(30)), byId(members(25))])).toMatchObject({ named: 25, distinct: 25, text: expect.stringMatching(/: Page 1; .*; Page 25; and 5 more\.$/u) });
+    expect(statement([which(members(30)), byId(members(25))])).toMatchObject({ cited: 25, distinct: 25, text: expect.stringMatching(/: Page 1; .*; Page 25; and 5 more\.$/u) });
     // Members 2 to 26 by id: the first member is no other statement's, so it is named past the spent share, and its name
     // buys no other member: the free ones follow, and the rest are "and N more".
-    expect(statement([which(members(30)), byId(members(25, 2))])).toMatchObject({ named: 26, distinct: 26, text: expect.stringMatching(/: Page 1; Page 2; .*; Page 26; and 4 more\.$/u) });
-    expect(() => agenticListStatementV1({ noun: "pages", filter: {}, count: 1, complete: true, selected: members(1), share: -1 })).toThrow(RangeError);
+    expect(statement([which(members(30)), byId(members(25, 2))])).toMatchObject({ cited: 26, distinct: 26, text: expect.stringMatching(/: Page 1; Page 2; .*; Page 26; and 4 more\.$/u) });
+    expect(() => agenticListStatementV1({ noun: PAGES, filter: {}, count: 1, complete: true, selected: members(1), share: -1 })).toThrow(RangeError);
   });
 });
 
@@ -430,7 +441,7 @@ describe("the statement code writes for a list (ADR-0041)", () => {
   const titles = ["ECHO Product Pipeline — Start Here", "Assumptions and decisions — source facts versus proposals", "Gate reviews — EVT pass, DVT hold, PVT pending"];
   const page = (title: string) => ({ title, status: "current" });
   /** A statement naming every one of `members`: the names the renderer writes. */
-  const named = (members: readonly AgenticListNamedMemberV1[]) => agenticListStatementV1({ noun: "items", filter: {}, count: members.length, complete: true, selected: members, share: members.length }).text;
+  const named = (members: readonly AgenticListNamedMemberV1[]) => agenticListStatementV1({ noun: ITEMS, filter: {}, count: members.length, complete: true, selected: members, share: members.length }).text;
 
   it("reads a filter as applied: dates, channel and fields, never the model's arguments", () => {
     expect(agenticCalendarDayV1("2026-10-04")).toBe("October 4, 2026");
@@ -454,7 +465,7 @@ describe("the statement code writes for a list (ADR-0041)", () => {
       .toBe("2 items: Check the numbers (no owner recorded); Ship it (owner Mara).");
     // Whether a fact differs is read among the names the statement writes, not among the members it counts in "and N more".
     const statuses = [{ title: "Alpha", status: "open" }, { title: "Beta", status: "open" }, { title: "Gamma", status: "done" }];
-    expect(agenticListStatementV1({ noun: "items", filter: {}, count: 3, complete: true, selected: statuses, share: 2 }).text).toBe("3 items: Alpha; Beta; and 1 more.");
+    expect(agenticListStatementV1({ noun: ITEMS, filter: {}, count: 3, complete: true, selected: statuses, share: 2 }).text).toBe("3 items: Alpha; Beta; and 1 more.");
     expect(named(statuses)).toBe("3 items: Alpha (open); Beta (open); Gamma (done).");
     const long = named([{ title: `${"x".repeat(200)}\nsecond line` }]).slice("1 item: ".length, -1);
     expect([...long]).toHaveLength(120);
@@ -466,7 +477,7 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     // A meeting's records all carry the meeting's label; its action records an owner the others do not.
     const records = [{ title: sync, kind: "imported_meeting" }, { title: sync, kind: "decision" }, { title: "Vendor review (2026-10-04)", kind: "action", owner: "Dana" }, { title: sync, kind: "action", owner: "Dana" }, { title: sync, kind: "rationale" }];
     const statement = agenticListStatementV1({ noun: agenticListMembersNounV1({ selector: "meetings" }, records.map(record => record.kind)), filter: { since: "2026-10-04", until: "2026-10-04" }, count: 5, complete: true, selected: records, share: 25 });
-    expect(statement).toEqual({ text: `5 items from meetings dated on October 4, 2026: ${sync} (1 meeting, 1 decision and 1 rationale); Vendor review (2026-10-04) (1 action, owner Dana); ${sync} (1 action, owner Dana).`, named: 5, cited: [0, 1, 2, 3, 4] });
+    expect(statement).toEqual({ text: `5 items from meetings dated on October 4, 2026: ${sync} (1 meeting, 1 decision and 1 rationale); Vendor review (2026-10-04) (1 action, owner Dana); ${sync} (1 action, owner Dana).`, cited: [0, 1, 2, 3, 4] });
     // A merge never hides a row fact: one meeting's actions due on different days are named apart, each with its date.
     const review = "DVT review (2026-10-01)";
     const due = (date?: string) => ({ title: review, kind: "action", owner: "Mara Quinn", ...(date === undefined ? {} : { due: date }) });
@@ -477,23 +488,29 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(agenticListStatementV1({ noun: agenticListMembersNounV1({ selector: "meetings" }, ["decision"]), filter: { kind: "decision", owner: "Dana" }, count: 3, complete: true, selected: decisions, share: 25 }).text)
       .toBe(`3 decisions with owner Dana: ${sync} (3 decisions).`);
     // A share smaller than a name's members names as many of them as it cites; "and N more" counts the rest, from the list.
-    const two = agenticListStatementV1({ noun: "decisions", filter: {}, count: 4, complete: true, selected: [...decisions, { title: "Other (2026-10-05)", kind: "decision" }], share: 2 });
-    expect(two).toEqual({ text: `4 decisions: ${sync} (2 decisions); and 2 more.`, named: 2, cited: [0, 1] });
+    const two = agenticListStatementV1({ noun: DECISIONS, filter: {}, count: 4, complete: true, selected: [...decisions, { title: "Other (2026-10-05)", kind: "decision" }], share: 2 });
+    expect(two).toEqual({ text: `4 decisions: ${sync} (2 decisions); and 2 more.`, cited: [0, 1] });
+  });
+
+  it("takes the noun as the renderer builds it, and gives the text and the members it cites, all the renderer reads", () => {
+    expectTypeOf<AgenticListStatementInputV1["noun"]>().toEqualTypeOf<AgenticListNounFormsV1>();
+    expectTypeOf<Parameters<typeof agenticListSelectionNotFoundV1>[0]>().toEqualTypeOf<AgenticListNounFormsV1>();
+    expectTypeOf<ReturnType<typeof agenticListStatementV1>>().toEqualTypeOf<{ readonly text: string; readonly cited: readonly number[] }>();
   });
 
   it("writes the October 4 statement: the count, the filter and every name", () => {
-    const statement = agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 3, complete: true, selected: titles.map(page), share: 25 });
-    expect(statement).toEqual({ text: `3 Confluence pages created on October 4, 2026: ${titles.join("; ")}.`, named: 3, cited: [0, 1, 2] });
-    expect(agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 1, complete: true, selected: [page(titles[0]!)], share: 25 }).text)
+    const statement = agenticListStatementV1({ noun: PAGES, filter: OCTOBER_4.filter, count: 3, complete: true, selected: titles.map(page), share: 25 });
+    expect(statement).toEqual({ text: `3 Confluence pages created on October 4, 2026: ${titles.join("; ")}.`, cited: [0, 1, 2] });
+    expect(agenticListStatementV1({ noun: PAGES, filter: OCTOBER_4.filter, count: 1, complete: true, selected: [page(titles[0]!)], share: 25 }).text)
       .toBe(`1 Confluence page created on October 4, 2026: ${titles[0]}.`);
   });
 
   it("names its share, then 'and N more' with N from the list, and says 'at least' for a list not read to its end", () => {
     const sixty = Array.from({ length: 60 }, (_, index) => ({ title: `THERM-${index + 1}: Fixture work ${index + 1}` }));
-    const statement = agenticListStatementV1({ noun: "Jira tickets", filter: OCTOBER_4.filter, count: 60, complete: true, selected: sixty, share: 25 });
-    expect(statement.named).toBe(25);
+    const statement = agenticListStatementV1({ noun: TICKETS, filter: OCTOBER_4.filter, count: 60, complete: true, selected: sixty, share: 25 });
+    expect(statement.cited).toEqual(Array.from({ length: 25 }, (_, index) => index));
     expect(statement.text).toBe(`60 Jira tickets created on October 4, 2026: ${sixty.slice(0, 25).map(value => value.title).join("; ")}; and 35 more.`);
-    expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: false, selected: sixty.slice(0, 2), share: 2 }).text)
+    expect(agenticListStatementV1({ noun: TICKETS, filter: {}, count: 25, complete: false, selected: sixty.slice(0, 2), share: 2 }).text)
       .toBe("At least 25 Jira tickets: THERM-1: Fixture work 1; THERM-2: Fixture work 2.");
   });
 
@@ -502,11 +519,11 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     const mine = agenticListSelectV1(rows, { field: "owner", value: " DANA LEE " });
     expect(mine).toEqual([rows[0], rows[2]]);
     expect(agenticListSelectV1(rows, undefined)).toBe(rows);
-    expect(agenticListStatementV1({ noun: "Jira tickets", filter: OCTOBER_4.filter, count: 3, complete: true, where: { field: "owner", value: "Dana Lee" }, selected: mine, share: 25 }).text)
+    expect(agenticListStatementV1({ noun: TICKETS, filter: OCTOBER_4.filter, count: 3, complete: true, where: { field: "owner", value: "Dana Lee" }, selected: mine, share: 25 }).text)
       .toBe("2 of the 3 Jira tickets created on October 4, 2026 have owner Dana Lee: THERM-1: A; THERM-3: C.");
-    expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 50, complete: false, where: { field: "status", value: "Done" }, selected: [rows[1]!], share: 25 }).text)
+    expect(agenticListStatementV1({ noun: TICKETS, filter: {}, count: 50, complete: false, where: { field: "status", value: "Done" }, selected: [rows[1]!], share: 25 }).text)
       .toBe("At least 1 Jira ticket has status Done (50 listed so far): THERM-2: B.");
-    expect(agenticListSelectionNotFoundV1("Jira tickets", OCTOBER_4.filter, { field: "owner", value: "Zhen Ye" })).toBe("Jira tickets created on October 4, 2026 that have owner Zhen Ye");
+    expect(agenticListSelectionNotFoundV1(TICKETS, OCTOBER_4.filter, { field: "owner", value: "Zhen Ye" })).toBe("Jira tickets created on October 4, 2026 that have owner Zhen Ye");
   });
 
   it("selects by a row date within an inclusive range, each day the list's, and leaves out a member that records none", () => {
@@ -535,27 +552,26 @@ describe("the statement code writes for a list (ADR-0041)", () => {
   });
 
   it("says a date selection's range in its lead and its not-found phrase, and an owner or status as before", () => {
-    const followUps = { plural: "follow-ups", singular: "follow-up", kind: "follow_up" };
     const mara = { owner: "Mara Lind", status: "open" as const };
     const due = { field: "due", since: "2026-10-18", until: "2026-10-24" } as const;
-    expect(agenticListStatementV1({ noun: followUps, filter: mara, count: 12, complete: true, where: due, selected: [{ title: "THERM-43 follow-up" }, { title: "THERM-47 follow-up" }], share: 25 }).text)
+    expect(agenticListStatementV1({ noun: FOLLOW_UPS, filter: mara, count: 12, complete: true, where: due, selected: [{ title: "THERM-43 follow-up" }, { title: "THERM-47 follow-up" }], share: 25 }).text)
       .toBe("2 of the 12 follow-ups with owner Mara Lind and status open are due from October 18 to October 24, 2026: THERM-43 follow-up; THERM-47 follow-up.");
-    expect(agenticListStatementV1({ noun: followUps, filter: mara, count: 12, complete: true, where: { field: "due", until: "2026-10-17" }, selected: [{ title: "THERM-41 follow-up" }], share: 25 }).text)
+    expect(agenticListStatementV1({ noun: FOLLOW_UPS, filter: mara, count: 12, complete: true, where: { field: "due", until: "2026-10-17" }, selected: [{ title: "THERM-41 follow-up" }], share: 25 }).text)
       .toBe("1 of the 12 follow-ups with owner Mara Lind and status open is due through October 17, 2026: THERM-41 follow-up.");
     const three = Array.from({ length: 3 }, (_, index) => ({ title: `THERM-${index + 1}: A` }));
-    expect(agenticListStatementV1({ noun: "Jira tickets", filter: OCTOBER_4.filter, count: 25, complete: false, where: { field: "updated", since: "2026-10-11" }, selected: three, share: 25 }).text)
+    expect(agenticListStatementV1({ noun: TICKETS, filter: OCTOBER_4.filter, count: 25, complete: false, where: { field: "updated", since: "2026-10-11" }, selected: three, share: 25 }).text)
       .toBe("At least 3 Jira tickets created on October 4, 2026 were updated since October 11, 2026 (25 listed so far): THERM-1: A; THERM-2: A; THERM-3: A.");
-    expect(agenticListStatementV1({ noun: "Confluence pages", filter: {}, count: 8, complete: true, where: { field: "created", since: "2026-10-04", until: "2026-10-04" }, selected: [{ title: "PRD" }], share: 25 }).text)
+    expect(agenticListStatementV1({ noun: PAGES, filter: {}, count: 8, complete: true, where: { field: "created", since: "2026-10-04", until: "2026-10-04" }, selected: [{ title: "PRD" }], share: 25 }).text)
       .toBe("1 of the 8 Confluence pages was created on October 4, 2026: PRD.");
-    expect(agenticListSelectionNotFoundV1(followUps, mara, due)).toBe("follow-ups with owner Mara Lind and status open due from October 18 to October 24, 2026");
-    expect(agenticListSelectionNotFoundV1("Confluence pages", OCTOBER_4.filter, { field: "updated", since: "2026-10-11" })).toBe("Confluence pages created on October 4, 2026 updated since October 11, 2026");
+    expect(agenticListSelectionNotFoundV1(FOLLOW_UPS, mara, due)).toBe("follow-ups with owner Mara Lind and status open due from October 18 to October 24, 2026");
+    expect(agenticListSelectionNotFoundV1(PAGES, OCTOBER_4.filter, { field: "updated", since: "2026-10-11" })).toBe("Confluence pages created on October 4, 2026 updated since October 11, 2026");
   });
 
   it("states the row facts of members selected by id, each alone, with every date in the list's time zone", () => {
     const prd = { title: "PRD — System and acceptance requirements", kind: "page", status: "current", dates: { created: "2026-10-05T03:00:00.000Z", updated: "2026-10-05T22:11:30.875Z" } };
     // 03:00 UTC on October 5 is October 4 in Los Angeles: a day is the list's, never UTC's.
-    expect(agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 8, complete: true, by_id: true, selected: [prd], share: 25 }))
-      .toEqual({ text: "1 of the 8 Confluence pages created on October 4, 2026: PRD — System and acceptance requirements (status current, created October 4, 2026, updated October 5, 2026).", named: 1, cited: [0] });
+    expect(agenticListStatementV1({ noun: PAGES, filter: OCTOBER_4.filter, count: 8, complete: true, by_id: true, selected: [prd], share: 25 }))
+      .toEqual({ text: "1 of the 8 Confluence pages created on October 4, 2026: PRD — System and acceptance requirements (status current, created October 4, 2026, updated October 5, 2026).", cited: [0] });
     // Actions of one meeting share its label, but each keeps its own owner and due date; a calendar day keeps its day.
     const sync = "DVT review (2026-10-01)";
     const actions = [
@@ -564,36 +580,36 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     ];
     const named = `${sync} (owner Mara Quinn, due October 9, 2026, dated October 1, 2026); ${sync} (no owner recorded, dated October 1, 2026, due October 12, 2026).`;
     // However many it selects, a selection by id states row facts, never which items exist (W2).
-    expect(agenticListStatementV1({ noun: "actions", filter: { time_zone: "UTC" }, count: 2, complete: false, by_id: true, selected: actions, share: 25 }).text).toBe(`2 of at least 2 actions: ${named}`);
+    expect(agenticListStatementV1({ noun: ACTIONS, filter: { time_zone: "UTC" }, count: 2, complete: false, by_id: true, selected: actions, share: 25 }).text).toBe(`2 of at least 2 actions: ${named}`);
     // Merged with a use of the list in full, it leads with the list's count.
-    expect(agenticListStatementV1({ noun: "actions", filter: { time_zone: "UTC" }, count: 2, complete: false, by_id: true, which: true, selected: actions, share: 25 }).text).toBe(`At least 2 actions: ${named}`);
-    expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: false, by_id: true, selected: [{ title: "THERM-46: Fixture", status: "In Progress", date: "2026-10-04", date_kind: "unspecified" }], share: 25 }).text)
+    expect(agenticListStatementV1({ noun: ACTIONS, filter: { time_zone: "UTC" }, count: 2, complete: false, by_id: true, which: true, selected: actions, share: 25 }).text).toBe(`At least 2 actions: ${named}`);
+    expect(agenticListStatementV1({ noun: TICKETS, filter: {}, count: 25, complete: false, by_id: true, selected: [{ title: "THERM-46: Fixture", status: "In Progress", date: "2026-10-04", date_kind: "unspecified" }], share: 25 }).text)
       .toBe("1 of at least 25 Jira tickets: THERM-46: Fixture (status In Progress).");
   });
 
   it("names members another statement already named by id at no share, and leads a selection named by id with its condition (W2, W6)", () => {
     const tickets = Array.from({ length: 25 }, (_, index) => ({ title: `THERM-${index + 1}: A`, status: "In Review" }));
     const free = new Set(Array.from({ length: 10 }, (_, index) => index));
-    const all = agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: false, selected: tickets, share: 15, free });
-    expect(all).toEqual({ text: `At least 25 Jira tickets: ${tickets.map(ticket => ticket.title).join("; ")}.`, named: 25, cited: Array.from({ length: 25 }, (_, index) => index) });
+    const all = agenticListStatementV1({ noun: TICKETS, filter: {}, count: 25, complete: false, selected: tickets, share: 15, free });
+    expect(all).toEqual({ text: `At least 25 Jira tickets: ${tickets.map(ticket => ticket.title).join("; ")}.`, cited: Array.from({ length: 25 }, (_, index) => index) });
     // Without them free, the same share names 15, and cites those 15.
-    expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: false, selected: tickets, share: 15 })).toMatchObject({ named: 15, cited: Array.from({ length: 15 }, (_, index) => index) });
+    expect(agenticListStatementV1({ noun: TICKETS, filter: {}, count: 25, complete: false, selected: tickets, share: 15 })).toMatchObject({ cited: Array.from({ length: 15 }, (_, index) => index) });
     // A merged group names its free members and at most `share` of the others, and cites every member it names (W6).
     const sync = Array.from({ length: 4 }, () => ({ title: "THERM DVT sync (2026-10-04)", kind: "decision" }));
-    expect(agenticListStatementV1({ noun: "decisions", filter: {}, count: 4, complete: true, selected: sync, share: 1, free: new Set([2, 3]) }))
-      .toEqual({ text: "4 decisions: THERM DVT sync (2026-10-04) (3 decisions); and 1 more.", named: 3, cited: [0, 2, 3] });
+    expect(agenticListStatementV1({ noun: DECISIONS, filter: {}, count: 4, complete: true, selected: sync, share: 1, free: new Set([2, 3]) }))
+      .toEqual({ text: "4 decisions: THERM DVT sync (2026-10-04) (3 decisions); and 1 more.", cited: [0, 2, 3] });
     // A where use and a selection by id of the same members: the condition's lead, each member named with its facts.
-    expect(agenticListStatementV1({ noun: "Jira tickets", filter: {}, count: 25, complete: true, where: { field: "status", value: "In Review" }, by_id: true, selected: tickets.slice(0, 2), share: 25 }).text)
+    expect(agenticListStatementV1({ noun: TICKETS, filter: {}, count: 25, complete: true, where: { field: "status", value: "In Review" }, by_id: true, selected: tickets.slice(0, 2), share: 25 }).text)
       .toBe("2 of the 25 Jira tickets have status In Review: THERM-1: A (status In Review); THERM-2: A (status In Review).");
   });
 
   it("stops naming before a statement passes its byte bound, and counts the rest as more", () => {
     const wide = Array.from({ length: 25 }, (_, index) => ({ title: `${index} ${"𝔸".repeat(118)}` }));
-    const statement = agenticListStatementV1({ noun: "Confluence pages", filter: OCTOBER_4.filter, count: 25, complete: true, selected: wide, share: 25 });
+    const statement = agenticListStatementV1({ noun: PAGES, filter: OCTOBER_4.filter, count: 25, complete: true, selected: wide, share: 25 });
     expect(Buffer.byteLength(statement.text, "utf8")).toBeLessThanOrEqual(AGENTIC_LIST_STATEMENT_BYTES_V1);
-    expect(statement.named).toBeLessThan(25);
-    expect(statement.text.endsWith(`; and ${25 - statement.named} more.`)).toBe(true);
-    expect(() => agenticListStatementV1({ noun: "pages", filter: {}, count: 0, complete: true, selected: [], share: 25 })).toThrow(RangeError);
+    expect(statement.cited.length).toBeLessThan(25);
+    expect(statement.text.endsWith(`; and ${25 - statement.cited.length} more.`)).toBe(true);
+    expect(() => agenticListStatementV1({ noun: PAGES, filter: {}, count: 0, complete: true, selected: [], share: 25 })).toThrow(RangeError);
   });
 
   it("says how many members were checked for content across a list (addition 4)", () => {
