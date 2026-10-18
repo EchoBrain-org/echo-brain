@@ -317,16 +317,15 @@ route, header, database table or client changes.
   only ids of lists code names ("All eight pages were created on October 4"
   beside the list's statement) carries no member's content and says what
   code's statement says, so it is left out without going back and without
-  the not-found phrase. A kept sentence
-  citing a member's row beside other text claims content across that list and
-  gets its checked note. A reply that answers nothing and says what it could
-  not find goes back once when the plan found a need on a list, with a reason
-  that names both ways on: put the list in `lists`, or keep `not_found` if the
-  list does not answer the question. The reply after that repair, or one no
-  repair can follow, is honored, and the list is not written ("Is DVT on hold?"
-  researched on a list alone is not found after one repair, not the list).
-  Otherwise one writer's misjudgment would bring back the held question as not
-  found.
+  the not-found phrase. A kept sentence citing a member's row beside other
+  text claims content across that list and gets its checked note. A reply
+  that answers nothing and says what it could not find goes back once when
+  the plan found a need on a list, with a reason that names both ways on: put
+  the list in `lists`, or keep `not_found` if the list does not answer the
+  question. The reply after that repair, or one no repair can follow, is
+  honored, and the list is not written ("Is DVT on hold?" researched on a
+  list alone is not found after one repair, not the list). Otherwise one
+  writer's misjudgment would bring back the held question as not found.
 - **Code checks the answer.** For each list the writer saw, the answer goes
   back to the writer once, with the reason, if either:
   - the plan found a need on the list (that need's support includes it), but
@@ -367,11 +366,11 @@ route, header, database table or client changes.
   writer prompt asks: a sentence citing the list's id beside its members'
   text, for a list a found need claims content across, is an explicit claim
   about what they say and always stays, with its "(k of N checked so far)"
-  note unless every member was checked. For a list a
-  found need claims content across, the repair's reason names both ways on:
-  put the list in `lists` for which items exist, or cite it beside the
-  evidence for what its members say. A first reply that fails only the check
-  stays the writer's answer when the repair's reply is unusable.
+  note unless every member was checked. For a list a found need claims
+  content across, the repair's reason names both ways on: put the list in
+  `lists` for which items exist, or cite it beside the evidence for what its
+  members say. A first reply that fails only the check stays the writer's
+  answer when the repair's reply is unusable.
 - **One citation per cited object.** The response refuses duplicate
   citations, and a listed ticket's row and its opened body cite the same
   ticket. Code gives them one citation, in first-citation order, so a list
