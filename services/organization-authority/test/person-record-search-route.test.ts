@@ -1354,3 +1354,47 @@ describe("Person Layer 2 route: an approved record's anchor (runs store v1)", ()
     } finally { w.close(); }
   });
 });
+
+describe("Person Layer 2 route: Ask's list rows name each meeting record by its own line (ADR-0041)", () => {
+  it("gives every decision, action and rationale a list label of its own text and its meeting, released and audited with the row", async () => {
+    // Over 80 characters, so its line is cut.
+    const long = "Keep the DVT gate on hold until the probe reads within 0.1 C at 42 C across every fixture position and both firmware builds.";
+    const w = await meetingWorld({ extra: [{
+      name: "r9", approval_id: "apr_r9", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 1, actions: 1, rationales: 1 },
+      action_owners: [{ signal_id: "action-apr_r9-0", owner: "Ari Employee" }],
+      brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, title: "THERM DVT sync", time: { actual_start_at: "2026-10-04T16:00:00.000Z" } }, decisions: brief.decisions.map((signal) => ({ ...signal, text: long })) }),
+    }] });
+    try {
+      const route = w.route();
+      const listed = route.listDeskBatch({ access_token: "emp_a" });
+      const items = listed.desk_items!;
+      const r9 = items.filter((item) => item.record_sha256 === w.digest("r9"));
+      expect(r9.map((item) => item.item_kind).sort()).toEqual(["action", "decision", "rationale"]);
+      // The label stays the meeting's; the list label is one line of the record's own text, then its meeting.
+      for (const item of r9) expect(item.label).toBe("THERM DVT sync (2026-10-04)");
+      expect(r9.find((item) => item.item_kind === "decision")!.list_label).toBe(`${[...long].slice(0, 79).join("").trimEnd()}… (THERM DVT sync, 2026-10-04)`);
+      // An action's line is its own text: its owner is the row's own fact, not part of its line.
+      const action = r9.find((item) => item.item_kind === "action")!;
+      expect(action.text).toMatch(/ Owner: Ari Employee\.$/u);
+      expect(action.list_label).toBe(`${action.text.replace(/ Owner: Ari Employee\.$/u, "")} (THERM DVT sync, 2026-10-04)`);
+      // Every other record is named the same way, from its meeting's title (or "Approved meeting") and day.
+      const meetings = new Map([[w.digest("r1"), "Weekly sync, 2026-09-01"], [w.digest("r4"), "Pricing review, 2026-09-04"]]);
+      const others = items.filter((value) => meetings.has(value.record_sha256));
+      expect(new Set(others.map((item) => item.record_sha256)).size).toBe(2);
+      for (const item of others) expect(item.list_label).toBe(`${item.text} (${meetings.get(item.record_sha256)})`);
+      // The read audit's response digest binds the list labels with the rows they name.
+      const digest = (desk_items: readonly unknown[]) => canonicalSha256(JSON.parse(canonicalJson({ response: listed.response, desk_items })) as never);
+      const audited = w.audits("layer2").map((body) => body.response_sha256);
+      expect(audited).toContain(digest(items));
+      expect(audited).not.toContain(digest(items.map(({ list_label: _listLabel, ...item }) => item)));
+      // A reader who cannot read r9 gets neither its row nor its line.
+      const other = route.listDeskBatch({ access_token: "emp_c" });
+      expect(other.desk_items!.some((item) => item.record_sha256 === w.digest("r9"))).toBe(false);
+      expect(JSON.stringify(other)).not.toContain("THERM DVT sync");
+      expect(JSON.stringify(route.searchBatch({ access_token: "emp_c", queries: ["DVT"], desk: true }))).not.toContain("THERM DVT sync");
+      // A search releases the same line with the hit.
+      const searched = route.searchBatch({ access_token: "emp_a", queries: ["fixture position"], desk: true }).desk_items!;
+      expect(searched.filter((item) => item.record_sha256 === w.digest("r9")).map((item) => item.list_label)).toEqual([r9.find((item) => item.item_kind === "decision")!.list_label]);
+    } finally { w.close(); }
+  });
+});

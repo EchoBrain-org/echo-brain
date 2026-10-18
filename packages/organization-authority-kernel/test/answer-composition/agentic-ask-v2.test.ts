@@ -141,8 +141,9 @@ describe('Agentic Ask V2 ticket release', () => {
     const f = fixture();
     const events: CoreRuntimeObservationV1[] = [];
     await observeCoreRuntimeV1('ask_request', () => f.run(), { observer: event => { events.push(event); } });
+    // The writer reads the opened body and sees the listed row in its list (ADR-0041).
     expect(events.find(event => event.root && event.event === 'succeeded')).toMatchObject({
-      counts: { ticket_retrieved_items: 2, ticket_context_items: 1, ticket_citations: 1 },
+      counts: { ticket_retrieved_items: 2, ticket_context_items: 2, ticket_citations: 1 },
     });
     expect(JSON.stringify(events)).not.toContain(body);
     expect(JSON.stringify(events)).not.toContain('request-private-ticket');
@@ -154,7 +155,7 @@ describe('Agentic Ask V2 ticket release', () => {
     const events: CoreRuntimeObservationV1[] = [];
     await expect(observeCoreRuntimeV1('ask_request', () => f.run(), { observer: event => { events.push(event); } })).rejects.toBe(refusal);
     expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({
-      counts: { ticket_retrieved_items: 2, ticket_context_items: 1, ticket_citations: 0 },
+      counts: { ticket_retrieved_items: 2, ticket_context_items: 2, ticket_citations: 0 },
     });
   });
 
@@ -244,6 +245,6 @@ describe('Agentic Ask V2 ticket release', () => {
     await Promise.resolve();
     expect(f.append).toHaveBeenCalledTimes(1);
     expect(f.generate).toHaveBeenCalledTimes(4);
-    expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({ result: 'cancelled', counts: { ticket_retrieved_items: 2, ticket_context_items: 1, ticket_citations: 0 } });
+    expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({ result: 'cancelled', counts: { ticket_retrieved_items: 2, ticket_context_items: 2, ticket_citations: 0 } });
   });
 });

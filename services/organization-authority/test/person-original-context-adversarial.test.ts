@@ -187,6 +187,11 @@ describe("adversarial original-context retrieval", () => {
     expect(searched.items).toHaveLength(2);
     expect(searched.items.every(item => item.dates?.received?.startsWith('2026-09-21'))).toBe(true);
     expect(f.retrieval.deskSearch({ ...base, source: 'meeting', date_field: 'occurred' }).items).toEqual([]);
+    // A document read with a date field documents do not record is refused and names the one they do, never answered
+    // empty as if the filter applied (ADR-0041, addition 3).
+    for (const date_field of ['created', 'updated', 'occurred', 'due'] as const) {
+      expect(() => f.retrieval.deskSearch({ ...base, date_field })).toThrow('This source supports date_field: received');
+    }
     expect(() => f.retrieval.revalidateDeskRelease({ access_token: 'member', release: searched })).not.toThrow();
   });
 

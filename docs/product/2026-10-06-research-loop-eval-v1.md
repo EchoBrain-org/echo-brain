@@ -43,7 +43,7 @@ Known gaps the baseline is expected to show (verified at `b108ad3`):
 | Ticket and page search/list return metadata only; each body needs its own `open`, four actions per round | `agentic-ask-v1-model-protocol.ts:15` |
 | A Jira open returns summary and description up to 3 KB: no comments, history, links or updated date | `providers/jira/src/jira-payload-v1.ts:65` |
 | `list` status and owner filters apply to meeting actions only | `agentic-ask-v1.ts:403` |
-| Items without released text never reach the writer | `agentic-ask-v1.ts:1117` |
+| Items without released text never reach the writer (changed for Ask's list members by [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md)) | `agentic-ask-v1.ts:1117` |
 | The writer gets no plan; the answer is one part of at most ten sentences | `agentic-ask-v1.ts:1144` |
 
 ## Round one
@@ -397,3 +397,16 @@ and within budget.
   does; the delivery-date gap of `sweep-bug-412-and-gate` stays covered by
   its `no_evidence` verdict and its must-not rule. Sweep baselines taken
   before R77 must be retaken.
+- Implementation note, 2026-10-17: [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md)
+  makes a complete list Ask evidence of which items exist, and adds a part
+  type, `list`, for situation 12, "which items a filter selects". A list
+  part's evidence names every member, and it scores on the whole list: found,
+  read (a complete list research read holds every member), handed over and
+  correct in the answer only when that holds for every member, so naming some
+  members earns nothing, whatever the judge says. Whether the answer names
+  every member is a code check, reported as "lists named in full". An answer's
+  citation of a list member's row resolves like one of an item read in full.
+  The development case `confluence-pages-created-on-october-4-global` asks the
+  question of trace `ee2f0973`, whose answer named 4 of the 8 pages; the
+  dataset now has 30 cases, 20 of them development. Ask baselines taken before
+  ADR-0041 must be retaken.

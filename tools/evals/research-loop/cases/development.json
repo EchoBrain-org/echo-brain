@@ -936,6 +936,50 @@
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-6" }, { "ticket": "ECHO-23" }]
     },
     {
+      "id": "confluence-pages-created-on-october-4-global",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 12,
+      "kind": "list",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "expected_kinds": ["which_items"],
+      "question": "Which Confluence pages were created on October 4, 2026?",
+      "expected_outcome": "answerable",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "list",
+          "requirement": "Eight Confluence pages were created on 2026-10-04: ECHO Product Pipeline — Start Here; Assumptions and decisions — source facts versus proposals; Gate reviews — EVT pass, DVT hold, PVT pending; Traceability — requirement threads and BUG-412 walkthrough; PRD — System and acceptance requirements; Verification plan — EVT, DVT and PVT mock results; MRD — Mock Digital Thermometer; Mock Digital Thermometer Home.",
+          "evidence": [
+            { "page": "589865" },
+            { "page": "1474561" },
+            { "page": "1441793" },
+            { "page": "1409042" },
+            { "page": "1409025" },
+            { "page": "1212607" },
+            { "page": "1212589" },
+            { "page": "1015989" }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "Confluence pages created on 2026-10-04"
+      ],
+      "gaps": [],
+      "must_not": [
+        "names a page created on another day as created on 2026-10-04, or says more or fewer than eight pages were created that day",
+        "dates a page by its last update or version instead of its creation (ECHO Product Pipeline — Start Here was updated on 2026-10-05)"
+      ],
+      "never_appears": [
+        { "meeting": "M6", "item": "decision" },
+        { "meeting": "M6", "item": "action" },
+        { "meeting": "M6", "item": "rationale" },
+        { "meeting": "M6", "item": "transcript" }
+      ],
+      "distractors": []
+    },
+    {
       "id": "restricted-supplier-sensor-decision",
       "trigger": "ask",
       "state": "S0",
@@ -1503,6 +1547,70 @@
           "proof": []
         }
       ]
+    },
+    {
+      "id": "confluence-pages-october-4-mentioning-bug-412",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 12,
+      "kind": "list",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "key_status": "awaiting_founder_confirmation",
+      "expected_kinds": ["which_say"],
+      "question": "Which Confluence pages created on October 4, 2026 mention BUG-412?",
+      "expected_outcome": "answerable",
+      "parts": [
+        { "id": "p1", "type": "fact", "requirement": "Assumptions and decisions — source facts versus proposals mentions BUG-412 (decision register, mock workflow convention).", "evidence": [{ "page": "1474561", "section": "Decision register" }, { "page": "1474561", "section": "Mock workflow convention" }] },
+        { "id": "p2", "type": "fact", "requirement": "Gate reviews — EVT pass, DVT hold, PVT pending mentions BUG-412 (gate policy, DVT hold).", "evidence": [{ "page": "1441793", "section": "Gate policy" }, { "page": "1441793", "section": "DVT review — hold on accuracy" }] },
+        { "id": "p3", "type": "fact", "requirement": "Traceability — requirement threads and BUG-412 walkthrough mentions BUG-412 (test index, walkthrough).", "evidence": [{ "page": "1409042", "section": "Test index" }, { "page": "1409042", "section": "BUG-412 walkthrough" }] },
+        { "id": "p4", "type": "fact", "requirement": "PRD — System and acceptance requirements mentions BUG-412 (functional requirements, gate acceptance, seeded defect).", "evidence": [{ "page": "1409025", "section": "Functional requirements" }, { "page": "1409025", "section": "Verification and gate acceptance" }, { "page": "1409025", "section": "Seeded defect and retest" }] },
+        { "id": "p5", "type": "fact", "requirement": "Verification plan — EVT, DVT and PVT mock results mentions BUG-412 (coverage, TC-D-03, proposed coverage, DVT round 2).", "evidence": [{ "page": "1212607", "section": "Coverage summary" }, { "page": "1212607", "section": "TC-D-03 — 100 readings, ≥99 within spec" }, { "page": "1212607", "section": "Additional coverage proposed by this PRD" }, { "page": "1212607", "section": "DVT round 2 and regression policy" }] },
+        { "id": "p6", "type": "fact", "requirement": "MRD — Mock Digital Thermometer mentions BUG-412 (problems, scope, gate strategy, risks, change control).", "evidence": [{ "page": "1212589", "section": "Problem statements" }, { "page": "1212589", "section": "Scope and boundaries" }, { "page": "1212589", "section": "Delivery and gate strategy" }, { "page": "1212589", "section": "Dependencies, risks and mitigations" }, { "page": "1212589", "section": "Review and change control" }] },
+        { "id": "p7", "type": "fact", "requirement": "Mock Digital Thermometer Home mentions BUG-412 (folders, ownership, scenario, failure thread, conventions).", "evidence": [{ "page": "1015989", "section": "Browse the document folders" }, { "page": "1015989", "section": "Documents and Jira ownership" }, { "page": "1015989", "section": "Current illustrative scenario" }, { "page": "1015989", "section": "Follow the failure thread" }, { "page": "1015989", "section": "Board and ownership conventions" }] }
+      ],
+      "expected_needs": ["Confluence pages created on 2026-10-04 that mention BUG-412"],
+      "gaps": [],
+      "must_not": [
+        "names ECHO Product Pipeline — Start Here (page 589865) as mentioning BUG-412",
+        "answers with the pages created on 2026-10-04 alone, without saying which of them mention BUG-412",
+        "says that a page whose text was not read does not mention BUG-412"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "jira-tickets-mentioning-bug-412-global",
+      "trigger": "ask",
+      "state": "S0",
+      "situation": 12,
+      "kind": "lookup",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "key_status": "awaiting_founder_confirmation",
+      "expected_kinds": ["content"],
+      "question": "Which Jira tickets mention BUG-412?",
+      "expected_outcome": "answerable",
+      "parts": [
+        { "id": "p1", "type": "fact", "requirement": "THERM-46 is the BUG-412 bug itself: the high temperature reading under load.", "evidence": [{ "ticket": "THERM-46" }] },
+        { "id": "p2", "type": "fact", "requirement": "THERM-12, the SW-14c filter-tuning subtask, names BUG-412 as what it investigates.", "evidence": [{ "ticket": "THERM-12" }] },
+        { "id": "p3", "type": "fact", "requirement": "THERM-47 (TRACE-01) names BUG-412: it confirms the bug's requirement and fix-owner links.", "evidence": [{ "ticket": "THERM-47" }] },
+        { "id": "p4", "type": "fact", "requirement": "THERM-1, the MRD-01 accuracy epic, mentions BUG-412.", "evidence": [{ "ticket": "THERM-1" }] },
+        { "id": "p5", "type": "fact", "requirement": "THERM-4, the delivery and gate-review epic, mentions BUG-412.", "evidence": [{ "ticket": "THERM-4" }] },
+        { "id": "p6", "type": "fact", "requirement": "THERM-9, the SW-14 calibration and filtering story, mentions BUG-412.", "evidence": [{ "ticket": "THERM-9" }] },
+        { "id": "p7", "type": "fact", "requirement": "THERM-38, the TC-D-03 test task, mentions BUG-412.", "evidence": [{ "ticket": "THERM-38" }] },
+        { "id": "p8", "type": "fact", "requirement": "THERM-48, the DVT-R2 verification and regression task, mentions BUG-412.", "evidence": [{ "ticket": "THERM-48" }] },
+        { "id": "p9", "type": "fact", "requirement": "THERM-50, the GATE-DVT hold, mentions BUG-412.", "evidence": [{ "ticket": "THERM-50" }] }
+      ],
+      "expected_needs": ["Jira tickets that mention BUG-412"],
+      "gaps": [],
+      "must_not": [
+        "names a ticket whose text does not mention BUG-412 as mentioning it",
+        "answers with Jira tickets picked by date, owner or status (for example every ticket created on 2026-10-04) instead of those that mention BUG-412",
+        "says it checked only some of the Jira tickets, or how many of them it checked, as if the question asked about a listed set"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
     }
   ]
 }

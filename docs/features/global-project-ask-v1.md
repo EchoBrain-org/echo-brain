@@ -240,6 +240,21 @@ A meeting inventory includes readable imported notes and explicitly shared
 transcripts as well as approved records. Transcript permission and Mine-scope
 exclusion remain unchanged. Every metadata release remains audited and fenced.
 
+A list read to its end answers which items exist
+([ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md)). For a
+question such as "Which Confluence pages were created on October 4?", research
+may finish on a complete list without opening its items, and code writes the
+sentence that counts and names them, citing each item's own row: at most 25
+names across an answer, then "and N more", with N from ECHO's own list of
+items the asker can read, never a vendor's total. A list not read to a
+confirmed end (its last page was exactly full, or it was cut short) gives "at
+least N" and a partial answer. A requested filter the source cannot apply,
+such as an owner on pages, is named in the response notice rather than
+silently widening the list; a date field the source lacks is refused. A list
+supports titles, dates, status and owner only: what an item says still needs
+the item opened, and a question about which listed items say something notes
+how many were checked.
+
 An upload date is not an event date inside a document, a due date is not a
 completion date, and the current revision's update timestamp is not a complete
 change history. The model may search a date quoted in content as a keyword

@@ -206,6 +206,8 @@ describe("research loop: open", () => {
     expect(h.prompt(2).last_results).toEqual([{ tool: "open", args: { id: "E2" }, opened: ["E2"] }]);
     expect(h.prompt(3).last_results).toEqual([{ tool: "open", args: { id: "E2" }, note: "already open; its full text is in your scratchpad" }]);
     expect(view.stop).toEqual({ reason: "finished", completed: true });
+    // A task's rounds record its opens as before ADR-0041: only an Ask open records the item it resolved to.
+    expect(view.rounds[1]!.actions[0]!.result).toEqual({ items: [], opened: ["E2"] });
   });
 });
 
@@ -648,16 +650,17 @@ describe("research loop: need ids", () => {
     need("any associated action", "found", ["E2"]), need("rationale for the decision", "found", ["E3"]),
   ])], [{ tool: "finish", args: {} }]);
   const answer = { sentences: [{ text: "The release must verify owner approval of a staged meeting.", evidence: ["E1"] }], not_found: [] };
+  // An Ask need with the list tool declares its kind; one that names none is content (ADR-0041).
   const settled = [
-    { need: planned, status: "found", evidence: ["E1"] },
-    { need: "any associated action", status: "found", evidence: ["E2"] }, { need: "rationale for the decision", status: "found", evidence: ["E3"] },
+    { need: planned, kind: "content", status: "found", evidence: ["E1"] },
+    { need: "any associated action", kind: "content", status: "found", evidence: ["E2"] }, { need: "rationale for the decision", kind: "content", status: "found", evidence: ["E3"] },
   ];
 
   it("accepts a finish that rewords a need but keeps its id (005d7876)", async () => {
     const h = harness([first, reworded("N1"), answer], { search });
     const { research } = await h.research.answerWithResearch({ question });
     // The planner sees each need's id; the first finish is accepted, with no repair.
-    expect(h.prompt(1).plan).toEqual([{ part: 1, question, notes: "", needs: [{ id: "N1", need: planned, status: "open", evidence: [] }] }]);
+    expect(h.prompt(1).plan).toEqual([{ part: 1, question, notes: "", needs: [{ id: "N1", need: planned, kind: "content", status: "open", evidence: [] }] }]);
     expect(h.generate).toHaveBeenCalledTimes(3);
     expect(research.rounds.map(round => round.rejected)).toEqual([[], []]);
     expect(research.stop).toEqual({ reason: "finished", completed: true });
@@ -794,5 +797,50 @@ describe("research core: what a task trigger's renderer was shown and cited", ()
     expect(metadata.filter(value => value.phase === "research_run" && value.event === "succeeded")).toEqual([
       expect.objectContaining({ counts: expect.objectContaining({ ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 }) }),
     ]);
+  });
+});
+
+describe("research loop: need kinds (ADR-0041)", () => {
+  const question = (text: string, list = true): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false, ...(list ? {} : { list: false }) } });
+  const kinded = (text: string, kind: string | undefined, status: string, evidence: readonly string[] = []) => ({ ...need(text, status, evidence), ...(kind === undefined ? {} : { kind }) });
+  /** A proposed need that names the plan's id for it. */
+  const withId = (id: string, value: ReturnType<typeof need>) => ({ id, ...value });
+  const needSchema = (h: ReturnType<typeof harness>, index: number) => (h.inputs[index]!.schema as { properties: { parts: { items: { properties: { needs: { items: { required: string[]; properties: Record<string, unknown> } } } } } } }).properties.parts.items.properties.needs.items;
+  const launch = record("launch", "Launch is approved for Tuesday.");
+  const writer = { lists: [], sentences: [{ text: "Launch is Tuesday.", evidence: ["E1"] }], not_found: [] };
+
+  it("shows each Ask need's kind in its plan and bundle, and never a task's", async () => {
+    // Step 1 declares nothing, so its needs are content; step 2's proposal declares each need's kind again.
+    const h = harness([
+      step([part("When is launch, and which actions are open?", [kinded("launch date", undefined, "open"), kinded("open actions", "Which Items", "open")])], [{ tool: "search", args: { query: "launch" } }, { tool: "list", args: { source: "meetings", kind: "action" } }]),
+      step([part("When is launch, and which actions are open?", [withId("N1", kinded("launch date", "content", "found", ["E1"])), withId("N2", kinded("open actions", "which_items", "found", ["L1"]))])], [{ tool: "finish", args: {} }]),
+      writer,
+    ], { search: async () => result([launch]), list: async () => result([]) });
+    const view = await h.research.research({ trigger: "ask", brief: question("When is launch, and which actions are open?") });
+    expect(needSchema(h, 0).required).toEqual(["need", "kind", "status", "evidence"]);
+    expect(h.prompt(1).plan).toEqual([{ part: 1, question: "When is launch, and which actions are open?", notes: "", needs: [
+      { id: "N1", need: "launch date", kind: "content", status: "open", evidence: [] }, { id: "N2", need: "open actions", kind: "which_items", status: "open", evidence: [] },
+    ] }]);
+    expect(view.plan[0]!.needs).toEqual([{ need: "launch date", kind: "content", status: "found", evidence: ["E1"] }, { need: "open actions", kind: "which_items", status: "found", evidence: ["L1"] }]);
+    expect(view.rounds.map(round => round.plan[0]!.needs.map(value => value.kind))).toEqual([["content", "which_items"], ["content", "which_items"]]);
+    // A part research gives no need of its own still needs its answer: content.
+    const bare = harness([
+      step([part("When is launch?", [])], [{ tool: "search", args: { query: "launch" } }]), step([part("When is launch?", [withId("N1", need("When is launch?", "found", ["E1"]))])], [{ tool: "finish", args: {} }]), writer,
+    ], { search: async () => result([launch]) });
+    expect((await bare.research.research({ trigger: "ask", brief: question("When is launch?") })).plan[0]!.needs).toEqual([{ need: "When is launch?", kind: "content", status: "found", evidence: ["E1"] }]);
+    expect(bare.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "When is launch?", kind: "content", status: "open", evidence: [] }] }]);
+    // A task goal, and Ask without the list tool, declare nothing: their schema, plan view and bundle have no kind.
+    for (const [trigger, brief_] of [["approved_record", brief("Find the launch date.", [])], ["ask", question("When is launch?", false)]] as const) {
+      const plain = harness([
+        step([part("When is launch?", [kinded("launch date", "which_items", "open")])], [{ tool: "search", args: { query: "launch" } }]),
+        step([part("When is launch?", [withId("N1", kinded("launch date", "which_say", "found", ["E1"]))])], [{ tool: "finish", args: {} }]),
+        ...(trigger === "ask" ? [writer] : []),
+      ], { search: async () => result([launch]) });
+      const result_ = await plain.research.research({ trigger, brief: brief_ });
+      expect(needSchema(plain, 0).required).toEqual(["need", "status", "evidence"]);
+      expect(needSchema(plain, 0).properties).not.toHaveProperty("kind");
+      expect(plain.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "open", evidence: [] }] }]);
+      expect(result_.plan[0]!.needs).toEqual([{ need: "launch date", status: "found", evidence: ["E1"] }]);
+    }
   });
 });

@@ -11,6 +11,7 @@
       "kind": "lookup",
       "scope": { "kind": "project", "project": "THERM" },
       "budget": "live",
+      "expected_kinds": ["content"],
       "question": "When is the DVT gate review?",
       "expected_outcome": "answerable",
       "parts": [
@@ -47,6 +48,7 @@
       "kind": "status",
       "scope": { "kind": "project", "project": "THERM" },
       "budget": "live",
+      "expected_kinds": ["content"],
       "question": "Can PVT start? If not, what is it waiting for?",
       "expected_outcome": "answerable",
       "parts": [
@@ -134,6 +136,7 @@
       "kind": "multi-hop",
       "scope": { "kind": "project", "project": "THERM" },
       "budget": "live",
+      "expected_kinds": ["content"],
       "question": "Which requirement does BUG-412 trace to, and has that link been confirmed?",
       "expected_outcome": "answerable",
       "parts": [
@@ -200,6 +203,7 @@
       "kind": "cross-check",
       "scope": { "kind": "project", "project": "THERM" },
       "budget": "live",
+      "expected_kinds": ["content"],
       "question": "Has the PRD caught up with the display precision the customer approved?",
       "expected_outcome": "answerable",
       "parts": [
@@ -254,6 +258,7 @@
       "kind": "honest-gap",
       "scope": { "kind": "project", "project": "THERM" },
       "budget": "live",
+      "expected_kinds": ["content"],
       "question": "Which firmware build fixes BUG-412?",
       "expected_outcome": "partial",
       "parts": [
@@ -315,6 +320,7 @@
       "kind": "status",
       "scope": { "kind": "project", "project": "THERM" },
       "budget": "live",
+      "expected_kinds": ["which_items"],
       "question": "Which THERM tickets are assigned to me, and when are they due?",
       "expected_outcome": "answerable",
       "parts": [
@@ -357,6 +363,7 @@
       "kind": "honest-gap",
       "scope": { "kind": "project", "project": "THERM" },
       "budget": "live",
+      "expected_kinds": ["content"],
       "question": "When was TC-D-03 marked In Progress?",
       "expected_outcome": "partial",
       "parts": [
@@ -400,6 +407,7 @@
       "kind": "status",
       "scope": { "kind": "global" },
       "budget": "live",
+      "expected_kinds": ["content"],
       "question": "Did we pass EVT?",
       "expected_outcome": "answerable",
       "parts": [

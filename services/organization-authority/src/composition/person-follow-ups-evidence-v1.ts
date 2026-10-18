@@ -340,7 +340,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
 
   /** Audits one call's follow-ups before they leave, then remembers each for `open` and the checks. */
   const release = (operation: 'search' | 'list' | 'open', view: View, entries: readonly Entry[], truncated: boolean,
-    { next_cursor, notice }: { readonly next_cursor?: string | undefined; readonly notice?: string | undefined } = {}): EvidenceDeskResultV2 => {
+    { next_cursor, notice, page_full }: { readonly next_cursor?: string | undefined; readonly notice?: string | undefined; readonly page_full?: boolean } = {}): EvidenceDeskResultV2 => {
     const shaped = entries.flatMap(entry => { const value = shape(view, entry); return value === undefined ? [] : [value]; });
     const receipt = options.audit.record({ operation, items: shaped.map(({ evidence, visibility }) => ({ item_id: evidence.item_id, released_fields_sha256: canonicalSha256({ evidence, visibility }) })) });
     const items = shaped.map(({ evidence, visibility, decision }): EvidenceDeskItemV2 => {
@@ -356,6 +356,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       receipt_digests: Object.freeze([...new Set([receipt, ...shaped.flatMap(value => value.receipts)])]),
       ...(next_cursor === undefined ? {} : { next_cursor }),
       ...(notice === undefined ? {} : { notice }),
+      ...(page_full === undefined ? {} : { page_full }),
     });
   };
   const withReads = (entries: readonly Assessed[], signal?: AbortSignal): Promise<readonly Entry[]> =>
@@ -444,7 +445,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         next_cursor = `follow_ups_${++cursorSequence}`;
         cursors.set(next_cursor, Object.freeze({ selection, after: page.at(-1)!.row }));
       }
-      return release('list', view, entries, false, { next_cursor });
+      // This source holds every matching follow-up, so a list's end is always confirmed (ADR-0041).
+      return release('list', view, entries, false, { next_cursor, page_full: false });
     },
 
     async open(input) {

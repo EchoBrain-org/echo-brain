@@ -2,6 +2,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_ANSWER_PATH_V6,
+  personAnswerCitationKeyV7,
   personFollowUpRefV1,
   validatePersonAnswerCitationV6,
   validatePersonAnswerCitationV7,
@@ -70,6 +71,22 @@ describe('Follow-up answer V7 (ADR-0040)', () => {
     expect(() => validatePersonAnswerResponseV7(response([owned]))).toThrow('private is inconsistent');
     const answer = response([owned]);
     expect(validatePersonAnswerResponseV7({ ...answer, parts: [{ ...answer.parts[0]!, statements: [{ ...answer.parts[0]!.statements[0]!, private: true }] }] }).citations[0]).toEqual(owned);
+  });
+});
+
+describe('the Ask response citation key', () => {
+  it('is the identity the response checks for duplicates, so a renderer can cite each object once', () => {
+    const page = { kind: 'page' as const, tool_id: 'confluence', external_scope_id: 'site-one', page_id: '1', section_id: 's1', version: '3', permalink: 'https://knowledge.example.test/wiki/pages/1', text_sha256: `sha256:${'a'.repeat(64)}` as const };
+    const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'cloud-one', ticket_id: '10046', permalink: 'https://tickets.example.test/browse/THERM-46', text_sha256: `sha256:${'b'.repeat(64)}` as const };
+    // A page's sections and versions are separate citations; a ticket's row and opened body are one.
+    expect(personAnswerCitationKeyV7(page)).not.toBe(personAnswerCitationKeyV7({ ...page, section_id: 's2' }));
+    expect(personAnswerCitationKeyV7(page)).not.toBe(personAnswerCitationKeyV7({ ...page, version: '4' }));
+    expect(personAnswerCitationKeyV7(ticket)).toBe(personAnswerCitationKeyV7({ ...ticket, text_sha256: `sha256:${'c'.repeat(64)}` }));
+    expect(personAnswerCitationKeyV7(followUp)).toBe(`follow_up:${itemId}`);
+    const citation = (value: typeof page | typeof ticket) => ({ citation: value, kind: value.kind, label: 'x', visibility: 'only_me' as const });
+    const response = (citations: readonly unknown[]) => ({ schema_version: 7, kind: 'echo-clean-person-answer-v7', scope: { kind: 'global' }, outcome: 'answered', citations,
+      parts: [{ question: 'q', status: 'answered', statements: [{ text: 'x', citation_indexes: citations.map((_, index) => index), private: true }] }] });
+    expect(() => validatePersonAnswerResponseV7(response([citation(ticket), citation({ ...ticket, text_sha256: `sha256:${'c'.repeat(64)}` })]))).toThrow(/duplicate citations/u);
   });
 });
 

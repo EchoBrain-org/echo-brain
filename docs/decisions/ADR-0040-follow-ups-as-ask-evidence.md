@@ -226,3 +226,10 @@ follow-up from the real Authority runtime through the Person client to the
 desktop page and its item page; the Person client's fallback chain is in
 `tests/person-client/person-ask-progress.test.ts`, and the desktop's opener
 and panel in `product/echo-desktop/test/unit/ask-follow-up.test.ts`.
+
+## Later decisions
+
+[ADR-0041](ADR-0041-complete-lists-as-ask-evidence.md) (2026-10-17) makes a
+follow-ups list evidence like any other list: code names the follow-ups it
+lists by title, with owner and due date. What a follow-up releases, and to
+whom, does not change.

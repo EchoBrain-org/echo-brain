@@ -177,11 +177,13 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         input.signal?.throwIfAborted();
         return remember(result, followUpSource!);
       }
+      // Owner and status are follow-ups' own filters; the research loop applies its meeting filters itself. A source that
+      // cannot apply one refuses the read rather than answer wider than asked (ADR-0041).
+      if (input.owner !== undefined || input.status !== undefined) throw new AuthorityOperationError('invalid_request', 'This source cannot be filtered by owner or status');
       const registration = sources.get(input.source);
       if (registration === undefined) {
         if (!['meeting', 'document', 'slack'].includes(input.source)) refused();
-        // Owner and status are follow-ups' own filters; the research loop applies its meeting filters itself.
-        const { kinds, owner: _owner, status: _status, ...request } = input;
+        const { kinds, ...request } = input;
         if (kinds?.some(kind => kind === 'ticket' || kind === 'page' || kind === FOLLOW_UP_EVIDENCE_KIND_V1)) refused();
         const result = await base.list({ ...request, source: input.source as 'meeting' | 'document' | 'slack', ...(kinds === undefined ? {} : { kinds: kinds.filter((kind): kind is EvidenceDeskKindV1 => kind !== 'ticket' && kind !== 'page' && kind !== FOLLOW_UP_EVIDENCE_KIND_V1) }) });
         input.signal?.throwIfAborted();

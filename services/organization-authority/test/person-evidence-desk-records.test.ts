@@ -317,8 +317,9 @@ describe('Person evidence desk over the real approved-record route', () => {
     const inventory = await inventoryDesk.search({ limit: 10 });
     const item = inventory.items.find(value => value.citation.kind === 'approved_record');
     expect(item).toBeDefined();
+    // A record's text is released whole: the open says its anchor was not cut (ADR-0041).
     await expect(inventoryDesk.open({ item: item!.id })).resolves.toMatchObject({
-      items: [expect.objectContaining({ text: accepted.recordAtom.text })],
+      items: [expect.objectContaining({ text: accepted.recordAtom.text })], truncated: false, anchor_truncated: false,
     });
 
     for (const bytes of [3_073, 4_096]) {
@@ -367,6 +368,22 @@ describe('Person evidence desk: one source at a time', () => {
     const listed = await value.makeDesk().list({ source: 'meeting', kinds: ['decision'] });
     expect(listed.items).toEqual([expect.objectContaining({ kind: 'decision', label: 'Approved meeting' })]);
     expect(listed.items[0]).not.toHaveProperty('text');
+    // The inventory reads one row past its limit and says truncated when more exist, so its end is confirmed (ADR-0041).
+    expect(listed).toMatchObject({ truncated: false, page_full: false });
+  });
+
+  it('names a listed record by a line of its own text in its list label, keeps it when opened, and checks it with the row (ADR-0041)', async () => {
+    const value = await fixture();
+    const desk = value.makeDesk();
+    const listed = await desk.list({ source: 'meeting', kinds: ['decision'] });
+    // The row still has no text; its list label is released and audited with it.
+    expect(listed.items).toEqual([expect.objectContaining({ kind: 'decision', label: 'Approved meeting', list_label: `${value.recordAtom.text} (Approved meeting)` })]);
+    expect(listed.items[0]).not.toHaveProperty('text');
+    const opened = await desk.open({ item: listed.items[0]!.id });
+    expect(opened.items[0]).toMatchObject({ id: listed.items[0]!.id, text: value.recordAtom.text, list_label: listed.items[0]!.list_label });
+    // A revoked release stops the label at the next check, as it stops the row.
+    value.revoke();
+    await expect(desk.revalidate({})).rejects.toThrow('person authentication failed');
   });
 
   it('reads no Slack: a Slack-only search or list returns nothing, with no Slack receipt', async () => {
@@ -405,7 +422,11 @@ describe('Person evidence desk over an approval-decision record with a confirmed
   it('reads the confirmed owner from the signed approval, and matches the owned search text exactly', async () => {
     const desk = await approvedFixture(true);
     const searched = await desk.search({ query: 'Jules', limit: 10 });
-    expect(searched.items.find(item => item.citation.kind === 'approved_record')).toMatchObject({ kind: 'action', text: 'Action 1 Owner: Jules.', attributes: { owner: 'Jules' } });
+    const action = searched.items.find(item => item.citation.kind === 'approved_record');
+    expect(action).toMatchObject({ kind: 'action', text: 'Action 1 Owner: Jules.', attributes: { owner: 'Jules' } });
+    // Its list label is its own line; the owner is the row's own fact (ADR-0041).
+    expect(action!.list_label).toMatch(/^Action 1 \(.+\)$/u);
+    expect(action!.list_label).not.toContain('Jules');
   });
 
   it('needs the Authority record codecs to read an approval-decision record at all', async () => {
