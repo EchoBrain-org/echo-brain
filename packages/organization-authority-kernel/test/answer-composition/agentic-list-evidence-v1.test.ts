@@ -378,6 +378,8 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     ["status and due dates that differ", { selected: [{ title: "THERM-1: Fixture", status: "In Progress", owner: "Dana Lee" }, { title: "THERM-2: Firmware", status: "Done", owner: "Dana Lee", due: "2026-10-09" }] }, "2 items: THERM-1: Fixture (In Progress); THERM-2: Firmware (Done, due October 9, 2026)."],
     ["owners that differ", { selected: [{ title: "Check the numbers", owner: "none recorded" }, { title: "Ship it", owner: "Mara" }] }, "2 items: Check the numbers (no owner recorded); Ship it (owner Mara)."],
     ["a status that differs only past the share", { count: 3, share: 2, selected: [{ title: "Alpha", status: "open" }, { title: "Beta", status: "open" }, { title: "Gamma", status: "done" }] }, "3 items: Alpha; Beta; and 1 more."],
+    // A plain statement's lead counts the list, never the members it names: here 2 named of at least 25 listed.
+    ["a count past the members it names", { noun: TICKETS, count: 25, complete: false, share: 2, selected: sixty.slice(0, 2) }, "At least 25 Jira tickets: THERM-1: Fixture work 1; THERM-2: Fixture work 2."],
     ["a status that differs among the names", { selected: [{ title: "Alpha", status: "open" }, { title: "Beta", status: "open" }, { title: "Gamma", status: "done" }] }, "3 items: Alpha (open); Beta (open); Gamma (done)."],
     // A merge never hides a row fact: one meeting's actions due on different days are named apart, each with its date.
     ["one meeting's actions by due date", { selected: [due("2026-10-09"), due("2026-10-12"), due(), due(" 2026-10-09")] }, `4 items: ${review} (2 actions, due October 9, 2026); ${review} (due October 12, 2026); ${review}.`],
@@ -410,7 +412,8 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(statement({ noun: TICKETS, complete: false, share: 15, free: new Set(Array.from({ length: 10 }, (_, index) => index)), selected: reviewed }))
       .toEqual({ text: `At least 25 Jira tickets: ${reviewed.map(value => value.title).join("; ")}.`, cited: Array.from({ length: 25 }, (_, index) => index) });
     expect(statement({ noun: TICKETS, complete: false, share: 15, selected: reviewed }).cited).toEqual(Array.from({ length: 15 }, (_, index) => index));
-    expect(statement({ noun: TICKETS, filter: OCTOBER_4.filter, count: 60, selected: sixty }).cited).toEqual(Array.from({ length: 25 }, (_, index) => index));
+    expect(statement({ noun: TICKETS, filter: OCTOBER_4.filter, count: 60, selected: sixty }))
+      .toEqual({ text: `60 Jira tickets created on October 4, 2026: ${sixty.slice(0, 25).map(value => value.title).join("; ")}; and 35 more.`, cited: Array.from({ length: 25 }, (_, index) => index) });
     const long = statement({ selected: [{ title: `${"x".repeat(200)}\nsecond line` }] }).text.slice("1 item: ".length, -1);
     expect([[...long].length, long.endsWith("…")]).toEqual([120, true]);
   });

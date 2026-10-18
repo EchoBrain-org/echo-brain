@@ -529,8 +529,13 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       steps: [read([OCT4_LIST], WS), fin(WS, "L1"), UNUSABLE[0]!], w: [nothing(BUG_NEED)], rejected: [HINT, BAD[0]!], stop: "unusable_step", out: "partial", status: "not_found", gap: `${INCOMPLETE} Missing context: ${BUG_NEED}. ${WHICH}`,
       check: ({ h, research }) => { for (const word of ["which_items", "which_say", "kind"]) expect(research.rounds[1].rejected[0]).not.toContain(word); expect(h.port.open).not.toHaveBeenCalled(); } },
     { id: "X7b (misdeclared)", name: "states the list alone for a which-say question declared which_items: the content is left out (Known limit)", ...B4, steps: [read([OCT4_LIST], WI), read(opens(ids(1, 4)), WI), fin(WI, "L1", "E12")], w: [say(TRACE, ["E12"])], out: "answered", says: [FULL8] },
-    ...([["X9", [none(WS, "L1")], []], ["X9b", [none(WS), none(WS, "L1")], [`${UNLISTED} (from lists), or list them first. `]], ["X9b", [none(WS, ...ids(1, 4)), none(WS, "L1")], [`${UNLISTED} (L1). `]]] as const).map(([id, finishes, rejected]): Row => ({
-      id, name: `answers a not_found which_say need over the list it checked with the unchecked gap${rejected.length ? ", after one refusal" : ""}`, q: "Which pages created on October 4, 2026 mention BUG-999?", need: "pages created on 2026-10-04 that mention BUG-999", desk: () => oct4(),
+    // X9b's first finish is refused, then repaired to cite the list: one that cites nothing is asked for the list, one that cites the opened pages is told their list's id.
+    ...([
+      ["X9", "", [none(WS, "L1")], []],
+      ["X9b", ", after one refusal of a finish that cites nothing", [none(WS), none(WS, "L1")], [`${UNLISTED} (from lists), or list them first. `]],
+      ["X9b", ", after one refusal of a finish that cites the opened pages, not their list", [none(WS, ...ids(1, 4)), none(WS, "L1")], [`${UNLISTED} (L1). `]],
+    ] as const).map(([id, after, finishes, rejected]): Row => ({
+      id, name: `answers a not_found which_say need over the list it checked with the unchecked gap${after}`, q: "Which pages created on October 4, 2026 mention BUG-999?", need: "pages created on 2026-10-04 that mention BUG-999", desk: () => oct4(),
       steps: [read([OCT4_LIST], WS), read(opens(ids(1, 4)), WS), ...finishes], w: [nothing("pages created on October 4 that mention BUG-999")], rejected, stop: "finished", out: "not_found", says: [], citations: 0,
       gap: `Not found: pages created on October 4 that mention BUG-999. ${UNCHECKED}`, check: ({ research }) => expect(research.plan[0].needs).toEqual([{ need: "pages created on 2026-10-04 that mention BUG-999", kind: "which_say", status: "not_found", evidence: ["L1"] }]),
     })),
