@@ -282,7 +282,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     });
   });
 
-  it("says 'at least' for a list not read to a confirmed end, and leaves out a count resting on one row and the list's id", async () => {
+  it("says 'at least' for a list not read to a confirmed end, and leaves out a count resting on one row and the list's id (CF5b)", async () => {
     const count = { lists: [], sentences: [{ text: "25 tickets were created on October 4, 2026.", evidence: ["L1", "E1"] }], not_found: [] };
     const run = alone({ bundle: listBundle(25, 0, [list("L1", ids(1, 25), { unverified_end: true })], [WI(["L1"])]), replies: [count, count], version: 6 });
     const rendered = await run.render("Which tickets were created on October 4?");
@@ -342,7 +342,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(stated.citations).toHaveLength(25);
   });
 
-  it("says which items exist, with the list-end gap, only for a use in full, by where or by id of every member (R9)", async () => {
+  it("says which items exist, with the list-end gap, only for a use in full, by where or by id of every member (R9 iii to v)", async () => {
     const facts = (n: number) => `THERM-${n}: Fixture work ${n} (status In Progress, owner Dana Lee, created October 4, 2026)`;
     const gap = "The list of tickets could not be read to its end, so more may exist.";
     const open = (members: readonly string[], needs: readonly Need[]) => alone({
@@ -431,6 +431,38 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     const bounded = (await many.render("Which tickets?")).result.response.parts[0]!;
     expect(bounded.statements).toHaveLength(10);
     expect(bounded.statements.slice(2).map(statement => statement.text)).toEqual(singles.slice(0, 8).map(sentence => sentence.text));
+  });
+
+  it("CF2: leaves out a repeated rows sentence beside a stated list whether or not the need also cites text", async () => {
+    const subset = { lists: [], sentences: [{ text: "The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", evidence: ["L1", ...ids(1, 4)] }], not_found: [] };
+    const run = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], [WI(["L1", "E9"])]), replies: [subset, subset], version: 6 });
+    const rendered = await run.render("Which tickets were created on October 4?");
+    expect(generations(run)).toBe(2);
+    expect(rendered.result.response.parts[0]).toMatchObject({ status: "partial", statements: [{ text: eight }], gap: UNSUPPORTED });
+    expect(rendered.result.response.parts[0]!.statements).toHaveLength(1);
+  });
+
+  it("CF5c: adds the unchecked gap for a which_say list even when no sentence cites its members, and notes no sentence", async () => {
+    // E9 is a record outside L1: the sentence cites no member's text, so it carries no note; none of the 8 was checked.
+    const reply = { lists: [], sentences: [{ text: "THERM-1 mentions BUG-412.", evidence: ["L1", "E9"] }], not_found: [] };
+    const run = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], [WS(["L1", "E9"])]), replies: [reply], version: 6 });
+    const rendered = await run.render("Which tickets created on October 4 mention BUG-412?");
+    expect(generations(run)).toBe(1);
+    expect(run.prompt(0).lists[0]).toMatchObject({ id: "L1", stated: false, checked: 0 });
+    expect(rendered.result.response.parts[0]).toEqual({ question: "Which tickets created on October 4 mention BUG-412?", status: "partial", statements: [{ text: "THERM-1 mentions BUG-412.", citation_indexes: [0], private: false }], gap: UNCHECKED });
+  });
+
+  it("R9: says 'at least' with the list-end gap for a stated list in full or by where, and for a where selection says how many were listed", async () => {
+    // 25 rows of a list that was cut short; the first five are in review.
+    const research = listBundle(25, 0, [list("L1", ids(1, 25), { ended: false, truncated: true })], [WI(["L1"])]);
+    const reviewed: AgenticEvidenceBundleV1 = Object.freeze({ ...research, items: research.items.map((entry, index) => index < 5 ? Object.freeze({ ...entry, item: { ...entry.item, attributes: { status: "In Review", owner: "Dana Lee" } } }) : entry) });
+    const gap = "The list of tickets could not be read to its end, so more may exist.";
+    const full = await alone({ bundle: reviewed, replies: [{ lists: [{ id: "L1" }], sentences: [], not_found: [] }], version: 6 }).render("Which tickets were created on October 4?");
+    expect(full.result.response.parts[0]).toMatchObject({ status: "partial", gap });
+    expect(full.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`At least 25 tickets created on October 4, 2026: ${[...names(1, 5).map(name => `${name} (In Review)`), ...names(6, 20).map(name => `${name} (In Progress)`)].join("; ")}.`]);
+    const where = await alone({ bundle: reviewed, replies: [{ lists: [{ id: "L1", where: { field: "status", value: "in review" } }], sentences: [], not_found: [] }], version: 6 }).render("Which tickets created on October 4 are in review?");
+    expect(where.result.response.parts[0]).toMatchObject({ status: "partial", gap });
+    expect(where.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`At least 5 tickets created on October 4, 2026 have status In Review (25 listed so far): ${names(1, 5).join("; ")}.`]);
   });
 
   it("gives a listed ticket's row and its opened body one citation", async () => {

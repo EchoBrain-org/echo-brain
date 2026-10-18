@@ -67,11 +67,35 @@ function ticketBody(n: number, text: string): EvidenceDeskItemV2 {
   return Object.freeze({ ...ticketRow(n), text, citation: { ...(ticketRow(n).citation as Extract<EvidenceDeskItemV2["citation"], { kind: "ticket" }>), text_sha256: sha256Digest(text) } });
 }
 
-/** A follow-up as the desk releases it: its row carries its text (ADR-0040). */
-function followUpItem(n: number): EvidenceDeskItemV2 {
+/** A follow-up as the desk releases it: its row carries its text (ADR-0040), and its due date when it has one. */
+function followUpItem(n: number, due_at?: string): EvidenceDeskItemV2 {
   const decision = { title: "THERM DVT recovery sync", first_line: "Ship fan curve v2 before DVT.", ref: `meeting:sha256:${"a".repeat(64)}` } as const;
-  const fields = followUpDeskFieldsV1(validatePersonFollowUpEvidenceV1({ item_id: `itm_6b0f8a52-55a4-4f6e-9a39-${String(n).padStart(12, "0")}`, kind: "ticket", title: `THERM-${40 + n} follow-up`, owner: "Mara Lind", status: "open", decision }));
+  const fields = followUpDeskFieldsV1(validatePersonFollowUpEvidenceV1({ item_id: `itm_6b0f8a52-55a4-4f6e-9a39-${String(n).padStart(12, "0")}`, kind: "ticket", title: `THERM-${40 + n} follow-up`, owner: "Mara Lind", status: "open", ...(due_at === undefined ? {} : { due_at }), decision }));
   return Object.freeze({ id: `follow-up-${n}`, ...fields, visibility: "team" as const, receipt_sha256: canonicalSha256(`follow-up-${n}`) });
+}
+/** A global desk over `items` of live sources, listed `size` a page (ECHO's follow-ups page 10 at a time). */
+function pagedDesk(items: readonly EvidenceDeskItemV2[], extra: Partial<EvidenceDeskPortV2> & { readonly size?: number } = {}) {
+  const { size = 10, ...rest } = extra;
+  return {
+    scope: { kind: "global" as const }, live_sources: [FOLLOW_UPS_SOURCE_DESCRIPTOR_V1],
+    list: vi.fn(async (input: EvidenceDeskListInputV2) => {
+      const start = input.cursor === undefined ? 0 : Number(input.cursor);
+      return { ...result(items.slice(start, start + size)), ...(start + size < items.length ? { next_cursor: String(start + size) } : {}), page_full: false } as EvidenceDeskResultV2;
+    }),
+    search: vi.fn(async () => result([]) as EvidenceDeskResultV2), open: vi.fn(async () => result([]) as EvidenceDeskResultV2), revalidate: vi.fn(async () => checked), ...rest,
+  } satisfies EvidenceDeskPortV2;
+}
+/** Ask's V4 core (whose V7 answers cite follow-ups) with scripted replies in order: its answer, and what each step and the writer were shown. */
+async function askV4(desk: EvidenceDeskPortV2, text: string, replies: unknown[], context: { readonly now?: string; readonly time_zone?: string } = {}) {
+  const inputs: StructuredGenerationInput[] = [];
+  const now = context.now ?? LIST_READ_AT;
+  const response = await createAgenticAskV4({
+    desk, generation, audit: { append: () => undefined }, asker: { display_name: "Mara Lind" }, wall_ms: () => Date.parse(now),
+    ...(context.time_zone === undefined ? {} : { time_context: { now, time_zone: context.time_zone } }),
+    model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift(); } },
+  }).answer({ question: text });
+  const prompts = (writer: boolean) => inputs.filter(input => input.system_prompt.startsWith("You write") === writer).map(input => JSON.parse(input.user_prompt) as Record<string, any>);
+  return { response, steps: prompts(false), writers: prompts(true), left: replies, systems: inputs.map(input => input.system_prompt) };
 }
 
 const question = (text: string): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false } });
@@ -594,7 +618,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: fullStatement }], gap: "Not found: whether DVT is on hold." }] });
   });
 
-  it("states the plan's list beside a reply that found nothing, with no repair: the October 4 question gets its list (C6)", async () => {
+  it("states the plan's list beside a reply that found nothing, with no repair: the October 4 question gets its list (C6, R1, R8)", async () => {
     const nothing = { lists: [], sentences: [], not_found: ["Confluence pages created on October 4, 2026"] };
     const h = research([nothing]);
     const { response } = await h.research.answerWithResearch({ question: OCT4 });
@@ -602,7 +626,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: fullStatement, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7] }], gap: "Not found: Confluence pages created on October 4, 2026." }] });
   });
 
-  it("states a list in full and then a selection of its members by id, in either order, each member one name (R4)", async () => {
+  it("states a list in full and then a selection of its members by id, in either order, each member one name, beside a content sentence (R4, X2)", async () => {
     const text = "Which Confluence pages were created on October 4, 2026, and when was the PRD last updated?";
     // Part 1 asks which pages exist; part 2 one fact about the PRD, read from its section (E9), a content need.
     const open = vi.fn(async (input: { readonly item: string }) => result([section(PAGES.find(page => page.id === input.item)!, "PRD last updated October 4, 2026.")]) as EvidenceDeskResultV2);
@@ -653,7 +677,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     }
   });
 
-  it("writes the list itself when the writer gives no usable reply", async () => {
+  it("writes the list itself when the writer gives no usable reply (X3)", async () => {
     const h = research([{ wrong: true }, { still: "wrong" }]);
     const { response } = await h.research.answerWithResearch({ question: OCT4 });
     expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: fullStatement }], gap: "I found these items, but could not write the rest of the answer." }] });
@@ -665,7 +689,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
   const TICKETS_LIST = { tool: "list", args: { source: "tickets", date_field: "created", since: "2026-10-04", until: "2026-10-04" } } as const;
   const ticketNames = (from: number, count: number) => tickets(from, count).map(item => item.label);
 
-  it("names 25 of a 60-ticket list and says 'and 35 more', the count from ECHO's own list", async () => {
+  it("names 25 of a 60-ticket list and says 'and 35 more', the count from ECHO's own list (X4)", async () => {
     const list = vi.fn(async (input: EvidenceDeskListInputV2) => (input.cursor === undefined
       ? result(tickets(1, 50), { next_cursor: "page-2", page_full: false })
       : result(tickets(51, 10), { page_full: false })) as EvidenceDeskResultV2);
@@ -699,7 +723,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([`At least 25 Jira tickets created on October 4, 2026: ${ticketNames(1, 25).join("; ")}.`]);
   });
 
-  it("answers 'which are assigned to me' with only the members that owner records, and none as not found", async () => {
+  it("answers 'which are assigned to me' with only the members that owner records, and none as not found (X1)", async () => {
     const assigned = [ticketRow(1, "Zhen Ye"), ticketRow(2, "Dana Lee", "Done"), ticketRow(3, "zhen ye"), ticketRow(4, "Tobias Lund")];
     const text = "Which of the Jira tickets created on October 4, 2026 are assigned to Zhen Ye?";
     const run = async (value: string) => {
@@ -718,7 +742,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(nobody).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: "Not found: Jira tickets created on October 4, 2026 that have owner Mara Quinn." }] });
   });
 
-  it("states a which_items need's list, and leaves out a sentence naming members from their opened text (CF7, CF9a, R3, R5)", async () => {
+  it("states a which_items need's list, and leaves out a sentence naming members from their opened text (CF7, CF9a, CF12c, R3, R5)", async () => {
     // Opening a page row releases its section as a new item: E1..E4 give E9..E12, E5..E8 give E13..E16.
     const open = vi.fn(async (input: { readonly item: string }) => {
       const row = PAGES.find(page => page.id === input.item)!;
@@ -789,7 +813,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: "The gate review says DVT is on hold pending fixture rework.", citation_indexes: [0] }] }] });
   });
 
-  it("accepts a finish on an opened page's row and section while that page's list is unfinished", async () => {
+  it("accepts a finish on an opened page's row and section while that page's list is unfinished (CF12a)", async () => {
     // The list has a next page; opening the PRD's row (E5) returned two sections as new items.
     const open = vi.fn(async (input: { readonly item: string }) => {
       const row = PAGES.find(page => page.id === input.item)!;
@@ -911,7 +935,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(revoked.generate).toHaveBeenCalledTimes(2);
   });
 
-  it("states a meeting-action list by its own lines and leaves out the opened subset, or notes it for a which_say need (C7b, C7d)", async () => {
+  it("states a meeting-action list by its own lines and leaves out the opened subset, or notes it for a which_say need (C7b, C7d, CF9d)", async () => {
     // A list row has no text; opening it returns the same item with its text, so research reads the member in full.
     const action = (index: number) => ({ kind: "action" as const, list_label: `Task ${index} (DVT review, 2026-10-01)`, attributes: { owner: "Mara Quinn" } });
     const rows = Array.from({ length: 8 }, (_, index) => listed(`a${index + 1}`, action(index + 1)));
@@ -967,7 +991,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     }
   });
 
-  it("keeps a sentence about what a which_say list's members say beside the list a which_items need states, and repairs a rows sentence (X15)", async () => {
+  it("keeps a sentence about what a which_say list's members say beside the list a which_items need states, and repairs a rows sentence (W4, W1)", async () => {
     // Every page opened; one need asks which pages exist, one which of them mention BUG-412.
     const open = vi.fn(async (input: { readonly item: string }) => {
       const row = PAGES.find(page => page.id === input.item)!;
@@ -1023,7 +1047,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(beside.response.parts[0]!.statements).toHaveLength(1);
   });
 
-  it("notes a which_say list's members that keep their row ids when opened, until all are checked: tickets, actions and follow-ups alike (R2, R7)", async () => {
+  it("notes a which_say list's members that keep their row ids when opened, until all are checked: tickets, actions and follow-ups alike (C7c, R2, R7)", async () => {
     // A Jira open returns the ticket's body under the row's own id, as a meeting open does; a follow-up's row carries its text.
     const open = vi.fn(async (input: { readonly item: string }) => {
       const n = Number(/THERM-(\d+)/u.exec(input.item)![1]);
@@ -1091,7 +1115,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(replies).toEqual([]);
   });
 
-  it("names a meeting and each of its records once, the records by their own lines, never as that many meetings", async () => {
+  it("names a meeting and each of its records once, the records by their own lines, never as that many meetings (CF3)", async () => {
     // Production rows: every record of a meeting carries the meeting's title and date as its label, and a list label
     // of its own line (ADR-0041); the meeting itself is named by its label.
     const label = "THERM DVT sync (2026-10-04)";
@@ -1114,7 +1138,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response.parts[0]!.statements).toEqual([{ text: "4 items from meetings dated on October 4, 2026: THERM DVT sync (2026-10-04) (1 meeting); Keep the DVT gate on hold (THERM DVT sync, 2026-10-04) (1 decision); Send fixture drawings to vendor (THERM DVT sync, 2026-10-04) (1 action, owner Dana Lee); Accuracy fails at 42 °C (THERM DVT sync, 2026-10-04) (1 rationale).", citation_indexes: [0, 1, 2, 3], private: false }]);
   });
 
-  it("names one meeting's actions by their own lines, each with its own due date, though they share the meeting's label", async () => {
+  it("names one meeting's actions by their own lines, each with its own due date, though they share the meeting's label (C7a, CF6, X12)", async () => {
     // Production list rows: no text; every action of the meeting carries its label (deskLabel) and its own line (deskListLabel).
     const label = "DVT review (2026-10-01)";
     const lines = ["Publish the DVT dashboard (DVT review, 2026-10-01)", "Order fixture spares (DVT review, 2026-10-01)", "Confirm the trace plan (DVT review, 2026-10-01)"];
@@ -1136,7 +1160,7 @@ describe("Ask's answer: code names a list's members (ADR-0041)", () => {
     expect(response.citations.map(citation => citation.label)).toEqual([label, label, label]);
   });
 
-  it("gives a task goal over the same meeting rows the same model inputs, with or without their list labels", async () => {
+  it("gives a task goal over the same meeting rows the same model inputs, with or without their list labels (X12)", async () => {
     // An impact card reads each row's label; a list label changes none of its research or renderer inputs (ADR-0041).
     const lines = ["Publish the DVT dashboard", "Order fixture spares"];
     const rows = (labelled: boolean) => lines.map((value, index) => listed(`a${index + 1}`, { kind: "action", label: "DVT review (2026-10-01)", ...(labelled ? { list_label: `${value} (DVT review, 2026-10-01)` } : {}), attributes: { owner: "Mara Quinn" } }));
@@ -1255,8 +1279,491 @@ describe("Ask research: the finish check follows each need's declared kind (ADR-
   });
 });
 
+describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", () => {
+  // Each test names the scenarios of the restructure design's table it pins; the rest are pinned above.
+  const OCT4_NAMES = OCTOBER_4.map(([, title]) => title);
+  const FULL8 = `8 Confluence pages created on October 4, 2026: ${OCT4_NAMES.join("; ")}.`;
+  const writersOf = (h: ReturnType<typeof harness>) => h.inputs.filter(input => input.system_prompt.startsWith("You write"));
+  /** Opening a page row releases one section, which mentions BUG-412 when the page's title matches `mentions`. */
+  const pageOpen = (mentions: RegExp) => vi.fn(async (input: { readonly item: string }) => {
+    const row = PAGES.find(page => page.id === input.item)!;
+    return result([section(row, mentions.test(row.label) ? `${row.label}: BUG-412 is traced to TC-D-03.` : `${row.label}: no defects are discussed.`)]) as EvidenceDeskResultV2;
+  });
+  const NOBODY = /^$/u;
+  const BUG = "Which pages created on October 4, 2026 mention BUG-412?";
+  const BUG_NEED = "pages created on 2026-10-04 that mention BUG-412";
+  const TRACE = "Traceability — requirement threads and BUG-412 walkthrough mentions BUG-412.";
+  const FOUR = "The pages are ECHO Product Pipeline, Assumptions and decisions, Gate reviews and Traceability.";
+  const SECTIONS = ["E9", "E10", "E11", "E12"];
+  const say = (text: string, evidence: readonly string[], lists: readonly unknown[] = []) => ({ lists, sentences: [{ text, evidence }], not_found: [] });
+  const noted = (text: string, note: string) => text.replace(/\.$/u, ` ${note}.`);
+  /** An unusable step and an unusable repair: research stops, its plan the last accepted step's. */
+  const UNUSABLE = [{ wrong: true }, { still: "wrong" }] as const;
+  const TICKETS = "Which Jira tickets were created on October 4, 2026?";
+  const TICKETS_NEED = "tickets created on 2026-10-04";
+  const TICKETS_LIST = { tool: "list", args: { source: "tickets", date_field: "created", since: "2026-10-04", until: "2026-10-04" } } as const;
+  const FOLLOW_UPS = { tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } } as const;
+  /** Follow-ups with due dates: THERM-41 is overdue on October 18, THERM-43 and THERM-47 are due that week. */
+  const DUES: Readonly<Record<number, readonly [string, string]>> = { 1: ["2026-10-09", "October 9, 2026"], 2: ["2026-10-30", "October 30, 2026"], 3: ["2026-10-20", "October 20, 2026"], 7: ["2026-10-22", "October 22, 2026"], 9: ["2026-11-02", "November 2, 2026"] };
+  const dueItems = Array.from({ length: 12 }, (_, index) => followUpItem(index + 1, DUES[index + 1]?.[0]));
+  const FULL12 = `12 follow-ups with owner Mara Lind and status open: ${dueItems.map((item, index) => DUES[index + 1] === undefined ? item.label : `${item.label} (due ${DUES[index + 1]![1]})`).join("; ")}.`;
+  const followUpFacts = (n: number) => `THERM-${40 + n} follow-up (status open, owner Mara Lind, due ${DUES[n]![1]})`;
+
+  it("C1: states all 8 October 4 pages after the trace's own step 2 is refused once, whatever lists the writer gives", async () => {
+    for (const writer of [{ lists: [], sentences: [], not_found: [] }, useL1]) {
+      const h = harness([ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST]), ask(OCT4, OCT4_NEED, "found", MEMBERS, [finish], "N1", WI), ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1", WI), writer], october4Desk());
+      const { response, research: view } = await h.research.answerWithResearch({ question: OCT4 });
+      expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining("cites no list: cite the id of the list that holds its items (L1). ")]);
+      expect(view.rounds[1]!.rejected[0]).not.toContain("keep reading");
+      expect(writersOf(h)).toHaveLength(1);
+      expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: FULL8, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7] }] }] });
+      expect(response.parts[0]!.statements).toHaveLength(1);
+    }
+  });
+
+  it("C2: answers a which-say question declared content with no note, its list id carrying no meaning (misdeclared, a Known limit)", async () => {
+    const h = harness([
+      ask(BUG, BUG_NEED, "open", [], [OCT4_LIST]), ask(BUG, BUG_NEED, "open", [], opens(MEMBERS.slice(0, 4)), "N1"),
+      ask(BUG, BUG_NEED, "found", ["L1", "E12"], [finish], "N1", "content"), say(TRACE, ["L1", "E12"]),
+    ], october4Desk({ open: pageOpen(/^Traceability/u) }));
+    const { response } = await h.research.answerWithResearch({ question: BUG });
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]).toEqual({ question: BUG, status: "answered", statements: [{ text: TRACE, citation_indexes: [0], private: true }] });
+  });
+
+  it("C3, C3b: answers one follow-up's due date from its text on the list's first page, stating no list, whether or not the need cites it", async () => {
+    const text = "When is THERM-41 due?";
+    const need = "THERM-41's due date";
+    for (const evidence of [["E1"], ["L1", "E1"]]) {
+      const desk = pagedDesk(dueItems);
+      const { response, steps, writers, left } = await askV4(desk, text, [ask(text, need, "open", [], [FOLLOW_UPS], undefined, "content"), ask(text, need, "found", evidence, [finish], "N1", "content"), say("THERM-41 follow-up is due October 9, 2026.", ["E1"])]);
+      // A content need never waits for a list's end: the finish is accepted on the first page.
+      expect(steps).toHaveLength(2);
+      expect(desk.list).toHaveBeenCalledOnce();
+      expect(writers[0]!.lists[0]).toMatchObject({ id: "L1", complete: false, count: 10, stated: false });
+      expect(response.parts[0]).toEqual({ question: text, status: "answered", statements: [{ text: "THERM-41 follow-up is due October 9, 2026.", citation_indexes: [0], private: false }] });
+      expect(left).toEqual([]);
+    }
+  });
+
+  it("C3c: states all 12 follow-ups for a due-date question declared which_items, and the member's facts by id; the writer's sentence restates the list (misdeclared)", async () => {
+    const text = "When is THERM-41 due?";
+    const need = "THERM-41's due date";
+    const desk = pagedDesk(dueItems);
+    const { response, steps } = await askV4(desk, text, [
+      ask(text, need, "open", [], [FOLLOW_UPS], undefined, WI), ask(text, need, "found", ["L1"], [finish], "N1", WI),
+      ask(text, need, "open", [], [FOLLOW_UPS], "N1", WI), ask(text, need, "found", ["L1"], [finish], "N1", WI),
+      { lists: [{ id: "L1", members: ["E1"] }], sentences: [{ text: "THERM-41 follow-up is due October 9, 2026.", evidence: ["E1"] }], not_found: [] },
+    ]);
+    expect(steps[2]!.validation_error).toContain("list L1 is unfinished: keep reading the list");
+    expect(desk.list).toHaveBeenCalledTimes(2);
+    expect(response.outcome).toBe("answered");
+    // A name shows its due date where members' due dates differ; THERM-41 costs one name.
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([FULL12, `1 of the 12 follow-ups with owner Mara Lind and status open: ${followUpFacts(1)}.`]);
+    expect(response.citations).toHaveLength(12);
+  });
+
+  it("C4: opens one ticket for who owns it, a content need, and answers from its text or from its row facts selected by id", async () => {
+    const text = "Who owns THERM-46?";
+    const need = "THERM-46's owner";
+    const open = vi.fn(async () => result([ticketBody(46, "THERM-46: fixture work, assigned to Dana Lee.")]) as EvidenceDeskResultV2);
+    const run = async (writer: unknown) => {
+      const h = harness([
+        ask(text, need, "open", [], [{ tool: "list", args: { source: "tickets" } }], undefined, "content"), ask(text, need, "found", ["E6"], [finish], "N1", "content"),
+        ask(text, need, "open", [], [{ tool: "open", args: { id: "E6" } }], "N1", "content"), ask(text, need, "found", ["E6"], [finish], "N1", "content"), writer,
+      ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(41, 10)) as EvidenceDeskResultV2), open });
+      return { h, ...(await h.research.answerWithResearch({ question: text })) };
+    };
+    const owned = await run(say("THERM-46 is owned by Dana Lee.", ["E6"]));
+    // Its row alone is refused with what each kind of support is; opening it returns its body under the row's own id.
+    expect(owned.research.rounds[1]!.rejected).toEqual([expect.stringContaining('need N1 "THERM-46\'s owner" is found but cites no item whose full text you have read: a list shows which items exist')]);
+    expect(writersOf(owned.h)).toHaveLength(1);
+    expect(owned.response.parts[0]).toEqual({ question: text, status: "answered", statements: [{ text: "THERM-46 is owned by Dana Lee.", citation_indexes: [0], private: true }] });
+    const facts = await run({ lists: [{ id: "L1", members: ["E6"] }], sentences: [], not_found: [] });
+    expect(facts.response.parts[0]).toEqual({ question: text, status: "answered", statements: [{ text: "1 of the 10 Jira tickets: THERM-46: Fixture work 46 (status In Progress, owner Dana Lee, created October 4, 2026).", citation_indexes: [0], private: true }] });
+  });
+
+  it("C4b: states the whole list for a one-ticket question declared which_items, the ticket named once (misdeclared)", async () => {
+    const text = "Who owns THERM-46?";
+    const need = "THERM-46's owner";
+    const h = harness([
+      ask(text, need, "open", [], [{ tool: "list", args: { source: "tickets" } }], undefined, WI), ask(text, need, "found", ["L1"], [finish], "N1", WI),
+      { lists: [{ id: "L1", members: ["E6"] }], sentences: [], not_found: [] },
+    ], { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result(tickets(41, 10)) as EvidenceDeskResultV2) });
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+      `10 Jira tickets: ${tickets(41, 10).map(item => item.label).join("; ")}.`, "1 of the 10 Jira tickets: THERM-46: Fixture work 46 (status In Progress, owner Dana Lee, created October 4, 2026).",
+    ]);
+    expect(response.citations).toHaveLength(10);
+  });
+
+  it("CF1: states a Jira list read to its end in full, with no 'at least', though one summary was cut to its label bound", async () => {
+    // The reader's side, a cut summary never marking the page truncated, is pinned in the Jira reader's own tests.
+    const cut = Object.freeze({ ...ticketRow(1), label: `THERM-1: ${"温度计固件校准流程".repeat(9)}…` });
+    const h = harness([ask(TICKETS, TICKETS_NEED, "open", [], [TICKETS_LIST]), ask(TICKETS, TICKETS_NEED, "found", ["L1"], [finish], "N1", WI), useL1],
+      { live_sources: [JIRA], ticket_available: true, list: vi.fn(async () => result([cut, ...tickets(2, 5)], { page_full: false }) as EvidenceDeskResultV2) });
+    const { response } = await h.research.answerWithResearch({ question: TICKETS });
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]).not.toHaveProperty("gap");
+    expect(response.parts[0]!.statements[0]!.text).toBe(`6 Jira tickets created on October 4, 2026: ${cut.label}; ${tickets(2, 5).map(item => item.label).join("; ")}.`);
+  });
+
+  it("CF8c, CF8d: follows a list kind on a one-page question: the list alone for which_items, the checked note for which_say (misdeclared, Known limits)", async () => {
+    const open = vi.fn(async (input: { readonly item: string }) => result([section(PAGES.find(page => page.id === input.item)!, "DVT is on hold pending fixture rework.")]) as EvidenceDeskResultV2);
+    const hold = say("DVT is on hold pending fixture rework.", ["E9"]);
+    // (c) "What does the gate review page say?" declared which_items beside the section: code states L1, and the section's
+    // sentence restates one of its members, so the content is lost.
+    const text = "What does the gate review page say about DVT?";
+    const need = "what the gate review page says about DVT";
+    const stated = harness([ask(text, need, "open", [], [OCT4_LIST], undefined, WI), ask(text, need, "open", [], opens(["E3"]), "N1", WI), ask(text, need, "found", ["L1", "E9"], [finish], "N1", WI), hold], october4Desk({ open }));
+    const c = (await stated.research.answerWithResearch({ question: text })).response;
+    expect(writersOf(stated)).toHaveLength(1);
+    expect(c).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: FULL8 }] }] });
+    expect(c.parts[0]!.statements).toHaveLength(1);
+    // (d) "Is DVT on hold?" declared which_say: refused until a page is read, then noted and partial.
+    const question2 = "Is DVT on hold?";
+    const need2 = "whether DVT is on hold";
+    const checking = harness([
+      ask(question2, need2, "open", [], [OCT4_LIST], undefined, WS), ask(question2, need2, "found", ["L1"], [finish], "N1", WS),
+      ask(question2, need2, "open", [], opens(["E3"]), "N1", WS), ask(question2, need2, "found", ["L1", "E9"], [finish], "N1", WS), hold,
+    ], october4Desk({ open }));
+    const d = await checking.research.answerWithResearch({ question: question2 });
+    expect(d.research.rounds[1]!.rejected).toEqual([expect.stringContaining("is found but cites no item whose full text you have read: a list shows which items exist")]);
+    expect(d.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED, statements: [{ text: "DVT is on hold pending fixture rework (1 of 8 checked so far)." }] }] });
+  });
+
+  it("CF9b, CF9c: follows a content declaration on the October 4 shape: the 4-name sentence is answered, the list stated only when the writer uses it (Known limit)", async () => {
+    for (const plan of [SECTIONS, ["L1", ...SECTIONS]]) for (const lists of [[], [{ id: "L1" }]]) {
+      const h = harness([
+        ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST], undefined, "content"), ask(OCT4, OCT4_NEED, "open", [], opens(MEMBERS.slice(0, 4)), "N1", "content"),
+        ask(OCT4, OCT4_NEED, "found", plan, [finish], "N1", "content"), say(FOUR, SECTIONS, lists),
+      ], october4Desk({ open: pageOpen(NOBODY) }));
+      const { response } = await h.research.answerWithResearch({ question: OCT4 });
+      expect(writersOf(h)).toHaveLength(1);
+      expect(response.outcome).toBe("answered");
+      expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual(lists.length === 0 ? [FOUR] : [FULL8, FOUR]);
+    }
+  });
+
+  it("CF10b, CF12b: answers what one page says from its section when the content need also cites the list or the page's row: no list, no note", async () => {
+    const open = vi.fn(async (input: { readonly item: string }) => result([section(PAGES.find(page => page.id === input.item)!, "DVT is on hold pending fixture rework.")]) as EvidenceDeskResultV2);
+    const text = "What does the gate review page created on October 4 say about DVT?";
+    const need = "what the gate review page says about DVT";
+    const sentence = "The gate review says DVT is on hold pending fixture rework.";
+    for (const plan of [["L1", "E9"], ["E3", "E9"]]) {
+      const h = harness([ask(text, need, "open", [], [OCT4_LIST]), ask(text, need, "open", [], opens(["E3"]), "N1"), ask(text, need, "found", plan, [finish], "N1", "content"), say(sentence, ["E9"])], october4Desk({ open }));
+      const { response, research: view } = await h.research.answerWithResearch({ question: text });
+      expect(view.rounds.map(round => round.rejected)).toEqual([[], [], []]);
+      expect(response.parts[0]).toEqual({ question: text, status: "answered", statements: [{ text: sentence, citation_indexes: [0], private: true }] });
+    }
+  });
+
+  it("CF11: refuses a which_items finish on ten follow-up rows once; reading page 2 gets all 12 stated, a repair on L1 alone leaves the part partial", async () => {
+    const items = Array.from({ length: 12 }, (_, index) => followUpItem(index + 1));
+    const twelve = `12 follow-ups with owner Mara Lind and status open: ${items.map(item => item.label).join("; ")}.`;
+    const text = "What are my open follow-ups?";
+    const need = "my open follow-ups";
+    const ten = Array.from({ length: 10 }, (_, index) => `E${index + 1}`);
+    // (i) and (iii): the repair reads page 2; the writer's two names cite members' text, which only restates the list.
+    const read = await askV4(pagedDesk(items), text, [
+      ask(text, need, "open", [], [FOLLOW_UPS], undefined, WI), ask(text, need, "found", ten, [finish], "N1", WI),
+      ask(text, need, "open", [], [FOLLOW_UPS], "N1", WI), ask(text, need, "found", ["L1"], [finish], "N1", WI), say("Your open follow-ups are THERM-41 and THERM-42.", ["E1", "E2"]),
+    ]);
+    expect(read.steps[2]!.validation_error).toContain(`need N1 "${need}" cites no list: cite the id of the list that holds its items (L1); part 1 need N1 "${need}": list L1 is unfinished: keep reading the list`);
+    expect(read.response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+    expect(read.response.parts[0]!.statements.map(statement => statement.text)).toEqual([twelve]);
+    // (ii): a repair that only cites L1 is refused again; research stops with step 1's plan, whose need cites no list.
+    const repaired = await askV4(pagedDesk(items), text, [
+      ask(text, need, "open", [], [FOLLOW_UPS], undefined, WI), ask(text, need, "found", ten, [finish], "N1", WI), ask(text, need, "found", ["L1"], [finish], "N1", WI),
+      say("You have 10 open follow-ups.", ten),
+    ]);
+    expect(repaired.writers[0]!.research).toMatchObject({ completed: false, stop_reason: "unusable_step" });
+    expect(repaired.writers[0]!.lists[0]).toMatchObject({ id: "L1", stated: false });
+    expect(repaired.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: "You have 10 open follow-ups." }], gap: WHICH }] });
+  });
+
+  it("X5: makes a which_items need research left on rows, or open, partial when it stops: the writer's sentence stays, and no list is stated", async () => {
+    // A read step proposes the need found on the rows while opening four pages; research then stops before any finish.
+    const h = harness([
+      ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST], undefined, WI), ask(OCT4, OCT4_NEED, "found", MEMBERS, opens(MEMBERS.slice(0, 4)), "N1", WI), ...UNUSABLE, say(FOUR, SECTIONS),
+    ], october4Desk({ open: pageOpen(NOBODY) }));
+    const { response, research: view } = await h.research.answerWithResearch({ question: OCT4 });
+    expect(view.stop).toEqual({ reason: "unusable_step", completed: false });
+    expect(view.plan[0]!.needs).toEqual([{ need: OCT4_NEED, kind: "which_items", status: "found", evidence: MEMBERS }]);
+    expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: FOUR }], gap: WHICH }] });
+    expect(response.parts[0]!.statements).toHaveLength(1);
+    // Left open when research stops for no progress (relisting finds nothing new), the need cites no list: partial too.
+    const relist = (date_field: string) => ask(OCT4, OCT4_NEED, "open", [], [{ tool: "list", args: { ...OCT4_LIST.args, date_field } }], "N1", WI);
+    const idle = harness([ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST], undefined, WI), relist("updated"), relist("created"), relist("updated"), { lists: [], sentences: [], not_found: ["Confluence pages created on October 4, 2026"] }], october4Desk());
+    const stopped = await idle.research.answerWithResearch({ question: OCT4 });
+    expect(stopped.research.stop).toEqual({ reason: "no_progress", completed: false });
+    expect(stopped.response.outcome).toBe("partial");
+    expect(stopped.response.parts[0]!.gap).toContain(WHICH);
+  });
+
+  it("X6: tells the person a list's filter when the writer chooses to state it, and never for a list nothing names", async () => {
+    const actions = [
+      record("a1", "Dana will publish the dashboard.", { kind: "action", attributes: { owner: "Dana Lee", status: "open" } }),
+      record("a2", "Dana will order samples.", { kind: "action", attributes: { owner: "Dana Lee" } }),
+    ];
+    const text = "Who publishes the dashboard, and which actions are still open?";
+    const need = "who publishes the dashboard";
+    const run = async (lists: readonly unknown[]) => {
+      const h = harness([
+        ask(text, need, "open", [], [{ tool: "list", args: { source: "meetings", status: "open" } }], undefined, "content"), ask(text, need, "found", ["E1"], [finish], "N1", "content"),
+        say("Dana will publish the dashboard.", ["E1"], lists),
+      ], { list: vi.fn(async () => result(actions) as EvidenceDeskResultV2) });
+      return (await h.research.answerWithResearch({ question: text })).response;
+    };
+    const chosen = await run([{ id: "L1" }]);
+    expect(chosen.parts[0]!.statements.map(statement => statement.text)).toEqual(["2 actions with status open: Meeting a1 (open); Meeting a2.", "Dana will publish the dashboard."]);
+    expect(chosen.notice).toBe("Actions were filtered by status only where they record one, so this list also includes items that record none.");
+    expect(await run([])).not.toHaveProperty("notice");
+  });
+
+  it("X7: refuses a which_say finish before any page was read, offering no change of kind; declared which_items, the content is left out (Known limit)", async () => {
+    const open = pageOpen(/^Traceability/u);
+    // (a) The refusal says what each kind of support is, never which kind the need should be.
+    const early = harness([ask(BUG, BUG_NEED, "open", [], [OCT4_LIST], undefined, WS), ask(BUG, BUG_NEED, "found", ["L1"], [finish], "N1", WS), UNUSABLE[0], { lists: [], sentences: [], not_found: [BUG_NEED] }], october4Desk({ open }));
+    const a = await early.research.answerWithResearch({ question: BUG });
+    expect(a.research.rounds[1]!.rejected[0]).toContain("is found but cites no item whose full text you have read: a list shows which items exist and each member's title, dates, status and owner, never what an item says; open the items for what they say");
+    for (const word of ["which_items", "which_say", "kind"]) expect(a.research.rounds[1]!.rejected[0]).not.toContain(word);
+    expect(a.research.stop).toEqual({ reason: "unusable_step", completed: false });
+    expect(open).not.toHaveBeenCalled();
+    // (b) Declared which_items beside the Traceability section: code states the list, and the section's sentence restates one member.
+    const stated = harness([ask(BUG, BUG_NEED, "open", [], [OCT4_LIST], undefined, WI), ask(BUG, BUG_NEED, "open", [], opens(MEMBERS.slice(0, 4)), "N1", WI), ask(BUG, BUG_NEED, "found", ["L1", "E12"], [finish], "N1", WI), say(TRACE, ["E12"])], october4Desk({ open }));
+    const b = (await stated.research.answerWithResearch({ question: BUG })).response;
+    expect(writersOf(stated)).toHaveLength(1);
+    expect(b).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: FULL8 }] }] });
+    expect(b.parts[0]!.statements).toHaveLength(1);
+  });
+
+  it("X9, X9b: answers a not_found which_say need over the list it checked with the unchecked gap, after one refusal when it cites no list", async () => {
+    const text = "Which pages created on October 4, 2026 mention BUG-999?";
+    const need = "pages created on 2026-10-04 that mention BUG-999";
+    const nothing = { lists: [], sentences: [], not_found: ["pages created on October 4 that mention BUG-999"] };
+    const run = (finishes: readonly unknown[]) => harness([ask(text, need, "open", [], [OCT4_LIST], undefined, WS), ask(text, need, "open", [], opens(MEMBERS.slice(0, 4)), "N1", WS), ...finishes, nothing], october4Desk({ open: pageOpen(NOBODY) }));
+    for (const finishes of [[ask(text, need, "not_found", ["L1"], [finish], "N1", WS)], [ask(text, need, "not_found", [], [finish], "N1", WS), ask(text, need, "not_found", ["L1"], [finish], "N1", WS)]]) {
+      const h = run(finishes);
+      const { response, research: view } = await h.research.answerWithResearch({ question: text });
+      expect(view.stop).toEqual({ reason: "finished", completed: true });
+      expect(view.rounds.at(-1)!.rejected).toHaveLength(finishes.length - 1);
+      expect(writersOf(h)).toHaveLength(1);
+      expect(response).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: `Not found: pages created on October 4 that mention BUG-999. ${UNCHECKED}` }] });
+    }
+    // A repair that repeats the shape ends research; its plan's which_say need cites no list: partial, never an unqualified not_found.
+    const repeated = run([ask(text, need, "not_found", [], [finish], "N1", WS), ask(text, need, "not_found", [], [finish], "N1", WS)]);
+    const { response, research: view } = await repeated.research.answerWithResearch({ question: text });
+    expect(view.stop).toEqual({ reason: "unusable_step", completed: false });
+    expect(response.outcome).toBe("partial");
+    expect(response.parts[0]!.gap).toContain("Missing context: pages created on October 4 that mention BUG-999.");
+    expect(response.parts[0]!.gap).toContain(WHICH);
+  });
+
+  it("X9c, X10: makes a which_say need that research left without its list partial when it stops: not found, or a sentence with no note", async () => {
+    const open = pageOpen(/^Traceability/u);
+    // X9c: a read step proposes not_found, citing nothing; research stops before any finish.
+    const absent = harness([
+      ask(BUG, BUG_NEED, "open", [], [OCT4_LIST], undefined, WS), ask(BUG, BUG_NEED, "not_found", [], opens(MEMBERS.slice(0, 4)), "N1", WS), ...UNUSABLE,
+      { lists: [], sentences: [], not_found: ["pages created on October 4 that mention BUG-412"] },
+    ], october4Desk({ open }));
+    const notFound = await absent.research.answerWithResearch({ question: BUG });
+    expect(notFound.research.plan[0]!.needs).toEqual([{ need: BUG_NEED, kind: "which_say", status: "not_found", evidence: [] }]);
+    expect(notFound.response.outcome).toBe("partial");
+    expect(notFound.response.parts[0]!.gap).toContain(WHICH);
+    // X10: left open, citing no list; the writer's sentence about Traceability stays, with no note, since no list is checked.
+    const open10 = harness([
+      ask(BUG, BUG_NEED, "open", [], [OCT4_LIST], undefined, WS), ask(BUG, BUG_NEED, "open", [], opens(MEMBERS.slice(0, 4)), "N1", WS), ...UNUSABLE, say(TRACE, ["E12"]),
+    ], october4Desk({ open }));
+    const kept = (await open10.research.answerWithResearch({ question: BUG })).response;
+    expect(kept).toMatchObject({ outcome: "partial", parts: [{ status: "partial", statements: [{ text: TRACE }], gap: WHICH }] });
+  });
+
+  it("X11, X11b: never waits for the end of a which_say follow-up list and notes it; its absence still waits for the end", async () => {
+    const items = Array.from({ length: 12 }, (_, index) => followUpItem(index + 1));
+    const fan = "Which of my open follow-ups are about the fan curve?";
+    const fanNeed = "my open follow-ups about the fan curve";
+    const curve = "THERM-42 follow-up and THERM-44 follow-up say to ship fan curve v2 before DVT.";
+    const found = await askV4(pagedDesk(items), fan, [ask(fan, fanNeed, "open", [], [FOLLOW_UPS], undefined, WS), ask(fan, fanNeed, "found", ["L1", "E2", "E4"], [finish], "N1", WS), say(curve, ["E2", "E4"])]);
+    expect(found.steps).toHaveLength(2);
+    // Every shown follow-up row was read in full, so all 10 were checked, of a list with a next page.
+    expect(found.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED, statements: [{ text: noted(curve, "(10 of at least 10 checked so far)") }] }] });
+    const oven = "Which of my open follow-ups are about the oven?";
+    const ovenNeed = "my open follow-ups about the oven";
+    const absent = await askV4(pagedDesk(items), oven, [
+      ask(oven, ovenNeed, "open", [], [FOLLOW_UPS], undefined, WS), ask(oven, ovenNeed, "not_found", ["L1"], [finish], "N1", WS),
+      ask(oven, ovenNeed, "open", [], [FOLLOW_UPS], "N1", WS), ask(oven, ovenNeed, "not_found", ["L1"], [finish], "N1", WS),
+      { lists: [], sentences: [], not_found: ["open follow-ups about the oven"] },
+    ]);
+    expect(absent.steps[2]!.validation_error).toContain("is not_found after fewer than two completed searches or a completed list");
+    // All 12 rows were shown, so all were checked: no note and no gap of its own.
+    expect(absent.response).toMatchObject({ outcome: "not_found", parts: [{ status: "not_found", statements: [], gap: "Not found: open follow-ups about the oven." }] });
+  });
+
+  it("X12: makes a list statement private when one member it names is", async () => {
+    const rows = [
+      listed("a1", { kind: "action", list_label: "Publish the DVT dashboard (DVT review, 2026-10-01)", attributes: { owner: "Mara Quinn" } }),
+      listed("a2", { kind: "action", visibility: "approver_only", list_label: "Order fixture spares (DVT review, 2026-10-01)", attributes: { owner: "Mara Quinn" } }),
+    ];
+    const text = "Which actions does Mara own?";
+    const h = harness([ask(text, "actions owned by Mara", "open", [], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]), ask(text, "actions owned by Mara", "found", ["L1"], [finish], "N1", WI), useL1], { list: vi.fn(async () => result(rows) as EvidenceDeskResultV2) });
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(response.parts[0]!.statements).toEqual([{ text: "2 actions with owner Mara: Publish the DVT dashboard (DVT review, 2026-10-01); Order fixture spares (DVT review, 2026-10-01).", citation_indexes: [0, 1], private: true }]);
+  });
+
+  it("X13: notes a content sentence about a member of a which_say list too (Known limit)", async () => {
+    const open = vi.fn(async (input: { readonly item: string }) => {
+      const row = PAGES.find(page => page.id === input.item)!;
+      return result([section(row, row.label.startsWith("Traceability") ? "BUG-412 is traced to TC-D-03." : row.label.startsWith("PRD") ? "Readings within 0.1 C." : "No defects are discussed.")]) as EvidenceDeskResultV2;
+    });
+    const text = "Which pages created on October 4, 2026 mention BUG-412, and what does the PRD require?";
+    const prdNeed = "what the PRD requires";
+    const h = harness([
+      askAll(text, [[BUG_NEED, "open", [], WS], [prdNeed, "open", [], "content"]], [OCT4_LIST]),
+      askAll(text, [[BUG_NEED, "open", [], WS, "N1"], [prdNeed, "open", [], "content", "N2"]], opens(MEMBERS.slice(0, 4))),
+      askAll(text, [[BUG_NEED, "open", [], WS, "N1"], [prdNeed, "open", [], "content", "N2"]], opens(["E5"])),
+      askAll(text, [[BUG_NEED, "found", ["L1", "E12"], WS, "N1"], [prdNeed, "found", ["E13"], "content", "N2"]], [finish]),
+      { lists: [], sentences: [{ text: TRACE, evidence: ["E12"] }, { text: "The PRD requires readings within 0.1 C.", evidence: ["E13"] }], not_found: [] },
+    ], october4Desk({ open }));
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED }] });
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([noted(TRACE, "(5 of 8 checked so far)"), "The PRD requires readings within 0.1 C (5 of 8 checked so far)."]);
+  });
+
+  it("X14: notes the October 4 subset for a which-items question declared which_say, and states no list unless the writer uses it (Known limit)", async () => {
+    const h = harness([
+      ask(OCT4, OCT4_NEED, "open", [], [OCT4_LIST], undefined, WS), ask(OCT4, OCT4_NEED, "found", ["L1"], [finish], "N1", WS),
+      ask(OCT4, OCT4_NEED, "open", ["L1"], opens(MEMBERS.slice(0, 4)), "N1", WS), ask(OCT4, OCT4_NEED, "found", ["L1", ...SECTIONS], [finish], "N1", WS), say(FOUR, SECTIONS),
+    ], october4Desk({ open: pageOpen(NOBODY) }));
+    const { response, research: view } = await h.research.answerWithResearch({ question: OCT4 });
+    expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining("is found but cites no item whose full text you have read")]);
+    expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED }] });
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([noted(FOUR, "(4 of 8 checked so far)")]);
+  });
+
+  it("X15: keeps both sentences, noted, when a which_items and a which_say need share a list (Known limit)", async () => {
+    const text = "Which pages were created on October 4, 2026, and which of them mention BUG-412?";
+    const h = harness([
+      askAll(text, [[OCT4_NEED, "open", [], WI], [BUG_NEED, "open", [], WS]], [OCT4_LIST]),
+      askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [BUG_NEED, "open", [], WS, "N2"]], opens(MEMBERS.slice(0, 4))),
+      askAll(text, [[OCT4_NEED, "found", ["L1"], WI, "N1"], [BUG_NEED, "found", ["L1", "E12"], WS, "N2"]], [finish]),
+      { lists: [], sentences: [{ text: TRACE, evidence: ["E12"] }, { text: FOUR, evidence: SECTIONS }], not_found: [] },
+    ], october4Desk({ open: pageOpen(/^Traceability/u) }));
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED }] });
+    expect(response.parts[0]!.statements.map(statement => statement.text)).toEqual([FULL8, noted(TRACE, "(4 of 8 checked so far)"), noted(FOUR, "(4 of 8 checked so far)")]);
+  });
+
+  it("X17: states a where date range with its condition; a selection by id of the same members states their facts, never the condition", async () => {
+    const text = "Which of my open tasks are due this week?";
+    const need = "my open follow-ups due from 2026-10-18 to 2026-10-24";
+    const week = { text: "THERM-43 follow-up and THERM-47 follow-up are due this week.", evidence: ["E3", "E7"] };
+    // Follow-ups take no date filter: research reads the whole list, and the writer selects by due date.
+    const run = (lists: readonly unknown[], sentences: readonly unknown[] = [week]) => askV4(pagedDesk(dueItems), text, [
+      ask(text, need, "open", [], [FOLLOW_UPS], undefined, WI), ask(text, need, "open", [], [FOLLOW_UPS], "N1", WI), ask(text, need, "found", ["L1"], [finish], "N1", WI),
+      { lists, sentences, not_found: [] },
+    ], { now: "2026-10-18T17:00:00.000Z" });
+    const lead = "of the 12 follow-ups with owner Mara Lind and status open";
+    // (a) The writer's sentence only restates members of the stated list, so it is left out.
+    const a = await run([{ id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } }]);
+    expect(a.writers[0]).toMatchObject({ today: "2026-10-18" });
+    expect(a.response).toMatchObject({ outcome: "answered", parts: [{ status: "answered" }] });
+    expect(a.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`2 ${lead} are due from October 18 to October 24, 2026: THERM-43 follow-up (due October 20, 2026); THERM-47 follow-up (due October 22, 2026).`]);
+    // (b) The same members by id: the list in full, then their facts; the condition is not said (Known limit).
+    const b = await run([{ id: "L1", members: ["E3", "E7"] }]);
+    expect(b.response.outcome).toBe("answered");
+    expect(b.response.parts[0]!.statements.map(statement => statement.text)).toEqual([FULL12, `2 ${lead}: ${followUpFacts(3)}; ${followUpFacts(7)}.`]);
+    // (c) A range no member's due date falls in: no statement, and the selection's not-found phrase.
+    const c = await run([{ id: "L1", where: { field: "due", since: "2026-10-23", until: "2026-10-29" } }], []);
+    expect(c.response).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", statements: [], gap: "Not found: follow-ups with owner Mara Lind and status open due from October 23 to October 29, 2026." }] });
+    // (d) "Which are overdue?": an open range through yesterday.
+    const d = await run([{ id: "L1", where: { field: "due", until: "2026-10-17" } }], []);
+    expect(d.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`1 ${lead} is due through October 17, 2026: THERM-41 follow-up.`]);
+  });
+
+  it("X18: selects pages by an updated date on a list read by creation date, each day the list's time zone's", async () => {
+    // Late on Oct 10 in UTC (Oct 11 in Tokyo), early on Oct 11 in UTC (Oct 10 in Los Angeles), Oct 12, and one page with no updated date.
+    const updates = ["2026-10-10T23:30:00.000Z", "2026-10-11T03:00:00.000Z", "2026-10-12T09:00:00.000Z"];
+    const rows = PAGES.map((row, index) => {
+      const { updated: _updated, ...created } = row.dates!;
+      return Object.freeze({ ...row, dates: index === 3 ? created : updates[index] === undefined ? row.dates : { ...row.dates, updated: updates[index] } });
+    });
+    const desk = () => pagedDesk(rows, { live_sources: [CONFLUENCE], size: 50 });
+    const text = "Which of the Confluence pages created on October 4, 2026 were updated after October 10?";
+    const need = "pages created on 2026-10-04";
+    const run = (time_zone: string, writer: unknown, repair?: unknown) => askV4(desk(), text, [
+      ask(text, need, "open", [], [OCT4_LIST], undefined, WI), ask(text, need, "found", ["L1"], [finish], "N1", WI), writer, ...(repair === undefined ? [] : [repair]),
+    ], { now: "2026-10-18T01:00:00.000Z", time_zone });
+    const since = { lists: [{ id: "L1", where: { field: "updated", since: "2026-10-11" } }], sentences: [], not_found: [] };
+    const tokyo = await run("Asia/Tokyo", since);
+    expect(tokyo.response.outcome).toBe("answered");
+    expect(tokyo.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`3 of the 8 Confluence pages created on October 4, 2026 were updated since October 11, 2026: ${OCT4_NAMES.slice(0, 3).join("; ")}.`]);
+    const angeles = await run("America/Los_Angeles", since);
+    expect(angeles.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`1 of the 8 Confluence pages created on October 4, 2026 was updated since October 11, 2026: ${OCT4_NAMES[2]}.`]);
+    // (b) A sentence on a row's date alone goes back once, the reason naming where; repeated, the list stands and the part is partial.
+    const claim = { lists: [], sentences: [{ text: "The PRD was updated after October 10.", evidence: ["E5"] }], not_found: [] };
+    const repeated = await run("UTC", claim, claim);
+    expect(repeated.writers[1]!.validation_error).toContain('through "lists" (with "where" or "members")');
+    expect(repeated.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNSUPPORTED }] });
+    expect(repeated.response.parts[0]!.statements.map(statement => statement.text)).toEqual([FULL8]);
+  });
+
+  it("X19: answers which Jira tickets mention BUG-412 from search as content; declared a list kind, it follows the declaration (Known limits)", async () => {
+    const hits = [1, 4, 9, 12, 38, 46, 47, 48, 50];
+    const all = Array.from({ length: 60 }, (_, index) => ticketRow(index + 1));
+    const desk = () => ({
+      live_sources: [JIRA], ticket_available: true,
+      search: vi.fn(async () => result(hits.map(n => ticketBody(n, `THERM-${n}: references BUG-412.`))) as EvidenceDeskResultV2),
+      list: vi.fn(async (input: EvidenceDeskListInputV2) => (input.cursor === undefined ? result(all.slice(0, 50), { next_cursor: "page-2", page_full: false }) : result(all.slice(50), { page_full: false })) as EvidenceDeskResultV2),
+    });
+    const text = "Which Jira tickets mention BUG-412?";
+    const need = "Jira tickets that mention BUG-412";
+    const SEARCH = { tool: "search", args: { query: "BUG-412", source: "tickets" } } as const;
+    const LIST = { tool: "list", args: { source: "tickets" } } as const;
+    const found = hits.map((_, index) => `E${index + 1}`);
+    const named = say(`${hits.map(n => `THERM-${n}`).join(", ")} mention BUG-412.`, found);
+    // (a) Content: search finds the hits, which are read in full; the writer names them. No list, no note.
+    const content = harness([ask(text, need, "open", [], [SEARCH], undefined, "content"), ask(text, need, "found", found, [finish], "N1", "content"), named], desk());
+    const a = (await content.research.answerWithResearch({ question: text })).response;
+    expect(a.parts[0]).toEqual({ question: text, status: "answered", statements: [{ text: named.sentences[0]!.text, citation_indexes: found.map((_, index) => index), private: true }] });
+    // (b) which_say: refused until it cites a list; research lists the source's first page (25 rows shown, of which 4 are
+    // hits), and the note measures little.
+    const say412 = harness([
+      ask(text, need, "open", [], [SEARCH], undefined, WS), ask(text, need, "found", found, [finish], "N1", WS), ask(text, need, "open", found, [LIST], "N1", WS),
+      ask(text, need, "found", ["L1", ...found], [finish], "N1", WS), named,
+    ], desk());
+    const b = await say412.research.answerWithResearch({ question: text });
+    expect(b.research.rounds[1]!.rejected).toEqual([expect.stringContaining("cites no list: cite the id of the list that holds its items (from lists), or list them first")]);
+    expect(b.response).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: UNCHECKED, statements: [{ text: noted(named.sentences[0]!.text, "(4 of at least 25 checked so far)") }] }] });
+    // (c) which_items: research reads the whole source, code states it, and the sentence naming the hits restates its members.
+    const read = ask(text, need, "open", [], [LIST], "N1", WI);
+    const onList = ask(text, need, "found", ["L1"], [finish], "N1", WI);
+    const items412 = harness([ask(text, need, "open", [], [SEARCH], undefined, WI), ask(text, need, "found", found, [finish], "N1", WI), read, onList, read, onList, read, onList, named], desk());
+    const { response: c, research: view } = await items412.research.answerWithResearch({ question: text });
+    // Each finish before the list's end is refused with "keep reading"; research shows 25 rows a page, so 60 take three reads.
+    expect(view.rounds.flatMap(round => round.rejected).filter(reason => reason.includes("keep reading the list"))).toHaveLength(2);
+    expect(view.lists).toEqual([expect.objectContaining({ id: "L1", shown: 60, ended: true, complete: true })]);
+    expect(c.outcome).toBe("answered");
+    expect(c.parts[0]!.statements.map(statement => statement.text)).toEqual([`60 Jira tickets: ${all.slice(0, 25).map(item => item.label).join("; ")}; and 35 more.`]);
+  });
+
+  it("X20: asks research to read every listed page for a which_say need, and answers with no note once it has", async () => {
+    // Seven of the eight pages mention BUG-412 in the export; ECHO Product Pipeline — Start Here (E1, section E9) does not.
+    const h = harness([
+      ask(BUG, BUG_NEED, "open", [], [OCT4_LIST], undefined, WS), ask(BUG, BUG_NEED, "open", ["L1"], opens(MEMBERS.slice(0, 4)), "N1", WS),
+      ask(BUG, BUG_NEED, "open", ["L1"], opens(MEMBERS.slice(4)), "N1", WS), ask(BUG, BUG_NEED, "found", ["L1", "E10", "E11", "E12", "E13", "E14", "E15", "E16"], [finish], "N1", WS),
+      say("Seven of the eight pages mention BUG-412: every page but ECHO Product Pipeline — Start Here.", ["E10", "E11", "E12", "E13", "E14", "E15", "E16"]),
+    ], october4Desk({ open: pageOpen(/^(?!ECHO Product Pipeline)/u) }));
+    const { response } = await h.research.answerWithResearch({ question: BUG });
+    // The stop rule asks research on a which_say need to read every member its list has shown, without waiting for its end.
+    expect(h.inputs[0]!.system_prompt).toContain("for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.");
+    expect(response.parts[0]).toEqual({ question: BUG, status: "answered", statements: [{ text: "Seven of the eight pages mention BUG-412: every page but ECHO Product Pipeline — Start Here.", citation_indexes: [0, 1, 2, 3, 4, 5, 6], private: true }] });
+  });
+});
+
 describe("a task goal keeps the rules before ADR-0041", () => {
-  it("sees inventories, never lists, cites no list id and records none", async () => {
+  it("sees inventories, never lists, cites no list id and records none (X16)", async () => {
     const approved = record("approved", "Approved: ship the DVT fixture.");
     const task: AgenticBriefV1 = {
       goal: { kind: "task", task: `Find what ${agenticStartingSlotV1(1)} affects.` }, starting: [{ citation: approved.citation, if_unreadable: "fail" }],

@@ -172,7 +172,7 @@ it('omits a disconnected Slack source without provider calls or fabricated Slack
   } finally { await f.close(); }
 });
 
-it('returns a meeting record through the public evidence search and open doors without its list label (ADR-0041)', async () => {
+it('returns a meeting record through the public evidence search and open doors without its list label (ADR-0041, X21)', async () => {
   // The desk names a meeting record in Ask's list rows by a line of its own text; that label, like named dates and refs,
   // is internal research metadata, and the public desk contract carries none of it.
   const f = await allSourceFixture();
