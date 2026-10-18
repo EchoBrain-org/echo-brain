@@ -383,7 +383,8 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     ["one meeting's actions by due date", { selected: [due("2026-10-09"), due("2026-10-12"), due(), due(" 2026-10-09")] }, `4 items: ${review} (2 actions, due October 9, 2026); ${review} (due October 12, 2026); ${review}.`],
     // A kind filter is the noun, not a phrase; three decisions of one meeting are one name.
     ["three decisions of one meeting", { noun: agenticListMembersNounV1({ selector: "meetings" }, ["decision"]), filter: { kind: "decision", owner: "Dana" }, selected: decisions }, `3 decisions with owner Dana: ${sync} (3 decisions).`],
-    // A selection by an updated range or a created day says its condition in its lead (owner, status and due selections: the X1, R9 and X17 rows).
+    // A selection says its condition in its lead, one member "has" it, and a list not read to its end says how many were listed (more: X1, R9, X17).
+    ["one member's status selection of a list not read to its end", { noun: TICKETS, count: 50, complete: false, where: { field: "status", value: "Done" }, selected: [owners[1]!] }, "At least 1 Jira ticket has status Done (50 listed so far): THERM-2: B."],
     ["an updated range of a list not read to its end", { noun: TICKETS, filter: OCTOBER_4.filter, count: 25, complete: false, where: { field: "updated", since: "2026-10-11" }, selected: reviewed.slice(0, 3).map(value => ({ title: value.title })) }, "At least 3 Jira tickets created on October 4, 2026 were updated since October 11, 2026 (25 listed so far): THERM-1: A; THERM-2: A; THERM-3: A."],
     ["a created day", { noun: PAGES, count: 8, where: { field: "created", since: "2026-10-04", until: "2026-10-04" }, selected: [{ title: "PRD" }] }, "1 of the 8 Confluence pages was created on October 4, 2026: PRD."],
     // Members selected by id: each one's row facts, every date in the list's time zone (03:00 UTC on October 5 is October 4 in Los Angeles).
