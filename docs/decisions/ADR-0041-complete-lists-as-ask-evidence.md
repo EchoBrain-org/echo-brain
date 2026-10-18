@@ -331,14 +331,13 @@ route, header, database table or client changes.
   answers empty and never substitutes another field. A desk asked for an owner
   or status filter a source cannot apply refuses the read too.
 - **Code states every list a `which_items` need cites,** with or without
-  members, in full unless the writer selected it by `where`, whatever the
-  writer replies: no list, a selection by id only, not_found, or no usable
-  reply. No repair asks for it. The writer's own not_found phrases stay in the
-  gap. A need code reads a list
-  for (a found or open `which_items` need, or a `which_say` need of any status)
-  that cites no list research read (rows only, or nothing when research stopped
-  early) makes the part partial: "I could not confirm the full list of items
-  asked for."
+  members, in full unless the writer selected it by `where`, whatever the writer
+  replies: no list, a selection by id only, not_found, or no usable reply. No
+  repair asks for it. The writer's own not_found phrases stay in the gap. A need
+  code reads a list for (a found or open `which_items` need, or a `which_say`
+  need of any status) that cites no list research read (rows only, or nothing
+  when research stopped early) makes the part partial: "I could not confirm the
+  full list of items asked for."
 - **A writer's sentence stands only on text.** Its citations are the items
   whose text the writer read. Row ids and list ids in it are not citations. A
   sentence with no such citation is left out. If it cites a row or a list the
