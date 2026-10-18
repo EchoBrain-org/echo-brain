@@ -678,11 +678,11 @@ export interface AgenticListStatementInputV1 {
  * writer selected by id: "1 of the 8 Confluence pages created ...: PRD (status
  * current, created October 4, 2026)", each named alone with every row fact it
  * records; however many it selects, such a statement gives row facts, never
- * which items exist, unless a use of the list in full or by `where` selects
- * the same members (`which`, or `where`). Otherwise members that share a label are one name
- * (agenticListMemberNamesV1). Names are taken in
- * list order while the members they cover fit `share`, and stop early when the
- * statement would pass AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free`
+ * which items exist, unless a use of the list in full (`which`) or by `where`
+ * selects the same members. Otherwise members that share a label are one name
+ * (agenticListMemberNamesV1). Names are taken in list order while the members
+ * they cover fit `share`, and stop early when the statement would pass
+ * AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free`
  * costs no share. The first name is always written, covering its free members
  * and at most `share` others: a name never covers a member the statement does
  * not cite. `named` is how many of `selected` the names cover, so "and N more"
