@@ -66,7 +66,11 @@ is scored by code as `declared_kinds`, beside each run's `kinds`: it passes when
 the set of kinds the final plan declares, a need without a kind counting as
 content, is exactly the case's ("need kinds as the case expects"). A failed run
 of such a case scores zero on it. It is a score of its own, never part of
-complete and supported. Only Ask cases have list parts: impact
+complete and supported. Every held-out Ask case names its kinds, so the score
+also measures the step prompt's kind rule on questions tuning never sees, and
+its examples name nothing any case asks about
+(`tests/architecture/ask-kind-examples-eval-independence.test.ts`), so the
+score never measures recall of an example. Only Ask cases have list parts: impact
 cards and sweeps record no lists. The judge sees research's lists as rows
 (filter, completeness, members' titles, dates and details, never text), and
 for any part may take a member's own title, dates, status or owner from its

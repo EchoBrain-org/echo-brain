@@ -396,9 +396,13 @@ route, header, database table or client changes.
   both list kinds are for a set the question picks by list facts, so which
   items say something when the question picks no such set is content, found by
   search; a fact about one item is content. Its examples are provider-neutral,
-  as Ask's prompts must be: "which tickets mention BUG-412: search finds them",
-  and the example step asks "Which tickets were created on October 4, and which
-  of them mention the fixture vendor?". The reply shape names the three kinds,
+  as Ask's prompts must be, and name nothing the research-loop evaluation asks
+  about, no name and no run of four words of its questions, so the
+  evaluation's declared-kind score measures the rule, not recall of an example
+  (`tests/architecture/ask-kind-examples-eval-independence.test.ts`): "which
+  pages mention the recall: search finds them", and the example step asks
+  "Which tickets were updated since Monday, and which of them mention the
+  recall?". The reply shape names the three kinds,
   and the example has one need of each. Rule 4 and the stop rule say a
   `which_items` need is supported once each list it cites has more false, and
   that research on a `which_say` need stops once it has read every member its
@@ -430,7 +434,10 @@ declared kind, and a case may name the kinds its plan should declare
 pages mention BUG-412 (`which_say`), so an answer that is only the list fails.
 Another asks which Jira tickets mention BUG-412 (`content`): it picks no set by
 list facts, so search answers it, and a plan that declares a list kind fails.
-Both keys, drafted from the export, await the founder's confirmation.
+Both keys, drafted from the export, await the founder's confirmation. Every
+held-out Ask case names its kinds too, so the score also measures rule 3 on
+questions that tuning never sees: "Which THERM tickets are assigned to me, and
+when are they due?" is `which_items`, and the others ask what items say.
 
 ### Safety rules kept
 
@@ -618,9 +625,10 @@ not candidates.
 **Known limits.** Code follows the declaration, and nothing at run time checks
 it: a check would have to read meaning from citations, which Retirements 9 to
 11 retire. The guards are the required kind, the shape that names all three
-kinds, rule 3 with an example need of each, the content refusal that offers no
-change of kind, and the evaluation's declared-kind score (`expected_kinds`),
-"lists named in full" and its two BUG-412 cases.
+kinds, rule 3 with an example need of each (naming nothing the evaluation asks
+about), the content refusal that offers no change of kind, and the
+evaluation's declared-kind score (`expected_kinds`, on every held-out Ask case
+too), "lists named in full" and its two BUG-412 cases.
 
 - **A which-question declared `content`, or left without a kind,** gets
   content's rules: no list is stated unless the writer uses it. The held answer

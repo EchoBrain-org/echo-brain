@@ -110,9 +110,11 @@ describe("agentic Ask model protocol parity", () => {
     expect(canonicalSha256(ASK_SEARCH_ONLY_STEP_PROMPT)).toBe("sha256:2fe343eaa46666b27ff60f9ea03aef4a517ed0707d08791284f5e2f0e3b3e77b");
     // Research declares each need's kind, with an example of each; a list's id supports only the list kinds.
     expect(rule(ASK_STEP_PROMPT, 3)).toMatch(/^3\. Give each need a kind\. "which_items": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel/u);
-    expect(rule(ASK_STEP_PROMPT, 3)).toContain("\"which_say\": which members of such a picked set say something (\"which of the pages created on October 4 mention BUG-412\")");
-    expect(rule(ASK_STEP_PROMPT, 3)).toContain("which items say something when the question picks no set by a date, owner, status, kind or channel (\"which tickets mention BUG-412\": search finds them)");
-    expect(rule(ASK_STEP_PROMPT, 3)).toContain("(\"is DVT on hold\", \"who owns THERM-46\", \"when was the PRD created\")");
+    // Its examples name nothing the research-loop evaluation asks about (tests/architecture/ask-kind-examples-eval-independence.test.ts).
+    expect(rule(ASK_STEP_PROMPT, 3)).toContain("picked by a date, owner, status, kind or channel (\"tickets updated since Monday\", \"my open follow-ups\", \"my open tasks due this week\")");
+    expect(rule(ASK_STEP_PROMPT, 3)).toContain("\"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\")");
+    expect(rule(ASK_STEP_PROMPT, 3)).toContain("which items say something when the question picks no set by a date, owner, status, kind or channel (\"which pages mention the recall\": search finds them)");
+    expect(rule(ASK_STEP_PROMPT, 3)).toContain("(\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\")");
     expect(rule(ASK_STEP_PROMPT, 3)).toContain("Mark a which_items need \"found\" with the id of the list that answers it (such as L1, from lists). Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen");
     expect(rule(ASK_STEP_PROMPT, 3)).not.toContain("For which items exist, and each one's title, dates, status and owner, a list's id");
     expect(rule(STEP_PROMPT, 3)).not.toContain("kind");

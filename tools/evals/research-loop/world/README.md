@@ -122,6 +122,10 @@ be reverted, but ECHO cannot read either of them.
   are such cases. An Ask case's `expected_kinds` names the need kinds its plan
   should declare ([ADR-0041](../../../../docs/decisions/ADR-0041-complete-lists-as-ask-evidence.md));
   a plan that declares any other set of kinds fails the declared-kind check.
+  Every held-out Ask case names them. Ask's step prompt teaches the kinds with
+  examples that name nothing a case asks about: a new question that shares a
+  name or a run of four words with them fails `npm run test:architecture`
+  until one of them is reworded.
 - `never_appears` lists the M6 items in every case. Any trace of them in a
   research result, the notes or an answer fails the run.
 - THERM items carry "SYNTHETIC MOCK" banners. An answer that reports a mock

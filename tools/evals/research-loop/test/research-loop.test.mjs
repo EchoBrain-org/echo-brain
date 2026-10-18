@@ -771,6 +771,14 @@ test("each Ask run reports its plan's needs by declared kind, and a case may nam
   };
   assert.deepEqual([declared(jira, [need("content", ["E1"])]), declared(jira, [need(undefined, ["E1"])]), declared(jira, [need("which_say")])], [true, true, false]);
   assert.deepEqual([declared(confluence, [need("which_say")]), declared(confluence, [need("which_items"), need("which_say")])], [true, false]);
+  // Every held-out Ask case names its kinds, so the score also measures rule 3 on questions tuning never sees: a set one
+  // owner holds is which_items; the rest ask what items say.
+  const held = dataset.cases.filter(entry => entry.split === "holdout" && entry.trigger === "ask");
+  assert.ok(held.length > 0);
+  assert.deepEqual(held.filter(entry => entry.expected_kinds === undefined).map(entry => entry.id), []);
+  assert.deepEqual(held.filter(entry => entry.expected_kinds.includes("which_items")).map(entry => [entry.id, entry.expected_kinds]), [["my-assigned-therm-tickets", ["which_items"]]]);
+  const assigned = caseById("my-assigned-therm-tickets");
+  assert.deepEqual([declared(assigned, [need("which_items")]), declared(assigned, [need("which_items"), need("content", ["E1"])])], [true, false]);
   // A case that names no kinds has no such check, and a failed run of one that does scores zero on it.
   const other = caseById("bug-fix-dates-vs-dvt-review");
   assert.equal("declared_kinds" in codeChecks(other, completedRun(other, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } }), dataset), false);
