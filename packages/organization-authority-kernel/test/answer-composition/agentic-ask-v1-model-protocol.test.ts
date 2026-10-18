@@ -198,7 +198,13 @@ describe("agentic Ask model protocol parity", () => {
     // A list id after 12 item ids is never the one cut: research cited the rows, was asked for the list's id, and appended it.
     const appended = { ...value, parts: [{ question: "q", needs: [{ need: "n", status: "found", evidence: [...Array.from({ length: 15 }, (_, index) => `E${index + 1}`), "L1"] }], notes: "" }] };
     expect(parseStep(appended, { lists: true }).parts[0]!.needs[0]!.evidence).toEqual([...Array.from({ length: 11 }, (_, index) => `E${index + 1}`), "L1"]);
-    expect(parseAnswer({ sentences: [{ text: "x", evidence: [...Array.from({ length: 13 }, (_, index) => `E${index + 1}`), "L2"] }], not_found: [] }).sentences[0]!.evidence.at(-1)).toBe("L2");
+    // A sentence's list ids cite nothing (W1): past 12 ids it keeps its first 12, never a list id over an item it cites.
+    expect(parseAnswer({ sentences: [{ text: "x", evidence: [...Array.from({ length: 13 }, (_, index) => `E${index + 1}`), "L2"] }], not_found: [] }).sentences[0]!.evidence)
+      .toEqual(Array.from({ length: 12 }, (_, index) => `E${index + 1}`));
+    expect(parseAnswer({ sentences: [{ text: "x", evidence: [...Array.from({ length: 12 }, (_, index) => `E${index + 1}`), "L1"] }], not_found: [] }).sentences[0]!.evidence)
+      .toEqual(Array.from({ length: 12 }, (_, index) => `E${index + 1}`));
+    expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", ...Array.from({ length: 12 }, (_, index) => `E${index + 1}`)] }], not_found: [] }).sentences[0]!.evidence)
+      .toEqual(["L1", ...Array.from({ length: 11 }, (_, index) => `E${index + 1}`)]);
     // The writer's evidence keeps list ids beside item ids.
     expect(parseAnswer({ sentences: [{ text: "x", evidence: ["L1", "E2"] }], not_found: [] }).sentences[0]!.evidence).toEqual(["L1", "E2"]);
   });

@@ -168,17 +168,19 @@ export function cleanId(value: unknown): string | null {
 /** Raw entries read from one evidence array before the cap. */
 const EVIDENCE_IDS_READ = 64;
 /**
- * Evidence ids, each once, at most 12. With `lists` (an Ask step, ADR-0041), list ids such as L1 are kept beside item
- * ids, and never the ones the cap cuts: past 12 ids, every list id stays and item ids fill the rest, in their order.
+ * Evidence ids, each once, at most 12. With `lists` (Ask, ADR-0041), list ids such as L1 are read beside item ids.
+ * With `listsFirst`, where a list id carries meaning (an Ask need's evidence, which the finish check reads), list ids
+ * are never the ones the cap cuts: past 12 ids, every list id stays and item ids fill the rest, in their order.
+ * Otherwise (a task's need, a writer's sentence, whose list ids cite nothing) the first 12 ids are kept.
  */
-function cleanIds(value: unknown, lists = false): readonly string[] {
+function cleanIds(value: unknown, lists = false, listsFirst = lists): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
-  // Without lists the first 12 ids are kept, as before ADR-0041; with lists a bounded read finds a list id past them.
-  for (const raw of lists ? value.slice(0, EVIDENCE_IDS_READ) : value) {
+  // Without listsFirst the first 12 ids are kept, as before ADR-0041; with it a bounded read finds a list id past them.
+  for (const raw of listsFirst ? value.slice(0, EVIDENCE_IDS_READ) : value) {
     const id = (lists ? parseAgenticListIdV1(raw) : null) ?? cleanId(raw);
     if (id !== null && !result.includes(id)) result.push(id);
-    if (!lists && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) break;
+    if (!listsFirst && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) break;
   }
   if (result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return Object.freeze(result);
   const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, AGENTIC_ASK_MAX_EVIDENCE_IDS_V1);
@@ -360,7 +362,8 @@ export function parseAnswer(value: unknown): Answer {
     const entry = object(raw);
     if (entry === null) continue;
     const text = stripEvidenceIds(cleanLine(entry.text, SENTENCE_CHARS), true);
-    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry.evidence, true) }));
+    // A sentence's list ids cite nothing (W1), so its first 12 ids are kept, rows it cites included.
+    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry.evidence, true, false) }));
     if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) break;
   }
   const notFound: string[] = [];
