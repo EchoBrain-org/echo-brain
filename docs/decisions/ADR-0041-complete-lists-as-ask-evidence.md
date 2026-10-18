@@ -339,17 +339,18 @@ route, header, database table or client changes.
   is still unused and the request has time and model calls left. If the
   repaired answer still fails, or no repair can run, code writes that list's
   full statement and keeps the writer's sentences. Built: a sentence that
-  cites only members of a list code wrote this way by their rows, or the text
-  of two or more of them once every member was checked, is dropped, since it
-  restated part of that list (the October 4 answer's "the pages are A, B, C,
-  D" beside all eight names would contradict them); so is one that names two
-  or more of its members by their rows alone, whatever else it cites. A
-  sentence citing the text of two or more members of a list not every member
-  of which was checked stays, with its "(k of N checked so far)" note: code
-  cannot tell "A and B mention BUG-412" from a restated subset, and the note
-  keeps either from reading as complete. A sentence citing the list's id
-  beside its members' text, for a list a found need claims content across,
-  always stays: it is an explicit claim about what they say. For a list a
+  cites only members of a list code wrote this way, by their rows or two or
+  more of them by their text or opened sections, is dropped however many
+  members were checked, since it restated part of that list (the October 4
+  answer's "the pages are A, B, C, D" beside all eight names would
+  contradict them, and a note would wrongly make it partial); so is one that
+  names two or more of its members by their rows alone, whatever else it
+  cites. Code cannot tell "A and B mention BUG-412" from a restated subset by
+  the members a sentence cites, so the list's id tells them apart, as the
+  writer prompt asks: a sentence citing the list's id beside its members'
+  text, for a list a found need claims content across, is an explicit claim
+  about what they say and always stays, with its "(k of N checked so far)"
+  note unless every member was checked. For a list a
   found need claims content across, the repair's reason names both ways on:
   put the list in `lists` for which items exist, or cite it beside the
   evidence for what its members say. A first reply that fails only the check

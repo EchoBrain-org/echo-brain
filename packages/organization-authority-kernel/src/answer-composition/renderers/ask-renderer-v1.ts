@@ -405,15 +405,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // resting on rows or list ids alone is left out: a list never says what an item says, and code states row facts
       // itself. A sentence that names two or more members of a list code wrote after the check by their rows, whatever
       // else it cites, restates part of that list, which code now names in full; so does one citing only members of that
-      // list (or their opened sections), the text of two or more of them, once every member was checked: no note could
-      // qualify it. One citing the text of two or more members of a list not every member of which was checked may say
-      // what they say, so it stays, with its note; so does one citing that list's id beside its members' text when a
-      // found need claims content across it, an explicit claim about what they say.
+      // list, two or more of them by their text or opened sections, however many members were checked: the October 4
+      // answer's "the pages are A, B, C and D" beside all eight names would contradict them. Only the list's id beside
+      // its members' text, when a found need claims content across it, says what they say ("Gate reviews and
+      // Traceability mention BUG-412"): that sentence stays, with its note unless every member was checked.
       const named = uses.map(use => use.list.id);
       let rowsLeftOut = false;
       const restates = (evidence: readonly string[], shorts: readonly string[]) => forced.some(id => rowsOnly(id, shorts).size >= 2) ||
         (shorts.every(short => forced.some(id => membership.in(id, short) !== undefined)) &&
-          forced.some(id => membersCited(id, shorts).size >= 2 && agenticListCheckedNoteV1(writerById.get(id)!) === undefined && !(across.has(id) && evidence.includes(id))));
+          forced.some(id => membersCited(id, shorts).size >= 2 && !(across.has(id) && evidence.includes(id))));
       /**
        * The lists a sentence claims content across (addition 4), from what it cites rather than how: the list's id beside
        * text it read; the text of two or more of its members (an opened section counts as its page); the text of one
