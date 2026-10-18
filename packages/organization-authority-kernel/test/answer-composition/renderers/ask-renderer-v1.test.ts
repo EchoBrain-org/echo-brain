@@ -250,18 +250,32 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect((await dropped.render("Which tickets were created on October 4?")).result.response.parts[0]).toEqual({ question: "Which tickets were created on October 4?", status: "answered", statements: [{ text: eight, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }] });
   });
 
-  it("never counts rows or list ids among a sentence's citations: it stands on the text it cites", async () => {
-    // E9 is text the writer read, outside the list; the rows and the list's id beside it are no citations (W1).
+  it("stands a sentence on the text it cites, also cites the rows it names beside it, and counts no list id", async () => {
+    // E9 is text the writer read, outside the list: the sentence stands on it (W1). The rows it cites beside it are cited
+    // too, since it may carry their facts, so their only_me visibility makes it private (W6); the list's id cites nothing.
     const sentence = { text: "The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", evidence: ["L1", ...ids(1, 4), "E9"] };
     for (const [needs, statements] of [
-      [[WI(["L1"])], [{ text: eight, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }, { text: sentence.text, citation_indexes: [8], private: false }]],
-      [[C(["E9"])], [{ text: sentence.text, citation_indexes: [0], private: false }]],
+      [[WI(["L1"])], [{ text: eight, citation_indexes: [0, 1, 2, 3, 4, 5, 6, 7], private: true }, { text: sentence.text, citation_indexes: [8, 0, 1, 2, 3], private: true }]],
+      [[C(["E9"])], [{ text: sentence.text, citation_indexes: [0, 1, 2, 3, 4], private: true }]],
     ] as const) {
       const run = alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], needs), replies: [{ lists: [], sentences: [sentence], not_found: [] }], version: 6 });
       const rendered = await run.render("Which tickets were created on October 4?");
       expect(generations(run)).toBe(1);
       expect(rendered.result.response.parts[0]).toEqual({ question: "Which tickets were created on October 4?", status: "answered", statements });
     }
+  });
+
+  it("makes a sentence private when it cites a private row beside team text, citing the row the person can open", async () => {
+    // E9 is team text; E2 an only_me ticket row the writer saw. The sentence may carry the row's facts, so it cites the row
+    // and is private (W1, W6); before, it cited E9 alone and looked shareable. A list id names no item and cites none, so
+    // what a sentence carries from rows it cites only by their list's id is not locked (a Known limit).
+    const sentence = (evidence: readonly string[]) => ({ lists: [], sentences: [{ text: "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.", evidence }], not_found: [] });
+    const row = await alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], [C(["E9"])]), replies: [sentence(["E2", "E9"])], version: 6 }).render("What waits on the approved record?");
+    expect(row.result.response.parts[0]!.statements).toEqual([{ text: "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.", citation_indexes: [0, 1], private: true }]);
+    expect(row.result.response.citations.map(value => [value.kind, value.visibility])).toEqual([["decision", "team"], ["ticket", "only_me"]]);
+    expect(row).toMatchObject({ outcome: "answered", cited: ["E9", "E2"] });
+    const listId = await alone({ bundle: listBundle(8, 1, [list("L1", ids(1, 8))], [C(["E9"])]), replies: [sentence(["L1", "E9"])], version: 6 }).render("What waits on the approved record?");
+    expect(listId.result.response.parts[0]!.statements).toEqual([{ text: "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.", citation_indexes: [0], private: false }]);
   });
 
   it("leaves out a rows sentence beside a content sentence after one repair, and notes only a which_say list's members", async () => {

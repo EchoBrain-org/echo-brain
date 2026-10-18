@@ -351,12 +351,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const member = membership.in(id, short);
         return member !== undefined && !checking.some(other => membership.in(other, short) !== undefined) && !contentCited.some(cited => membership.in(id, cited) === member);
       }));
-      // Its citations are the items whose text the writer read; row ids and list ids are no citations (W1).
+      // It stands on the items whose text the writer read (W1), and also cites each row it cites that the writer saw, whose
+      // facts it may carry, so a private row makes it private (W6); a list id names no item and cites nothing.
       const writerSentences = sentences.flatMap(sentence => {
-        const shorts = sentence.evidence.filter(short => textGiven.has(short));
-        if (shorts.length === 0 || restates(shorts)) return [];
-        const notes = unchecked.filter(list => shorts.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
-        return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts }];
+        const read = sentence.evidence.filter(short => textGiven.has(short));
+        if (read.length === 0 || restates(read)) return [];
+        const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
+        return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.filter(id => shownRows.has(id))], read }];
       });
       // List statements come first, then the writer's sentences, all dropped from the end to fit the response's bounds (W6).
       const statements: Statement[] = [];
@@ -367,8 +368,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         statements.push(statementOf(sentence.text, sentence.shorts));
       }
       const notFound = [...(answer?.not_found ?? []), ...selectionNotFound];
-      // A list statement cites rows for which items exist; only what the writer's sentences cite can be limited coverage.
-      const coverageLimited = coverageIsLimitedFor(bundle, writerSentences.slice(0, Math.max(0, statements.length - listStatements.length)).flatMap(sentence => sentence.shorts.map(short => byShort.get(short)!)));
+      // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
+      const coverageLimited = coverageIsLimitedFor(bundle, writerSentences.slice(0, Math.max(0, statements.length - listStatements.length)).flatMap(sentence => sentence.read.map(short => byShort.get(short)!)));
       const incomplete = (answer === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
       const dateCoverageMissing = bundle.coverage.notices.some(notice => notice.includes(MISSING_EVENT_DATE_NOTICE_V1));
       const incompleteGap = dateCoverageMissing ? MISSING_DATE_GAP : INCOMPLETE_SEARCH_GAP;

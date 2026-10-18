@@ -1755,6 +1755,25 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     expect(response.parts[0]!.statements).toEqual([{ text: "2 actions with owner Mara: Publish the DVT dashboard (DVT review, 2026-10-01); Order fixture spares (DVT review, 2026-10-01).", citation_indexes: [0, 1], private: true }]);
   });
 
+  it("makes a writer's sentence private when it cites an approver_only row it saw beside team text, and cites that row (W1, W6)", async () => {
+    // The writer saw the restricted action only as a row, whose list label is a line of its own text; the sentence carries
+    // that line and cites the row beside the team record it stands on. Before, the row was dropped and the statement
+    // looked shareable, citing the team record alone.
+    const restricted = listed("exec", { kind: "action", visibility: "approver_only", list_label: "Replace the fixture vendor if the drawings slip again. (Exec vendor review, 2026-10-04)", attributes: { owner: "Dana Lee" } });
+    const team = record("drawings", "Approved: fixture drawings go to the vendor on Friday.");
+    const text = "When do the fixture drawings go to the vendor?";
+    const sentence = "The drawings go to the vendor on Friday; if they slip again, the vendor is to be replaced.";
+    const h = harness([
+      ask(text, "when the drawings go to the vendor", "open", [], [{ tool: "list", args: { source: "meetings", kind: "action" } }, { tool: "search", args: { query: "fixture drawings vendor" } }]),
+      ask(text, "when the drawings go to the vendor", "found", ["E2"], [finish], "N1", "content"),
+      { lists: [], sentences: [{ text: sentence, evidence: ["E1", "E2"] }], not_found: [] },
+    ], { list: vi.fn(async () => result([restricted]) as EvidenceDeskResultV2), search: vi.fn(async () => result([team]) as EvidenceDeskResultV2) });
+    const { response } = await h.research.answerWithResearch({ question: text });
+    expect(JSON.parse(writersOf(h)[0]!.user_prompt).lists[0].members[0]).toMatchObject({ id: "E1", title: restricted.list_label });
+    expect(response).toMatchObject({ outcome: "answered", parts: [{ status: "answered", statements: [{ text: sentence, citation_indexes: [0, 1], private: true }] }] });
+    expect(response.citations.map(citation => [citation.kind, citation.visibility])).toEqual([["decision", "team"], ["action", "approver_only"]]);
+  });
+
   it("X13: notes a content sentence about a member of a which_say list too (Known limit)", async () => {
     const open = vi.fn(async (input: { readonly item: string }) => {
       const row = PAGES.find(page => page.id === input.item)!;

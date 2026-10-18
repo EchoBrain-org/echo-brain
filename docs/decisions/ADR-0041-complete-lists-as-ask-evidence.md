@@ -374,16 +374,19 @@ the same desk results a task goal's model inputs are byte for byte.
   need of any status) that cites no list research read (rows only, or nothing
   when research stopped early) makes the part partial: "I could not confirm the
   full list of items asked for."
-- **A writer's sentence stands only on text.** Its citations are the items
-  whose text the writer read. Row ids and list ids in it are not citations. A
-  sentence with no such citation is left out. If it cites a row or a list the
-  writer saw, the reply goes back once first, saying that list facts go through
-  `lists` and what no text says goes in `not_found`; if the reply code keeps
-  still has one, the part is partial: "Part of the answer was left out because
-  no item's text supports it." A part that names nothing is partial too, its
-  status not found, as for a list not read to its end. "Is DVT on hold?"
-  answered from the Gate reviews page's title ends partial or not found, never
-  answered.
+- **A writer's sentence stands only on text.** It stands on the items whose
+  text the writer read. A row the writer saw that it cites beside them is cited
+  too, never as its support: the sentence may carry that row's facts, so a
+  private row makes the statement private and gives the person the row to
+  open, as for a statement code writes. A list id names no item and cites
+  nothing. A sentence citing no text the writer read is left out. If it cites a
+  row or a list the writer saw, the reply goes back once first, saying that
+  list facts go through `lists` and what no text says goes in `not_found`; if
+  the reply code keeps still has one, the part is partial: "Part of the answer
+  was left out because no item's text supports it." A part that names nothing
+  is partial too, its status not found, as for a list not read to its end. "Is
+  DVT on hold?" answered from the Gate reviews page's title ends partial or not
+  found, never answered.
 - **A sentence that only restates a stated list is left out.** Code leaves out
   a writer's sentence when every text item it cites is a member, or part of
   one, of a list code states whose statement in the answer covers every
@@ -727,6 +730,14 @@ too), "lists named in full" and its two BUG-412 cases.
   only restates the list ("Traceability ... was created on October 4, 2026"
   beside the eight names). Leaving out only the second needs the meaning of
   the cited text.
+- **What a sentence carries from rows it does not cite by id is not locked.**
+  A statement is private when an item it cites is, and the writer sees every
+  row of the lists it is shown. A sentence that carries a private row's facts
+  but cites only team text, or team text and the row's list id, is not marked
+  private, as a sentence carrying the text of an item it does not cite never
+  was. Locking such a sentence needs its list id to cite every row of the list,
+  which makes "Gate reviews and Traceability mention BUG-412" cite all eight
+  pages as its sources.
 - **One item's row facts cost one open** (above).
 - **A writer that repeats a sentence citing only rows or list ids** after its
   repair makes the part partial, even when the sentence only restated the list
