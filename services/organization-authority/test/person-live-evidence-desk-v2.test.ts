@@ -539,6 +539,25 @@ describe('workspace sources (research tool contract v1)', () => {
     expect(w.projects.search).toHaveBeenCalledOnce(); expect(w.people.search).not.toHaveBeenCalled(); expect(f.base.search).not.toHaveBeenCalled();
   });
 
+  it('leaves a source with no dates out of a dated search across sources, and a tool\'s containers out of one with no words', async () => {
+    const f = fixture();
+    const containers: PersonLiveEvidenceSourceV1 = { tool_id: 'jira', search: vi.fn(async () => empty), open: vi.fn(async () => empty), list: vi.fn(async () => empty), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) };
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [
+      { source: f.ticket, scope: { kind: 'global' }, descriptor: liveSourceDescriptorV2({ source: 'ticket', tool_id: 'jira' }) },
+      { source: containers, scope: { kind: 'global' }, descriptor: { source_id: 'jira_projects', selector: 'jira_projects', kind: 'tool_container', tool_id: 'jira', description: 'Jira projects',
+        metadata_only_list: false, capabilities: { filters: {}, dates: {}, any_date: false, links: [] } } },
+    ]);
+    await desk.search({ query: 'atlas', since: '2026-10-01' });
+    expect(f.ticket.search).toHaveBeenCalledOnce(); expect(f.base.search).toHaveBeenCalledOnce(); expect(containers.search).not.toHaveBeenCalled();
+    await desk.search({ limit: 5, inventory_mode: 'items' });
+    expect(f.ticket.list).toHaveBeenCalledOnce(); expect(containers.list).not.toHaveBeenCalled();
+    await desk.search({ query: 'atlas' });
+    expect(containers.search).toHaveBeenCalledOnce();
+    // Chosen, a source answers as its reader does, dates included.
+    await desk.search({ source: 'jira_projects', query: 'atlas', since: '2026-10-01' });
+    expect(containers.search).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'atlas', since: '2026-10-01' }));
+  });
+
   it('refuses workspace reads on a desk that bound no workspace', async () => {
     const f = fixture();
     const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, []);

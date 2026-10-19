@@ -1,5 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validateOrganizationAuthorityOrigin, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { PROJECT_PAGE_MAX_ITEMS, validateOrganizationAuthorityOrigin, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonDocumentApplicationV1 } from '../application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../adapters/persistence/sqlite/document-v1.js';
@@ -60,7 +60,9 @@ import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from './person-workspace-evidence-v1.js';
 import { createPersonWorkspaceReleaseAuditV1 } from './person-workspace-release-audit-v1.js';
-import type { PersonLiveConnectorDefinitionV1, OpenedPersonLiveConnectorV1, PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import type {
+  OpenedPersonLiveConnectorV1, PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1, PersonLiveConnectorSourceV1, PersonLiveProjectSettingV1,
+} from '../application/ports/person-context-live-runtime-v1.js';
 import { personLiveConnectorDefinitionsV1 } from './person-live-connector-registry-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
@@ -271,9 +273,35 @@ export async function startOrganizationAuthorityApiRuntime(
         return Object.freeze({ role: grant.role, authorization_sha256: canonicalSha256(grant) });
       });
     };
+    /**
+     * The current names of those projects the asker can see, read locally in one read transaction with no release (research
+     * tool contract v1): a tool container names the ECHO projects mapped to it, and is refused once one of them changes.
+     */
+    const projectNames: PersonContextProjectNamesV1 = (access_token, project_ids) => {
+      const wanted = new Set(project_ids);
+      const person = sessions.authenticateAccess({ access_token });
+      return projectRepository.withReadTransaction(transaction => {
+        const snapshot = transaction.captureAuthorization(person, { operation: 'project_list_v2' });
+        const names = new Map<string, string>();
+        for (const status of ['active', 'archived'] as const) {
+          for (let cursor: string | undefined; ;) {
+            const page = transaction.listProjectsV2(snapshot, { status, limit: PROJECT_PAGE_MAX_ITEMS, ...(cursor === undefined ? {} : { cursor }) });
+            for (const project of page.items) if (wanted.has(project.project_id)) names.set(project.project_id, project.name);
+            if (page.next_cursor === null) break;
+            cursor = page.next_cursor;
+          }
+        }
+        return names;
+      });
+    };
     for (const definition of connectorDefinitions) {
-      liveConnectors.push({ definition, runtime: definition.open(sessions, authorizeLiveProject) });
+      liveConnectors.push({ definition, runtime: definition.open(sessions, authorizeLiveProject, projectNames) });
     }
+    /** A tool's saved setting for each ECHO project, from the connector that carries it, for the projects source to name. */
+    const projectSetting = <T extends PersonLiveProjectSettingV1['tool']>(tool: T) => liveConnectors.map(({ runtime }) => runtime.project_setting)
+      .find((value): value is Extract<PersonLiveProjectSettingV1, { readonly tool: T }> => value?.tool === tool);
+    const jiraSetting = projectSetting('jira');
+    const confluenceSetting = projectSetting('confluence');
     const liveSources: readonly PersonLiveConnectorSourceV1[] = liveConnectors.map(({ definition, runtime }) => ({
       descriptor: definition.descriptor, scopes: definition.scopes, minimum_response_version: definition.minimum_response_version,
       application: runtime.application, ...(runtime.tools === undefined ? {} : { tools: runtime.tools.bind(runtime) }),
@@ -444,7 +472,10 @@ export async function startOrganizationAuthorityApiRuntime(
           person_answer_v7: createPersonLiveAnswerRouteV1({
             ...answerOptions, live_sources: liveSources, follow_ups: { runs, items, people, records: recordSearch },
             workspace: {
-              sources: { projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools },
+              sources: {
+                projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools,
+                ...(jiraSetting === undefined ? {} : { jira: jiraSetting }), ...(confluenceSetting === undefined ? {} : { confluence: confluenceSetting }),
+              },
               audit: context => createPersonWorkspaceReleaseAuditV1(database, context),
             },
           }, 8),

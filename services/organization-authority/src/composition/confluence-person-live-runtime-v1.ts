@@ -96,7 +96,8 @@ export function confluencePersonLiveConnectorsV1(open: (...parameters: Parameter
   return Object.freeze([
     Object.freeze({ ...CONFLUENCE_LIVE_CONNECTOR_V1, open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => {
       const { runtime, close } = share(...parameters);
-      return Object.freeze({ application: runtime.application, connection_http: runtime.connection_http, tools: (access_token: string) => runtime.tools(access_token), close });
+      return Object.freeze({ application: runtime.application, connection_http: runtime.connection_http, tools: (access_token: string) => runtime.tools(access_token),
+        project_setting: Object.freeze({ tool: 'confluence' as const, projectRead: (input: { readonly access_token: string; readonly request: unknown }) => runtime.application.projectRead(input) }), close });
     } }),
     Object.freeze({ ...CONFLUENCE_SPACES_LIVE_CONNECTOR_V1, open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => {
       const { runtime, close } = share(...parameters);

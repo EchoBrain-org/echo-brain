@@ -152,9 +152,14 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       if (selectedSource === undefined && kinds?.length !== 0) {
         lookups.push(page(base, () => base.search({ ...request, ...(selectedId === "meeting" || selectedId === "document" ? { source: selectedId } : {}), ...(kinds === undefined ? {} : { kinds }) })));
       }
+      const dated = input.since !== undefined || input.until !== undefined || input.date_field !== undefined;
       for (const registration of selectedSource === undefined ? (localSource ? [] : sources.values()) : [selectedSource]) {
         const { source, descriptor } = registration;
         if (requestedKinds !== undefined && !requestedKinds.includes(descriptor.kind)) continue;
+        // Across sources, one that records no dates sits out a dated search, as follow-ups do, and a tool's containers join
+        // only a keyword search (research tool contract v1). A chosen source answers or refuses as asked.
+        if (selectedSource === undefined && ((dated && descriptor.capabilities !== undefined && Object.keys(descriptor.capabilities.dates).length === 0) ||
+            (descriptor.kind === 'tool_container' && input.query === undefined))) continue;
         const live = page(registration, () => input.query === undefined
           ? lookup('evidence_list', registration, () => source.list({ ...evidenceDateFilterV1(input), limit: Math.min(maximum, LIVE_LIST_MAX), signal: input.signal }))
           : lookup('evidence_search', registration, () => source.search({ ...evidenceDateFilterV1(input), query: input.query!, limit: Math.min(maximum, 5), signal: input.signal })));
