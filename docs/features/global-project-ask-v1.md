@@ -188,11 +188,11 @@ lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
 [Confluence spaces](project-settings-v1.md#confluence-space-mapping). Mine and
 unmapped projects exclude live tools, and Mine excludes follow-ups and the
 workspace. The desktop uses `--live` for every question outside Mine. An older
-Authority without the `/v7` route gets `POST /v6/person/ask` with V7 answers,
-one without `/v6` `POST /v5/person/ask` with V6 answers, and one without `/v5`
-either the ticket-capable fallback, `POST /v4/person/ask` with V5 answers;
-only a 404 without the route header falls back, and permission failures never
-do. `person ask --tickets` keeps that `/v4` route for compatibility.
+Authority gets the newest route it has, down to the ticket-capable
+`POST /v4/person/ask`, as the
+[Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)
+describes; permission failures never fall back. `person ask --tickets` keeps
+that `/v4` route for compatibility.
 `--live --progress` streams Ask's progress
 ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)): one JSON line per step before the final
 line, which adds the answer's receipt; on `/v6` a step may name a follow-up,

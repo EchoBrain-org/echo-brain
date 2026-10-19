@@ -31,11 +31,9 @@ hidden while Ask works): the reader, where a meeting opens scrolled to the
 items the pane lit, lit too, a follow-up's item page, the project, or Tools. A
 person has no page to open. A follow-up's source row says only who owns it and
 its status ("Mara · Open"), and a Jira project's, Confluence space's or Slack
-channel's says its tool and key ("Jira · THERM"). Ask reads follow-ups only
-from an Authority that serves `/v6`, and your projects, people, tools and your
-tools' projects, spaces and channels only from one that serves `/v7`
-(research tool contract v1); an older one answers on its newest route without
-them.
+channel's says its tool and key ("Jira · THERM"). An older Authority answers
+on its newest route, without what that route cannot cite
+([Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)).
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 
