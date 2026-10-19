@@ -181,6 +181,7 @@ export interface PersonAskProgressResultLineV1 {
 
 const V1 = askProgressCodec({
   plain_sources: ['meetings', 'documents', 'slack'],
+  tool_sources: ['tickets', 'pages'],
   item: validatePersonAnswerCitationV6,
   answer: validatePersonAnswerResponseV6,
   bounds: {
