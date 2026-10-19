@@ -412,7 +412,8 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         const selected = page.selected.filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
         // Pages run newest first: once a page's oldest issue predates since, no later page can match.
         const oldest = page.selected.at(-1);
-        const oldestDay = evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
+        // A window on any date has no single field the pages are ordered by, so it never stops early.
+        const oldestDay = input.date_field === "any" ? undefined : evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
         const passedSince = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since;
         const token = passedSince ? undefined : page.token;
         await verifyConnection(input.signal);

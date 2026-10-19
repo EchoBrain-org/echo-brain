@@ -433,7 +433,10 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       // never another member whose name holds theirs.
       const asker = owner !== undefined && (ASKER.has(owner.toLowerCase()) || spelled(owner) === spelled(askerName()));
       // Filters apply before anything is released or read live.
-      const matching = context.assessed.filter(({ row }) => (input.status === undefined || followUpInStatusV1(row.state, input.status)) &&
+      // Follow-ups take open or done; a project's status never reaches them (the research loop checks capabilities first).
+      if (input.status !== undefined && input.status !== 'open' && input.status !== 'done') throw new AuthorityOperationError('invalid_request', 'Follow-ups take status open or done');
+      const status = input.status;
+      const matching = context.assessed.filter(({ row }) => (status === undefined || followUpInStatusV1(row.state, status)) &&
         (owner === undefined || (asker ? row.owner_membership_id === viewer.membership : followUpOwnerMatchesV1(openItemNameV1(context.people, row.owner_membership_id), owner))))
         .sort((left, right) => newestFirst(left.row, right.row));
       const following = after === undefined ? matching : matching.filter(({ row }) => newestFirst(after!, row) < 0);

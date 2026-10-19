@@ -50,8 +50,21 @@ export const FOLLOW_UPS_SOURCE_DESCRIPTOR_V1: FollowUpsSourceDescriptorV1 = Obje
   source_id: FOLLOW_UPS_SOURCE_ID_V1,
   kind: FOLLOW_UP_EVIDENCE_KIND_V1,
   selector: FOLLOW_UPS_SELECTOR_V1,
-  description: "Shared follow-ups of approved decisions: what a decision asked of a ticket, page, record or meeting action, with its owner, status, due date, latest check and decision. Search matches the decision's title and first line, the expected change, a ticket key and the owner's name, never words inside a ticket or page. List takes owner (a person's name) and status (open or done).",
+  // Content only: what it filters on, and which dates it has, are its capabilities (research tool contract v1). A due date
+  // belongs to the item it follows and shows only once that item is read, so it is not a date a list can filter on.
+  description: "Shared follow-ups of approved decisions: what a decision asked of a ticket, page, record or meeting action, with its owner, status, latest check and decision, and the due date its tool shows. Search matches the decision's title and first line, the expected change, a ticket key and the owner's name, never words inside a ticket or page.",
   metadata_only_list: false,
+  capabilities: Object.freeze({
+    filters: Object.freeze({ status: Object.freeze(['open', 'done']), owner: 'name' as const }),
+    dates: Object.freeze({
+      created: 'when ECHO created the follow-up; every follow-up has it',
+      sent: 'when it was sent to its owner; only sent follow-ups have it',
+      reassigned: 'when its owner was last picked or reassigned; only follow-ups whose owner was changed have it',
+      checked: 'when it was last checked; only checked follow-ups have it',
+    }),
+    any_date: true,
+    links: Object.freeze(['decision', 'follows']),
+  }),
 });
 
 const STATUS_TEXT: Readonly<Record<PersonOpenItemStateV1, string>> = Object.freeze({ unsent: 'not sent yet', open: 'open', done: 'done', not_relevant: 'not relevant' });

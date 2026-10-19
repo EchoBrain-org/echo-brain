@@ -1,5 +1,6 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonAnswerCitationV7 } from "@echo-brain/organization-api";
+import { isPersonWorkspaceCitationV1, type PersonAnswerCitationV7 } from "@echo-brain/organization-api";
+import { AuthorityOperationError } from "../domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../shared/evidence-desk-v2.js";
 import type { AgenticListEvidenceV1 } from "./agentic-list-evidence-v1.js";
 import type { AgenticAskGenerationObservationV1 } from "./agentic-model-gate-v1.js";
@@ -128,7 +129,9 @@ export function describeAgenticEvidenceItemV1(entry: { readonly short: string; r
 
 /** How a renderer's result cites an item: its citation, kind, title, visibility and the ref that opens it. */
 export function citationOfAgenticEvidenceItemV1(item: EvidenceDeskItemV2, timeZone?: string): PersonAnswerCitationV7 {
-  return Object.freeze({ citation: item.citation, kind: item.kind, label: agenticEvidenceLabelV1(item, timeZone), visibility: item.visibility, ...(item.ref === undefined ? {} : { ref: item.ref }) });
+  // A workspace item cites only in the V8 answer; a V7 catalog never offers its source (research tool contract v1).
+  if (isPersonWorkspaceCitationV1(item.citation)) throw new AuthorityOperationError('invalid_output', 'A workspace item has no V7 citation');
+  return Object.freeze({ citation: item.citation, kind: item.kind as PersonAnswerCitationV7['kind'], label: agenticEvidenceLabelV1(item, timeZone), visibility: item.visibility, ...(item.ref === undefined ? {} : { ref: item.ref }) });
 }
 
 /** The evaluation's view: released content only, no desk ids, refs, receipts or model-call records. */

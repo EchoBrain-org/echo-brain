@@ -14,7 +14,7 @@ export type EvidenceDeskCitationV1 = PersonAnswerEvidenceCitationV4;
 /** Where an item came from. Meeting records and documents live in Echo; Slack is read live and never stored. */
 export type EvidenceDeskSourceV1 = 'meeting' | 'document' | 'slack';
 /** Meaning of a provider-supplied date; never inferred from a storage source. */
-export type EvidenceDeskDateKindV1 = 'created' | 'version_created' | 'occurred' | 'updated' | 'due' | 'received';
+export type EvidenceDeskDateKindV1 = 'created' | 'version_created' | 'occurred' | 'updated' | 'due' | 'received' | 'approved';
 
 /**
  * A live source that server composition bound to this one request.  A legacy
@@ -34,10 +34,26 @@ export function evidenceDeskSourceV1(item: { readonly kind: EvidenceDeskKindV1; 
 }
 export type EvidenceDeskScopeV1 = PersonAnswerScopeV3;
 
+/**
+ * An item's row facts, each one line of text (research tool contract v1 adds the meeting-, project- and tool-level ones).
+ * Lists of names are joined with ", ", and end ", and more" when the source holds more than it released.
+ */
 export interface EvidenceDeskAttributesV1 {
   readonly owner?: string;
   readonly due_at?: string;
   readonly status?: string;
+  /** A meeting's participants, as the meeting recorded them (display names). */
+  readonly participants?: string;
+  /** Who gave a meeting record its final approval (a current directory display name). */
+  readonly approved_by?: string;
+  /** The asker's role in a project, or a member's role: lead or member. */
+  readonly role?: string;
+  /** A project's leads (display names). */
+  readonly leads?: string;
+  /** A tool container's key in its tool, such as a Jira project key or a Confluence space key. */
+  readonly key?: string;
+  /** The tool a tool item or container belongs to, as the person's tools list names it (Jira, Confluence, Slack). */
+  readonly tool?: string;
 }
 
 export interface EvidenceDeskItemV1 {

@@ -240,7 +240,7 @@ describe("agentic Ask model protocol parity", () => {
   it("names each selection field, and either bound, in the answer schema (ADR-0041)", () => {
     const listUse = ((answerSchema.properties as Schema).lists as Schema).items as Schema;
     expect((listUse.properties as Schema).where).toEqual({ type: "object", additionalProperties: false, required: ["field"], properties: {
-      field: { type: "string", enum: ["owner", "status", "due", "created", "updated", "received", "occurred"] }, value: { type: "string", maxLength: 120 }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
+      field: { type: "string", enum: ["owner", "status", "due", "created", "updated", "received", "occurred", "approved", "sent", "reassigned", "checked"] }, value: { type: "string", maxLength: 120 }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
     } });
   });
 

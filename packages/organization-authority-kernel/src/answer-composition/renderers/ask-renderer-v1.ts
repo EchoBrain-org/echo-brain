@@ -1,6 +1,8 @@
 import { MISSING_EVENT_DATE_NOTICE_V1 } from "../../shared/temporal-query-v1.js";
+import { AuthorityOperationError } from "../../domain/errors.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
+  isPersonWorkspaceCitationV1,
   personAnswerCitationKeyV7,
   type PersonAnswerPartV4,
   type PersonAnswerResponseV4,
@@ -274,7 +276,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const usedKeys = new Map<string, number>();
       // One citation per key, the key the Ask response checks for duplicates: a listed ticket's row and its opened body
       // are two items with one key, so they share one citation.
-      const keyOf = (short: string) => personAnswerCitationKeyV7(byShort.get(short)!.item.citation);
+      // A workspace item cites only in the V8 answer, whose renderer keys it (research tool contract v1).
+      const keyOf = (short: string) => { const citation = byShort.get(short)!.item.citation; if (isPersonWorkspaceCitationV1(citation)) throw new AuthorityOperationError("invalid_output", "A workspace item has no V7 citation"); return personAnswerCitationKeyV7(citation); };
       /** Citation indexes of `shorts`, each once; a new cited object becomes the next citation. */
       const cite = (shorts: readonly string[]): number[] => {
         const indexes: number[] = [];

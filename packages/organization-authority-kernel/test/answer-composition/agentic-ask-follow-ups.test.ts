@@ -71,7 +71,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     expect(followUpsOnly.steps()[0]!.system_prompt).toBe(`${ASK_STEP_PROMPT}\n\n${followUpsStepGuidance(true)}`);
     expect(followUpsOnly.writer()!.system_prompt).toBe(`${ANSWER_PROMPT}\n\n${FOLLOW_UPS_ANSWER_GUIDANCE}`);
     expect(listSources(followUpsOnly.steps()[0]!)).toEqual(['meetings', 'documents', 'follow_ups']);
-    expect((userOf(followUpsOnly.steps()[0]!).source_catalog as { source: string }[]).at(-1)).toEqual({ source: 'follow_ups', kind: 'follow_up', description: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.description, metadata_only_list: false });
+    expect((userOf(followUpsOnly.steps()[0]!).source_catalog as { source: string }[]).at(-1)).toEqual({ source: 'follow_ups', kind: 'follow_up', description: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.description, metadata_only_list: false, capabilities: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.capabilities });
 
     const withTools = scripted([step('open', [{ tool: 'finish', args: {} }])]);
     await createAgenticAskV4({ desk: deskWith([JIRA, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: withTools.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);

@@ -1,6 +1,6 @@
 import type { EvidenceDeskDateKindV1 } from "../shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
-import { evidenceDayV1, matchesEvidenceDateV1, type EvidenceDateFieldV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
+import { evidenceDayV1, matchesEvidenceDateV1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
 import { agenticEvidenceAttributesV1, agenticEvidenceDatesV1, agenticEvidenceLabelV1 } from "./agentic-evidence-bundle-v1.js";
 import type { AgenticResearchNeedV1 } from "./agentic-research-v1.js";
 
@@ -64,7 +64,7 @@ export interface AgenticListFilterV1 {
   /** Inclusive YYYY-MM-DD bounds; a catalog default (Slack's 14 days) appears here unrequested. */
   readonly since?: string;
   readonly until?: string;
-  readonly date_field?: EvidenceDateFieldV1;
+  readonly date_field?: EvidenceDateSelectionV1;
   readonly time_zone?: string;
 }
 
@@ -429,7 +429,7 @@ export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readon
 }
 
 /** The row fields a writer may select members by: an owner or status by value, or one of a row's dates by range. */
-export const AGENTIC_LIST_SELECTION_FIELDS_V1 = Object.freeze(["owner", "status", "due", "created", "updated", "received", "occurred"] as const);
+export const AGENTIC_LIST_SELECTION_FIELDS_V1 = Object.freeze(["owner", "status", "due", "created", "updated", "received", "occurred", "approved", "sent", "reassigned", "checked"] as const);
 /** A writer's selection (ADR-0041): members whose owner or status is `value`, or whose date of `field` is within `since` and `until`, inclusive. */
 export type AgenticListSelectionV1 =
   | { readonly field: "owner" | "status"; readonly value: string }
@@ -492,7 +492,7 @@ export function agenticCalendarDayV1(value: string): string {
   return match === null || month === undefined ? value : `${month} ${Number(match[3])}, ${match[1]}`;
 }
 /** How a date filter reads after its noun. Occurred, and a filter with no field, read as "dated". */
-const DATE_WORDS: Readonly<Record<EvidenceDateFieldV1, string>> = Object.freeze({ created: "created", updated: "updated", due: "due", received: "received", occurred: "dated" });
+const DATE_WORDS: Readonly<Record<EvidenceDateFieldV1, string>> = Object.freeze({ created: "created", updated: "updated", due: "due", received: "received", occurred: "dated", approved: "approved", sent: "sent", reassigned: "reassigned", checked: "checked" });
 function dateRange(since: string | undefined, until: string | undefined): string | undefined {
   if (since !== undefined && until !== undefined) {
     if (since === until) return `on ${agenticCalendarDayV1(since)}`;
@@ -527,7 +527,7 @@ export function agenticListFilterPhraseV1(filter: AgenticListFilterV1): string {
   const range = dateRange(filter.since, filter.until);
   return [
     ...(filter.channel === undefined ? [] : [` in #${filter.channel}`]),
-    ...(range === undefined ? [] : [` ${DATE_WORDS[filter.date_field ?? "occurred"]} ${range}`]),
+    ...(range === undefined ? [] : [` ${filter.date_field === "any" ? "dated" : DATE_WORDS[filter.date_field ?? "occurred"]} ${range}`]),
     ...(fields.length === 0 ? [] : [` with ${joined(fields)}`]),
   ].join("");
 }

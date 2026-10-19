@@ -18,6 +18,7 @@ const UNAVAILABLE_NOTICES: Readonly<Record<PersonLiveSourceDescriptorV2['kind'] 
   page: 'Live pages could not be searched just now, so these results leave them out.',
   slack_message: 'Live Slack messages could not be searched just now, so these results leave them out.',
   follow_up: 'Follow-ups could not be searched just now, so these results leave them out.',
+  tool_container: 'A connected tool could not be searched just now, so these results leave its projects, spaces or channels out.',
 });
 /** A provider outage, timeout or rate limit. Authorization, stale access and cancellation are never transient. */
 function transientLiveFailure(error: unknown): boolean {
