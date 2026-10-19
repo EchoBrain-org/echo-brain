@@ -39,13 +39,9 @@ const examples = [
 ];
 
 describe('Ask need-kind examples and the research-loop evaluation (ADR-0041)', () => {
-  it('reads the examples of every kind and the evaluation questions of both splits', () => {
-    expect(rule3).toMatch(/"which_items": .*"which_say": .*"content": /u);
-    expect(examples.length).toBeGreaterThan(6);
-    expect(questions.length).toBeGreaterThan(20);
-  });
-
   it('quote no name and no run of four words of any evaluation question', () => {
+    // It reads the examples of every kind and the evaluation questions of both splits.
+    expect([/"which_items": .*"which_say": .*"content": /u.test(rule3), examples.length > 6, questions.length > 20]).toEqual([true, true, true]);
     const exampleNames = new Set(examples.flatMap((text) => [...names(text)]));
     const examplePhrases = new Set(examples.flatMap((text) => [...phrases(text)]));
     const shared = questions.flatMap(({ id, question }) => [

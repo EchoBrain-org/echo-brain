@@ -30,12 +30,9 @@ function trackedWords(path: string): string | undefined {
 }
 
 describe('research-loop held-out cases stay in their file (ADR-0041)', () => {
-  it('reads every held-out case, and the question of each that asks one', () => {
-    expect(held.length).toBeGreaterThan(0);
-    expect(held.some((entry) => entry.question !== undefined)).toBe(true);
-  });
-
   it('no other tracked file quotes a held-out question or names a held-out case', () => {
+    // It reads every held-out case, and the question of each that asks one.
+    expect([held.length > 0, held.some((entry) => entry.question !== undefined)]).toEqual([true, true]);
     const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: REPOSITORY_ROOT, encoding: 'utf8' })
       .split('\0').filter((path) => path.length > 0 && path !== HOLDOUT);
     expect(tracked.length).toBeGreaterThan(100);

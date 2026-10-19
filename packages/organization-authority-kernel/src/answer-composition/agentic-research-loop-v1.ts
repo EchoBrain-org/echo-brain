@@ -1142,7 +1142,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const user = { ...head, opened: pad.opened, seen: pad.seen, ...tailWith(new Set(pad.entries)) };
       const openIds = [...entries.values()].map(entry => entry.short);
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
-      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, needKinds);
+      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, needKinds, ask);
       let step: Step;
       // The need holds after the access check too: a check retried after a transient failure can spend the margin, and a
       // step call sent below it would likely time out with no time to repair. No time here is the gate's budget stop. The one
