@@ -97,7 +97,12 @@ export interface AgenticListEvidenceV1 {
    * Items the list's date filter could not test because they do not record its date, and the dates they do carry
    * (research tool contract v1). They are not members; an answer that uses the list says they were not checked.
    */
-  readonly unchecked?: { readonly count: number; readonly dates: readonly EvidenceDateFieldV1[] };
+  readonly unchecked?: {
+    readonly count: number;
+    readonly dates: readonly EvidenceDateFieldV1[];
+    /** Filters the count is not narrowed by: ECHO applies a meeting list's owner and status after the desk counted. */
+    readonly any_of?: readonly ("owner" | "status")[];
+  };
   /** Derived: available, not truncated, ended, end verified and every member shown. Only then does the list support "all". */
   readonly complete: boolean;
 }
@@ -136,7 +141,8 @@ export function createAgenticListEvidenceV1(input: AgenticListEvidenceInputV1): 
     id: input.id, source: input.source, filter: Object.freeze({ ...input.filter }), filter_applied: Object.freeze({ ...input.filter_applied }),
     members: Object.freeze([...input.members]), shown: input.shown, ended: input.ended, unverified_end: input.unverified_end,
     available: input.available, truncated: input.truncated, read_at: input.read_at,
-    ...(input.unchecked === undefined || input.unchecked.count === 0 ? {} : { unchecked: Object.freeze({ count: input.unchecked.count, dates: Object.freeze([...input.unchecked.dates]) }) }),
+    ...(input.unchecked === undefined || input.unchecked.count === 0 ? {} : { unchecked: Object.freeze({ count: input.unchecked.count, dates: Object.freeze([...input.unchecked.dates]),
+      ...(input.unchecked.any_of === undefined || input.unchecked.any_of.length === 0 ? {} : { any_of: Object.freeze([...input.unchecked.any_of]) }) }) }),
   };
   return Object.freeze({ ...record, complete: agenticListCompleteV1(record) });
 }
@@ -160,8 +166,10 @@ export function agenticListEndUnverifiedV1(page: { readonly returned: number; re
  * tickets", "Confluence pages", "meetings", "follow-ups"). It reads only the catalog entry, never a source-specific rule.
  */
 export function agenticListNounV1(source: { readonly selector: string; readonly tool_id?: string }): string {
-  const selector = source.selector.replace(/_/gu, "-");
   const tool = source.tool_id === undefined || source.tool_id.length === 0 || source.tool_id === source.selector ? undefined : source.tool_id;
+  // A selector that already starts with its tool says the rest after it: "jira_projects" is "Jira projects".
+  const own = tool !== undefined && source.selector.startsWith(`${tool}_`) ? source.selector.slice(tool.length + 1) : source.selector;
+  const selector = own.replace(/_/gu, "-");
   return tool === undefined ? selector : `${tool.charAt(0).toUpperCase()}${tool.slice(1)} ${selector}`;
 }
 
@@ -173,6 +181,8 @@ const KIND_NOUNS: Readonly<Record<string, readonly [string, string]>> = Object.f
   imported_meeting: ["meetings", "meeting"], decision: ["decisions", "decision"], action: ["actions", "action"], rationale: ["rationales", "rationale"],
   note: ["notes", "note"], document_passage: ["documents", "document"], slack_message: ["messages", "message"],
   ticket: ["tickets", "ticket"], page: ["pages", "page"], follow_up: ["follow-ups", "follow-up"],
+  // The asker's workspace (research tool contract v1). A tool's containers are named by their source: "Jira projects".
+  project: ["projects", "project"], person: ["people", "person"], tool: ["tools", "tool"],
 });
 function kindNoun(kind: string, count: number): string {
   const [plural, singular] = KIND_NOUNS[kind] ?? ["items", "item"];
@@ -260,7 +270,9 @@ export function agenticListUncheckedNoticeV1(list: Pick<AgenticListEvidenceV1, "
   const field = list.filter.date_field;
   const lacking = field === undefined || field === "any" ? (one ? "has none of the dates this list was filtered by" : "have none of the dates this list was filtered by") : MISSING_DATE_WORDS[field][one ? 0 : 1];
   const carry = unchecked.dates.length === 0 ? "" : ` ${one ? "It has" : "They have"} ${eitherOf(unchecked.dates.map(date => DATE_NAMES[date]))}.`;
-  return `${unchecked.count} ${one ? noun.singular : noun.plural} ${lacking}, so ${one ? "it was" : "they were"} not checked against these dates.${carry}`;
+  // A count the desk took before ECHO's own owner or status filter covers every owner or status: said, never narrowed.
+  const wider = unchecked.any_of === undefined || unchecked.any_of.length === 0 ? "" : ` This count is of ${noun.plural} with any ${eitherOf(unchecked.any_of)}.`;
+  return `${unchecked.count} ${one ? noun.singular : noun.plural} ${lacking}, so ${one ? "it was" : "they were"} not checked against these dates.${carry}${wider}`;
 }
 
 // ---- what a need's declared kind asks of lists --------------------------
@@ -577,6 +589,8 @@ export function agenticListFilterPhraseV1(filter: AgenticListFilterV1): string {
     ...(filter.kind === undefined ? [] : [`kind ${filter.kind}`]),
     ...(filter.owner === undefined ? [] : [`owner ${filter.owner}`]),
     ...(filter.status === undefined ? [] : [`status ${filter.status}`]),
+    // The asker's own role in each member (research tool contract v1): "with your role lead".
+    ...(filter.role === undefined ? [] : [`your role ${filter.role}`]),
   ];
   const range = dateRange(filter.since, filter.until);
   return [

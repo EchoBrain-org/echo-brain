@@ -607,7 +607,8 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     ] as const).map(([id, name, page, list]): Row => ({
       id, name: `states a which_items need's list by its completeness, with no writer call: ${name}`, ...MARA, desk: () => ({ list: vi.fn(async () => page as EvidenceDeskResultV2) }), steps: [read([MARA_LIST]), fin(WI, "L1")], w: [],
       stop: "finished", says: [], citations: 0, lists: [{ id: "L1", ...list }], status: "not_found",
-      ...(id === "X23c" ? { out: "not_found", gap: MISSING } : { out: "partial", gap: `${MISSING} ${leg("meetings")}`, ...(id === "X23b" ? { notice: "Meetings are temporarily unavailable." } : {}) }),
+      // A list with no member is named by its kind filter: Mara's list is of actions (research tool contract v1).
+      ...(id === "X23c" ? { out: "not_found", gap: MISSING } : { out: "partial", gap: `${MISSING} ${leg("actions")}`, ...(id === "X23b" ? { notice: "Meetings are temporarily unavailable." } : {}) }),
     })),
     { id: "X26a", name: "states every list a which_items need reads past the writer's five, and the sixth list's filter notice", ...daily(6, WI, EMPTY, { owner: 6 }), out: "answered", notice: ownerNotice("Confluence pages"), says: [1, 2, 3, 4, 5, 6].map(dayStatement) },
     { id: "X26b", name: "states the first ten of eleven lists, the response's ten statements, and says what did not fit", ...daily(11, WI, EMPTY), out: "partial", gap: FIT, says: Array.from({ length: 10 }, (_, index) => dayStatement(index + 1)) },

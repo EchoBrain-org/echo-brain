@@ -256,7 +256,9 @@ type ListState = {
   /** When the desk returned its first page (addition 2). */
   read_at?: string;
   /** Items the date filter could not test (research tool contract v1), as the desk last counted them. */
-  unchecked?: EvidenceDeskUncheckedV1;
+  unchecked?: EvidenceDeskUncheckedV1 & { readonly any_of?: readonly ("owner" | "status")[] };
+  /** Items the desk released beside its rows, by desk id, each shown with the first page whose members link to it. */
+  linked?: Map<string, EvidenceDeskItemV2>;
 };
 /** An inventory has more to show: listed items not yet shown, or another page. */
 function inventoryMore(state: ListState): boolean { return state.paged < state.items.length || state.cursor !== undefined; }
@@ -361,6 +363,13 @@ type ListArgs = EvidenceDateFilterV1 & {
  */
 type ReadRefusal = { readonly refused: { readonly field: AgenticListFilterFieldV1; readonly reason: string; readonly supports: Readonly<Record<string, unknown>> } };
 /** What a refusal shows of a source's capabilities. */
+/** Two copies' links, each name's ids once, in the order first seen. */
+function linksUnion(left: EvidenceDeskItemV2["links"], right: EvidenceDeskItemV2["links"]): EvidenceDeskItemV2["links"] {
+  if (left === undefined || right === undefined) return left ?? right;
+  const union: Record<string, readonly string[]> = { ...left };
+  for (const [name, ids] of Object.entries(right)) union[name] = Object.freeze([...new Set([...(union[name] ?? []), ...ids])]);
+  return Object.freeze(union);
+}
 function supportsOf(capabilities: EvidenceSourceCapabilitiesV1): Readonly<Record<string, unknown>> {
   return Object.freeze({ filters: capabilities.filters, dates: Object.keys(capabilities.dates), any_date: capabilities.any_date });
 }
@@ -487,9 +496,11 @@ function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticR
   catch (error) { return { error: error instanceof Error ? error.message : 'Invalid date filter' }; }
   const declared = Object.keys(capabilities.dates) as EvidenceDateFieldV1[];
   let dateField: EvidenceDateSelectionV1 | undefined;
-  if (raw.date_field !== undefined) {
-    if (!declared.includes(raw.date_field as EvidenceDateFieldV1)) return refuse("date_field", declared.length === 0 ? "it records no dates to filter by" : `date_field must be ${declared.join(", ")}`);
-    dateField = raw.date_field as EvidenceDateFieldV1;
+  // "any" is what leaving date_field out means where the source reads any of its dates: the same request.
+  const askedField = raw.date_field === EVIDENCE_ANY_DATE_V1 && capabilities.any_date ? undefined : raw.date_field;
+  if (askedField !== undefined) {
+    if (!declared.includes(askedField as EvidenceDateFieldV1)) return refuse("date_field", declared.length === 0 ? "it records no dates to filter by" : `date_field must be ${declared.join(", ")}`);
+    dateField = askedField as EvidenceDateFieldV1;
   } else if (since != null || until != null) {
     if (declared.length === 0) return refuse(since != null ? "since" : "until", "it records no dates to filter by");
     if (capabilities.any_date) dateField = EVIDENCE_ANY_DATE_V1;
@@ -502,7 +513,7 @@ function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticR
   const defaultSince = descriptor.default_since_days !== undefined && since === undefined ? listDate(`${descriptor.default_since_days}d`, today)! : since ?? undefined;
   if (since != null) applied.since = "applied";
   if (until != null) applied.until = "applied";
-  if (raw.date_field !== undefined) applied.date_field = "applied";
+  if (askedField !== undefined) applied.date_field = "applied";
   return {
     source: descriptor.source_id, notes, applied, ...(dateField === undefined ? {} : { date_field: dateField }),
     ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(role === undefined ? {} : { role }),
@@ -584,8 +595,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const observe = (result: EvidenceDeskResultV2) => {
     if (result.notice !== undefined) notice.add(result.notice);
     for (const item of result.items) if (item.citation.kind === "ticket") retrievedTickets.add(item.id);
-    // Audits bind every released item, even one that never reaches a prompt.
-    for (const item of result.items) if (!receipts.includes(item.receipt_sha256)) receipts.push(item.receipt_sha256);
+    // Audits bind every released item, even one that never reaches a prompt: an item released beside a row too.
+    for (const item of [...result.items, ...(result.linked ?? [])]) if (!receipts.includes(item.receipt_sha256)) receipts.push(item.receipt_sha256);
     for (const receipt of result.receipt_digests) if (!receipts.includes(receipt)) receipts.push(receipt);
   };
   /**
@@ -596,7 +607,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const existing = entries.get(item.id);
     touch += 1;
     if (existing !== undefined) {
+      // Each copy's links are kept, name by name: an item first released beside another's row carries none of its own
+      // until a read returns it as a row (research tool contract v1). Links are never novelty.
+      const links = linksUnion(existing.item.links, item.links);
       if (item.text !== undefined && existing.item.text === undefined) { existing.item = item; evidenceNovelty += 1; }
+      if (links !== undefined) existing.item = Object.freeze({ ...existing.item, links });
       existing.touched = touch;
       return existing;
     }
@@ -640,8 +655,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** Ask marks which of an item's dates fell in a dated read's window. */
   const markMatched = (entry: Entry, filter: EvidenceDateFilterV1) => {
     if (!ask || (filter.since === undefined && filter.until === undefined)) return;
+    // The latest dated read that returned the item says which of its dates fell in that read's window.
     const matched = matchedEvidenceDatesV1(entry.item.dates, filter);
-    if (matched.length > 0) entry.matched = matched;
+    if (matched.length > 0) entry.matched = matched; else delete entry.matched;
   };
   /** Released source projections for automatic starting/preload reads, before short ids are assigned. */
   const releasedView = (result: EvidenceDeskResultV2): Record<string, unknown> => ({
@@ -658,22 +674,25 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
     const source = readSource(args.source);
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
-    if (args.date_field !== undefined && source === undefined) return { tool: 'search', args, error: 'Choose a source when selecting date_field; sources support different date meanings' };
     // Ask checks a dated search against the source's capabilities (research tool contract v1): a date it does not record
     // refuses the read, and a window with no date field reads any of an item's dates where the source declares that.
     const capabilities = ask && source !== undefined ? sourcesById.get(source)?.capabilities : undefined;
+    // "any" is what leaving date_field out means wherever a window reads any date: the same request.
+    const askedField = args.date_field === EVIDENCE_ANY_DATE_V1 && ask && (source === undefined || capabilities?.any_date === true) ? undefined : args.date_field;
+    if (askedField !== undefined && source === undefined) return { tool: 'search', args, error: 'Choose a source when selecting date_field; sources support different date meanings' };
     const windowed = args.since !== undefined || args.until !== undefined;
     if (capabilities !== undefined) {
       const declared = Object.keys(capabilities.dates);
       const selector = sourcesById.get(source!)!.selector;
       const refused = (field: AgenticListFilterFieldV1, reason: string): ToolResult => ({ tool: 'search', args, refused: true, filters: { [field]: 'refused' }, supports: supportsOf(capabilities), note: `refused: ${selector}: ${reason}` });
-      if (args.date_field !== undefined && !declared.includes(args.date_field)) return refused('date_field', declared.length === 0 ? 'it records no dates to filter by' : `date_field must be ${declared.join(', ')}`);
-      if (args.date_field === undefined && windowed && declared.length === 0) return refused(args.since !== undefined ? 'since' : 'until', 'it records no dates to filter by');
-    } else if (source !== undefined && followUpSource(sourcesById.get(source)) && (windowed || args.date_field !== undefined)) return { tool: 'search', args, error: followUpDatesError(sourcesById.get(source)!.selector) };
-    const anyDate = capabilities?.any_date === true && windowed && args.date_field === undefined;
-    const dates = { ...(args.since === undefined ? {} : { since: listDate(args.since, requestDay) ?? args.since }), ...(args.until === undefined ? {} : { until: listDate(args.until, requestDay) ?? args.until }), ...(args.date_field === undefined ? (anyDate ? { date_field: EVIDENCE_ANY_DATE_V1 } : {}) : { date_field: args.date_field as EvidenceDateFieldV1 }), ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }) };
-    // A field Ask's capabilities admitted is the source's to apply; only the bounds and zone are checked here.
-    try { validateEvidenceDateFilterV1(capabilities === undefined ? dates : { ...dates, date_field: undefined }); } catch (error) { return { tool: 'search', args, error: error instanceof Error ? error.message : 'Invalid date filter' }; }
+      if (askedField !== undefined && !declared.includes(askedField)) return refused('date_field', declared.length === 0 ? 'it records no dates to filter by' : `date_field must be ${declared.join(', ')}`);
+      if (askedField === undefined && windowed && declared.length === 0) return refused(args.since !== undefined ? 'since' : 'until', 'it records no dates to filter by');
+    } else if (source !== undefined && followUpSource(sourcesById.get(source)) && (windowed || askedField !== undefined)) return { tool: 'search', args, error: followUpDatesError(sourcesById.get(source)!.selector) };
+    // Across sources, Ask's window reads any of each item's dates too; the desk keeps a source that reads one date to it.
+    const anyDate = windowed && askedField === undefined && (capabilities?.any_date === true || (ask && source === undefined));
+    const dates = { ...(args.since === undefined ? {} : { since: listDate(args.since, requestDay) ?? args.since }), ...(args.until === undefined ? {} : { until: listDate(args.until, requestDay) ?? args.until }), ...(askedField === undefined ? (anyDate ? { date_field: EVIDENCE_ANY_DATE_V1 } : {}) : { date_field: askedField as EvidenceDateFieldV1 }), ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }) };
+    // A field Ask's capabilities admitted, or any date, is the source's to apply; only the bounds and zone are checked here.
+    try { validateEvidenceDateFilterV1(capabilities === undefined && !anyDate ? dates : { ...dates, date_field: undefined }); } catch (error) { return { tool: 'search', args, error: error instanceof Error ? error.message : 'Invalid date filter' }; }
     const fingerprint = JSON.stringify({ query: query.toLowerCase(), source: source ?? null, ...dates });
     const repeat = searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase() && JSON.stringify(evidenceDateFilterV1(previous)) === JSON.stringify(dates));
     // A source that could not be searched then (a notice) may answer now, so one repeat runs again; a complete or truncated
@@ -788,8 +807,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const key = listKey(normalized);
     let state = lists.get(key);
     if (state === undefined) {
+      // The list's args as research sees them and sends them again: a window with no date_field reads any date by itself,
+      // so the internal any-date selection never appears there (research tool contract v1).
       const stateArgs: StepArgs = Object.freeze({
-        ...(request.date_field === undefined ? {} : { date_field: request.date_field }), source: sourcesById.get(request.source)!.selector, ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
+        ...(request.date_field === undefined || request.date_field === EVIDENCE_ANY_DATE_V1 ? {} : { date_field: request.date_field }), source: sourcesById.get(request.source)!.selector, ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
         ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(role === undefined ? {} : { role }),
         ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
       });
@@ -828,10 +849,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         observe(result);
         cover('list', request.source, result);
         currentState.available = currentState.available && result.notice === undefined;
-        // The desk counts what the filter could not test for the whole selection; a later page's count replaces it.
+        // The desk counts what the filter could not test for the whole selection; a later page's count replaces it. A meeting
+        // list's owner and status are ECHO's own filters, applied after the desk counted, so the count says it covers any.
         if (result.unchecked !== undefined) {
           if (ask && currentState.unchecked === undefined) uncheckedItems += result.unchecked.count;
-          currentState.unchecked = result.unchecked;
+          const anyOf = deskFilters ? [] : [...(owner === undefined ? [] : ["owner" as const]), ...(status === undefined ? [] : ["status" as const])];
+          currentState.unchecked = Object.freeze({ ...result.unchecked, ...(anyOf.length === 0 ? {} : { any_of: Object.freeze(anyOf) }) });
         }
         if (!currentState.fetched || result.next_cursor !== currentState.cursor) retrievalProgress += 1;
         // A list's id and read time come from its first page, in plan order (ADR-0041, addition 2: search can lag edits).
@@ -862,7 +885,20 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
 
       // Ask's limit pages out fewer rows for a short look; repeating the call continues the same list.
       const page = currentState.items.slice(currentState.paged, currentState.paged + Math.min(limit ?? LIST_PAGE, LIST_PAGE)).map(item => register(item));
-      const linked = result === undefined ? [] : registerLinked(result);
+      // Items released beside the fetched rows wait for the page that shows a member linking to them, so a short page
+      // (a small limit) shows only its own members' links (research tool contract v1).
+      if (result !== undefined && result.linked !== undefined && result.linked.length > 0) {
+        currentState.linked ??= new Map();
+        for (const item of result.linked) if (!currentState.linked.has(item.id)) currentState.linked.set(item.id, item);
+      }
+      const wanted = new Set(page.flatMap(entry => Object.values(entry.item.links ?? {}).flat()));
+      const shownBeside = [...wanted].flatMap(id => {
+        const item = currentState.linked?.get(id);
+        if (item === undefined) return [];
+        currentState.linked!.delete(id);
+        return [item];
+      });
+      const linked = registerLinked({ items: [], truncated: false, receipt_digests: [], linked: shownBeside });
       for (const entry of page) {
         entry.direct = true;
         markMatched(entry, request);
@@ -995,16 +1031,20 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       pending.clear();
     };
     const listTasks = new Map<string, Promise<ToolResult>>();
+    // Ask: the same read twice in one step waits for the first, so a refusal is remembered before its copy runs.
+    const readTasks = new Map<string, Promise<ToolResult>>();
     const tasks = actions.map((action, index) => {
       let key: string | undefined;
       if (action.tool === 'list') {
         const normalized = normalizeListArgs(action.args, requestDay, sourcesById, readSource, ask);
         if (!('error' in normalized) && !('refused' in normalized)) key = listKey(normalized);
       }
-      const previous = key === undefined ? undefined : listTasks.get(key);
+      const read = ask ? readKey(action) : undefined;
+      const previous = [...new Set([key === undefined ? undefined : listTasks.get(key), read === undefined ? undefined : readTasks.get(read)])]
+        .filter((value): value is Promise<ToolResult> => value !== undefined);
       const task = (async () => {
         try {
-          if (previous !== undefined) await previous;
+          if (previous.length > 0) await Promise.all(previous);
           signal.throwIfAborted(); assertLive();
           const value = await run(action, admit(index), signal);
           skip(index);
@@ -1015,6 +1055,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         }
       })();
       if (key !== undefined) listTasks.set(key, task);
+      if (read !== undefined) readTasks.set(read, task);
       return task;
     });
     const settled = await Promise.allSettled(tasks);

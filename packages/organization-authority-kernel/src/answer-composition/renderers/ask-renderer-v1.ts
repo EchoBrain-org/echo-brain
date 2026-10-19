@@ -194,10 +194,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // The writer sees at most 5 lists, the plan's first.
       const writerOrder = [...new Set([...stated, ...checking, ...lists.map(list => list.id)])].slice(0, AGENTIC_LIST_WRITER_LISTS_MAX_V1).map(id => listById.get(id)!);
       const writerListsWith = (cap: number) => writerOrder.map(list => viewOf(list, cap));
-      /** What a list's members are called: their desk kinds, after the catalog's tool (ADR-0041). */
+      /** What a list's members are called: their desk kinds, after the catalog's tool (ADR-0041); an empty list's, its kind filter's. */
       const nounOf = (list: AgenticWriterListV1) => {
         const tool = options.source_catalog.find(entry => entry.source === list.source)?.tool_id;
-        return agenticListMembersNounV1({ selector: list.source, ...(typeof tool === "string" ? { tool_id: tool } : {}) }, rows.get(list.id)!.map(member => member.kind));
+        const members = rows.get(list.id)!.map(member => member.kind);
+        return agenticListMembersNounV1({ selector: list.source, ...(typeof tool === "string" ? { tool_id: tool } : {}) },
+          members.length === 0 && list.filter.kind !== undefined ? [list.filter.kind] : members);
       };
 
       // ---- final answer ---------------------------------------------------
