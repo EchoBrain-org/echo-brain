@@ -1,3 +1,4 @@
+import type { EvidenceDeskUncheckedV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v2";
 import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type { PersonMeetingTranscriptCitationV1, PersonOpenRefV1 } from "@echo-brain/organization-api";
@@ -153,6 +154,11 @@ export interface OriginalContextDeskReleaseV1 {
   readonly receipt: Sha256Digest;
   readonly items: readonly OriginalContextDeskItemV1[];
   readonly truncated: boolean;
+  /**
+   * A dated read's items its date filter could not test, because they do not record that date, and the dates they do
+   * record (research tool contract v1). They are not in `items`. Audited with the release.
+   */
+  readonly unchecked?: EvidenceDeskUncheckedV1;
 }
 
 export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalContextRetrievalPortV1 {

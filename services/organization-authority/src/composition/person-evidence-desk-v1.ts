@@ -1,4 +1,5 @@
-import { evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import { EVIDENCE_DATE_FIELDS_V1, evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import type { EvidenceDeskResultV2, EvidenceDeskUncheckedV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v2";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeCountsV1, type CoreRuntimePhaseV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -21,6 +22,7 @@ import type {
   PersonAskScopeV2,
   PersonOriginalContextEvidenceDeskPortV1,
 } from "../application/ports/person-original-context-retrieval-v1.js";
+import { PERSON_DOCUMENT_DATE_FIELDS_V1, PERSON_MEETING_DATE_FIELDS_V1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import {
   PersonRecordSearchIndexLagV1,
   type PersonEvidenceDeskRecordsV1,
@@ -35,6 +37,26 @@ export interface CreatePersonEvidenceDeskV1Options {
   readonly scope: PersonAskScopeV2;
   readonly originals: PersonOriginalContextEvidenceDeskPortV1;
   readonly records: PersonEvidenceDeskRecordsV1;
+}
+
+/**
+ * A result of this desk. A dated search or list also says what its date filter could not test, summed over meeting
+ * records and originals (research tool contract v1): those items are not in the result.
+ */
+export type PersonEvidenceDeskResultV1 = EvidenceDeskResultV1 & Pick<EvidenceDeskResultV2, "unchecked">;
+
+/** The concrete desk: the V1 port, `openCitation`, and results that carry `unchecked`. */
+export interface PersonEvidenceDeskV1 extends EvidenceDeskPortV1 {
+  search(input: EvidenceDeskSearchInputV1): Promise<PersonEvidenceDeskResultV1>;
+  open(input: EvidenceDeskOpenInputV1): Promise<PersonEvidenceDeskResultV1>;
+  list(input: EvidenceDeskListInputV1): Promise<PersonEvidenceDeskResultV1>;
+  openCitation(input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResultV1>;
+}
+
+/** Two halves' untested items as one: their counts summed, and every date either records. */
+function bothUnchecked(left: EvidenceDeskUncheckedV1 | undefined, right: EvidenceDeskUncheckedV1 | undefined): EvidenceDeskUncheckedV1 | undefined {
+  if (left === undefined || right === undefined) return left ?? right;
+  return Object.freeze({ count: left.count + right.count, dates: Object.freeze(EVIDENCE_DATE_FIELDS_V1.filter(field => left.dates.includes(field) || right.dates.includes(field))) });
 }
 
 /**
@@ -133,9 +155,7 @@ function balanced<T>(left: readonly T[], right: readonly T[]): readonly T[] {
  * only a server-issued item id; HTTP/CLI routes that receive a citation should
  * use `openCitation` below to make a fresh scoped desk release.
  */
-export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Options): EvidenceDeskPortV1 & {
-  openCitation(input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }): Promise<EvidenceDeskResultV1>;
-} {
+export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Options): PersonEvidenceDeskV1 {
   const stored = new Map<string, Stored>();
   const originalReleases: OriginalContextDeskReleaseV1[] = [];
   /** How many of `originalReleases` a successful check of this desk has covered. */
@@ -148,6 +168,8 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   let initializationReceipts: Sha256Digest[] = [];
   let latestRecordTruncated = false;
   const readNotices = new Set<string>();
+  /** What this call's dated reads could not test, over both halves; reset with the notices by each result. */
+  let readUnchecked: EvidenceDeskUncheckedV1 | undefined;
 
   const save = (item: EvidenceDeskItemV1, release: Omit<Stored, "item">): EvidenceDeskItemV1 => {
     const existing = stored.get(item.id);
@@ -160,6 +182,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const originals = (release: OriginalContextDeskReleaseV1): readonly EvidenceDeskItemV1[] => {
     originalReleases.push(release);
     if (release.notice !== undefined) readNotices.add(release.notice);
+    readUnchecked = bothUnchecked(readUnchecked, release.unchecked);
     return release.items.map((value) => save(Object.freeze({
       id: itemId(sourceCitation(value)), citation: sourceCitation(value), kind: value.kind,
       ...(value.text === undefined ? {} : { text: value.text }), label: value.label,
@@ -171,6 +194,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const records = (result: ReturnType<PersonEvidenceDeskRecordsV1["searchBatch"]>, includeText = true): readonly EvidenceDeskItemV1[] => {
     latestRecordTruncated ||= result.truncated === true;
     if (result.notice !== undefined) readNotices.add(result.notice);
+    readUnchecked = bothUnchecked(readUnchecked, result.unchecked);
     pointer ??= result.release.active_pointer;
     if (pointer.generation_id !== result.release.active_pointer.generation_id || pointer.manifest_sha256 !== result.release.active_pointer.manifest_sha256 || pointer.record_head.position !== result.release.active_pointer.record_head.position || pointer.record_head.record_sha256 !== result.release.active_pointer.record_head.record_sha256) throw new AuthorityOperationError("unavailable", "record evidence snapshot changed");
     recordReleases.push(result.release);
@@ -209,18 +233,20 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     initialized = true;
     return original.checked_at;
   };
-  const result = (items: readonly EvidenceDeskItemV1[], truncated: boolean, receipts: readonly Sha256Digest[]): EvidenceDeskResultV1 => {
+  const result = (items: readonly EvidenceDeskItemV1[], truncated: boolean, receipts: readonly Sha256Digest[]): PersonEvidenceDeskResultV1 => {
     const all = [...new Set([...initializationReceipts, ...receipts])];
     initializationReceipts = [];
     if (recordsUnavailableAtStart) readNotices.add("Meeting records were unavailable when this request began.");
     const notices = [...readNotices];
     readNotices.clear();
-    return Object.freeze({ items: Object.freeze(items), truncated, receipt_digests: Object.freeze(all), ...(notices.length > 0 ? { notice: notices.join(" ") } : {}) });
+    const unchecked = readUnchecked;
+    readUnchecked = undefined;
+    return Object.freeze({ items: Object.freeze(items), truncated, receipt_digests: Object.freeze(all), ...(notices.length > 0 ? { notice: notices.join(" ") } : {}), ...(unchecked === undefined ? {} : { unchecked }) });
   };
   /** A record open's result, with whether the anchor's own text was cut (ADR-0041). */
-  const opened = (value: EvidenceDeskResultV1, expanded: { readonly anchor_truncated?: boolean }): EvidenceDeskResultV1 =>
+  const opened = (value: PersonEvidenceDeskResultV1, expanded: { readonly anchor_truncated?: boolean }): PersonEvidenceDeskResultV1 =>
     expanded.anchor_truncated === undefined ? value : Object.freeze({ ...value, anchor_truncated: expanded.anchor_truncated });
-  const search = async (input: EvidenceDeskSearchInputV1): Promise<EvidenceDeskResultV1> => {
+  const search = async (input: EvidenceDeskSearchInputV1): Promise<PersonEvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
     if (input.inventory_mode !== undefined &&
       (input.query !== undefined || input.inventory_mode !== "items")) {
@@ -252,8 +278,9 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     const items = balanced(echoItems[0]!, echoItems[1]!);
     return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
   };
-  const list = async (input: EvidenceDeskListInputV1): Promise<EvidenceDeskResultV1> => {
-    validateEvidenceDateFilterV1(input);
+  const list = async (input: EvidenceDeskListInputV1): Promise<PersonEvidenceDeskResultV1> => {
+    // Each source takes the dates its capabilities declare (research tool contract v1); this desk reads no Slack.
+    validateEvidenceDateFilterV1(input, input.source === "meeting" ? PERSON_MEETING_DATE_FIELDS_V1 : input.source === "document" ? PERSON_DOCUMENT_DATE_FIELDS_V1 : undefined);
     input.signal?.throwIfAborted();
     initialize();
     const limit = Math.min(50, Math.max(1, input.limit ?? 50));
@@ -264,7 +291,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     // The inventory reads one row past its limit and says truncated when more exist, so its end is confirmed (ADR-0041).
     return Object.freeze({ ...page, page_full: false });
   };
-  const open = async (input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV1> => {
+  const open = async (input: EvidenceDeskOpenInputV1): Promise<PersonEvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
     initialize();
     const value = stored.get(input.item);
@@ -278,7 +305,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     latestRecordTruncated = false;
     return opened(result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]), expanded);
   };
-  const openCitation = async (input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }) => {
+  const openCitation = async (input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
     initialize();
     if ((input.citation as { readonly kind: string }).kind === "slack_message") throw new AuthorityOperationError("not_found", "Slack messages open in Slack");

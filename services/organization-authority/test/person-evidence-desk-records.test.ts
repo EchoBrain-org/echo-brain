@@ -460,11 +460,23 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
     expect(page.items).toHaveLength(1);
     expect(page.items[0]).toMatchObject({ citation: { record_sha256: w.digest('r1') }, occurred_at: '2026-08-31', date_kind: 'occurred' });
     expect((await desk.list({ source: 'meeting', since: '2026-09-02', until: '2026-09-02' })).items).toEqual([]);
+    // Meetings with no recorded time are counted, with the date they do record, never a notice that makes the list unavailable
+    // (research tool contract v1): r3, r7a and r7b.
     const emptyDate = await desk.list({ source: 'meeting', since: '2026-10-16', until: '2026-10-16' });
     expect(emptyDate.items).toEqual([]);
-    expect(emptyDate.notice).toContain('missing recorded event dates');
-    expect((await desk.search({ source: 'meeting', query: 'Decision', since: '2026-10-16', until: '2026-10-16' })).notice).toContain('missing recorded event dates');
-    expect((await desk.list({ source: 'meeting' })).notice).toBeUndefined();
+    expect(emptyDate).toMatchObject({ unchecked: { count: 3, dates: ['approved'] }, truncated: false });
+    expect(emptyDate).not.toHaveProperty('notice');
+    const searched = await desk.search({ source: 'meeting', query: 'Decision', since: '2026-10-16', until: '2026-10-16' });
+    expect(searched).toMatchObject({ items: [], unchecked: { count: 3, dates: ['approved'] } });
+    expect(searched).not.toHaveProperty('notice');
+    // Each read says only what it could not test, and a read without dates tests nothing.
+    const undated = await desk.list({ source: 'meeting' });
+    expect(undated).not.toHaveProperty('notice');
+    expect(undated).not.toHaveProperty('unchecked');
+    // Their approvals are dates every record has.
+    expect((await desk.list({ source: 'meeting', since: '2026-09-07', until: '2026-09-07', date_field: 'approved' })).items.map(item => (item.citation as { record_sha256: string }).record_sha256).sort())
+      .toEqual([w.digest('r7a'), w.digest('r7b')].sort());
+    expect(await desk.list({ source: 'meeting', since: '2026-09-07', until: '2026-09-07', date_field: 'any' })).not.toHaveProperty('unchecked');
     await desk.revalidate({});
   });
 
@@ -473,8 +485,31 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
     closers.push(w.close);
     for (const [access_token, scope] of [['emp_a', { kind: 'mine' as const }]] as const) {
       const desk = createPersonEvidenceDeskV1({ access_token, scope, originals: emptyOriginals(), records: w.route() });
-      expect((await desk.list({ source: 'meeting', since: '2026-10-16', until: '2026-10-16' })).notice).toBeUndefined();
+      const listed = await desk.list({ source: 'meeting', since: '2026-10-16', until: '2026-10-16' });
+      expect(listed).not.toHaveProperty('notice');
+      expect(listed).not.toHaveProperty('unchecked');
     }
+  });
+
+  it('sums what both halves of a dated meetings read could not test, and takes each source\'s own dates (research tool contract v1)', async () => {
+    const w = await meetingWorld();
+    closers.push(w.close);
+    const originals = emptyOriginals();
+    const deskSearch = vi.fn((input: Parameters<PersonOriginalContextEvidenceDeskPortV1['deskSearch']>[0]) => ({
+      ...originals.deskSearch(input), ...(input.since === undefined ? {} : { unchecked: { count: 2, dates: ['occurred', 'received'] } }),
+    }));
+    const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'global' }, originals: { ...originals, deskSearch }, records: w.route() });
+    expect(await desk.list({ source: 'meeting', since: '2026-10-16', until: '2026-10-16', date_field: 'occurred' })).toMatchObject({ items: [], unchecked: { count: 5, dates: ['occurred', 'received', 'approved'] } });
+    expect(await desk.search({ source: 'meeting', query: 'Decision', since: '2026-10-16', until: '2026-10-16' })).toMatchObject({ unchecked: { count: 5 } });
+    // A document read reads no meeting record, so only its own half counts.
+    expect(await desk.list({ source: 'document', since: '2026-10-16', until: '2026-10-16', date_field: 'any' })).toMatchObject({ unchecked: { count: 2, dates: ['occurred', 'received'] } });
+    expect(await desk.list({ source: 'meeting' })).not.toHaveProperty('unchecked');
+    // Each source takes the dates its capabilities declare; another is refused before either half is read.
+    const calls = deskSearch.mock.calls.length;
+    await expect(desk.list({ source: 'meeting', since: '2026-10-16', date_field: 'created' })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source supports date_field: occurred, due, received, approved, any' });
+    await expect(desk.list({ source: 'document', since: '2026-10-16', date_field: 'occurred' })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source supports date_field: received, any' });
+    expect(deskSearch.mock.calls.length).toBe(calls);
+    await desk.revalidate({});
   });
 
   it('passes mine, never a project, to every record call, and returns only the caller\'s own approvals', async () => {

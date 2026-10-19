@@ -427,6 +427,37 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(() => originals.deskSearch({ access_token: 'owner', scope: { kind: 'project', project_id: project }, query: 'cohort' })).toThrow();
     expect(JSON.stringify(await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } }))).toContain('Ship the cohort');
   });
+  it.each([undefined, '2026-10-02T15:00:00.000Z'])('dates imported notes by their meeting when recorded and by their arrival, and counts them where a date cannot test them (started: %s)', async started => {
+    const f = await fixture(started === undefined ? {} : { started }), runtime = f.create();
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
+    const scope = { kind: 'global' } as const;
+    const [note] = originals.deskSearch({ access_token: 'owner', scope, query: 'cohort', kinds: ['imported_meeting'] }).items;
+    expect(note!.dates).toEqual({ ...(started === undefined ? {} : { occurred: started }), received: note!.received_at });
+    const arrived = note!.received_at.slice(0, 10);
+    const read = (filter: { readonly since: string; readonly until: string; readonly date_field?: 'occurred' | 'approved' | 'received' | 'due' | 'any' }) => {
+      const listed = originals.deskSearch({ access_token: 'owner', scope, source: 'meeting', ...filter });
+      expect(listed).not.toHaveProperty('notice');
+      return { items: listed.items.length, unchecked: listed.unchecked };
+    };
+    const day = (value: string) => ({ since: value, until: value });
+    const recorded = started === undefined ? ['received'] : ['occurred', 'received'];
+    // Imported notes are never approved, and only a meeting's actions are due.
+    for (const date_field of ['approved', 'due'] as const) expect(read({ ...day(arrived), date_field })).toEqual({ items: 0, unchecked: { count: 1, dates: recorded } });
+    expect(read({ ...day(arrived), date_field: 'received' })).toEqual({ items: 1, unchecked: undefined });
+    expect(read({ ...day(arrived), date_field: 'any' })).toEqual({ items: 1, unchecked: undefined });
+    if (started === undefined) {
+      // No field is the meeting's time, as before: notes without one are counted, never a notice.
+      expect(read(day('2026-10-02'))).toEqual({ items: 0, unchecked: { count: 1, dates: ['received'] } });
+      expect(read({ ...day('2026-10-02'), date_field: 'occurred' })).toEqual({ items: 0, unchecked: { count: 1, dates: ['received'] } });
+    } else {
+      expect(read(day('2026-10-02'))).toEqual({ items: 1, unchecked: undefined });
+      expect(read({ ...day('2026-10-02'), date_field: 'any' })).toEqual({ items: 1, unchecked: undefined });
+    }
+    // Someone who cannot read the import never has it counted.
+    expect(originals.deskSearch({ access_token: 'other', scope, source: 'meeting', ...day(arrived), date_field: 'approved' })).not.toHaveProperty('unchecked');
+  });
   it.each([false, true])('keeps imported notes and an approved transcript independently readable (project audience: %s)', async (sharedWithProject) => {
     const f = await fixture(), runtime = f.create();
     f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');

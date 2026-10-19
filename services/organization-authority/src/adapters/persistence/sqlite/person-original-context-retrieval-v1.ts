@@ -1,4 +1,17 @@
-import { MISSING_EVENT_DATE_NOTICE_V1, evidenceDayV1, matchesEvidenceDateV1, meetingEvidenceDatesV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import {
+  EVIDENCE_ANY_DATE_V1,
+  EVIDENCE_DATE_FIELDS_V1,
+  evidenceDayV1,
+  matchesEvidenceDateV1,
+  meetingEvidenceDatesV1,
+  validateEvidenceDateFilterV1,
+  type EvidenceDateFieldV1,
+  type EvidenceDateFilterV1,
+  type EvidenceDateSelectionV1,
+  type EvidenceDatesV1,
+} from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import type { EvidenceDeskUncheckedV1, EvidenceSourceCapabilitiesV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v2";
+import { DOCUMENTS_SOURCE_CAPABILITIES_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } from "@echo-brain/organization-authority-kernel/shared/source-capabilities-v1";
 import { SqlitePersonImportedMeetingsV1, importedMeetingTextV1 } from './person-imported-meetings-v1.js';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -37,9 +50,23 @@ interface OriginalRowsQueryV1 extends EvidenceDateFilterV1 {
   readonly first_document_passage?: true;
 }
 
+/**
+ * The date fields a source's capabilities declare, and `any` when it takes it: what its reads accept, so what research is
+ * told and what the desk takes are one list (research tool contract v1).
+ */
+export function evidenceDateFieldsOfV1(capabilities: EvidenceSourceCapabilitiesV1): readonly EvidenceDateSelectionV1[] {
+  return Object.freeze([...EVIDENCE_DATE_FIELDS_V1.filter(field => capabilities.dates[field] !== undefined), ...(capabilities.any_date ? [EVIDENCE_ANY_DATE_V1] : [])]);
+}
+/** What a meetings read takes, in both its halves: approved records and these originals. */
+export const PERSON_MEETING_DATE_FIELDS_V1 = evidenceDateFieldsOfV1(MEETINGS_SOURCE_CAPABILITIES_V1);
+export const PERSON_DOCUMENT_DATE_FIELDS_V1 = evidenceDateFieldsOfV1(DOCUMENTS_SOURCE_CAPABILITIES_V1);
+/** A read across both sources takes either's fields; each item is tested against the dates it records. */
+const ANY_SOURCE_DATE_FIELDS: readonly EvidenceDateSelectionV1[] = Object.freeze([...new Set([...PERSON_MEETING_DATE_FIELDS_V1, ...PERSON_DOCUMENT_DATE_FIELDS_V1])]);
+
+/** Notes and documents record only when ECHO received them: no field, `received` and `any` all read that date. */
 function receivedDateSql(input: EvidenceDateFilterV1, prefix: 'u' | 'd'): { sql: string; args: string[] } {
   if (input.since === undefined && input.until === undefined) return { sql: '', args: [] };
-  if (input.date_field !== undefined && input.date_field !== 'received') return { sql: 'AND 0', args: [] };
+  if (input.date_field !== undefined && input.date_field !== 'received' && input.date_field !== EVIDENCE_ANY_DATE_V1) return { sql: 'AND 0', args: [] };
   const clauses: string[] = []; const args: string[] = [];
   for (const [bound, operator] of [[input.since, '>='], [input.until, '<=']] as const) {
     if (bound === undefined) continue;
@@ -346,7 +373,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     readonly limit?: number;
     readonly inventory_mode?: "items";
   }): OriginalContextDeskReleaseV1 {
-    validateEvidenceDateFilterV1(input, input.source === "meeting" ? ["occurred", "received", "due"] : input.source === "document" ? ["received"] : ["occurred", "received", "due"]);
+    validateEvidenceDateFilterV1(input, input.source === "meeting" ? PERSON_MEETING_DATE_FIELDS_V1 : input.source === "document" ? PERSON_DOCUMENT_DATE_FIELDS_V1 : ANY_SOURCE_DATE_FIELDS);
     const limit = input.limit ?? (input.query === undefined ? 50 : 10);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > (input.query === undefined ? 50 : 10)) {
       throw new AuthorityOperationError("invalid_request", "request is invalid");
@@ -385,12 +412,39 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     annotateCoreRuntimeV1({ counts: { transcript_items: selected.filter((entry) => entry.transcript === true).length } });
     const atoms = selected.map(({ atom }) => atom);
     const items = selected.map(({ item }) => item());
-    const datedMeetings = input.source !== "document" && (input.date_field === undefined || input.date_field === "occurred") && (input.since !== undefined || input.until !== undefined);
-    const undated = datedMeetings && (
-      ((input.kinds === undefined || input.kinds.includes("imported_meeting")) && this.imported.rows(actor, input.scope).some(row => row.dates.occurred === undefined)) ||
-      ((input.kinds === undefined || input.kinds.includes("note")) && this.transcriptCandidates(actor, input.scope).some(row => row.dates.occurred === undefined)));
-    return this.commitDeskRelease(actor, input.access_token, input.scope, items, atoms, expanded.length > limit,
-      undated ? MISSING_EVENT_DATE_NOTICE_V1 : undefined);
+    return this.commitDeskRelease(actor, input.access_token, input.scope, items, atoms, expanded.length > limit, this.uncheckedOf(actor, input.scope, input));
+  }
+
+  /**
+   * A dated read's items its filter could not test (research tool contract v1): of the items its source, kinds and
+   * scope select, those that do not record the date it reads, one per list member (a note, a document, an imported
+   * meeting, a shared transcript), with the dates they do record. As the notice it replaces, a search's words do not
+   * narrow it. No date field reads a meeting's time and a note's or document's arrival, as the reads themselves do.
+   */
+  private uncheckedOf(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, input: EvidenceDateFilterV1 & { readonly source?: "meeting" | "document"; readonly kinds?: readonly DeskKind[] }): EvidenceDeskUncheckedV1 | undefined {
+    if (input.since === undefined && input.until === undefined) return undefined;
+    const accepts = (kind: DeskKind) => input.kinds === undefined || input.kinds.includes(kind);
+    let count = 0;
+    const carried = new Set<EvidenceDateFieldV1>();
+    const consider = (dates: EvidenceDatesV1, unnamed: EvidenceDateFieldV1) => {
+      const field = input.date_field ?? unnamed;
+      const recorded = EVIDENCE_DATE_FIELDS_V1.filter(name => dates[name] !== undefined);
+      if (field === EVIDENCE_ANY_DATE_V1 ? recorded.length > 0 : dates[field] !== undefined) return;
+      count += 1;
+      for (const name of recorded) carried.add(name);
+    };
+    // Every note and document records when it was received, so only another field leaves one untested.
+    const received = input.date_field === undefined || input.date_field === "received" || input.date_field === EVIDENCE_ANY_DATE_V1;
+    if (input.source !== "meeting" && !received) {
+      if (accepts("note")) for (const row of this.textScanRows(actor, scope)) consider({ received: row.received_at }, "received");
+      if (accepts("document_passage")) for (const row of new Map(this.documentScanRows(actor, scope).map(row => [row.document_id, row])).values()) consider({ received: row.received_at }, "received");
+    }
+    if (input.source !== "document") {
+      // An import with no notes has no passage to list, so it is no member either way.
+      if (accepts("imported_meeting")) for (const row of this.imported.rows(actor, scope)) if (row.text.length > 0) consider({ ...row.dates, received: row.received_at }, "occurred");
+      if (accepts("note")) for (const transcript of this.transcriptCandidates(actor, scope)) consider({ ...transcript.dates, received: transcript.received_at }, "occurred");
+    }
+    return count === 0 ? undefined : Object.freeze({ count, dates: Object.freeze(EVIDENCE_DATE_FIELDS_V1.filter(name => carried.has(name))) });
   }
 
   deskAuthorize(input: { readonly access_token: string; readonly scope: PersonAskScopeV2 }): { readonly checked_at: string } {
@@ -934,14 +988,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return this.deskItem(row as DocumentRow, atom, includeText);
   }
 
-  private commitDeskRelease(actor: PersonAccessAuthorization, accessToken: string, scope: PersonAskScopeV2, items: readonly OriginalContextDeskItemV1[], atoms: readonly ReleasedSourceContextAtomV1[], truncated = false, notice?: string): OriginalContextDeskReleaseV1 {
+  private commitDeskRelease(actor: PersonAccessAuthorization, accessToken: string, scope: PersonAskScopeV2, items: readonly OriginalContextDeskItemV1[], atoms: readonly ReleasedSourceContextAtomV1[], truncated = false, unchecked?: EvidenceDeskUncheckedV1): OriginalContextDeskReleaseV1 {
     const release: OriginalContextReleaseV1 = Object.freeze({ authorization: Object.freeze({ principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, checked_at: actor.checked_at }), scope: Object.freeze({ ...scope }), authorization_revision: this.authorizationRevision(actor.organization_id), released_atoms: Object.freeze([...atoms]) });
     this.releases.add(release);
     this.revalidate({ access_token: accessToken, release });
-    const audit = { schema_version: 1, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, authorization_revision: release.authorization_revision, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text, ref, dates }) => ({ citation, kind, visibility, label, received_at, version, ...(dates === undefined ? {} : { dates }), ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ...(ref === undefined ? {} : { ref }) }))), released_count: items.length, checked_at: actor.checked_at };
+    const audit = { schema_version: 1, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, authorization_revision: release.authorization_revision, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text, ref, dates }) => ({ citation, kind, visibility, label, received_at, version, ...(dates === undefined ? {} : { dates }), ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ...(ref === undefined ? {} : { ref }) }))), released_count: items.length, ...(unchecked === undefined ? {} : { unchecked }), checked_at: actor.checked_at };
     const receipt = canonicalSha256(audit);
     this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(receipt, canonicalJson(audit), actor.checked_at);
-    const result: OriginalContextDeskReleaseV1 = Object.freeze({ release, receipt, items: Object.freeze([...items]), truncated, ...(notice === undefined ? {} : { notice }) });
+    const result: OriginalContextDeskReleaseV1 = Object.freeze({ release, receipt, items: Object.freeze([...items]), truncated, ...(unchecked === undefined ? {} : { unchecked }) });
     this.deskReleases.add(result);
     return result;
   }
