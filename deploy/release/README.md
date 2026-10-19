@@ -176,7 +176,8 @@ Use the [automated current-host lane](#automated-current-host-staging-lane) to
 stage, run the synthetic canary, obtain the human's approval of the canary
 meeting (on the desktop, or in Slack if the owner linked it), and install/check
 the exact candidate client. Preserve the candidate's positive
-record search and cited Ask evidence. A failing required check stops acceptance.
+record search and cited Ask evidence, and its
+[open-ended Ask check](#open-ended-ask-check). A failing required check stops acceptance.
 
 After those checks, present one final review containing the candidate release
 record hash, Person-client artifact hash, canary/read evidence, prepared manifest
@@ -490,6 +491,50 @@ before promotion. The `--canary-passed` flag remains the operator's explicit
 confirmation that the canary meeting was approved and both permission-aware reads
 succeeded; a receipt from the currently accepted release cannot promote a
 different candidate.
+
+#### Open-ended Ask check
+
+The canary Ask names its subject, so it cannot catch research that is lost on
+questions naming none (research tool contract v1). After the canary's two
+reads, ask the release's open-ended questions with the same candidate binary,
+word for word: they are the development cases that
+[`tools/evals/research-loop/release-check.json`](../../tools/evals/research-loop/release-check.json)
+names.
+
+```sh
+"$HOME/.local/bin/echo-brain" person ask --question 'What happened yesterday?'
+"$HOME/.local/bin/echo-brain" person ask --question 'What are the current projects, and who are the project leads?'
+"$HOME/.local/bin/echo-brain" person ask --question 'What are the open items, and who owns them?'
+```
+
+Then check them from their traces, which needs
+[LangSmith staging tracing](../organization-authority/README.md#langsmith-staging-tracing)
+enabled while they run. Save the Asks' runs from the `echo-staging` project as
+`langsmith-runs.json` in a private directory outside the repository: with the
+LangSmith MCP, a runs query from the time of the first question, filtered to
+`or(eq(name, "ECHO ask"), eq(name, "research"))`, selecting `ID`, `NAME`,
+`RUN_TYPE`, `TRACE_ID`, `IS_ROOT`, `PARENT_RUN_IDS`, `START_TIME`, `METADATA`,
+`INPUTS` and `OUTPUTS`, saved as returned. The file holds released source text,
+like an evaluation run. If a trace's `research` run is missing, add its tool
+runs (`run_type` tool) and the check rebuilds its rounds from them. Run the
+check from a checkout at the candidate's source:
+
+```sh
+npm run eval:research-loop -- release-check --out /absolute/private/release-ask-check --release-sha <candidate-source-sha>
+```
+
+It prints one line per question from its latest trace: rounds and stop reason,
+calls per round, refused calls and repeated refusals, unchecked items, and the
+collections research looked at, and writes `release-check.json` beside the
+runs. A question passes when its trace ran the candidate, its capture is
+complete, research looked at every collection its case names (for
+"yesterday": meetings, documents, Jira tickets and Confluence pages, each within
+yesterday), sent no refused call again, stated the unchecked items its answer
+used, and finished within 4 rounds; otherwise the command exits non-zero and
+names what failed. Keep its output with the canary evidence. A candidate that
+ships the research tool contract must pass it, and a failure stops acceptance
+like any failing required check; for an earlier candidate, record the result,
+which is expected to fail.
 
 If it fails, restore the prior **same-clean-v1** image, runtime profile, and
 environment tuple and leave the accepted record unchanged:

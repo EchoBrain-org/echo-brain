@@ -136,6 +136,66 @@ the signed-in person. It does not edit Jira or Confluence. The separate
 `trace` command below captures ordinary product requests in production or
 staging; an approved-record capture can start an existing pending ECHO run.
 
+## Open-ended family
+
+The [research tool contract](../../../docs/product/2026-10-19-research-tool-contract-v1.md)
+("Testing open-ended questions") adds questions that name no subject, source or
+date: the open items and who owns them, which meeting each is from and who was
+in it, how long since each was assigned, the current projects and their leads,
+what happened yesterday, the link to a project's Jira space, a question only
+Jira answers and one only Confluence answers, plus time, own-work, structure
+and desktop-screen questions. A case of the family has `family: open_ended`,
+a `category` (`goal`, `time`, `own_work`, `structure`, `reach`, `tools`) and a
+`reach` key: the collections holding part of its answer (`meetings`,
+`documents`, `follow_ups`, `projects`, `people`, `tools`, `tickets`, `pages`,
+`slack`, `jira_projects`, `confluence_spaces`, `slack_channels`; an entry that
+lists several is met by any of them), an optional time `window` (`yesterday`,
+`this_week`, `last_week`) and its rounds (`max_rounds`, 4 unless it says
+otherwise). Its parts name workspace items as `{ "project" }`, `{ "person" }`,
+`{ "tool" }`, `{ "container", "id" }` (a Jira project or Confluence space by
+its provider id) and `{ "follow_up" }` (a follow-up of `world/additions.json`
+`workspace`, matched by the ticket it follows). A case whose answer the world
+cannot fix in advance ("What happened yesterday?") has no parts.
+
+Every case of the family is graded on reach and cost, never on wording, by code
+reading the research result its run saves:
+
+- **Looked at**: every collection holding part of the answer was looked at: a
+  search or list naming it, unless refused (it read nothing), or an item from
+  it that research came across. With a window, only calls whose `since` and
+  `until` hold the window count, on the day asked in UTC (an evaluation's Ask
+  sends no time zone) or in the time zone its lists were read in.
+- **No repeated refusal**: no refused call was sent again. A refusal is a
+  result naming a `refused` filter (one outcome per filter), or one carrying an
+  error, the form refusals took before the contract; the same refusal on the
+  same collection (or, for `open`, the same id) is a repeat, however its date
+  arguments were reshaped. A notice that left a list unavailable is not a
+  refusal.
+- **Unchecked items stated**: every list the answer uses (one the plan relied
+  on, or one it cites a member of) whose `unchecked` count is above zero has
+  that count in the answer's text. Unknown, never a pass, when the answer used
+  no such list.
+- **Within rounds**: research stopped `finished` within its rounds.
+
+Every completed run of any case also reports what its trace counts: rounds,
+calls per round, collections looked at, refused calls, repeated refusals,
+unchecked items, notices and rejected replies. The report's "Reach and cost"
+section shows them per case, with each check's rate over the case's runs (a
+failed run meets none), and what each case awaits. `awaits` names the contract
+steps a case needs (`map_and_rules`, `dates_and_links`, `workspace_collections`,
+`wider_calls`, `connector_containers`, and `eval_full_catalog`: the evaluation
+endpoint binding follow-ups, the workspace sources and tool containers, which
+it leaves out while it answers as V6): such a case is expected to fail until
+they land, and a failure there is not a regression. The judge is told when each
+question was asked (`case.asked_at`), since these keys word time relative to it.
+Run the family alone with `run --family open_ended`; it needs the workspace
+seeded (`world/README.md`, "Workspace").
+
+`release-check` checks the staging release's open-ended Asks
+(`release-check.json` names the development cases it asks) from their
+LangSmith traces, with the same four checks: see
+[the release guide](../../../deploy/release/README.md#open-ended-ask-check).
+
 ## What is where
 
 | Path | What it is |
@@ -143,8 +203,9 @@ staging; an approved-record capture can start an existing pending ECHO run.
 | `world/` | The THERM additions and S1 edits to seed by hand (see `world/README.md`). |
 | `cases/development.json` | Cases used while improving the loop. |
 | `cases/holdout.json` | Held-out cases. Open them only for the final check. No other file quotes their questions, names them or gives their keys. |
-| `cli.mjs` | `validate`, `bindings`, `run`, `grade`, `report`, `calibrate`, `trace`. |
-| `lib/` | Reference matching, code checks, judge, report, calibration. |
+| `release-check.json` | The development cases the staging release check asks after its canary. |
+| `cli.mjs` | `validate`, `bindings`, `run`, `grade`, `report`, `calibrate`, `trace`, `release-check`. |
+| `lib/` | Reference matching, code checks, reach and cost, judge, report, calibration, the release check. |
 
 ## Founder steps, in order
 

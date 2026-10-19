@@ -1611,6 +1611,447 @@
       ],
       "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
       "distractors": []
+    },
+    {
+      "id": "open-items-and-owners",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "goal",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "What are the open items, and who owns them?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["follow_ups"] },
+      "awaits": ["eval_full_catalog"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "list",
+          "requirement": "Four follow-ups are open: MRD-02 (THERM-2), TC-D-06 (THERM-40), DVT-R2 (THERM-48) and TRACE-01 (THERM-47). BUG-412's is done and GATE-DVT's is not sent, so neither is open.",
+          "evidence": [{ "follow_up": "F1" }, { "follow_up": "F2" }, { "follow_up": "F3" }, { "follow_up": "F4" }]
+        },
+        {
+          "id": "p2",
+          "type": "owner",
+          "requirement": "MRD-02's and TRACE-01's follow-ups are {{TEST_PERSON}}'s, TC-D-06's is Rafael Moreno's, and DVT-R2's is Mara Lindqvist's since it was reassigned to her.",
+          "evidence": [{ "follow_up": "F1" }, { "follow_up": "F2" }, { "follow_up": "F3" }, { "follow_up": "F4" }]
+        }
+      ],
+      "expected_needs": ["open follow-ups", "each open follow-up's owner"],
+      "gaps": [],
+      "must_not": [
+        "lists BUG-412's follow-up (done) or GATE-DVT's (not sent) as open",
+        "names Rafael Moreno as the owner of DVT-R2's follow-up, which was reassigned to Mara Lindqvist"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": [{ "follow_up": "F5" }, { "follow_up": "F6" }]
+    },
+    {
+      "id": "open-items-meetings-and-participants",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "goal",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "For each open item, which meeting is it from, and who was in that meeting?",
+      "expected_outcome": "answerable",
+      "reach": { "collections": ["follow_ups", "meetings"] },
+      "awaits": ["eval_full_catalog", "dates_and_links"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "fact",
+          "requirement": "MRD-02's and TC-D-06's follow-ups come from the Kestrel Valley Care pilot review (2026-09-30), DVT-R2's from the THERM DVT round 1 results review (2026-10-01), and TRACE-01's from the BUG-412 failure review (2026-10-05).",
+          "evidence": [{ "follow_up": "F1" }, { "follow_up": "F2" }, { "follow_up": "F3" }, { "follow_up": "F4" }, { "meeting": "M2", "item": "decision" }, { "meeting": "M3", "item": "decision" }, { "meeting": "M4", "item": "decision" }]
+        },
+        {
+          "id": "p2",
+          "type": "fact",
+          "requirement": "For each of those meetings, names who was in it as the meeting recorded them, or says it recorded no participants.",
+          "evidence": [{ "meeting": "M2", "item": "decision" }, { "meeting": "M3", "item": "decision" }, { "meeting": "M4", "item": "decision" }]
+        }
+      ],
+      "expected_needs": ["open follow-ups", "the meeting each open follow-up comes from", "who was in each of those meetings"],
+      "gaps": [],
+      "must_not": [
+        "names someone as in a meeting who is neither among its recorded participants nor a speaker in its transcript",
+        "gives an open item the meeting of a decision it does not follow"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "open-items-time-since-assigned",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "goal",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "How long has it been since each open item was assigned?",
+      "expected_outcome": "answerable",
+      "reach": { "collections": ["follow_ups"] },
+      "awaits": ["eval_full_catalog", "dates_and_links"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "date",
+          "requirement": "For each open follow-up, the time from when it was sent to its owner (seeding day 0) to the day asked; for DVT-R2's, from when it was reassigned to Mara Lindqvist (day 1).",
+          "evidence": [{ "follow_up": "F1" }, { "follow_up": "F2" }, { "follow_up": "F3" }, { "follow_up": "F4" }]
+        }
+      ],
+      "expected_needs": ["open follow-ups", "when each was sent to its owner or last reassigned", "the time from then to today"],
+      "gaps": [],
+      "must_not": [
+        "counts DVT-R2's follow-up from when it was first sent to Rafael Moreno instead of from its reassignment",
+        "gives an assignment date that no follow-up's row carries"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "current-projects-and-leads",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "goal",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "What are the current projects, and who are the project leads?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["projects"] },
+      "awaits": ["workspace_collections", "eval_full_catalog"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "list",
+          "requirement": "The current projects are THERM and Kestrel Pilot Launch.",
+          "evidence": [{ "project": "THERM" }, { "project": "Kestrel Pilot Launch" }]
+        },
+        {
+          "id": "p2",
+          "type": "owner",
+          "requirement": "THERM's leads are {{TEST_PERSON}} and Mara Lindqvist; Kestrel Pilot Launch's lead is Mara Lindqvist.",
+          "evidence": [{ "project": "THERM" }, { "project": "Kestrel Pilot Launch" }]
+        }
+      ],
+      "expected_needs": ["the asker's active projects", "each project's leads"],
+      "gaps": [],
+      "must_not": [
+        "lists THERM EVT Archive, which is archived, as a current project",
+        "names a project the asker is not in, such as THERM Supplier Review"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }, { "project": "THERM Supplier Review" }],
+      "distractors": [{ "project": "THERM EVT Archive" }]
+    },
+    {
+      "id": "what-happened-yesterday",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "goal",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "What happened yesterday?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["meetings", "documents", "tickets", "pages"], "window": "yesterday" },
+      "awaits": ["map_and_rules", "dates_and_links", "wider_calls"],
+      "parts": [],
+      "expected_needs": ["meeting records dated or approved yesterday", "documents received yesterday", "tickets created or updated yesterday", "pages created or updated yesterday"],
+      "gaps": [],
+      "must_not": [
+        "says nothing happened yesterday in a source whose items could not all be checked against that day, without saying how many were not checked",
+        "reports something dated another day as having happened yesterday"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "jira-space-link-for-project",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "goal",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "Give me the link to the Jira space for project THERM.",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["content"],
+      "reach": { "collections": [["projects", "jira_projects"]] },
+      "awaits": ["workspace_collections", "connector_containers", "eval_full_catalog"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "fact",
+          "requirement": "THERM's Jira project is THERM (Digital Thermometer), and the answer gives the link research found for it.",
+          "evidence": [{ "container": "jira_project", "id": "10003" }, { "project": "THERM" }]
+        }
+      ],
+      "expected_needs": ["the Jira project mapped to THERM", "its link"],
+      "gaps": [],
+      "must_not": [
+        "gives the link of a single ticket, or of another Jira project, as THERM's Jira project",
+        "gives a link that no item research found carries"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "due-late-october-in-project",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "tools",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "live",
+      "question": "What is due between October 20 and October 30?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["tickets", "meetings"] },
+      "awaits": ["map_and_rules"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "list",
+          "requirement": "Four THERM tickets are due between 2026-10-20 and 2026-10-30: SW-14c (THERM-12, 2026-10-20), GATE-DVT (THERM-50, 2026-10-23), BUG-412 (THERM-46, 2026-10-28) and DVT-R2 (THERM-48, 2026-10-30). Only Jira holds these due dates.",
+          "evidence": [{ "ticket": "THERM-12" }, { "ticket": "THERM-50" }, { "ticket": "THERM-46" }, { "ticket": "THERM-48" }]
+        }
+      ],
+      "expected_needs": ["tickets due between 2026-10-20 and 2026-10-30", "meeting actions due between 2026-10-20 and 2026-10-30"],
+      "gaps": [],
+      "must_not": [
+        "includes a ticket due outside 2026-10-20 to 2026-10-30, such as TRACE-01 (due 2026-10-14)",
+        "gives a due date that its ticket does not carry"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "project-confluence-pages",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "tools",
+      "scope": { "kind": "project", "project": "THERM" },
+      "budget": "live",
+      "question": "Which Confluence pages does this project have?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["pages"] },
+      "parts": [
+        {
+          "id": "p1",
+          "type": "list",
+          "requirement": "The project's Confluence space holds seven pages: Mock Digital Thermometer Home; MRD — Mock Digital Thermometer; Verification plan — EVT, DVT and PVT mock results; PRD — System and acceptance requirements; Traceability — requirement threads and BUG-412 walkthrough; Gate reviews — EVT pass, DVT hold, PVT pending; Assumptions and decisions — source facts versus proposals.",
+          "evidence": [{ "page": "1015989" }, { "page": "1212589" }, { "page": "1212607" }, { "page": "1409025" }, { "page": "1409042" }, { "page": "1441793" }, { "page": "1474561" }]
+        }
+      ],
+      "expected_needs": ["Confluence pages in the project's space"],
+      "gaps": [],
+      "must_not": [
+        "lists a page outside the project's Confluence space, such as ECHO Product Pipeline — Start Here",
+        "lists one of the space's folders as a page"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": [{ "page": "589865" }]
+    },
+    {
+      "id": "jira-changes-this-week",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "time",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "What changed in Jira this week?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["tickets"], "window": "this_week" },
+      "parts": [],
+      "expected_needs": ["Jira tickets updated this week"],
+      "gaps": [],
+      "must_not": [
+        "reports a ticket as changed this week from its creation date or due date alone",
+        "says what changed inside a ticket beyond its current state, when Ask cannot read Jira history"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "decisions-last-week",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "time",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "What did we decide last week?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["meetings"], "window": "last_week" },
+      "awaits": ["map_and_rules", "dates_and_links"],
+      "parts": [],
+      "expected_needs": ["decisions made or approved last week"],
+      "gaps": [],
+      "must_not": [
+        "presents a discussion, proposal or open question as a decision",
+        "says nothing was decided last week while some meeting records could not be checked against it, without saying how many"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "what-am-i-working-on",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "own_work",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "What am I working on?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["follow_ups", "tickets", "meetings"] },
+      "awaits": ["eval_full_catalog"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "owner",
+          "requirement": "{{TEST_PERSON}} owns the open MRD-02 (THERM-2) and TRACE-01 (THERM-47) follow-ups.",
+          "evidence": [{ "follow_up": "F1" }, { "follow_up": "F4" }]
+        },
+        {
+          "id": "p2",
+          "type": "owner",
+          "requirement": "TRACE-01, MRD-REVIEW, PRD-REVIEW and OD-REGISTER are assigned to {{TEST_PERSON}} in Jira.",
+          "evidence": [{ "ticket": "THERM-47" }, { "ticket": "THERM-52" }, { "ticket": "THERM-53" }, { "ticket": "THERM-54" }]
+        },
+        {
+          "id": "p3",
+          "type": "owner",
+          "requirement": "{{TEST_PERSON}} owns two meeting actions: the MRD-02 and PRD display update (due 2026-10-07) and confirming the named DVT gate authority (due 2026-10-16).",
+          "evidence": [{ "meeting": "M2", "item": "action" }, { "meeting": "M3", "item": "action" }]
+        }
+      ],
+      "expected_needs": ["the asker's open follow-ups", "Jira tickets assigned to the asker", "meeting actions the asker owns"],
+      "gaps": [],
+      "must_not": [
+        "lists Rafael Moreno's regression-scope proposal or TRACE-01 confirmation (actions that only mention {{TEST_PERSON}}) as {{TEST_PERSON}}'s work",
+        "lists DVT-R2's follow-up, now Mara Lindqvist's, as {{TEST_PERSON}}'s"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": [{ "follow_up": "F3" }]
+    },
+    {
+      "id": "what-do-i-owe-this-week",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "own_work",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "What do I owe this week?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["follow_ups", "tickets", "meetings"] },
+      "awaits": ["eval_full_catalog"],
+      "parts": [],
+      "expected_needs": ["items the asker owns that are due this week", "their due dates"],
+      "gaps": [],
+      "must_not": [
+        "counts an item owned by someone else, even one that mentions {{TEST_PERSON}}, as owed by {{TEST_PERSON}}",
+        "counts an item due outside this week as due this week"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "confluence-spaces-of-project",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "structure",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "Which Confluence spaces belong to project THERM?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["content"],
+      "reach": { "collections": [["projects", "confluence_spaces"]] },
+      "awaits": ["workspace_collections", "connector_containers", "eval_full_catalog"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "fact",
+          "requirement": "THERM has one Confluence space: Mock Digital Thermometer (key THERM).",
+          "evidence": [{ "container": "confluence_space", "id": "1015812" }, { "project": "THERM" }]
+        }
+      ],
+      "expected_needs": ["the Confluence spaces mapped to THERM"],
+      "gaps": [],
+      "must_not": ["names a space THERM is not mapped to, such as Project Management or a personal space, as THERM's"],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
+    },
+    {
+      "id": "people-i-work-with",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "reach",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "Who do I work with, and on which projects?",
+      "expected_outcome": "answerable",
+      "reach": { "collections": [["people", "projects"]] },
+      "awaits": ["workspace_collections", "eval_full_catalog"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "fact",
+          "requirement": "Mara Lindqvist works with {{TEST_PERSON}} on THERM and Kestrel Pilot Launch, leading both; Rafael Moreno works with them on both as a member.",
+          "evidence": [{ "person": "Mara Lindqvist" }, { "person": "Rafael Moreno" }, { "project": "THERM" }, { "project": "Kestrel Pilot Launch" }]
+        }
+      ],
+      "expected_needs": ["people who share a project with the asker", "the projects they share and their roles in them"],
+      "gaps": [],
+      "must_not": [
+        "names someone as sharing a project with {{TEST_PERSON}} who shares none",
+        "names THERM Supplier Review, or anyone as working on it with {{TEST_PERSON}}"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }, { "project": "THERM Supplier Review" }],
+      "distractors": []
+    },
+    {
+      "id": "connected-tools",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "reach",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "Which of my tools are connected?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["which_items"],
+      "reach": { "collections": ["tools"] },
+      "awaits": ["workspace_collections", "eval_full_catalog"],
+      "parts": [
+        {
+          "id": "p1",
+          "type": "list",
+          "requirement": "Jira and Confluence are connected.",
+          "evidence": [{ "tool": "jira" }, { "tool": "confluence" }]
+        }
+      ],
+      "expected_needs": ["the asker's tools and whether each is connected"],
+      "gaps": [],
+      "must_not": ["says Jira or Confluence is not connected"],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "distractors": []
     }
   ]
 }

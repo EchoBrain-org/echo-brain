@@ -22,7 +22,8 @@ export function runScores(graded) {
   if (checks.status !== "completed") {
     return { status: checks.status, complete_and_supported: false, tools_found: 0, tools_read: 0, research_established: 0, ...(planned ? { planner_needs_covered: 0, tools_handed: 0 } : {}),
       ...(checks.declared_kinds === undefined ? {} : { planner_kinds_declared: 0 }),
-      ...(checks.trigger === "ask" ? { writer_parts_correct: 0, ...((checks.list_parts ?? 0) > 0 ? { writer_lists_named: 0 } : {}) } : {}), ...(checks.trigger === "approved_record" ? { card_items_listed: 0 } : {}) };
+      ...(checks.trigger === "ask" ? { writer_parts_correct: 0, ...((checks.list_parts ?? 0) > 0 ? { writer_lists_named: 0 } : {}) } : {}), ...(checks.trigger === "approved_record" ? { card_items_listed: 0 } : {}),
+      ...(checks.reach === undefined ? {} : reachScores(checks.reach)) };
   }
   const parts = checks.parts.length;
   const ask = checks.trigger === "ask";
@@ -81,7 +82,21 @@ export function runScores(graded) {
     elapsed_ms: checks.cost.elapsed_ms,
     rounds: checks.cost.rounds,
     model_calls: checks.cost.model_calls,
+    ...(checks.trace === undefined ? {} : traceScores(checks.trace)),
+    ...(checks.reach === undefined ? {} : reachScores(checks.reach)),
   };
+}
+
+const flag = value => (value === null ? null : value ? 1 : 0);
+/** An open-ended case's reach and cost checks as rates; unchecked items count only where some needed stating. */
+function reachScores(reach) {
+  return { reach_collections: flag(reach.looked_at_every_collection), reach_no_repeated_refusal: flag(reach.no_repeated_refusal),
+    reach_unchecked_stated: flag(reach.unchecked_stated), reach_within_rounds: flag(reach.within_rounds), reach_met: flag(reach.met) };
+}
+/** What one trace counts beside its rounds (research tool contract v1); calls per round count the rounds that read, not finish. */
+function traceScores(trace) {
+  const reading = trace.calls_per_round.filter(calls => calls > 0).length;
+  return { trace_calls_per_round: reading === 0 ? null : trace.calls / reading, trace_refused: trace.refused, trace_repeated_refusals: trace.repeated_refusals, trace_unchecked: trace.unchecked };
 }
 
 const METRICS = [
@@ -89,6 +104,8 @@ const METRICS = [
   "verdicts_correct", "writer_parts_correct", "writer_lists_named", "writer_unsupported_claims", "gaps_reported",
   "card_items_listed", "card_relations_correct", "card_owners_correct", "card_invented", "card_gaps_reported", "must_not_violations",
   "leaks", "noise_handed", "distractors_handed", "elapsed_ms", "rounds", "model_calls",
+  "trace_calls_per_round", "trace_refused", "trace_repeated_refusals", "trace_unchecked",
+  "reach_collections", "reach_no_repeated_refusal", "reach_unchecked_stated", "reach_within_rounds", "reach_met",
 ];
 
 const JUDGE_METRICS = [
@@ -125,8 +142,12 @@ export function aggregate(gradedRuns) {
     const verdicts = runs.map(run => run.scores.complete_and_supported);
     const sweeps = runs.map(run => run.graded.checks.sweep).filter(sweep => sweep !== undefined);
     const kinds = runs.map(run => run.graded.checks.kinds).filter(value => value !== undefined);
+    const reached = runs.map(run => run.graded.checks.reach).filter(reach => reach !== undefined);
     return {
       case_id: checks.case_id, split: checks.split, trigger: checks.trigger, budget: checks.budget, runs: runs.length, key_status: checks.key_status ?? null,
+      // The open-ended family (research tool contract v1): its reach and cost checks met in every run, and the contract steps it awaits.
+      family: checks.family ?? null, awaits: checks.awaits ?? [], reach_met_in_every_run: reached.length === 0 ? null : reached.every(reach => reach.met),
+      reach_missing: [...new Set(reached.flatMap(reach => reach.missing))],
       // Every completed run's needs, by declared kind, summed over the case's runs.
       kinds: kinds.length === 0 ? null : Object.fromEntries(KIND_COUNTS.map(kind => [kind, kinds.reduce((total, value) => total + value[kind], 0)])),
       failed_runs: runs.length - completed.length,
@@ -158,6 +179,8 @@ export function aggregate(gradedRuns) {
       cards_not_assessed: gradedRuns.filter(graded => graded.checks.card?.status === "not_assessed").length,
       sweep_verdicts_right: tally(swept, "sweep_verdicts_right"), sweep_findings: tally(swept, "sweep_findings"), sweep_not_assessed: tally(swept, "sweep_not_assessed"),
       median_elapsed_ms: median(gradedRuns.filter(graded => graded.checks.cost).map(graded => graded.checks.cost.elapsed_ms)),
+      open_ended_cases: [...new Set(cases.filter(entry => entry.reach_met_in_every_run !== null).map(entry => entry.case_id))].length,
+      open_ended_cases_met_in_every_run: [...new Set(cases.filter(entry => entry.reach_met_in_every_run === true).map(entry => entry.case_id))].length,
     },
   };
 }
@@ -258,6 +281,38 @@ export function markdownReport(identity, report) {
     "| --- | --- | --- | --- | --- |",
     ...swept.map(entry => `| ${entry.case_id} | ${entry.budget} | ${entry.runs} | ${outOf(entry.sweep_verdicts_right, entry.sweep_findings)} | ${number(entry.sweep_not_assessed)} |`),
     "",
+    ...reachSection(report),
   ];
   return lines.join("\n");
+}
+
+/**
+ * Reach and cost (research tool contract v1): the open-ended family's four checks, and what every case's traces count.
+ * A case awaiting contract steps is listed with them, so a reader tells an expected failure from a regression.
+ */
+function reachSection(report) {
+  const s = report.summary;
+  const counted = report.cases.filter(entry => typeof entry.trace_refused === "number" || entry.reach_met_in_every_run !== null);
+  if (counted.length === 0) return [];
+  return [
+    "## Reach and cost",
+    "",
+    "Graded on what research reached and what it spent, never on the answer's wording (research tool contract v1). An open-ended case meets them when every collection holding part of its answer was looked at (within its time window, when it names one), no refused call was sent again, unchecked items were stated wherever its answer used a list that had them, and research finished within its rounds (4 unless the case says otherwise). A case that awaits contract steps is expected to fail until they land.",
+    "",
+    `Open-ended cases meeting reach and cost in every run: **${s.open_ended_cases_met_in_every_run} of ${s.open_ended_cases}**.`,
+    "",
+    "| Check | Value |",
+    "| --- | --- |",
+    `| every collection holding part of the answer looked at | ${percent(s.reach_collections)} |`,
+    `| no refused call sent again | ${percent(s.reach_no_repeated_refusal)} |`,
+    `| unchecked items stated, where the answer used them | ${percent(s.reach_unchecked_stated)} |`,
+    `| research finished within its rounds | ${percent(s.reach_within_rounds)} |`,
+    "",
+    "What each case's traces count, over its completed runs, then each check over all its runs (a failed run meets none).",
+    "",
+    "| Case | Budget | Rounds | Calls per round | Refused | Repeated refusals | Unchecked | Looked at all | No repeat | Unchecked stated | Within rounds | Not looked at | Awaits |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...counted.map(entry => `| ${entry.case_id} | ${entry.budget} | ${number(entry.rounds)} | ${number(entry.trace_calls_per_round)} | ${number(entry.trace_refused)} | ${number(entry.trace_repeated_refusals)} | ${number(entry.trace_unchecked)} | ${percent(entry.reach_collections)} | ${percent(entry.reach_no_repeated_refusal)} | ${percent(entry.reach_unchecked_stated)} | ${percent(entry.reach_within_rounds)} | ${entry.reach_missing.join(", ") || "—"} | ${entry.awaits.join(", ") || "—"} |`),
+    "",
+  ];
 }
