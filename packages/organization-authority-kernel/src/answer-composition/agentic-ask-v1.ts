@@ -511,7 +511,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         progress?.settle();
         const { searches, search_hits, refused_reads, repeated_refusals, unchecked_items, sources_looked_at, most_reads_in_a_step } = loop.progress();
         annotateCoreRuntimeV1({ counts: { planned_query_count: searches, query_hit_count: search_hits } });
-        // Ask's read accounting (research tool contract v1): what the release check reads from each trace.
+        // Ask's read accounting (research tool contract v1), beside planned_query_count for operators (RB-OPERATIONS-001).
+        // The release check counts its own from the research rounds.
         if (goal.kind === "question") annotateCoreRuntimeV1({ counts: { refused_read_count: refused_reads, repeated_refusal_count: repeated_refusals, unchecked_item_count: unchecked_items, sources_looked_at, most_reads_in_a_step } });
         if (tickets) annotateCoreRuntimeV1({ counts: { ticket_retrieved_items: loop.progress().retrieved_tickets, ticket_context_items: ticketContextCount, ticket_citations: ticketCitationCount } });
       }
