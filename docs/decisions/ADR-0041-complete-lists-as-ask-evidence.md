@@ -937,15 +937,5 @@ is unchanged. No tools, access scope, research budgets, or stop rules change.
 
 ## Later decisions
 
-[ADR-0042](ADR-0042-research-tool-contract.md) (2026-10-19) changes three
-things for Ask, as the research tool contract decided. A filter value or date
-field a source does not declare is refused as a result
-(`filters: {<field>: "refused"}`, with what the source supports), never an
-error string, and the same refused read is not sent again in that Ask. A
-dated read counts the items its window could not test (`unchecked`) and keeps
-them out of the list; this replaces the missing-date notice, and a list the
-answer uses says how many were not checked. A window with no date field
-matches any of an item's dates where the source declares that. `applied`,
-`partial` and `ignored` are unchanged, and a list still never passes a wider
-set off as the one asked for. Ask steps take up to 10 actions, and the other
-safety rules above are unchanged.
+[ADR-0042](ADR-0042-research-tool-contract.md#one-outcome-per-filter) (2026-10-19)
+adds, for Ask, refused filters, `unchecked` counts and any-date windows.
