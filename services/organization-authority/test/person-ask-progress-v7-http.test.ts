@@ -18,7 +18,6 @@ import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { personWorkspaceGrantsV1 } from '../src/composition/person-workspace-evidence-v1.js';
-import { createPersonWorkspaceReleaseAuditV1 } from '../src/composition/person-workspace-release-audit-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
@@ -93,11 +92,8 @@ async function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mo
     live_sources: [{ ...JIRA_LIVE_CONNECTOR_V1, application: { source: async ({ access_token }) => jira(access_token as FixturePerson) } }],
     follow_ups: { runs: f.runs, items: f.items, people: f.directory, records: f.records, on_live_failure: () => {} },
     workspace: {
-      sources: {
-        projects: createProjectContextApplicationV1({ authenticate: access_token => sessions.authenticateAccess({ access_token }), repository: projects }),
-        grants: personWorkspaceGrantsV1(projects), people: f.directory, tools,
-      },
-      audit: context => createPersonWorkspaceReleaseAuditV1(f.db, context),
+      projects: createProjectContextApplicationV1({ authenticate: access_token => sessions.authenticateAccess({ access_token }), repository: projects }),
+      grants: personWorkspaceGrantsV1(projects), people: f.directory, tools,
     },
   };
   const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',

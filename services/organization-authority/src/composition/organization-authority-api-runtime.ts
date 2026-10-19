@@ -59,7 +59,6 @@ import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRou
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from './person-workspace-evidence-v1.js';
-import { createPersonWorkspaceReleaseAuditV1 } from './person-workspace-release-audit-v1.js';
 import type {
   OpenedPersonLiveConnectorV1, PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1, PersonLiveConnectorSourceV1, PersonLiveProjectSettingV1,
 } from '../application/ports/person-context-live-runtime-v1.js';
@@ -410,11 +409,8 @@ export async function startOrganizationAuthorityApiRuntime(
     // release audited without content.
     const followUps = runs === undefined ? undefined : { runs, items, people, records: recordSearch };
     const workspace = {
-      sources: {
-        projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools,
-        ...(jiraSetting === undefined ? {} : { jira: jiraSetting }), ...(confluenceSetting === undefined ? {} : { confluence: confluenceSetting }),
-      },
-      audit: (context: Parameters<typeof createPersonWorkspaceReleaseAuditV1>[1]) => createPersonWorkspaceReleaseAuditV1(database, context),
+      projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools,
+      ...(jiraSetting === undefined ? {} : { jira: jiraSetting }), ...(confluenceSetting === undefined ? {} : { confluence: confluenceSetting }),
     };
     // The staging research evaluation asks a question as `/v7` does, on the same sources.
     const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined

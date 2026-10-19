@@ -8,10 +8,10 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import type { EvidenceDeskItemV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { PEOPLE_SOURCE_DESCRIPTOR_V1, PROJECTS_SOURCE_DESCRIPTOR_V1, TOOLS_SOURCE_DESCRIPTOR_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import { SqliteOpenItemPeopleV1 } from '../src/adapters/persistence/sqlite/open-item-people-v1.js';
+import { SqlitePersonAgenticAskAuditV1 } from '../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createPersonWorkspaceEvidenceSourcesV1, personWorkspaceGrantsV1 } from '../src/composition/person-workspace-evidence-v1.js';
-import { createPersonWorkspaceReleaseAuditV1 } from '../src/composition/person-workspace-release-audit-v1.js';
 import { MEMBER, OWNER, addMembership, authorization, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
@@ -97,7 +97,7 @@ function world() {
   const sources = (name: Name = 'ari', options: { readonly scope?: Scope; readonly settings?: boolean } = {}) => {
     const binding = PEOPLE[name];
     const request_id = `ask_${randomUUID()}`;
-    const audit = createPersonWorkspaceReleaseAuditV1(database, {
+    const audit = new SqlitePersonAgenticAskAuditV1(database).forWorkspaceRequest({
       authority_id: 'authority', organization_id: binding.organization_id, state_lineage_id: 'lineage', principal_id: binding.principal_id,
       membership_id: binding.membership_id, session_family_id: 'session-fixture', request_id,
     });
@@ -493,7 +493,7 @@ describe('workspace sources: checks and audit (research tool contract v1, ADR-00
 
   it('refuses an audit of anything but workspace items by their ids', () => {
     const w = world();
-    const audit = createPersonWorkspaceReleaseAuditV1(w.database, {
+    const audit = new SqlitePersonAgenticAskAuditV1(w.database).forWorkspaceRequest({
       authority_id: 'authority', organization_id: ARI.organization_id, state_lineage_id: 'lineage', principal_id: ARI.principal_id,
       membership_id: ARI.membership_id, session_family_id: 'session-fixture', request_id: 'ask_audit',
     });

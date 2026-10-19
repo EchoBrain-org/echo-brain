@@ -62,7 +62,8 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
     },
     model: { generate },
     generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 },
-    audit: { forRequest: () => ({ append: (entry: unknown) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('release') }) },
+    audit: { forRequest: () => ({ append: (entry: unknown) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('release') }),
+      forWorkspaceRequest: () => ({ record: () => canonicalSha256('workspace release') }) },
     now: () => clock,
     ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
     ...options.extra,
@@ -106,10 +107,7 @@ describe('staging research evaluation runs', () => {
       openRecord: openedRecord, recordProjects: () => [PROJECT],
       extra: {
         live_sources: [{ ...JIRA_PROJECTS_LIVE_CONNECTOR_V1, application: { source: containers } }],
-        workspace: {
-          sources: { projects: {} as never, grants: () => [], people: { people: () => new Map() } as never, tools: async () => [] },
-          audit: () => ({ record: () => canonicalSha256('workspace release') }),
-        },
+        workspace: { projects: {} as never, grants: () => [], people: { people: () => new Map() } as never, tools: async () => [] },
       },
     });
     const question = await h.application.start({ access_token: 'token-a', request: ask('What are the current projects?') });

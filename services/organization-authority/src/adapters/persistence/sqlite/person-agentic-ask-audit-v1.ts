@@ -1,9 +1,10 @@
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceCitationV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import type { WorkspaceSourceDescriptorV1, WorkspaceSourceIdV1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
-import { PERSON_ASK_PROGRESS_NAMED_MAX_V1 } from "@echo-brain/organization-api";
+import { PERSON_ASK_PROGRESS_NAMED_MAX_V1, validatePersonWorkspaceCitationV1 } from "@echo-brain/organization-api";
 
 export interface AgenticAskAuditRequestContextV1 {
   readonly authority_id: string;
@@ -28,8 +29,37 @@ export interface PersonFollowUpReleaseAuditV1 {
   /** Commits the release before its bytes leave Layer 3 and returns its receipt. */
   record(release: PersonFollowUpReleaseV1): Sha256Digest;
 }
+/**
+ * One release of workspace items to an Ask (research tool contract v1): its source and operation, and for each item its
+ * kind, its id (a project id, a membership id or a tool id), whether it was released beside the result, and a digest of
+ * the fields released. Never a name, title or text.
+ */
+export interface PersonWorkspaceReleaseV1 {
+  readonly source: WorkspaceSourceIdV1;
+  readonly operation: 'search' | 'list' | 'open';
+  readonly items: readonly { readonly kind: WorkspaceSourceDescriptorV1['kind']; readonly item_id: string; readonly linked: boolean; readonly released_fields_sha256: Sha256Digest }[];
+}
+export interface PersonWorkspaceReleaseAuditV1 {
+  /** Commits the release before its bytes leave Layer 3 and returns its receipt. */
+  record(release: PersonWorkspaceReleaseV1): Sha256Digest;
+}
 const FOLLOW_UP_ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const OPERATIONS: readonly string[] = ['search', 'list', 'open'];
+const WORKSPACE_SOURCES: readonly string[] = ['projects', 'people', 'tools'];
+/** Each workspace item kind's id, as its citation names it. */
+const WORKSPACE_ID_FIELDS: Readonly<Record<string, string>> = Object.freeze({ project: 'project_id', person: 'membership_id', tool: 'tool_id' });
+/** A page of rows and the workspace items released beside them. */
+const WORKSPACE_RELEASE_ITEMS_MAX = 200;
+
+/** A workspace item named only by the id its citation would carry, and a digest of what was released. */
+function workspaceItem(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const { kind, item_id, linked, released_fields_sha256 } = value as Record<string, unknown>;
+  const field = typeof kind === 'string' && Object.hasOwn(WORKSPACE_ID_FIELDS, kind) ? WORKSPACE_ID_FIELDS[kind] : undefined;
+  if (field === undefined || typeof item_id !== 'string' || typeof linked !== 'boolean' || typeof released_fields_sha256 !== 'string' || !DIGEST.test(released_fields_sha256)) return false;
+  try { validatePersonWorkspaceCitationV1({ kind, [field]: item_id }); return true; } catch { return false; }
+}
 
 /**
  * The V3 terminal witness reuses the immutable read-decision table.  Its body
@@ -64,43 +94,58 @@ export class SqlitePersonAgenticAskAuditV1 {
       // tool/tenant plus opaque citation commitments suffice without retaining presentation URLs.
       // A tool container's citation commits to no text (research tool contract v1); its released value digest still does.
       const citations = release.citations.map((citation, index) => ({ kind: citation.kind, released_value_sha256: release.value_digests[index], coordinates: { object_id: release.coordinates[index]!.object_id, ...(release.coordinates[index]!.container_id === undefined ? {} : { container_id: release.coordinates[index]!.container_id }) }, ...(citation.kind === 'tool_container' ? {} : { text_sha256: citation.text_sha256 }), citation_sha256: canonicalSha256(citation) }));
-      const body = { schema_version: 1, kind: 'echo-person-live-evidence-release-audit-v1', context_kind: 'answer_composition', ...bound,
-        release_sequence: ++releaseSequence, binding: read_binding, operation: release.operation, citations, prompt_sha256, answer_sha256, recorded_at };
-      const receipt = canonicalSha256(body);
-      this.database.prepare(`INSERT INTO authority_person_read_decision_audit_v2
-        (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
-        VALUES (?, ?, 'answer_composition', ?, ?, ?)`).run(receipt, canonicalJson(body), prompt_sha256, answer_sha256, recorded_at);
-      return receipt;
+      return this.insert({ schema_version: 1, kind: 'echo-person-live-evidence-release-audit-v1', context_kind: 'answer_composition', ...bound,
+        release_sequence: ++releaseSequence, binding: read_binding, operation: release.operation, citations, prompt_sha256, answer_sha256, recorded_at }, prompt_sha256, answer_sha256, recorded_at);
     } });
   }
 
-  /**
-   * A content-free witness of each follow-ups release (ADR-0040), in the same
-   * table and request context as the Ask's other release witnesses. Empty
-   * releases are committed too.
-   */
+  /** A content-free witness of each follow-ups release (ADR-0040): the operation, and each follow-up's id and digest. */
   forFollowUpRequest(context: AgenticAskAuditRequestContextV1): PersonFollowUpReleaseAuditV1 {
+    return Object.freeze<PersonFollowUpReleaseAuditV1>({ record: this.itemWitness(context, 'echo-person-follow-up', 'Follow-up release audit is invalid', release =>
+      release.items.length <= 50 && new Set(release.items.map(item => item.item_id)).size === release.items.length &&
+        release.items.every(item => typeof item.item_id === 'string' && FOLLOW_UP_ITEM_ID.test(item.item_id) && typeof item.released_fields_sha256 === 'string' && DIGEST.test(item.released_fields_sha256)),
+    release => ({ selected: { operation: release.operation }, items: release.items.map(item => ({ item_id: item.item_id, released_fields_sha256: item.released_fields_sha256 })) })) });
+  }
+
+  /**
+   * A content-free witness of each workspace release (research tool contract v1): the source, the operation, and each
+   * item's kind, id, whether it was released beside the result, and a digest of its released fields.
+   */
+  forWorkspaceRequest(context: AgenticAskAuditRequestContextV1): PersonWorkspaceReleaseAuditV1 {
+    return Object.freeze<PersonWorkspaceReleaseAuditV1>({ record: this.itemWitness(context, 'echo-person-workspace', 'Workspace release audit is invalid', release =>
+      WORKSPACE_SOURCES.includes(release.source) && release.items.length <= WORKSPACE_RELEASE_ITEMS_MAX && release.items.every(workspaceItem) &&
+        new Set(release.items.map(item => `${item.kind}:${item.item_id}`)).size === release.items.length,
+    release => ({ selected: { source: release.source, operation: release.operation },
+      items: release.items.map(item => ({ kind: item.kind, item_id: item.item_id, linked: item.linked, released_fields_sha256: item.released_fields_sha256 })) })) });
+  }
+
+  /**
+   * One request's item release witnesses, in the same table and request context as the Ask's other witnesses: what was
+   * selected (`<name>-selection-v1`) and the items' ids and digests, copied from an explicit allowlist so that a release
+   * carries nothing else and nothing else is kept. Empty releases are committed too.
+   */
+  private itemWitness<R extends { readonly operation: string; readonly items: readonly unknown[] }>(context: AgenticAskAuditRequestContextV1, name: string, invalid: string,
+    valid: (release: R) => boolean, copy: (release: R) => { readonly selected: Readonly<Record<string, string>>; readonly items: readonly unknown[] }): (release: R) => Sha256Digest {
     const bound = this.bind(context);
     let releaseSequence = 0;
-    return Object.freeze<PersonFollowUpReleaseAuditV1>({ record: (release) => {
-      if (!['search', 'list', 'open'].includes(release.operation) || !Array.isArray(release.items) || release.items.length > 50 ||
-          new Set(release.items.map(item => item.item_id)).size !== release.items.length ||
-          !release.items.every(item => typeof item.item_id === 'string' && FOLLOW_UP_ITEM_ID.test(item.item_id) && typeof item.released_fields_sha256 === 'string' && DIGEST.test(item.released_fields_sha256))) {
-        throw new Error('Follow-up release audit is invalid');
-      }
-      // Copy an explicit allowlist: the release carries nothing else, and nothing else is kept.
-      const items = release.items.map(item => ({ item_id: item.item_id, released_fields_sha256: item.released_fields_sha256 }));
+    return (release) => {
+      if (!OPERATIONS.includes(release.operation) || !Array.isArray(release.items) || !valid(release)) throw new Error(invalid);
+      const { selected, items } = copy(release);
       const recorded_at = this.now();
-      const prompt_sha256 = canonicalSha256({ kind: 'echo-person-follow-up-selection-v1', operation: release.operation });
+      const prompt_sha256 = canonicalSha256({ kind: `${name}-selection-v1`, ...selected });
       const answer_sha256 = canonicalSha256(items);
-      const body = { schema_version: 1, kind: 'echo-person-follow-up-release-audit-v1', context_kind: 'answer_composition', ...bound,
-        release_sequence: ++releaseSequence, operation: release.operation, items, prompt_sha256, answer_sha256, recorded_at };
-      const receipt = canonicalSha256(body);
-      this.database.prepare(`INSERT INTO authority_person_read_decision_audit_v2
-        (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
-        VALUES (?, ?, 'answer_composition', ?, ?, ?)`).run(receipt, canonicalJson(body), prompt_sha256, answer_sha256, recorded_at);
-      return receipt;
-    } });
+      return this.insert({ schema_version: 1, kind: `${name}-release-audit-v1`, context_kind: 'answer_composition', ...bound,
+        release_sequence: ++releaseSequence, ...selected, items, prompt_sha256, answer_sha256, recorded_at }, prompt_sha256, answer_sha256, recorded_at);
+    };
+  }
+
+  /** Commits one immutable row and returns its receipt, the digest of its body. */
+  private insert(body: object, prompt_sha256: Sha256Digest, answer_sha256: Sha256Digest, recorded_at: string): Sha256Digest {
+    const receipt = canonicalSha256(body);
+    this.database.prepare(`INSERT INTO authority_person_read_decision_audit_v2
+      (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
+      VALUES (?, ?, 'answer_composition', ?, ?, ?)`).run(receipt, canonicalJson(body), prompt_sha256, answer_sha256, recorded_at);
+    return receipt;
   }
 
   /** Validates the trusted request context and copies exactly its fields. */
@@ -185,12 +230,6 @@ export class SqlitePersonAgenticAskAuditV1 {
       finish_reason_counts: entry.finish_reason_counts,
       ...(entry.named_citation_digests === undefined ? {} : { named_citation_digests: [...entry.named_citation_digests] }),
     });
-    const row_sha256 = canonicalSha256(body);
-    this.database.prepare(
-      `INSERT INTO authority_person_read_decision_audit_v2
-       (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
-       VALUES (?, ?, 'answer_composition', ?, ?, ?)`,
-    ).run(row_sha256, canonicalJson(body), prompt_sha256, answer_sha256, recorded_at);
-    return row_sha256;
+    return this.insert(body, prompt_sha256, answer_sha256, recorded_at);
   }
 }

@@ -1,4 +1,4 @@
-import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
+import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PROJECT_PAGE_MAX_ITEMS,
   validatePersonWorkspaceCitationV1,
@@ -29,6 +29,7 @@ import {
   type WorkspaceSourceIdV1,
 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
+import type { PersonWorkspaceReleaseAuditV1, PersonWorkspaceReleaseV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { ProjectContextApplicationV1, ProjectContextRepositoryV1, ProjectMembershipGrantV1 } from '../application/ports/project-context-v1.js';
 import {
   createEvidenceCursorsV1,
@@ -67,21 +68,6 @@ export interface PersonWorkspaceSourcesV1 {
   readonly tools: (access_token: string) => Promise<readonly OrganizationPersonToolV4[]>;
 }
 
-/**
- * One release of workspace items to an Ask: its source and operation, and for each item its kind, its id (a project id,
- * a membership id or a tool id), whether it was released beside the result, and a digest of the fields released. Never a
- * name, title or text.
- */
-export interface PersonWorkspaceReleaseV1 {
-  readonly source: WorkspaceSourceIdV1;
-  readonly operation: 'search' | 'list' | 'open';
-  readonly items: readonly { readonly kind: WorkspaceItemKind; readonly item_id: string; readonly linked: boolean; readonly released_fields_sha256: Sha256Digest }[];
-}
-export interface PersonWorkspaceReleaseAuditV1 {
-  /** Commits the release before its bytes leave Layer 3 and returns its receipt. */
-  record(release: PersonWorkspaceReleaseV1): Sha256Digest;
-}
-
 export interface CreatePersonWorkspaceEvidenceSourcesV1Options {
   readonly sources: PersonWorkspaceSourcesV1;
   /** The asker's access token: every read is made as them. */
@@ -90,7 +76,7 @@ export interface CreatePersonWorkspaceEvidenceSourcesV1Options {
   readonly authenticate: () => PersonAccessAuthorization;
   /** Never Mine: Mine reads only what the asker added. In a project, only that project and its members. */
   readonly scope: { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
-  /** One audit for the request, shared by the three sources. */
+  /** One audit for the request, shared by the three sources (`SqlitePersonAgenticAskAuditV1.forWorkspaceRequest`). */
   readonly audit: PersonWorkspaceReleaseAuditV1;
 }
 
