@@ -106,11 +106,11 @@ async function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mo
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
   return `http://127.0.0.1:${address.port}`;
 }
-const ask = (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: FixturePerson | 'stranger' } = {}) => fetch(`${base}${input.path ?? PERSON_ANSWER_PATH_V7}`, {
+const ask = (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: FixturePerson | 'stranger'; readonly mine?: true } = {}) => fetch(`${base}${input.path ?? PERSON_ANSWER_PATH_V7}`, {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? 'mina'}`,
     ...(input.progress === null ? {} : { [PERSON_ASK_PROGRESS_HEADER_V1]: input.progress ?? PERSON_ASK_PROGRESS_HEADER_VALUE_V3 }) },
-  body: JSON.stringify({ schema_version: 3, question: QUESTION }),
+  body: JSON.stringify({ schema_version: 3, question: QUESTION, ...(input.mine === true ? { mine: true } : {}) }),
 });
 function decode(text: string): readonly PersonAskProgressEventV3[] {
   const decoder = createPersonAskProgressDecoderV3();
@@ -186,6 +186,18 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     const unauthenticated = await ask(base, { token: 'stranger' });
     expect(unauthenticated.status).toBe(401);
     expect(unauthenticated.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
+  });
+
+  it('never binds the workspace in Mine, which reads only what the asker added: no projects, people or tools are offered, read or audited', async () => {
+    const f = await sentFixture();
+    const planner = leadsAndTasks();
+    const base = await origin(f, planner.model);
+    const response = await ask(base, { progress: null, mine: true });
+    expect(response.status).toBe(200);
+    const answer = validatePersonAnswerResponseV8(await response.json());
+    for (const source of ['projects', 'people', 'tools', 'follow_ups']) expect(planner.catalogs.flat()).not.toContain(source);
+    expect(answer.citations.map(citation => citation.kind)).not.toContain('project');
+    expect(audits(f, 'echo-person-workspace-release-audit-v1')).toEqual([]);
   });
 
   it('answers /v7 as unavailable, still route-matched, on an Authority composed without the V8 Ask', async () => {

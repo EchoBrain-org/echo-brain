@@ -499,12 +499,14 @@ questions naming none (research tool contract v1). After the canary's two
 reads, ask the release's open-ended questions with the same candidate binary,
 word for word: they are the development cases that
 [`tools/evals/research-loop/release-check.json`](../../tools/evals/research-loop/release-check.json)
-names.
+names. `--live` asks on the newest Ask route (`/v7`), the one that reads the
+connected tools, follow-ups and the workspace; without it the CLI asks on `/v3`,
+which reads none of them.
 
 ```sh
-"$HOME/.local/bin/echo-brain" person ask --question 'What happened yesterday?'
-"$HOME/.local/bin/echo-brain" person ask --question 'What are the current projects, and who are the project leads?'
-"$HOME/.local/bin/echo-brain" person ask --question 'What are the open items, and who owns them?'
+"$HOME/.local/bin/echo-brain" person ask --live --question 'What happened yesterday?'
+"$HOME/.local/bin/echo-brain" person ask --live --question 'What are the current projects, and who are the project leads?'
+"$HOME/.local/bin/echo-brain" person ask --live --question 'What are the open items, and who owns them?'
 ```
 
 Then check them from their traces, which needs
