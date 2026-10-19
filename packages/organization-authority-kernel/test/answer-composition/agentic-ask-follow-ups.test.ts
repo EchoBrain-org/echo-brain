@@ -108,11 +108,11 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     // Each filter's outcome comes back with the result (research tool contract v1): kind is ignored, owner and status applied.
     expect(listed.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: '@Mara', status: 'In progress', kind: 'action' }, list: 'L1', items: ['E1', 'E2'], more: false, filters: { kind: 'ignored', owner: 'applied', status: 'applied' }, note: 'follow_ups takes no kind; ignored' }]);
     expect(listed.seen).toEqual([
-      { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, text: fanCurve.text, full: true },
+      { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, dates: { checked: '2026-10-15T09:30:00.000Z' }, text: fanCurve.text, full: true },
       { id: 'E2', source: 'follow_ups', kind: 'follow_up', title: 'THERM-46 Alarm thresholds', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open' }, text: thresholds.text, full: true },
     ]);
     expect((JSON.parse(run.writer()!.user_prompt) as { evidence: unknown[] }).evidence).toEqual([
-      { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, text: fanCurve.text },
+      { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, dates: { checked: '2026-10-15T09:30:00.000Z' }, text: fanCurve.text },
       { id: 'E2', source: 'follow_ups', kind: 'follow_up', title: 'THERM-46 Alarm thresholds', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open' }, text: thresholds.text },
     ]);
     expect(validatePersonAnswerResponseV7(answer).citations).toEqual([fanCurve, thresholds].map(item => ({ citation: item.citation, kind: 'follow_up', label: item.label, visibility: 'team', ref: item.ref })));
@@ -193,6 +193,8 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     expect(evidenceDeskSourceV2(fanCurve)).toBe('follow_ups');
     expect(describeAgenticEvidenceItemV1({ short: 'E3', source: 'follow_ups', item: fanCurve })).toEqual({
       id: 'E3', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' },
+      // A follow-up's own dates (research tool contract v1): its last check here.
+      dates: { checked: '2026-10-15T09:30:00.000Z' },
     });
     expect(citationOfAgenticEvidenceItemV1(fanCurve)).toEqual({ citation: fanCurve.citation, kind: 'follow_up', label: 'THERM-48 Fan curve v2', visibility: 'team', ref: `follow_up:${fanCurve.citation.kind === 'follow_up' ? fanCurve.citation.item_id : ''}` });
   });
