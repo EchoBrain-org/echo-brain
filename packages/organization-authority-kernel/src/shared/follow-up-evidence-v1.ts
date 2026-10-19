@@ -9,6 +9,7 @@ import {
 } from '@echo-brain/organization-api';
 import type { EvidenceDeskAttributesV1 } from './evidence-desk-v1.js';
 import type { PersonLiveSourceDescriptorV2 } from './evidence-desk-v2.js';
+import type { EvidenceDatesV1 } from './temporal-query-v1.js';
 
 /**
  * ECHO's shared follow-ups as an Ask source (ADR-0040): the kernel-facing
@@ -71,20 +72,23 @@ const STATUS_TEXT: Readonly<Record<PersonOpenItemStateV1, string>> = Object.free
 const VERDICT_TEXT: Readonly<Record<PersonOpenItemVerdictV1, string>> = Object.freeze({ landed: 'landed', still_open: 'still open', changed: 'changed', unreadable: 'could not be read' });
 const KIND_TEXT: Readonly<Record<PersonOpenItemKindV1, string>> = Object.freeze({ action: 'meeting action', ticket: 'ticket', page: 'page', slack_message: 'Slack message', record: 'ECHO meeting record', document: 'ECHO document' });
 
-/** The desk fields of one follow-up. The source adds its desk id, visibility and release receipt. */
+/** The desk fields of one follow-up. The source adds its desk id, visibility, release receipt and links. */
 export interface FollowUpDeskFieldsV1 {
   readonly kind: typeof FOLLOW_UP_EVIDENCE_KIND_V1;
   readonly citation: PersonFollowUpCitationV1;
   readonly ref: PersonFollowUpRefV1;
   readonly label: string;
   readonly attributes: EvidenceDeskAttributesV1;
+  /** ECHO's own dates (research tool contract v1): created, and sent, reassigned and checked once they happened. Absent when it has none. */
+  readonly dates?: EvidenceDatesV1;
   readonly text: string;
 }
 
 /**
  * One follow-up as the desk carries it: its title as the label; owner, status
- * and due date as attributes; and as text, what it is on, what the decision
- * expects of it, its latest check and its decision. Every value comes from the
+ * and due date as attributes; when ECHO created, sent, reassigned and last
+ * checked it as dates; and as text, what it is on, what the decision expects
+ * of it, its latest check and its decision. Every value comes from the
  * already-shaped evidence, so nothing the asker may not see can enter here.
  */
 export function followUpDeskFieldsV1(evidence: PersonFollowUpEvidenceV1): FollowUpDeskFieldsV1 {
@@ -95,9 +99,16 @@ export function followUpDeskFieldsV1(evidence: PersonFollowUpEvidenceV1): Follow
     evidence.check === undefined ? 'Latest check: none yet' : `Latest check: ${VERDICT_TEXT[evidence.check.verdict]} on ${evidence.check.checked_at.slice(0, 10)}`,
     ...(evidence.decision === undefined ? [] : [`Decision: ${evidence.decision.title}`, ...(evidence.decision.first_line === undefined ? [] : [`Decided: ${evidence.decision.first_line}`])]),
   ];
+  const dates: EvidenceDatesV1 = {
+    ...(evidence.created_at === undefined ? {} : { created: evidence.created_at }),
+    ...(evidence.sent_at === undefined ? {} : { sent: evidence.sent_at }),
+    ...(evidence.reassigned_at === undefined ? {} : { reassigned: evidence.reassigned_at }),
+    ...(evidence.check === undefined ? {} : { checked: evidence.check.checked_at }),
+  };
   return Object.freeze({
     kind: FOLLOW_UP_EVIDENCE_KIND_V1, citation, ref: personFollowUpRefV1(citation), label: evidence.title,
     attributes: Object.freeze({ owner: evidence.owner, status: STATUS_TEXT[evidence.status], ...(evidence.due_at === undefined ? {} : { due_at: evidence.due_at }) }),
+    ...(Object.keys(dates).length === 0 ? {} : { dates: Object.freeze(dates) }),
     text: lines.join('\n'),
   });
 }

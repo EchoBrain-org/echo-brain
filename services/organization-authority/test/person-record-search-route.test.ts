@@ -42,7 +42,7 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { addMembership } from "./fixtures/project-context-sqlite.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
-import { EMP_A, OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
+import { EMP_A, EMP_B, OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
 
 import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
@@ -1395,6 +1395,104 @@ describe("Person Layer 2 route: Ask's list rows name each meeting record by its 
       // A search releases the same line with the hit.
       const searched = route.searchBatch({ access_token: "emp_a", queries: ["fixture position"], desk: true }).desk_items!;
       expect(searched.filter((item) => item.record_sha256 === w.digest("r9")).map((item) => item.list_label)).toEqual([r9.find((item) => item.item_kind === "decision")!.list_label]);
+    } finally { w.close(); }
+  });
+});
+
+describe("Person Layer 2 route: approved records carry their dates and their meeting's people (research tool contract v1)", () => {
+  const people = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `p-${index}`, display_name: `Person ${String(index + 1).padStart(2, "0")}` }));
+
+  it("gives every atom its approval time, and its meeting's participants and final approver as the person open names them, released and audited with it", async () => {
+    const w = await meetingWorld({ extra: [
+      { name: "r9", approval_id: "apr_r9", projects: [SHARED], final_approver: OWNER, issued_at: "2026-10-05T23:30:00.000Z", signals: { decisions: 1, actions: 1 },
+        brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, title: "THERM DVT sync", time: { actual_start_at: "2026-10-04T16:00:00.000Z" },
+          participants: [{ id: "ari", display_name: "Ari Employee", identities: [{ kind: "email", value: "ari-identity@example.test" }] }, { id: "maya", display_name: "Maya Chen" }, { id: "maya-again", display_name: "Maya Chen" }, { id: "unnamed" }] },
+          actions: brief.actions.map((signal) => ({ ...signal, due_at: "2026-10-09T17:00:00.000Z" })) }) },
+      // A Team approval is a generic human act, which names no approver; forty participants are more than open releases.
+      { name: "crowd", approval_id: "apr_crowd", projects: "team", final_approver: EMP_B, issued_at: T(10), brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, participants: people(40) } }) },
+    ] });
+    try {
+      const route = w.route();
+      const listed = route.listDeskBatch({ access_token: "emp_a" });
+      const of = (name: string) => listed.desk_items!.filter((item) => item.record_sha256 === w.digest(name));
+      const r9 = of("r9");
+      expect(r9.map((item) => [item.item_kind, item.dates, item.attributes])).toEqual([
+        ["decision", { occurred: "2026-10-04T16:00:00.000Z", approved: "2026-10-05T23:30:00.000Z" }, { status: "decided", participants: "Ari Employee, Maya Chen", approved_by: "Olive Owner" }],
+        ["action", { occurred: "2026-10-04T16:00:00.000Z", approved: "2026-10-05T23:30:00.000Z", due: "2026-10-09T17:00:00.000Z" }, { due_at: "2026-10-09T17:00:00.000Z", participants: "Ari Employee, Maya Chen", approved_by: "Olive Owner" }],
+      ]);
+      // The open's names, "and more" past its 32, and no approver a record does not name.
+      expect(of("crowd")[0]!.attributes).toEqual({ status: "decided", participants: `${people(32).map((person) => person.display_name).join(", ")}, and more` });
+      expect(of("r1")[0]).toMatchObject({ dates: { occurred: "2026-09-01T02:00:00.000Z", approved: T(1) }, attributes: { status: "decided" } });
+      expect(of("r3")[0]!.dates).toEqual({ approved: T(3) });
+      // Names only: no identity, id or membership of a participant or the approver.
+      for (const hidden of ["ari-identity", "unnamed", "prn_", "mem_"]) expect(JSON.stringify(r9)).not.toContain(hidden);
+      // A search and an open release the same facts with the atom.
+      const searched = route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true }).desk_items!.find((item) => item.record_sha256 === w.digest("r9"))!;
+      expect(searched).toMatchObject({ dates: r9[0]!.dates, attributes: r9[0]!.attributes });
+      const opened = route.openDeskCitation({ access_token: "emp_a", atom_id: searched.atom_id, record_sha256: searched.record_sha256, policy_id: searched.policy_id });
+      expect(opened.desk_items!.map((item) => item.attributes?.approved_by)).toEqual(["Olive Owner", "Olive Owner"]);
+      // The read audit's digest binds them with the rows they describe.
+      const digest = (desk_items: readonly unknown[]) => canonicalSha256(JSON.parse(canonicalJson({ response: listed.response, desk_items })) as never);
+      expect(w.audits("layer2").map((body) => body.response_sha256)).toContain(digest(listed.desk_items!));
+      expect(w.audits("layer2").map((body) => body.response_sha256)).not.toContain(digest(listed.desk_items!.map(({ attributes: _attributes, ...item }) => item)));
+      // The approver's name is the directory's current label; without a directory it is left out, and the participants stay.
+      expect(w.route({ memberships: undefined }).listDeskBatch({ access_token: "emp_a" }).desk_items!.find((item) => item.record_sha256 === w.digest("r9"))!.attributes)
+        .toEqual({ status: "decided", participants: "Ari Employee, Maya Chen" });
+      // A reader who cannot read r9 gets neither its people nor its approver.
+      const other = JSON.stringify([route.listDeskBatch({ access_token: "emp_c" }), route.searchBatch({ access_token: "emp_c", queries: ["Decision", "Action"], desk: true })]);
+      for (const hidden of ["Maya Chen", "Ari Employee", "Olive Owner", "2026-10-05T23:30:00.000Z"]) expect(other).not.toContain(hidden);
+    } finally { w.close(); }
+  });
+
+  it("filters by any meetings date before the limit, and counts the atoms of its selection a date cannot test, never as a notice", async () => {
+    const w = await meetingWorld({ extra: [{
+      name: "r9", approval_id: "apr_r9", projects: [SHARED], final_approver: EMP_A, issued_at: "2026-10-05T23:30:00.000Z", signals: { decisions: 1, actions: 2 },
+      brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, time: { actual_start_at: "2026-10-04T16:00:00.000Z" } }, actions: brief.actions.map((signal, index) => ({ ...signal, due_at: index === 0 ? "2026-10-09T17:00:00.000Z" : null })) }),
+    }] });
+    try {
+      const route = w.route();
+      // emp_a reads r1 (held Aug 31 in Los Angeles, approved Sep 1), r3, r7a and r7b (no meeting time; approved Sep 3, 7, 7), r4 (held
+      // and approved Sep 4) and r9 (held Oct 4, approved Oct 5 at 16:30 in Los Angeles; a decision and two actions, one due Oct 9).
+      const read = (filter: Record<string, unknown>) => {
+        const listed = route.listDeskBatch({ access_token: "emp_a", ...filter });
+        expect(listed).not.toHaveProperty("notice");
+        return { atoms: listed.desk_items!.map((item) => `${Object.entries({ r1: 1, r3: 3, r4: 4, r7a: 7, r7b: 8, r9: 9 }).find(([name]) => w.digest(name) === item.record_sha256)![0]}:${item.item_kind}`).sort(), unchecked: listed.unchecked };
+      };
+      const day = (value: string) => ({ since: value, until: value });
+      expect(read({ ...day("2026-09-07"), date_field: "approved" })).toEqual({ atoms: ["r7a:decision", "r7b:decision"], unchecked: undefined });
+      expect(read({ ...day("2026-10-05"), date_field: "approved", time_zone: "America/Los_Angeles" }).atoms).toEqual(["r9:action", "r9:action", "r9:decision"]);
+      expect(read({ ...day("2026-10-05"), date_field: "approved", time_zone: "Asia/Tokyo" }).atoms).toEqual([]);
+      // No field is the meeting's time, as before: the undated meetings are counted, with the date they do record.
+      expect(read(day("2026-10-16"))).toEqual({ atoms: [], unchecked: { count: 3, dates: ["approved"] } });
+      expect(read({ ...day("2026-10-04"), date_field: "occurred" })).toEqual({ atoms: ["r9:action", "r9:action", "r9:decision"], unchecked: { count: 3, dates: ["approved"] } });
+      // The count is of the requested kinds: no undated meeting has an action.
+      expect(read({ ...day("2026-10-16"), kinds: ["action"] })).toEqual({ atoms: [], unchecked: undefined });
+      expect(read({ ...day("2026-10-09"), date_field: "due" })).toEqual({ atoms: ["r9:action"], unchecked: { count: 7, dates: ["occurred", "approved"] } });
+      // No approved record records when ECHO received it: every atom is untested.
+      expect(read({ ...day("2026-10-09"), date_field: "received" })).toEqual({ atoms: [], unchecked: { count: 8, dates: ["occurred", "due", "approved"] } });
+      // Any of an atom's dates: an approval, a due date, or a meeting's day in its own time zone.
+      expect(read({ ...day("2026-09-03"), date_field: "any" })).toEqual({ atoms: ["r3:decision"], unchecked: undefined });
+      expect(read({ ...day("2026-10-09"), date_field: "any" }).atoms).toEqual(["r9:action"]);
+      expect(read({ ...day("2026-08-31"), date_field: "any" }).atoms).toEqual(["r1:decision"]);
+      expect(read({ until: "2026-09-03", date_field: "any" }).atoms).toEqual(["r1:decision", "r3:decision"]);
+      // Selected before the limit: the newest atoms are r9's, which that day does not hold.
+      expect(route.listDeskBatch({ access_token: "emp_a", ...day("2026-09-07"), date_field: "approved", limit: 2 })).toMatchObject({
+        truncated: false, desk_items: [expect.objectContaining({ record_sha256: w.digest("r7b") }), expect.objectContaining({ record_sha256: w.digest("r7a") })] });
+      // A search selects the same atoms, and says the same of its selection whatever its words match.
+      const searched = route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true, ...day("2026-10-16") });
+      expect(searched).toMatchObject({ response: { items: [] }, unchecked: { count: 3, dates: ["approved"] } });
+      expect(searched).not.toHaveProperty("notice");
+      expect(route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true, ...day("2026-09-07"), date_field: "approved" }).response.items.map((item) => item.record_sha256).sort())
+        .toEqual([w.digest("r7a"), w.digest("r7b")].sort());
+      // The count is the release's: audited with it.
+      const listed = route.listDeskBatch({ access_token: "emp_a", ...day("2026-10-16") });
+      expect(w.audits("layer2").at(-1)!.response_sha256).toBe(canonicalSha256(JSON.parse(canonicalJson({ response: listed.response, desk_items: listed.desk_items, unchecked: listed.unchecked })) as never));
+      // Mine counts only the caller's own approvals, which all record their meetings' times.
+      expect(route.listDeskBatch({ access_token: "emp_a", mine: true, ...day("2026-10-16") })).not.toHaveProperty("unchecked");
+      // A field no meetings item records is refused, naming those it records.
+      for (const date_field of ["created", "updated", "sent", "checked"]) {
+        expect(() => route.listDeskBatch({ access_token: "emp_a", ...day("2026-10-16"), date_field: date_field as never })).toThrow("This source supports date_field: occurred, due, received, approved, any");
+      }
     } finally { w.close(); }
   });
 });

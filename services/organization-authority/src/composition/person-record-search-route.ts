@@ -1,5 +1,14 @@
 import { EvidenceDeskSnapshotChangedV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
-import { MISSING_EVENT_DATE_NOTICE_V1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import type { EvidenceDeskUncheckedV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v2";
+import {
+  EVIDENCE_ANY_DATE_V1,
+  EVIDENCE_DATE_FIELDS_V1,
+  matchesEvidenceDateV1,
+  validateEvidenceDateFilterV1,
+  type EvidenceDateFieldV1,
+  type EvidenceDateFilterV1,
+  type EvidenceDatesV1,
+} from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
   canonicalJson,
@@ -17,6 +26,7 @@ import {
   validateProjectIdV1,
   type PersonAnswerCitationV3,
   type PersonOpenMeetingAtomV1,
+  type PersonOpenMeetingDetailV1,
   type ProjectIdV1,
 } from "@echo-brain/organization-api";
 import { PersonRecordReaderV1, type RecordApproverProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
@@ -61,6 +71,7 @@ import type {
 } from "../application/ports/person-list-v1.js";
 import type { PersonAskScopeV2 } from "../application/ports/person-original-context-retrieval-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import { PERSON_MEETING_DATE_FIELDS_V1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { samePersonReleaseAuthorizationV1 } from "../application/person-release-authorization-v1.js";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -182,6 +193,12 @@ export interface PersonRecordSearchBatchResultV1 {
   readonly truncated?: boolean;
   /** An open only: the anchor record's own text was left out; `truncated` also covers its meeting's other records (ADR-0041). */
   readonly anchor_truncated?: boolean;
+  /**
+   * A dated desk read only: the atoms of its selection (scope, mine and kinds, not a search's words) that its date filter
+   * could not test because they do not record that date, and the dates they do record (research tool contract v1). They
+   * are not in the result. Audited with the release.
+   */
+  readonly unchecked?: EvidenceDeskUncheckedV1;
 }
 
 export interface PersonRecordDeskItemV1 {
@@ -198,8 +215,13 @@ export interface PersonRecordDeskItemV1 {
   /** How Ask's list rows name the record (ADR-0041): one line of its own text, then its meeting. Released and audited with the row. */
   readonly list_label: string;
   readonly visibility: "team" | "project" | "projects" | "approver_only";
-  readonly attributes?: Readonly<{ owner?: string; due_at?: string; status?: string }>;
+  /**
+   * The atom's own facts, and its meeting's as the person open shows them (PersonOpenMeetingDetailV1): the participants'
+   * names, and the final approver's current directory name (research tool contract v1). Released with the atom only.
+   */
+  readonly attributes?: Readonly<{ owner?: string; due_at?: string; status?: string; participants?: string; approved_by?: string }>;
   readonly occurred_at?: string;
+  /** When its meeting happened (when recorded), when it was approved (always), and an action's due date (when set). */
   readonly dates?: EvidenceDatesV1;
 }
 
@@ -586,27 +608,70 @@ function recordVisibility(policy_id: ReadableSearchResultItemV1["policy_id"], au
   return policy_id === "restricted-reviewer-person-v2" ? "approver_only" : policy_id === "project-members-readable-person-v1" ? (audience_project_count === 1 ? "project" : "projects") : "team";
 }
 
-function deskItems(record: Database.Database, items: readonly ReadableSearchResultItemV1[], codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4): readonly PersonRecordDeskItemV1[] {
-  const statement = record.prepare(`SELECT canonical_envelope, envelope_sha256, record_sha256 FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`);
-  return Object.freeze(items.map((item) => {
-    const row = statement.get(item.record_position, item.record_sha256) as { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly record_sha256: Sha256Digest } | undefined;
+/** The approval's decided_at: the record envelope's issue time (approval-publisher-v1.ts), canonical. */
+function approvalTime(envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>): string {
+  return receiptTime(envelope.body.issued_at);
+}
+
+/**
+ * A meeting's participants as one row fact (research tool contract v1): the names the person open releases
+ * (`meetingDetailV1`), joined with ", ", ending ", and more" when the meeting recorded more than it releases.
+ */
+function participantsLine(detail: Pick<PersonOpenMeetingDetailV1, "participants" | "participants_more">): string | undefined {
+  return detail.participants.length === 0 ? undefined : `${detail.participants.join(", ")}${detail.participants_more ? ", and more" : ""}`;
+}
+
+/** What naming a record's final approver takes: the record's coordinates, the approver projectors and the directory. */
+type DeskPresentationV1 = Pick<CreatePersonRecordSearchRouteV1Options, "authority_id" | "organization_id" | "state_lineage_id" | "record_approver" | "memberships" | "record_input_codecs">;
+
+function deskItems(record: Database.Database, items: readonly ReadableSearchResultItemV1[], presentation: DeskPresentationV1): readonly PersonRecordDeskItemV1[] {
+  const statement = record.prepare(`SELECT canonical_envelope, envelope_sha256, record_sha256, approval_id FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`);
+  type Meeting = { readonly envelope_sha256: Sha256Digest; readonly envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>; readonly approved_at: string; readonly participants?: string; readonly approved_by?: string };
+  // Each record is read, checked and named once, however many of its atoms a release holds.
+  const meetings = new Map<string, Meeting>();
+  const meetingOf = (item: ReadableSearchResultItemV1): Meeting => {
+    const key = `${item.record_position}:${item.record_sha256}`;
+    const cached = meetings.get(key);
+    if (cached !== undefined) return cached;
+    const row = statement.get(item.record_position, item.record_sha256) as { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly record_sha256: Sha256Digest; readonly approval_id: string } | undefined;
     if (row === undefined) metadataUnavailable();
+    let parsed: JsonObject;
     let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
-    try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope), codecs); } catch { metadataUnavailable(); }
-    if (row.envelope_sha256 !== item.envelope_sha256 || sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || envelope.record_sha256 !== item.record_sha256 || envelope.body.event.kind !== "approved") metadataUnavailable();
+    try {
+      parsed = parseCanonicalJson(row.canonical_envelope) as JsonObject;
+      envelope = validateOrganizationRecordEnvelopeV4(parsed, presentation.record_input_codecs ?? HUMAN_ACT_RECORD_INPUT_CODECS_V4);
+    } catch { metadataUnavailable(); }
+    if (sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || envelope.record_sha256 !== item.record_sha256 || envelope.body.event.kind !== "approved") metadataUnavailable();
+    // The meeting as the person open names it: participants' display names, and the approver's current directory name.
+    const detail = meetingDetailV1(envelope.body.event.approved_snapshot.approved_payload.brief,
+      boundedTextV1(approverDisplayNameV1(parsed, row.approval_id, presentation, presentation.record_approver, presentation.memberships), PERSON_LIST_TEXT_MAX_BYTES_V1));
+    const participants = participantsLine(detail);
+    const meeting: Meeting = Object.freeze({ envelope_sha256: row.envelope_sha256, envelope, approved_at: approvalTime(envelope),
+      ...(participants === undefined ? {} : { participants }), ...(detail.approved_by === undefined ? {} : { approved_by: detail.approved_by }) });
+    meetings.set(key, meeting);
+    return meeting;
+  };
+  return Object.freeze(items.map((item) => {
+    const meeting = meetingOf(item);
+    const { envelope } = meeting;
+    if (meeting.envelope_sha256 !== item.envelope_sha256 || envelope.body.event.kind !== "approved") metadataUnavailable();
     const brief = envelope.body.event.approved_snapshot.approved_payload.brief;
     if (item.atom_order === undefined || item.audience_project_count === undefined) metadataUnavailable();
     const signal = [...brief.decisions, ...brief.actions, ...brief.rationales][item.atom_order];
     const owner = signal?.kind === "action" ? confirmedOwners(envelope.body.human_act_resolution_ref).get(signal.id) : undefined;
     const indexedText = signal === undefined ? undefined : owner === undefined ? signal.text : `${signal.text} Owner: ${owner}.`;
     if (signal === undefined || signal.kind !== item.item_kind || indexedText !== item.text) metadataUnavailable();
-    const attributes = signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) } : undefined;
+    const attributes = {
+      ...(signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) } : {}),
+      ...(meeting.participants === undefined ? {} : { participants: meeting.participants }),
+      ...(meeting.approved_by === undefined ? {} : { approved_by: meeting.approved_by }),
+    };
     const visibility = recordVisibility(item.policy_id, item.audience_project_count);
     const time = brief.meeting.time;
     const stamp = meetingStamp(time);
     const occurred_at = meetingDateV1(time);
-    const dates = { ...(stamp === undefined ? {} : { occurred: time?.all_day ? stamp.slice(0, 10) : stamp }), ...(signal.kind === 'action' && signal.due_at !== null ? { due: signal.due_at } : {}) };
-    return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), list_label: deskListLabel(signal.text, brief.meeting.title, brief.meeting.time), visibility, ...(occurred_at === undefined ? {} : { occurred_at }), ...(Object.keys(dates).length === 0 ? {} : { dates: Object.freeze(dates) }), ...(attributes === undefined || Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
+    const dates = { ...(stamp === undefined ? {} : { occurred: time?.all_day ? stamp.slice(0, 10) : stamp }), approved: meeting.approved_at, ...(signal.kind === 'action' && signal.due_at !== null ? { due: signal.due_at } : {}) };
+    return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), list_label: deskListLabel(signal.text, brief.meeting.title, brief.meeting.time), visibility, ...(occurred_at === undefined ? {} : { occurred_at }), dates: Object.freeze(dates), ...(Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
   }));
 }
 
@@ -689,6 +754,14 @@ type ApprovedRecordV1 = {
   readonly reference: unknown;
   readonly policy_id: string;
   readonly added_at: string;
+  /** When it was approved: the envelope's issue time. */
+  readonly approved_at: string;
+};
+/** A dated read's records and, per record, its atoms in the window, with what it could not test; without dates, mine's records. */
+type DatedRecordSelectionV1 = {
+  readonly records: readonly Sha256Digest[] | undefined;
+  readonly atom_orders?: ReadonlyMap<Sha256Digest, ReadonlySet<number>>;
+  readonly unchecked?: EvidenceDeskUncheckedV1;
 };
 
 function invalidRequest(): never {
@@ -797,6 +870,8 @@ export function createPersonRecordSearchRouteV1(
     readonly scope: Pick<PersonRecordSearchBatchInputV1, "project_id" | "mine">;
     readonly response: PersonRecordSearchResponseV2;
     readonly desk_items?: readonly PersonRecordDeskItemV1[];
+    /** A dated desk read's untested atoms: released beside the items, so audited with them. */
+    readonly unchecked?: EvidenceDeskUncheckedV1;
   }): PersonRecordSearchBatchReleaseV1 {
     const receipt = options.audit.append({
       read_mode: "layer2",
@@ -809,7 +884,7 @@ export function createPersonRecordSearchRouteV1(
       result_count: input.response.items.length,
       response_sha256: canonicalSha256(JSON.parse(canonicalJson(input.desk_items === undefined
         ? input.response
-        : { response: input.response, desk_items: input.desk_items })) as never),
+        : { response: input.response, desk_items: input.desk_items, ...(input.unchecked === undefined ? {} : { unchecked: input.unchecked }) })) as never),
       checked_at: input.current.checked_at,
     });
     const release: PersonRecordSearchBatchReleaseV1 = Object.freeze({
@@ -852,7 +927,7 @@ export function createPersonRecordSearchRouteV1(
     } catch { metadataUnavailable(); }
     const event = envelope.body.event;
     if (envelope.record_sha256 !== recordSha256 || event.kind !== "approved") metadataUnavailable();
-    return { envelope: parsed, brief: event.approved_snapshot.approved_payload.brief, reference: envelope.body.human_act_resolution_ref, policy_id: event.policy_id, added_at: receiptTime(row.receipt_issued_at) };
+    return { envelope: parsed, brief: event.approved_snapshot.approved_payload.brief, reference: envelope.body.human_act_resolution_ref, policy_id: event.policy_id, added_at: receiptTime(row.receipt_issued_at), approved_at: approvalTime(envelope) };
   }
 
   /** Whether the caller is this admitted record's final approver. The tuple never leaves the server. */
@@ -905,38 +980,48 @@ export function createPersonRecordSearchRouteV1(
       .sort());
   }
 
-  /** Filter reader-admitted immutable meeting times before the retrieval limit. */
-  function datedRecordSet(input: EvidenceDateFilterV1, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, mine: readonly Sha256Digest[] | undefined, projectId?: string): { readonly records: readonly Sha256Digest[] | undefined; readonly notice?: string } {
-    validateEvidenceDateFilterV1(input, ['occurred', 'due']);
+  /**
+   * A dated read's selection, before the retrieval limit (research tool contract v1). Of the reader-admitted records
+   * (under mine, the caller's own approvals), the atoms of the requested kinds whose date falls in the window, and a count
+   * of the atoms the filter could not test because they do not record that date, with the dates those atoms do record.
+   * No date field is the meeting's time, as before; `any` is any of an atom's dates. Every atom records its approval, an
+   * action its due date when one is set, and none when ECHO received it.
+   */
+  function datedSelection(input: EvidenceDateFilterV1 & { readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][] }, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, mine: readonly Sha256Digest[] | undefined, projectId?: string): DatedRecordSelectionV1 {
+    // Meetings' one set of dates: an approved record takes `received` too, which none of its atoms records.
+    validateEvidenceDateFilterV1(input, PERSON_MEETING_DATE_FIELDS_V1);
     if (input.since === undefined && input.until === undefined) return { records: mine };
-    let missing = false;
-    const records = generationRecords(authorization, projects, pointer, projectId).filter(record => {
-      if (mine !== undefined && !mine.includes(record.record_sha256)) return false;
-      const brief = approvedRecord(record.record_position, record.record_sha256, record.envelope_sha256).brief;
-      if (input.date_field === 'due') {
-        missing ||= brief.actions.some(action => action.due_at === null);
-        return brief.actions.some(action => matchesEvidenceDateV1({ due: action.due_at ?? undefined }, input, 'due'));
-      }
-      const time = brief.meeting.time;
-      const stamp = time?.actual_start_at ?? time?.scheduled_start_at ?? time?.actual_end_at ?? time?.scheduled_end_at;
-      const occurred = time?.all_day ? stamp?.slice(0, 10) : stamp;
-      missing ||= occurred === undefined;
-      return matchesEvidenceDateV1({ occurred }, { ...input, time_zone: input.time_zone ?? time?.timezone ?? 'UTC' }, 'occurred');
-    }).map(record => record.record_sha256).sort();
-    return { records, ...(missing ? { notice: input.date_field === 'due'
-      ? "Some accessible actions have no recorded due date and were excluded from this date search."
-      : MISSING_EVENT_DATE_NOTICE_V1 } : {}) };
-  }
-
-  function dueAtomOrders(input: EvidenceDateFilterV1, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, records: readonly Sha256Digest[] | undefined, projectId?: string): ReadonlyMap<Sha256Digest, ReadonlySet<number>> | undefined {
-    if (input.date_field !== 'due' || (input.since === undefined && input.until === undefined)) return undefined;
-    const selected = new Map<Sha256Digest, ReadonlySet<number>>();
+    const field = input.date_field ?? "occurred";
+    const atom_orders = new Map<Sha256Digest, ReadonlySet<number>>();
+    let count = 0;
+    const carried = new Set<EvidenceDateFieldV1>();
     for (const record of generationRecords(authorization, projects, pointer, projectId)) {
-      if (records !== undefined && !records.includes(record.record_sha256)) continue;
-      const brief = approvedRecord(record.record_position, record.record_sha256, record.envelope_sha256).brief;
-      selected.set(record.record_sha256, new Set(brief.actions.flatMap((action, index) => matchesEvidenceDateV1({ due: action.due_at ?? undefined }, input, 'due') ? [brief.decisions.length + index] : [])));
+      if (mine !== undefined && !mine.includes(record.record_sha256)) continue;
+      const approved = approvedRecord(record.record_position, record.record_sha256, record.envelope_sha256);
+      const time = approved.brief.meeting.time;
+      const stamp = meetingStamp(time);
+      const occurred = time?.all_day ? stamp?.slice(0, 10) : stamp;
+      // A meeting's time is matched in its own time zone unless the request names one.
+      const zones: Partial<Record<EvidenceDateFieldV1, string>> = { occurred: input.time_zone ?? time?.timezone ?? "UTC" };
+      const selected = new Set<number>();
+      [...approved.brief.decisions, ...approved.brief.actions, ...approved.brief.rationales].forEach((signal, order) => {
+        if (input.kinds !== undefined && !input.kinds.includes(signal.kind)) return;
+        const dates: EvidenceDatesV1 = { ...(occurred === undefined ? {} : { occurred }), approved: approved.approved_at, ...(signal.kind === "action" && signal.due_at !== null ? { due: signal.due_at } : {}) };
+        const recorded = EVIDENCE_DATE_FIELDS_V1.filter((name) => dates[name] !== undefined);
+        const tested = field === EVIDENCE_ANY_DATE_V1 ? recorded : recorded.filter((name) => name === field);
+        if (tested.length === 0) {
+          count += 1;
+          for (const name of recorded) carried.add(name);
+          return;
+        }
+        if (tested.some((name) => matchesEvidenceDateV1(dates, { ...input, date_field: name, ...(zones[name] === undefined ? {} : { time_zone: zones[name] }) }, name))) selected.add(order);
+      });
+      if (selected.size > 0) atom_orders.set(record.record_sha256, selected);
     }
-    return selected;
+    return {
+      records: Object.freeze([...atom_orders.keys()].sort()), atom_orders,
+      ...(count === 0 ? {} : { unchecked: Object.freeze({ count, dates: Object.freeze(EVIDENCE_DATE_FIELDS_V1.filter((name) => carried.has(name))) }) }),
+    };
   }
 
   /** Receipt times of admitted records: cached, else one batched read bound to both digests. */
@@ -1125,7 +1210,7 @@ export function createPersonRecordSearchRouteV1(
     if (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer)) {
       unavailable();
     }
-    const dated = datedRecordSet(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
+    const dated = datedSelection(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
     const mine = dated.records;
     const results = readGeneration(() => input.queries.map((query) =>
       search({
@@ -1134,7 +1219,7 @@ export function createPersonRecordSearchRouteV1(
         reader: readerOf(authorization, projects),
         ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
         ...(mine === undefined ? {} : { record_sha256s: mine }),
-        atom_orders: dueAtomOrders(input, authorization, projects, pointer, mine, input.project_id),
+        ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
         query,
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
@@ -1174,16 +1259,19 @@ export function createPersonRecordSearchRouteV1(
     const response = asResponse({ items: deskSourceItems ?? items });
     const deskProjection = deskSourceItems === undefined
       ? undefined
-      : deskItems(options.record, deskSourceItems, options.record_input_codecs);
+      : deskItems(options.record, deskSourceItems, options);
+    // What a dated read could not test is a desk read's, released and audited beside its items.
+    const unchecked = deskProjection === undefined ? undefined : dated.unchecked;
     const release = commitBatchRelease({
       initial_authorization: releaseAuthorization(authorization),
       current: released, pointer, projects, scope: input, response,
       ...(deskProjection === undefined ? {} : { desk_items: deskProjection }),
+      ...(unchecked === undefined ? {} : { unchecked }),
     });
     return Object.freeze({
       response,
       release,
-      ...(dated.notice === undefined ? {} : { notice: dated.notice }),
+      ...(unchecked === undefined ? {} : { unchecked }),
       ...(deskProjection === undefined ? {} : { desk_items: deskProjection }),
       truncated: results.some((result) => result.truncated === true) ||
         (deskSourceItems !== undefined && deskSourceItems.length !== items.length),
@@ -1238,7 +1326,7 @@ export function createPersonRecordSearchRouteV1(
     assertCurrentSnapshot(input.pointer);
     const deskSourceItems = boundedDeskItems(items);
     const response = asResponse({ items: deskSourceItems });
-    const projection = deskItems(options.record, deskSourceItems, options.record_input_codecs);
+    const projection = deskItems(options.record, deskSourceItems, options);
     const release = commitBatchRelease({
       initial_authorization: input.initial_authorization,
       current: released, pointer: input.pointer, projects: input.projects, scope: input, response, desk_items: projection,
@@ -1303,7 +1391,7 @@ export function createPersonRecordSearchRouteV1(
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
       if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head) || (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer))) unavailable();
-      const dated = datedRecordSet(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
+      const dated = datedSelection(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
       const mine = dated.records;
       const inventory = readGeneration(() => listReadableSearchGenerationV1({
         state_directory: options.state_directory,
@@ -1311,7 +1399,7 @@ export function createPersonRecordSearchRouteV1(
         reader: readerOf(authorization, projects),
         ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit,
         ...(mine === undefined ? {} : { record_sha256s: mine }),
-        atom_orders: dueAtomOrders(input, authorization, projects, pointer, mine, input.project_id),
+        ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
       }));
       assertGeneration(inventory, pointer);
@@ -1320,12 +1408,13 @@ export function createPersonRecordSearchRouteV1(
       assertCurrentSnapshot(pointer);
       const deskSourceItems = boundedDeskItems(inventory.items);
       const response = asResponse({ items: deskSourceItems });
-      const projection = deskItems(options.record, deskSourceItems, options.record_input_codecs);
+      const projection = deskItems(options.record, deskSourceItems, options);
+      const { unchecked } = dated;
       const release = commitBatchRelease({
         initial_authorization: releaseAuthorization(authorization),
-        current: released, pointer, projects, scope: input, response, desk_items: projection,
+        current: released, pointer, projects, scope: input, response, desk_items: projection, ...(unchecked === undefined ? {} : { unchecked }),
       });
-      return Object.freeze({ response, release, desk_items: projection, ...(dated.notice === undefined ? {} : { notice: dated.notice }), truncated: inventory.truncated === true || deskSourceItems.length !== inventory.items.length });
+      return Object.freeze({ response, release, desk_items: projection, ...(unchecked === undefined ? {} : { unchecked }), truncated: inventory.truncated === true || deskSourceItems.length !== inventory.items.length });
     },
     openDeskCitation(input: {
       readonly access_token: string;
