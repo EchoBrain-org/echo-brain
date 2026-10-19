@@ -1,12 +1,13 @@
 import type { AnswerSource, AskRead, AskReceipt, AskSearched, AskSearchedSource, AskStage, AskStep, ConnectedTool } from '../shared/protocol.js';
-import { groupKey } from './answer.js';
+import { documentName, groupKey } from './answer.js';
 
 /**
  * What Ask shows while it works (Ask progress and internal links v1,
- * ADR-0039): one live line, the stage now, and under it at most three rows
- * of what it searched and read. Everything here is built from the steps the
- * Authority reported, never from model text, and none of it outlives the Ask:
- * a cancel, a timeout or a refused answer drops it.
+ * ADR-0039; the quiet line, 2026-10-19): one line that names the step now,
+ * and, only when the person opens it, every row of what it searched and read.
+ * Everything here is built from the steps the Authority reported, never from
+ * model text, and none of it outlives the Ask: a cancel, a timeout or a
+ * refused answer drops it.
  */
 export interface AskProgress {
   /** When the question was asked, by the page's clock. */
@@ -19,12 +20,8 @@ export interface AskProgress {
   readonly rows: readonly (AskSearched | AskRead)[];
 }
 
-/** Nothing extra shows for an Ask answered sooner: no live line, no rows, no receipt. */
+/** Nothing extra shows for an Ask answered sooner: the line says only "Thinking…", and leaves no receipt. */
 export const PROGRESS_AFTER_MS = 3_000;
-/** Live rows under the line; older ones fold away, and the receipt has them all. */
-export const LIVE_ROWS = 3;
-/** Names a live row shows before "+N". */
-export const ROW_NAMES = 3;
 /** The shortest time between two announcements to a screen reader. */
 export const ANNOUNCE_MS = 5_000;
 
@@ -60,8 +57,9 @@ export function withStep(progress: AskProgress, step: AskStep): AskProgress {
 }
 
 /**
- * A live row: a search (and whether one before it found anything) or a read,
- * done or still going, or the items being read whose names have not come.
+ * A row of the line, opened: a search (and whether one before it found
+ * anything) or a read, done or still going, or the items being read whose
+ * names have not come.
  */
 export type LiveRow =
   | { readonly type: 'searched'; readonly row: AskSearched; readonly earlier: boolean }
@@ -69,15 +67,16 @@ export type LiveRow =
   | { readonly type: 'pending'; readonly count: number; readonly more: boolean };
 
 /**
- * The rows under the live line: the last LIVE_ROWS. A search is reported
- * done; the newest read is still going while the research model reads it.
+ * The rows under the line, once it is opened: every one, as the receipt has
+ * them. A search is reported done; the newest read is still going while the
+ * research model reads it.
  */
 export function liveRows(progress: AskProgress): LiveRow[] {
   const reading = progress.stage === 'reading';
   const rows: LiveRow[] = progress.rows.map((row, index) => row.type === 'searched' ? { type: 'searched', row, earlier: foundBefore(progress.rows, index) }
     : { type: 'read', row, done: !(reading && progress.pending === 0 && index === progress.rows.length - 1) });
   if (reading && progress.pending > 0) rows.push({ type: 'pending', count: progress.pending, more: progress.rows.some(row => row.type === 'read') });
-  return rows.slice(-LIVE_ROWS);
+  return rows;
 }
 
 /** Whether a search before `index` among `rows` found anything. */
@@ -87,9 +86,22 @@ export function foundBefore(rows: readonly (AskSearched | AskRead)[], index: num
 
 const VERBS: Record<AskStage, string> = { searching: 'Searching', reading: 'Reading', checking_access: 'Checking access', writing: 'Writing' };
 
-/** The live line's words: the stage, or, before any step came, what Ask always said. */
-export function stageWords(progress: AskProgress | null): string {
-  return progress?.stage ? VERBS[progress.stage] : 'Thinking…';
+/**
+ * The line's words: the stage, and while it reads, what. "Reading Tuesday
+ * sync and 3 more" names the first place of the read now and counts the
+ * other places, as its row, opened, names them. Before any step came, what
+ * Ask always said.
+ */
+export function headline(progress: AskProgress | null): string {
+  if (!progress?.stage) return 'Thinking…';
+  if (progress.stage === 'writing') return 'Writing the answer';
+  if (progress.stage !== 'reading') return VERBS[progress.stage];
+  if (progress.pending > 0) return `Reading ${progress.pending} ${progress.pending === 1 ? 'item' : 'items'}`;
+  const last = progress.rows.at(-1);
+  if (last?.type !== 'read') return VERBS.reading;
+  const places = namedPlaces(last.items);
+  const others = places.length - 1;
+  return `Reading ${placeLabel(places[0]!.source)}${others > 0 ? ` and ${others} more` : ''}`;
 }
 
 /** "meetings, documents and Jira" */
@@ -137,10 +149,9 @@ export function namedPlaces(items: readonly AnswerSource[]): NamedPlace[] {
   return [...places.values()].map(read => ({ source: read[0]!, items: read }));
 }
 
-/** A read row's names: the first ROW_NAMES places, and how many more items, so "+N" counts what "Reading N items" did. */
-export function rowNames(items: readonly AnswerSource[], shown = ROW_NAMES): { names: readonly NamedPlace[]; more: number } {
-  const names = namedPlaces(items).slice(0, shown);
-  return { names, more: items.length - names.reduce((total, place) => total + place.items.length, 0) };
+/** What a named place is called: a file's name as a person says it, otherwise its label. */
+export function placeLabel(source: AnswerSource): string {
+  return source.kind === 'original' ? documentName(source.label).name : source.label;
 }
 
 /** "48s", "1m 12s": whole seconds gone, as the live timer counts them. */
