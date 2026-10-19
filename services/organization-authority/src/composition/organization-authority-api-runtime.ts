@@ -58,6 +58,8 @@ import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-
 import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
+import { personWorkspaceGrantsV1 } from './person-workspace-evidence-v1.js';
+import { createPersonWorkspaceReleaseAuditV1 } from './person-workspace-release-audit-v1.js';
 import type { PersonLiveConnectorDefinitionV1, OpenedPersonLiveConnectorV1, PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { personLiveConnectorDefinitionsV1 } from './person-live-connector-registry-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
@@ -373,6 +375,10 @@ export async function startOrganizationAuthorityApiRuntime(
       database, sessions, projects: projectRepository, items, people, records: recordSearch,
       ...(reviewStatuses === undefined ? {} : { reviews: reviewStatuses }),
     });
+    const projectContext = createProjectContextApplicationV1({
+      authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
+      repository: projectRepository,
+    });
     const runs = answerOptions === undefined ? undefined : new SqliteTriggerRunsV1(database);
     const triggerRuns: PersonTriggerRunsHttpApplicationV1 = answerOptions === undefined || runs === undefined ? unavailablePersonTriggerRunsV1(sessions) : (() => {
       // Ticket assignees match impact owners only when a live connector that reads them is configured.
@@ -433,6 +439,15 @@ export async function startOrganizationAuthorityApiRuntime(
         // The V7 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040); without these sources its desk would bind none.
         ...(runs === undefined ? {} : {
           person_answer_v6: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: { runs, items, people, records: recordSearch } }, 7),
+          // The V8 answer also reads the asker's projects, people and tools as the project pages and the tools page show
+          // them (research tool contract v1), each release audited without content.
+          person_answer_v7: createPersonLiveAnswerRouteV1({
+            ...answerOptions, live_sources: liveSources, follow_ups: { runs, items, people, records: recordSearch },
+            workspace: {
+              sources: { projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools },
+              audit: context => createPersonWorkspaceReleaseAuditV1(database, context),
+            },
+          }, 8),
         }),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
@@ -445,10 +460,7 @@ export async function startOrganizationAuthorityApiRuntime(
         on_original_saved: () => documentWorker?.wake(),
       }),
       document_upload_staging: createPersonDocumentUploadStagingV1(),
-      project_context: createProjectContextApplicationV1({
-        authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
-        repository: projectRepository,
-      }),
+      project_context: projectContext,
       person_employees: createPersonEmployeeHttpApplication(
         new PersonEmployeeLifecycleApplication(sessions, {
           next(prefix) {

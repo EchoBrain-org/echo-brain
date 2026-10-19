@@ -467,7 +467,7 @@ describe('follow-ups on the request desk (ADR-0040)', () => {
     expect(bound.base.search).toHaveBeenCalledTimes(3);
     // Owner and status are never sent to another source: one that cannot apply them refuses the read rather than answer
     // wider than asked (ADR-0041).
-    await expect(bound.desk.list({ source: 'meeting', owner: 'me', status: 'open', limit: 10 })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source cannot be filtered by owner or status' });
+    await expect(bound.desk.list({ source: 'meeting', owner: 'me', status: 'open', limit: 10 })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source cannot be filtered by owner, status or role' });
     await expect(bound.desk.list({ source: 'jira', status: 'open', limit: 10 })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(bound.base.list).not.toHaveBeenCalled();
 

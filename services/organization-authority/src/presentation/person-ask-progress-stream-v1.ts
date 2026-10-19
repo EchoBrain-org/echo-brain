@@ -5,12 +5,16 @@ import {
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
   formatPersonAskProgressEventV1,
   formatPersonAskProgressEventV2,
+  formatPersonAskProgressEventV3,
   type PersonAskProgressEventV1,
   type PersonAskProgressEventV2,
+  type PersonAskProgressEventV3,
   type PersonAskProgressStepEventV1,
   type PersonAskProgressStepEventV2,
+  type PersonAskProgressStepEventV3,
   type PersonAskProgressTerminalEventV1,
   type PersonAskProgressTerminalEventV2,
+  type PersonAskProgressTerminalEventV3,
 } from '@echo-brain/organization-api';
 
 /**
@@ -35,6 +39,13 @@ export interface PersonAskProgressStreamV2 {
   close(): void;
 }
 
+/** The `/v7` stream (Ask progress V3, research tool contract v1): the same response, whose events may name workspace items and tool containers. */
+export interface PersonAskProgressStreamV3 {
+  step(event: PersonAskProgressStepEventV3): void;
+  end(event: PersonAskProgressTerminalEventV3): void;
+  close(): void;
+}
+
 /** Status and headers set before this call (the route header) are kept. */
 export function startPersonAskProgressStreamV1(response: ServerResponse, options: { readonly heartbeat_ms?: number } = {}): PersonAskProgressStreamV1 {
   return start<PersonAskProgressEventV1>(response, formatPersonAskProgressEventV1, options);
@@ -45,7 +56,12 @@ export function startPersonAskProgressStreamV2(response: ServerResponse, options
   return start<PersonAskProgressEventV2>(response, formatPersonAskProgressEventV2, options);
 }
 
-function start<Event extends PersonAskProgressEventV1 | PersonAskProgressEventV2>(response: ServerResponse, format: (event: Event) => string,
+/** `/v7`'s stream: V1's framing, heartbeat and terminal rules, with each event validated as V3. */
+export function startPersonAskProgressStreamV3(response: ServerResponse, options: { readonly heartbeat_ms?: number } = {}): PersonAskProgressStreamV3 {
+  return start<PersonAskProgressEventV3>(response, formatPersonAskProgressEventV3, options);
+}
+
+function start<Event extends PersonAskProgressEventV1 | PersonAskProgressEventV2 | PersonAskProgressEventV3>(response: ServerResponse, format: (event: Event) => string,
   options: { readonly heartbeat_ms?: number }): { step(event: Event): void; end(event: Event): void; close(): void } {
   const heartbeatMs = options.heartbeat_ms ?? PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1;
   response.writeHead(200, { 'content-type': `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}; charset=utf-8`, 'cache-control': 'no-store' });
