@@ -1,6 +1,8 @@
 // Shared by the store's unit tests: the Authority's answers as the host hands
 // them to the renderer, with its real ordering and cursors, and a way to hold
-// one reply back while later ones land.
+// one reply back while later ones land; and, for tests that call components
+// as plain functions, hooks that do so and the tree those calls show.
+import type { VNode } from 'preact';
 import { vi } from 'vitest';
 import type { ProjectSummary } from '../../src/shared/protocol.js';
 
@@ -150,3 +152,39 @@ export function show(store: Windowed): Promise<void> {
 
 /** The machine wakes from sleep. */
 export async function wake(): Promise<void> { (await import('../../src/renderer/freshness.js')).woke(); }
+
+/**
+ * `preact/hooks` for components called as plain functions: hooks keep their first value and run no effect. A test
+ * mocks the module with it: `vi.mock('preact/hooks', original => plainHooks(original))`.
+ */
+export async function plainHooks(original: <T>() => Promise<T>) {
+  return {
+    ...await original<typeof import('preact/hooks')>(),
+    useRef: (value: unknown = null) => ({ current: value }), useEffect: () => undefined, useLayoutEffect: () => undefined,
+    useState: (value: unknown) => [typeof value === 'function' ? (value as () => unknown)() : value, () => undefined],
+    useCallback: (fn: unknown) => fn, useMemo: (make: () => unknown) => make(),
+  };
+}
+
+export type Node = VNode<Record<string, unknown>>;
+/** A component tree as it would show: function components called, so only elements remain. */
+export function render(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(render);
+  if (!value || typeof value !== 'object' || !('props' in value)) return value;
+  const node = value as Node;
+  if (typeof node.type === 'function') return render((node.type as (props: Record<string, unknown>) => unknown)(node.props));
+  return { ...node, props: { ...node.props, children: render(node.props.children) } };
+}
+export function elements(value: unknown): Node[] {
+  if (Array.isArray(value)) return value.flatMap(elements);
+  if (!value || typeof value !== 'object' || !('props' in value)) return [];
+  const node = value as Node;
+  return [node, ...elements(node.props.children)];
+}
+export function text(value: unknown): string {
+  if (Array.isArray(value)) return value.map(text).join('');
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (!value || typeof value !== 'object' || !('props' in value)) return '';
+  return text((value as Node).props.children);
+}
+export const byTestId = (tree: unknown, id: string) => elements(tree).filter(node => node.props['data-testid'] === id);

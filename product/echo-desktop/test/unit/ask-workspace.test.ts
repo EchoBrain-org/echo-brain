@@ -4,21 +4,15 @@
 // is read for it. Once the answer came, Open goes to the project, or to
 // Tools; a person has nowhere to go; a Jira project, Confluence space or Slack
 // channel says its tool and key on its source row, and opens in its tool.
-import type { VNode } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Answer, AnswerSource, AskReceipt, ConnectedTool, Expect, ProjectSummary } from '../../src/shared/protocol.js';
+import type { Answer, AnswerSource, AskReceipt, ConnectedTool, Expect } from '../../src/shared/protocol.js';
 import { Folder, Hash, Plug } from '../../src/renderer/screens/icons.js';
-import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, stubWindow, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
-// Components are called as plain functions below: hooks keep their first value and run no effect.
-vi.mock('preact/hooks', async original => ({
-  ...await original<typeof import('preact/hooks')>(),
-  useRef: (value: unknown = null) => ({ current: value }), useEffect: () => undefined, useLayoutEffect: () => undefined,
-  useState: (value: unknown) => [typeof value === 'function' ? (value as () => unknown)() : value, () => undefined],
-  useCallback: (fn: unknown) => fn, useMemo: (make: () => unknown) => make(),
-}));
+// Components are called as plain functions below.
+vi.mock('preact/hooks', original => plainHooks(original));
 
 const EXPECT: Expect = { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id };
 /** Apollo, in the sidebar, and a project of yours past its pages. */
@@ -58,28 +52,6 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals()
 
 const called = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params as Record<string, unknown>);
 
-type Node = VNode<Record<string, unknown>>;
-/** A component tree as it would show: function components called, so only elements remain. */
-function render(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(render);
-  if (!value || typeof value !== 'object' || !('props' in value)) return value;
-  const node = value as Node;
-  if (typeof node.type === 'function') return render((node.type as (props: Record<string, unknown>) => unknown)(node.props));
-  return { ...node, props: { ...node.props, children: render(node.props.children) } };
-}
-function elements(value: unknown): Node[] {
-  if (Array.isArray(value)) return value.flatMap(elements);
-  if (!value || typeof value !== 'object' || !('props' in value)) return [];
-  const node = value as Node;
-  return [node, ...elements(node.props.children)];
-}
-function text(value: unknown): string {
-  if (Array.isArray(value)) return value.map(text).join('');
-  if (typeof value === 'string' || typeof value === 'number') return String(value);
-  if (!value || typeof value !== 'object' || !('props' in value)) return '';
-  return text((value as Node).props.children);
-}
-const byTestId = (tree: unknown, id: string) => elements(tree).filter(node => node.props['data-testid'] === id);
 /** What the pane's head calls what it shows. */
 const heading = (tree: unknown) => text(elements(tree).filter(node => node.props.class === 'section-label'));
 /** An icon, by the lines it draws. */
