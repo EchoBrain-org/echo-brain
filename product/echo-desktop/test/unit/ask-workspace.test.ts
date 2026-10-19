@@ -212,7 +212,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     expect(text(byTestId(thread(), 'source-row'))).toBe('1Mara Lind');
   });
 
-  it('shows a tool by its name, and how you are connected to it once Tools has read that; Open goes to Tools', async () => {
+  it('shows a tool by its name alone, never a connection Tools read earlier; Open goes to Tools', async () => {
     tools = [{ tool_id: 'jira', name: 'Jira', status: 'revoked' }];
     const { store, release, pane, thread } = await asking();
     release(ok(answering([jira])));
@@ -235,15 +235,16 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     expect(store.getState().route).toEqual({ page: 'tools' });
     expect(store.getState().tools?.items).toEqual(tools);
 
-    // Asked again from Tools, which has read your connection: the pane says it, in Tools' words.
+    // Asked again from Tools, which has read your connection: the pane still names the tool alone. The connection may
+    // have changed since Tools read it, and the answer says it as the Authority read it for this Ask.
     const again = held.hold('ask.run');
     void store.ask('Is Jira connected?');
     await flush();
     again(ok(answering([jira])));
     await flush();
     store.chooseSource(0);
-    expect(text(byTestId(pane(), 'pane-tool'))).toBe('JiraConnection stopped. Reconnect to keep using it.');
-    expect(text(byTestId(pane(), 'pane-tool-status'))).toBe('Connection stopped. Reconnect to keep using it.');
+    expect(text(byTestId(pane(), 'pane-tool'))).toBe('Jira');
+    expect(byTestId(pane(), 'pane-tool-status')).toEqual([]);
   });
 
   it('names a container\'s tool and key on its source row and beside Ask, and opens it in its tool, never on a page of ECHO\'s', async () => {

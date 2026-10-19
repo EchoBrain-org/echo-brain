@@ -22,8 +22,9 @@ working: a meeting's decision, action or rationale opens its meeting with that
 item lit; a note, document or imported meeting its cited passages; a
 transcript its meeting; a follow-up its title, owner, status and latest check
 (ADR-0040); one of your projects its name; a person in your organization their
-name only; one of your tools its name, and how you are connected to it once
-Tools has read that; a Jira ticket, Confluence page or Slack message, and a
+name only; one of your tools its name only (the answer says how you are
+connected, as ECHO read it for that Ask); a Jira ticket, Confluence page or
+Slack message, and a
 Jira project, Confluence space or Slack channel, its "Open in …". Once the
 answer has come, **Open** goes to the item's own page (leaving Ask, so it is
 hidden while Ask works): the reader, where a meeting opens scrolled to the

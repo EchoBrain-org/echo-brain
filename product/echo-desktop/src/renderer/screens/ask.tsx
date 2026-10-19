@@ -6,7 +6,7 @@ import type {
 import { askText, queryTerms } from '../../shared/query.js';
 import { answerSentences, documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
-import { message, TOOL_STATES } from '../messages.js';
+import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
@@ -707,16 +707,15 @@ function FollowUpSource({ state, source, item }: { state: State; source: Extract
 /**
  * One of your projects, a person in your organization, or one of your tools
  * beside Ask (research tool contract v1): its name, as the answer cites it,
- * and nothing is read for it. A tool also says how you are connected to it,
- * as Tools says it, once Tools has read that. Once the answer came, Open goes
- * to the project, or to Tools; a person has no page to open.
+ * and nothing is read for it. A tool's connection is the answer's to say, as
+ * the Authority read it for this Ask; a state Tools read earlier may be stale.
+ * Once the answer came, Open goes to the project, or to Tools; a person has no
+ * page to open.
  */
-function WorkspaceSource({ state, source }: { state: State; source: Extract<AnswerSource, { kind: 'project' | 'person' | 'tool' }> }) {
-  const tool = source.kind === 'tool' ? state.tools?.items?.find(item => item.tool_id === source.tool_id) : undefined;
+function WorkspaceSource({ source }: { source: Extract<AnswerSource, { kind: 'project' | 'person' | 'tool' }> }) {
   return (
     <div class="source-detail selectable" data-testid={`pane-${source.kind}`}>
       <h2>{source.label}</h2>
-      {tool && <div class="meta" data-testid="pane-tool-status">{TOOL_STATES[tool.status]}</div>}
     </div>
   );
 }
@@ -751,7 +750,7 @@ export function SourcePane({ state }: { state: State }) {
   } else if (source.kind === 'follow_up') {
     body = <ReadRecord read={sources.followUps[source.item_id]}>{item => <FollowUpSource state={state} source={source} item={item} />}</ReadRecord>;
   } else if (source.kind === 'project' || source.kind === 'person' || source.kind === 'tool') {
-    body = <WorkspaceSource state={state} source={source} />;
+    body = <WorkspaceSource source={source} />;
   }
   return (
     <aside class="source-pane" data-testid="source-pane" aria-label="Source">

@@ -173,6 +173,12 @@ describe('Workspace citations V1', () => {
       { ...containerCitation, permalink: 'https://user:pass@example.atlassian.net/browse/THERM' },
       { ...containerCitation, permalink: 'https://example.atlassian.net/browse/THERM?x=1' },
       { ...containerCitation, permalink: 'https://example.atlassian.net/browse/THERM#top' },
+      // Only a link already in the form the desktop opens: no upper-case host, default port, dot segment or raw non-ASCII.
+      { ...containerCitation, permalink: 'https://Example.atlassian.net/browse/THERM' },
+      { ...containerCitation, permalink: 'https://example.atlassian.net:443/browse/THERM' },
+      { ...containerCitation, permalink: 'https://example.atlassian.net/browse/../THERM' },
+      { ...containerCitation, permalink: 'https://example.atlassian.net/browse/Tä' },
+      { ...containerCitation, permalink: 'https://1.1/x' },
       { kind: 'workspace' },
       null,
     ]) expect(() => validatePersonWorkspaceCitationV1(value)).toThrow();

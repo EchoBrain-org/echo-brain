@@ -57,14 +57,19 @@ function line(value: unknown, label: string): asserts value is string {
   if (value !== value.normalize('NFC')) fail(`${label} is not normalized`);
 }
 
-/** A display link: https, a host, no credentials, query or fragment. Never a fetch target. */
+/**
+ * A display link: https, a host, no credentials, query or fragment, and already in the form the URL parser writes it, as
+ * the desktop opens it (no upper-case host, default port or dot segment). Never a fetch target.
+ */
 function permalink(value: unknown): asserts value is string {
   assertPatternString(value, 'permalink', 2048, PERMALINK);
-  const Url = (globalThis as unknown as { URL?: new (input: string) => { protocol: string; hostname: string; username: string; password: string; search: string; hash: string } }).URL;
+  const Url = (globalThis as unknown as { URL?: new (input: string) => { href: string; protocol: string; hostname: string; username: string; password: string; search: string; hash: string } }).URL;
   if (Url === undefined) fail('Tool container citation URL parser is unavailable');
   let url: InstanceType<typeof Url>;
   try { url = new Url(value); } catch { fail('Tool container citation permalink is invalid'); }
-  if (url.protocol !== 'https:' || url.hostname === '' || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') fail('Tool container citation permalink is invalid');
+  if (url.protocol !== 'https:' || url.hostname === '' || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '' || url.href !== value) {
+    fail('Tool container citation permalink is invalid');
+  }
 }
 
 /** Whether a cited object is a workspace item or a tool container, which only the V8 answer admits. */
