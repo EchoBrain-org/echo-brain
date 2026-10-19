@@ -57,10 +57,8 @@ interface Store {
   fullPageOffered(): boolean;
   openFullPage(): void;
   followUpShown(): { kind: string; item_id?: string; item?: Json | null } | null;
-  openExternalSource(source: Source): Promise<boolean>;
   getState(): {
-    route: { page: string; project?: { project_id: string; name: string } };
-    ask: { asking: { progress: Progress } | null; shown: { answer: { sources: readonly Source[]; receipt?: Receipt }; receipt?: Receipt; took?: number } | null; failed: unknown } | null;
+    ask:{ asking: { progress: Progress } | null; shown: { answer: { sources: readonly Source[]; receipt?: Receipt }; receipt?: Receipt; took?: number } | null; failed: unknown } | null;
     sources: { records: Record<string, { loading: boolean; value?: { decisions: { items: { atom_id?: string; text: string }[] } } }>;
       evidence: { reads: Record<number, { loading: boolean; value?: { text: string } }> } | null;
       followUps: Record<string, { loading: boolean; value?: { item_id: string; state: string; owner: { membership_id: string; name: string }; expected: string | null } }> } | null;
@@ -105,10 +103,9 @@ afterEach(() => {
  */
 /**
  * `route`: the newest Ask route the Authority has; one before /v7 answers it with a 404. `v7`: instead, a scripted
- * /v7 stream (progress V3) the loopback answers with, as an Authority that serves the V8 answer would; `project`: the
- * project its page reads by id.
+ * /v7 stream (progress V3) the loopback answers with, as an Authority that serves the V8 answer would.
  */
-async function app(options: { readonly route?: '/v6' | '/v5'; readonly v7?: () => string; readonly project?: Json } = {}) {
+async function app(options: { readonly route?: '/v6' | '/v5'; readonly v7?: () => string } = {}) {
   const f = await allSourceAskFixture(roots, { notes: NOTE });
   const [{ runCli, lastJson }, ask, views, { askText }, progress, { openerOf }] = await Promise.all([
     desktop<{ runCli(cli: unknown, argv: readonly string[], dependencies: Json, onLine?: (line: string) => void): Promise<CliRun>; lastJson(text: string): unknown }>('host/cli.ts'),
@@ -175,7 +172,6 @@ async function app(options: { readonly route?: '/v6' | '/v5'; readonly v7?: () =
       return viewed(run, raw => views.answerView(raw, scope));
     }
     if (method === 'ask.cancel') { asks.get(params.cancel_id as string)?.abort(); return ok(null); }
-    if (method === 'projects.read' && options.project !== undefined && params.project_id === options.project.project_id) return ok(options.project);
     if (method === 'ask.record') return viewed(await runCli(runPersonClientCli, ask.askRecordArgv(params.record as Json), client), raw => views.recordView(raw, params.record as Json));
     if (method === 'ask.source') return viewed(await runCli(runPersonClientCli, ask.askSourceArgv(params.ref as Json, params.scope as Scope), client), views.evidenceView);
     // A follow-up's row, as the host reads one: the runs command, its result validated, the item as the page has it.
@@ -427,9 +423,9 @@ describe('Ask progress from the Authority through the Person client to the deskt
 // The V8 answer on /v7 (research tool contract v1), whose Ask may cite the asker's projects, the people in their
 // organization, their tools and their tools' containers. The Authority's kernel builds it; here a scripted /v7 stream
 // stands in for it, exactly as progress V3 frames one, so the proof is the client's, the host's and the page's.
-const WORKSPACE_PROJECT = { project_id: 'prj_00000000-0000-4000-8000-0000000000a1', name: 'Launchscope', role: 'lead', created_at: '2026-10-01T09:00:00.000Z', status: 'active' } as const;
+const WORKSPACE_PROJECT_ID = 'prj_00000000-0000-4000-8000-0000000000a1';
 const WORKSPACE = {
-  project: { citation: { kind: 'project', project_id: WORKSPACE_PROJECT.project_id }, kind: 'project', label: 'Launchscope', visibility: 'project', ref: `project:${WORKSPACE_PROJECT.project_id}` },
+  project: { citation: { kind: 'project', project_id: WORKSPACE_PROJECT_ID }, kind: 'project', label: 'Launchscope', visibility: 'project', ref: `project:${WORKSPACE_PROJECT_ID}` },
   person: { citation: { kind: 'person', membership_id: 'mem_00000000-0000-4000-8000-0000000000a2' }, kind: 'person', label: 'Mara Lind', visibility: 'team' },
   tool: { citation: { kind: 'tool', tool_id: 'jira' }, kind: 'tool', label: 'Jira', visibility: 'only_me', ref: 'tool:jira' },
   container: {
@@ -459,8 +455,8 @@ const WORKSPACE_EVENTS: readonly PersonAskProgressEventV3[] = [
 const WORKSPACE_STREAM = () => WORKSPACE_EVENTS.map(event => formatPersonAskProgressEventV3(event)).join('');
 
 describe('The V8 Ask on /v7, through the Person client to the desktop page (research tool contract v1)', () => {
-  it('streams workspace names as progress V3, keeps them in the receipt, and opens a project, a person, a tool and a container by their kind', async () => {
-    const { f, store, views, progress, openerOf, lines, notices, refused, runs, asked, opted } = await app({ v7: WORKSPACE_STREAM, project: WORKSPACE_PROJECT });
+  it('streams workspace names as progress V3, keeps them in the receipt, and gives the page a project, a person, a tool and a container', async () => {
+    const { f, store, views, progress, lines, notices, refused, runs, asked, opted } = await app({ v7: WORKSPACE_STREAM });
     try {
       await store.ask(WORKSPACE_QUESTION, { kind: 'global' });
       expect(runs).toHaveLength(1);
@@ -483,7 +479,7 @@ describe('The V8 Ask on /v7, through the Person client to the desktop page (rese
       expect(notices).toHaveLength(steps.length);
 
       // --- The page: the answer's sources and the receipt's names are the four kinds, each as the page keeps it. ---
-      const project = { kind: 'project', label: 'Launchscope', project_id: WORKSPACE_PROJECT.project_id };
+      const project = { kind: 'project', label: 'Launchscope', project_id: WORKSPACE_PROJECT_ID };
       const person = { kind: 'person', label: 'Mara Lind', membership_id: WORKSPACE.person.citation.membership_id };
       const tool = { kind: 'tool', label: 'Jira', tool_id: 'jira' };
       const container = { kind: 'container', label: 'Launchscope delivery', tool_id: 'jira', container: 'jira_project', key: 'LAUNCH', permalink: WORKSPACE.container.citation.permalink };
@@ -495,36 +491,7 @@ describe('The V8 Ask on /v7, through the Person client to the desktop page (rese
       // No tools list was read here, so Jira is named by its id.
       expect(progress.searchedWords(shown.receipt!.rows[0]!)).toBe('Searched projects, people, tools and Jira · 4 found');
       expect(progress.receiptWords(shown.receipt!, shown.took!)).toMatch(/^Looked through 4 items · \d+s$/);
-
-      // --- Each opens by its kind: a project in ECHO, a tool on the tools page, a container in its tool, a person nowhere. ---
-      expect(openerOf(project as Source)).toEqual({ pane: 'project', page: { kind: 'project', project_id: WORKSPACE_PROJECT.project_id } });
-      expect(openerOf(person as Source)).toEqual({ pane: 'person', page: null });
-      expect(openerOf(tool as Source)).toEqual({ pane: 'tool', page: { kind: 'tools' } });
-      expect(openerOf(container as Source)).toEqual({ pane: 'external', page: null });
-      store.openNamed([person as Source]);
-      expect(store.fullPageOffered()).toBe(false);
-      store.openNamed([container as Source]);
-      expect(store.fullPageOffered()).toBe(false);
-      await expect(store.openExternalSource(container as Source)).resolves.toBe(true);
-      expect(rpc).toHaveBeenCalledWith('source.openExternal', { kind: 'container', permalink: WORKSPACE.container.citation.permalink });
-      // A tool's Open is the tools page, in place of Ask.
-      store.openNamed([tool as Source]);
-      expect(store.fullPageOffered()).toBe(true);
-      store.openFullPage();
-      await flush();
-      expect(store.getState().ask).toBeNull();
-      expect(store.getState().route.page).toBe('tools');
-
-      // Asked again, the project's Open is its own page in ECHO, read by its id from its ref.
-      await store.ask(WORKSPACE_QUESTION, { kind: 'global' });
-      expect(asked).toEqual(['/v7/person/ask', '/v7/person/ask']);
-      store.openNamed([project as Source]);
-      expect(store.fullPageOffered()).toBe(true);
-      store.openFullPage();
-      await vi.waitFor(() => expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: WORKSPACE_PROJECT.project_id, name: 'Launchscope' } }),
-        { timeout: 10_000, interval: 10 });
-      expect(store.getState().ask).toBeNull();
-      expect(rpc).toHaveBeenCalledWith('projects.read', expect.objectContaining({ project_id: WORKSPACE_PROJECT.project_id }));
+      // How each opens from here is the page's own: ask-workspace.test.ts and openers.test.ts in product/echo-desktop/test/unit.
     } finally { await f.close(); }
   });
 });
@@ -533,13 +500,13 @@ describe('The V8 Ask on /v7, through the Person client to the desktop page (rese
 function quiet(method: string, account: Expect) {
   switch (method) {
     case 'app.status': return ok({ signed_in: true, account: { ...account, display_name: 'Owner', role: 'owner' }, client_version: 'test' });
-    case 'app.setUnresolved': case 'notice.show': case 'log.changes': case 'source.openExternal': return ok(null);
+    case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
     case 'account.tools': return ok({ tools: [] });
     case 'projects.list': case 'projects.members': case 'people.directory': case 'projects.directory': return ok({ items: [], next_cursor: null });
     case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
     case 'search.run': return ok({ items: [] });
     case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60, areas: { projects: `sha256:${'1'.repeat(64)}`, follow_ups: `sha256:${'2'.repeat(64)}`, reviews: `sha256:${'3'.repeat(64)}` } });
-    case 'runs': case 'projects.jiraRead': case 'projects.confluenceRead': return { ok: false, failure: { code: 'unavailable', retryable: true } };
+    case 'runs': return { ok: false, failure: { code: 'unavailable', retryable: true } };
   }
   throw new Error(`Unexpected request: ${method}`);
 }
