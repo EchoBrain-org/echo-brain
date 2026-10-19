@@ -10,10 +10,9 @@ import {
   type EvidenceDeskResultV2,
   type EvidenceDeskSourceV2,
   type EvidenceDeskUncheckedV1,
-  type EvidenceFilterNameV1,
   type EvidenceSourceCapabilitiesV1,
 } from "../shared/evidence-desk-v2.js";
-import { FOLLOW_UP_EVIDENCE_KIND_V1, followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
+import { followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
 import {
   AGENTIC_ASK_LIST_LIMIT_MAX_V1,
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
@@ -341,12 +340,6 @@ function listDate(value: string, today: string): string | null {
   base.setUTCDate(base.getUTCDate() - amount * unit);
   return isoDay(base);
 }
-/** Follow-ups take owner and status at the desk, before anything is released or read live (ADR-0040). */
-function followUpSource(source: AgenticResearchSourceV1 | undefined): boolean {
-  return source !== undefined && source.kinds.length === 1 && source.kinds[0] === FOLLOW_UP_EVIDENCE_KIND_V1;
-}
-/** A follow-up has no date of its own, so a dated read of follow-ups is refused before the desk. */
-function followUpDatesError(selector: string): string { return `${selector} have no dates; omit since, until and date_field`; }
 /**
  * A list request after normalization. `applied` says how the selection applies each filter field the model asked for
  * (ADR-0041): a field this source cannot apply is `ignored`, with a note, and absent from the selection. `limit` is how
@@ -362,7 +355,6 @@ type ListArgs = EvidenceDateFilterV1 & {
  * is a result, never an error: nothing was read, and `supports` says what the source does take.
  */
 type ReadRefusal = { readonly refused: { readonly field: AgenticListFilterFieldV1; readonly reason: string; readonly supports: Readonly<Record<string, unknown>> } };
-/** What a refusal shows of a source's capabilities. */
 /** Two copies' links, each name's ids once, in the order first seen. */
 function linksUnion(left: EvidenceDeskItemV2["links"], right: EvidenceDeskItemV2["links"]): EvidenceDeskItemV2["links"] {
   if (left === undefined || right === undefined) return left ?? right;
@@ -370,8 +362,27 @@ function linksUnion(left: EvidenceDeskItemV2["links"], right: EvidenceDeskItemV2
   for (const [name, ids] of Object.entries(right)) union[name] = Object.freeze([...new Set([...(union[name] ?? []), ...ids])]);
   return Object.freeze(union);
 }
+/** What a refusal shows of a source's capabilities. */
 function supportsOf(capabilities: EvidenceSourceCapabilitiesV1): Readonly<Record<string, unknown>> {
   return Object.freeze({ filters: capabilities.filters, dates: Object.keys(capabilities.dates), any_date: capabilities.any_date });
+}
+/** A read refused for one field, naming its source and what the source does take. */
+function readRefusal(source: AgenticResearchSourceV1, capabilities: EvidenceSourceCapabilitiesV1, field: AgenticListFilterFieldV1, reason: string): ReadRefusal {
+  return { refused: Object.freeze({ field, reason: `${source.selector}: ${reason}`, supports: supportsOf(capabilities) }) };
+}
+/**
+ * The dates a search or list asks of a source its capabilities do not take: a date field it does not record, or a window
+ * when it records no dates. `askedField` is the read's date_field, "any" already read as none where the source takes any.
+ */
+function dateRefusal(source: AgenticResearchSourceV1, capabilities: EvidenceSourceCapabilitiesV1, askedField: string | undefined, args: StepArgs): ReadRefusal | undefined {
+  const declared = Object.keys(capabilities.dates);
+  const none = "it records no dates to filter by";
+  if (askedField !== undefined) return declared.includes(askedField) ? undefined : readRefusal(source, capabilities, "date_field", declared.length === 0 ? none : `date_field must be ${declared.join(", ")}`);
+  return (args.since !== undefined || args.until !== undefined) && declared.length === 0 ? readRefusal(source, capabilities, args.since !== undefined ? "since" : "until", none) : undefined;
+}
+/** A refused read's result, for search and list alike. */
+function refusedResult(tool: "search" | "list", args: StepArgs, { refused: { field, reason, supports } }: ReadRefusal): ToolResult {
+  return { tool, args, refused: true, filters: { [field]: "refused" }, supports, note: `refused: ${reason}` };
 }
 /** One inventory per normalized selection: notes and ignored filters never start another, owner matching ignores case, and a limit is one call's page. */
 function listKey({ notes: _notes, applied: _applied, limit: _limit, status, owner, ...request }: ListArgs): string {
@@ -382,9 +393,7 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
   if (source === undefined) return { error: `source must be ${[...sources.values()].map(value => value.selector).join(", ")}` };
   const descriptor = sources.get(source)!;
   if (ask && descriptor.capabilities !== undefined) return normalizeAskListArgs(raw, today, descriptor, descriptor.capabilities);
-  const followUps = followUpSource(descriptor);
-  // owner and status filter meeting actions here, after each page, and follow-ups at the desk.
-  const filterable = [...sources.values()].some(followUpSource) ? "meeting actions and follow-ups" : "meeting actions";
+  // owner and status filter meeting actions here, after each page.
   const notes: string[] = [];
   const applied: FilterApplication = {};
   let kinds: EvidenceDeskKindV2[] | undefined;
@@ -397,16 +406,16 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
   let status: "open" | "done" | undefined;
   if (raw.status !== undefined) {
     const group = statusGroup(raw.status);
-    if (source !== "meeting" && !followUps) { notes.push(`status applies to ${filterable} only; ignored`); applied.status = "ignored"; }
+    if (source !== "meeting") { notes.push("status applies to meeting actions only; ignored"); applied.status = "ignored"; }
     else if (group === null) return { error: "status must be \"open\" or \"done\"" };
-    else { status = group; applied.status = "applied"; if (!followUps) kinds ??= ["action"]; }
+    else { status = group; applied.status = "applied"; kinds ??= ["action"]; }
   }
   let owner: string | undefined;
   if (raw.owner !== undefined) {
     const name = raw.owner.trim().replace(/^@/u, "").trim();
-    if (source !== "meeting" && !followUps) { notes.push(`owner applies to ${filterable} only; ignored`); applied.owner = "ignored"; }
+    if (source !== "meeting") { notes.push("owner applies to meeting actions only; ignored"); applied.owner = "ignored"; }
     else if (name.length === 0 || name.length > 80) return { error: "owner must be a person's name such as \"Dana\"" };
-    else { owner = name; applied.owner = "applied"; if (!followUps) kinds ??= ["action"]; }
+    else { owner = name; applied.owner = "applied"; kinds ??= ["action"]; }
   }
   let channel: string | undefined;
   if (raw.channel !== undefined) {
@@ -416,7 +425,6 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
     else { channel = name; applied.channel = "applied"; }
   }
   if (descriptor.requires_channel && channel === undefined) return { error: `${descriptor.selector} needs a channel, such as ${JSON.stringify({ source: descriptor.selector, channel: "hw-dvt" })}` };
-  if (followUps && (raw.since !== undefined || raw.until !== undefined || raw.date_field !== undefined)) return { error: followUpDatesError(descriptor.selector) };
   const since = raw.since === undefined ? undefined : listDate(raw.since, today);
   const until = raw.until === undefined ? undefined : listDate(raw.until, today);
   if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21 or an age like 7d or 2w" };
@@ -444,47 +452,39 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
 function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticResearchSourceV1, capabilities: EvidenceSourceCapabilitiesV1): ListArgs | ReadRefusal | { readonly error: string } {
   const notes: string[] = [];
   const applied: FilterApplication = {};
-  const refuse = (field: AgenticListFilterFieldV1, reason: string): ReadRefusal => ({ refused: Object.freeze({ field, reason: `${descriptor.selector}: ${reason}`, supports: supportsOf(capabilities) }) });
   const ignore = (field: AgenticListFilterFieldV1) => { notes.push(`${descriptor.selector} takes no ${field}; ignored`); applied[field] = "ignored"; };
-  const values = (name: EvidenceFilterNameV1): readonly string[] | "name" | "text" | undefined => capabilities.filters[name];
+  /** A filter whose values the source lists: ignored where it takes none, refused outside its values, otherwise applied. */
+  const listed = (field: "kind" | "status" | "role", value: string | undefined, join: string): string | ReadRefusal | undefined => {
+    if (value === undefined) return undefined;
+    const allowed = capabilities.filters[field];
+    if (allowed === undefined) { ignore(field); return undefined; }
+    if (!Array.isArray(allowed) || !allowed.includes(value)) return readRefusal(descriptor, capabilities, field, `${field} must be ${Array.isArray(allowed) ? allowed.join(join) : `a ${field} it lists`}`);
+    applied[field] = "applied";
+    return value;
+  };
   const meeting = descriptor.source_id === "meeting";
-  let kinds: EvidenceDeskKindV2[] | undefined;
-  if (raw.kind !== undefined) {
-    const allowed = values("kind");
-    const kind = MEETING_KINDS[raw.kind.trim().toLowerCase()] ?? raw.kind.trim().toLowerCase();
-    if (allowed === undefined) ignore("kind");
-    else if (!Array.isArray(allowed) || !allowed.includes(kind)) return refuse("kind", `kind must be ${Array.isArray(allowed) ? allowed.join(", ") : "a kind it lists"}`);
-    else { kinds = [kind as EvidenceDeskKindV2]; applied.kind = "applied"; }
-  }
-  let status: ListArgs["status"];
-  if (raw.status !== undefined) {
-    const allowed = values("status");
-    // A source's own value wins ("active" is a project's status); otherwise a loose word reads as open or done.
-    const literal = raw.status.trim().toLowerCase();
-    const value = Array.isArray(allowed) && allowed.includes(literal) ? literal : statusGroup(raw.status) ?? literal;
-    if (allowed === undefined) ignore("status");
-    else if (!Array.isArray(allowed) || !allowed.includes(value)) return refuse("status", `status must be ${Array.isArray(allowed) ? allowed.join(" or ") : "a status it lists"}`);
-    else { status = value as ListArgs["status"]; applied.status = "applied"; if (meeting) kinds ??= ["action"]; }
-  }
+  const kind = listed("kind", raw.kind === undefined ? undefined : MEETING_KINDS[raw.kind.trim().toLowerCase()] ?? raw.kind.trim().toLowerCase(), ", ");
+  if (typeof kind === "object") return kind;
+  let kinds: EvidenceDeskKindV2[] | undefined = kind === undefined ? undefined : [kind as EvidenceDeskKindV2];
+  // A source's own value wins ("active" is a project's status); otherwise a loose word reads as open or done.
+  const literal = raw.status?.trim().toLowerCase();
+  const statuses = capabilities.filters.status;
+  const status = listed("status", literal === undefined || (Array.isArray(statuses) && statuses.includes(literal)) ? literal : statusGroup(literal) ?? literal, " or ");
+  if (typeof status === "object") return status;
+  if (status !== undefined && meeting) kinds ??= ["action"];
   let owner: string | undefined;
   if (raw.owner !== undefined) {
     const name = raw.owner.trim().replace(/^@/u, "").trim();
-    if (values("owner") === undefined) ignore("owner");
+    if (capabilities.filters.owner === undefined) ignore("owner");
     else if (name.length === 0 || name.length > 80) return { error: "owner must be a person's name such as \"Dana\"" };
     else { owner = name; applied.owner = "applied"; if (meeting) kinds ??= ["action"]; }
   }
-  let role: ListArgs["role"];
-  if (raw.role !== undefined) {
-    const allowed = values("role");
-    const value = raw.role.trim().toLowerCase();
-    if (allowed === undefined) ignore("role");
-    else if (!Array.isArray(allowed) || !allowed.includes(value)) return refuse("role", `role must be ${Array.isArray(allowed) ? allowed.join(" or ") : "a role it lists"}`);
-    else { role = value as ListArgs["role"]; applied.role = "applied"; }
-  }
+  const role = listed("role", raw.role?.trim().toLowerCase(), " or ");
+  if (typeof role === "object") return role;
   let channel: string | undefined;
   if (raw.channel !== undefined) {
     const name = raw.channel.trim().replace(/^#/u, "").trim();
-    if (!descriptor.requires_channel && values("channel") === undefined) ignore("channel");
+    if (!descriptor.requires_channel && capabilities.filters.channel === undefined) ignore("channel");
     else if (name.length === 0 || name.length > 80) return { error: "channel must be a channel name such as \"hw-dvt\"" };
     else { channel = name; applied.channel = "applied"; }
   }
@@ -494,17 +494,11 @@ function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticR
   if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21" };
   try { validateEvidenceDateFilterV1({ since: since ?? undefined, until: until ?? undefined }); }
   catch (error) { return { error: error instanceof Error ? error.message : 'Invalid date filter' }; }
-  const declared = Object.keys(capabilities.dates) as EvidenceDateFieldV1[];
-  let dateField: EvidenceDateSelectionV1 | undefined;
   // "any" is what leaving date_field out means where the source reads any of its dates: the same request.
   const askedField = raw.date_field === EVIDENCE_ANY_DATE_V1 && capabilities.any_date ? undefined : raw.date_field;
-  if (askedField !== undefined) {
-    if (!declared.includes(askedField as EvidenceDateFieldV1)) return refuse("date_field", declared.length === 0 ? "it records no dates to filter by" : `date_field must be ${declared.join(", ")}`);
-    dateField = askedField as EvidenceDateFieldV1;
-  } else if (since != null || until != null) {
-    if (declared.length === 0) return refuse(since != null ? "since" : "until", "it records no dates to filter by");
-    if (capabilities.any_date) dateField = EVIDENCE_ANY_DATE_V1;
-  }
+  const refusedDate = dateRefusal(descriptor, capabilities, askedField, raw);
+  if (refusedDate !== undefined) return refusedDate;
+  const dateField: EvidenceDateSelectionV1 | undefined = askedField !== undefined ? askedField as EvidenceDateFieldV1 : (since != null || until != null) && capabilities.any_date ? EVIDENCE_ANY_DATE_V1 : undefined;
   let limit: number | undefined;
   if (raw.limit !== undefined) {
     limit = Number(raw.limit);
@@ -516,9 +510,9 @@ function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticR
   if (askedField !== undefined) applied.date_field = "applied";
   return {
     source: descriptor.source_id, notes, applied, ...(dateField === undefined ? {} : { date_field: dateField }),
-    ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(role === undefined ? {} : { role }),
-    ...(channel === undefined ? {} : { channel }), ...(defaultSince === undefined ? {} : { since: defaultSince }), ...(until === undefined || until === null ? {} : { until }),
-    ...(limit === undefined ? {} : { limit }),
+    ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status: status as ListArgs["status"] }), ...(owner === undefined ? {} : { owner }),
+    ...(role === undefined ? {} : { role: role as ListArgs["role"] }), ...(channel === undefined ? {} : { channel }), ...(defaultSince === undefined ? {} : { since: defaultSince }),
+    ...(until === undefined || until === null ? {} : { until }), ...(limit === undefined ? {} : { limit }),
   };
 }
 
@@ -684,14 +678,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // "any" is what leaving date_field out means wherever a window reads any date: the same request.
     const askedField = args.date_field === EVIDENCE_ANY_DATE_V1 && ask && (source === undefined || capabilities?.any_date === true) ? undefined : args.date_field;
     if (askedField !== undefined && source === undefined) return { tool: 'search', args, error: 'Choose a source when selecting date_field; sources support different date meanings' };
+    const refused = capabilities === undefined ? undefined : dateRefusal(sourcesById.get(source!)!, capabilities, askedField, args);
+    if (refused !== undefined) return refusedResult('search', args, refused);
     const windowed = args.since !== undefined || args.until !== undefined;
-    if (capabilities !== undefined) {
-      const declared = Object.keys(capabilities.dates);
-      const selector = sourcesById.get(source!)!.selector;
-      const refused = (field: AgenticListFilterFieldV1, reason: string): ToolResult => ({ tool: 'search', args, refused: true, filters: { [field]: 'refused' }, supports: supportsOf(capabilities), note: `refused: ${selector}: ${reason}` });
-      if (askedField !== undefined && !declared.includes(askedField)) return refused('date_field', declared.length === 0 ? 'it records no dates to filter by' : `date_field must be ${declared.join(', ')}`);
-      if (askedField === undefined && windowed && declared.length === 0) return refused(args.since !== undefined ? 'since' : 'until', 'it records no dates to filter by');
-    } else if (source !== undefined && followUpSource(sourcesById.get(source)) && (windowed || askedField !== undefined)) return { tool: 'search', args, error: followUpDatesError(sourcesById.get(source)!.selector) };
     // Across sources, Ask's window reads any of each item's dates too; the desk keeps a source that reads one date to it.
     const anyDate = windowed && askedField === undefined && (capabilities?.any_date === true || (ask && source === undefined));
     const dates = { ...(args.since === undefined ? {} : { since: listDate(args.since, requestDay) ?? args.since }), ...(args.until === undefined ? {} : { until: listDate(args.until, requestDay) ?? args.until }), ...(askedField === undefined ? (anyDate ? { date_field: EVIDENCE_ANY_DATE_V1 } : {}) : { date_field: askedField as EvidenceDateFieldV1 }), ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }) };
@@ -795,14 +784,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (!listAvailable) return { tool: "list", args, error: LIST_UNAVAILABLE };
     const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource, ask);
     if ("error" in normalized) return { tool: "list", args, error: normalized.error };
-    if ("refused" in normalized) {
-      const { field, reason, supports } = normalized.refused;
-      return { tool: "list", args, refused: true, filters: { [field]: "refused" }, supports, note: `refused: ${reason}` };
-    }
+    if ("refused" in normalized) return refusedResult("list", args, normalized);
     const { notes, applied, status, owner, role, limit, ...selection } = normalized;
-    // Follow-ups and the workspace sources filter at the desk, before anything is released; meeting actions are filtered
-    // here, after each page. For Ask a source's own filters are the desk's, except meetings' (research tool contract v1).
-    const deskFilters = followUpSource(sourcesById.get(selection.source)) || (ask && selection.source !== "meeting" && sourcesById.get(selection.source)?.capabilities !== undefined);
+    // For Ask a source's own filters are the desk's, applied before anything is released, except meetings': meeting actions
+    // are filtered here, after each page (research tool contract v1).
+    const deskFilters = ask && selection.source !== "meeting" && sourcesById.get(selection.source)?.capabilities !== undefined;
     const request = {
       ...selection, ...(deskFilters && status !== undefined ? { status } : {}), ...(deskFilters && owner !== undefined ? { owner } : {}), ...(role === undefined ? {} : { role }),
       ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }),
