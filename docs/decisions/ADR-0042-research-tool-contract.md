@@ -218,9 +218,12 @@ the desk (`normalizeAskListArgs` and the search date checks in
   containers the asker's own connection can see. Research lists them, searches
   them by key, name and the names of the ECHO projects mapped to them, and opens
   one by an exact read through that connection. A container's text names the
-  mapped ECHO projects the asker can see: ten, then how many more. A project
-  Ask reads only the containers its lead mapped, and an unmapped project reads
-  none. They refuse a date window.
+  mapped ECHO projects the asker can see, whole names only, then how many more.
+  A project Ask reads only the containers its lead mapped, and an unmapped
+  project reads none. They refuse a date window. A row that fails validation
+  is left out, never released or named, and the result says some could not be
+  shown, so a list that left one out is never complete. Only "not found"
+  leaves a container out; a credential rejection fails the read.
 - **Bounds.** Per call, a workspace source returns at most 10 search hits or
   20 list rows and releases at most 100 items beside them, and a container
   source at most 10 search hits or 25 list rows. A project names at most 50

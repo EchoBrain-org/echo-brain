@@ -180,15 +180,18 @@ readers to the dates their sources declare.
   (`providers/shared/src/person-tool-container-reader-v1.ts`) keeps handles
   and cursors in the request, labels a container by its name with its key and
   tool as attributes, cites it with its permalink, and rechecks every distinct
-  release.
+  release. A row that fails validation is left out and counted, and the result
+  carries a notice that some could not be shown; a credential rejection fails
+  the read, and only "not found" leaves a container out.
 - **Project names.** `PersonLiveConnectorDefinitionV1.open` takes an optional
   third argument, `project_names` (`PersonContextProjectNamesV1`): the current
   names of those ECHO projects the asker can see, read locally with no
   provider call. A connector whose containers name their mapped ECHO projects
   reads it; any other ignores it. The API runtime supplies it from the asker's
   own project list, in one read transaction with no release. A connection pins
-  the names when its container source opens, and its fence refuses once they
-  change.
+  the names when its container source opens, reading each mapped project's
+  grant once; every later fence reads the mappings once and asks for all their
+  names at once, and refuses once they change.
 - **Project settings.** A tool's item connector also carries its project
   setting, so the workspace's projects source names each project's Jira
   project key and Confluence space count from that tool's own project read,
