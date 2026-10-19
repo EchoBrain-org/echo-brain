@@ -1,4 +1,4 @@
-import { evidenceDateFilterV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import { evidenceDateFilterV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, EVIDENCE_ANY_DATE_V1, type EvidenceDateFieldV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
@@ -25,9 +25,12 @@ const REVALIDATION_BATCH_SIZE = 50;
 const LIST_STATUSES = Object.freeze(['current', 'archived', 'deleted', 'trashed']);
 const STATUSES = Object.freeze([...LIST_STATUSES, 'draft', 'historical']);
 const EMPTY_DIGEST = sha256Digest('');
-/** A page's dates, and the ones a window on any date reads; CQL calls the updated one lastmodified. */
-const DATE_SELECTIONS = Object.freeze(['created', 'updated', 'any'] as const);
-const CQL_DATE_FIELDS = Object.freeze({ created: 'created', updated: 'lastmodified' } as const);
+/**
+ * The dates a page records, by their CQL names, and a window on any of them (research tool contract v1). The Confluence
+ * connector's registered capabilities declare exactly these.
+ */
+const CQL_DATE_FIELDS: Readonly<Partial<Record<EvidenceDateFieldV1, string>>> = Object.freeze({ created: 'created', updated: 'lastmodified' });
+const DATE_SELECTIONS = Object.freeze([...Object.keys(CQL_DATE_FIELDS) as EvidenceDateFieldV1[], EVIDENCE_ANY_DATE_V1]);
 type Page = Readonly<{ dates: EvidenceDatesV1; id: string; space_id: string; title: string; version: string; status: string; occurred_at?: string; date_kind?: 'created' | 'version_created'; document?: string }>;
 type Item = Readonly<{ page: Page; section: string; offset: number; text?: string }>;
 type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token: string }>;
@@ -192,7 +195,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
   }
   async function cql(query: string | undefined, since: string | undefined, until: string | undefined, signal?: AbortSignal, selection: EvidenceDateFilterV1 = {}): Promise<string | undefined> {
     // A window on any date is an OR of the same window on each date a page records.
-    const fields: readonly string[] = selection.date_field === 'any' ? Object.values(CQL_DATE_FIELDS) : [selection.date_field === 'created' ? CQL_DATE_FIELDS.created : CQL_DATE_FIELDS.updated];
+    const fields: readonly string[] = selection.date_field === EVIDENCE_ANY_DATE_V1 ? Object.values(CQL_DATE_FIELDS) : [CQL_DATE_FIELDS[selection.date_field ?? 'updated']!];
     const keys = await spaceKeys(signal);
     if (keys?.length === 0) return undefined;
     const clauses = ['type = page'];

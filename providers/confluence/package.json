@@ -5,6 +5,10 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./confluence-person-live-evidence-reader-v1": {
+      "types": "./dist/confluence-person-live-evidence-reader-v1.d.ts",
+      "import": "./dist/confluence-person-live-evidence-reader-v1.js"
+    },
     "./confluence-person-connection-v1": {
       "types": "./dist/confluence-person-connection-v1.d.ts",
       "import": "./dist/confluence-person-connection-v1.js"

@@ -1,4 +1,4 @@
-import { evidenceDateFilterV1, evidenceDayV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import { evidenceDateFilterV1, evidenceDayV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, EVIDENCE_ANY_DATE_V1, type EvidenceDateFieldV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
@@ -83,9 +83,12 @@ function shiftDay(day: string, days: number): string | undefined {
   return /^\d{4}-\d{2}-\d{2}$/.test(shifted) ? shifted : undefined;
 }
 
-/** The date fields a Jira issue records, and the ones a window on any date reads. */
-const DATE_FIELDS = Object.freeze(["created", "updated", "due"] as const);
-const DATE_SELECTIONS = Object.freeze([...DATE_FIELDS, "any"] as const);
+/**
+ * The dates a Jira issue records, by their JQL names, and a window on any of them (research tool contract v1). The Jira
+ * connector's registered capabilities declare exactly these.
+ */
+const DATE_FIELDS: readonly EvidenceDateFieldV1[] = Object.freeze(["created", "updated", "due"]);
+const DATE_SELECTIONS = Object.freeze([...DATE_FIELDS, EVIDENCE_ANY_DATE_V1]);
 
 /**
  * Inventory JQL. JQL dates use the account timezone, so the date bounds are
