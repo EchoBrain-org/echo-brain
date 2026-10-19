@@ -534,8 +534,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const listAvailable = brief.options.list !== false;
   /** A question goal (Ask) keeps every list it reads as evidence of which items exist (ADR-0041); a task goal does not. */
   const ask = brief.goal.kind === "question";
-  // Only Ask is shown sources' capabilities (research tool contract v1): a task goal's catalog, and prompt, are unchanged.
-  const askedCatalog = ask ? options.catalog.entries : options.catalog.entries.map(({ capabilities: _capabilities, ...entry }) => Object.freeze(entry));
+  // Only Ask is shown sources' capabilities (research tool contract v1). A task goal's catalog says a connected tool's date
+  // fields in its description, as the tool's description did before its capabilities said them; nothing else changes.
+  const askedCatalog = ask ? options.catalog.entries : options.catalog.entries.map(({ capabilities, ...entry }) => {
+    const dates = entry.tool_id === undefined || capabilities === undefined ? [] : Object.keys(capabilities.dates);
+    return Object.freeze(dates.length === 0 ? entry : { ...entry, description: `${entry.description} Date filters support date_field ${dates.length === 1 ? dates[0] : `${dates.slice(0, -1).join(', ')} or ${dates.at(-1)}`}.` });
+  });
   const sourceCatalog: readonly AgenticResearchCatalogEntryV1[] = listAvailable ? Object.freeze(askedCatalog)
     : Object.freeze(askedCatalog.map(({ metadata_only_list: _metadata, requires_channel: _channel, default_since_days: _since, ...entry }) => Object.freeze(entry)));
   const budget = brief.budget;

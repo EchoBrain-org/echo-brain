@@ -517,29 +517,40 @@ describe('workspace sources (research tool contract v1)', () => {
     await expect(desk.search({ source: 'people', query: 'mina', kinds: ['project'] })).rejects.toMatchObject({ code: 'unauthorized' });
   });
 
-  it('reads the workspace in a keyword search across sources, with only the items beside the rows it keeps, and none of it in a dated one', async () => {
+  it('reads the asker\'s projects in a search across sources after the content sources, with only the items beside the rows it keeps', async () => {
     const f = fixture(); const w = workspace();
+    const meeting: EvidenceDeskItemV1 = { id: 'local-1', kind: 'note', label: 'Atlas kickoff', text: 'Atlas kickoff', visibility: 'team', receipt_sha256: receipt('local'),
+      citation: { kind: 'source_revision', source_id: `source:${'1'.repeat(64)}`, revision_id: 'revision-1', source_sha256: receipt('source'), representation_sha256: receipt('representation'), anchor_sha256: receipt('anchor-1') } };
+    vi.mocked(f.base.search).mockResolvedValue({ items: [meeting], truncated: false, receipt_digests: [receipt('local')] });
     const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [], undefined, w.sources);
-    // One row from each source first: Atlas, Mina and Jira, then Beacon would come fourth.
-    const found = await desk.search({ query: 'atlas', limit: 3 });
-    expect(found.items.map(value => value.id)).toEqual(['project_atlas', 'person_mina', 'tool_jira']);
-    // Mina is a row, so only Atlas's other link could come beside, and Rafael's project, Beacon, was left out.
-    expect(found.linked).toBeUndefined();
+    // What was said comes first; the projects fill what is left. People and tools are searched only when named.
+    const found = await desk.search({ query: 'atlas', limit: 2 });
+    expect(found.items.map(value => value.id)).toEqual(['local-1', 'project_atlas']);
+    expect(found.linked!.map(value => [value.id, value.source_id])).toEqual([['person_mina', 'people']]);
     expect(found.truncated).toBe(true);
     const wider = await desk.search({ query: 'atlas', limit: 4 });
-    expect(wider.items.map(value => value.id)).toEqual(['project_atlas', 'person_mina', 'tool_jira', 'project_beacon']);
-    expect(wider.linked!.map(value => [value.id, value.source_id])).toEqual([['person_rafael', 'people']]);
-    for (const call of [w.projects.search, w.people.search, w.tools.search]) call.mockClear();
+    expect(wider.items.map(value => value.id)).toEqual(['local-1', 'project_atlas', 'project_beacon']);
+    expect(wider.linked!.map(value => value.id)).toEqual(['person_mina', 'person_rafael']);
+    expect(w.people.search).not.toHaveBeenCalled(); expect(w.tools.search).not.toHaveBeenCalled();
+    // Projects record when they were created, so a dated search reads them on that date; a search with no words reads none.
+    w.projects.search.mockClear();
     await desk.search({ query: 'atlas', since: '2026-10-01' });
+    expect(w.projects.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'atlas', since: '2026-10-01' }));
+    w.projects.search.mockClear();
     await desk.search({ limit: 5, inventory_mode: 'items' });
-    for (const call of [w.projects.search, w.people.search, w.tools.search]) expect(call).not.toHaveBeenCalled();
+    expect(w.projects.search).not.toHaveBeenCalled();
     // A kind names the sources that serve it; ECHO's own desk is not asked for a workspace kind.
     vi.mocked(f.base.search).mockClear();
     await desk.search({ query: 'atlas', kinds: ['project'] });
-    expect(w.projects.search).toHaveBeenCalledOnce(); expect(w.people.search).not.toHaveBeenCalled(); expect(f.base.search).not.toHaveBeenCalled();
+    expect(w.projects.search).toHaveBeenCalledOnce(); expect(f.base.search).not.toHaveBeenCalled();
+    // A workspace source briefly unavailable becomes a coverage notice beside what the others found.
+    w.projects.search.mockRejectedValueOnce(new AuthorityOperationError('unavailable', 'busy'));
+    const noticed = await desk.search({ query: 'atlas', limit: 4 });
+    expect(noticed.items.map(value => value.id)).toEqual(['local-1']);
+    expect(noticed.notice).toBe('Your projects could not be searched just now, so these results leave them out.');
   });
 
-  it('leaves a source with no dates out of a dated search across sources, and a tool\'s containers out of one with no words', async () => {
+  it('leaves a source with no dates out of a dated search across sources, and a tool\'s containers out of every search across them', async () => {
     const f = fixture();
     const containers: PersonLiveEvidenceSourceV1 = { tool_id: 'jira', search: vi.fn(async () => empty), open: vi.fn(async () => empty), list: vi.fn(async () => empty), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) };
     const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [
@@ -551,11 +562,16 @@ describe('workspace sources (research tool contract v1)', () => {
     expect(f.ticket.search).toHaveBeenCalledOnce(); expect(f.base.search).toHaveBeenCalledOnce(); expect(containers.search).not.toHaveBeenCalled();
     await desk.search({ limit: 5, inventory_mode: 'items' });
     expect(f.ticket.list).toHaveBeenCalledOnce(); expect(containers.list).not.toHaveBeenCalled();
+    // A tool's containers are searched only when named: each search scans the tool's projects or spaces.
     await desk.search({ query: 'atlas' });
-    expect(containers.search).toHaveBeenCalledOnce();
+    expect(containers.search).not.toHaveBeenCalled();
     // Chosen, a source answers as its reader does, dates included.
     await desk.search({ source: 'jira_projects', query: 'atlas', since: '2026-10-01' });
     expect(containers.search).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'atlas', since: '2026-10-01' }));
+    // A window on any date reaches a source that reads one date only as its own default date.
+    await desk.search({ query: 'atlas', since: '2026-10-01', date_field: 'any' });
+    expect(f.ticket.search).toHaveBeenLastCalledWith(expect.not.objectContaining({ date_field: expect.anything() }));
+    expect(f.base.search).toHaveBeenLastCalledWith(expect.objectContaining({ date_field: 'any' }));
   });
 
   it('refuses workspace reads on a desk that bound no workspace', async () => {
@@ -586,9 +602,9 @@ describe('workspace sources (research tool contract v1)', () => {
     // A workspace release no longer the asker's fails the check.
     w.people.revalidate.mockImplementation(() => { throw new AuthorityOperationError('stale_access_state', 'A workspace item is no longer available to this person'); });
     await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
-    // With no live source, the local checks still run, after the tools check.
+    // With no live source, the tools check comes first, so the base check is the last await before the local checks.
     order.length = 0; w.people.revalidate.mockImplementation(() => { order.push('people'); });
     await createRegisteredPersonLiveEvidenceDeskV2(f.base, [], undefined, w.sources).revalidate({});
-    expect(order).toEqual(['base', 'tools', 'projects', 'people']);
+    expect(order).toEqual(['tools', 'base', 'projects', 'people']);
   });
 });

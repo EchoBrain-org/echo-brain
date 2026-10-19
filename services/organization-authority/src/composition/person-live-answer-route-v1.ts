@@ -71,6 +71,9 @@ export async function bindPersonLiveEvidenceDeskV1(
   context: PersonLiveRequestContextV1,
 ) {
   const { scope } = input;
+  // One release witness for the request's live sources: two sources on one connection (a tool's items and its containers)
+  // share its sequence, so two empty releases in the same millisecond never write the same witness.
+  const liveAudit = options.audit.forLiveRequest(context);
   // Each binding verifies its own connection, so sources bind concurrently.
   // They register in catalog order, and the first failure in that order is
   // the request's failure, exactly as when they bound one after another.
@@ -80,7 +83,7 @@ export async function bindPersonLiveEvidenceDeskV1(
       if (scope.kind === 'mine' || !selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return undefined; }
       const source = await selected.application.source({
         ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}),
-        access_token: input.access_token, audit: options.audit.forLiveRequest(context),
+        access_token: input.access_token, audit: liveAudit,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       input.signal?.throwIfAborted();

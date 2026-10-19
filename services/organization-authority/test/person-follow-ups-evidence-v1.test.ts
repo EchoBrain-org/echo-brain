@@ -452,19 +452,21 @@ describe('follow-ups as an Ask source: checks and audit (ADR-0040, ADR-0038)', (
 });
 
 describe('follow-ups on the request desk (ADR-0040)', () => {
-  it('joins a keyword search across sources, never a dated one, and is advertised only where bound', async () => {
+  it('joins a keyword search across sources, dated too, on its own dates, and is advertised only where bound', async () => {
     const f = await sentFixture();
     const bound = askDesk(f, 'mina');
     expect(bound.desk.live_sources).toEqual([expect.objectContaining({ source_id: 'jira' }), FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]);
     expect(titles(await bound.desk.search({ query: 'launch', limit: 8 }))).toEqual(['launch next week']);
-    expect((await bound.desk.search({ query: 'launch', limit: 8, since: '2026-10-01' })).items).toEqual([]);
-    expect(bound.audits()).toHaveLength(1);
+    // A window on any of its dates finds it; one after all of them does not (research tool contract v1).
+    expect(titles(await bound.desk.search({ query: 'launch', limit: 8, since: '2026-10-01', date_field: 'any' }))).toEqual(['launch next week']);
+    expect((await bound.desk.search({ query: 'launch', limit: 8, since: '2027-01-01', date_field: 'any' })).items).toEqual([]);
+    expect(bound.audits()).toHaveLength(3);
     // Meeting kinds alone never reach follow-ups, nor follow-up kinds the meetings.
     await bound.desk.search({ query: 'launch', kinds: ['decision'], limit: 8 });
-    expect(bound.audits()).toHaveLength(1);
+    expect(bound.audits()).toHaveLength(3);
     await bound.desk.search({ query: 'launch', kinds: ['follow_up'], limit: 8 });
-    expect(bound.audits()).toHaveLength(2);
-    expect(bound.base.search).toHaveBeenCalledTimes(3);
+    expect(bound.audits()).toHaveLength(4);
+    expect(bound.base.search).toHaveBeenCalledTimes(4);
     // Owner and status are never sent to another source: one that cannot apply them refuses the read rather than answer
     // wider than asked (ADR-0041).
     await expect(bound.desk.list({ source: 'meeting', owner: 'me', status: 'open', limit: 10 })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source cannot be filtered by owner, status or role' });

@@ -179,7 +179,7 @@ describe('Ask research tool contract v1: review fixes', () => {
 
   it('searches every source on any date across sources, and replaces which dates matched with each dated read', async () => {
     const both = decision('both', { occurred: '2026-10-10T09:00:00.000Z', approved: '2026-10-18T09:00:00.000Z' });
-    const search = vi.fn(async () => result([both]));
+    const search = vi.fn(async (_input: Parameters<EvidenceDeskPortV2['search']>[0]) => result([both]));
     const port = desk({ search });
     const run = scripted([
       step([{ tool: 'search', args: { query: 'launch', since: '2026-10-18', until: '2026-10-18' } }]),
