@@ -106,6 +106,19 @@ describe('Confluence spaces as a tool container source (research tool contract v
     expect(f.spaceLists()).toEqual([]);
   });
 
+  it('pages a project scope\'s spaces by the limit asked for, counting only spaces the asker can view', async () => {
+    const f = fixture({ pinned: ['42', '43', '44', '45'] }); f.state.hidden.add('43');
+    f.state.spaces.push({ id: '45', key: 'QA', name: 'Quality' });
+    const source = await f.make();
+    const first = await source.list({ limit: 2 });
+    expect(first.items.map(item => item.label)).toEqual(['Echo Product', 'Operations']);
+    expect(first).toMatchObject({ truncated: true, next_cursor: expect.any(String) });
+    const second = await source.list({ limit: 2, cursor: first.next_cursor });
+    expect(second.items.map(item => item.label)).toEqual(['Quality']);
+    expect(second).toMatchObject({ truncated: false, page_full: false });
+    expect(second).not.toHaveProperty('next_cursor');
+  });
+
   it('refuses a date window or a container selector before any provider read', async () => {
     const f = fixture(); const source = await f.make(); f.fetch.mockClear();
     for (const dates of [{ since: '2026-10-01' }, { until: '2026-10-01' }, { date_field: 'updated' as const }]) {

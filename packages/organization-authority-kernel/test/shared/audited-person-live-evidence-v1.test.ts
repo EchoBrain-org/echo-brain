@@ -432,6 +432,14 @@ describe('tool containers and any-date windows at the shared boundary (research 
     expect(JSON.stringify(f.releases)).not.toContain('Launchscope');
   });
 
+  it('still requires a text commitment from every citation but a tool container', async () => {
+    const f = fixture('tickets', page([ticket()]));
+    const { text_sha256: _digest, ...uncommitted } = ticket().citation;
+    f.reader.validateCitation = () => ({ citation: uncommitted as PersonTicketCitationV1, tool_id: 'tickets', external_scope_id: 'tenant-1', coordinates: { object_id: 'ECHO-42' } });
+    await expect(f.make().search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+    expect(f.audit.record).not.toHaveBeenCalled();
+  });
+
   it('bounds a container key like any other attribute', async () => {
     const f = containers(page([{ ...container(), attributes: { key: 'K'.repeat(257), tool: 'Jira' } }]));
     await expect(f.source.list({})).rejects.toMatchObject({ code: 'invalid_output' });

@@ -498,6 +498,17 @@ describe('ECHO project to Jira project setting', () => {
       await expect(source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
     } finally { f.database.close(); }
   });
+  it('fences container reads on the ECHO projects they name, so losing one while a check reads Jira refuses it', async () => {
+    const f = fixture(); try {
+      await f.connected();
+      await f.service.projectSet({ access_token: f.token, request: command() });
+      const source = (await f.service.containerSource({ access_token: f.token, audit: f.audit }))!;
+      await source.list({});
+      f.setHook(url => { if (url.endsWith('/project/10000')) f.setProjectRole(null); });
+      await expect(source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+      expect(() => source.assertCurrent()).toThrow(expect.objectContaining({ code: 'stale_access_state' }));
+    } finally { f.database.close(); }
+  });
   it('reads only the mapped Jira project in a project scope, and nothing for an unmapped project', async () => {
     const f = fixture(); try {
       await f.connected();

@@ -104,31 +104,38 @@ export function createPersonProjectMappingAccessV1<T extends ScopedProjectMappin
     },
     /**
      * The names of the ECHO projects mapped to each of the tool's containers that the asker can see (research tool
-     * contract v1), by container id: `containers` names the containers one mapping on this site maps. A project the
-     * asker cannot see is left out, never named or counted. Without the stores and names, nothing is named.
+     * contract v1), by container id, pinned for one source: `containers` names the containers one mapping on this site
+     * maps. A project the asker cannot see is left out, never named or counted; without the stores and names, nothing is.
+     * `current` refuses once any of them changes (a grant, a mapping or a name), so a container's released text is still
+     * what the asker may see at every fence, including the final synchronous one.
      */
-    containerProjects(token: string, organizationId: string, containers: (mapping: NonNullable<T['mapping']>) => readonly string[]): ReadonlyMap<string, readonly string[]> {
-      const store = options.project_mappings, authorize = options.authorize_project, names = options.project_names;
-      if (store === undefined || authorize === undefined || names === undefined) return new Map();
-      if (store.provider !== provider.id) failure('invalid_request');
-      const visible = new Map<string, readonly string[]>();
-      for (const value of store.list(organizationId)) {
-        if (value.mapping === null) continue;
-        try { authorize(token, value.project_id); }
-        catch (error) {
-          if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) continue;
-          throw error;
+    containerProjects(token: string, organizationId: string, containers: (mapping: NonNullable<T['mapping']>) => readonly string[]) {
+      const read = (): ReadonlyMap<string, readonly string[]> => {
+        const store = options.project_mappings, authorize = options.authorize_project, names = options.project_names;
+        if (store === undefined || authorize === undefined || names === undefined) return new Map();
+        if (store.provider !== provider.id) failure('invalid_request');
+        const visible = new Map<string, readonly string[]>();
+        for (const value of store.list(organizationId)) {
+          if (value.mapping === null) continue;
+          try { authorize(token, value.project_id); }
+          catch (error) {
+            if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) continue;
+            throw error;
+          }
+          visible.set(value.project_id, containers(value.mapping as NonNullable<T['mapping']>));
         }
-        visible.set(value.project_id, containers(value.mapping as NonNullable<T['mapping']>));
-      }
-      const named = visible.size === 0 ? new Map<string, string>() : names(token, [...visible.keys()]);
-      const result = new Map<string, string[]>();
-      for (const [project, ids] of visible) {
-        const name = named.get(project);
-        if (name === undefined) continue;
-        for (const id of ids) result.set(id, [...result.get(id) ?? [], name]);
-      }
-      return result;
+        const named = visible.size === 0 ? new Map<string, string>() : names(token, [...visible.keys()]);
+        const result = new Map<string, string[]>();
+        for (const [project, ids] of visible) {
+          const name = named.get(project);
+          if (name === undefined) continue;
+          for (const id of ids) result.set(id, [...result.get(id) ?? [], name]);
+        }
+        return new Map([...result].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([id, list]) => [id, Object.freeze([...new Set(list)].sort())]));
+      };
+      const names = read();
+      const pinned = canonicalSha256([...names]);
+      return Object.freeze({ names, current: () => { if (canonicalSha256([...read()]) !== pinned) failure('stale_access_state'); } });
     },
   };
 }

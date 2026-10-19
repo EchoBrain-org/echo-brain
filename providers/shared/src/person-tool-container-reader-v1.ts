@@ -88,7 +88,11 @@ export async function createPersonToolContainerReaderV1(options: {
   if (pinned !== undefined && (pinned.length === 0 || pinned.length > PINNED_MAX)) failure('invalid_request');
   const nouns = provider.noun.toLowerCase().split(' ');
   const handles = new Map<string, Released>();
-  const issued = new Map<string, Released>();
+  /**
+   * Every distinct release of each citation. A container's citation commits to no text, so releases of one container
+   * with different names or ECHO projects share it, and each must still be what the asker sees when it is checked.
+   */
+  const issued = new Map<string, readonly Released[]>();
   const cursors = new Map<string, { readonly selection: string; readonly token: string }>();
 
   async function safe<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -149,7 +153,9 @@ export async function createPersonToolContainerReaderV1(options: {
     return Object.freeze(values.map(released => {
       const handle = `tool_container_${randomUUID()}`;
       handles.set(handle, released);
-      issued.set(canonicalSha256(released.value.citation), released);
+      const key = canonicalSha256(released.value.citation);
+      const digest = canonicalSha256(released.value);
+      issued.set(key, Object.freeze([...(issued.get(key) ?? []).filter(previous => canonicalSha256(previous.value) !== digest), released]));
       return Object.freeze({ ...released.value, handle });
     }));
   }
@@ -172,7 +178,7 @@ export async function createPersonToolContainerReaderV1(options: {
     validateCitation(raw: unknown) {
       let citation: ReturnType<typeof validatePersonWorkspaceCitationV1>;
       try { citation = validatePersonWorkspaceCitationV1(raw); } catch { failure('invalid_output'); }
-      const released = citation.kind === 'tool_container' ? issued.get(canonicalSha256(citation)) : undefined;
+      const released = citation.kind === 'tool_container' ? issued.get(canonicalSha256(citation))?.[0] : undefined;
       if (released === undefined) failure('invalid_output');
       return Object.freeze({ citation: released.value.citation, tool_id: binding.tool_id, external_scope_id: binding.external_scope_id,
         coordinates: Object.freeze({ object_id: released.container.id }) });
@@ -212,25 +218,34 @@ export async function createPersonToolContainerReaderV1(options: {
       return safe(async () => {
         await verify(input.signal);
         const echo = options.echo_projects();
+        let containers: readonly PersonToolContainerV1[];
+        let next: string | undefined;
+        let full: boolean;
         if (pinned !== undefined) {
-          // A pinned scope holds at most a few containers, read exactly: its list is complete.
-          const containers = await visibleAll(pinned, input.signal);
-          await verify(input.signal);
-          return Object.freeze({ items: release(containers, echo), truncated: false, page_full: false });
+          // A project scope maps a few containers, each read exactly: its pages hold only those the asker can see, and
+          // its end is known. The continuation is this reader's own offset.
+          const offset = previous === undefined ? 0 : Number(previous.token);
+          const visible = await visibleAll(pinned, input.signal);
+          containers = visible.slice(offset, offset + maximum);
+          next = offset + maximum < visible.length ? String(offset + maximum) : undefined;
+          full = false;
+        } else {
+          const page = await provider.page({ ...(previous === undefined ? {} : { cursor: previous.token }), limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) });
+          if (page.containers.length > maximum || (page.next !== undefined && page.containers.length === 0)) failure('invalid_output');
+          containers = page.containers;
+          next = page.next;
+          // A last page that held its full size cannot confirm the list's end (ADR-0041).
+          full = page.containers.length >= maximum;
         }
-        const page = await provider.page({ ...(previous === undefined ? {} : { cursor: previous.token }), limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-        if (page.containers.length > maximum || (page.next !== undefined && page.containers.length === 0)) failure('invalid_output');
         await verify(input.signal);
-        const items = release(page.containers, echo);
+        const items = release(containers, echo);
         let next_cursor: string | undefined;
-        if (page.next !== undefined) {
+        if (next !== undefined) {
           if (cursors.size >= MAX_HANDLES) failure('unavailable');
           next_cursor = `tool_container_cursor_${randomUUID()}`;
-          cursors.set(next_cursor, Object.freeze({ selection, token: page.next }));
+          cursors.set(next_cursor, Object.freeze({ selection, token: next }));
         }
-        // A last page that held its full size cannot confirm the list's end (ADR-0041).
-        return Object.freeze({ items, truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }),
-          page_full: next_cursor === undefined && page.containers.length >= maximum });
+        return Object.freeze({ items, truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full: next_cursor === undefined && full });
       }, input.signal);
     },
     async open(input): Promise<Page> {
@@ -255,18 +270,22 @@ export async function createPersonToolContainerReaderV1(options: {
         for (const raw of input.citations) {
           let citation: ReturnType<typeof validatePersonWorkspaceCitationV1>;
           try { citation = validatePersonWorkspaceCitationV1(raw); } catch { failure('invalid_request'); }
-          const released = issued.get(canonicalSha256(citation));
-          if (released === undefined) failure('unauthorized');
-          byContainer.set(released.container.id, [...byContainer.get(released.container.id) ?? [], released]);
+          const releases = issued.get(canonicalSha256(citation));
+          if (releases === undefined) failure('unauthorized');
+          for (const released of releases) byContainer.set(released.container.id, [...byContainer.get(released.container.id) ?? [], released]);
         }
-        // What was released must still be what the asker sees now: the container, its link, and the ECHO projects named.
-        const echo = options.echo_projects();
-        await parallel([...byContainer], async ([id, releases]) => {
-          const current = await provider.exact(id, input.signal);
-          if (current.id !== id) failure('invalid_output');
-          const fresh = canonicalSha256(value(current, echo));
-          if (releases.some(released => canonicalSha256(released.value) !== fresh)) failure('stale_access_state');
+        // What was released must still be what the asker sees now: the container, its link, and the ECHO projects named,
+        // read after the provider's so a change during its reads is seen.
+        const current = await parallel([...byContainer.keys()], async id => {
+          const container = await provider.exact(id, input.signal);
+          if (container.id !== id) failure('invalid_output');
+          return container;
         });
+        const echo = options.echo_projects();
+        for (const container of current) {
+          const fresh = canonicalSha256(value(container, echo));
+          if (byContainer.get(container.id)!.some(released => canonicalSha256(released.value) !== fresh)) failure('stale_access_state');
+        }
         await verify(input.signal);
       }, input.signal);
     },

@@ -52,7 +52,7 @@ function fixture(options: { readonly pinned?: string } = {}) {
   const releases: PersonLiveEvidenceReleaseV1<PersonToolContainerCitationV1>[] = [];
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1<PersonToolContainerCitationV1>) => { releases.push(release); return canonicalSha256(release); }) };
   async function make() {
-    const reader = await createJiraPersonLiveContainerReaderV1({ binding, transport, echo_projects: () => state.echo, ...(options.pinned === undefined ? {} : { project: options.pinned }) });
+    const reader = await createJiraPersonLiveContainerReaderV1({ binding, transport, echo_projects: () => new Map(state.echo), ...(options.pinned === undefined ? {} : { project: options.pinned }) });
     const source = createAuditedPersonLiveEvidenceSourceV1({ actor: binding, read_grant_sha256: binding.read_grant_sha256, reader, audit, authorization: { assertCurrent: () => {} },
       access: { tool_id: 'jira', identity_status: 'linked', external_scope_id: cloudid, external_subject_id: binding.external_subject_id, read_status: 'connected', read_capabilities: ['live_evidence'] } });
     return { reader, source };
@@ -151,6 +151,27 @@ describe('Jira projects as a tool container source (research tool contract v1)',
     await expect(source.revalidate({})).resolves.toBeUndefined();
     change(f);
     await expect(source.revalidate({})).rejects.toMatchObject({ code });
+  });
+
+  it('revalidates every release of a project, not only its latest', async () => {
+    const f = fixture(); const { source } = await f.make();
+    const [listed] = (await source.list({ limit: 1 })).items;
+    f.state.projects.set('10000', project('10000', 'ECHO', 'Echo Platform Two'));
+    expect((await source.open({ item: listed!.id })).items[0]!.label).toBe('Echo Platform Two');
+    // The list released the old name too, and it is no longer what the asker sees.
+    await expect(source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+  });
+
+  it('compares a check against the ECHO projects named after Jira answers, so a change during the check is seen', async () => {
+    const f = fixture(); const { source } = await f.make();
+    await source.list({});
+    const answer = f.request.getMockImplementation()!;
+    f.request.mockImplementation(async input => {
+      const value = await answer(input);
+      if (/\/project\/\d+$/.test(input.path)) f.state.echo.delete('10001');
+      return value;
+    });
+    await expect(source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 
   it('refuses malformed project pages before anything is released', async () => {

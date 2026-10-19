@@ -178,7 +178,8 @@ export function createConfluencePersonConnectionV1(options: {
       if (scope === null) return undefined;
       const stored = options.store.current(person);
       if (stored === undefined || !stored.active) return undefined;
-      const current = () => { requirePerson(); options.store.requireCurrent(stored.binding); scope?.current(); };
+      const named = containerProjects(input.access_token, person.organization_id, mapping => mapping.cloud_id === cloud ? mapping.space_ids : []);
+      const current = () => { requirePerson(); options.store.requireCurrent(stored.binding); scope?.current(); named.current(); };
       current();
       const reader = await createConfluencePersonLiveContainerReaderV1({
         binding: stored.binding,
@@ -186,7 +187,7 @@ export function createConfluencePersonConnectionV1(options: {
         expected_origin: stored.site,
         signal: input.signal,
         ...(scope === undefined ? {} : { space_ids: scope.mapping.space_ids }),
-        echo_projects: () => containerProjects(input.access_token, person.organization_id, mapping => mapping.cloud_id === cloud ? mapping.space_ids : []),
+        echo_projects: () => named.names,
       });
       current();
       return createAuditedPersonLiveEvidenceSourceV1({

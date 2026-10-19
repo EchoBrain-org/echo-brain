@@ -127,14 +127,10 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       boundedString(value.handle, 512);
       boundedString(value.label, PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
       if (value.visibility !== 'only_me' && value.visibility !== 'team') invalidOutput();
-      // A tool container's citation commits to no text (research tool contract v1); the audit below still commits it.
-      const committed = citation.kind === 'tool_container' ? undefined : citation.text_sha256;
-      if (value.text !== undefined) {
-        boundedString(value.text, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, true);
-        const digest = `sha256:${createHash('sha256').update(value.text, 'utf8').digest('hex')}`;
-        if (committed !== undefined && digest !== committed) invalidOutput();
-      }
-      if (value.text === undefined && committed !== undefined && committed !== `sha256:${createHash('sha256').update('').digest('hex')}`) invalidOutput();
+      if (value.text !== undefined) boundedString(value.text, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, true);
+      // Every citation commits to exactly the text released (none for an inventory item), except a tool container's,
+      // which commits to no text (research tool contract v1); the audit below still commits the container's text.
+      if (citation.kind !== 'tool_container' && citation.text_sha256 !== `sha256:${createHash('sha256').update(value.text ?? '', 'utf8').digest('hex')}`) invalidOutput();
       if (value.occurred_at !== undefined) day(value.occurred_at);
       if (value.date_kind !== undefined && (value.occurred_at === undefined || !['created', 'version_created', 'occurred', 'updated', 'due', 'received'].includes(value.date_kind))) invalidOutput();
       let dates: EvidenceDatesV1 | undefined;
