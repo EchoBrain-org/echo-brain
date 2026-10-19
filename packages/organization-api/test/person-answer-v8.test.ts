@@ -16,7 +16,7 @@ import {
   validatePersonWorkspaceRefV1,
 } from '../src/index.js';
 
-const projectId = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
+const projectId = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' as const;
 const membershipId = 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e';
 const project = { citation: { kind: 'project' as const, project_id: projectId }, kind: 'project' as const, label: 'Thermal recovery', visibility: 'project' as const, ref: `project:${projectId}` as const };
 const person = { citation: { kind: 'person' as const, membership_id: membershipId }, kind: 'person' as const, label: 'Mara Lind', visibility: 'team' as const };
