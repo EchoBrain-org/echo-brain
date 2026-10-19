@@ -477,7 +477,8 @@ function Receipt({ state, receipt, took, line }: { state: State; receipt: AskRec
         </button>
       </div>
       {open && (
-        <ul class="ask-steps" data-testid="receipt-rows">
+        // Kept out of the thread's live region, as the running line's rows are: a receipt that comes open is not read out row by row.
+        <ul class="ask-steps" data-testid="receipt-rows" aria-live="off">
           {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} earlier={foundBefore(receipt.rows, index)} />
             : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
           {unnamed > 0 && <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">and {unnamed} more not listed</span></li>}

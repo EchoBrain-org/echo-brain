@@ -464,6 +464,8 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   await expect(receipt).toHaveText(/^Looked through 5 items · \d+s$/);
   await expect(receipt).not.toHaveText(/48s/);
   await expect(receipt).toHaveAttribute('aria-expanded', 'true');
+  // Its rows, mounted with the answer, stay out of the thread's live region: a screen reader hears the answer, not the history again.
+  await expect(page.getByTestId('receipt-rows')).toHaveAttribute('aria-live', 'off');
   await expect(pane).toContainText('Meeting · Transcript');
   await expect(pane.getByTestId('source-open')).toBeVisible();
 
