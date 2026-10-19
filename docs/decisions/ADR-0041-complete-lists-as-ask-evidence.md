@@ -500,20 +500,28 @@ the whole list too (found; read, when a complete list holds every member;
 cited, when the plan cites every member or a found `which_items` need cites a
 list holding it; handed over), and whether the answer names every member is a
 code check, "lists named in full", that holds without a judge and overrides a
-judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`). It reads names as
-the renderer writes statements: a statement code writes cites only list
-members' rows and names each member it cites, and a writer's sentence, which
-stands on text (an item no list holds as a member, such as a page's section),
-names the members whose text it cites, never a row it cites beside that text
-for the row's facts, a private row its list id brings included (W1). A
-brought row whose text the writer was given (an opened ticket's) still reads
-as named: the response does not say whether a sentence cites a row by id or
-through its list's id. The development list part is of pages, whose rows
-carry no text. A writer's sentence that cites only members' rows, as one
-on follow-ups' text does, reads as one code wrote, so every row it cites
-counts and the judge decides. Past an answer's 25 names, a statement code
-wrote that ends "and N more" names the whole list when the members it names
-plus N are exactly the list. The rows the writer sees are never
+judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`). The response
+does not say which statements code wrote, so the check reads names from what
+each statement says: a statement names a member only when it cites one of the
+member's items and its text names the member as code writes a name, the
+member's title on one line, cut to 120 characters (a cut title is matched on
+what stands before its ellipsis), ignoring case, members that share a label
+sharing the one name code merges them under. A name counts as a phrase of its
+own, never inside a longer word or a longer name the text holds. Citing a
+member never names it alone: the 4-of-8 answer names 4 pages whether it cites
+their 4 sections or the 8 rows beside them (W1's row facts, or the private
+rows its list id brings), and a sentence that cites 8 rows carrying text, as
+follow-ups' rows do, and names 4 of them names those 4. Past an answer's 25
+names, a statement that ends "and N more" names the whole list when it reads
+as one code wrote (it cites only list members' rows, and its text names every
+item it cites) and the members it names plus N are exactly the list. Where
+the research result lacks the name code writes, the check errs toward "not
+named", and code, not the judge, fails the part: the result titles a meeting
+record by its meeting's label, which every record of that meeting shares,
+while code names a record by a line of its own text, its list label, which
+the result does not carry. So a member the key names by its meeting is never
+named, and a list part holding one fails "lists named in full". The rows the
+writer sees are never
 counted as noise or distractors handed, and hand over a part only when it is a
 row fact (a date, owner or status). Each run reports its plan's needs by
 declared kind, and a case may name the kinds its plan should declare
