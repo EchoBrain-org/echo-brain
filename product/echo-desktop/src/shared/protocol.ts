@@ -219,18 +219,23 @@ export interface RecordRef {
   readonly policy_id: RecordPolicy;
 }
 
+/** What a connected tool keeps its items in: a Jira project, a Confluence space or a Slack channel. */
+export type ToolContainerKind = 'jira_project' | 'confluence_space' | 'slack_channel';
+
 /**
  * What an answer is based on, or an item Ask named while it worked: an
  * approved record's item, an original's passage, a transcript's passage, a
- * follow-up, or live evidence. Each kind opens through one opener
- * (renderer/openers.ts).
+ * follow-up, a project, a person, a tool, or live evidence. Each kind opens
+ * through one opener (renderer/openers.ts).
  */
-export interface ExternalAnswerSource {
-  readonly kind: 'slack' | 'ticket' | 'page';
-  readonly tool_id: string;
-  readonly label: string;
-  readonly permalink: string;
-}
+export type ExternalAnswerSource =
+  | { readonly kind: 'slack' | 'ticket' | 'page'; readonly tool_id: string; readonly label: string; readonly permalink: string }
+  /**
+   * A Jira project, Confluence space or Slack channel in a tool you connected
+   * (research tool contract v1): it opens in its tool, by its link. `key` is
+   * its key there ("THERM"), when it has one; a Slack channel has none.
+   */
+  | { readonly kind: 'container'; readonly tool_id: string; readonly label: string; readonly permalink: string; readonly container: ToolContainerKind; readonly key?: string };
 export type AnswerSource =
   /** `atom_id`: the decision, action or rationale cited, as its record's items carry it. */
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef; readonly atom_id: string }
@@ -243,6 +248,12 @@ export type AnswerSource =
    * item page, where its owner, status and check are read again as Home shows them.
    */
   | { readonly kind: 'follow_up'; readonly label: string; readonly item_id: string }
+  /** One of your projects (research tool contract v1), by its id: it opens the project, as the sidebar does. */
+  | { readonly kind: 'project'; readonly label: string; readonly project_id: string }
+  /** A person in your organization, by their membership: shown by name, it opens nothing. */
+  | { readonly kind: 'person'; readonly label: string; readonly membership_id: string }
+  /** One of your tools, by its id: it opens Tools, where you connect it. */
+  | { readonly kind: 'tool'; readonly label: string; readonly tool_id: string }
   | ExternalAnswerSource;
 
 /**
@@ -251,8 +262,14 @@ export type AnswerSource =
  * answer being written.
  */
 export type AskStage = 'searching' | 'reading' | 'checking_access' | 'writing';
-/** A kind of source a step searched: meetings, documents, follow-ups or Slack, or a live tool's tickets or pages, by the tool's id. */
-export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'follow_ups' | 'slack' } | { readonly kind: 'tickets' | 'pages'; readonly tool_id: string };
+/**
+ * A kind of source a step searched: meetings, documents, follow-ups or Slack;
+ * your projects, the people in your organization or your tools; or a live
+ * tool's tickets, pages or containers (its Jira projects, Confluence spaces or
+ * Slack channels), by the tool's id.
+ */
+export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'follow_ups' | 'slack' | 'projects' | 'people' | 'tools' }
+  | { readonly kind: 'tickets' | 'pages' | 'containers'; readonly tool_id: string };
 /** One step's searches: the source kinds, and how many items they returned that no earlier read had. */
 export interface AskSearched {
   readonly type: 'searched';
@@ -791,8 +808,13 @@ export const pagePermalink = (raw: unknown): string | null => webPermalink(raw, 
 /** A ticket display link has no embedded authorization or redirect parameters. */
 export const ticketPermalink = (raw: unknown): string | null => webPermalink(raw, false);
 
+/**
+ * A cited link, checked by its kind's rule: a Slack message's, a ticket's, a
+ * page's, or a tool container's, which is checked as a ticket's (no query, no
+ * fragment), since a Slack channel's link is no message's.
+ */
 export function externalSourcePermalink(kind: unknown, raw: unknown): string | null {
-  return kind === 'slack' ? slackPermalink(raw) : kind === 'ticket' ? ticketPermalink(raw) : kind === 'page' ? pagePermalink(raw) : null;
+  return kind === 'slack' ? slackPermalink(raw) : kind === 'ticket' || kind === 'container' ? ticketPermalink(raw) : kind === 'page' ? pagePermalink(raw) : null;
 }
 
 /** A follow-up's id, in the API's own grammar. */

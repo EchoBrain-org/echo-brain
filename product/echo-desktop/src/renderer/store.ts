@@ -1291,6 +1291,9 @@ async function refreshSidebar(): Promise<void> {
   if (read.every(Boolean)) await followOpenProject();
 }
 
+/** A project read on its own that you cannot open: it is gone, or you are no longer in it. */
+const PROJECT_GONE = ['not_found', 'unauthorized', 'forbidden'];
+
 /**
  * The project on screen, after the sidebar was read again: its header (name,
  * role, status) from its row; a new role for you in it is a change of access,
@@ -1305,7 +1308,7 @@ async function followOpenProject(): Promise<void> {
   let row = [...state.projects.items, ...state.archivedProjects.items].find(project => project.project_id === opened);
   if (!row && (state.projects.next !== null || state.archivedProjects.next !== null)) {
     const result = await rpc('projects.read', { expect: account, project_id: opened });
-    if (!sameAccount(account) || (!result.ok && !['not_found', 'unauthorized', 'forbidden'].includes(result.failure.code))) return;
+    if (!sameAccount(account) || (!result.ok && !PROJECT_GONE.includes(result.failure.code))) return;
     row = result.ok ? result.value : undefined;
   }
   const now = state.route.page === 'project' && state.route.project.project_id === opened ? state.route.project : null;
@@ -3524,13 +3527,14 @@ export function citedItems(record: ApprovedRecord, atoms: ReadonlySet<string>): 
  * Open: the pane's item on its own page, in place of Ask. A meeting opens on
  * the items the pane lit, found in the record the pane read; with that record
  * not read, it opens at its top. A follow-up opens its item page, with the
- * row the pane read while it reads it again.
+ * row the pane read while it reads it again. A project opens as the sidebar
+ * opens it, and a tool opens Tools.
  */
 export function openFullPage(): void {
   const target = paneTarget();
   const source = target?.sources[0];
   const page = source === undefined ? null : openerOf(source).page;
-  if (!target || page === null || state.concealed || !fullPageOffered()) return;
+  if (!target || !source || page === null || state.concealed || !fullPageOffered()) return;
   if (page.kind === 'follow_up') {
     const read = state.sources?.followUps[page.item_id];
     const shown = read !== undefined && !read.loading && 'value' in read ? read.value : null;
@@ -3538,14 +3542,47 @@ export function openFullPage(): void {
     void openFollowUp(page.item_id, shown);
     return;
   }
+  if (page.kind === 'tools') {
+    closeAsk();
+    openTools();
+    return;
+  }
+  if (page.kind === 'project') {
+    void openCitedProject(page.project_id, source.label);
+    return;
+  }
   const scope = state.ask?.shown?.answer.scope;
-  const read = source?.kind === 'record' ? state.sources?.records[source.record.record_sha256] : undefined;
+  const read = source.kind === 'record' ? state.sources?.records[source.record.record_sha256] : undefined;
   const cited = read !== undefined && !read.loading && 'value' in read ? citedItems(read.value, litAtoms(state, target)) : [];
   closeAsk();
   if (page.kind === 'reader') {
     void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : scope?.kind === 'mine' ? { kind: 'mine' } : { kind: 'search' },
       undefined, { cited });
   }
+}
+
+/**
+ * Open, on a project Ask cited (research tool contract v1): the project, in
+ * place of Ask, as the sidebar opens it, from its row there. One past the
+ * sidebar's pages is read on its own first, as the project on screen is, and
+ * Ask stays until it is: one you can no longer open says so, by the name Ask
+ * cited it by, as the sidebar says it of the project on screen, and any other
+ * failure says why, over the answer, which stays. A reply that lands once you
+ * left that answer, or asked again, is dropped.
+ */
+async function openCitedProject(project_id: string, label: string): Promise<void> {
+  const account = expect();
+  if (!account) return;
+  const row = [...state.projects.items, ...state.archivedProjects.items].find(project => project.project_id === project_id);
+  if (row) { closeAsk(); void openProject(row); return; }
+  const seq = state.ask?.seq;
+  const turn = state.ask?.shown?.id;
+  const result = await rpc('projects.read', { expect: account, project_id });
+  const thread = state.ask;
+  if (!sameAccount(account) || state.concealed || !thread || thread.seq !== seq || thread.shown?.id !== turn || thread.asking) return;
+  if (result.ok) { closeAsk(); void openProject(result.value); return; }
+  accountLost(result.failure);
+  set({ toast: PROJECT_GONE.includes(result.failure.code) ? `You no longer have access to ${label}` : message(result.failure) });
 }
 
 /** Nothing open in the pane, nothing read for it yet. */
@@ -3640,7 +3677,11 @@ async function readMeeting(gen: number, id: string): Promise<void> {
   if (!result.ok && sourcesAt(gen)) accountLost(result.failure);
 }
 
-/** What the pane needs read for `source`, unless it already was: its record, its meeting, or its passages. */
+/**
+ * What the pane needs read for `source`, unless it already was: its record,
+ * its meeting, its passages, or its follow-up's row. A project, a person, a
+ * tool or a link needs nothing read: the pane shows what Ask cited.
+ */
 function readPane(gen: number, source: AnswerSource): void {
   const sources = sourcesAt(gen);
   if (!sources) return;

@@ -74,6 +74,10 @@ export const Calendar = () => (
 export const Page = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l4 4v14H7zM14 3v4h4" stroke="rgba(240,236,230,0.8)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
 );
+/** A project, in ECHO or in a tool (a Jira project, a Confluence space): a folder, in outline. */
+export const Folder = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v9.3a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linejoin="round" fill="none" /></svg>
+);
 export const FolderPlus = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v9.3a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linejoin="round" fill="none" /><path d="M12 10.5v5M9.5 13h5" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" /></svg>
 );
