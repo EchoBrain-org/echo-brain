@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ConnectedTool, ToolStatus } from '../../shared/protocol.js';
-import { message, toolMessage } from '../messages.js';
+import { message, TOOL_STATES, toolMessage } from '../messages.js';
 import {
   cancelConnect, closeSheet, connectTool, disconnectTool, loadToolList, manageTool,
   type State, type ToolConnectSheet, type ToolManageSheet, type ToolsPage,
@@ -17,13 +17,6 @@ const SECTIONS: readonly { label: string; status: ToolStatus }[] = [
   { label: 'Not turned on', status: 'unavailable' },
 ];
 
-const STATE: Record<ToolStatus, string> = {
-  linked: 'Connected',
-  unlinked: 'Not connected',
-  revoked: 'Connection stopped. Reconnect to keep using it.',
-  unavailable: 'Not turned on for your organization.',
-};
-
 /** A tool's mark: its first letter, until tools carry their own icon. */
 function Mark({ tool }: { tool: ConnectedTool }) {
   return <span class={`tool-mark${tool.status === 'unavailable' ? ' off' : ''}`} aria-hidden="true">{tool.name.slice(0, 1).toUpperCase()}</span>;
@@ -35,7 +28,7 @@ function ToolRow({ tool }: { tool: ConnectedTool }) {
       <Mark tool={tool} />
       <span class="lines">
         <span class="name">{tool.name}</span>
-        <span class="state" data-testid="tool-state">{STATE[tool.status]}</span>
+        <span class="state" data-testid="tool-state">{TOOL_STATES[tool.status]}</span>
       </span>
       {(tool.status === 'linked' || (tool.tool_id === 'granola' && tool.status !== 'unavailable')) && (
         <button type="button" class="plain-button" data-testid="tool-manage" onClick={() => manageTool(tool)}>Manage</button>

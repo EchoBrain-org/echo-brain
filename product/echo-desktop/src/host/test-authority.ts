@@ -61,6 +61,12 @@ interface Contract {
   /** Ask progress V2 on `/v6` (ADR-0040): its header value, and one event, which may name a follow-up, as its frame. */
   PERSON_ASK_PROGRESS_HEADER_VALUE_V2: string;
   formatPersonAskProgressEventV2(event: unknown): string;
+  /**
+   * Ask progress V3 on `/v7` (research tool contract v1): its header value, and one event, which may name a project, a
+   * person, a tool or a tool's container, as its frame.
+   */
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V3: string;
+  formatPersonAskProgressEventV3(event: unknown): string;
 }
 
 /** A runs request, as the contract's validator returns it. */
@@ -595,6 +601,27 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const followUpCitation = { citation: { kind: 'follow_up', item_id: FOLLOW_UP_ITEM }, kind: 'follow_up', label: 'Ship the launch checklist', visibility: 'team',
     ref: `follow_up:${FOLLOW_UP_ITEM}` };
   /**
+   * What `ask-progress-workspace` cites (research tool contract v1): Apollo,
+   * which Ari leads; Mina; Jira; and Apollo's Jira project, with its key. Each
+   * citation names its item alone; a project and a tool carry the ref that
+   * opens them, and a Jira project opens by its link.
+   */
+  const APOLLO_PROJECT = desktop.projects[0]!.project_id;
+  const workspaceCitations = [
+    { citation: { kind: 'project', project_id: APOLLO_PROJECT }, kind: 'project', label: 'Apollo', visibility: 'project', ref: `project:${APOLLO_PROJECT}` },
+    { citation: { kind: 'person', membership_id: MINA.membership_id }, kind: 'person', label: MINA.name, visibility: 'team' },
+    { citation: { kind: 'tool', tool_id: 'jira' }, kind: 'tool', label: 'Jira', visibility: 'only_me', ref: 'tool:jira' },
+    { citation: { kind: 'tool_container', tool_id: 'jira', external_scope_id: JIRA_CLOUD, container: 'jira_project', container_id: '10000',
+      permalink: 'https://example.atlassian.net/browse/APOLLO' }, kind: 'tool_container', label: 'Apollo delivery', visibility: 'only_me', key: 'APOLLO' },
+  ];
+  /** The V8 answer that cites them: who leads Apollo, and where its work is. */
+  const workspaceAnswer = (question: string, scope: Record<string, unknown>) => ({
+    schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered', citations: workspaceCitations, parts: [{ question, status: 'answered', statements: [
+      { text: 'Ari leads Apollo, with Mina.', citation_indexes: [0, 1], private: false },
+      { text: 'Its work is in the APOLLO Jira project, which your Jira connection reads.', citation_indexes: [2, 3], private: true },
+    ] }],
+  });
+  /**
    * A streamed Ask, framed by the contract itself: a search of meetings,
    * documents and Jira, its four reads, then, once the test lets it answer
    * (`release-ask`), the writer, the final check and the answer with its
@@ -603,15 +630,19 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * test writes `more-steps`, an Ask still waiting searches Jira once more.
    * On `/v6` (progress V2, `ask-progress-follow-up`) it searches meetings and
    * follow-ups, reads Tuesday sync's decision and the follow-up, and the V7
-   * answer cites the follow-up.
+   * answer cites the follow-up. On `/v7` (progress V3,
+   * `ask-progress-workspace`) it searches your projects, people and tools and
+   * Jira's projects, reads Apollo, Mina, Jira and Apollo's Jira project, and
+   * the V8 answer cites all four.
    */
-  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, version: 1 | 2 = 1): Response => {
-    const format = version === 2 ? api.formatPersonAskProgressEventV2 : api.formatPersonAskProgressEventV1;
-    const items = version === 2 ? [progressItems()[0]!, followUpCitation] : progressItems();
-    const searched = version === 2 ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 2 }
-      : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
+  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, version: 1 | 2 | 3 = 1): Response => {
+    const format = version === 3 ? api.formatPersonAskProgressEventV3 : version === 2 ? api.formatPersonAskProgressEventV2 : api.formatPersonAskProgressEventV1;
+    const items = version === 3 ? workspaceCitations : version === 2 ? [progressItems()[0]!, followUpCitation] : progressItems();
+    const searched = version === 3 ? { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 }
+      : version === 2 ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 2 }
+        : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
     const [part] = desktop.answer.parts as Record<string, unknown>[];
-    const response = version === 2
+    const response = version === 3 ? workspaceAnswer(question, scope) : version === 2
       ? { ...desktop.answer, schema_version: 7, kind: 'echo-clean-person-answer-v7', scope, citations: [followUpCitation], parts: [{ question, status: 'answered', statements: [
         { text: 'Mina still owes the launch checklist.', citation_indexes: [0], private: false }] }] }
       : { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
@@ -644,7 +675,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       },
       cancel() { cancelled = true; },
     });
-    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-echo-person-ask-route': version === 2 ? '6' : '5' } });
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-echo-person-ask-route': String(version + 4) } });
   };
 
   // Open items. Ari's own check of Pilot planning finds two once it is done;
@@ -1703,9 +1734,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    // Only ask-progress-follow-up's Authority has `/v6` (ADR-0040); every other mode's predates it, so its client asks `/v5`.
+    // Only ask-progress-follow-up's Authority has `/v6` (ADR-0040), and only ask-progress-workspace's has `/v7` (research tool
+    // contract v1); every other mode's predates both, so its client asks `/v5`.
     const v6 = mode === 'ask-progress-follow-up' && path === '/v6/person/ask';
-    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask' || v6)) {
+    const v7 = mode === 'ask-progress-workspace' && path === '/v7/person/ask';
+    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask' || v6 || v7)) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);
@@ -1724,6 +1757,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // Ask progress: a client that asks for it gets the Ask's steps as they happen, then its answer and receipt.
       const api = await contract();
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
+      if (v7) {
+        if (progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) return progressStream(api, question, scope, init?.signal ?? undefined, 3);
+        const answered = json(workspaceAnswer(question, scope));
+        answered.headers.set('x-echo-person-ask-route', '7');
+        return answered;
+      }
       if (v6) {
         if (progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V2) return progressStream(api, question, scope, init?.signal ?? undefined, 2);
         const answered = json({ schema_version: 7, kind: 'echo-clean-person-answer-v7', scope, outcome: 'answered', citations: [followUpCitation],

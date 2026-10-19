@@ -109,7 +109,12 @@ export function listWords(words: readonly string[]): string {
   return words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
 }
 
-/** A searched source as a person says it: a tool by its own name, once its list is read; ECHO's follow-ups as "follow-ups". */
+/**
+ * A searched source as a person says it: a tool by its own name, once its
+ * list is read, whether its tickets, pages or containers (its Jira projects,
+ * Confluence spaces or Slack channels) were searched; ECHO's follow-ups as
+ * "follow-ups"; your projects, people and tools as those words.
+ */
 export function sourceWords(source: AskSearchedSource, tools?: readonly ConnectedTool[] | null): string {
   if (!('tool_id' in source)) return source.kind === 'slack' ? 'Slack' : source.kind === 'follow_ups' ? 'follow-ups' : source.kind;
   return tools?.find(tool => tool.tool_id === source.tool_id)?.name ??
@@ -118,12 +123,13 @@ export function sourceWords(source: AskSearchedSource, tools?: readonly Connecte
 
 /**
  * "Searched meetings and Jira · 22 found": source kinds, never the words
- * searched. An empty search found nothing, or, once one before it found
+ * searched, each named once (a tool's issues and its projects are both
+ * "Jira"). An empty search found nothing, or, once one before it found
  * items (`earlier`), nothing new.
  */
 export function searchedWords(row: AskSearched, tools?: readonly ConnectedTool[] | null, earlier = false): string {
   const found = row.found > 0 ? `${row.found} found` : earlier ? 'nothing new' : 'nothing found';
-  return `Searched ${listWords(row.sources.map(source => sourceWords(source, tools)))} · ${found}`;
+  return `Searched ${listWords([...new Set(row.sources.map(source => sourceWords(source, tools)))])} · ${found}`;
 }
 
 /** A place Ask read, as one name: the first of its items read stands for it, and all of its items read go with it. */

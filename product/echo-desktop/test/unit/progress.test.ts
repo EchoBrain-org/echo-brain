@@ -37,6 +37,10 @@ describe('the line and its rows', () => {
     expect(headline(withStep(withStep(reading, { type: 'searched', sources: [{ kind: 'documents' }], found: 1 }), { type: 'stage', stage: 'reading' }))).toBe('Reading');
     expect(placeLabel(passage('6', 'launch_plan_v2.md'))).toBe('launch plan');
     expect(placeLabel(decision('1'))).toBe('Tuesday sync');
+    // Your project, and a Jira project, are places of their own, named by their labels (research tool contract v1).
+    const project: AnswerSource = { kind: 'project', label: 'Thermal recovery', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' };
+    const jira: AnswerSource = { kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: 'https://example.atlassian.net/browse/THERM', container: 'jira_project', key: 'THERM' };
+    expect(headline(steps({ type: 'stage', stage: 'reading', pending: 2 }, { type: 'read', items: [project, jira] }))).toBe('Reading Thermal recovery and 1 more');
   });
 
   it('merge neighbours of a type as the receipt does, and keep every item read', () => {
@@ -101,6 +105,16 @@ describe('the line and its rows', () => {
     // ECHO's follow-ups (ADR-0040) are a kind of source like meetings: never a tool, never a label.
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }, { kind: 'tickets', tool_id: 'jira' }], found: 9 }))
       .toBe('Searched meetings, follow-ups and Jira · 9 found');
+    // Your projects, people and tools (research tool contract v1) are kinds of source too; a tool's containers are its name.
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'confluence' }], found: 4 }))
+      .toBe('Searched projects, people, tools and Confluence · 4 found');
+    // Each word once: Jira's issues and its projects are both Jira, Slack's messages and its channels both Slack.
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'containers', tool_id: 'jira' }], found: 3 }))
+      .toBe('Searched meetings and Jira · 3 found');
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'slack' }, { kind: 'containers', tool_id: 'slack' }, { kind: 'projects' }], found: 0 }))
+      .toBe('Searched Slack and projects · nothing found');
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'containers', tool_id: 'jira' }, { kind: 'pages', tool_id: 'confluence' }, { kind: 'tickets', tool_id: 'jira' }],
+      found: 2 }, [{ tool_id: 'jira', name: 'Jira Cloud', status: 'linked' }])).toBe('Searched Jira Cloud and Confluence · 2 found');
     // Nothing at all, or, after an earlier search found items, nothing those had not.
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 })).toBe('Searched Knowledge Base · nothing found');
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 }, null, true)).toBe('Searched Knowledge Base · nothing new');

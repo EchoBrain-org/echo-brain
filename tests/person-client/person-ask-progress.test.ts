@@ -12,22 +12,25 @@ import {
   PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
   formatPersonAskProgressEventV1,
   formatPersonAskProgressEventV2,
-  validatePersonAskProgressLineV2,
-  validatePersonAskProgressResultLineV2,
+  formatPersonAskProgressEventV3,
+  validatePersonAskProgressLineV3,
+  validatePersonAskProgressResultLineV3,
   type OrganizationPersonSessionV2,
   type PersonAnswerScopeV3,
   type PersonAskProgressEventV1,
   type PersonAskProgressEventV2,
+  type PersonAskProgressEventV3,
   type PersonAskProgressStepEventV1,
   type PersonAskProgressStepEventV2,
+  type PersonAskProgressStepEventV3,
 } from '@echo-brain/organization-api';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 
-// Ask progress (ADR-0039) on the Person client: V2 on /v6 (ADR-0040) and V1 on /v5, the opt-in streams, the
-// /v6, /v5, /v4 fallback chain, and `person ask --live --progress`.
+// Ask progress (ADR-0039) on the Person client: V3 on /v7 (research tool contract v1), V2 on /v6 (ADR-0040) and V1
+// on /v5, the opt-in streams, the /v7, /v6, /v5, /v4 fallback chain, and `person ask --live --progress`.
 
 const ORIGIN = 'https://authority.example.test';
 const NOW = '2026-10-16T10:00:00.000Z';
@@ -74,9 +77,33 @@ const ANSWERED_V2: PersonAskProgressEventV2 = { type: 'answer', response: answer
 const framesV2 = (events: readonly PersonAskProgressEventV2[]) => events.map(event => formatPersonAskProgressEventV2(event)).join('');
 const STREAM_V2 = `${framesV2(STEPS_V2.slice(0, 2))}${PERSON_ASK_PROGRESS_HEARTBEAT_V1}${framesV2(STEPS_V2.slice(2))}${framesV2([ANSWERED_V2])}`;
 
+// The /v7 stream (progress V3): the V8 answer, whose search names the asker's projects and Jira's containers, and whose
+// read names a project and a Jira project with its key.
+const projectId = 'prj_00000000-0000-4000-8000-000000000021' as const;
+const project = { citation: { kind: 'project' as const, project_id: projectId }, kind: 'project' as const, label: 'Thermal recovery', visibility: 'project' as const, ref: `project:${projectId}` as const };
+const container = {
+  citation: { kind: 'tool_container' as const, tool_id: 'jira', external_scope_id: 'cloud-1', container: 'jira_project' as const, container_id: '10001', permalink: 'https://example.atlassian.net/browse/THERM' },
+  kind: 'tool_container' as const, label: 'Thermal — DVT ✓', visibility: 'only_me' as const, key: 'THERM',
+};
+const answerV8 = (scope: PersonAnswerScopeV3 = { kind: 'global' }) => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope, outcome: 'answered' as const, citations: [project, container, followUp],
+  parts: [{ question: 'Where is Thermal recovery tracked?', status: 'answered' as const, statements: [{ text: 'Thermal recovery is tracked in the THERM Jira project.', citation_indexes: [0, 1], private: true }] }] });
+const receiptV3 = () => ({ looked_through: 2, elapsed_ms: 24_000, rows: [{ type: 'searched' as const, sources: [{ kind: 'projects' as const }, { kind: 'containers' as const, tool_id: 'jira' }], found: 5 }, { type: 'read' as const, items: [project, container] }] });
+const STEPS_V3: readonly PersonAskProgressStepEventV3[] = [
+  { type: 'stage', stage: 'searching' },
+  { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 5 },
+  { type: 'stage', stage: 'reading', pending: 2 },
+  { type: 'read', items: [project, container] },
+  { type: 'stage', stage: 'writing' },
+  { type: 'stage', stage: 'checking_access' },
+];
+const ANSWERED_V3: PersonAskProgressEventV3 = { type: 'answer', response: answerV8(), receipt: receiptV3() };
+const framesV3 = (events: readonly PersonAskProgressEventV3[]) => events.map(event => formatPersonAskProgressEventV3(event)).join('');
+const STREAM_V3 = `${framesV3(STEPS_V3.slice(0, 2))}${PERSON_ASK_PROGRESS_HEARTBEAT_V1}${framesV3(STEPS_V3.slice(2))}${framesV3([ANSWERED_V3])}`;
+
 const encoder = new TextEncoder();
 const STREAM_HEADERS = { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' };
 const V6_HEADERS = { [PERSON_ANSWER_ROUTE_HEADER_V5]: '6' };
+const V7_HEADERS = { [PERSON_ANSWER_ROUTE_HEADER_V5]: '7' };
 /** An Authority with no such route: a 404 without the route header. */
 const noRoute = () => json({ error: { code: 'not_found', message: 'route absent' } }, 404);
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -240,23 +267,23 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
 
   it('turns an error inside the stream into the error its JSON response would have been, never a fallback', async () => {
     for (const [status, code] of [[404, 'not_found'], [503, 'unavailable'], [401, 'unauthorized']] as const) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(`${framesV2(STEPS_V2.slice(0, 2))}${framesV2([{ type: 'error', status, error: { code, message: 'request failed' } }])}`, undefined, { headers: V6_HEADERS }));
-      const progress: PersonAskProgressStepEventV2[] = [];
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(`${framesV3(STEPS_V3.slice(0, 2))}${framesV3([{ type: 'error', status, error: { code, message: 'request failed' } }])}`, undefined, { headers: V7_HEADERS }));
+      const progress: PersonAskProgressStepEventV3[] = [];
       await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
         .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code, status, routeMatched: true });
-      expect(progress).toEqual(STEPS_V2.slice(0, 2));
-      expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v6/person/ask']);
+      expect(progress).toEqual(STEPS_V3.slice(0, 2));
+      expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
     }
   });
 
   it('answers from an Authority that does not stream with its JSON, without progress or a receipt', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answerV7(), 200, V6_HEADERS));
-    const progress: PersonAskProgressStepEventV2[] = [];
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answerV8(), 200, V7_HEADERS));
+    const progress: PersonAskProgressStepEventV3[] = [];
     const result = await new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event));
-    expect(result).toEqual({ result: answerV7() });
+    expect(result).toEqual({ result: answerV8() });
     expect('receipt' in result).toBe(false);
     expect(progress).toEqual([]);
-    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v6/person/ask']);
+    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
     // A JSON body is still bound to today's validator and scope.
     for (const body of [{ ...answer(), receipt: receipt() }, answer({ kind: 'mine' })]) {
       await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body))).askV5WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined))
@@ -264,31 +291,42 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     }
   });
 
-  it('streams V1 on /v5 only for an Authority with no /v6 route', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(sse(STREAM, 5));
-    const progress: PersonAskProgressStepEventV2[] = [];
+  it('streams V2 on /v6 only for an Authority with no /v7 route', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(sse(STREAM_V2, 5, { headers: V6_HEADERS }));
+    const progress: PersonAskProgressStepEventV3[] = [];
+    await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveProgress('What is still open?', undefined, undefined, event => progress.push(event)))
+      .resolves.toEqual({ result: answerV7(), receipt: receiptV2() });
+    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask', '/v6/person/ask']);
+    expect(fetch.mock.calls.map(([, init]) => headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1))).toEqual(['3', '2']);
+    expect(progress).toEqual(STEPS_V2);
+  });
+
+  it('streams V1 on /v5 only for an Authority with neither /v7 nor /v6', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(sse(STREAM, 5));
+    const progress: PersonAskProgressStepEventV3[] = [];
     await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
       .resolves.toEqual({ result: answer(), receipt: receipt() });
-    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v6/person/ask', '/v5/person/ask']);
+    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask', '/v6/person/ask', '/v5/person/ask']);
     // Each route is asked for its own progress version.
-    expect(fetch.mock.calls.map(([, init]) => headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1))).toEqual(['2', '1']);
+    expect(fetch.mock.calls.map(([, init]) => headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1))).toEqual(['3', '2', '1']);
     expect(progress).toEqual(STEPS);
   });
 
-  it('falls back to V4 without progress only for an Authority with neither /v6 nor /v5', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(json(v5Answer()));
-    const progress: PersonAskProgressStepEventV2[] = [];
+  it('falls back to V4 without progress only for an Authority with none of /v7, /v6 and /v5', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(json(v5Answer()));
+    const progress: PersonAskProgressStepEventV3[] = [];
     await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
       .resolves.toEqual({ result: v5Answer() });
-    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v6/person/ask', '/v5/person/ask', '/v4/person/ask']);
-    expect(headersOf(fetch.mock.calls[2]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
+    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask', '/v6/person/ask', '/v5/person/ask', '/v4/person/ask']);
+    expect(headersOf(fetch.mock.calls[3]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
     expect(progress).toEqual([]);
-    // A JSON failure from a route itself, before any stream, never falls back: /v6's own 404 stays a 404, and so does /v5's.
+    // A JSON failure from a route itself, before any stream, never falls back: /v7's own 404 stays a 404, and so do /v6's and /v5's.
     for (const [replies, status, code, paths] of [
-      [[json({ error: { code: 'not_found', message: 'request failed' } }, 404, V6_HEADERS)], 404, 'not_found', ['/v6/person/ask']],
-      [[json({ error: { code: 'unauthorized', message: 'request failed' } }, 401)], 401, 'unauthorized', ['/v6/person/ask']],
-      [[noRoute(), json({ error: { code: 'not_found', message: 'request failed' } }, 404, { [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' })], 404, 'not_found', ['/v6/person/ask', '/v5/person/ask']],
-      [[noRoute(), json({ error: { code: 'unavailable', message: 'request failed' } }, 503, { [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' })], 503, 'unavailable', ['/v6/person/ask', '/v5/person/ask']],
+      [[json({ error: { code: 'not_found', message: 'request failed' } }, 404, V7_HEADERS)], 404, 'not_found', ['/v7/person/ask']],
+      [[json({ error: { code: 'unauthorized', message: 'request failed' } }, 401)], 401, 'unauthorized', ['/v7/person/ask']],
+      [[noRoute(), json({ error: { code: 'not_found', message: 'request failed' } }, 404, V6_HEADERS)], 404, 'not_found', ['/v7/person/ask', '/v6/person/ask']],
+      [[noRoute(), noRoute(), json({ error: { code: 'not_found', message: 'request failed' } }, 404, { [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' })], 404, 'not_found', ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask']],
+      [[noRoute(), noRoute(), json({ error: { code: 'unavailable', message: 'request failed' } }, 503, { [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' })], 503, 'unavailable', ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask']],
     ] as const) {
       const queue = [...replies];
       const refused = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => queue.shift()!);
@@ -404,7 +442,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
   it('asks only as the account its caller expects: another sign-in that came first is refused before anything is sent', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const client = new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch });
-    const progress: PersonAskProgressStepEventV2[] = [];
+    const progress: PersonAskProgressStepEventV3[] = [];
     for (const expected of [
       { expected_authority: ORIGIN, expected_membership_id: 'mem_00000000-0000-4000-8000-000000000002' },
       { expected_authority: 'https://other.example.test', expected_membership_id: SESSION.membership_id },
@@ -416,16 +454,16 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     }
     expect(fetch).not.toHaveBeenCalled();
     expect(progress).toEqual([]);
-    fetch.mockResolvedValueOnce(sse(STREAM_V2, undefined, { headers: V6_HEADERS }));
+    fetch.mockResolvedValueOnce(sse(STREAM_V3, undefined, { headers: V7_HEADERS }));
     await expect(client.askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event),
-      { expected_authority: ORIGIN, expected_membership_id: SESSION.membership_id })).resolves.toEqual({ result: answerV7(), receipt: receiptV2() });
-    expect(progress).toEqual(STEPS_V2);
+      { expected_authority: ORIGIN, expected_membership_id: SESSION.membership_id })).resolves.toEqual({ result: answerV8(), receipt: receiptV3() });
+    expect(progress).toEqual(STEPS_V3);
   });
 
   it('stops handing on steps once another account is signed in, and drops the stream', async () => {
     const home = sessionHome();
-    const stream = openStream({ ...STREAM_HEADERS, ...V6_HEADERS });
-    const progress: PersonAskProgressStepEventV2[] = [];
+    const stream = openStream({ ...STREAM_HEADERS, ...V7_HEADERS });
+    const progress: PersonAskProgressStepEventV3[] = [];
     const pending = new PersonClient({ home_directory: home, now: () => NOW, fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response) })
       .askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event));
     stream.write(frames(STEPS.slice(0, 1)));
@@ -440,8 +478,8 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
   it('withholds a step that arrives while another command refreshes the session, and keeps the Ask', async () => {
     const home = sessionHome();
     const store = new PersonSessionStore(home);
-    const stream = openStream({ ...STREAM_HEADERS, ...V6_HEADERS });
-    const progress: PersonAskProgressStepEventV2[] = [];
+    const stream = openStream({ ...STREAM_HEADERS, ...V7_HEADERS });
+    const progress: PersonAskProgressStepEventV3[] = [];
     const pending = new PersonClient({ home_directory: home, now: () => NOW, fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response) })
       .askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event));
     stream.write(frames(STEPS.slice(0, 1)));
@@ -452,10 +490,10 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     stream.write(frames(STEPS.slice(1, 2)));
     await vi.waitFor(() => expect(read.mock.results.some(result => result.type === 'throw')).toBe(true));
     store.completeRefresh(claim, { ...SESSION, access_token: 'B'.repeat(43), refresh_token: 'S'.repeat(43), access_expires_at: '2026-10-16T10:20:00.000Z' });
-    stream.write(`${framesV2(STEPS_V2.slice(2))}${framesV2([ANSWERED_V2])}`);
+    stream.write(`${framesV3(STEPS_V3.slice(2))}${framesV3([ANSWERED_V3])}`);
     stream.close();
-    await expect(pending).resolves.toEqual({ result: answerV7(), receipt: receiptV2() });
-    expect(progress).toEqual([STEPS[0], ...STEPS_V2.slice(2)]);
+    await expect(pending).resolves.toEqual({ result: answerV8(), receipt: receiptV3() });
+    expect(progress).toEqual([STEPS[0], ...STEPS_V3.slice(2)]);
   });
 });
 
@@ -499,21 +537,62 @@ describe('Ask progress V2 on /v6 (ADR-0040)', () => {
   });
 });
 
-describe('person ask --live without progress (ADR-0040)', () => {
-  it('prefers /v6, and falls back to /v5 then /v4 only on a 404 without the route header', async () => {
+describe('Ask progress V3 on /v7 (research tool contract v1)', () => {
+  it('opts in on /v7 with its own header value and reads workspace names across any chunking', async () => {
+    const bytes = encoder.encode(STREAM_V3);
+    for (const size of [1, 3, 64, bytes.length]) {
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(bytes, size, { headers: V7_HEADERS }));
+      const progress: PersonAskProgressStepEventV3[] = [];
+      const result = await authority(fetch).askV7WithProgress('bearer', 'Where is Thermal recovery tracked?', undefined, undefined, event => progress.push(event));
+      expect(result).toEqual({ result: answerV8(), receipt: receiptV3() });
+      expect(progress).toEqual(STEPS_V3);
+      const [url, init] = fetch.mock.calls[0]!;
+      expect(pathOf(url)).toBe('/v7/person/ask');
+      expect(headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
+      expect(headersOf(init).get('accept')).toBe('text/event-stream, application/json');
+    }
+  });
+
+  it('fails closed on a /v7 stream that breaks progress V3, a V7 answer included', async () => {
+    for (const body of [
+      framesV2([ANSWERED_V2]),
+      `${framesV3(STEPS_V3.slice(0, 1))}data: {"type":"read","items":[{"citation":{"kind":"project","project_id":"${projectId}"},"kind":"project","label":"x","visibility":"project"}]}\n\n`,
+      `${framesV3(STEPS_V3.slice(0, 1))}data: {"type":"searched","sources":[{"kind":"projects","tool_id":"jira"}],"found":1}\n\n`,
+    ]) {
+      await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(body, undefined, { headers: V7_HEADERS })))
+        .askV7WithProgress('bearer', 'Where is Thermal recovery tracked?', undefined, undefined, () => undefined)).rejects.toMatchObject({ code: 'invalid_response', status: 200 });
+    }
+  });
+
+  it('reads /v7 JSON as the V8 answer, in the scope asked, with or without progress', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answerV8(), 200, V7_HEADERS)).mockResolvedValueOnce(json(answerV8(), 200, V7_HEADERS));
+    await expect(authority(fetch).askV7('bearer', 'Where is Thermal recovery tracked?')).resolves.toEqual(answerV8());
+    await expect(authority(fetch).askV7WithProgress('bearer', 'Where is Thermal recovery tracked?', undefined, undefined, () => undefined)).resolves.toEqual({ result: answerV8() });
+    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask', '/v7/person/ask']);
+    expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
+    for (const body of [answerV7(), answerV8({ kind: 'mine' })]) {
+      await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body, 200, V7_HEADERS))).askV7('bearer', 'Where is Thermal recovery tracked?'))
+        .rejects.toMatchObject({ code: 'invalid_response' });
+    }
+  });
+});
+
+describe('person ask --live without progress (research tool contract v1, ADR-0040)', () => {
+  it('prefers /v7, and falls back to /v6, /v5 then /v4 only on a 404 without the route header', async () => {
     for (const [replies, paths, result] of [
-      [() => [json(answerV7(), 200, V6_HEADERS)], ['/v6/person/ask'], answerV7()],
-      [() => [noRoute(), json(answer(), 200, { [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' })], ['/v6/person/ask', '/v5/person/ask'], answer()],
-      [() => [noRoute(), noRoute(), json(v5Answer())], ['/v6/person/ask', '/v5/person/ask', '/v4/person/ask'], v5Answer()],
+      [() => [json(answerV8(), 200, V7_HEADERS)], ['/v7/person/ask'], answerV8()],
+      [() => [noRoute(), json(answerV7(), 200, V6_HEADERS)], ['/v7/person/ask', '/v6/person/ask'], answerV7()],
+      [() => [noRoute(), noRoute(), json(answer(), 200, { [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' })], ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask'], answer()],
+      [() => [noRoute(), noRoute(), noRoute(), json(v5Answer())], ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask', '/v4/person/ask'], v5Answer()],
     ] as const) {
       const queue = replies();
       const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => queue.shift()!);
       await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveSources('What is still open?')).resolves.toEqual(result);
       expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(paths);
     }
-    // /v6's own failure, route header and all, is the answer: no fallback.
+    // /v7's own failure, route header and all, is the answer: no fallback.
     for (const [status, code] of [[404, 'not_found'], [503, 'unavailable']] as const) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code, message: 'request failed' } }, status, V6_HEADERS));
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code, message: 'request failed' } }, status, V7_HEADERS));
       await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveSources('What is still open?')).rejects.toMatchObject({ code, status });
       expect(fetch).toHaveBeenCalledTimes(1);
     }
@@ -521,43 +600,53 @@ describe('person ask --live without progress (ADR-0040)', () => {
 });
 
 describe('person ask --live --progress', () => {
-  it('prints each step as its own line, then today\'s final line with the receipt, follow-ups included', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(STREAM_V2, 7, { headers: V6_HEADERS }));
+  it('prints each step as its own line, then today\'s final line with the receipt, the workspace included', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(STREAM_V3, 7, { headers: V7_HEADERS }));
     const { output, run } = cli(sessionHome(), fetch);
-    await expect(run(['ask', '--question', 'What did we decide?', '--live', '--progress'])).resolves.toBe(0);
+    await expect(run(['ask', '--question', 'Where is Thermal recovery tracked?', '--live', '--progress'])).resolves.toBe(0);
     expect(output.stderr).toBe('');
     const printed = lines(output.stdout);
-    expect(printed.slice(0, -1).map(line => validatePersonAskProgressLineV2(line))).toEqual(STEPS_V2.map(progress => ({ ok: true, progress })));
-    expect(validatePersonAskProgressResultLineV2(printed.at(-1))).toEqual({ ok: true, result: answerV7(), receipt: receiptV2() });
+    expect(printed.slice(0, -1).map(line => validatePersonAskProgressLineV3(line))).toEqual(STEPS_V3.map(progress => ({ ok: true, progress })));
+    expect(validatePersonAskProgressResultLineV3(printed.at(-1))).toEqual({ ok: true, result: answerV8(), receipt: receiptV3() });
     expect(output.stdout.endsWith('\n')).toBe(true);
-    expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v6/person/ask');
-    expect(headersOf(fetch.mock.calls[0]![1]).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('2');
+    expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
+    expect(headersOf(fetch.mock.calls[0]![1]).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
   });
 
-  it('prints a /v5 stream\'s V1 steps and its V6 answer with its V1 receipt on an Authority without /v6', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(sse(STREAM, 7));
+  it('prints a /v6 stream\'s V2 steps and its V7 answer with its V2 receipt on an Authority without /v7', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(sse(STREAM_V2, 7, { headers: V6_HEADERS }));
+    const { output, run } = cli(sessionHome(), fetch);
+    await expect(run(['ask', '--question', 'What is still open?', '--live', '--progress'])).resolves.toBe(0);
+    const printed = lines(output.stdout);
+    expect(printed.slice(0, -1)).toEqual(STEPS_V2.map(progress => ({ ok: true, progress })));
+    expect(validatePersonAskProgressResultLineV3(printed.at(-1))).toEqual({ ok: true, result: answerV7(), receipt: receiptV2() });
+  });
+
+  it('prints a /v5 stream\'s V1 steps and its V6 answer with its V1 receipt on an Authority without /v7 or /v6', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(sse(STREAM, 7));
     const { output, run } = cli(sessionHome(), fetch);
     await expect(run(['ask', '--question', 'What did we decide?', '--live', '--progress'])).resolves.toBe(0);
     const printed = lines(output.stdout);
     expect(printed.slice(0, -1)).toEqual(STEPS.map(progress => ({ ok: true, progress })));
-    expect(validatePersonAskProgressResultLineV2(printed.at(-1))).toEqual({ ok: true, result: answer(), receipt: receipt() });
+    expect(validatePersonAskProgressResultLineV3(printed.at(-1))).toEqual({ ok: true, result: answer(), receipt: receipt() });
   });
 
   it('keeps the project scope on the streamed request', async () => {
     const project = 'prj_00000000-0000-4000-8000-000000000019' as const;
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(framesV2([{ type: 'answer', response: answerV7({ kind: 'project', project_id: project }), receipt: receiptV2() }]), undefined, { headers: V6_HEADERS }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(framesV3([{ type: 'answer', response: answerV8({ kind: 'project', project_id: project }), receipt: receiptV3() }]), undefined, { headers: V7_HEADERS }));
     const { output, run } = cli(sessionHome(), fetch);
     await expect(run(['ask', '--question', 'What did we decide?', '--live', '--progress', '--project', project])).resolves.toBe(0);
     expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ schema_version: 3, question: 'What did we decide?', project_id: project });
-    expect(lines(output.stdout)).toEqual([{ ok: true, result: answerV7({ kind: 'project', project_id: project }), receipt: receiptV2() }]);
+    expect(lines(output.stdout)).toEqual([{ ok: true, result: answerV8({ kind: 'project', project_id: project }), receipt: receiptV3() }]);
   });
 
   it('prints exactly today\'s line from an Authority that does not stream, and from the V4 fallback', async () => {
     const home = sessionHome();
     for (const [replies, result] of [
-      [() => [json(answerV7(), 200, V6_HEADERS)], answerV7()],
-      [() => [noRoute(), json(answer())], answer()],
-      [() => [noRoute(), noRoute(), json(v5Answer())], v5Answer()],
+      [() => [json(answerV8(), 200, V7_HEADERS)], answerV8()],
+      [() => [noRoute(), json(answerV7(), 200, V6_HEADERS)], answerV7()],
+      [() => [noRoute(), noRoute(), json(answer())], answer()],
+      [() => [noRoute(), noRoute(), noRoute(), json(v5Answer())], v5Answer()],
     ] as const) {
       const ask = async (argv: readonly string[]) => {
         const queue = replies();
@@ -573,7 +662,7 @@ describe('person ask --live --progress', () => {
 
   it('sends no opt-in header and prints one line without --progress, and never streams Mine on V3', async () => {
     for (const [argv, path, body] of [
-      [['ask', '--question', 'What did we decide?', '--live'], '/v6/person/ask', answerV7()],
+      [['ask', '--question', 'What did we decide?', '--live'], '/v7/person/ask', answerV8()],
       [['ask', '--question', 'What did we decide?', '--mine'], '/v3/person/ask', { ...answer({ kind: 'mine' }), schema_version: 4, kind: 'echo-clean-person-answer-v4' }],
     ] as const) {
       const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body));
@@ -594,10 +683,10 @@ describe('person ask --live --progress', () => {
     expect(refused.output.stdout).toBe('');
     expect(JSON.parse(refused.output.stderr)).toMatchObject({ ok: false, action: 'ask' });
 
-    fetch.mockResolvedValueOnce(sse(STREAM_V2, undefined, { headers: V6_HEADERS }));
+    fetch.mockResolvedValueOnce(sse(STREAM_V3, undefined, { headers: V7_HEADERS }));
     const pinned = cli(sessionHome(), fetch);
     await expect(pinned.run(['ask', '--question', 'What did we decide?', '--live', '--progress', ...pin(SESSION.membership_id)])).resolves.toBe(0);
-    expect(lines(pinned.output.stdout)).toHaveLength(STEPS_V2.length + 1);
+    expect(lines(pinned.output.stdout)).toHaveLength(STEPS_V3.length + 1);
 
     // Only a streamed Ask takes a pin: the others never check it.
     const unpinned = cli(sessionHome(), vi.fn<typeof globalThis.fetch>());
