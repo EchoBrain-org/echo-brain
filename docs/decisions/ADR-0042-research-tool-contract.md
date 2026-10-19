@@ -27,7 +27,7 @@ on 2026-10-19 with its five recommended decisions, to be built end to end. Its
 goal: Ask's research can find everything in ECHO and in the asker's connected
 tools that the asker may see, with a few simple tools the model combines
 freely. The names, bounds and wording below are build calls within that
-design; its "As built" section lists where the build differs. Acceptance does
+design; where the build differs from it, this record says so. Acceptance does
 not mean the change is deployed or qualified. Code paths are at
 `reviewed_ref`, relative to `packages/organization-authority-kernel/src/`
 unless shown in full.
@@ -35,39 +35,13 @@ unless shown in full.
 ## Context and options
 
 On 2026-10-19 staging ran 13 Asks on release `40ba71c` (LangSmith project
-`echo-staging`). The 11 that named a meeting, a release, a source and a date,
-or follow-ups finished in two or three rounds. The two open-ended ones failed:
-
-- **"what happened yesterday"** (`14cf3f41-1550-4d18-9a62-ef117dd9d6a9`)
-  stopped on its time budget after 6 rounds. Its dated meeting lists were
-  marked unavailable because some meetings record no time, while the note the
-  model read said "nothing more to list". It sent the same date filter in four
-  shapes, and answered that it could not verify that day's meetings.
-- **"what are my current active projects?"**
-  (`d8cd5a3e-78ea-4927-895d-df4e286d9e6d`) stopped with no progress after 5
-  rounds. It sent a date filter that follow-ups refuse 7 times. No tool could
-  list projects.
-
-What the traces showed:
-
-1. **Refusals misled.** A filter that did not work came back four ways: an
-   error string, an unavailable list whose note still said "nothing more to
-   list", or ADR-0041's `ignored` or `partial`. Nothing stopped research from
-   sending a refused call again. Which filters and dates a source took was
-   prose, and it contradicted itself: one description gave follow-ups a "due
-   date", another said they had no dates.
-2. **Whole parts of ECHO had no source.** Projects with their members and
-   leads, the organization directory and the asker's tools were stored but out
-   of research's reach, as were the Jira projects and Confluence spaces of the
-   connected tools.
-3. **Records hid their dates.** An approved record carried no approval date.
-   Staging canary meetings and several imported transcripts recorded no meeting
-   time, so most dated meeting reads tripped the missing-date notice.
-   Follow-ups dropped their own created, sent and reassigned dates.
-4. **A step made at most 4 calls,** so a broad question worked through sources
-   one at a time.
-5. **The receipt counted only full reads.** An Ask that read only rows said
-   "Looked through 0 items".
+`echo-staging`). The 11 that named their subject finished in two or three
+rounds; the two open-ended ones, "what happened yesterday"
+(`14cf3f41-1550-4d18-9a62-ef117dd9d6a9`) and "what are my current active
+projects?" (`d8cd5a3e-78ea-4927-895d-df4e286d9e6d`), failed. The design's
+"Why" gives the causes: refusals that misled and were sent again, parts of
+ECHO no source reached, records that hid their dates, four calls a step, and
+a receipt that counted only full reads.
 
 The design's five decisions, each chosen over its alternative:
 
@@ -182,9 +156,10 @@ the desk (`normalizeAskListArgs` and the search date checks in
 - In a search across sources, only items linked by the rows the desk keeps come
   through.
 - Projects link `members`, people `projects`, and follow-ups `decision` (only
-  where the release carries the decision) and `follows` (only when this
-  request read the tool item live). Meetings, documents, Jira issues,
-  Confluence pages, tools and containers declare no links.
+  where the release carries the decision, which leads to their meeting) and
+  `follows` (only when this request read the tool item live). Meetings,
+  documents, Jira issues, Confluence pages, tools and containers declare no
+  links.
 - **No URL reaches the model.** An item's link in its tool travels with the
   answer's citation, and the client opens it.
 
@@ -265,11 +240,11 @@ by name answers or refuses as asked.
 - **Older routes.** `/v6` (V7, progress V2), `/v5` (V6, progress V1), `/v4`
   and `/v3` keep their answers and never bind or cite the workspace or
   containers.
-- **Clients.** `person ask --live` asks `/v7`, then `/v6`, `/v5` and `/v4`,
-  each only on a 404 without the route header. With `--progress` it streams
-  `/v7` as V3, `/v6` as V2 and `/v5` as V1, and prints every step as a V3
-  line. The desktop opens a project's page, shows a person by name only, opens
-  Tools for a tool, and shows a container as "Jira · KEY" that opens its link.
+- **Clients.** `person ask --live` asks `/v7` first and falls back as the
+  [Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)
+  describes; with `--progress` it prints every step as a V3 line. The desktop
+  opens a project's page, shows a person by name only, opens Tools for a tool,
+  and shows a container as "Jira · KEY" that opens its link.
 
 ### Permissions, audit and checks
 
@@ -305,14 +280,15 @@ by name answers or refuses as asked.
 
 ### Observability
 
-An Ask counts its research beside `planned_query_count`:
-`refused_read_count`, `repeated_refusal_count`, `unchecked_item_count`,
-`sources_looked_at` and `most_reads_in_a_step`. Container calls record
-`evidence_source: tool_container`. See
+The counts an Ask records for its research, and container calls'
+`evidence_source`, are in
 [RB-OPERATIONS-001](../operations/RB-OPERATIONS-001-authority-observability.md).
 
 ### Known limits
 
+- **The map is the source catalog.** The first prompt carries the asker,
+  today's date and time zone, and each source's description and capabilities;
+  the asker's projects and tools are sources research lists, not map entries.
 - **No `total` on lists.** Only projects declare `count`. A list's size is
   still its number of members (ADR-0041).
 - **Connector items carry no links yet.** Jira issues and Confluence pages
@@ -406,23 +382,3 @@ in `services/organization-authority/test/` unless shown in full:
   (`person-evidence-desk-records.test.ts`);
 - every answer version below V8 refuses a workspace or container citation
   (`packages/organization-api/test/person-answer-v8.test.ts`).
-
-The research contract is tested in
-`packages/organization-authority-kernel/test/answer-composition/agentic-ask-research-contract.test.ts`:
-a refused read answered again from memory, unsent; a window on any date and
-what matched; a short look with `limit`; links by id with linked items kept
-out of the list; unchecked items told to research and named only through a
-list the answer uses; ten reads in one step; and a V8 answer citing a project
-with progress V3. The wire contracts are in
-`packages/organization-api/test/person-answer-v8.test.ts` and
-`person-ask-progress-v3.test.ts` beside it. In
-`services/organization-authority/test/`,
-`person-live-connector-registry-v1.test.ts` holds the Jira and Confluence
-readers to the dates their sources declare,
-`person-follow-ups-evidence-v1.test.ts` covers follow-ups' dates and links,
-and `person-record-search-route.test.ts` approved records' dates and people.
-`tests/architecture/ask-progress-roundtrip.test.ts` carries a V8 Ask from `/v7`
-through the Person client to the desktop page, where a project, a person, a
-tool and a Jira project each open by their kind. The client's fallback chain is
-in `tests/person-client/person-ask-progress.test.ts`, and the desktop's
-end-to-end proof in `product/echo-desktop/test/e2e/ask.spec.ts`.
