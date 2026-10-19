@@ -4,7 +4,6 @@ import {
   PERSON_ASK_PROGRESS_HEADER_VALUE_V1,
   PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
   PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  PERSON_ASK_PROGRESS_HEARTBEAT_V1,
   PERSON_ASK_PROGRESS_SOURCES_MAX_V1,
   PERSON_ASK_PROGRESS_SOURCES_MAX_V3,
   createPersonAskProgressDecoderV2,
@@ -114,34 +113,19 @@ describe('Ask progress V3 wire contract (/v7, research tool contract v1)', () =>
 });
 
 describe('Ask progress V3 stream framing', () => {
-  const events: readonly PersonAskProgressEventV3[] = [
-    { type: 'stage', stage: 'searching' },
-    { type: 'searched', sources, found: 3 },
-    { type: 'stage', stage: 'reading', pending: 2 },
-    { type: 'read', items: [project, container] },
-    { type: 'stage', stage: 'writing' },
-    { type: 'answer', response: v8(), receipt: { looked_through: 2, elapsed_ms: 20_000, rows: [{ type: 'searched', sources, found: 3 }, { type: 'read', items: [project, container] }] } },
-  ];
-  const stream = events.map((event, index) => `${index === 2 ? PERSON_ASK_PROGRESS_HEARTBEAT_V1 : ''}${formatPersonAskProgressEventV3(event)}`).join('');
-
-  it('frames and decodes exactly as V1, across any chunking', () => {
-    for (const size of [1, 17, stream.length]) {
-      const decoder = createPersonAskProgressDecoderV3();
-      const read: PersonAskProgressEventV3[] = [];
-      for (let at = 0; at < stream.length; at += size) read.push(...decoder.push(stream.slice(at, at + size)));
-      decoder.end();
-      expect(read).toEqual(events);
-    }
-    // A V2 decoder refuses a workspace stream; a V3 decoder reads a V2 stream's steps.
+  // Framing, chunking and failing closed are the shared codec's, tested in person-ask-progress-v1.test.ts.
+  it('formats and decodes a workspace stream that a V2 decoder refuses, and reads a V2 stream', () => {
+    const events: readonly PersonAskProgressEventV3[] = [
+      { type: 'searched', sources, found: 3 },
+      { type: 'read', items: [project, container] },
+      { type: 'answer', response: v8(), receipt: { looked_through: 2, elapsed_ms: 20_000, rows: [{ type: 'searched', sources, found: 3 }, { type: 'read', items: [project, container] }] } },
+    ];
+    const stream = events.map(formatPersonAskProgressEventV3).join('');
+    const decoder = createPersonAskProgressDecoderV3();
+    expect(decoder.push(stream)).toEqual(events);
+    decoder.end();
     expect(() => createPersonAskProgressDecoderV2().push(stream)).toThrow();
     expect(createPersonAskProgressDecoderV3().push(formatPersonAskProgressEventV2({ type: 'read', items: [followUp] }))).toEqual([{ type: 'read', items: [followUp] }]);
-  });
-
-  it('fails closed after its result, and refuses to format an event that breaks the contract', () => {
-    expect(() => createPersonAskProgressDecoderV3().push(`${stream}${formatPersonAskProgressEventV3({ type: 'stage', stage: 'writing' })}`)).toThrow('after its result');
-    const open = createPersonAskProgressDecoderV3();
-    open.push(formatPersonAskProgressEventV3({ type: 'stage', stage: 'searching' }));
-    expect(() => open.end()).toThrow('without its result');
     expect(() => formatPersonAskProgressEventV3({ type: 'read', items: [{ ...project, lead: 'Mara' }] } as unknown as PersonAskProgressEventV3)).toThrow();
   });
 });
