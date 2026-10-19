@@ -14,17 +14,7 @@ export type EvidenceDeskCitationV1 = PersonAnswerEvidenceCitationV4;
 /** Where an item came from. Meeting records and documents live in Echo; Slack is read live and never stored. */
 export type EvidenceDeskSourceV1 = 'meeting' | 'document' | 'slack';
 /** Meaning of a provider-supplied date; never inferred from a storage source. */
-export type EvidenceDeskDateKindV1 = 'created' | 'version_created' | 'occurred' | 'updated' | 'due' | 'received' | 'approved';
-
-/**
- * A live source that server composition bound to this one request.  A legacy
- * Slack reader has no provider tool identifier, so that coordinate is
- * deliberately optional rather than invented by the core.
- */
-export interface EvidenceDeskLiveSourceV1 {
-  readonly source: 'slack';
-  readonly tool_id?: string;
-}
+export type EvidenceDeskDateKindV1 = 'created' | 'version_created' | 'occurred' | 'updated' | 'due' | 'received';
 
 /** The source of an item, from its kind. */
 export function evidenceDeskSourceV1(item: { readonly kind: EvidenceDeskKindV1; readonly ref?: string }): EvidenceDeskSourceV1 {
@@ -166,11 +156,6 @@ export interface EvidenceDeskRevalidateInputV1 {
  */
 export interface EvidenceDeskPortV1 {
   readonly scope: EvidenceDeskScopeV1;
-  /**
-   * Actual request-bound live sources.  Omission and an empty list both mean
-   * no live source is available; callers must not infer one from scope.
-   */
-  readonly live_sources?: readonly EvidenceDeskLiveSourceV1[];
   search(input: EvidenceDeskSearchInputV1): Promise<EvidenceDeskResultV1>;
   open(input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV1>;
   list(input: EvidenceDeskListInputV1): Promise<EvidenceDeskResultV1>;
