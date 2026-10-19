@@ -1,4 +1,4 @@
-import { EVIDENCE_DATE_FIELDS_V1, evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import { evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import type { EvidenceDeskResultV2, EvidenceDeskUncheckedV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v2";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -23,6 +23,7 @@ import type {
   PersonOriginalContextEvidenceDeskPortV1,
 } from "../application/ports/person-original-context-retrieval-v1.js";
 import { PERSON_DOCUMENT_DATE_FIELDS_V1, PERSON_MEETING_DATE_FIELDS_V1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
+import { mergeUncheckedV1 } from "../application/evidence-unchecked-v1.js";
 import {
   PersonRecordSearchIndexLagV1,
   type PersonEvidenceDeskRecordsV1,
@@ -51,12 +52,6 @@ export interface PersonEvidenceDeskV1 extends EvidenceDeskPortV1 {
   open(input: EvidenceDeskOpenInputV1): Promise<PersonEvidenceDeskResultV1>;
   list(input: EvidenceDeskListInputV1): Promise<PersonEvidenceDeskResultV1>;
   openCitation(input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResultV1>;
-}
-
-/** Two halves' untested items as one: their counts summed, and every date either records. */
-function bothUnchecked(left: EvidenceDeskUncheckedV1 | undefined, right: EvidenceDeskUncheckedV1 | undefined): EvidenceDeskUncheckedV1 | undefined {
-  if (left === undefined || right === undefined) return left ?? right;
-  return Object.freeze({ count: left.count + right.count, dates: Object.freeze(EVIDENCE_DATE_FIELDS_V1.filter(field => left.dates.includes(field) || right.dates.includes(field))) });
 }
 
 /**
@@ -181,7 +176,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   };
   const originals = (release: OriginalContextDeskReleaseV1): readonly EvidenceDeskItemV1[] => {
     originalReleases.push(release);
-    readUnchecked = bothUnchecked(readUnchecked, release.unchecked);
+    readUnchecked = mergeUncheckedV1([readUnchecked, release.unchecked]);
     return release.items.map((value) => save(Object.freeze({
       id: itemId(sourceCitation(value)), citation: sourceCitation(value), kind: value.kind,
       ...(value.text === undefined ? {} : { text: value.text }), label: value.label,
@@ -192,7 +187,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   };
   const records = (result: ReturnType<PersonEvidenceDeskRecordsV1["searchBatch"]>, includeText = true): readonly EvidenceDeskItemV1[] => {
     latestRecordTruncated ||= result.truncated === true;
-    readUnchecked = bothUnchecked(readUnchecked, result.unchecked);
+    readUnchecked = mergeUncheckedV1([readUnchecked, result.unchecked]);
     pointer ??= result.release.active_pointer;
     if (pointer.generation_id !== result.release.active_pointer.generation_id || pointer.manifest_sha256 !== result.release.active_pointer.manifest_sha256 || pointer.record_head.position !== result.release.active_pointer.record_head.position || pointer.record_head.record_sha256 !== result.release.active_pointer.record_head.record_sha256) throw new AuthorityOperationError("unavailable", "record evidence snapshot changed");
     recordReleases.push(result.release);

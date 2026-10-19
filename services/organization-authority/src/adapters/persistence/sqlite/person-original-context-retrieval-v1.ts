@@ -37,6 +37,7 @@ import type {
 import { personOriginalAclV1, personOriginalGrantedProjectIdsV1, personOriginalScopeFilterV1, personUnknownScopeV1 } from "./person-original-access-v1.js";
 import { analyzeOriginalContextPacketV1, scoreOriginalContextPacketV1 } from "./original-context-bm25-v1.js";
 import { samePersonReleaseAuthorizationV1 } from "../../../application/person-release-authorization-v1.js";
+import { createUncheckedTallyV1 } from "../../../application/evidence-unchecked-v1.js";
 
 const MAXIMUM_PACKET_BYTES = 3_072;
 const SOURCE_ID = /^source:[0-9a-f]{64}$/;
@@ -424,15 +425,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   private uncheckedOf(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, input: EvidenceDateFilterV1 & { readonly source?: "meeting" | "document"; readonly kinds?: readonly DeskKind[] }): EvidenceDeskUncheckedV1 | undefined {
     if (input.since === undefined && input.until === undefined) return undefined;
     const accepts = (kind: DeskKind) => input.kinds === undefined || input.kinds.includes(kind);
-    let count = 0;
-    const carried = new Set<EvidenceDateFieldV1>();
-    const consider = (dates: EvidenceDatesV1, unnamed: EvidenceDateFieldV1) => {
-      const field = input.date_field ?? unnamed;
-      const recorded = EVIDENCE_DATE_FIELDS_V1.filter(name => dates[name] !== undefined);
-      if (field === EVIDENCE_ANY_DATE_V1 ? recorded.length > 0 : dates[field] !== undefined) return;
-      count += 1;
-      for (const name of recorded) carried.add(name);
-    };
+    const tally = createUncheckedTallyV1();
+    const consider = (dates: EvidenceDatesV1, unnamed: EvidenceDateFieldV1) => { tally.tests(dates, input.date_field ?? unnamed); };
     // Every note and document records when it was received, so only another field leaves one untested.
     const received = input.date_field === undefined || input.date_field === "received" || input.date_field === EVIDENCE_ANY_DATE_V1;
     if (input.source !== "meeting" && !received) {
@@ -444,7 +438,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       if (accepts("imported_meeting")) for (const row of this.imported.rows(actor, scope)) if (row.text.length > 0) consider({ ...row.dates, received: row.received_at }, "occurred");
       if (accepts("note")) for (const transcript of this.transcriptCandidates(actor, scope)) consider({ ...transcript.dates, received: transcript.received_at }, "occurred");
     }
-    return count === 0 ? undefined : Object.freeze({ count, dates: Object.freeze(EVIDENCE_DATE_FIELDS_V1.filter(name => carried.has(name))) });
+    return tally.unchecked();
   }
 
   deskAuthorize(input: { readonly access_token: string; readonly scope: PersonAskScopeV2 }): { readonly checked_at: string } {

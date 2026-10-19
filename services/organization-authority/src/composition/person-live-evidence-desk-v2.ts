@@ -1,7 +1,7 @@
 import { EVIDENCE_ANY_DATE_V1, evidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { validatePersonEvidenceOpenRequestV1, type PersonAnswerCitationV3 } from '@echo-brain/organization-api';
 import type { EvidenceDeskKindV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
-import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2, EvidenceDeskUncheckedV1, PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2, PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_LIMITS_V1, FOLLOW_UPS_SOURCE_ID_V1 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -10,6 +10,7 @@ import type { PersonFollowUpsEvidenceSourceV1 } from './person-follow-ups-eviden
 import type { PersonWorkspaceEvidenceSourcesV1 } from './person-workspace-evidence-v1.js';
 import { WORKSPACE_SOURCE_IDS_V1, type WorkspaceSourceIdV1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
+import { mergeUncheckedV1 } from '../application/evidence-unchecked-v1.js';
 
 const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'];
 /** Live inventory pages match the research loop's list fetch; each reader still applies its own smaller cap. */
@@ -49,11 +50,6 @@ function linkedOf(results: readonly EvidenceDeskResultV2[]): readonly EvidenceDe
   const linked = new Map<string, EvidenceDeskItemV2>();
   for (const result of results) for (const item of result.linked ?? []) if (!linked.has(item.id)) linked.set(item.id, item);
   return linked.size === 0 ? undefined : Object.freeze([...linked.values()]);
-}
-/** What several dated reads could not test: their counts summed, and the dates those items carry, each once. */
-function uncheckedOf(results: readonly EvidenceDeskResultV2[]): EvidenceDeskUncheckedV1 | undefined {
-  const counted = results.flatMap(result => result.unchecked === undefined || result.unchecked.count === 0 ? [] : [result.unchecked]);
-  return counted.length === 0 ? undefined : Object.freeze({ count: counted.reduce((total, value) => total + value.count, 0), dates: Object.freeze([...new Set(counted.flatMap(value => value.dates))]) });
 }
 
 /**
@@ -228,7 +224,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       const rows = new Set(selected.map(item => item.id));
       const kept = new Set(selected.flatMap(item => Object.values(item.links ?? {}).flat()));
       const linked = linkedOf(pages.map(page => remember({ items: [], truncated: false, receipt_digests: [], linked: (page.result.linked ?? []).filter(item => kept.has(item.id) && !rows.has(item.id)) }, page.source)));
-      const unchecked = uncheckedOf(pages.map(page => page.result));
+      const unchecked = mergeUncheckedV1(pages.map(page => page.result.unchecked));
       return Object.freeze({
         items: Object.freeze(selected),
         truncated: pages.some(page => page.result.truncated) || pages.reduce((count, page) => count + page.result.items.length, 0) > maximum,

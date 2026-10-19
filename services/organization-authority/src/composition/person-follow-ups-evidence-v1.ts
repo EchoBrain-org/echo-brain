@@ -20,16 +20,15 @@ import {
 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
 import {
   EVIDENCE_ANY_DATE_V1,
-  EVIDENCE_DATE_FIELDS_V1,
   matchesEvidenceDateV1,
   validateEvidenceDateFilterV1,
-  type EvidenceDateFieldV1,
   type EvidenceDateFilterV1,
   type EvidenceDatesV1,
 } from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
 import type { ImpactItemRowV1, ImpactItemStateV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { PersonFollowUpReleaseAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import { evidenceDateFieldsOfV1 } from '../adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
+import { createUncheckedTallyV1 } from '../application/evidence-unchecked-v1.js';
 import {
   assessOpenItemsV1,
   errorCodeV1,
@@ -193,16 +192,10 @@ function inWindow(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_s
 /** The rows a window could not test because they do not record its date, and the dates they do record (research tool contract v1). */
 function uncheckedOf(rows: readonly Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'check'>[], window: EvidenceDateFilterV1 | undefined): EvidenceDeskUncheckedV1 | undefined {
   if (window === undefined) return undefined;
-  let count = 0;
-  const carried = new Set<EvidenceDateFieldV1>();
-  for (const row of rows) {
-    const dates = rowDates(row);
-    const recorded = EVIDENCE_DATE_FIELDS_V1.filter(field => dates[field] !== undefined);
-    if (window.date_field === EVIDENCE_ANY_DATE_V1 ? recorded.length > 0 : dates[window.date_field as EvidenceDateFieldV1] !== undefined) continue;
-    count += 1;
-    for (const field of recorded) carried.add(field);
-  }
-  return count === 0 ? undefined : Object.freeze({ count, dates: Object.freeze(EVIDENCE_DATE_FIELDS_V1.filter(field => carried.has(field))) });
+  // `windowOf` always names the window's field.
+  const tally = createUncheckedTallyV1();
+  for (const row of rows) tally.tests(rowDates(row), window.date_field ?? EVIDENCE_ANY_DATE_V1);
+  return tally.unchecked();
 }
 /** A ticket key a query names, upper case, from a word that is one once punctuation around it is trimmed. */
 function keyOf(word: string): string | undefined {
