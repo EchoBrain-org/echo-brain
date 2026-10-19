@@ -10,7 +10,7 @@ import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, duration, foundBefore, headline, liveRows, namedPlaces, placeLabel, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, searchedWords, type AskProgress,
+  announceAfter, announcement, duration, foundBefore, headline, liveRows, namedPlaces, placeLabel, PROGRESS_AFTER_MS, receiptWords, searchedWords, type AskProgress,
   type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
@@ -482,13 +482,13 @@ function Names({ state, places }: { state: State; places: readonly NamedPlace[] 
 
 /**
  * Above an answer that took a while: the Ask's line, in place, as one dim
- * receipt, "Looked through 14 items · 48s ›", that opens the searches and
+ * receipt, "Looked through 58 items · 48s ›", that opens the searches and
  * reads the Authority audited, each name opening beside the answer. A line
- * opened while Ask worked stays open.
+ * opened while Ask worked stays open. The searches' found counts and the
+ * names account for what it looked through (ADR-0043).
  */
 function Receipt({ state, receipt, took, line }: { state: State; receipt: AskReceipt; took: number; line: Line }) {
   const { open } = line;
-  const unnamed = receiptUnnamed(receipt);
   return (
     <div class="ask-trail">
       <div class="ask-line">
@@ -501,7 +501,6 @@ function Receipt({ state, receipt, took, line }: { state: State; receipt: AskRec
         <ul class="ask-steps" data-testid="receipt-rows" aria-live="off">
           {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} earlier={foundBefore(receipt.rows, index)} />
             : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
-          {unnamed > 0 && <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">and {unnamed} more not listed</span></li>}
         </ul>
       )}
     </div>

@@ -285,8 +285,10 @@ export interface AskRead {
 export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readonly pending?: number } | AskSearched | AskRead;
 /**
  * What an answered Ask looked through, rebuilt by the Authority from the
- * items that passed its final check: how many it read, how long it took, and
- * its searches and reads in order, neighbours of a type already merged.
+ * items that passed its final check: how many items it looked through (from
+ * progress V3, ADR-0043, the rows it was shown as well as what it read in
+ * full; before, only what it read in full), how long it took, and its
+ * searches and reads in order, neighbours of a type already merged.
  */
 export interface AskReceipt {
   readonly looked_through: number;
