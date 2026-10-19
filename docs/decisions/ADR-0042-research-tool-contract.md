@@ -228,10 +228,16 @@ the desk (`normalizeAskListArgs` and the search date checks in
 - **No Slack containers.** Production has had no Slack reader since `2bb9b25`
   (2026-10-05), so Slack stays out of scope.
 
-**Search across sources.** The workspace joins only an undated keyword search,
-as follow-ups do. A source that records no dates sits out a dated search, and
-a tool's containers join only a keyword search. A source chosen by name
-answers or refuses as asked.
+**Search across sources.** A search with no source reads meetings, documents,
+the connected tools' items, follow-ups and the asker's projects, dated or not:
+a window with no `date_field` reads any of each item's dates, and a source
+that reads one date only gets its own default. A source that records no dates
+sits out a dated search. People, tools and a tool's containers are searched
+only when named, since the directory is read whole and a container search
+scans the tool. The asker's projects fill the slots the content sources leave,
+so a project's name never crowds out what was said about it. A follow-up or
+project source briefly unavailable becomes a coverage notice. A source chosen
+by name answers or refuses as asked.
 
 ### Answer V8, progress V3 and clients
 
@@ -319,6 +325,22 @@ An Ask counts its research beside `planned_query_count`:
 - **No step schema per source.** The design's open question, a step schema
   generated per source, was not built. The outcome rule covers a filter a
   source does not take.
+- **The workspace's first read reads it whole.** A request's first projects
+  read takes every project in scope, each roster and each project's Jira and
+  Confluence setting, and a people read takes the whole directory. That is
+  cheap for today's organizations; a large one would need paged reads.
+- **Counts that leave unaudited.** A follow-up release's `unchecked` count and
+  the projects source's `count` reach the model without a release witness of
+  their own; only the Ask's prompt digest records them.
+- **A container names every mapped project the asker sees.** In a project
+  scope, a Jira project or Confluence space mapped to two of the asker's
+  projects names both. Nothing leaks, but the text is wider than the scope.
+- **A row a search left out is still checked.** A workspace item a search
+  across sources released but did not keep stays in the workspace's checks, so
+  a change to it can refuse the answer though the model never saw it.
+- **Older routes research the same way.** `/v6` and older keep their answer
+  contracts but research under this contract: any-date windows, `unchecked`
+  counts, follow-ups' linked decisions and dated follow-up searches.
 
 ## Migration, rollback, and evidence
 
@@ -363,9 +385,10 @@ in `services/organization-authority/test/` unless shown in full:
 - audit rows hold item kinds, ids and digests only, and the audit refuses
   anything else (`person-workspace-evidence-v1.test.ts`,
   `person-ask-progress-v7-http.test.ts`);
-- a search across sources reads the workspace only without dates and brings
-  only the items beside the rows it keeps; a desk that bound no workspace
-  refuses workspace reads (`person-live-evidence-desk-v2.test.ts`);
+- a search across sources reads the asker's projects after the content
+  sources, never people, tools or containers, and brings only the items beside
+  the rows it keeps; a desk that bound no workspace refuses workspace reads
+  (`person-live-evidence-desk-v2.test.ts`);
 - `/v6` never binds the workspace, and a V1 or V2 header value on `/v7` gets
   the JSON answer (`person-ask-progress-v7-http.test.ts`);
 - a container the asker cannot see is never found, even through its ECHO
