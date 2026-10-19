@@ -400,7 +400,8 @@ describe("agentic Ask: research loop", () => {
     expect(script.prompt(1).last_results.slice(1)).toEqual([
       expect.objectContaining({ error: expect.stringContaining("slack needs a channel") }),
       expect.objectContaining({ error: expect.stringContaining("since and until") }),
-      expect.objectContaining({ error: expect.stringContaining("kind must be") }),
+      // A value the source's capabilities do not allow is refused, never an error: nothing was read (research tool contract v1).
+      expect.objectContaining({ filters: { kind: "refused" }, note: expect.stringContaining("kind must be decision, action, rationale"), supports: expect.objectContaining({ dates: ["occurred", "approved", "received", "due"] }) }),
     ]);
   });
 

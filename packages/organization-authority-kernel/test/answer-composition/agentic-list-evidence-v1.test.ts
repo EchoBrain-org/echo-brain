@@ -83,7 +83,7 @@ describe("the list record", () => {
     const tickets = createAgenticListEvidenceV1({ ...OCTOBER_4, id: "L2", source: "tickets", filter: { status: "open" }, filter_applied: { owner: "ignored", status: "partial" } });
     expect([tickets.filter, tickets.filter_applied]).toEqual([{ status: "open" }, { owner: "ignored", status: "partial" }]);
     expectTypeOf<AgenticListFilterApplicationV1>().toEqualTypeOf<"applied" | "partial" | "ignored">();
-    expect(AGENTIC_LIST_FILTER_FIELDS_V1).toEqual(["kind", "status", "owner", "channel", "since", "until", "date_field"]);
+    expect(AGENTIC_LIST_FILTER_FIELDS_V1).toEqual(["kind", "status", "owner", "role", "channel", "since", "until", "date_field"]);
   });
 
   it.each([

@@ -27,6 +27,8 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "provider_latency_ms",
   // One terminal research-run summary, shared by every trigger and output type.
   "planned_query_count", "query_hit_count", "released_atom_count", "context_atom_count", "citation_count",
+  // Ask's reads (research tool contract v1): refused, refused and sent again, unchecked by a date filter, sources looked at, widest step.
+  "refused_read_count", "repeated_refusal_count", "unchecked_item_count", "sources_looked_at", "most_reads_in_a_step",
   "rss_bytes", "heap_used_bytes", "cpu_user_us", "cpu_system_us", "fs_read_count", "fs_write_count",
   // Items an evidence call returned, by source; transcript_items is the shared-transcript subset of document_items.
   "meeting_items", "document_items", "transcript_items", "slack_items",

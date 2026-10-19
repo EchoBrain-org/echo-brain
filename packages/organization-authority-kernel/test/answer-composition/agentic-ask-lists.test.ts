@@ -357,7 +357,8 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
         // The second step saw the list by id, with every member, and no inventories; the impact card's coverage view is unchanged.
         expect(steps[1]).not.toHaveProperty("inventories");
         expect(steps[1]!.lists).toEqual([{ id: "L1", args: OCT4_LIST.args, members: ids(1, 8), shown_count: 8, more: false, complete: true, available: true, truncated: false, unverified_end: false }]);
-        expect(steps[1]!.last_results).toEqual([{ tool: "list", args: OCT4_LIST.args, list: "L1", items: ids(1, 8), more: false }]);
+        // Each requested filter comes back applied (research tool contract v1).
+        expect(steps[1]!.last_results).toEqual([{ tool: "list", args: OCT4_LIST.args, list: "L1", items: ids(1, 8), more: false, filters: { date_field: "applied", since: "applied", until: "applied" } }]);
         expect(research.coverage.inventories).toEqual([{ source: "pages", shown_count: 8, more: false, available: true, truncated: false }]);
         // Code names each page, citing its row; the writer saw the rows and no text, never a desk id, receipt or permalink.
         expect(response.citations.map((citation: { citation: unknown }) => citation.citation)).toEqual(PAGES.map(page => page.citation));

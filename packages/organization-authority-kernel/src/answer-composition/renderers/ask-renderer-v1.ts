@@ -28,6 +28,7 @@ import {
   AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
   agenticListCheckedNoteV1,
   agenticListFilterNoticeV1,
+  agenticListUncheckedNoticeV1,
   agenticListMembershipV1,
   agenticListMembersNounV1,
   agenticListNameSharesV1,
@@ -60,6 +61,8 @@ import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 
  */
 
 const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
+/** An empty list whose date filter could not test some items (research tool contract v1): none of those it tested matched. */
+const UNCHECKED_EMPTY_GAP = "None of the items that record the date asked for matched.";
 const RECORDS_GAP = "I found these records, but could not write a verified summary.";
 const INCOMPLETE_SEARCH_GAP = "I couldn't complete the search. Please try again.";
 const MISSING_DATE_GAP = "I can't verify the requested date because some accessible meeting sources have no recorded event date.";
@@ -343,6 +346,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const unchecked = checking.map(id => views.get(id)!).filter(list => agenticListCheckedNoteV1(list) !== undefined);
       if (unchecked.length > 0) listGaps.push({ text: UNCHECKED_GAP, partial: false });
       if (unlisted) listGaps.push({ text: WHICH_GAP, partial: true });
+      // A list whose date filter could not test some items (research tool contract v1) supports neither "none" nor "all" of
+      // them: the part says how many were not checked, and is partial, even when the list is empty.
+      let uncheckedEmpty = false;
+      for (const list of [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])]) {
+        const text = agenticListUncheckedNoticeV1(list, nounOf(list));
+        if (text === undefined) continue;
+        listGaps.push({ text, partial: true });
+        if (list.count === 0) uncheckedEmpty = true;
+      }
       const sentences = answer?.sentences ?? [];
       // A sentence the kept reply still rests on rows or list ids is left out, and the part says so, never what it claimed.
       if (sentences.some(restsOnRows)) listGaps.push({ text: UNSUPPORTED_GAP, partial: true });
@@ -401,7 +413,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const records = fallback.map(entry => statementOf(entry.item.text!, [entry.short]));
         draft = records.length > 0
           ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
-          : { status: "not_found", statements: [], gap: withGaps(gapText ?? (dateCoverageMissing ? MISSING_DATE_GAP : incomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP))! };
+          : { status: "not_found", statements: [], gap: withGaps(gapText ?? (dateCoverageMissing ? MISSING_DATE_GAP : incomplete ? INCOMPLETE_SEARCH_GAP : uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
       // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).

@@ -51,9 +51,11 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
       expect(args(tool).since).toMatchObject({ format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' });
       expect(args(tool).until).toMatchObject({ format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' });
       expect(args(tool).source!.enum).toEqual(['meetings', 'handbook']);
-      expect(args(tool).date_field!.enum).toEqual(['occurred', 'created', 'updated', 'due', 'received']);
+      expect(args(tool).date_field!.enum).toEqual(['occurred', 'created', 'updated', 'due', 'received', 'approved', 'sent', 'reassigned', 'checked']);
     }
-    expect(args('list').status!.enum).toEqual(['open', 'done']);
+    expect(args('list').status!.enum).toEqual(['open', 'done', 'active', 'archived']);
+    // A list's limit stays an integer on the wire (research tool contract v1).
+    expect(args('list').limit).toMatchObject({ type: 'integer' });
     expect(args('open').id!.enum).toEqual(['E2']);
   });
 
