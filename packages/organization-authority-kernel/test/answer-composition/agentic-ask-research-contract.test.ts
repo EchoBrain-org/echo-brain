@@ -50,16 +50,16 @@ const ask = (port: EvidenceDeskPortV2, model: ReturnType<typeof scripted>['model
 
 describe('Ask research tool contract v1', () => {
   it('refuses a read its source cannot take before the desk, and answers it again from memory, unsent', async () => {
-    const port = desk();
     const refused = { tool: 'list', args: { source: 'meetings', date_field: 'sent', since: '2026-10-18', until: '2026-10-18' } };
     const document = Object.freeze({ ...listed('note'), kind: 'document_passage' as const, text: 'A note.' }) as EvidenceDeskItemV2;
-    port.list.mockImplementation(async (input: Parameters<EvidenceDeskPortV2['list']>[0]) => input.source === 'document' ? result([document]) : result([]));
+    const list = vi.fn(async (input: Parameters<EvidenceDeskPortV2['list']>[0]) => input.source === 'document' ? result([document]) : result([]));
+    const port = desk({ list });
     // The second step sends the refused read again beside one that makes progress, so research goes on to a third step.
     const run = scripted([step([refused]), step([refused, { tool: 'list', args: { source: 'documents' } }]), step([{ tool: 'finish', args: {} }], 'not_found')]);
     const events: CoreRuntimeObservationV1[] = [];
     await observeCoreRuntimeV1('ask_request', () => ask(port, run.model).answer({ question }), { observer: event => { events.push(event); } }).catch(() => undefined);
-    expect(port.list).toHaveBeenCalledTimes(1);
-    expect(port.list).toHaveBeenCalledWith(expect.objectContaining({ source: 'document' }));
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ source: 'document' }));
     const [first, again] = [userOf(run.steps()[1]!).last_results[0]!, userOf(run.steps()[2]!).last_results[0]!];
     expect(first).toEqual({ tool: 'list', args: refused.args, filters: { date_field: 'refused' }, supports: { filters: { kind: ['decision', 'action', 'rationale'], status: ['open', 'done'], owner: 'name' }, dates: ['occurred', 'approved', 'received', 'due'], any_date: true }, note: 'refused: meetings: date_field must be occurred, approved, received, due' });
     expect(again.note).toBe(`${String(first.note)}; refused again: this exact request was already refused in this Ask, so it was not sent; change the source, the filter or the approach`);
