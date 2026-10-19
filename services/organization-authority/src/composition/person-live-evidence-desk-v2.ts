@@ -14,16 +14,16 @@ import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-
 const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'];
 /** Live inventory pages match the research loop's list fetch; each reader still applies its own smaller cap. */
 const LIVE_LIST_MAX = 50;
-/** Coverage notices for a source that was briefly unavailable to a search across sources. */
-const UNAVAILABLE_NOTICES: Readonly<Record<PersonLiveSourceDescriptorV2['kind'] | typeof FOLLOW_UP_EVIDENCE_KIND_V1 | 'project' | 'person' | 'tool', string>> = Object.freeze({
+/**
+ * Coverage notices for a source that was briefly unavailable to a search across sources. Only a tool's items, follow-ups
+ * and the asker's projects join one: a tool's containers, people and tools are searched only when named.
+ */
+const UNAVAILABLE_NOTICES: Readonly<Record<Exclude<PersonLiveSourceDescriptorV2['kind'], 'tool_container'> | typeof FOLLOW_UP_EVIDENCE_KIND_V1 | 'project', string>> = Object.freeze({
   ticket: 'Live tickets could not be searched just now, so these results leave them out.',
   page: 'Live pages could not be searched just now, so these results leave them out.',
   slack_message: 'Live Slack messages could not be searched just now, so these results leave them out.',
   follow_up: 'Follow-ups could not be searched just now, so these results leave them out.',
-  tool_container: 'A connected tool could not be searched just now, so these results leave its projects, spaces or channels out.',
   project: 'Your projects could not be searched just now, so these results leave them out.',
-  person: 'People could not be searched just now, so these results leave them out.',
-  tool: 'Your tools could not be searched just now, so these results leave them out.',
 });
 /** A provider outage, timeout or rate limit. Authorization, stale access and cancellation are never transient. */
 function transientLiveFailure(error: unknown): boolean {
@@ -138,21 +138,21 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         return remember(result, selectedWorkspace);
       }
       const selectedSource = selectedId === undefined ? undefined : sources.get(selectedId);
-      const localSource = selectedId === 'meeting' || selectedId === 'document' || (selectedId === 'slack' && !sources.has('slack'));
+      const localSource = selectedId === 'meeting' || selectedId === 'document';
       if (selectedId !== undefined && selectedSource === undefined && !localSource) refused();
       for (const kind of requestedKinds ?? []) if (LIVE_ONLY_KINDS.has(kind) && ![...sources.values()].some(value => value.descriptor.kind === kind)) refused();
       if (requestedKinds?.includes(FOLLOW_UP_EVIDENCE_KIND_V1) === true && followUpSource === undefined) refused();
       if (requestedKinds?.some(workspaceKind) === true && workspaceSources === undefined) refused();
       if (selectedSource !== undefined && requestedKinds?.some(kind => kind !== selectedSource.descriptor.kind)) refused();
       const liveKinds = new Set([...sources.values()].map(value => value.descriptor.kind));
-      const localKinds = selectedId === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : selectedId === 'slack' ? ['slack_message'] as const : undefined;
+      const localKinds = selectedId === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : undefined;
       const kinds = (requestedKinds ?? localKinds)?.filter((kind): kind is EvidenceDeskKindV1 => !LIVE_ONLY_KINDS.has(kind) && kind !== FOLLOW_UP_EVIDENCE_KIND_V1 && !workspaceKind(kind) && !liveKinds.has(kind as 'slack_message')) ?? (liveKinds.has('slack_message') ? LOCAL_KINDS : undefined);
       type Page = { readonly source: Source; readonly result: EvidenceDeskResultV2 };
-      type Unavailable = { readonly source: LiveSource; readonly result?: undefined; readonly failure: unknown };
+      type Unavailable = { readonly notice: string; readonly result?: undefined; readonly failure: unknown };
       /** Across sources, a source's transient failure becomes a coverage notice and the others still answer. */
-      const tolerate = (source: LiveSource, lookup: Promise<Page>): Promise<Page | Unavailable> => lookup.catch((failure: unknown): Unavailable => {
+      const tolerate = (kind: keyof typeof UNAVAILABLE_NOTICES, lookup: Promise<Page>): Promise<Page | Unavailable> => lookup.catch((failure: unknown): Unavailable => {
         if (!transientLiveFailure(failure)) throw failure;
-        return { source, failure };
+        return { notice: UNAVAILABLE_NOTICES[kind], failure };
       });
       const page = (source: Source, operation: () => Promise<EvidenceDeskResultV2>): Promise<Page> =>
         Promise.resolve().then(operation).then(result => ({ source, result }));
@@ -178,14 +178,14 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         const live = page(registration, () => input.query === undefined
           ? lookup('evidence_list', registration, () => source.list({ ...dates, limit: Math.min(maximum, LIVE_LIST_MAX), signal: input.signal }))
           : lookup('evidence_search', registration, () => source.search({ ...dates, query: input.query!, limit: Math.min(maximum, 5), signal: input.signal })));
-        lookups.push(selectedSource !== undefined ? live : tolerate(registration, live));
+        lookups.push(selectedSource !== undefined || descriptor.kind === 'tool_container' ? live : tolerate(descriptor.kind, live));
       }
       // Follow-ups join a keyword search across sources, dated too, on the dates they record; they hold no inventory. Only some
       // of them are kept below, so they are released with ECHO-held text and none is read live (ADR-0040).
       if (followUpSource !== undefined && selectedId === undefined && input.query !== undefined && input.inventory_mode === undefined &&
           (requestedKinds === undefined || requestedKinds.includes(FOLLOW_UP_EVIDENCE_KIND_V1))) {
         const query = input.query;
-        lookups.push(tolerate(followUpSource, page(followUpSource, () => followUpSource.search({ ...evidenceDateFilterV1(input), query, limit: Math.min(maximum, FOLLOW_UPS_LIMITS_V1.search_hits), live: false, signal: input.signal }))));
+        lookups.push(tolerate(FOLLOW_UP_EVIDENCE_KIND_V1, page(followUpSource, () => followUpSource.search({ ...evidenceDateFilterV1(input), query, limit: Math.min(maximum, FOLLOW_UPS_LIMITS_V1.search_hits), live: false, signal: input.signal }))));
       }
       // The asker's projects join a keyword search across sources as follow-ups do, dated too, on their creation (research tool
       // contract v1). People and tools are searched only when named: their names rarely answer a search for content, and
@@ -194,7 +194,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       if (projects !== undefined && selectedId === undefined && input.query !== undefined && input.inventory_mode === undefined &&
           (requestedKinds === undefined || requestedKinds.includes(projects.descriptor.kind))) {
         const query = input.query;
-        lookups.push(tolerate(projects, page(projects, () => projects.search({ ...evidenceDateFilterV1(input), query, limit: maximum, signal: input.signal }))));
+        lookups.push(tolerate('project', page(projects, () => projects.search({ ...evidenceDateFilterV1(input), query, limit: maximum, signal: input.signal }))));
       }
       const settled = await Promise.all(lookups);
       input.signal?.throwIfAborted();
@@ -222,7 +222,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         }
       }
       const notices = [...pages.flatMap(page => page.result.notice === undefined ? [] : [page.result.notice]),
-        ...unavailable.map(value => UNAVAILABLE_NOTICES[value.source.descriptor.kind])];
+        ...unavailable.map(value => value.notice)];
       // Items released beside the kept rows come through once each, as their sources gave them; those beside rows left out,
       // and those kept as rows, stay out. Unchecked counts are summed (research tool contract v1).
       const rows = new Set(selected.map(item => item.id));
@@ -268,10 +268,10 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       if (input.owner !== undefined || input.status !== undefined || input.role !== undefined) throw new AuthorityOperationError('invalid_request', 'This source cannot be filtered by owner, status or role');
       const registration = sources.get(input.source);
       if (registration === undefined) {
-        if (!['meeting', 'document', 'slack'].includes(input.source)) refused();
+        if (!['meeting', 'document'].includes(input.source)) refused();
         const { kinds, ...request } = input;
         if (kinds?.some(kind => LIVE_ONLY_KINDS.has(kind) || kind === FOLLOW_UP_EVIDENCE_KIND_V1 || workspaceKind(kind))) refused();
-        const result = await base.list({ ...request, source: input.source as 'meeting' | 'document' | 'slack', ...(kinds === undefined ? {} : { kinds: kinds as readonly EvidenceDeskKindV1[] }) });
+        const result = await base.list({ ...request, source: input.source as 'meeting' | 'document', ...(kinds === undefined ? {} : { kinds: kinds as readonly EvidenceDeskKindV1[] }) });
         input.signal?.throwIfAborted();
         return remember(result, base);
       }

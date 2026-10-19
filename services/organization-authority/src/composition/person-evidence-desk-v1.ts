@@ -181,7 +181,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   };
   const originals = (release: OriginalContextDeskReleaseV1): readonly EvidenceDeskItemV1[] => {
     originalReleases.push(release);
-    if (release.notice !== undefined) readNotices.add(release.notice);
     readUnchecked = bothUnchecked(readUnchecked, release.unchecked);
     return release.items.map((value) => save(Object.freeze({
       id: itemId(sourceCitation(value)), citation: sourceCitation(value), kind: value.kind,
@@ -193,7 +192,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   };
   const records = (result: ReturnType<PersonEvidenceDeskRecordsV1["searchBatch"]>, includeText = true): readonly EvidenceDeskItemV1[] => {
     latestRecordTruncated ||= result.truncated === true;
-    if (result.notice !== undefined) readNotices.add(result.notice);
     readUnchecked = bothUnchecked(readUnchecked, result.unchecked);
     pointer ??= result.release.active_pointer;
     if (pointer.generation_id !== result.release.active_pointer.generation_id || pointer.manifest_sha256 !== result.release.active_pointer.manifest_sha256 || pointer.record_head.position !== result.release.active_pointer.record_head.position || pointer.record_head.record_sha256 !== result.release.active_pointer.record_head.record_sha256) throw new AuthorityOperationError("unavailable", "record evidence snapshot changed");

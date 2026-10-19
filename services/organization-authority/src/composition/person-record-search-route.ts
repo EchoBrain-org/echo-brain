@@ -189,7 +189,6 @@ export interface PersonRecordSearchBatchResultV1 {
   readonly release: PersonRecordSearchBatchReleaseV1;
   /** Private desk projection of immutable V4 meeting metadata. */
   readonly desk_items?: readonly PersonRecordDeskItemV1[];
-  readonly notice?: string;
   readonly truncated?: boolean;
   /** An open only: the anchor record's own text was left out; `truncated` also covers its meeting's other records (ADR-0041). */
   readonly anchor_truncated?: boolean;
