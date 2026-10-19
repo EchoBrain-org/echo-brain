@@ -566,8 +566,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const cover = (tool: 'search' | 'open' | 'list', source: string | undefined, result?: EvidenceDeskResultV2) => {
     readCoverage.push({ tool, source: source === undefined ? 'available_sources' : sourcesById.get(source)?.selector ?? source,
       returned_items: result?.items.length ?? 0, truncated: result?.truncated ?? false, notice: result?.notice !== undefined, unavailable: result === undefined });
-    // Progress counts only what a read released to this person.
-    if (result !== undefined) report?.returned(tool, source, result.items);
   };
   /** Sources whose complete, unfiltered inventory was observed empty. */
   const exhaustivelyEmptySources = new Set<EvidenceDeskSourceV2>();
@@ -697,6 +695,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const apply = () => {
       observe(result);
       cover('search', source, result);
+      // Progress finds what a read gives research: every hit of a search (ADR-0043).
+      report?.returned('search', source, result.items);
       const complete = !result.truncated && result.notice === undefined;
       if (!repeat && result.notice !== undefined) noticedSearches.add(fingerprint);
       researchObservations.push({ operation: 'search', fingerprint, complete });
@@ -875,6 +875,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
 
       // Ask's limit pages out fewer rows for a short look; repeating the call continues the same list.
       const page = currentState.items.slice(currentState.paged, currentState.paged + Math.min(limit ?? LIST_PAGE, LIST_PAGE)).map(item => register(item));
+      // Progress finds the page research is given, never the rows fetched behind it or left out by ECHO's own filter
+      // (ADR-0043). A repeat that read nothing and paged nothing out is no read.
+      if (result !== undefined || page.length > 0) report?.returned('list', request.source, page.map(entry => entry.item));
       // Items released beside the fetched rows wait for the page that shows a member linking to them, so a short page
       // (a small limit) shows only its own members' links (research tool contract v1).
       if (result !== undefined && result.linked !== undefined && result.linked.length > 0) {
@@ -1336,6 +1339,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       cover('search', undefined, inventory);
       if (!inventory.truncated && inventory.items.length <= SHORTCUT_ITEMS) {
         let used = 0;
+        const shown: EvidenceDeskItemV2[] = [];
         for (const listed of inventory.items) {
           assertLive();
           const opened = await observeAgenticLifecycleV1('preload', 'research_preload', { operation: 'open', citation: listed.citation },
@@ -1345,7 +1349,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
           if (exact === undefined || used + bytes(exact.text) > researchBudget / 2) continue;
           const entry = register(exact); entry.opened = true; entry.preloaded = true; entry.direct = true; used += bytes(exact.text);
+          shown.push(exact);
         }
+        // Research is shown the preload only when everything fits, and then only what fits: progress finds that alone
+        // (ADR-0043). An empty inventory still says the search found nothing.
+        if (shown.length > 0 || inventory.items.length === 0) report?.returned('search', undefined, shown);
       }
       report?.reads_done();
     } else observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'preload', event: 'skipped' });
@@ -1542,8 +1550,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         }
         // Everything the call shows, text or row, has been shown to research: a list counts once every member has (ADR-0041).
         for (const entry of researchPromptShown) entry.shown = true;
-        // This call's access check has passed: the items it reads in full may now be named (ADR-0039).
-        report?.given(researchPromptEntries.filter(entry => entry.direct === true).map(entry => entry.item));
+        // This call's access check has passed: the items it reads in full may now be named (ADR-0039), and every item it
+        // shows, row or text, counts as looked through (ADR-0043).
+        const direct = (prompted: readonly Entry[]) => prompted.filter(entry => entry.direct === true).map(entry => entry.item);
+        report?.given(direct(researchPromptEntries), direct(researchPromptShown));
       },
     }),
     progress: () => Object.freeze({

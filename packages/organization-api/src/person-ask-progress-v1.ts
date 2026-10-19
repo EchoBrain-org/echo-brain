@@ -17,11 +17,12 @@ import { asEnumerableRecord as object, assertExactKeys, fail } from './validatio
  * event (`answer` or `error`); nothing follows it.
  *
  * Before the answer, events carry only the stage, the source kinds a step
- * searched with a count of what those reads returned to this person, how many
- * items are about to be read, and the citation projection of items whose full
- * text the research model is about to be given, sent only after the access
- * check before that model call. Never notes, needs, plans, model-written or
- * provider queries, bodies, excerpts, scratchpad ids, rounds or hidden counts.
+ * searched with a count of what those reads released to this person and gave
+ * research, how many items are about to be read, and the citation projection
+ * of items whose full text the research model is about to be given, sent only
+ * after the access check before that model call. Never notes, needs, plans,
+ * model-written or provider queries, bodies, excerpts, scratchpad ids, rounds
+ * or hidden counts.
  *
  * The V7 answer on `POST /v6/person/ask` streams the same way as Ask progress
  * V2 (`person-ask-progress-v2.ts`), which only adds follow-ups; V1 never
@@ -98,8 +99,10 @@ export interface PersonAskProgressSearchedEventV1 {
   /** Distinct, in first-read order; a read with no source names every catalog source it covered. */
   readonly sources: readonly PersonAskProgressSourceV1[];
   /**
-   * Distinct items these reads returned to this person that no earlier read
-   * in the run returned, so consecutive rows add up exactly.
+   * Distinct items these reads gave research that no earlier read in the run
+   * gave it, so consecutive rows add up exactly: a search's hits and a list's
+   * page, never the rows a list fetched behind its page, and the small-scope
+   * preload's items only when research is shown them (ADR-0043).
    */
   readonly found: number;
 }

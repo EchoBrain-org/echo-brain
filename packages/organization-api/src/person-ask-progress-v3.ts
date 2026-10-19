@@ -24,7 +24,9 @@ import { asEnumerableRecord as object, assertExactKeys, fail } from './validatio
 
 /**
  * Ask progress V3 (ADR-0042): V2's stream, under ADR-0039's rules, for the V8 answer on `POST /v7/person/ask`. A searched
- * row may also name the workspace or a connected tool's containers, up to 16 sources; a named item is a V8 citation.
+ * row may also name the workspace or a connected tool's containers, up to 16 sources; a named item is a V8 citation. Its
+ * receipt's `looked_through` counts every item research was shown, rows included, where V1 and V2 count only what it read
+ * in full (ADR-0043).
  */
 export const PERSON_ASK_PROGRESS_HEADER_VALUE_V3 = '3';
 /** Distinct sources one searched row names: twice V1's. */
@@ -49,6 +51,11 @@ export interface PersonAskProgressReadEventV3 {
 }
 /** V1's receipt, whose rows may name the workspace, containers and their items. */
 export interface PersonAskReceiptV3 {
+  /**
+   * Distinct items research was shown after an access check, as a row or in
+   * full (ADR-0043); at least the items listed. It never counts a neighbour
+   * an open brought along, or an item released beside a row.
+   */
   readonly looked_through: number;
   readonly elapsed_ms: number;
   readonly rows: readonly PersonAskReceiptRowV3[];
