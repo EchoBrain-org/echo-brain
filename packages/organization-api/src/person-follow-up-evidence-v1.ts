@@ -47,6 +47,8 @@ export interface PersonFollowUpDecisionV1 {
  * - `title`: the item's current title in its tool when the asker opened it
  *   there in this request, else ECHO's `expected` phrase, else `Follow-up`;
  * - `owner`, `status`, `check` and `expected`: ECHO's own row facts;
+ * - `created_at`, `sent_at` and `reassigned_at`: ECHO's own dates, which the
+ *   runs API shows whoever sees the row (research tool contract v1);
  * - `due_at`: from the item's tool, only with a title read from it;
  * - `decision`: only for an asker who reads the decision now.
  */
@@ -57,6 +59,15 @@ export interface PersonFollowUpEvidenceV1 {
   /** The owner's current directory display name. */
   readonly owner: string;
   readonly status: PersonOpenItemStateV1;
+  /**
+   * When ECHO created it: the open item's `created_at`. ECHO's follow-ups source always sets it; evidence built without it
+   * (as before research tool contract v1) still validates, and its desk item then has no created date.
+   */
+  readonly created_at?: string;
+  /** When Send sent it: the open item's `sent_at`; absent while it is unsent. */
+  readonly sent_at?: string;
+  /** When its owner was last picked or reassigned: the open item's `owner_set_at`; absent while ECHO's own match stands. */
+  readonly reassigned_at?: string;
   readonly due_at?: string;
   /** Absent when nobody has checked the item yet. */
   readonly check?: PersonFollowUpCheckV1;
@@ -109,8 +120,9 @@ export function personFollowUpRefV1(citation: Pick<PersonFollowUpCitationV1, 'it
 
 export function validatePersonFollowUpEvidenceV1(value: unknown): PersonFollowUpEvidenceV1 {
   const entry = asEnumerableRecord(value, 'Follow-up evidence');
-  assertExactKeys(entry, ['item_id', 'kind', 'title', 'owner', 'status', ...optional(entry, ['due_at', 'check', 'decision', 'expected'])], 'Follow-up evidence');
+  assertExactKeys(entry, ['item_id', 'kind', 'title', 'owner', 'status', ...optional(entry, ['created_at', 'sent_at', 'reassigned_at', 'due_at', 'check', 'decision', 'expected'])], 'Follow-up evidence');
   const title = line(entry.title, 'Follow-up title', LIMITS.title_chars);
+  for (const key of ['created_at', 'sent_at', 'reassigned_at'] as const) if (Object.hasOwn(entry, key)) assertTimestamp(entry[key], `Follow-up ${key}`);
   let check: PersonFollowUpCheckV1 | undefined;
   if (Object.hasOwn(entry, 'check')) {
     const raw = asEnumerableRecord(entry.check, 'Follow-up check');
@@ -138,6 +150,9 @@ export function validatePersonFollowUpEvidenceV1(value: unknown): PersonFollowUp
     title,
     owner: line(entry.owner, 'Follow-up owner', LIMITS.owner_chars),
     status: oneOf<PersonOpenItemStateV1>(entry.status, STATES, 'Follow-up status'),
+    ...(Object.hasOwn(entry, 'created_at') ? { created_at: entry.created_at as string } : {}),
+    ...(Object.hasOwn(entry, 'sent_at') ? { sent_at: entry.sent_at as string } : {}),
+    ...(Object.hasOwn(entry, 'reassigned_at') ? { reassigned_at: entry.reassigned_at as string } : {}),
     ...(Object.hasOwn(entry, 'due_at') ? { due_at: line(entry.due_at, 'Follow-up due date', LIMITS.due_chars) } : {}),
     ...(check === undefined ? {} : { check }),
     ...(decision === undefined ? {} : { decision }),

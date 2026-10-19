@@ -496,7 +496,7 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
     closers.push(w.close);
     const originals = emptyOriginals();
     const deskSearch = vi.fn((input: Parameters<PersonOriginalContextEvidenceDeskPortV1['deskSearch']>[0]) => ({
-      ...originals.deskSearch(input), ...(input.since === undefined ? {} : { unchecked: { count: 2, dates: ['occurred', 'received'] } }),
+      ...originals.deskSearch(input), ...(input.since === undefined ? {} : { unchecked: { count: 2, dates: ['occurred', 'received'] as const } }),
     }));
     const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'global' }, originals: { ...originals, deskSearch }, records: w.route() });
     expect(await desk.list({ source: 'meeting', since: '2026-10-16', until: '2026-10-16', date_field: 'occurred' })).toMatchObject({ items: [], unchecked: { count: 5, dates: ['occurred', 'received', 'approved'] } });

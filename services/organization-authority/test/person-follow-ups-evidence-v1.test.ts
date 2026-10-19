@@ -9,6 +9,7 @@ import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1 } from '@echo-brain/organization-author
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { SqlitePersonAgenticAskAuditV1 } from '../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import { createPersonFollowUpsEvidenceSourceV1 } from '../src/composition/person-follow-ups-evidence-v1.js';
+import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import { createRegisteredPersonLiveEvidenceDeskV2 } from '../src/composition/person-live-evidence-desk-v2.js';
 import { openItemViewerV1 } from '../src/composition/person-open-items-v1.js';
@@ -80,6 +81,9 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
       id: `follow_up_${f.ticket.item_id}`, kind: 'follow_up', source_id: 'follow_ups',
       citation: { kind: 'follow_up', item_id: f.ticket.item_id }, ref: `follow_up:${f.ticket.item_id}`, label: `ECHO-12 ${f.outsideText}`,
       attributes: { owner: 'Mina Patel', status: 'open', due_at: '2026-10-30' },
+      // ECHO's own dates, and links to its decision's items and the ticket it follows (research tool contract v1).
+      dates: { created: f.ticket.created_at, sent: f.ticket.sent_at },
+      links: { decision: ['desk-decision'], follows: ['desk-ticket'] },
       text: 'On: ticket\nExpected: launch next week\nLatest check: none yet\nDecision: Pilot planning\nDecided: The pilot starts next week.',
       // Its title is the asker's own Jira read, so it is no wider than that read.
       visibility: 'only_me', receipt_sha256: found.receipt_digests[0],
@@ -90,8 +94,8 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
     expect(titles(await search(desk, 'mina'))).toEqual([`ECHO-12 ${f.outsideText}`]);
     expect(titles(await search(desk, 'ECHO-12'))).toEqual([`ECHO-12 ${f.outsideText}`]);
     expect(titles(await search(desk, 'ari'))).toEqual(['Thermostat rollout plan']);             // its owner, the approver ECHO fell back to
-    // Each tool item read once in the request, however many searches return it.
-    expect(f.opened.filter(open => open.token === 'mina').map(open => open.kind).sort()).toEqual(['approved_record', 'ticket']);
+    // Each tool item read once in the request, however many searches return it, and their one decision once.
+    expect(f.opened.filter(open => open.token === 'mina').map(open => open.kind).sort()).toEqual(['approved_record', 'approved_record', 'ticket']);
   });
 
   it('never matches words read from a tool, nor a page pointer', async () => {
@@ -211,7 +215,9 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
     expect(found.items).toHaveLength(1);
     expect(found.items[0]).toMatchObject({ label: 'Send the vendor the pilot plan', attributes: { owner: 'Rafael Moreno', status: 'not sent yet' } });
     expect(found.items[0]!.text!.startsWith('On: meeting action\nLatest check: none yet\nDecision: Pilot planning')).toBe(true);
-    expect(f.opened.length).toBe(opens);
+    // Nothing is read live for it: only its decision is opened, through ECHO's own desk, for its link.
+    expect(f.opened.slice(opens).map(open => open.kind)).toEqual(['approved_record']);
+    expect(found.items[0]!.links).toEqual({ decision: ['desk-decision'] });
   });
 });
 
@@ -283,12 +289,18 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     expect(f.readable.mock.calls.length - decisions).toBe(2);
   });
 
-  it('refuses date filters and the filters of other sources', async () => {
+  it("takes ECHO's own dates, and refuses a due date, which is its tool's, and the filters of other sources", async () => {
     const f = await sentFixture();
     const { desk } = askDesk(f, 'mina');
-    for (const dates of [{ since: '2026-10-01' }, { until: '2026-10-30' }, { date_field: 'created' }]) {
-      await expect(list(desk, dates)).rejects.toMatchObject({ code: 'invalid_request' });
-      await expect(search(desk, 'launch', dates)).rejects.toMatchObject({ code: 'invalid_request' });
+    // A due date shows only once a follow-up's tool item is read, so a list cannot filter on it (ADR-0040); nor on a date no follow-up records.
+    for (const date_field of ['due', 'occurred', 'updated', 'received', 'approved']) {
+      for (const read of [() => list(desk, { since: '2026-10-01', date_field }), () => search(desk, 'launch', { since: '2026-10-01', date_field })]) {
+        await expect(read()).rejects.toMatchObject({ code: 'invalid_request', message: 'This source supports date_field: created, sent, reassigned, checked, any' });
+      }
+    }
+    for (const dates of [{ since: '2026-10-01' }, { until: '2026-10-30' }, { since: '2026-10-01', date_field: 'created' }, { date_field: 'sent' }]) {
+      expect((await list(desk, dates)).items).toHaveLength(2);
+      expect((await search(desk, 'launch', dates)).items).toHaveLength(1);
     }
     await expect(list(desk, { channel: 'hw-dvt' })).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(list(desk, { owner: ' @ ' })).rejects.toMatchObject({ code: 'invalid_request' });
@@ -307,16 +319,17 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
       pages.push(page); cursor = page.next_cursor;
     }
     expect(pages.flatMap(page => page.items)).toHaveLength(32);
-    expect(f.opened.length - opens).toBe(20);
+    // Twenty tool items, and their one decision, once, for its link.
+    expect(f.opened.length - opens).toBe(21);
     // The two oldest, past the bound, carry ECHO's phrases and no tool words.
     expect(pages.at(-1)!.items.map(item => item.label).sort()).toEqual(['launch next week', 'pilot starts next week']);
     expect(JSON.stringify(pages.at(-1))).not.toMatch(/ECHO-12|Kestrel|due_at/);
     await search(desk, 'pilot');
     await list(desk);
-    expect(f.opened.length - opens).toBe(20);
+    expect(f.opened.length - opens).toBe(21);
     // Past the bound a ticket key cannot be checked, and the search says so whether or not any follow-up holds that key.
     for (const query of ['ECHO-12', 'ECHO-999']) expect([query, await search(desk, query)]).toEqual([query, expect.objectContaining({ items: [], notice: CAPPED })]);
-    expect(f.opened.length - opens).toBe(20);
+    expect(f.opened.length - opens).toBe(21);
     // Within it, a key no follow-up holds says nothing.
     expect(await search(askDesk(f, 'mina').desk, 'ECHO-999')).not.toHaveProperty('notice');
   });
@@ -475,6 +488,8 @@ describe('follow-ups on the request desk (ADR-0040)', () => {
     const across = await desk.search({ query: 'Pilot planning', limit: 8 });
     expect(titles(across)).toEqual(['launch next week', 'pilot starts next week']);
     expect(across.items.every(item => item.attributes?.due_at === undefined && item.visibility === 'project')).toBe(true);
+    // Nothing is opened for a hit the desk may drop, so none links anywhere.
+    expect(across.items.every(item => item.links === undefined)).toBe(true);
     expect(across).not.toHaveProperty('notice');
     expect(f.opened.length).toBe(opens);
     // A key alone needs a live open, so across sources it finds no follow-up, and says so whether or not one holds it.
@@ -484,10 +499,10 @@ describe('follow-ups on the request desk (ADR-0040)', () => {
     }
     expect(f.opened.length).toBe(opens);
     expect(audits().map(row => (row.body.items as unknown[]).length)).toEqual([2, 0, 0]);
-    // On their own, follow-ups read each hit's tool item live, once.
+    // On their own, follow-ups read each hit's tool item live, once, and their one decision once for its link.
     expect(titles(await search(desk, 'ECHO-12'))).toEqual([`ECHO-12 ${f.outsideText}`]);
     expect(titles(await search(desk, 'Pilot planning'))).toEqual([`ECHO-12 ${f.outsideText}`, 'Thermostat rollout plan'].sort());
-    expect(f.opened.slice(opens).map(open => open.kind).sort()).toEqual(['approved_record', 'ticket']);
+    expect(f.opened.slice(opens).map(open => open.kind).sort()).toEqual(['approved_record', 'approved_record', 'ticket']);
   });
 
   it('reserves the follow-ups selector, and refuses a follow-up search with kinds of another source', async () => {
@@ -498,5 +513,132 @@ describe('follow-ups on the request desk (ADR-0040)', () => {
     const jira = { tool_id: 'jira', search: vi.fn(), open: vi.fn(), list: vi.fn(), revalidate: vi.fn(), assertCurrent: vi.fn() } as unknown as PersonLiveEvidenceSourceV1;
     expect(() => createRegisteredPersonLiveEvidenceDeskV2(desk as never, [{ descriptor: { ...JIRA_LIVE_CONNECTOR_V1.descriptor, source_id: 'follow_ups' }, source: jira, scope: GLOBAL }]))
       .toThrow(expect.objectContaining({ code: 'invalid_request' }));
+  });
+});
+
+describe("follow-ups as an Ask source: ECHO's own dates and links (research tool contract v1)", () => {
+  const DAY = 86_400_000;
+  const day = (value: string) => ({ since: value.slice(0, 10), until: value.slice(0, 10) });
+  const ids = (result: EvidenceDeskResultV2) => result.items.map(item => item.id).sort();
+
+  it('carries when each follow-up was created, sent, reassigned and checked, and lists by any of them before the page', async () => {
+    const f = await sentFixture();
+    // A day on, the ticket is checked; a day after that, Ari hands the rollout to Rafael.
+    f.advance(DAY);
+    f.check(f.ticket.item_id, 'still_open');
+    f.advance(DAY);
+    await assign(f, 'ari', f.action.item_id, 'rafael');
+    const ticket = f.items.read(f.ticket.item_id)!;
+    const action = f.items.read(f.action.item_id)!;
+    const [ticketId, actionId] = [`follow_up_${ticket.item_id}`, `follow_up_${action.item_id}`];
+    const { desk } = askDesk(f, 'mina');
+    expect(Object.fromEntries((await list(desk)).items.map(item => [item.id, item.dates]))).toEqual({
+      [ticketId]: { created: ticket.created_at, sent: ticket.sent_at, checked: ticket.check!.at },
+      [actionId]: { created: action.created_at, sent: action.sent_at, reassigned: action.owner_set_at },
+    });
+    // Each field reads its own date; what a field cannot test is counted, with the dates those follow-ups record, never listed.
+    const checked = await list(desk, { ...day(ticket.check!.at), date_field: 'checked' });
+    expect([ids(checked), checked.unchecked]).toEqual([[ticketId], { count: 1, dates: ['created', 'sent', 'reassigned'] }]);
+    const reassigned = await list(desk, { ...day(action.owner_set_at!), date_field: 'reassigned' });
+    expect([ids(reassigned), reassigned.unchecked]).toEqual([[actionId], { count: 1, dates: ['created', 'sent', 'checked'] }]);
+    for (const date_field of ['created', 'sent'] as const) {
+      const both = await list(desk, { ...day(ticket.created_at), date_field });
+      expect([date_field, ids(both), both.unchecked]).toEqual([date_field, [actionId, ticketId].sort(), undefined]);
+    }
+    expect((await list(desk, { ...day(ticket.created_at), date_field: 'checked' })).items).toEqual([]);
+    // No field is any of a follow-up's dates; every follow-up records its creation, so nothing is untested.
+    const any = await list(desk, day(action.owner_set_at!));
+    expect([ids(any), any.unchecked]).toEqual([[actionId], undefined]);
+    expect(ids(await list(desk, { since: ticket.check!.at.slice(0, 10) }))).toEqual([actionId, ticketId].sort());
+    expect(ids(await list(desk, { ...day(ticket.check!.at), date_field: 'any' }))).toEqual([ticketId]);
+    // A window applies with owner and status, and counts only what they select.
+    expect(await list(desk, { owner: 'Rafael', ...day(action.owner_set_at!), date_field: 'reassigned' })).toMatchObject({ items: [{ id: actionId }] });
+    expect(await list(desk, { owner: 'Rafael', ...day(action.owner_set_at!), date_field: 'reassigned' })).not.toHaveProperty('unchecked');
+    expect(await list(desk, { status: 'open', ...day(ticket.check!.at), date_field: 'checked' })).toMatchObject({ items: [{ id: ticketId }], unchecked: { count: 1 } });
+    // A search applies the same window before it ranks or reads anything live, and counts over every follow-up the asker sees.
+    const searched = await search(desk, 'launch', { ...day(action.owner_set_at!), date_field: 'reassigned' });
+    expect([searched.items, searched.unchecked]).toEqual([[], { count: 1, dates: ['created', 'sent', 'checked'] }]);
+    expect(ids(await search(desk, 'Pilot planning', { ...day(ticket.check!.at), date_field: 'checked' }))).toEqual([ticketId]);
+
+    // Pages of a dated list share its window and its count; a cursor belongs to its own window.
+    insertRows(f, 11);
+    const later = askDesk(f, 'mina').desk;
+    const first = await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'created' });
+    expect(first.items).toHaveLength(10);
+    await expect(list(later, { cursor: first.next_cursor })).rejects.toMatchObject({ code: 'invalid_request' });
+    const rest = await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'created', cursor: first.next_cursor });
+    expect(rest.items).toHaveLength(3);
+    // The same window however it is spelled: no field is any of the dates.
+    const implied = await list(later, { since: ticket.created_at.slice(0, 10) });
+    expect((await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'any', cursor: implied.next_cursor })).items).toHaveLength(3);
+    const sent = await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'sent' });
+    expect([ids(sent), sent.unchecked]).toEqual([[actionId, ticketId].sort(), { count: 11, dates: ['created'] }]);
+  });
+
+  it('never counts a follow-up the asker cannot see', async () => {
+    const f = await sentFixture({ ticketOwner: 'okafor' });
+    insertRows(f, 53);
+    // S. Okafor sees only the ticket he owns; the 55 others are his decision readers' alone.
+    const listed = await list(askDesk(f, 'okafor').desk, { since: '2026-10-01', date_field: 'checked' });
+    expect(listed).toMatchObject({ items: [], unchecked: { count: 1, dates: ['created', 'sent'] } });
+    expect((await list(askDesk(f, 'mina').desk, { since: '2026-10-01', date_field: 'checked' })).unchecked).toEqual({ count: 55, dates: ['created', 'sent'] });
+  });
+
+  it("links each follow-up to its decision's items and to the tool item it follows, released by the desk that owns them, beside the rows", async () => {
+    const f = await sentFixture();
+    const { desk, base, jira } = askDesk(f, 'mina');
+    const listed = await list(desk);
+    const links = { [`follow_up_${f.ticket.item_id}`]: { decision: ['desk-decision'], follows: ['desk-ticket'] }, [`follow_up_${f.action.item_id}`]: { decision: ['desk-decision'], follows: ['desk-rollout'] } };
+    expect(Object.fromEntries(listed.items.map(item => [item.id, item.links]))).toEqual(links);
+    // The rows are the follow-ups alone; each linked item comes once, as the desk released it.
+    expect(listed.items.every(item => item.kind === 'follow_up')).toBe(true);
+    expect(listed.linked!.map(item => item.id).sort()).toEqual(['desk-decision', 'desk-rollout', 'desk-ticket']);
+    expect(listed.linked!.find(item => item.id === 'desk-ticket')).toMatchObject({ kind: 'ticket', source_id: 'jira', text: `${f.outsideText} ships on Oct 30.` });
+    expect(listed.linked!.find(item => item.id === 'desk-decision')).toMatchObject({ kind: 'decision', citation: f.decisionCitation, text: 'The pilot starts next week.' });
+    // The decision is opened once in the request, by its record's anchor, and its release's receipt is bound with the read that linked it.
+    const decisionOpens = () => f.openCitation.mock.calls.filter(([, citation]) => citation.kind === 'approved_record' && citation.record_sha256 === f.record).length;
+    expect(decisionOpens()).toBe(1);
+    expect(listed.receipt_digests).toContain(canonicalSha256('receipt'));
+    const searched = await search(desk, 'launch');
+    expect(searched.items[0]!.links).toEqual(links[`follow_up_${f.ticket.item_id}`]);
+    expect(searched.linked!.map(item => item.id).sort()).toEqual(['desk-decision', 'desk-ticket']);
+    const opened = await desk.open({ item: `follow_up_${f.action.item_id}` });
+    expect(opened.items[0]!.links).toEqual(links[`follow_up_${f.action.item_id}`]);
+    expect(decisionOpens()).toBe(1);
+    // A linked item opens through the source that released it.
+    await desk.open({ item: 'desk-decision' });
+    expect(base.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'desk-decision' }));
+    await desk.open({ item: 'desk-ticket' });
+    expect(jira.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'desk-ticket' }));
+  });
+
+  it('links a decision only where the release carries it, and a tool item only where this request opened it', async () => {
+    const f = await sentFixture({ ticketOwner: 'okafor' });
+    // S. Okafor owns the ticket and reads no decision: his follow-up links to the ticket he opened, never to the decision.
+    const okafor = await list(askDesk(f, 'okafor').desk);
+    expect(okafor.items.map(item => item.links)).toEqual([{ follows: ['desk-ticket'] }]);
+    expect(okafor.linked!.map(item => item.id)).toEqual(['desk-ticket']);
+    expect(f.openCitation.mock.calls.some(([name, citation]) => name === 'okafor' && citation.kind === 'approved_record')).toBe(false);
+    expect(JSON.stringify(okafor)).not.toMatch(/desk-decision|Pilot planning|The pilot starts next week|meeting:sha256/);
+    // The desk refuses Rafael the ticket: that follow-up links to its decision alone.
+    const rafael = await list(askDesk(f, 'rafael').desk);
+    expect(Object.fromEntries(rafael.items.map(item => [item.id, item.links]))).toEqual({
+      [`follow_up_${f.ticket.item_id}`]: { decision: ['desk-decision'] },
+      [`follow_up_${f.action.item_id}`]: { decision: ['desk-decision'], follows: ['desk-rollout'] },
+    });
+    expect(rafael.linked!.map(item => item.id).sort()).toEqual(['desk-decision', 'desk-rollout']);
+  });
+
+  it('leaves a decision unlinked while it cannot be opened, and still releases its follow-ups', async () => {
+    const f = await sentFixture();
+    const anchor = vi.spyOn(f.records, 'recordAnchor').mockImplementation(() => { throw new PersonRecordSearchIndexLagV1(); });
+    const { desk } = askDesk(f, 'mina');
+    const listed = await list(desk);
+    expect(listed.items.map(item => item.links).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))))
+      .toEqual([{ follows: ['desk-rollout'] }, { follows: ['desk-ticket'] }]);
+    expect(listed.items.every(item => item.text!.includes('Decision: Pilot planning'))).toBe(true);
+    // A later release tries again.
+    anchor.mockRestore();
+    expect((await list(desk)).items.every(item => item.links?.decision?.[0] === 'desk-decision')).toBe(true);
   });
 });
