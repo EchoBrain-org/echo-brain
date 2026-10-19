@@ -1,4 +1,3 @@
-import { MISSING_EVENT_DATE_NOTICE_V1 } from "../../shared/temporal-query-v1.js";
 import { AuthorityOperationError } from "../../domain/errors.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
@@ -67,7 +66,6 @@ const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
 const UNCHECKED_EMPTY_GAP = "None of the items that record the date asked for matched.";
 const RECORDS_GAP = "I found these records, but could not write a verified summary.";
 const INCOMPLETE_SEARCH_GAP = "I couldn't complete the search. Please try again.";
-const MISSING_DATE_GAP = "I can't verify the requested date because some accessible meeting sources have no recorded event date.";
 const INCOMPLETE_SEARCH_NOTICE = "Research stopped before it finished, so relevant context may be missing.";
 const LIMITED_COVERAGE_GAP = "Some source coverage was incomplete, so relevant context may be missing.";
 const LIST_FALLBACK_GAP = "I found these items, but could not write the rest of the answer.";
@@ -396,10 +394,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
       const coverageLimited = coverageIsLimitedFor(bundle, writerSentences.slice(0, Math.max(0, statements.length - listStatements.length)).flatMap(sentence => sentence.read.map(short => byShort.get(short)!)));
       const incomplete = (answer === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
-      const dateCoverageMissing = bundle.coverage.notices.some(notice => notice.includes(MISSING_EVENT_DATE_NOTICE_V1));
-      const incompleteGap = dateCoverageMissing ? MISSING_DATE_GAP : INCOMPLETE_SEARCH_GAP;
       const gapText = incomplete
-        ? cleanLine(`${incompleteGap}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
+        ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
         : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
       // What the lists add to the gap: a list not read to its end, a which_say list not fully checked, a list kind with no
       // list, a sentence left out for resting on rows, and what did not fit.
@@ -422,7 +418,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const records = fallback.map(entry => statementOf(entry.item.text!, [entry.short]));
         draft = records.length > 0
           ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
-          : { status: "not_found", statements: [], gap: withGaps(gapText ?? (dateCoverageMissing ? MISSING_DATE_GAP : incomplete ? INCOMPLETE_SEARCH_GAP : uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
+          : { status: "not_found", statements: [], gap: withGaps(gapText ?? (uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
       // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
