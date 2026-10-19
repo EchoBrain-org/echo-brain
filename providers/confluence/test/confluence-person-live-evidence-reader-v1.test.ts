@@ -16,12 +16,14 @@ const binding: PersonConnectorReadBindingV1 = Object.freeze({ organization_id: '
   tool_id: 'confluence', external_scope_id: CLOUD, external_subject_id: 'synthetic-account', read_grant_sha256: canonicalSha256({ synthetic_grant: 1 }) });
 const document = (text: string) => JSON.stringify({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
 const emptyHash = `sha256:${createHash('sha256').update('').digest('hex')}`;
-type Page = { id: string; spaceId: string; title: string; status: string; version: number; document: string; createdAt: string };
+/** `createdAt` is the current version's time; `pageCreatedAt`, when set, the page's own creation time. */
+type Page = { id: string; spaceId: string; title: string; status: string; version: number; document: string; createdAt: string; pageCreatedAt?: string };
 type Call = { path: string; query: URLSearchParams };
 const page = (overrides: Partial<Page> = {}): Page => ({ id: '123', spaceId: '42', title: 'ECHO product requirements', status: 'current', version: 3,
   document: document('EVT requirements\nThe gate requires meeting, ticket, and document context.'), createdAt: '2026-10-05T12:00:00Z', ...overrides });
 function metadata(value: Page, body = false) {
   return { id: value.id, spaceId: value.spaceId, title: value.title, status: value.status, version: { number: value.version, createdAt: value.createdAt },
+    ...(value.pageCreatedAt === undefined ? {} : { createdAt: value.pageCreatedAt }),
     // Citation URLs must come from the verified site plus stable ID, not provider-controlled links.
     _links: { webui: 'https://untrusted.invalid/never-follow', base: 'https://untrusted.invalid' },
     ...(body ? { body: { atlas_doc_format: { value: value.document, representation: 'atlas_doc_format' } } } : {}) };
@@ -539,6 +541,23 @@ describe('Confluence live reader through the audited evidence source', () => {
       await expect(f.source.search({ query: 'gate', since: '2026-10-01', until: '2026-10-05', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
     }
     expect(f.calls.length).toBe(calls);
+  });
+
+  it('matches a window on any date with one CQL OR across created and last modified', async () => {
+    const f = await fixture({ selected: ['42'], pages: [
+      // Created in the window and edited after it; edited in the window; neither.
+      page({ id: '123', pageCreatedAt: '2026-10-03T12:00:00Z', createdAt: '2026-10-20T12:00:00Z' }),
+      page({ id: '124', pageCreatedAt: '2026-09-01T12:00:00Z', createdAt: '2026-10-04T12:00:00Z' }),
+      page({ id: '125', pageCreatedAt: '2026-09-01T12:00:00Z', createdAt: '2026-09-02T12:00:00Z' }),
+    ] });
+    f.state.searchIds = ['123', '124', '125'];
+    const window = { since: '2026-10-01', until: '2026-10-05', date_field: 'any' as const };
+    expect((await f.source.list(window)).items.map(item => item.citation.page_id)).toEqual(['123', '124']);
+    expect((await f.source.search({ query: 'gate', ...window })).items.map(item => item.citation.page_id)).toEqual(['123', '124']);
+    const any = '((created >= "2026-09-29" AND created < "2026-10-08") OR (lastmodified >= "2026-09-29" AND lastmodified < "2026-10-08"))';
+    expect(f.calls.filter(call => call.path === '/rest/api/search').map(call => call.query.get('cql'))).toEqual([
+      `type = page AND space IN ("ECHO") AND ${any}`, `type = page AND text ~ "gate" AND space IN ("ECHO") AND ${any}`,
+    ]);
   });
 
   it('reports truncated search discovery when more permission-visible matches exist', async () => {

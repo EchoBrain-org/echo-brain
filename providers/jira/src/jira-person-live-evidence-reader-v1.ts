@@ -83,22 +83,29 @@ function shiftDay(day: string, days: number): string | undefined {
   return /^\d{4}-\d{2}-\d{2}$/.test(shifted) ? shifted : undefined;
 }
 
+/** The date fields a Jira issue records, and the ones a window on any date reads. */
+const DATE_FIELDS = Object.freeze(["created", "updated", "due"] as const);
+const DATE_SELECTIONS = Object.freeze([...DATE_FIELDS, "any"] as const);
+
 /**
- * Inventory JQL. JQL dates use the account timezone, so the created bounds are
+ * Inventory JQL. JQL dates use the account timezone, so the date bounds are
  * coarse, with one day of margin either side; the exact UTC filter stays in code.
- * A bound past four-digit years is left out rather than sent malformed.
+ * A bound past four-digit years is left out rather than sent malformed. A window
+ * on any date is an OR of the same window on each field, ordered by created.
  */
 function listJql(projectId: string | undefined, since: string | undefined, until: string | undefined, selection: EvidenceDateFilterV1 = {}): string {
-  const field = selection.date_field ?? "created";
+  const fields: readonly string[] = selection.date_field === "any" ? DATE_FIELDS : [selection.date_field ?? "created"];
   const lower = since === undefined ? undefined : shiftDay(since, selection.time_zone === undefined ? -1 : -2);
   const upper = until === undefined ? undefined : shiftDay(until, selection.time_zone === undefined ? 2 : 3);
+  const window = (field: string) => [...(lower === undefined ? [] : [`${field} >= "${lower}"`]), ...(upper === undefined ? [] : [`${field} < "${upper}"`])].join(' AND ');
+  const bounded = lower !== undefined || upper !== undefined;
   const clauses = [
     ...(projectId === undefined ? [] : [`project = ${projectId}`]),
-    // The search endpoint refuses an unbounded query; a site-wide list keeps a created restriction.
-    ...(lower !== undefined ? [`${field} >= "${lower}"`] : projectId === undefined ? ['created >= "1970-01-01"'] : []),
-    ...(upper === undefined ? [] : [`${field} < "${upper}"`]),
+    // The search endpoint refuses an unbounded query; a site-wide list keeps a created restriction, which an OR is not.
+    ...(projectId === undefined && (lower === undefined || fields.length > 1) ? ['created >= "1970-01-01"'] : []),
+    ...(!bounded ? [] : [fields.length === 1 ? window(fields[0]!) : `(${fields.map(field => `(${window(field)})`).join(' OR ')})`]),
   ];
-  return `${clauses.join(' AND ')} ORDER BY ${field} DESC, id DESC`;
+  return `${clauses.join(' AND ')} ORDER BY ${fields.length === 1 ? fields[0] : "created"} DESC, id DESC`;
 }
 
 /** Construct once per request from trusted ECHO state, never from model arguments. */
@@ -345,7 +352,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       return Object.freeze({ citation, tool_id: 'jira', external_scope_id: cloudid, coordinates: Object.freeze({ object_id: citation.ticket_id }) });
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
-      validateEvidenceDateFilterV1(input, ["created", "updated", "due"]);
+      validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const maximum = Math.min(limit(input.limit), 5);
       const { terms, keys, keyed } = searchTerms(input.query);
       const projectId = pinnedProject?.id;
@@ -390,7 +397,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       return openIssue(citation.ticket_id, maximum, input.signal, false);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
-      validateEvidenceDateFilterV1(input, ["created", "updated", "due"]);
+      validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const maximum = Math.min(limit(input.limit), LIST_MAX_ITEMS);
       if (input.container !== undefined && (typeof input.container !== 'string' || !(JIRA_ID.test(input.container) || JIRA_PROJECT_KEY.test(input.container)))) jiraFailure('invalid_request');
       if (pinnedProject !== undefined && input.container !== undefined && input.container !== fixedProject && !jiraProjectMatches(pinnedProject, input.container)) jiraFailure('unauthorized');

@@ -879,6 +879,28 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.releases[0]!.citations).toEqual([]); expect(f.releases).toHaveLength(2);
   });
 
+  it('matches a window on any date with one JQL OR across created, updated and due, and never stops paging early', async () => {
+    const f = fixture();
+    // Newest created first: updated in the window; due in the window; no date in the window.
+    f.state.tickets.set('10003', withFields({ created: '2026-09-01T12:00:00Z', updated: '2026-10-16T12:00:00Z', duedate: null }, ticket('10003')));
+    f.state.tickets.set('10002', withFields({ created: '2026-08-01T12:00:00Z', updated: '2026-08-02T12:00:00Z', duedate: '2026-10-16' }, ticket('10002')));
+    f.state.tickets.set('10001', withFields({ created: '2026-07-01T12:00:00Z', updated: '2026-07-02T12:00:00Z', duedate: '2026-07-03' }));
+    f.state.pages = [page(['10003', '10002', '10001'], 'page-2'), page(['10003', '10002', '10001'])];
+    const { source } = await f.make();
+    const window = { since: '2026-10-16', until: '2026-10-16', date_field: 'any' as const };
+    const listed = await source.list({ ...window, limit: 3 });
+    expect(listed.items.map(item => item.citation.ticket_id)).toEqual(['10003', '10002']);
+    // Every issue on the page was created before since, yet a later one may still have been updated in the window.
+    expect(listed.next_cursor).toBeDefined();
+    const searched = await source.search({ query: 'ship', ...window });
+    expect(searched.items.map(item => item.citation.ticket_id)).toEqual(['10003', '10002']);
+    const any = '((created >= "2026-10-15" AND created < "2026-10-18") OR (updated >= "2026-10-15" AND updated < "2026-10-18") OR (due >= "2026-10-15" AND due < "2026-10-18"))';
+    expect(f.jqls()).toEqual([
+      `created >= "1970-01-01" AND ${any} ORDER BY created DESC, id DESC`,
+      `(text ~ "\\"ship\\"") AND created >= "1970-01-01" AND ${any} ORDER BY created DESC, id DESC`,
+    ]);
+  });
+
   it('keeps paging an inventory with no since, and bounds until alone without dropping the site-wide restriction', async () => {
     const f = fixture(); f.state.pages = [page(['10001'], 'page-2')];
     const { source } = await f.make();
