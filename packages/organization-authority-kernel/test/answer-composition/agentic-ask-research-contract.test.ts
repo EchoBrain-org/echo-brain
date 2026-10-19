@@ -131,7 +131,7 @@ describe('Ask research tool contract v1', () => {
 
   it('answers V8 with a cited project and its leads, and streams progress V3 that names the projects source', async () => {
     const project: EvidenceDeskItemV2 = Object.freeze({
-      id: 'project-therm', kind: 'project', citation: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' }, label: 'THERM', visibility: 'project',
+      id: 'project-therm', kind: 'project', citation: { kind: 'project' as const, project_id: 'prj_00000000-0000-4000-8000-000000000001' as const }, label: 'THERM', visibility: 'project',
       attributes: { status: 'active', role: 'member', leads: 'Mara Lind' }, text: 'THERM. Leads: Mara Lind. Members: Jules Park (member).', receipt_sha256: canonicalSha256('project-therm'),
     });
     const port = desk({ live_sources: [PROJECTS_SOURCE_DESCRIPTOR_V1], list: vi.fn(async () => result([project])) });

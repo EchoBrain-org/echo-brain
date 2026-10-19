@@ -489,7 +489,7 @@ describe('workspace sources (research tool contract v1)', () => {
   it('describes the workspace sources, and refuses a live source named like one', () => {
     const f = fixture(); const w = workspace();
     const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [], undefined, w.sources);
-    expect(desk.live_sources.map(source => source.source_id)).toEqual(['projects', 'people', 'tools']);
+    expect((desk.live_sources ?? []).map(source => 'source_id' in source ? source.source_id : undefined)).toEqual(['projects', 'people', 'tools']);
     for (const name of ['projects', 'people', 'tools']) {
       const registration: RegisteredPersonLiveEvidenceSourceV2 = { source: f.ticket, scope: { kind: 'global' }, descriptor: { ...liveSourceDescriptorV2({ source: 'ticket', tool_id: 'jira' }), source_id: name } };
       expect(() => createRegisteredPersonLiveEvidenceDeskV2(f.base, [registration], undefined, w.sources)).toThrow(expect.objectContaining({ code: 'invalid_request' }));

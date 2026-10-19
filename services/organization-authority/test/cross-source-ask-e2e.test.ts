@@ -100,14 +100,14 @@ it('binds a tool\'s containers and its project setting for the V8 Ask alone, nam
   ];
   // Research lists the asker's projects, then stops; each step's catalog and scratchpad are kept.
   const prompts: { readonly source_catalog?: readonly { readonly source: string }[]; readonly step?: number }[] = [];
-  const model = finishingModel();
-  model.generate.mockImplementation(async (input: StructuredGenerationInput) => {
+  const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const prompt = JSON.parse(input.user_prompt) as { readonly source_catalog?: readonly { readonly source: string }[]; readonly step?: number };
     prompts.push(prompt);
     const listing = prompt.step === 1 && prompt.source_catalog?.some(entry => entry.source === 'projects') === true;
     return { parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: listing ? 'open' : 'not_found', evidence: [] }], notes: '' }],
       actions: listing ? [{ tool: 'list', args: { source: 'projects' } }] : [{ tool: 'finish', args: {} }] };
   });
+  const model = { answer_composition_generation: { ...finishingModel().answer_composition_generation, structured_output: { generate } } };
   const runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors, answer_composition_generation: model.answer_composition_generation });
   try {
     const origin = `http://127.0.0.1:${runtime.address.port}`;
