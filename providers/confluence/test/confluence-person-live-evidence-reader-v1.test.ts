@@ -29,21 +29,26 @@ function metadata(value: Page, body = false) {
     ...(body ? { body: { atlas_doc_format: { value: value.document, representation: 'atlas_doc_format' } } } : {}) };
 }
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+const SPACES_LEFT_OUT = "Some of this project's Confluence spaces were not found or are not visible to you, so these results leave out their pages.";
 
 async function fixture(options: { selected?: readonly string[]; pages?: Page[]; scopes?: readonly string[] } = {}) {
   const calls: Call[] = [];
   const audits: PersonLiveEvidenceReleaseV1<PersonPageCitationV1>[] = [];
   const state: {
     pages: Map<string, Page>; keys: Map<string, string>; denied: Set<string>; account: string; site: string; searchIds: string[];
+    /** A path Confluence answers with this HTTP status. */
+    statuses: Map<string, number>;
     list?: (call: Call) => unknown; bulk?: (call: Call) => unknown;
     searchNext?: string; authorizationCurrent: boolean; rejectAudit: boolean;
   } = { pages: new Map((options.pages ?? [page()]).map(value => [value.id, value])), keys: new Map([['42', 'ECHO'], ['43', '~personal:key']]),
-    denied: new Set(), account: 'synthetic-account', site: ORIGIN, searchIds: ['123'], authorizationCurrent: true, rejectAudit: false };
+    denied: new Set(), statuses: new Map(), account: 'synthetic-account', site: ORIGIN, searchIds: ['123'], authorizationCurrent: true, rejectAudit: false };
   const fetch = vi.fn(async (raw: string, _init: RequestInit) => {
     const url = new URL(raw);
     const path = url.pathname.startsWith(API_PREFIX) ? url.pathname.slice(API_PREFIX.length) : url.pathname;
     const call = { path, query: new URLSearchParams(url.searchParams) };
     calls.push(call);
+    const status = state.statuses.get(path);
+    if (status !== undefined) return response({ private: 'provider denial must not escape' }, status);
     if (state.denied.has(path)) return response({ private: 'provider denial must not escape' }, 403);
     if (path === '/oauth/token/accessible-resources') return response([{ id: CLOUD, url: state.site, scopes: options.scopes ?? SCOPES }]);
     if (path === '/rest/api/user/current') return response({ accountId: state.account, type: 'known', accountType: 'atlassian' });
@@ -223,15 +228,45 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toContain('"RENAMED_AGAIN"');
   });
 
-  it('queries only requester-visible mapped spaces and returns empty when none are visible', async () => {
-    const f = await fixture({ selected: ['42', '43'] });
-    f.state.denied.add('/api/v2/spaces/43');
-    expect((await f.source.search({ query: 'requirements' })).items).toHaveLength(1);
+  it('leaves out a mapped space Confluence does not find for the asker (404), and every page of the result says so', async () => {
+    const f = await fixture({ selected: ['42', '43'], pages: [page(), page({ id: '124' })] });
+    // Confluence answers 404 for a space that is missing or that the asker cannot view.
+    f.state.keys.delete('43');
+    const found = await f.source.search({ query: 'requirements' });
+    expect(found.items).toHaveLength(1);
+    expect(found).toMatchObject({ truncated: false, notice: SPACES_LEFT_OUT });
     expect(f.calls.find(call => call.path === '/rest/api/search')!.query.get('cql')).toBe('type = page AND text ~ "requirements" AND space IN ("ECHO")');
-    f.state.denied.add('/api/v2/spaces/42');
+    // A dated list's continuation reuses its first page's query, so it still leaves the space out and says so.
+    f.state.searchNext = '/wiki/rest/api/search?cursor=second';
+    const first = await f.source.list({ since: '2026-10-01', limit: 20 });
+    expect(first).toMatchObject({ truncated: true, next_cursor: expect.any(String), notice: SPACES_LEFT_OUT });
+    f.state.searchNext = undefined; f.state.searchIds = ['124'];
+    const second = await f.source.list({ since: '2026-10-01', limit: 20, cursor: first.next_cursor });
+    expect(second.items.map(item => item.citation.page_id)).toEqual(['124']);
+    expect(second).toMatchObject({ truncated: false, notice: SPACES_LEFT_OUT });
+    expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-09-29"');
+    // None found: no CQL read at all, and an empty result that still is not complete.
+    f.state.keys.delete('42');
     const searchCount = f.calls.filter(call => call.path === '/rest/api/search').length;
-    expect(await f.source.search({ query: 'requirements' })).toMatchObject({ items: [], truncated: false });
+    expect(await f.source.search({ query: 'requirements' })).toMatchObject({ items: [], truncated: false, notice: SPACES_LEFT_OUT });
+    expect(await f.source.list({ since: '2026-10-01', limit: 20 })).toMatchObject({ items: [], truncated: false, page_full: false, notice: SPACES_LEFT_OUT });
     expect(f.calls.filter(call => call.path === '/rest/api/search')).toHaveLength(searchCount);
+  });
+
+  it('says nothing was left out when every mapped space is found', async () => {
+    const f = await fixture({ selected: ['42', '43'] });
+    expect(await f.source.search({ query: 'requirements' })).not.toHaveProperty('notice');
+    expect(await f.source.list({ since: '2026-10-01', limit: 20 })).not.toHaveProperty('notice');
+  });
+
+  it.each([401, 403])('fails a scoped search or dated list when Confluence refuses the credentials on one mapped space (%i), never leaving its pages out', async status => {
+    const f = await fixture({ selected: ['42', '43'] });
+    // 401 is a credential rejection, never a space the asker cannot view; the space read documents no 403.
+    f.state.statuses.set('/api/v2/spaces/43', status);
+    await expect(f.source.search({ query: 'requirements' })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(f.source.list({ since: '2026-10-01', limit: 20 })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.calls.some(call => call.path === '/rest/api/search')).toBe(false);
+    expect(f.audits).toEqual([]);
   });
 
   it('opens and continues a long page in bounded, audited sections without skipping or repeating text', async () => {

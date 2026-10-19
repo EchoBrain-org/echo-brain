@@ -32,14 +32,17 @@ const EMPTY_DIGEST = sha256Digest('');
  */
 const CQL_DATE_FIELDS: Readonly<Partial<Record<EvidenceDateFieldV1, string>>> = Object.freeze({ created: 'created', updated: 'lastmodified' });
 const DATE_SELECTIONS = Object.freeze([...Object.keys(CQL_DATE_FIELDS) as EvidenceDateFieldV1[], EVIDENCE_ANY_DATE_V1]);
+/** A scoped search or dated list that left out a mapped space says so on every page, so it never reads as complete (ADR-0041). */
+const SPACES_LEFT_OUT = "Some of this project's Confluence spaces were not found or are not visible to you, so these results leave out their pages.";
 type Page = Readonly<{ dates: EvidenceDatesV1; id: string; space_id: string; title: string; version: string; status: string; occurred_at?: string; date_kind?: 'created' | 'version_created'; document?: string }>;
 type Item = Readonly<{ page: Page; section: string; offset: number; text?: string }>;
-type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token: string }>;
+type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token: string; left_out: boolean }>;
 
 function limit(value: number, maximum = 20): number {
   if (!Number.isInteger(value) || value < 1 || value > 50) confluenceFailure('invalid_request');
   return Math.min(value, maximum);
 }
+function leftOut(left_out: boolean): { notice?: string } { return left_out ? { notice: SPACES_LEFT_OUT } : {}; }
 function quote(value: string): string { return `"${value.replace(/[\\"]/g, '\\$&')}"`; }
 function boundedLabel(value: string): string {
   let result = '';
@@ -173,7 +176,13 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     // operation and scope; only the cursor token is consumed from this URL.
     return confluenceString(url.searchParams.get('cursor'), 4096);
   }
-  async function spaceKeys(signal?: AbortSignal): Promise<readonly string[] | undefined> {
+  /**
+   * The mapped spaces' current keys. Project members can view different mapped spaces, and Confluence answers 404 for a
+   * space that is missing or that the asker cannot view, so only a 404 leaves a space out, and `left_out` says one was.
+   * A refused connection (unauthorized: HTTP 401 or 403) says nothing about one space, so it fails the read rather than
+   * end a search without that space's pages.
+   */
+  async function spaceKeys(signal?: AbortSignal): Promise<Readonly<{ keys: readonly string[]; left_out: boolean }> | undefined> {
     if (selected === undefined) return undefined;
     const keys = await parallel(selected, async id => {
       try {
@@ -181,22 +190,23 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         if (confluenceString(space.id, 20, ID) !== id) confluenceFailure('invalid_output');
         return confluenceString(space.key, 256);
       } catch (error) {
-        // Different project members can see different subsets of mapped spaces.
-        // The operation's final connection fence still detects a revoked grant.
-        if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) return undefined;
+        if (error instanceof AuthorityOperationError && error.code === 'not_found') return undefined;
         throw error;
       }
     });
-    return Object.freeze(keys.filter((key): key is string => key !== undefined));
+    const found = keys.filter((key): key is string => key !== undefined);
+    return Object.freeze({ keys: Object.freeze(found), left_out: found.length < keys.length });
   }
-  async function cql(query: string | undefined, since: string | undefined, until: string | undefined, signal?: AbortSignal, selection: EvidenceDateFilterV1 = {}): Promise<string | undefined> {
+  /** The CQL for a search or dated list, with none when no mapped space was found. */
+  async function cql(query: string | undefined, since: string | undefined, until: string | undefined, signal?: AbortSignal, selection: EvidenceDateFilterV1 = {}): Promise<Readonly<{ expression?: string; left_out: boolean }>> {
     // A window on any date is an OR of the same window on each date a page records.
     const fields: readonly string[] = selection.date_field === EVIDENCE_ANY_DATE_V1 ? Object.values(CQL_DATE_FIELDS) : [CQL_DATE_FIELDS[selection.date_field ?? 'updated']!];
-    const keys = await spaceKeys(signal);
-    if (keys?.length === 0) return undefined;
+    const spaces = await spaceKeys(signal);
+    const left_out = spaces?.left_out ?? false;
+    if (spaces?.keys.length === 0) return { left_out };
     const clauses = ['type = page'];
     if (query !== undefined) clauses.push(`text ~ ${quote(query)}`);
-    if (keys !== undefined) clauses.push(`space IN (${keys.map(quote).join(', ')})`);
+    if (spaces !== undefined) clauses.push(`space IN (${spaces.keys.map(quote).join(', ')})`);
     const bounds: ((field: string) => string)[] = [];
     if (since !== undefined) {
       const lower = new Date(`${day(since)}T00:00:00Z`); lower.setUTCDate(lower.getUTCDate() - 2);
@@ -211,7 +221,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     }
     const window = (field: string) => bounds.map(bound => bound(field)).join(' AND ');
     if (bounds.length > 0) clauses.push(fields.length === 1 ? window(fields[0]!) : `(${fields.map(field => `(${window(field)})`).join(' OR ')})`);
-    return clauses.join(' AND ');
+    return { expression: clauses.join(' AND '), left_out };
   }
   async function discover(path: string, query: Readonly<Record<string, string | readonly string[]>>, maximum: number, signal?: AbortSignal): Promise<{ pages: readonly Page[]; token?: string }> {
     const response = confluenceRecord(await transport.request({ path, query, signal }));
@@ -322,10 +332,10 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       const query = confluenceString(input.query, 1024).trim();
       if (query === '') confluenceFailure('invalid_request');
       await verify(input.signal);
-      const expression = await cql(query, input.since, input.until, input.signal, input);
-      const result = expression === undefined ? { pages: [] } : await discover('/rest/api/search', { cql: expression, limit: String(maximum), includeArchivedSpaces: 'true' }, maximum, input.signal);
+      const scoped = await cql(query, input.since, input.until, input.signal, input);
+      const result = scoped.expression === undefined ? { pages: [] } : await discover('/rest/api/search', { cql: scoped.expression, limit: String(maximum), includeArchivedSpaces: 'true' }, maximum, input.signal);
       await verify(input.signal);
-      return Object.freeze({ items: Object.freeze(result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(page => remember(inventory(page)))), truncated: result.token !== undefined });
+      return Object.freeze({ items: Object.freeze(result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(page => remember(inventory(page)))), truncated: result.token !== undefined, ...leftOut(scoped.left_out) });
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
@@ -341,12 +351,14 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       await verify(input.signal);
       let path = '/api/v2/pages';
       let query: Readonly<Record<string, string | readonly string[]>>;
-      if (previous !== undefined) { path = previous.path; query = { ...previous.query, cursor: previous.token }; }
+      // A continuation reuses its first page's query, and so whether that query left out a mapped space.
+      let left_out = false;
+      if (previous !== undefined) { path = previous.path; query = { ...previous.query, cursor: previous.token }; left_out = previous.left_out; }
       else if (input.since !== undefined || input.until !== undefined) {
         if (container !== undefined) confluenceFailure('invalid_request');
-        const expression = await cql(undefined, input.since, input.until, input.signal, input);
-        if (expression === undefined) { await verify(input.signal); return Object.freeze({ items: Object.freeze([]), truncated: false, page_full: false }); }
-        path = '/rest/api/search'; query = { cql: expression, limit: String(maximum), includeArchivedSpaces: 'true' };
+        const scoped = await cql(undefined, input.since, input.until, input.signal, input);
+        if (scoped.expression === undefined) { await verify(input.signal); return Object.freeze({ items: Object.freeze([]), truncated: false, page_full: false, ...leftOut(scoped.left_out) }); }
+        path = '/rest/api/search'; query = { cql: scoped.expression, limit: String(maximum), includeArchivedSpaces: 'true' }; left_out = scoped.left_out;
       } else query = { limit: String(maximum), status: LIST_STATUSES, ...(container === undefined ? selected === undefined ? {} : { 'space-id': selected } : { 'space-id': container }) };
       const result = await discover(path, query, maximum, input.signal);
       await verify(input.signal);
@@ -355,11 +367,11 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         if (cursors.size >= MAX_HANDLES) confluenceFailure('unavailable');
         next_cursor = `confluence_cursor_${randomUUID()}`;
         const { cursor: _cursor, ...stable } = query;
-        cursors.set(next_cursor, Object.freeze({ selection, path, query: Object.freeze(stable), token: result.token }));
+        cursors.set(next_cursor, Object.freeze({ selection, path, query: Object.freeze(stable), token: result.token, left_out }));
       }
       // A last page with no next link can still be exactly full (ADR-0041): counted before ECHO's own date filter.
       const page_full = next_cursor === undefined && result.pages.length >= maximum;
-      return Object.freeze({ items: Object.freeze(result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(page => remember(inventory(page)))), truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full });
+      return Object.freeze({ items: Object.freeze(result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(page => remember(inventory(page)))), truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full, ...leftOut(left_out) });
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
       const maximum = limit(input.limit, 8);

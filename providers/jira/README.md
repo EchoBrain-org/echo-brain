@@ -179,8 +179,11 @@ or project coordinates, and are never followed.
 Opening a ticket also discovers up to four directly linked ticket summaries,
 within the requested result limit. Jira's `issuelinks` contributes only numeric
 issue IDs; each selected target is exact-read under the same person and project
-boundary before its metadata is released. Inaccessible or out-of-project targets
-are omitted with a coverage limitation. The planner must use a normal `open`
+boundary before its metadata is released. A target Jira does not find for the
+asker (404: deleted, or hidden from them) or outside the pinned project is
+omitted, and the open reports `truncated` with the ticket's own text whole.
+Jira refusing the credentials on a target (401 or 403) fails the open rather
+than omit a link the asker may see. The planner must use a normal `open`
 on the returned handle to read a linked body. Missing optional link data does
 not block the anchor, and refreshing a stored citation reads only that anchor.
 Source: [Jira issue links](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-links/).
