@@ -20,9 +20,11 @@ import { JIRA_TEXT, SLACK_TEXT } from '../../services/organization-authority/tes
 // desktop host runs it; the host's own line reader turns the printed lines
 // into page notices; and the desktop's store takes them, then the answer, and
 // opens what Ask named. A change on any of the three sides meets the others.
-// The client streams the V7 answer on /v6 (progress V2, ADR-0040), whose Ask
-// may cite a follow-up, and falls back to V1 on /v5 for an Authority without
-// /v6, as an older one answers.
+// The client asks /v7 first (the V8 answer, research tool contract v1); here
+// each Authority is one from before /v7, which answers it with a 404 without
+// the route header. So the client streams the V7 answer on /v6 (progress V2,
+// ADR-0040), whose Ask may cite a follow-up, and falls back to V1 on /v5 for
+// an Authority without /v6 either, as an older one answers.
 //
 // The desktop's modules are loaded by path, as approval-proposal-roundtrip
 // loads the Authority's: the root typecheck never reads the app (its DOM and
@@ -98,7 +100,7 @@ afterEach(() => {
  * client command the host would, through the host's own views and line
  * reader, and every step the reader posts goes to the page's store.
  */
-async function app(options: { readonly older?: boolean } = {}) {
+async function app(options: { readonly route?: '/v6' | '/v5' } = {}) {
   const f = await allSourceAskFixture(roots, { notes: NOTE });
   const [{ runCli, lastJson }, ask, views, { askText }, progress, { openerOf }] = await Promise.all([
     desktop<{ runCli(cli: unknown, argv: readonly string[], dependencies: Json, onLine?: (line: string) => void): Promise<CliRun>; lastJson(text: string): unknown }>('host/cli.ts'),
@@ -121,8 +123,8 @@ async function app(options: { readonly older?: boolean } = {}) {
     const url = new URL(String(input));
     expect(url.origin).toBe(AUTHORITY);
     if (url.pathname.endsWith('/person/ask')) asked.push(url.pathname);
-    // An Authority from before /v6 has no such route: a 404 without the route header.
-    if (options.older === true && url.pathname === '/v6/person/ask') {
+    // An Authority from before /v7, and from before /v6 for the /v5 proof, has no such route: a 404 without the route header.
+    if (url.pathname === '/v7/person/ask' || (options.route === '/v5' && url.pathname === '/v6/person/ask')) {
       return new Response(JSON.stringify({ error: { code: 'not_found', message: 'request failed' } }), { status: 404, headers: { 'content-type': 'application/json; charset=utf-8' } });
     }
     return fetch(`${f.origin}${url.pathname}${url.search}`, init);
@@ -191,10 +193,10 @@ const SEARCHED_V2 = [...SEARCHED_V1, { kind: 'follow_ups' }];
 
 describe('Ask progress from the Authority through the Person client to the desktop page', () => {
   it.each([
-    { route: '/v6', older: false, schema: 7, sources: SEARCHED_V2, words: 'meetings, documents, Jira, Slack and follow-ups' },
-    { route: '/v5', older: true, schema: 6, sources: SEARCHED_V1, words: 'meetings, documents, Jira and Slack' },
+    { route: '/v6' as const, older: false, schema: 7, sources: SEARCHED_V2, words: 'meetings, documents, Jira, Slack and follow-ups' },
+    { route: '/v5' as const, older: true, schema: 6, sources: SEARCHED_V1, words: 'meetings, documents, Jira and Slack' },
   ])('streams each step to the page while the Authority works on $route, then folds into the audited receipt, and opens what it named', async ({ route, older, schema, sources, words }) => {
-    const { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits, asked } = await app({ older });
+    const { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits, asked } = await app({ route });
     try {
       // The desktop's atom ids are the Authority's own.
       expect(views.atomId(f.seeded.approved_record_sha256, 'd1')).toBe(derivedAtomIdentity(f.seeded.approved_record_sha256, 'd1'));
@@ -214,7 +216,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
 
       // --- The client: every step, in order, then the one final line, from the newest route this Authority has. ---
-      expect(asked).toEqual(older ? ['/v6/person/ask', '/v5/person/ask'] : ['/v6/person/ask']);
+      expect(asked).toEqual(older ? ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask'] : ['/v7/person/ask', '/v6/person/ask']);
       expect(asked.at(-1)).toBe(`${route}/person/ask`);
       const steps = stepsOf(lines.slice(0, -1));
       // A /v5 stream is V1 throughout: a V1 client reads every step of it.
