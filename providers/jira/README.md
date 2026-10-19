@@ -248,17 +248,14 @@ organization, grant or site selector in model arguments or connection commands.
    The desk rechecks its local snapshot after Jira I/O.
 4. V5 citations open the adapter-verified Jira permalink directly. The
    desktop's global and project Ask call `person ask --live`
-   (`POST /v7/person/ask`, strict V8 response with Jira tickets and Jira
-   projects, Confluence pages and spaces, ECHO's follow-ups and the asker's
-   projects, people and tools,
-   [ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md));
-   they fall back to `/v6/person/ask` (strict V7, with follow-ups,
-   [ADR-0040](../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)),
-   then `/v5/person/ask` (strict V6, no follow-ups), and then the V5 ticket
-   route (`/v4/person/ask`), each only when an older Authority answers 404
-   without the route header. The desktop validates V4 to V8 answers, with a
-   safe direct-link opener. `--tickets` is kept for
-   compatibility, and `person ask` with neither flag retains strict V4 behavior.
+   (`POST /v7/person/ask`, strict V8 response,
+   [ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), which
+   falls back on an older Authority down to the V5 ticket route
+   (`/v4/person/ask`), as the
+   [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
+   describes. The desktop validates V4 to V8 answers, with a safe direct-link
+   opener. `--tickets` is kept for compatibility, and `person ask` with
+   neither flag retains strict V4 behavior.
 5. `echo-brain person tools disconnect --tool jira` calls
    `POST /v1/person/tools/jira/disconnect`. Local revocation is committed before
    remote deletion; a failed deletion cannot restore read access. Missing
@@ -313,38 +310,15 @@ for the setting's CLI and revision checks.
 ## Jira projects as Ask evidence
 
 The V8 Ask can also read the Jira projects the asker can browse, as the tool
-container source `jira_projects`
-([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)),
-registered over the same runtime as the ticket source and bound only for the
-V8 answer. `createJiraPersonLiveContainerReaderV1` reads through the asker's
-own connection and the same audited boundary:
-
-- **List** pages Jira's project search, which applies the asker's Browse
-  projects permission, in key order, at most 25 a call. The transport admits
-  `project/search` with only its paging, keyword, order and browse selectors.
-- **Search** sends the longest significant keyword, cut at a whole character
-  to the 256 bytes the transport admits, to Jira's own key-and-name match,
-  then matches every word against each project's key, name and the names of
-  the ECHO projects mapped to it, at most 10 a call. Words that only name the
-  collection, such as "Jira projects", match every project. A project found
-  only through a mapped ECHO project's name is read exactly, and one the asker
-  cannot browse (404) is left out, never counted. Jira refusing the
-  credentials (401 or 403) fails the read.
-- **Rows it cannot show.** A project row that fails validation, such as a name
-  that is not NFC or holds a line separator, or an unexpected key shape, is
-  left out and never shown, and the result's notice says some projects could
-  not be shown, so the list or search never reads as complete.
-- **Open** is an exact project read under current permissions.
-- **Each item** is labeled by the project's name, carries its key and tool,
-  cites the project with its `/browse/<key>` link, and names the mapped ECHO
-  projects the asker can see by whole name: ten, or as many as fit, then how
-  many more.
-- **Scope.** A project Ask reads only the Jira project its ECHO project maps;
-  an unmapped project reads none. A date window is refused before any
-  provider read.
-- **Checks** re-read every distinct release of a project and refuse one whose
-  name, key, link or named ECHO projects changed, reading the ECHO names after
-  Jira answers.
+container source `jira_projects`, through the shared container reader the
+[connector contracts](../../docs/architecture/connector-contracts.md#source-capabilities-and-containers)
+describe ([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)).
+`createJiraPersonLiveContainerReaderV1` lists Jira's project search, which
+applies the asker's Browse projects permission, in key order; the transport
+admits `project/search` with only its paging, keyword, order and browse
+selectors. A search sends Jira's key-and-name match the longest significant
+keyword, cut at a whole character to the 256 bytes the transport admits. Open
+is an exact project read, and each project cites its `/browse/<key>` link.
 
 ## Remaining human inputs and live qualification
 
