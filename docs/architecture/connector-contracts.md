@@ -77,6 +77,10 @@ The provider returns normalized items with citations, bounded text, labels and
 optional inventory metadata. It validates its own API payload, tenant URL and
 item coordinates. The shared boundary checks the citation's tenant/tool,
 verifies the digest of released text and owns all handles visible to the desk.
+A tool container's citation commits to no text
+([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)), so the
+boundary checks that digest for every other citation, and the audit commits a
+container's released value instead.
 A Slack reader, when adapted, uses the existing typed message citation; ticket
 tools use
 [`PersonTicketCitationV1`](../../packages/organization-api/src/person-ticket-citation-v1.ts),
@@ -135,12 +139,62 @@ Two selected diagnostic paths are explicit exceptions to that capture rule:
   [LangSmith staging tracing](../../deploy/organization-authority/README.md#langsmith-staging-tracing)).
 
 Ask progress is not a capture path. A streamed Ask
-([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) may name a live ticket, page or message while
-it runs, but only after the access check before the model call that reads
+([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) may name a live ticket, page or message, or on
+`/v7` a Jira project or Confluence space, while it runs, but only after the access check before the model call that reads
 it, and only by the citation projection its answer citation would carry:
 coordinates, kind, label, visibility and checked link. It never sends the
 item's body, a generated Jira query or the model's search terms, and it names
 a live tool only by its tool id.
+
+## Source capabilities and containers
+
+[ADR-0042](../decisions/ADR-0042-research-tool-contract.md) makes what a
+connector's source can do data. Each registration in
+`services/organization-authority/src/composition/person-live-connector-registry-v1.ts`
+declares `capabilities` beside its descriptor: the filters it takes, its date
+fields with what each means, `any_date`, and the link names its items carry.
+Descriptions say only what a source holds. Ask shows research the
+capabilities and refuses, before the reader, a filter value or date field a
+source does not declare. The registry's test holds the Jira and Confluence
+readers to the dates their sources declare.
+
+- **Any date.** The boundary passes every date field and `any` in shape; the
+  reader applies the one asked for or refuses it. Jira issues declare
+  `created`, `updated` and `due`, and Confluence pages `created` and
+  `updated`, each with `any_date`. On `any`, Jira sends one JQL OR of the
+  window on its three dates (a site-wide read keeps a created restriction
+  beside it) and never stops paging early; Confluence sends one CQL OR on
+  `created` and `lastmodified`. Neither declares filters or links yet.
+- **Tool containers.** A connector may register a source of kind
+  `tool_container` for its containers. `jira_projects` and
+  `confluence_spaces` register at minimum response version 8, so only the V8
+  answer binds and cites them, and the registry refuses a container without
+  capabilities. They declare no filters, dates or links, and refuse a date
+  window. A tool's items and containers share one runtime
+  (`jiraPersonLiveConnectorsV1`, `confluencePersonLiveConnectorsV1`): the
+  first registration to open it opens it, the last to close it closes it, and
+  every registration must open with the same authority. Each person
+  connection's `containerSource` binds behind the same fences as its item
+  source and through the same audited boundary, pinned in a project scope to
+  the mapped containers; an unmapped project reads none. The shared reader
+  (`providers/shared/src/person-tool-container-reader-v1.ts`) keeps handles
+  and cursors in the request, labels a container by its name with its key and
+  tool as attributes, cites it with its permalink, and rechecks every distinct
+  release.
+- **Project names.** `PersonLiveConnectorDefinitionV1.open` takes an optional
+  third argument, `project_names` (`PersonContextProjectNamesV1`): the current
+  names of those ECHO projects the asker can see, read locally with no
+  provider call. A connector whose containers name their mapped ECHO projects
+  reads it; any other ignores it. The API runtime supplies it from the asker's
+  own project list, in one read transaction with no release. A connection pins
+  the names when its container source opens, and its fence refuses once they
+  change.
+- **Project settings.** A tool's item connector also carries its project
+  setting, so the workspace's projects source names each project's Jira
+  project key and Confluence space count from that tool's own project read,
+  as the asker.
+
+Slack registers no containers: no Slack reader is composed.
 
 ## Meeting exports
 
@@ -205,9 +259,11 @@ and ticket fixtures; they do not call either service.
 
 Ticket evidence reaches Ask through Evidence Desk V2 and `PersonAnswerResponseV5`
 at `POST /v4/person/ask`, and live page evidence through `PersonAnswerResponseV6`
-at `POST /v5/person/ask` and `PersonAnswerResponseV7` at `POST /v6/person/ask`
-(which also reads ECHO's follow-ups, ADR-0040), all with the durable live-read
-audit. The Authority mounts these routes whenever an answer model is bound; ticket or page evidence
+at `POST /v5/person/ask`, `PersonAnswerResponseV7` at `POST /v6/person/ask`
+(which also reads ECHO's follow-ups, ADR-0040) and `PersonAnswerResponseV8`
+at `POST /v7/person/ask` (which also reads the asker's workspace and their
+tools' Jira projects and Confluence spaces, ADR-0042), all with the durable
+live-read audit. The Authority mounts these routes whenever an answer model is bound; ticket or page evidence
 appears only when the matching Jira or Confluence live runtime is selected.
 [ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted
 and [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md) is
@@ -217,7 +273,8 @@ connector profile's Atlassian site (Jira also takes its integration; Confluence
 uses the `confluence` integration). Each Person reads under their own grant, with
 no initial-owner or fixed-project restriction and without tool capture; the
 rehearsal's owner and fixed-project limits apply only to its diagnostic reads.
-Jira (tickets) and Confluence (pages) are the live readers. No live Slack reader
+Jira (tickets, and Jira projects for V8) and Confluence (pages, and spaces
+for V8) are the live readers. No live Slack reader
 is composed, the V3 desk reads no Slack, and read status is not exposed to
 clients.
 

@@ -16,13 +16,16 @@ Three triggers run the same loop:
   verdict and one line per finding).
 
 **Which Ask it runs.** The Ask trigger here runs Ask as
-`POST /v5/person/ask` runs it: V6 answers, with no follow-ups. Desktops and
-`person ask --live` now ask `/v6`, whose V7 answers may also cite ECHO's
-shared follow-ups ([ADR-0040](../../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)),
-so an Ask case here never finds or cites a follow-up. To see how a question
-about follow-ups (for example "help me understand all my open tasks") is
-researched, use the `trace` command below: it captures the ordinary live Ask
-on `/v6`.
+`POST /v7/person/ask` runs it, as desktops and `person ask --live` ask it: V8
+answers on the full catalog, which may also cite ECHO's shared follow-ups
+([ADR-0040](../../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)),
+the asker's projects, people and tools, and the Jira projects and Confluence
+spaces of the tools they connected
+([ADR-0042](../../../docs/decisions/ADR-0042-research-tool-contract.md)). An
+Authority from before that change answers V6, as `/v5` does, with none of
+them, and its results still read. To see the exact request a desktop sends,
+use the `trace` command below: it captures the ordinary live Ask, which is
+`/v7` once the Authority serves it.
 
 The report keeps the loop and the renderers apart. **Research loop**: every
 trigger, graded on its research result (needs, found, read, handed,
@@ -184,9 +187,10 @@ section shows them per case, with each check's rate over the case's runs (a
 failed run meets none), and what each case awaits. `awaits` names the contract
 steps a case needs (`map_and_rules`, `dates_and_links`, `workspace_collections`,
 `wider_calls`, `connector_containers`, and `eval_full_catalog`: the evaluation
-endpoint binding follow-ups, the workspace sources and tool containers, which
-it leaves out while it answers as V6): such a case is expected to fail until
-they land, and a failure there is not a regression. The judge is told when each
+endpoint binding follow-ups, the workspace sources and tool containers): such
+a case is expected to fail until they land, and a failure there is not a
+regression. Every one of these steps is built, so no case awaits one now,
+and a failing case is a regression. The judge is told when each
 question was asked (`case.asked_at`), since these keys word time relative to it.
 Run the family alone with `run --family open_ended`; it needs the workspace
 seeded (`world/README.md`, "Workspace").

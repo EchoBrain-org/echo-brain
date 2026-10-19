@@ -29,9 +29,10 @@ decision_ids:
   - ADR-0038
   - ADR-0039
   - ADR-0040
+  - ADR-0042
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -107,10 +108,12 @@ and cancellation failures release no answer.
 
 [ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)
 adds one release path before the final response. A `POST /v5/person/ask`
-request that sends `x-echo-ask-progress: 1`, or a `POST /v6/person/ask`
+request that sends `x-echo-ask-progress: 1`, a `POST /v6/person/ask`
 request that sends `x-echo-ask-progress: 2` (progress V2, whose names may be
-follow-ups, ADR-0040), receives progress events while it runs. Before the
-answer, an event may carry only:
+follow-ups, ADR-0040), or a `POST /v7/person/ask` request that sends
+`x-echo-ask-progress: 3` (progress V3, whose names may also be projects,
+people, tools and tool containers, ADR-0042) receives progress events while
+it runs. Before the answer, an event may carry only:
 
 - the stage;
 - the source kinds a research step searched, from the request's own catalog,
@@ -215,6 +218,33 @@ release check puts all of them through it; one the asker can no longer see
 refuses the answer. Its negative disclosure tests are
 `services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`
 and `person-follow-ups-ask-integration.test.ts`.
+
+[ADR-0042](../decisions/ADR-0042-research-tool-contract.md) adds the asker's
+workspace to Ask on V8 answers, served by the additive `POST /v7/person/ask`,
+which streams under the ADR-0039 rules above in progress V3. Three ECHO
+sources release only what the asker's own reads show them: their project list
+and each project's roster, the organization directory (in a project Ask, only
+that project and its roster), and their person tools list, never a tool's site
+or account. Two connector sources release the Jira projects and Confluence
+spaces the asker's own connection can see, through the audited live-evidence
+path that tickets and pages use: in a project Ask only the containers its lead
+mapped, and none for an unmapped project. A container names only the mapped
+ECHO projects the asker can see. None of them binds in Mine, in trigger
+research or for V4 to V7 answers. Every workspace release is audited before
+its bytes leave Layer 3 (`echo-person-workspace-release-audit-v1`: item kinds,
+ids and digests only), and a container release is its connector's audited
+live release. A link names only items this request released to the asker,
+and a link to anything the asker cannot read is left out. Counts, including
+how many items a date filter could not test, cover only what the asker can
+read. Each check before a model call rechecks the workspace items
+and containers released since the last check, and the release check all of
+them: a lost or replaced project grant, a released person no longer active, a
+changed tool connection, or a container whose name, key, link or named ECHO
+projects changed refuses the answer. Its negative disclosure tests are listed
+in ADR-0042: `services/organization-authority/test/person-workspace-evidence-v1.test.ts`,
+`person-live-evidence-desk-v2.test.ts`, `person-ask-progress-v7-http.test.ts`
+and `cross-source-ask-e2e.test.ts`, and the Jira and Confluence container
+reader tests.
 
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
 Both original and approved-record citations bind the exact released evidence.

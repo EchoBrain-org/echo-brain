@@ -76,6 +76,10 @@ streams one progress version for its one answer version:
 | `POST /v5/person/ask` | V6 | `1` | V1 (`person-ask-progress-v1.ts`) |
 | `POST /v6/person/ask` | V7 ([ADR-0040](ADR-0040-follow-ups-as-ask-evidence.md)) | `2` | V2 (`person-ask-progress-v2.ts`) |
 
+[ADR-0042](ADR-0042-research-tool-contract.md) later adds a third route,
+`POST /v7/person/ask`: the V8 answer, header value `3`, progress V3. See
+"Later decisions".
+
 Progress V2 is V1 with two additions only: a searched row may name
 `follow_ups`, and a named item is a V7 citation, so it may be a follow-up
 with the ref that opens its item page. Everything else below holds for both
@@ -314,3 +318,14 @@ its fixture Authority, is `product/echo-desktop/test/e2e/ask.spec.ts`.
 
 Staging delivery through Cloudflare and Caddy is a manual operator check
 after merge. Live qualification is separate.
+
+## Later decisions
+
+[ADR-0042](ADR-0042-research-tool-contract.md) (2026-10-19) adds
+`POST /v7/person/ask`, which serves the V8 answer and streams Ask progress V3
+(`person-ask-progress-v3.ts`) for `x-echo-ask-progress: 3`, with the route
+header `x-echo-person-ask-route: 7`. V3 is V2 with three additions: a
+searched row may name the asker's `projects`, `people` and `tools` and a
+connected tool's containers, a row names up to 16 sources, and a named item is
+a V8 citation. Every rule above holds for V3. `/v5` and `/v6` keep streaming V1
+and V2, and the Person client asks `/v7` first, then `/v6` and `/v5`.

@@ -63,6 +63,7 @@ separately.
 | [ADR-0039](ADR-0039-ask-progress-names-after-the-access-check.md) | Ask streams its progress and names what it read only after the access check | accepted |
 | [ADR-0040](ADR-0040-follow-ups-as-ask-evidence.md) | Follow-ups are an Ask source, seen exactly as Home shows them | accepted |
 | [ADR-0041](ADR-0041-complete-lists-as-ask-evidence.md) | A complete list is Ask evidence of which items exist | accepted |
+| [ADR-0042](ADR-0042-research-tool-contract.md) | Ask reads every source by what it declares, and reaches the asker's workspace | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

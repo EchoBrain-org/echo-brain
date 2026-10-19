@@ -233,3 +233,16 @@ and panel in `product/echo-desktop/test/unit/ask-follow-up.test.ts`.
 follow-ups list evidence like any other list: code names the follow-ups it
 lists by title, with owner and due date. What a follow-up releases, and to
 whom, does not change.
+
+[ADR-0042](ADR-0042-research-tool-contract.md) (2026-10-19) gives follow-ups
+ECHO's own dates: when each was created, sent to its owner, last reassigned
+and last checked, which the runs API already shows whoever sees the row.
+Search and list filter on them, or on any of them. A due date stays refused:
+it is the tool item's, and shows only after a live open. A follow-up links to
+its decision's items, only where the release carries the decision, and to the
+tool item it follows, only when this request read it live. Its capabilities,
+not its description, say what it takes. The V7 answer on `/v6` keeps its
+shape. `/v7` serves the V8 answer, which also cites the asker's projects,
+people, tools and their tools' Jira projects and Confluence spaces, and
+streams progress V3 for header value `3`. The staging research evaluation
+now asks its questions as `/v7` does, follow-ups included.

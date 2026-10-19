@@ -759,6 +759,20 @@ planner call, the stop is `budget` and `research_admission` is
 the writer can still use evidence already released within its reserved time.
 These fields contain only fixed diagnostic values, never queries or evidence.
 
+An Ask (a question, never a background task) also records five counts on the
+span that carries its `planned_query_count`, for the research tool contract
+([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)):
+
+| Count | Meaning |
+| --- | --- |
+| `refused_read_count` | Reads refused before the desk because the source does not take a filter value or date, or answered with an error |
+| `repeated_refusal_count` | Refused reads sent again with the same arguments and answered from memory, unsent |
+| `unchecked_item_count` | Items a date window could not test because they lack the asked date |
+| `sources_looked_at` | Distinct sources a search or list read; a search across sources counts once |
+| `most_reads_in_a_step` | The most reads one research step ran (at most 10) |
+
+They are counts only, never filters, queries or evidence.
+
 A request that fails marks the first research-to-audit stage still open as
 failed with the request's failure class, then fails `ask_response`. The deadline
 is `timeout`; a closed client connection is `cancelled`. A failed `ask_response`
@@ -783,7 +797,7 @@ metadata shares its `journey_id`; existing events and fields remain available.
 | Signal | How to read it |
 | --- | --- |
 | `evidence_connection`, `evidence_source: ticket` | `verified` means the request's Jira reader passed its fresh provider identity check, including the saved mapping in project scope. `unlinked`, `not_configured`, and `out_of_scope` mean no reader was selected. A successful `unavailable` event in project scope means no reader was selected; it does not distinguish a missing mapping from a missing personal connection. A failed event carries a finite failure category. This is not the UI's stored connected status. |
-| Live `evidence_search`, `evidence_list`, `evidence_open` | `evidence_source` distinguishes `ticket` from `slack`. `included_count` counts the items that provider operation returned, before mixed-source trimming. `empty` is a successful zero-result lookup; a failed lookup has its failure category and no result count. Queryless searches call `evidence_list`. |
+| Live `evidence_search`, `evidence_list`, `evidence_open` | `evidence_source` distinguishes `ticket` from `slack`, `page` and `tool_container` (a connected tool's Jira projects or Confluence spaces, read only for the V8 Ask, ADR-0042). `included_count` counts the items that provider operation returned, before mixed-source trimming. `empty` is a successful zero-result lookup; a failed lookup has its failure category and no result count. Queryless searches call `evidence_list`. |
 | Terminal `http_request` | `result` is the returned Ask outcome. `ticket_retrieved_items` counts distinct ticket handles returned to the Ask loop, including inventory; `ticket_context_items` counts tickets actually submitted to the answer model, without counting a repair twice; `ticket_citations` counts citations in the final response after its access fences. A failed or cancelled request has zero returned citations. |
 
 Only finite categories and counts are added. These live spans exclude provider
@@ -794,8 +808,9 @@ do not add separate live-source spans. Older releases have no Jira fields;
 their absence is not evidence that Jira was skipped or returned no data.
 Requests that fail before the Ask loop starts have no ticket summary counters.
 
-A streamed `/v5/person/ask` (`x-echo-ask-progress: 1`, ADR-0039), or
-`/v6/person/ask` (`x-echo-ask-progress: 2`, ADR-0040), always
+A streamed `/v5/person/ask` (`x-echo-ask-progress: 1`, ADR-0039),
+`/v6/person/ask` (`x-echo-ask-progress: 2`, ADR-0040), or `/v7/person/ask`
+(`x-echo-ask-progress: 3`, ADR-0042), always
 answers HTTP `200` once its stream starts; a later failure is its terminal
 `error` event. Its terminal `http_request` span records that event's status
 as `http_status`, the status the JSON route would have returned, so a filter

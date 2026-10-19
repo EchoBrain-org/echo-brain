@@ -168,25 +168,35 @@ scope rules here still apply to every route. The CLI accepts
 `--project` and `--mine` are exclusive, as are `--tickets` and `--live`. The
 client does not silently downgrade a project or mine request to global Ask.
 
-`--live` calls `POST /v6/person/ask`, which returns V7 answers: those of
-`/v5` (V6), which may also cite ECHO's shared follow-ups, seen as Home shows
-them ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)); a
-follow-up's `follow_up:<item_id>` ref opens with `person runs` operation
-`item`, not `person open`. It uses every configured request-local live source: Jira ticket citations
+`--live` calls `POST /v7/person/ask`, which returns V8 answers: those of
+`/v6` (V7), which may cite ECHO's shared follow-ups, seen as Home shows them
+([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)), and may
+also cite the asker's workspace: their projects, the people in their
+organization, their tools, and the Jira projects and Confluence spaces of the
+tools they connected
+([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). A follow-up's
+`follow_up:<item_id>` ref opens with `person runs` operation `item`, a
+project's `project:<project-id>` with `person projects read-v2`, and a tool's
+`tool:<tool>` in `person tools`, not `person open`; a person and a tool
+container carry no ref. In a project Ask the workspace is that project and
+its roster, and the containers are those its lead mapped. It uses every
+configured request-local live source: Jira ticket citations
 ([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md)) and
 Confluence page citations, read under the asker's own connections. Global
 scope reads what those connections can access; a project reads only its
 lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
 [Confluence spaces](project-settings-v1.md#confluence-space-mapping). Mine and
-unmapped projects exclude live tools, and Mine excludes follow-ups. The
-desktop uses `--live` for every question outside Mine. An older Authority
-without the `/v6` route gets `POST /v5/person/ask` with V6 answers, and one
-without `/v5` either the ticket-capable fallback, `POST /v4/person/ask` with V5
-answers; only a 404 without the route header falls back, and permission
-failures never do. `person ask --tickets` keeps that `/v4` route for
-compatibility. `--live --progress` streams Ask's progress
+unmapped projects exclude live tools, and Mine excludes follow-ups and the
+workspace. The desktop uses `--live` for every question outside Mine. An older
+Authority without the `/v7` route gets `POST /v6/person/ask` with V7 answers,
+one without `/v6` `POST /v5/person/ask` with V6 answers, and one without `/v5`
+either the ticket-capable fallback, `POST /v4/person/ask` with V5 answers;
+only a 404 without the route header falls back, and permission failures never
+do. `person ask --tickets` keeps that `/v4` route for compatibility.
+`--live --progress` streams Ask's progress
 ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)): one JSON line per step before the final
-line, which adds the answer's receipt; on `/v6` a step may name a follow-up. An Authority that does not stream
+line, which adds the answer's receipt; on `/v6` a step may name a follow-up,
+and on `/v7` also a project, a person, a tool or a tool container. An Authority that does not stream
 gets today's output. The desktop pins the streamed Ask to the account it
 shows (`--expected-membership-id` and `--expected-authority`): a client
 signed in as another asks nothing and prints no step. See [Person client architecture](../architecture/person-client-architecture.md)
@@ -221,11 +231,23 @@ Both keyword `search` and keyword-free `list` carry date bounds. An explicit
 
 | Source | Date fields | Default |
 | --- | --- | --- |
-| Approved meeting records | `occurred`, action `due` | `occurred` |
-| Imported meeting notes and approved shared transcripts | `occurred` | `occurred` |
+| Meetings: approved records, imported notes and shared transcripts | `occurred` (when recorded), `approved` (approved records), `received` (imported notes and transcripts), action `due` | `occurred` |
 | Saved notes and uploaded documents | `received` | `received` |
+| Follow-ups | `created`, `sent`, `reassigned`, `checked` | any of them |
+| Projects | `created` | `created` |
 | Jira tickets | `created`, `updated`, `due` | `created` |
 | Confluence pages | `created`, `updated` | `updated` |
+
+Each source declares its date fields, and whether a window may match any of
+them, in its capabilities
+([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). Ask sends a
+window with no field as `date_field: any`, so it matches any of an item's
+dates on every source above, and each row says which matched; other callers
+read the default. A date field a source does not declare is refused, and the
+same refused read is not sent again. People, tools, Jira projects and
+Confluence spaces record no dates and refuse a window. Items that do not
+record the asked date are counted as `unchecked`, not listed, and an answer
+that uses such a list says how many were not checked.
 
 Timestamps are compared in the request's time zone; date-only deadlines and
 all-day events retain their stated date. The evidence carries named source
