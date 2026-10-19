@@ -25,6 +25,28 @@ describe('bounded direct Jira Cloud transport', () => {
     expect(fetch).toHaveBeenLastCalledWith(`https://api.atlassian.com${prefix}/issue/bulkfetch`, expect.objectContaining({ method: 'POST', redirect: 'error', body: '{"issueIdsOrKeys":["10001"],"fields":["summary","project"]}' }));
   });
 
+  it('reads the asker\'s browsable projects through project search with only its paging, keyword and order selectors', async () => {
+    const fetch = vi.fn(async (_url: string, _init: RequestInit) => response({ isLast: true, values: [] }));
+    const transport = createJiraCloudTransportV1({ binding, fetch });
+    await transport.request({ path: `${prefix}/project/search`, query: { startAt: '25', maxResults: '25', query: 'launch readiness', orderBy: 'key', action: 'browse' } });
+    expect(fetch).toHaveBeenLastCalledWith(`https://api.atlassian.com${prefix}/project/search?startAt=25&maxResults=25&query=launch+readiness&orderBy=key&action=browse`, expect.objectContaining({ method: 'GET', redirect: 'error' }));
+    const refused: JiraCloudRequestV1[] = [
+      { path: `${prefix}/project/search`, method: 'POST' },
+      { path: `${prefix}/project/search`, query: { expand: 'projectKeys' } },
+      { path: `${prefix}/project/search`, query: { expand: 'lead' } },
+      { path: `${prefix}/project/search`, query: { action: 'view' } },
+      { path: `${prefix}/project/search`, query: { orderBy: 'lastIssueUpdatedTime' } },
+      { path: `${prefix}/project/search`, query: { maxResults: '51' } },
+      { path: `${prefix}/project/search`, query: { maxResults: '0' } },
+      { path: `${prefix}/project/search`, query: { startAt: '-1' } },
+      { path: `${prefix}/project/search`, query: { query: 'line\nbreak' } },
+      { path: `${prefix}/project/search`, query: { query: 'x'.repeat(257) } },
+      { path: `${prefix}/project/search`, query: { keys: 'ECHO' } },
+    ];
+    for (const input of refused) await expect(transport.request(input)).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses another tenant, absolute/provider links, unapproved endpoints and query selectors before fetching', async () => {
     const fetch = vi.fn(async () => response({})); const transport = createJiraCloudTransportV1({ binding, fetch });
     for (const path of ['https://evil.example.test', '//evil.example.test', '/rest/api/3/myself', '/ex/jira/another/rest/api/3/myself', `${prefix}/issue/ECHO-1`, `${prefix}/issue/10001/../../myself`, `${prefix}/user`, `${prefix}/myself?person=another`, `${prefix}/myself#fragment`]) {

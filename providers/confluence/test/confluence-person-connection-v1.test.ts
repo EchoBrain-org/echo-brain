@@ -30,6 +30,9 @@ function fixture() {
     if (path === '/oauth/token/accessible-resources') return Response.json([{ id: cloud, url: site, scopes: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user'] }]);
     if (path.endsWith('/rest/api/user/current')) return Response.json({ accountId: 'account-fixture', type: 'known', accountType: 'atlassian' });
     if (path.endsWith('/api/v2/pages')) return Response.json({ results: [{ id: '100', spaceId: '123', title: 'ECHO MRD', status: 'current', version: { number: 7 } }], _links: {} });
+    if (path.endsWith('/api/v2/spaces')) return Response.json({ results: [{ id: '123', key: 'ECHO', name: 'Echo Product' }, { id: '124', key: 'OPS', name: 'Operations' }], _links: {} });
+    if (path.endsWith('/api/v2/spaces/123')) return Response.json({ id: '123', key: 'ECHO', name: 'Echo Product' });
+    if (path.endsWith('/api/v2/spaces/124')) return Response.json({ id: '124', key: 'OPS', name: 'Operations' });
     throw new Error(`unexpected Confluence endpoint ${path}`);
   });
   let member = true;
@@ -38,10 +41,12 @@ function fixture() {
       if (project_id !== project || !member) throw new AuthorityOperationError('unauthorized', 'Fixture project access revoked');
       return { role: 'member', authorization_sha256: canonicalSha256('member') };
     },
+    project_names: (_token, project_ids) => new Map(project_ids.map(id => [id, 'Launchscope'])),
     authenticate: token => ({ ...person, authorization_sha256: canonicalSha256({ token }) }) });
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1) => canonicalSha256(release)) };
   return { db, fetch, nango,
     source: () => service.source({ access_token: 'session', project_id: project, audit }),
+    containers: (scoped = false) => service.containerSource({ access_token: 'session', ...(scoped ? { project_id: project } : {}), audit }),
     map: (cloud_id: string) => mappings.set(person.organization_id, project, mappings.read(person.organization_id, project).revision, canonicalSha256(randomUUID()), { cloud_id, space_ids: ['123'] }),
     revoke: () => { member = false; } };
 }
@@ -66,5 +71,33 @@ it('reads a project only through its saved mapping on this site, fenced to the m
     f.revoke();
     await expect(reopened.list({})).rejects.toMatchObject({ code: 'unauthorized' });
     await expect(f.source()).rejects.toMatchObject({ code: 'unauthorized' });
+  } finally { f.db.close(); }
+});
+
+it('lists the Confluence spaces the asker can view, naming the mapped ECHO projects the asker can see (research tool contract v1)', async () => {
+  const f = fixture();
+  try {
+    f.map(cloud);
+    const source = (await f.containers())!;
+    expect((await source.list({})).items.map(item => [item.label, item.text, item.citation.permalink])).toEqual([
+      ['Echo Product', 'Confluence space ECHO: Echo Product\nECHO projects: Launchscope', `${site}/wiki/spaces/ECHO`],
+      ['Operations', 'Confluence space OPS: Operations', `${site}/wiki/spaces/OPS`],
+    ]);
+    f.revoke();
+    expect((await (await f.containers())!.list({})).items[0]!.text).toBe('Confluence space ECHO: Echo Product');
+    await expect(source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+  } finally { f.db.close(); }
+});
+
+it('reads only the mapped spaces in a project scope, and nothing for an unmapped project', async () => {
+  const f = fixture();
+  try {
+    expect(await f.containers(true)).toBeUndefined();
+    f.map(cloud);
+    const source = (await f.containers(true))!;
+    expect((await source.list({})).items.map(item => item.label)).toEqual(['Echo Product']);
+    expect(f.fetch.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/api/v2/spaces'))).toBe(false);
+    f.revoke();
+    await expect(source.list({})).rejects.toMatchObject({ code: 'unauthorized' });
   } finally { f.db.close(); }
 });

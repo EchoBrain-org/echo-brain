@@ -1,4 +1,4 @@
-import { evidenceDateFilterV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import { evidenceDateFilterV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, EVIDENCE_ANY_DATE_V1, type EvidenceDateFieldV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
@@ -25,6 +25,12 @@ const REVALIDATION_BATCH_SIZE = 50;
 const LIST_STATUSES = Object.freeze(['current', 'archived', 'deleted', 'trashed']);
 const STATUSES = Object.freeze([...LIST_STATUSES, 'draft', 'historical']);
 const EMPTY_DIGEST = sha256Digest('');
+/**
+ * The dates a page records, by their CQL names, and a window on any of them (research tool contract v1). The Confluence
+ * connector's registered capabilities declare exactly these.
+ */
+const CQL_DATE_FIELDS: Readonly<Partial<Record<EvidenceDateFieldV1, string>>> = Object.freeze({ created: 'created', updated: 'lastmodified' });
+const DATE_SELECTIONS = Object.freeze([...Object.keys(CQL_DATE_FIELDS) as EvidenceDateFieldV1[], EVIDENCE_ANY_DATE_V1]);
 type Page = Readonly<{ dates: EvidenceDatesV1; id: string; space_id: string; title: string; version: string; status: string; occurred_at?: string; date_kind?: 'created' | 'version_created'; document?: string }>;
 type Item = Readonly<{ page: Page; section: string; offset: number; text?: string }>;
 type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token: string }>;
@@ -188,23 +194,27 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     return Object.freeze(keys.filter((key): key is string => key !== undefined));
   }
   async function cql(query: string | undefined, since: string | undefined, until: string | undefined, signal?: AbortSignal, selection: EvidenceDateFilterV1 = {}): Promise<string | undefined> {
-    const field = selection.date_field === "created" ? "created" : "lastmodified";
+    // A window on any date is an OR of the same window on each date a page records.
+    const fields: readonly string[] = selection.date_field === EVIDENCE_ANY_DATE_V1 ? Object.values(CQL_DATE_FIELDS) : [CQL_DATE_FIELDS[selection.date_field ?? 'updated']!];
     const keys = await spaceKeys(signal);
     if (keys?.length === 0) return undefined;
     const clauses = ['type = page'];
     if (query !== undefined) clauses.push(`text ~ ${quote(query)}`);
     if (keys !== undefined) clauses.push(`space IN (${keys.map(quote).join(', ')})`);
+    const bounds: ((field: string) => string)[] = [];
     if (since !== undefined) {
       const lower = new Date(`${day(since)}T00:00:00Z`); lower.setUTCDate(lower.getUTCDate() - 2);
       const date = lower.toISOString().slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) clauses.push(`${field} >= ${quote(date)}`);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) bounds.push(field => `${field} >= ${quote(date)}`);
     }
     if (until !== undefined) {
       // Provider and client zones may differ by over 24 hours; exact filtering follows discovery.
       const next = new Date(`${day(until)}T00:00:00Z`); next.setUTCDate(next.getUTCDate() + 3);
       const date = next.toISOString().slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) clauses.push(`${field} < ${quote(date)}`);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) bounds.push(field => `${field} < ${quote(date)}`);
     }
+    const window = (field: string) => bounds.map(bound => bound(field)).join(' AND ');
+    if (bounds.length > 0) clauses.push(fields.length === 1 ? window(fields[0]!) : `(${fields.map(field => `(${window(field)})`).join(' OR ')})`);
     return clauses.join(' AND ');
   }
   async function discover(path: string, query: Readonly<Record<string, string | readonly string[]>>, maximum: number, signal?: AbortSignal): Promise<{ pages: readonly Page[]; token?: string }> {
@@ -311,7 +321,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         coordinates: Object.freeze({ object_id: `${item.page.id}:${item.section}:${item.page.version}`, container_id: item.page.space_id }) });
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
-      validateEvidenceDateFilterV1(input, ["created", "updated"]);
+      validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const maximum = limit(input.limit, 5);
       const query = confluenceString(input.query, 1024).trim();
       if (query === '') confluenceFailure('invalid_request');
@@ -322,7 +332,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       return Object.freeze({ items: Object.freeze(result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(page => remember(inventory(page)))), truncated: result.token !== undefined });
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
-      validateEvidenceDateFilterV1(input, ["created", "updated"]);
+      validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const maximum = limit(input.limit);
       const container = input.container === undefined ? undefined : confluenceString(input.container, 20, ID);
       if (selected !== undefined && container !== undefined && !selected.includes(container)) confluenceFailure('unauthorized');

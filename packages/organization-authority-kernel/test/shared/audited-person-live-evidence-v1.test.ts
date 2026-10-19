@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonTicketCitationV1, type PersonConnectorAccessV1, type PersonSlackMessageCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import { validatePersonTicketCitationV1, validatePersonWorkspaceCitationV1, type PersonConnectorAccessV1, type PersonSlackMessageCitationV1, type PersonTicketCitationV1, type PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '../../src/shared/audited-person-live-evidence-v1.js';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceCitationV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceReleaseV1, PersonLiveEvidenceValueV1 } from '../../src/shared/person-live-evidence-v1.js';
@@ -395,5 +395,66 @@ describe('shared audited live evidence source V1', () => {
     vi.mocked(f.reader.search).mockImplementationOnce(async () => { controller.abort(); return page([ticket()]); });
     await expect(source.search({ query: 'ship', signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
     expect(f.audit.record).not.toHaveBeenCalled();
+  });
+});
+
+describe('tool containers and any-date windows at the shared boundary (research tool contract v1)', () => {
+  const container = (text = 'Jira project ECHO: Echo Platform\nECHO projects: Launchscope'): PersonLiveEvidenceValueV1<PersonToolContainerCitationV1> => ({
+    handle: 'private:10000', label: 'Echo Platform', text, visibility: 'only_me', attributes: { key: 'ECHO', tool: 'Jira' },
+    citation: { kind: 'tool_container', tool_id: 'tickets', external_scope_id: 'tenant-1', container: 'jira_project', container_id: '10000', permalink: 'https://tickets.example.test/browse/ECHO' },
+  });
+  function containers(selected: PersonLiveEvidencePageV1<PersonToolContainerCitationV1>) {
+    const releases: PersonLiveEvidenceReleaseV1<PersonToolContainerCitationV1>[] = [];
+    const reader: PersonLiveEvidenceReaderV1<PersonToolContainerCitationV1> = {
+      binding: binding('tickets'),
+      validateCitation(value) {
+        const citation = validatePersonWorkspaceCitationV1(value);
+        if (citation.kind !== 'tool_container') throw new Error('Fixture citation is not a tool container');
+        return { citation, tool_id: citation.tool_id, external_scope_id: citation.external_scope_id, coordinates: { object_id: citation.container_id } };
+      },
+      search: vi.fn(async () => selected), open: vi.fn(async () => selected), list: vi.fn(async () => selected), revalidate: vi.fn(async () => {}),
+    };
+    const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1<PersonToolContainerCitationV1>) => { releases.push(release); return canonicalSha256(release); }) };
+    const source = createAuditedPersonLiveEvidenceSourceV1({ actor, access: access('tickets'), read_grant_sha256, authorization: { assertCurrent: () => {} }, reader, audit });
+    return { reader, audit, releases, source };
+  }
+
+  it('releases a container with its text, key and tool, though its citation commits to no text', async () => {
+    const f = containers(page([container()]));
+    for (const result of [await f.source.list({}), await f.source.search({ query: 'echo' })]) {
+      expect(result.items).toEqual([expect.objectContaining({ kind: 'tool_container', label: 'Echo Platform', text: 'Jira project ECHO: Echo Platform\nECHO projects: Launchscope',
+        attributes: { key: 'ECHO', tool: 'Jira' }, citation: container().citation })]);
+    }
+    expect(f.releases.map(release => release.citations)).toEqual([[container().citation], [container().citation]]);
+    // The audit still commits the released text and attributes, never their bytes.
+    const { handle: _handle, ...released } = container();
+    expect(f.releases[0]!.value_digests).toEqual([canonicalSha256(released)]);
+    expect(JSON.stringify(f.releases)).not.toContain('Launchscope');
+  });
+
+  it('still requires a text commitment from every citation but a tool container', async () => {
+    const f = fixture('tickets', page([ticket()]));
+    const { text_sha256: _digest, ...uncommitted } = ticket().citation;
+    f.reader.validateCitation = () => ({ citation: uncommitted as PersonTicketCitationV1, tool_id: 'tickets', external_scope_id: 'tenant-1', coordinates: { object_id: 'ECHO-42' } });
+    await expect(f.make().search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+    expect(f.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('bounds a container key like any other attribute', async () => {
+    const f = containers(page([{ ...container(), attributes: { key: 'K'.repeat(257), tool: 'Jira' } }]));
+    await expect(f.source.list({})).rejects.toMatchObject({ code: 'invalid_output' });
+    expect(f.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('passes date_field any to the reader, which applies or refuses it, and still refuses an unknown selection', async () => {
+    const f = fixture('tickets', page([ticket()])); const source = f.make();
+    const window = { since: '2026-10-01', until: '2026-10-02', date_field: 'any' as const };
+    await source.search({ query: 'ship', ...window });
+    await source.list(window);
+    expect(f.reader.search).toHaveBeenCalledWith(expect.objectContaining(window));
+    expect(f.reader.list).toHaveBeenCalledWith(expect.objectContaining(window));
+    for (const date_field of ['whenever', 'Any']) {
+      await expect(source.list({ ...window, date_field: date_field as 'any' })).rejects.toMatchObject({ code: 'invalid_request' });
+    }
   });
 });

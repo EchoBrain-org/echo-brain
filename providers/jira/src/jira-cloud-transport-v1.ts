@@ -28,13 +28,18 @@ export function createJiraCloudTransportV1(authenticated: JiraCloudAuthenticated
     const suffix = input.path.startsWith(prefix) ? input.path.slice(prefix.length) : '';
     const resources = input.path === '/oauth/token/accessible-resources';
     const postRead = suffix === 'search/jql' || suffix === 'issue/bulkfetch';
-    if (!(resources || /^(?:myself|project\/(?:[1-9][0-9]{0,19}|[A-Z][A-Z0-9_]{0,63})|issue\/(?:[1-9][0-9]{0,19}|bulkfetch)|search\/jql)$/.test(suffix)) ||
+    // The asker's browsable projects, as tool containers (research tool contract v1).
+    const projectSearch = suffix === 'project/search';
+    if (!(resources || /^(?:myself|project\/(?:[1-9][0-9]{0,19}|[A-Z][A-Z0-9_]{0,63}|search)|issue\/(?:[1-9][0-9]{0,19}|bulkfetch)|search\/jql)$/.test(suffix)) ||
         (postRead ? method !== 'POST' : method !== 'GET') || (method === 'GET' && input.body !== undefined)) jiraFailure('invalid_request');
     const url = new URL(input.path, 'https://api.atlassian.com');
     for (const [key, value] of Object.entries(input.query ?? {})) {
       const issueFields = key === 'fields' && /^[a-zA-Z,]+$/.test(value) && suffix.startsWith('issue/') && !postRead;
-      const projectKeys = key === 'expand' && value === 'projectKeys' && suffix.startsWith('project/');
-      if (!issueFields && !projectKeys) jiraFailure('invalid_request');
+      const projectKeys = key === 'expand' && value === 'projectKeys' && suffix.startsWith('project/') && !projectSearch;
+      const searchSelector = projectSearch && (key === 'startAt' && /^(?:0|[1-9][0-9]{0,5})$/.test(value) ||
+        key === 'maxResults' && /^(?:[1-9]|[1-4][0-9]|50)$/.test(value) || key === 'orderBy' && value === 'key' || key === 'action' && value === 'browse' ||
+        key === 'query' && value.trim() !== '' && Buffer.byteLength(value, 'utf8') <= 256 && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value));
+      if (!issueFields && !projectKeys && !searchSelector) jiraFailure('invalid_request');
       url.searchParams.set(key, value);
     }
     return { url, method, ...(input.body === undefined ? {} : { body: input.body }) };
