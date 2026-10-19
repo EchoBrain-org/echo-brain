@@ -104,10 +104,11 @@ describe("agentic Ask model protocol parity", () => {
 
   it("gives Ask its own rules 3 and 4, and keeps the task prompt byte for byte (ADR-0041)", () => {
     const rule = (prompt: string, number: number) => prompt.split("\n").find(line => line.startsWith(`${number}. `))!;
-    // The task prompts, and Ask's search-only prompt, are the text of 026f60d byte for byte.
+    // Background task prompts stay byte-for-byte unchanged. Ask also explains its client-local date projection.
     expect(canonicalSha256(STEP_PROMPT)).toBe("sha256:8083e4e4f259bd9676bd3a685d30c3fb5b8a797ecd61727552488a31a5014d86");
     expect(canonicalSha256(SEARCH_ONLY_STEP_PROMPT)).toBe("sha256:d4d67ae7a306adbae70a9f5c2d5ebea59a9c9e69173657f82f7ccfac9e6bccaf");
-    expect(canonicalSha256(ASK_SEARCH_ONLY_STEP_PROMPT)).toBe("sha256:2fe343eaa46666b27ff60f9ea03aef4a517ed0707d08791284f5e2f0e3b3e77b");
+    expect(canonicalSha256(ASK_SEARCH_ONLY_STEP_PROMPT)).toBe("sha256:4d4f6dc83b6a3db32574f1317d304ce93963baf49b3be246fd7c5951d33805ed");
+    for (const prompt of [ASK_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain('already converted to the request time_zone');
     // Research declares each need's kind, with an example of each; a list's id supports only the list kinds.
     expect(rule(ASK_STEP_PROMPT, 3)).toMatch(/^3\. Give each need a kind\. "which_items": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel/u);
     // Its examples name nothing the research-loop evaluation asks about (tests/architecture/ask-kind-examples-eval-independence.test.ts).
@@ -143,12 +144,13 @@ describe("agentic Ask model protocol parity", () => {
       expect(prompt).not.toContain("instead of paging through it");
     }
     for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain("You may stop early when the facts the question asks for are already supported.");
-    // Only the opening line, rules 3 and 4, what search returns and when to open, the reply shape and the example differ.
+    // Apart from Ask's local-date presentation rule, only these existing structural rules differ.
+    const withoutLocalDates = (prompt: string) => prompt.split('\n').filter(value => !value.startsWith('- Evidence timestamps, dates and ECHO-generated')).join('\n');
     const differing = (left: string, right: string) => left.split("\n").flatMap((line, index) => line === right.split("\n")[index] ? [] : [index]);
-    const lines = ASK_STEP_PROMPT.split("\n");
-    expect(differing(ASK_STEP_PROMPT, STEP_PROMPT)).toEqual([0, 5, 6, lines.indexOf(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")), lines.indexOf(line(ASK_STEP_PROMPT, "  When to use: before relying on")),
+    const lines = withoutLocalDates(ASK_STEP_PROMPT).split("\n");
+    expect(differing(withoutLocalDates(ASK_STEP_PROMPT), STEP_PROMPT)).toEqual([0, 5, 6, lines.indexOf(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")), lines.indexOf(line(ASK_STEP_PROMPT, "  When to use: before relying on")),
       lines.indexOf(shape), lines.indexOf(shape) + 1, lines.length - 1]);
-    expect(differing(ASK_SEARCH_ONLY_STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT)).toEqual([6]);
+    expect(differing(withoutLocalDates(ASK_SEARCH_ONLY_STEP_PROMPT), SEARCH_ONLY_STEP_PROMPT)).toEqual([6]);
   });
 
   it("requires a need kind in Ask's step schema only with the list tool (ADR-0041)", () => {

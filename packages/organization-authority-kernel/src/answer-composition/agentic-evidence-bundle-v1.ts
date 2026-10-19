@@ -3,6 +3,7 @@ import type { PersonAnswerCitationV7 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../shared/evidence-desk-v2.js";
 import type { AgenticListEvidenceV1 } from "./agentic-list-evidence-v1.js";
 import type { AgenticAskGenerationObservationV1 } from "./agentic-model-gate-v1.js";
+import { evidenceDayV1, localEvidenceDatesV1, localEvidenceTimeV1 } from "../shared/temporal-query-v1.js";
 import type {
   AgenticResearchBudgetV1,
   AgenticResearchGoalV1,
@@ -82,24 +83,52 @@ export function attributesOf(item: EvidenceDeskItemV2): EvidenceDeskItemV2["attr
   return Object.freeze({ ...item.attributes, owner: "none recorded" });
 }
 
-/**
- * How a model sees one item, research step or renderer alike: its short id,
- * source selector, kind, title, provenance, date and details. Never its text,
- * desk id, receipt or citation.
- */
-export function describeAgenticEvidenceItemV1(entry: { readonly short: string; readonly source: string; readonly item: EvidenceDeskItemV2 }): Record<string, unknown> {
+/** Date fields for the client view, or the unchanged source view for a task without a client timezone. */
+export function agenticEvidenceDatesV1(item: EvidenceDeskItemV2, timeZone?: string) {
+  const field = item.date_kind === 'version_created' ? 'updated' : item.date_kind;
+  // The legacy date is already UTC-truncated. Prefer the timestamp with the same meaning, never a different date field.
+  const stamp = field === undefined ? item.occurred_at : item.dates?.[field] ?? item.occurred_at;
+  const local = timeZone === undefined ? undefined : localEvidenceTimeV1(stamp, timeZone);
+  const date = timeZone === undefined ? item.occurred_at : local === undefined ? undefined : evidenceDayV1(local, timeZone);
+  const dates = timeZone === undefined ? item.dates : localEvidenceDatesV1(item.dates, timeZone);
+  return { ...(dates === undefined ? {} : { dates }), ...(date === undefined ? {} : { date, date_kind: item.date_kind ?? 'unspecified' as const }) };
+}
+
+/** Only replace the date suffix ECHO adds to approved meeting labels; source-authored titles and text remain intact. */
+export function agenticEvidenceLabelV1(item: EvidenceDeskItemV2, timeZone?: string, list = false): string {
+  const label = list ? item.list_label ?? item.label : item.label;
+  if (timeZone === undefined || item.citation.kind !== 'approved_record' || item.dates?.occurred === undefined) return label;
+  const local = localEvidenceTimeV1(item.dates.occurred, timeZone);
+  if (local === undefined) return label;
+  const day = evidenceDayV1(local, timeZone)!;
+  const rawDay = item.dates.occurred.slice(0, 10);
+  const prefix = list && item.list_label !== undefined ? ', ' : ' (';
+  const suffix = `${prefix}${rawDay})`;
+  return label.endsWith(suffix) ? `${label.slice(0, -suffix.length)}${prefix}${day})` : label;
+}
+
+export function agenticEvidenceAttributesV1(item: EvidenceDeskItemV2, timeZone?: string): EvidenceDeskItemV2['attributes'] {
+  const attributes = attributesOf(item);
+  if (attributes?.due_at === undefined || timeZone === undefined) return attributes;
+  const { due_at, ...rest } = attributes;
+  const due = localEvidenceTimeV1(due_at, timeZone);
+  return { ...rest, ...(due === undefined ? {} : { due_at: due }) };
+}
+
+/** How research and renderers see an item: metadata only, never text, desk identity, receipt or citation. */
+export function describeAgenticEvidenceItemV1(entry: { readonly short: string; readonly source: string; readonly item: EvidenceDeskItemV2 }, timeZone?: string): Record<string, unknown> {
+  const attributes = agenticEvidenceAttributesV1(entry.item, timeZone);
   return {
-    id: entry.short, source: entry.source, kind: entry.item.kind, title: entry.item.label,
+    id: entry.short, source: entry.source, kind: entry.item.kind, title: agenticEvidenceLabelV1(entry.item, timeZone),
     provenance: { kind: entry.item.citation.kind, ...(entry.item.citation.kind === 'page' ? { version: entry.item.citation.version } : {}) },
-    ...(entry.item.dates === undefined ? {} : { dates: entry.item.dates }),
-    ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at, date_kind: entry.item.date_kind ?? 'unspecified' }),
-    ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
+    ...agenticEvidenceDatesV1(entry.item, timeZone),
+    ...(attributes === undefined ? {} : { attributes }),
   };
 }
 
 /** How a renderer's result cites an item: its citation, kind, title, visibility and the ref that opens it. */
-export function citationOfAgenticEvidenceItemV1(item: EvidenceDeskItemV2): PersonAnswerCitationV7 {
-  return Object.freeze({ citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility, ...(item.ref === undefined ? {} : { ref: item.ref }) });
+export function citationOfAgenticEvidenceItemV1(item: EvidenceDeskItemV2, timeZone?: string): PersonAnswerCitationV7 {
+  return Object.freeze({ citation: item.citation, kind: item.kind, label: agenticEvidenceLabelV1(item, timeZone), visibility: item.visibility, ...(item.ref === undefined ? {} : { ref: item.ref }) });
 }
 
 /** The evaluation's view: released content only, no desk ids, refs, receipts or model-call records. */

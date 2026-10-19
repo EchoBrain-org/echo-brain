@@ -1871,7 +1871,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     const run = (lists: readonly unknown[], sentences: readonly unknown[] = [week]) => askV4(pagedDesk(dueItems), text, [
       ask(text, need, "open", [], [FOLLOW_UPS], undefined, WI), ask(text, need, "open", [], [FOLLOW_UPS], "N1", WI), ask(text, need, "found", ["L1"], [finish], "N1", WI),
       { lists, sentences, not_found: [] },
-    ], { now: "2026-10-18T17:00:00.000Z" });
+    ], { now: "2026-10-18T17:00:00.000Z", time_zone: "UTC" });
     const lead = "of the 12 follow-ups with owner Mara Lind and status open";
     // (a) The list's one statement is the where selection, which names 2 of its 12 members, not every member: the writer's
     // sentence restates no statement that covers the list, so it stays beside it (W4, revision 8; Known limit).

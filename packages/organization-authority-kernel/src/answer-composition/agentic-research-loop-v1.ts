@@ -488,11 +488,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** The source selector the models see for an item. */
   const selectorOf = (item: EvidenceDeskItemV2): string => item.source_id === undefined ? evidenceDeskSourceV2(item) : sourcesById.get(item.source_id)?.selector ?? item.source_id;
   // The scratchpad describes each item once, with its body; a tool result names items by id only (lastResult).
-  const describe = (entry: Entry): Record<string, unknown> => describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item });
+  const describe = (entry: Entry): Record<string, unknown> => describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item }, ask ? context.time_zone ?? 'UTC' : undefined);
   /** Released source projections for automatic starting/preload reads, before short ids are assigned. */
   const releasedView = (result: EvidenceDeskResultV2): Record<string, unknown> => ({
     released_items: result.items.map(item => {
-      const { id: _id, ...metadata } = describeAgenticEvidenceItemV1({ short: '', source: selectorOf(item), item });
+      const { id: _id, ...metadata } = describeAgenticEvidenceItemV1({ short: '', source: selectorOf(item), item }, ask ? context.time_zone ?? 'UTC' : undefined);
       return { ...metadata, citation: item.citation, ...(item.text === undefined ? {} : { text: item.text }) };
     }),
     truncated: result.truncated, ...(result.notice === undefined ? {} : { notice: result.notice }),
