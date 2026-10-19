@@ -416,3 +416,6 @@ field, the new collections, and the new citation kinds and answer version.
 [ADR-0042](../decisions/ADR-0042-research-tool-contract.md) records the
 contract as built and says where the build differs from this design, chiefly
 under its "Links", "Sources" and "Known limits".
+
+The receipt fix came later, in
+[ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md).
