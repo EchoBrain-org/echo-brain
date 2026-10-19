@@ -42,6 +42,21 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
     expect(sentSchema(await wireRequest(schema, 'deepseek/deepseek-v3.2'))).toEqual(schema);
   });
 
+  it('retains Ask date formats, canonical filters and registered sources on the Claude wire', async () => {
+    const schema = sentSchema(await wireRequest(createStepSchema(['meetings', 'handbook'], ['E2'], true, true, true)));
+    type Variant = { properties: { tool: { enum: string[] }; args: { properties: Record<string, Record<string, unknown>> } } };
+    const variants = (schema.properties as { actions: { items: { anyOf: Variant[] } } }).actions.items.anyOf;
+    const args = (tool: string) => variants.find(value => value.properties.tool.enum[0] === tool)!.properties.args.properties;
+    for (const tool of ['search', 'list']) {
+      expect(args(tool).since).toMatchObject({ format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' });
+      expect(args(tool).until).toMatchObject({ format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' });
+      expect(args(tool).source!.enum).toEqual(['meetings', 'handbook']);
+      expect(args(tool).date_field!.enum).toEqual(['occurred', 'created', 'updated', 'due', 'received']);
+    }
+    expect(args('list').status!.enum).toEqual(['open', 'done']);
+    expect(args('open').id!.enum).toEqual(['E2']);
+  });
+
   it('keeps property names and literal values that resemble schema keywords', async () => {
     const schema = { type: 'object', additionalProperties: false, required: ['maxLength'], properties: {
       maxLength: { type: 'string', minLength: 1, maxLength: 8, description: 'A label', enum: ['minItems'] },

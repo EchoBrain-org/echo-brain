@@ -899,3 +899,30 @@ test named by its id, in `agentic-ask-lists.test.ts`,
 
 The live check is a staging rerun of the October 4 question, comparing the
 names in the answer against the list itself.
+
+
+## Ask tool-contract clarification (2026-10-19)
+
+Ask's tool descriptions state purpose, when to use the tool, arguments and
+returned evidence, limitations, related tools/recovery, and examples. The
+system prompt reinforces adaptive choice: no fixed search/list/open sequence.
+Empty or irrelevant search results can lead to different terms, a different
+source, a date/kind list, or relevant related evidence. Approved-record keyword
+search indexes record text and category, not the parent meeting title. A title
+or date match identifies a candidate; its text must support the requested fact.
+
+Ask's model schema describes every tool argument. Date bounds use calendar
+`YYYY-MM-DD` with an inclusive same-day example, `date_field` uses the existing
+five meanings, and action/follow-up status uses `open` or `done`. A decision is
+selected with meeting `kind`, not an invented status. Source selectors remain
+request-scoped, including registered extensions. Unsupported or ignored filters
+cannot establish a narrower result. Each question part is nonempty; local
+normalization and the existing bounded repair still apply.
+
+The guidance preserves one search retry after an availability notice, reopening
+a limited read, and opening a full passage for new surrounding context. Reusing
+an already completed open avoids a redundant read. Pagination and list/content
+evidence rules are unchanged. Search-only Ask briefs receive the same argument
+clarifications without an available list action. Background task prompts and
+schemas keep their prior bytes, and runtime date-age/filter-alias compatibility
+is unchanged. No tools, access scope, research budgets, or stop rules change.
