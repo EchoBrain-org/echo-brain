@@ -29,8 +29,16 @@ import {
   type WorkspaceSourceIdV1,
 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
-import { PERSON_QUERY_FUNCTION_WORDS_V1 } from '../adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import type { ProjectContextApplicationV1, ProjectContextRepositoryV1, ProjectMembershipGrantV1 } from '../application/ports/project-context-v1.js';
+import {
+  createEvidenceCursorsV1,
+  evidenceInvalidV1 as invalid,
+  evidenceNotFoundV1 as notFound,
+  evidencePageSizeV1,
+  evidenceTermsV1,
+  evidenceWordsV1,
+  newestFirstV1,
+} from './person-local-source-helpers-v1.js';
 
 /**
  * The asker's workspace as three Ask sources (research tool contract v1, "Collections in ECHO" and "Permission rules"):
@@ -162,29 +170,11 @@ const PROJECT_DATES: readonly EvidenceDateSelectionV1[] = Object.freeze(['create
 const TOOL_STATUS: Readonly<Record<OrganizationPersonToolV4['personal_status'], string>> = Object.freeze({ linked: 'connected', unlinked: 'not connected', revoked: 'connection revoked', unavailable: 'not available' });
 const TOOL_SETUP: Readonly<Record<OrganizationToolSetupStatusV4, string>> = Object.freeze({ not_set_up: 'not set up', app_created: 'app created', connected: 'connected', needs_reinstall: 'needs reinstall' });
 
-const invalid = (message: string): never => { throw new AuthorityOperationError('invalid_request', message); };
 const stale = (): never => { throw new AuthorityOperationError('stale_access_state', 'A workspace item is no longer available to this person'); };
-const notFound = (): never => { throw new AuthorityOperationError('not_found', 'Evidence item is not available in this request'); };
 
-function pageSize(limit: number | undefined, maximum: number): number {
-  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)) invalid('Evidence limit is invalid');
-  return Math.min(limit ?? maximum, maximum);
-}
 /** People and tools have no dates, so a date bound is refused rather than ignored. A time zone alone bounds nothing. */
 function refuseDates(input: EvidenceDateFilterV1, source: string): void {
   if (input.since !== undefined || input.until !== undefined || input.date_field !== undefined) invalid(`${source} have no dates; leave out since, until and date_field`);
-}
-/** A search's words: whole Unicode terms, lower case, without function words unless written as an acronym. */
-function termsOf(query: string): readonly string[] {
-  const terms = new Set<string>();
-  for (const run of query.normalize('NFC').match(/[\p{L}\p{N}]+/gu) ?? []) {
-    const term = run.toLowerCase();
-    if (!PERSON_QUERY_FUNCTION_WORDS_V1.has(term) || /^[A-Z]{2,}$/u.test(run)) terms.add(term);
-  }
-  return [...terms];
-}
-function wordsOf(values: readonly (string | null | undefined)[]): ReadonlySet<string> {
-  return new Set(values.flatMap(value => (value ?? '').normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []));
 }
 /** Names joined with ", ", the rest counted. */
 function named(values: readonly string[], maximum: number): string {
@@ -195,9 +185,7 @@ function listed(values: readonly string[], maximum: number): string {
   return values.length <= maximum ? values.join(', ') : `${values.slice(0, maximum).join(', ')}, and more`;
 }
 /** Newest first, as the project list orders them; then by id. */
-function newestFirst(left: ProjectSummaryV2, right: ProjectSummaryV2): number {
-  return left.created_at < right.created_at ? 1 : left.created_at > right.created_at ? -1 : left.project_id < right.project_id ? -1 : left.project_id > right.project_id ? 1 : 0;
-}
+const newestFirst = newestFirstV1<ProjectSummaryV2>(project => project.project_id);
 /** Every page of one of the project application's lists. */
 function everyPage<T>(read: (paging: { readonly limit: number; readonly cursor?: string }) => { readonly items: readonly T[]; readonly next_cursor: string | null }, signal?: AbortSignal): T[] {
   const all: T[] = [];
@@ -227,8 +215,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   /** What each source released, and what it released since its last successful check (ADR-0038). */
   const ledger = (): Ledger => ({ released: new Map(), unchecked: new Set() });
   const ledgers: Readonly<Record<WorkspaceSourceIdV1, Ledger>> = Object.freeze({ projects: ledger(), people: ledger(), tools: ledger() });
-  const cursors = new Map<string, { readonly source: WorkspaceSourceIdV1; readonly selection: string; readonly after: string }>();
-  let cursorSequence = 0;
+  const cursors = createEvidenceCursorsV1<string>();
 
   /** The asker's session, still the person these sources were bound to. */
   const current = (signal?: AbortSignal): PersonAccessAuthorization => {
@@ -405,25 +392,18 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   };
   /** One page of a list, after its cursor; the next cursor only when more match. */
   const paged = <T>(source: WorkspaceSourceIdV1, matching: readonly T[], keyOf: (value: T) => string, size: number, selection: string, cursor: string | undefined) => {
-    let start = 0;
-    if (cursor !== undefined) {
-      const saved = cursors.get(cursor);
-      if (saved === undefined || saved.source !== source || saved.selection !== selection) return invalid('Evidence list cursor is invalid');
-      const index = matching.findIndex(value => keyOf(value) === saved.after);
-      if (index < 0) return invalid('Evidence list cursor is invalid');
-      start = index + 1;
-    }
+    // A cursor continues only its own source's list, with the same selection.
+    const listed = `${source}:${selection}`;
+    const after = cursor === undefined ? undefined : cursors.after(cursor, listed);
+    const start = after === undefined ? 0 : matching.findIndex(value => keyOf(value) === after) + 1;
+    if (after !== undefined && start === 0) invalid('Evidence list cursor is invalid');
     const page = matching.slice(start, start + size);
-    let next_cursor: string | undefined;
-    if (start + page.length < matching.length) {
-      next_cursor = `${source}_${++cursorSequence}`;
-      cursors.set(next_cursor, Object.freeze({ source, selection, after: keyOf(page.at(-1)!) }));
-    }
+    const next_cursor = start + page.length < matching.length ? cursors.next(source, listed, keyOf(page.at(-1)!)) : undefined;
     return { page, next_cursor };
   };
   const query = (input: { readonly query: string }): readonly string[] => {
     if (typeof input.query !== 'string') invalid('query is required');
-    return termsOf(input.query);
+    return evidenceTermsV1(input.query);
   };
   const otherFilters = (input: EvidenceDeskListInputV2, source: WorkspaceSourceIdV1, takes: readonly ('status' | 'role')[]) => {
     const kind = WORKSPACE_SOURCE_KINDS_V1[source];
@@ -436,8 +416,8 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   /** Projects ranked by the query's words in their names or Jira keys, then in their members' names; active, then newest, first. */
   const findProjects = (shown: View, terms: readonly string[], dated: EvidenceDateFilterV1) => shown.projects.flatMap(value => {
     if (!matchesEvidenceDateV1({ created: value.created_at }, dated, 'created')) return [];
-    const own = wordsOf([value.name, shown.jira?.get(value.project_id)]);
-    const members = wordsOf((shown.members.get(value.project_id) ?? []).map(member => member.display_name));
+    const own = evidenceWordsV1([value.name, shown.jira?.get(value.project_id)]);
+    const members = evidenceWordsV1((shown.members.get(value.project_id) ?? []).map(member => member.display_name));
     const strong = terms.filter(term => own.has(term)).length;
     const weak = terms.filter(term => !own.has(term) && members.has(term)).length;
     return strong + weak === 0 ? [] : [{ value, score: 2 * strong + weak }];
@@ -445,14 +425,14 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
     .map(entry => entry.value);
   /** People or tools ranked by the query's words in their names, in their list's order. */
   const findNamed = <T>(values: readonly T[], terms: readonly string[], names: (value: T) => readonly string[]) => values
-    .map(value => { const words = wordsOf(names(value)); return { value, score: terms.filter(term => words.has(term)).length }; })
+    .map(value => { const words = evidenceWordsV1(names(value)); return { value, score: terms.filter(term => words.has(term)).length }; })
     .filter(entry => entry.score > 0).sort((left, right) => right.score - left.score).map(entry => entry.value);
 
   const projects: PersonWorkspaceLocalSourceV1 = Object.freeze({
     descriptor: Object.freeze({ ...PROJECTS_SOURCE_DESCRIPTOR_V1, capabilities: Object.freeze({ ...PROJECTS_SOURCE_DESCRIPTOR_V1.capabilities, count }) }),
     async search(input: Parameters<PersonWorkspaceEvidenceSourceV1['search']>[0]) {
       validateEvidenceDateFilterV1(input, PROJECT_DATES);
-      const limit = pageSize(input.limit, PERSON_WORKSPACE_LIMITS_V1.search_hits);
+      const limit = evidencePageSizeV1(input.limit, PERSON_WORKSPACE_LIMITS_V1.search_hits);
       const terms = query(input);
       const shown = readView(input.signal);
       const hits = terms.length === 0 ? [] : findProjects(shown, terms, input);
@@ -465,7 +445,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
       otherFilters(input, 'projects', ['status', 'role']);
       if (input.status !== undefined && input.status !== 'active' && input.status !== 'archived') invalid('status must be "active" or "archived"');
       if (input.role !== undefined && input.role !== 'lead' && input.role !== 'member') invalid('role must be "lead" or "member"');
-      const size = pageSize(input.limit, PERSON_WORKSPACE_LIMITS_V1.list_page);
+      const size = evidencePageSizeV1(input.limit, PERSON_WORKSPACE_LIMITS_V1.list_page);
       const selection = JSON.stringify({ status: input.status ?? null, role: input.role ?? null, since: input.since ?? null, until: input.until ?? null, date_field: input.date_field ?? null, time_zone: input.time_zone ?? null });
       const shown = readView(input.signal);
       // Filters apply before anything is released; the asker's role is their own in each project.
@@ -494,7 +474,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
     descriptor: PEOPLE_SOURCE_DESCRIPTOR_V1,
     async search(input: Parameters<PersonWorkspaceEvidenceSourceV1['search']>[0]) {
       refuseDates(input, 'people');
-      const limit = pageSize(input.limit, PERSON_WORKSPACE_LIMITS_V1.search_hits);
+      const limit = evidencePageSizeV1(input.limit, PERSON_WORKSPACE_LIMITS_V1.search_hits);
       const terms = query(input);
       const shown = readView(input.signal);
       const hits = terms.length === 0 ? [] : findNamed(readPeople(shown, input.signal), terms, value => [value.display_name]);
@@ -505,7 +485,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
     async list(input: EvidenceDeskListInputV2) {
       refuseDates(input, 'people');
       otherFilters(input, 'people', []);
-      const size = pageSize(input.limit, PERSON_WORKSPACE_LIMITS_V1.list_page);
+      const size = evidencePageSizeV1(input.limit, PERSON_WORKSPACE_LIMITS_V1.list_page);
       const shown = readView(input.signal);
       const { page, next_cursor } = paged('people', readPeople(shown, input.signal), value => value.membership_id, size, '{}', input.cursor);
       const { rows, linked } = withProjects(shown, page);
@@ -529,7 +509,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
     descriptor: TOOLS_SOURCE_DESCRIPTOR_V1,
     async search(input: Parameters<PersonWorkspaceEvidenceSourceV1['search']>[0]) {
       refuseDates(input, 'tools');
-      const limit = pageSize(input.limit, PERSON_WORKSPACE_LIMITS_V1.search_hits);
+      const limit = evidencePageSizeV1(input.limit, PERSON_WORKSPACE_LIMITS_V1.search_hits);
       const terms = query(input);
       const all = await readTools(input.signal);
       const hits = terms.length === 0 ? [] : findNamed(all, terms, value => [value.display_name, value.tool_id]);
@@ -539,7 +519,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
     async list(input: EvidenceDeskListInputV2) {
       refuseDates(input, 'tools');
       otherFilters(input, 'tools', []);
-      const size = pageSize(input.limit, PERSON_WORKSPACE_LIMITS_V1.list_page);
+      const size = evidencePageSizeV1(input.limit, PERSON_WORKSPACE_LIMITS_V1.list_page);
       const { page, next_cursor } = paged('tools', await readTools(input.signal), value => value.tool_id, size, '{}', input.cursor);
       input.signal?.throwIfAborted();
       return release('tools', 'list', page.flatMap(value => tool(value) ?? []), [], { truncated: false, next_cursor, page_full: false });
