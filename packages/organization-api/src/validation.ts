@@ -13,6 +13,8 @@ const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const TOOL_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
+const PERMALINK_PATTERN = /^https:\/\/[a-zA-Z0-9.-]+(?::[0-9]{1,5})?\/[^\s\\\p{Cc}]*$/u;
 
 export class OrganizationApiValidationError extends Error {
   constructor(detail: string, options?: { cause?: unknown }) {
@@ -169,6 +171,59 @@ export function assertPatternString(
 ): asserts value is string {
   assertString(value, label, maximumLength);
   if (!pattern.test(value)) fail(`${label} is invalid`);
+}
+
+/** A tool's id, as citations, tools lists, refs and progress sources name it. */
+export function assertToolId(
+  value: unknown,
+  label = 'tool_id',
+): asserts value is string {
+  assertPatternString(value, label, 64, TOOL_ID_PATTERN);
+}
+
+/**
+ * A citation's display link, never a fetch target: https to a host, with no
+ * credentials, fragment or, unless `query` allows one, query. `canonical`
+ * also requires the form the URL parser writes, as the desktop opens it. The
+ * provider validates its own tenant host and coordinates.
+ */
+export function assertCitationPermalink(
+  value: unknown,
+  citation: string,
+  options: { readonly query?: boolean; readonly canonical?: boolean } = {},
+): asserts value is string {
+  assertPatternString(value, 'permalink', 2048, PERMALINK_PATTERN);
+  const Url = (
+    globalThis as unknown as {
+      URL?: new (input: string) => {
+        href: string;
+        protocol: string;
+        hostname: string;
+        username: string;
+        password: string;
+        search: string;
+        hash: string;
+      };
+    }
+  ).URL;
+  if (Url === undefined) fail(`${citation} URL parser is unavailable`);
+  let url: InstanceType<typeof Url>;
+  try {
+    url = new Url(value);
+  } catch {
+    fail(`${citation} permalink is invalid`);
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.hostname === '' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    (options.query !== true && url.search !== '') ||
+    url.hash !== '' ||
+    (options.canonical === true && url.href !== value)
+  ) {
+    fail(`${citation} permalink is invalid`);
+  }
 }
 
 export function assertDigest(

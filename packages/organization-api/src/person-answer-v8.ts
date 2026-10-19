@@ -2,7 +2,7 @@ import type { PersonAnswerCitationV4, PersonAnswerResponseV4 } from './person-an
 import type { PersonAnswerEvidenceCitationV7, PersonAnswerOpenRefV7, PersonEvidenceKindV4 } from './person-answer-v7.js';
 import { validateProjectIdV1 } from './project-context-v1.js';
 import type { PersonProjectCitationV1, PersonToolCitationV1, PersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
-import { assertPatternString, fail } from './validation.js';
+import { assertToolId, fail } from './validation.js';
 
 /**
  * V8 adds workspace and tool-container citations (research tool contract
@@ -37,8 +37,6 @@ export interface PersonAnswerResponseV8 extends Omit<PersonAnswerResponseV4, 'sc
   readonly citations: readonly PersonAnswerCitationV8[];
 }
 
-const TOOL_ID = /^[a-z][a-z0-9-]*$/;
-
 /** A workspace ref, exactly: `project:` and a project id, or `tool:` and a tool id. */
 export function validatePersonWorkspaceRefV1(value: unknown, label = 'Workspace ref'): PersonWorkspaceRefV1 {
   if (typeof value === 'string' && value.startsWith('project:')) {
@@ -46,7 +44,7 @@ export function validatePersonWorkspaceRefV1(value: unknown, label = 'Workspace 
     return value as PersonWorkspaceRefV1;
   }
   if (typeof value === 'string' && value.startsWith('tool:')) {
-    assertPatternString(value.slice('tool:'.length), label, 64, TOOL_ID);
+    assertToolId(value.slice('tool:'.length), label);
     return value as PersonWorkspaceRefV1;
   }
   return fail(`${label} is invalid`);
