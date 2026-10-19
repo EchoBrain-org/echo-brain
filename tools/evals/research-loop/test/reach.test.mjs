@@ -55,7 +55,6 @@ test("a trace counts its rounds, calls per round, collections, refusals and repe
 
 test("a structured refusal names its refused filters, and only the same refusal on the same target repeats it", () => {
   assert.equal(refusalOf(action("list", { source: "meetings" }, { filters: { date_field: "refused", since: "applied" }, supports: { dates: ["approved"] } })), "refused date_field");
-  assert.equal(refusalOf(action("list", { source: "meetings" }, { filters: { status: { outcome: "refused" } } })), "refused status");
   assert.equal(refusalOf(action("list", { source: "meetings" }, { filters: { status: "ignored", owner: "partial" } })), null, "ignored and partial are outcomes, not refusals");
   assert.equal(refusalOf(action("list", { source: "meetings" }, { notice: true, note: "nothing more to list" })), null, "a notice is not a refusal");
   const counts = traceCounts(research([
@@ -70,7 +69,7 @@ test("a structured refusal names its refused filters, and only the same refusal 
 test("collections are named by source ids, selectors and the containers a source or item names", () => {
   assert.deepEqual(["meetings", "meeting", "jira", "tickets", "confluence", "pages", "follow_ups", "projects", "people", "tools", "slack"].map(collectionOfSource),
     ["meetings", "meetings", "tickets", "tickets", "pages", "pages", "follow_ups", "projects", "people", "tools", "slack"]);
-  assert.deepEqual(["jira_projects", "jira-project", "confluence_spaces", "slack_channels", "calendar"].map(collectionOfSource), ["jira_projects", "jira_projects", "confluence_spaces", "slack_channels", null]);
+  assert.deepEqual(["jira_projects", "JIRA_PROJECTS", "confluence_spaces", "slack_channels", "calendar"].map(collectionOfSource), ["jira_projects", "jira_projects", "confluence_spaces", "slack_channels", null]);
   const value = research([
     round(1, action("search", { query: "THERM" }, { items: ["E1", "E2"] }), action("list", { source: "pages" }, { error: "that request is not valid" })),
     finish(2),
@@ -181,11 +180,10 @@ test("the dataset validates workspace references, the open-ended fields and the 
   assert.ok(problems({ reach: { collections: ["projects"], window: "tomorrow" } }).some(problem => problem.includes("window")));
   assert.ok(problems({ reach: { collections: ["projects"], depth: 2 } }).some(problem => problem.includes("reach takes")));
   assert.ok(problems({ category: "vibes" }).some(problem => problem.includes("categories")));
-  assert.ok(problems({ awaits: ["magic"] }).some(problem => problem.includes("contract steps")));
   assert.ok(problems({ parts: [{ ...base.parts[0], evidence: [{ follow_up: "F99" }] }] }).some(problem => problem.includes("F99")));
   assert.ok(problems({ parts: [{ ...base.parts[0], evidence: [{ project: "THERM Supplier Review" }] }] }).some(problem => problem.includes("restricted project")));
   assert.ok(problems({ parts: [{ ...base.parts[0], evidence: [{ container: "jira_board", id: "1" }] }] }).some(problem => problem.includes("tool container")));
-  assert.ok(problems({ parts: [] , reach: undefined, family: undefined, category: undefined, awaits: undefined }).some(problem => problem.includes("parts are required")));
+  assert.ok(problems({ parts: [] , reach: undefined, family: undefined, category: undefined }).some(problem => problem.includes("parts are required")));
   assert.deepEqual(problems({ parts: [] }), [], "an open-ended case may be graded on reach and cost alone");
   assert.ok(datasetProblems({ ...dataset, cases: [{ ...caseById("approved-record-t1-two-decimal-display"), family: "open_ended", category: "goal", reach: { collections: ["meetings"] } }] }).some(problem => problem.includes("only Ask cases are open-ended")));
   const world = workspace => datasetProblems({ ...dataset, additions: { ...dataset.additions, workspace: { ...dataset.additions.workspace, ...workspace } }, cases: [] });
@@ -214,14 +212,12 @@ test("the open-ended family asks every goal question in development and holds ou
   }
   // Every held-out Ask case names its kinds (world/README.md); the held-out ones are read here and never restated.
   assert.ok(holdout.length >= 8 && holdout.every(entry => Array.isArray(entry.expected_kinds)));
-  // The Jira-only and Confluence-only questions read their tool and no workspace source, so they await no new collection.
+  // The Confluence-only question reads its tool and no workspace source.
   assert.deepEqual(caseById("project-confluence-pages").reach.collections, ["pages"]);
-  assert.equal(caseById("project-confluence-pages").awaits, undefined);
 });
 
-test("open-ended runs carry reach checks and trace counts into grading, and the report shows them with what each case awaits", () => {
-  // Every contract step has landed, so no case awaits one; a case that does still reports what it awaits.
-  const testCase = { ...caseById("current-projects-and-leads"), awaits: ["workspace_collections", "eval_full_catalog"] };
+test("open-ended runs carry reach checks and trace counts into grading, and the report shows them", () => {
+  const testCase = caseById("current-projects-and-leads");
   const items = [
     { id: "E1", source: "projects", kind: "project", title: "THERM", attributes: { role: "lead", leads: "Zhen Ye, Mara Lindqvist" }, citation: { kind: "project", project_id: "prj_1" }, read_in_full: false, opened: false, preloaded: false, cited_by_plan: false },
     { id: "E2", source: "projects", kind: "project", title: "Kestrel Pilot Launch", attributes: { role: "member", leads: "Mara Lindqvist" }, citation: { kind: "project", project_id: "prj_2" }, read_in_full: false, opened: false, preloaded: false, cited_by_plan: false },
@@ -233,7 +229,6 @@ test("open-ended runs carry reach checks and trace counts into grading, and the 
   const answer = { writer_evidence: ["E1", "E2"], response: { outcome: "answered", parts: [{ statements: [{ text: "You have 2 current projects: THERM; Kestrel Pilot Launch.", citation_indexes: [0, 1] }] }], citations: items.map(item => ({ citation: item.citation, label: item.title })) } };
   const checks = codeChecks(testCase, completed(value, answer), dataset);
   assert.equal(checks.family, "open_ended");
-  assert.deepEqual(checks.awaits, ["workspace_collections", "eval_full_catalog"]);
   assert.equal(checks.reach.met, true);
   assert.deepEqual([checks.trace.rounds, checks.trace.collections], [2, ["projects"]]);
   assert.deepEqual(checks.parts.map(part => [part.id, part.found, part.read]), [["p1", true, true], ["p2", true, false]]);
@@ -246,7 +241,7 @@ test("open-ended runs carry reach checks and trace counts into grading, and the 
   const markdown = markdownReport({ split: "development", state: "S0", world: "therm-v1", graded_at: "2026-10-19" }, report);
   const [, section] = markdown.split("## Reach and cost");
   assert.match(section, /Open-ended cases meeting reach and cost in every run: \*\*0 of 1\*\*/u);
-  assert.match(section, /\| current-projects-and-leads \| live \| 2 \| 1 \| 0 \| 0 \| 0 \| 50% \| 50% \| — \| 50% \| projects \| workspace_collections, eval_full_catalog \|/u);
+  assert.match(section, /\| current-projects-and-leads \| live \| 2 \| 1 \| 0 \| 0 \| 0 \| 50% \| 50% \| — \| 50% \| projects \|$/mu);
 });
 
 test("a report without trace counts or open-ended cases has no reach section", () => {

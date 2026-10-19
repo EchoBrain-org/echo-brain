@@ -12,9 +12,8 @@ import { isDeepStrictEqual } from "node:util";
 export const REACH_MAX_ROUNDS = 4;
 
 /**
- * Every collection an open-ended key names, with the source ids and catalog selectors a call or an item names it by.
- * A connected tool's containers take whatever selector their connector declares, so a source naming both the tool and
- * the container ("jira_projects") is that collection, and so is an item citing that container.
+ * Every collection an open-ended key names, with the source ids and catalog selectors a call or an item names it by. A
+ * connected tool's containers are named by the selector their connector declares, and an item by the container it cites.
  */
 const COLLECTIONS = Object.freeze({
   meetings: { sources: ["meetings", "meeting"] },
@@ -26,9 +25,9 @@ const COLLECTIONS = Object.freeze({
   tickets: { sources: ["tickets", "jira"], kinds: ["ticket"] },
   pages: { sources: ["pages", "confluence"], kinds: ["page"] },
   slack: { sources: ["slack"], kinds: ["slack_message"] },
-  jira_projects: { container: "jira_project", words: ["jira", "project"] },
-  confluence_spaces: { container: "confluence_space", words: ["confluence", "space"] },
-  slack_channels: { container: "slack_channel", words: ["slack", "channel"] },
+  jira_projects: { sources: ["jira_projects"], container: "jira_project" },
+  confluence_spaces: { sources: ["confluence_spaces"], container: "confluence_space" },
+  slack_channels: { sources: ["slack_channels"], container: "slack_channel" },
 });
 export const REACH_COLLECTIONS = Object.freeze(Object.keys(COLLECTIONS));
 /** The time windows a key may require each collection to be looked at in, relative to the day the question was asked. */
@@ -39,11 +38,7 @@ const words = value => String(value ?? "").toLowerCase().split(/[^a-z0-9]+/u).fi
 /** The collection a call's `source` names, or null for a source no key names. */
 export function collectionOfSource(source) {
   const normalized = words(source).join("_");
-  if (normalized === "") return null;
-  for (const [name, entry] of Object.entries(COLLECTIONS)) if (entry.sources?.includes(normalized)) return name;
-  const parts = new Set(normalized.split("_").map(part => part.replace(/s$/u, "")));
-  for (const [name, entry] of Object.entries(COLLECTIONS)) if (entry.words?.every(word => parts.has(word))) return name;
-  return null;
+  return Object.entries(COLLECTIONS).find(([, entry]) => entry.sources.includes(normalized))?.[0] ?? null;
 }
 
 /** The collection an item research came across belongs to: a container by what it cites, else by kind, else by source. */
@@ -61,20 +56,16 @@ function actionsOf(research) {
   return (research?.rounds ?? []).flatMap(round => (round.actions ?? []).map(action => ({ ...action, round: round.round }))).filter(action => action.tool !== "finish");
 }
 
-/** An outcome a result gives one filter (research tool contract v1): a word, or an object naming it. */
-const outcome = how => (typeof how === "string" ? how : typeof how?.outcome === "string" ? how.outcome : undefined);
-
 /**
  * Why a call was refused, or null when it was not. A refusal is a result that names refused filters (one outcome per
- * filter, research tool contract v1), says it was refused, or carries an error (the form refusals took before it).
- * A notice that left a list unavailable is not a refusal: the contract replaces it with an unchecked count.
+ * filter, research tool contract v1) or carries an error (the form refusals took before it). A notice that left a list
+ * unavailable is not a refusal: the contract replaces it with an unchecked count.
  */
 export function refusalOf(action) {
   const result = action?.result ?? {};
-  const outcomes = result.filters ?? result.filter_applied;
-  const refused = outcomes !== null && typeof outcomes === "object" ? Object.entries(outcomes).filter(([, how]) => outcome(how) === "refused").map(([name]) => name).sort() : [];
+  const outcomes = result.filters;
+  const refused = outcomes !== null && typeof outcomes === "object" ? Object.entries(outcomes).filter(([, how]) => how === "refused").map(([name]) => name).sort() : [];
   if (refused.length > 0) return `refused ${refused.join(", ")}`;
-  if (result.refused === true || result.outcome === "refused") return "refused";
   return typeof result.error === "string" && result.error.length > 0 ? result.error : null;
 }
 
