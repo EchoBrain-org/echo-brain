@@ -100,7 +100,7 @@ export interface CreateAskRendererV1Options {
   /** What the writer is told the desk reads. */
   readonly scope: string;
   /** Who is asking and today's date. */
-  readonly context: { readonly asked_by?: string; readonly today: string };
+  readonly context: { readonly asked_by?: string; readonly today: string; readonly time_zone?: string };
   /** The response's scope: the desk's. */
   readonly desk_scope: AgenticEvidenceBundleV1["gathered_for"]["scope"];
 }
@@ -163,7 +163,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const id = cleanId(short);
         return id === null ? undefined : byShort.get(id);
       };
-      const describe = describeAgenticEvidenceItemV1;
+      const describe = (entry: Entry) => describeAgenticEvidenceItemV1(entry, options.context.time_zone ?? 'UTC');
 
       // ---- lists (ADR-0041): what the plan's declared kinds ask of them, and how the writer sees them ----
       const lists = bundle.lists ?? [];
@@ -180,7 +180,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** Every need that asks about members declares them by what it cites, whatever its status: a list kind its list, a content need an item (W4). */
       const declared = !unlisted && content.every(need => need.evidence.some(id => byShort.has(id)));
       const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, short => byShort.get(short)?.full === true));
-      const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short)))]));
+      const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short), options.context.time_zone))]));
       const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap);
       /** Every list as code reads it: code states, notes and filters each list the plan's kinds read, past the writer's bound too. */
       const views = new Map(lists.map(list => [list.id, viewOf(list)]));
@@ -419,7 +419,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(draft.gap === undefined ? {} : { gap: draft.gap }),
           ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
         })]),
-        citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV1(entry.item)) : []),
+        citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV1(entry.item, options.context.time_zone ?? 'UTC')) : []),
         ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
       });
       const validated: AskResponse = responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);

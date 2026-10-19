@@ -48,6 +48,37 @@ export function evidenceDayV1(value: string | undefined, timeZone = 'UTC'): stri
   const part = (kind: string) => parts.find(entry => entry.type === kind)!.value;
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
+const timeFormatters = new Map<string, Intl.DateTimeFormat>();
+/** The same instant with the client's local clock and explicit offset; date-only values are not instants. */
+export function localEvidenceTimeV1(value: string | undefined, timeZone: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    try { return calendarDateV1(value); } catch { return undefined; }
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return undefined;
+  if (timeZone === 'UTC') return value.endsWith('Z') ? value : new Date(timestamp).toISOString();
+  let formatter = timeFormatters.get(timeZone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3, hourCycle: 'h23', timeZoneName: 'longOffset' });
+    if (timeFormatters.size >= 32) timeFormatters.delete(timeFormatters.keys().next().value!);
+    timeFormatters.set(timeZone, formatter);
+  }
+  const parts = formatter.formatToParts(new Date(timestamp));
+  const part = (kind: string) => parts.find(entry => entry.type === kind)!.value;
+  const offset = part('timeZoneName').replace(/^GMT/, '') || 'Z';
+  return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:${part('minute')}:${part('second')}.${part('fractionalSecond')}${offset}`;
+}
+/** A presentation copy only: authoritative source timestamps stay in the evidence desk and audit. */
+export function localEvidenceDatesV1(dates: EvidenceDatesV1 | undefined, timeZone: string): EvidenceDatesV1 | undefined {
+  if (dates === undefined) return undefined;
+  const local = Object.fromEntries(Object.entries(dates).flatMap(([field, value]) => {
+    const stamp = localEvidenceTimeV1(value, timeZone);
+    return stamp === undefined ? [] : [[field, stamp]];
+  })) as EvidenceDatesV1;
+  return Object.keys(local).length === 0 ? undefined : Object.freeze(local);
+}
 export function matchesEvidenceDateV1(dates: EvidenceDatesV1, input: EvidenceDateFilterV1, defaultField: EvidenceDateFieldV1): boolean {
   if (input.since === undefined && input.until === undefined) return true;
   const day = evidenceDayV1(dates[input.date_field ?? defaultField], input.time_zone);

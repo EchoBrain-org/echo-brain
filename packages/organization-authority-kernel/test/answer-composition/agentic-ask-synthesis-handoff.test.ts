@@ -17,9 +17,9 @@ const step = (tool: string, args: Record<string, string>, found = false) => ({
   actions: [{ tool, args }],
 });
 
-async function run(options: { truncated?: boolean; notice?: string; idle?: boolean; inventory?: boolean; refusedOpen?: boolean } = {}) {
+async function run(options: { truncated?: boolean; notice?: string; idle?: boolean; inventory?: boolean; refusedOpen?: boolean; evidence?: EvidenceDeskItemV2; time_zone?: string } = {}) {
   let searches = 0;
-  const result = () => ({ items: searches++ === 0 ? [item] : [], truncated: options.truncated ?? false, receipt_digests: [], ...(options.notice === undefined ? {} : { notice: options.notice }) });
+  const result = () => ({ items: searches++ === 0 ? [options.evidence ?? item] : [], truncated: options.truncated ?? false, receipt_digests: [], ...(options.notice === undefined ? {} : { notice: options.notice }) });
   const desk: EvidenceDeskPortV2 = {
     scope: { kind: 'global' }, live_sources: [{ source: 'page', tool_id: 'confluence' }],
     search: async () => result(), list: async () => ({ ...result(), next_cursor: 'unread-page' }),
@@ -30,20 +30,32 @@ async function run(options: { truncated?: boolean; notice?: string; idle?: boole
     : [options.inventory ? step('list', { source: 'pages' }) : step('search', { source: 'pages', query: 'pilot' }), step('finish', {}, true)];
   if (options.refusedOpen) replies.splice(1, 0, step('open', { id: 'E1' }));
   let writer: Record<string, unknown> = {};
+  const prompts: Record<string, unknown>[] = [];
   const audit: unknown[] = [];
   const answer = await createAgenticAskV3({ desk,
     model: { generate: async input => {
+      prompts.push(JSON.parse(input.user_prompt) as Record<string, unknown>);
       if (replies.length > 0) return replies.shift();
       writer = JSON.parse(input.user_prompt) as Record<string, unknown>;
       return { sentences: [{ text: 'The gate decision is pending.', evidence: ['E1'] }], not_found: [] };
     } },
     audit: { append: entry => { audit.push(entry); } },
     generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30000 },
+    ...(options.time_zone === undefined ? {} : { time_context: { now: '2026-10-18T23:28:09.000Z', time_zone: options.time_zone } }),
   }).answer({ question });
-  return { writer, answer, audit };
+  return { writer, answer, audit, prompts };
 }
 
 describe('synthesis receives observed research coverage', () => {
+  it('automatically gives research and synthesis client-local times from the real legacy date shape', async () => {
+    const stamp = '2026-10-17T00:20:00.000Z';
+    const evidence = { ...item, occurred_at: '2026-10-17', date_kind: 'occurred' as const, dates: { occurred: stamp } };
+    const { prompts, writer } = await run({ evidence, time_zone: 'America/Los_Angeles' });
+    const local = { date: '2026-10-16', dates: { occurred: '2026-10-16T17:20:00.000-07:00' } };
+    expect(prompts[1]).toMatchObject({ seen: [expect.objectContaining(local)] });
+    expect(writer.evidence).toEqual([expect.objectContaining(local)]);
+    expect(evidence.dates.occurred).toBe(stamp);
+  });
   it('preserves a failed read as unavailable rather than an empty search', async () => {
     const { writer } = await run({ refusedOpen: true });
     expect(writer.research).toMatchObject({ reads: [{ tool: 'search', unavailable: false }, { tool: 'open', unavailable: true }] });

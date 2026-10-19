@@ -1,7 +1,7 @@
 import type { EvidenceDeskDateKindV1 } from "../shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
 import { evidenceDayV1, matchesEvidenceDateV1, type EvidenceDateFieldV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
-import { attributesOf } from "./agentic-evidence-bundle-v1.js";
+import { agenticEvidenceAttributesV1, agenticEvidenceDatesV1, agenticEvidenceLabelV1 } from "./agentic-evidence-bundle-v1.js";
 import type { AgenticResearchNeedV1 } from "./agentic-research-v1.js";
 
 /**
@@ -398,13 +398,12 @@ export interface AgenticWriterListV1 {
  * label when it has one (a meeting record, named by a line of its own text), and by its label otherwise; only Ask's
  * list rows and code's statements read it.
  */
-export function agenticWriterListMemberV1(entry: { readonly short: string; readonly item: EvidenceDeskItemV2 }, checked: boolean): AgenticWriterListMemberV1 {
+export function agenticWriterListMemberV1(entry: { readonly short: string; readonly item: EvidenceDeskItemV2 }, checked: boolean, timeZone = "UTC"): AgenticWriterListMemberV1 {
   const { item } = entry;
-  const attributes = attributesOf(item);
+  const attributes = agenticEvidenceAttributesV1(item, timeZone);
   return Object.freeze({
-    id: entry.short, kind: item.kind, title: item.list_label ?? item.label,
-    ...(item.dates === undefined ? {} : { dates: item.dates }),
-    ...(item.occurred_at === undefined ? {} : { date: item.occurred_at, date_kind: item.date_kind ?? "unspecified" as const }),
+    id: entry.short, kind: item.kind, title: agenticEvidenceLabelV1(item, timeZone, true),
+    ...agenticEvidenceDatesV1(item, timeZone),
     ...(attributes?.status === undefined ? {} : { status: attributes.status }),
     ...(attributes?.owner === undefined ? {} : { owner: attributes.owner }),
     ...(attributes?.due_at === undefined ? {} : { due: attributes.due_at }),
