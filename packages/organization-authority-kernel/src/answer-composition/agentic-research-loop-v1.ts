@@ -450,7 +450,9 @@ function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticR
   let status: ListArgs["status"];
   if (raw.status !== undefined) {
     const allowed = values("status");
-    const value = statusGroup(raw.status) ?? raw.status.trim().toLowerCase();
+    // A source's own value wins ("active" is a project's status); otherwise a loose word reads as open or done.
+    const literal = raw.status.trim().toLowerCase();
+    const value = Array.isArray(allowed) && allowed.includes(literal) ? literal : statusGroup(raw.status) ?? literal;
     if (allowed === undefined) ignore("status");
     else if (!Array.isArray(allowed) || !allowed.includes(value)) return refuse("status", `status must be ${Array.isArray(allowed) ? allowed.join(" or ") : "a status it lists"}`);
     else { status = value as ListArgs["status"]; applied.status = "applied"; if (meeting) kinds ??= ["action"]; }

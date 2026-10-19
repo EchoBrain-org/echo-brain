@@ -1,5 +1,5 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import { isPersonWorkspaceCitationV1, type PersonAnswerCitationV7 } from "@echo-brain/organization-api";
+import { isPersonWorkspaceCitationV1, personWorkspaceRefV1, type PersonAnswerCitationV7, type PersonAnswerCitationV8 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../shared/evidence-desk-v2.js";
 import type { AgenticListEvidenceV1 } from "./agentic-list-evidence-v1.js";
@@ -132,6 +132,19 @@ export function citationOfAgenticEvidenceItemV1(item: EvidenceDeskItemV2, timeZo
   // A workspace item cites only in the V8 answer; a V7 catalog never offers its source (research tool contract v1).
   if (isPersonWorkspaceCitationV1(item.citation)) throw new AuthorityOperationError('invalid_output', 'A workspace item has no V7 citation');
   return Object.freeze({ citation: item.citation, kind: item.kind as PersonAnswerCitationV7['kind'], label: agenticEvidenceLabelV1(item, timeZone), visibility: item.visibility, ...(item.ref === undefined ? {} : { ref: item.ref as PersonAnswerCitationV7['ref'] }) });
+}
+
+/**
+ * How the V8 answer cites an item (research tool contract v1): as V7 does, and a workspace item or tool container by its
+ * workspace citation. A project and a tool open through their workspace ref; a person and a container carry none, and a
+ * container shows its key in its tool beside its label.
+ */
+export function citationOfAgenticEvidenceItemV8(item: EvidenceDeskItemV2, timeZone?: string): PersonAnswerCitationV8 {
+  if (!isPersonWorkspaceCitationV1(item.citation)) return citationOfAgenticEvidenceItemV1(item, timeZone);
+  const citation = item.citation;
+  const ref = citation.kind === "project" || citation.kind === "tool" ? personWorkspaceRefV1(citation) : undefined;
+  const key = citation.kind === "tool_container" ? item.attributes?.key : undefined;
+  return Object.freeze({ citation, kind: citation.kind, label: agenticEvidenceLabelV1(item, timeZone), visibility: item.visibility, ...(ref === undefined ? {} : { ref }), ...(key === undefined ? {} : { key }) });
 }
 
 /** The evaluation's view: released content only, no desk ids, refs, receipts or model-call records. */

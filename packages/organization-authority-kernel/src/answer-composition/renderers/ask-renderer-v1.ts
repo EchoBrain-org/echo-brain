@@ -4,6 +4,8 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   isPersonWorkspaceCitationV1,
   personAnswerCitationKeyV7,
+  personAnswerCitationKeyV8,
+  type PersonAnswerResponseV8,
   type PersonAnswerPartV4,
   type PersonAnswerResponseV4,
   type PersonAnswerResponseV5,
@@ -22,7 +24,7 @@ import {
   type AnswerSentence,
 } from "../agentic-ask-v1-model-protocol.js";
 import { compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
-import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
+import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_WRITER_LISTS_MAX_V1,
   AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
@@ -84,7 +86,7 @@ const MAX_STATEMENTS = AGENTIC_ASK_MAX_SENTENCES_V1;
 const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
 
 type Entry = AgenticEvidenceBundleItemV1;
-type AskResponse = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7;
+type AskResponse = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8;
 
 export interface AskRendererInputV1 {
   readonly question: string;
@@ -97,7 +99,7 @@ export interface AskRenderedV1 {
 
 export interface CreateAskRendererV1Options {
   /** 4 (V1 core), 5 (V2), 6 (V3 and the research core) or 7 (V4: follow-ups, ADR-0040). */
-  readonly response_version: 4 | 5 | 6 | 7;
+  readonly response_version: 4 | 5 | 6 | 7 | 8;
   /** The writer's system prompt, with the live-source guidance when live sources are available. */
   readonly answer_prompt: string;
   /** The sources research could read, as the research model saw them. */
@@ -280,7 +282,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // One citation per key, the key the Ask response checks for duplicates: a listed ticket's row and its opened body
       // are two items with one key, so they share one citation.
       // A workspace item cites only in the V8 answer, whose renderer keys it (research tool contract v1).
-      const keyOf = (short: string) => { const citation = byShort.get(short)!.item.citation; if (isPersonWorkspaceCitationV1(citation)) throw new AuthorityOperationError("invalid_output", "A workspace item has no V7 citation"); return personAnswerCitationKeyV7(citation); };
+      const keyOf = (short: string) => {
+        const citation = byShort.get(short)!.item.citation;
+        if (responseVersion === 8) return personAnswerCitationKeyV8(citation);
+        if (isPersonWorkspaceCitationV1(citation)) throw new AuthorityOperationError("invalid_output", "A workspace item has no V7 citation");
+        return personAnswerCitationKeyV7(citation);
+      };
       /** Citation indexes of `shorts`, each once; a new cited object becomes the next citation. */
       const cite = (shorts: readonly string[]): number[] => {
         const indexes: number[] = [];
@@ -427,17 +434,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       ];
       const outcome = !anyEvidence ? (incomplete || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
       const result = Object.freeze({
-        schema_version: responseVersion, kind: responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
+        schema_version: responseVersion, kind: responseVersion === 8 ? "echo-clean-person-answer-v8" : responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
         parts: Object.freeze([Object.freeze({
           question, status: draft.status,
           statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
           ...(draft.gap === undefined ? {} : { gap: draft.gap }),
           ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
         })]),
-        citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV1(entry.item, options.context.time_zone ?? 'UTC')) : []),
+        citations: Object.freeze(anyEvidence ? used.map(entry => (responseVersion === 8 ? citationOfAgenticEvidenceItemV8 : citationOfAgenticEvidenceItemV1)(entry.item, options.context.time_zone ?? 'UTC')) : []),
         ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
       });
-      const validated: AskResponse = responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
+      const validated: AskResponse = responseVersion === 8 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV8) : responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
       return Object.freeze({
         result: Object.freeze({ response: validated, writer_evidence: writerEvidence }),
         // `used` is in first-citation order, and fitting the byte bound drops

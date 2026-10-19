@@ -1,11 +1,12 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validatePersonFollowUpEvidenceV1 } from '@echo-brain/organization-api';
+import { validatePersonAnswerResponseV8, validatePersonFollowUpEvidenceV1, type PersonAskProgressStepEventV3 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
-import { createAgenticAskV4 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { createAgenticAskV4, createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from '../../src/shared/follow-up-evidence-v1.js';
+import { PROJECTS_SOURCE_DESCRIPTOR_V1 } from '../../src/shared/workspace-evidence-v1.js';
 import { generation, listed } from './fixtures/agentic-scenarios.js';
 
 /**
@@ -126,5 +127,22 @@ describe('Ask research tool contract v1', () => {
     expect(port.search).toHaveBeenCalledTimes(10);
     const schema = run.steps()[0]!.schema as { properties: { actions: { maxItems: number } } };
     expect(schema.properties.actions.maxItems).toBe(10);
+  });
+
+  it('answers V8 with a cited project and its leads, and streams progress V3 that names the projects source', async () => {
+    const project: EvidenceDeskItemV2 = Object.freeze({
+      id: 'project-therm', kind: 'project', citation: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' }, label: 'THERM', visibility: 'project',
+      attributes: { status: 'active', role: 'member', leads: 'Mara Lind' }, text: 'THERM. Leads: Mara Lind. Members: Jules Park (member).', receipt_sha256: canonicalSha256('project-therm'),
+    });
+    const port = desk({ live_sources: [PROJECTS_SOURCE_DESCRIPTOR_V1], list: vi.fn(async () => result([project])) });
+    const run = scripted([step([{ tool: 'list', args: { source: 'projects', status: 'active' } }]), finish(), { lists: [{ id: 'L1' }], sentences: [], not_found: [] }]);
+    const events: PersonAskProgressStepEventV3[] = [];
+    const { response, receipt } = await createAgenticAskV5({ desk: port, model: run.model, audit: { append: () => undefined }, generation, today: () => '2026-10-19' })
+      .answerWithReceipt({ question: 'What are the current projects, and who leads them?', on_progress: event => { events.push(event); } });
+    expect(port.list).toHaveBeenCalledWith(expect.objectContaining({ source: 'projects', status: 'active' }));
+    expect(validatePersonAnswerResponseV8(response)).toEqual(response);
+    expect(response.citations).toEqual([{ citation: project.citation, kind: 'project', label: 'THERM', visibility: 'project', ref: 'project:prj_00000000-0000-4000-8000-000000000001' }]);
+    expect(events).toContainEqual({ type: 'searched', sources: [{ kind: 'projects' }], found: 1 });
+    expect(receipt.rows).toContainEqual({ type: 'searched', sources: [{ kind: 'projects' }], found: 1 });
   });
 });
