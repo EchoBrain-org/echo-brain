@@ -1205,6 +1205,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       ...(typeof value?.note === "string" ? { note: value.note } : {}), ...(typeof value?.error === "string" ? { error: value.error } : {}),
       ...(value?.truncated === true ? { truncated: true } : {}), ...(raw?.anchor_truncated === false ? { anchor_truncated: false as const } : {}),
       ...(typeof value?.more === "boolean" ? { more: value.more } : {}), ...(typeof value?.notice === "string" ? { notice: true } : {}),
+      // Ask (research tool contract v1): what the step saw of each filter's outcome, a refused read's supports and the
+      // items its dates could not test, so an evaluation reads them from the round as the model did.
+      ...(ask && value?.filters !== undefined ? { filters: value.filters as Readonly<Record<string, unknown>> } : {}),
+      ...(ask && value?.supports !== undefined ? { supports: value.supports as Readonly<Record<string, unknown>> } : {}),
+      ...(ask && value?.unchecked !== undefined ? { unchecked: value.unchecked as Readonly<Record<string, unknown>> } : {}),
     }) });
   };
   const recordRound = (startedAt: number, actions: readonly AgenticResearchActionV1[]) => {

@@ -392,9 +392,6 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(diagnostics === undefined ? {} : { diagnostics }),
       ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
     };
-    const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
-      ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources })
-      : undefined;
     const items = new SqliteImpactItemsV1(database);
     const people = new SqliteOpenItemPeopleV1(database);
     // The change check (ADR-0036) needs no answer model: it reads only the database, in one read transaction.
@@ -408,6 +405,21 @@ export async function startOrganizationAuthorityApiRuntime(
       repository: projectRepository,
     });
     const runs = answerOptions === undefined ? undefined : new SqliteTriggerRunsV1(database);
+    // The V7 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040); the V8 answer also reads the asker's
+    // projects, people and tools as the project pages and the tools page show them (research tool contract v1), each
+    // release audited without content.
+    const followUps = runs === undefined ? undefined : { runs, items, people, records: recordSearch };
+    const workspace = {
+      sources: {
+        projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools,
+        ...(jiraSetting === undefined ? {} : { jira: jiraSetting }), ...(confluenceSetting === undefined ? {} : { confluence: confluenceSetting }),
+      },
+      audit: (context: Parameters<typeof createPersonWorkspaceReleaseAuditV1>[1]) => createPersonWorkspaceReleaseAuditV1(database, context),
+    };
+    // The staging research evaluation asks a question as `/v7` does, on the same sources.
+    const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
+      ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources, ...(followUps === undefined ? {} : { follow_ups: followUps }), workspace })
+      : undefined;
     const triggerRuns: PersonTriggerRunsHttpApplicationV1 = answerOptions === undefined || runs === undefined ? unavailablePersonTriggerRunsV1(sessions) : (() => {
       // Ticket assignees match impact owners only when a live connector that reads them is configured.
       const owners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
@@ -464,21 +476,10 @@ export async function startOrganizationAuthorityApiRuntime(
         // source is configured. The request catalog still contains local context.
         person_answer_v4: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 5),
         person_answer_v5: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 6),
-        // The V7 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040); without these sources its desk would bind none.
-        ...(runs === undefined ? {} : {
-          person_answer_v6: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: { runs, items, people, records: recordSearch } }, 7),
-          // The V8 answer also reads the asker's projects, people and tools as the project pages and the tools page show
-          // them (research tool contract v1), each release audited without content.
-          person_answer_v7: createPersonLiveAnswerRouteV1({
-            ...answerOptions, live_sources: liveSources, follow_ups: { runs, items, people, records: recordSearch },
-            workspace: {
-              sources: {
-                projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools,
-                ...(jiraSetting === undefined ? {} : { jira: jiraSetting }), ...(confluenceSetting === undefined ? {} : { confluence: confluenceSetting }),
-              },
-              audit: context => createPersonWorkspaceReleaseAuditV1(database, context),
-            },
-          }, 8),
+        // Without the follow-up sources the V7 and V8 desks would bind none, so those answers need them.
+        ...(followUps === undefined ? {} : {
+          person_answer_v6: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps }, 7),
+          person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }, 8),
         }),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
