@@ -484,5 +484,191 @@
         ]
       }
     }
-  ]
+  ],
+  "workspace": {
+    "note": "The asker's workspace the open-ended Ask cases are keyed against (research tool contract v1): ECHO accounts, projects with members, roles and tool mappings, tool connections, and follow-ups with their history. Seeded by hand like the rest of the world; see README.md, 'Workspace'. A follow-up's history counts days from the day the founder sends its meeting's follow-ups (day 0).",
+    "accounts": [
+      {
+        "name": "{{TEST_PERSON}}",
+        "note": "The signed-in test person."
+      },
+      {
+        "name": "Mara Lindqvist",
+        "note": "Product lead. A synthetic staging account with exactly this display name."
+      },
+      {
+        "name": "Rafael Moreno",
+        "note": "QA lead. A synthetic staging account with exactly this display name."
+      }
+    ],
+    "projects": [
+      {
+        "name": "THERM",
+        "status": "active",
+        "members": [
+          {
+            "name": "{{TEST_PERSON}}",
+            "role": "lead"
+          },
+          {
+            "name": "Mara Lindqvist",
+            "role": "lead"
+          },
+          {
+            "name": "Rafael Moreno",
+            "role": "member"
+          }
+        ],
+        "jira_project": {
+          "id": "10003",
+          "key": "THERM",
+          "name": "Digital Thermometer"
+        },
+        "confluence_spaces": [
+          {
+            "id": "1015812",
+            "key": "THERM",
+            "name": "Mock Digital Thermometer"
+          }
+        ],
+        "why": "The existing project, with the mapping step 1 of seeding already makes. Two leads, so 'who leads it' names both."
+      },
+      {
+        "name": "Kestrel Pilot Launch",
+        "status": "active",
+        "members": [
+          {
+            "name": "Mara Lindqvist",
+            "role": "lead"
+          },
+          {
+            "name": "{{TEST_PERSON}}",
+            "role": "member"
+          },
+          {
+            "name": "Rafael Moreno",
+            "role": "member"
+          }
+        ],
+        "jira_project": null,
+        "confluence_spaces": [],
+        "why": "A second current project the test person is only a member of, mapped to no tool, so a project's tool links can be absent."
+      },
+      {
+        "name": "THERM EVT Archive",
+        "status": "archived",
+        "members": [
+          {
+            "name": "{{TEST_PERSON}}",
+            "role": "lead"
+          }
+        ],
+        "jira_project": null,
+        "confluence_spaces": [],
+        "why": "An archived project, never a current one. Only a lead can archive it, so the test person leads it."
+      }
+    ],
+    "tools": [
+      {
+        "tool_id": "jira",
+        "connected": true
+      },
+      {
+        "tool_id": "confluence",
+        "connected": true
+      }
+    ],
+    "tools_note": "Slack is not keyed: record in the seed log whether the test person has connected it. No account may carry a leak marker as its display name: the people source shows every account in the organization.",
+    "follow_ups": [
+      {
+        "id": "F1",
+        "meeting": "M2",
+        "follows": "THERM-2",
+        "owner": "{{TEST_PERSON}}",
+        "status": "open",
+        "history": [
+          {
+            "day": 0,
+            "event": "sent"
+          }
+        ],
+        "why": "MRD-02 must change to two decimals; the test person owns the MRD update (M2 action)."
+      },
+      {
+        "id": "F2",
+        "meeting": "M2",
+        "follows": "THERM-40",
+        "owner": "Rafael Moreno",
+        "status": "open",
+        "history": [
+          {
+            "day": 0,
+            "event": "sent"
+          }
+        ],
+        "why": "TC-D-06 expected results must change; Rafael owns that update (M2 action)."
+      },
+      {
+        "id": "F3",
+        "meeting": "M3",
+        "follows": "THERM-48",
+        "owner": "Mara Lindqvist",
+        "status": "open",
+        "history": [
+          {
+            "day": 0,
+            "event": "sent",
+            "owner": "Rafael Moreno"
+          },
+          {
+            "day": 1,
+            "event": "reassigned",
+            "owner": "Mara Lindqvist"
+          }
+        ],
+        "why": "DVT-R2 must complete by 2026-10-30. Sent to Rafael, then reassigned to Mara the next day: its time since assignment counts from the reassignment, and it is no longer Rafael's."
+      },
+      {
+        "id": "F4",
+        "meeting": "M4",
+        "follows": "THERM-47",
+        "owner": "{{TEST_PERSON}}",
+        "status": "open",
+        "history": [
+          {
+            "day": 0,
+            "event": "sent"
+          }
+        ],
+        "why": "TRACE-01 must record the confirmed fix owner; it is assigned to the test person in Jira, so ECHO matches them as owner."
+      },
+      {
+        "id": "F5",
+        "meeting": "M4",
+        "follows": "THERM-46",
+        "owner": "Mara Lindqvist",
+        "status": "done",
+        "history": [
+          {
+            "day": 0,
+            "event": "sent"
+          },
+          {
+            "day": 1,
+            "event": "done"
+          }
+        ],
+        "why": "BUG-412's likely cause is recorded; marked done the next day, so it is not an open item."
+      },
+      {
+        "id": "F6",
+        "meeting": "M3",
+        "follows": "THERM-50",
+        "owner": "Mara Lindqvist",
+        "status": "unsent",
+        "history": [],
+        "why": "GATE-DVT stays on hold; left unsent, so it is not an open item."
+      }
+    ]
+  }
 }

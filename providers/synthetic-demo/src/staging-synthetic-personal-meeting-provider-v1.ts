@@ -86,6 +86,28 @@ const CURSOR_POLICY: AdmittedMeetingSourceCursorPolicyV1 = Object.freeze({
   assert_live_cursor(cursor: string) { readStagingSyntheticCheckpointV1(cursor); },
 });
 
+/** A canary that names no release date is held at the fixture's own observation day. */
+const CANARY_FALLBACK_DAY = "2026-10-07";
+
+/**
+ * When a release's canary meeting is recorded as held: noon UTC, which is the same
+ * calendar day from UTC-11 to UTC+11, on the release's date. Release ids carry it
+ * as `clean-v1-YYYYMMDD-…`; one that does not is held on the fixture's own day.
+ * The time is a pure function of the release, so every run of one release's canary
+ * builds the same meeting and revision. A recorded time lets a dated meeting read
+ * test the canary instead of counting it as a meeting with no date (research tool
+ * contract v1, "Approved records carry dates").
+ */
+export function stagingSyntheticCanaryMeetingTimeV1(releaseId: string): { readonly actual_start_at: string; readonly actual_end_at: string; readonly timezone: string; readonly all_day: false } {
+  stagingSyntheticCanaryEntryV1(releaseId);
+  const dated = /^clean-v1-(\d{4})(\d{2})(\d{2})(?:-|$)/.exec(releaseId);
+  const candidate = dated === null ? undefined : `${dated[1]}-${dated[2]}-${dated[3]}`;
+  const parsed = candidate === undefined ? Number.NaN : Date.parse(`${candidate}T00:00:00.000Z`);
+  // Only a real calendar day: 20261332 or 20260230 names none.
+  const day = Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === candidate ? candidate! : CANARY_FALLBACK_DAY;
+  return { actual_start_at: `${day}T12:00:00.000Z`, actual_end_at: `${day}T12:15:00.000Z`, timezone: "UTC", all_day: false };
+}
+
 /**
  * One release's canary meeting. Its id and external id are fixed; its body
  * names the release, so its revision changes per release and with the body.
@@ -95,6 +117,7 @@ export function stagingSyntheticCanaryMeetingV1(releaseId: string): MeetingDocum
   const body = {
     title: `SYNTHETIC STAGING CANARY ${releaseId} - Release approval check`,
     lifecycle: "completed" as const,
+    time: stagingSyntheticCanaryMeetingTimeV1(releaseId),
     capture: { state: "complete" as const, components: [
       { kind: "metadata" as const, state: "available" as const },
       { kind: "notes" as const, state: "available" as const },

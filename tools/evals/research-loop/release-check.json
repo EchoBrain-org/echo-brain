@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "note": "The open-ended Asks the staging release check asks after the canary (deploy/release/README.md). Each is a development case: its question is asked on staging, and its reach keys are checked from the Ask's LangSmith trace with `release-check`. Never name a held-out case here.",
+  "cases": ["what-happened-yesterday", "current-projects-and-leads", "open-items-and-owners"]
+}

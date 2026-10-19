@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { itemMatches, leakMarkers, matching, meetingIndex, satisfying, sectionCovered } from "./match.mjs";
+import { failedReach, reachChecks, traceCounts } from "./reach.mjs";
 
 /**
  * Code checks for one saved run (spec section 5): what research found, read,
@@ -18,9 +19,12 @@ export function codeChecks(testCase, run, dataset) {
   const base = {
     case_id: testCase.id, split: testCase.split, trigger: testCase.trigger, trial: run.trial, budget: run.budget, ...(listParts === 0 ? {} : { list_parts: listParts }),
     ...(testCase.key_status === undefined ? {} : { key_status: testCase.key_status }),
+    // The open-ended family (research tool contract v1): its cases carry reach and cost keys, and may await contract steps.
+    ...(testCase.family === undefined ? {} : { family: testCase.family }), ...(testCase.awaits === undefined ? {} : { awaits: testCase.awaits }),
   };
   // A run that delivered nothing scores zero: a sweep's findings all count as wrong, and a plan it never wrote declares no kind.
-  const nothing = { parts: [], leaks: [], stop: null, cost: null, ...(testCase.trigger === "sweep" ? { sweep: gradeSweep(testCase, { findings: [] }) } : {}), ...(testCase.expected_kinds === undefined ? {} : { declared_kinds: false }) };
+  const nothing = { parts: [], leaks: [], stop: null, cost: null, ...(testCase.trigger === "sweep" ? { sweep: gradeSweep(testCase, { findings: [] }) } : {}), ...(testCase.expected_kinds === undefined ? {} : { declared_kinds: false }),
+    ...(testCase.reach === undefined ? {} : { reach: failedReach(testCase) }) };
   if (run.outcome !== "completed" || run.result?.status !== "completed") {
     return { ...base, status: run.outcome === "rejected" ? "rejected_at_ingress" : "failed", error: run.error ?? run.result?.error ?? null, ...nothing };
   }
@@ -102,6 +106,9 @@ export function codeChecks(testCase, run, dataset) {
     ...(testCase.trigger === "sweep" ? { sweep: { status: rendered.status, ...gradeSweep(testCase, rendered) } } : {}),
     ...(testCase.trigger === "ask" ? { kinds: kindsOf(research.plan) } : {}),
     ...(testCase.expected_kinds === undefined ? {} : { declared_kinds: declaredKinds(research.plan, testCase.expected_kinds) }),
+    // What every trace counts, and an open-ended case's reach and cost checks (research tool contract v1).
+    trace: traceCounts(research),
+    ...(testCase.reach === undefined ? {} : { reach: reachChecks(testCase, run) }),
   };
 }
 
