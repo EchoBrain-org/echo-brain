@@ -14,6 +14,9 @@ type Page = PersonLiveEvidencePageV1<Citation>;
 /** A container as its tool reports it, already validated: provider-stable id, key and display name. */
 export interface PersonToolContainerV1 { readonly id: string; readonly key: string; readonly name: string }
 
+/** Containers a tool returned, and how many of its rows were left out because they could not be shown. */
+export interface PersonToolContainerRowsV1 { readonly containers: readonly PersonToolContainerV1[]; readonly left_out: number }
+
 /** One tool's container reads, each made with the asker's own connection under the tool's current permissions. */
 export interface PersonToolContainerProviderV1 {
   readonly binding: PersonConnectorReadBindingV1;
@@ -27,15 +30,32 @@ export interface PersonToolContainerProviderV1 {
   /** The container's display link in the tool, from the verified origin and its key. */
   permalink(origin: string, container: PersonToolContainerV1): string;
   /** One page of the containers the asker can see, in a stable order, and the provider's continuation. */
-  page(input: { readonly cursor?: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<{ readonly containers: readonly PersonToolContainerV1[]; readonly next?: string }>;
+  page(input: { readonly cursor?: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonToolContainerRowsV1 & { readonly next?: string }>;
   /**
    * Containers that may match `probe` by key or name, or the first containers when there is none, and whether the tool
    * holds more than it returned. The reader matches every search term itself.
    */
-  candidates(input: { readonly probe?: string; readonly signal?: AbortSignal }): Promise<{ readonly containers: readonly PersonToolContainerV1[]; readonly more: boolean }>;
-  /** One container under current permissions; it refuses with not_found or unauthorized when the asker cannot see it. */
+  candidates(input: { readonly probe?: string; readonly signal?: AbortSignal }): Promise<PersonToolContainerRowsV1 & { readonly more: boolean }>;
+  /**
+   * One container under current permissions. It refuses with not_found when the asker cannot see it (Jira and Confluence
+   * answer 404 for a container that is missing or hidden from them), and with unauthorized when the tool refuses the
+   * connection itself.
+   */
   exact(id: string, signal?: AbortSignal): Promise<PersonToolContainerV1>;
   failure(code: PersonProviderFailureCodeV1): never;
+}
+
+/**
+ * A tool's rows as containers. A row that fails validation is left out and counted, never shown, so one malformed
+ * container cannot fail a whole list or search; the reader then says that some could not be shown.
+ */
+export function personToolContainerRowsV1(rows: readonly unknown[], parse: (row: unknown) => PersonToolContainerV1): PersonToolContainerRowsV1 {
+  const containers: PersonToolContainerV1[] = [];
+  for (const row of rows) {
+    try { containers.push(parse(row)); }
+    catch (error) { if (!(error instanceof AuthorityOperationError) || error.code !== 'invalid_output') throw error; }
+  }
+  return Object.freeze({ containers: Object.freeze(containers), left_out: rows.length - containers.length });
 }
 
 const LIST_MAX = 25;
@@ -129,11 +149,19 @@ export async function createPersonToolContainerReaderV1(options: {
     const haystack = [container.key, container.name, ...names].join('\n').normalize('NFC').toLowerCase();
     return terms.every(term => haystack.includes(term));
   }
-  function describe(container: PersonToolContainerV1, names: readonly string[]): string {
-    const shown = names.slice(0, NAMES_SHOWN);
-    const more = names.length - shown.length;
-    const projects = names.length === 0 ? '' : `\nECHO projects: ${shown.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
-    return bound(`${provider.noun} ${container.key}: ${container.name}${projects}`, TEXT_BYTES);
+  /**
+   * What the container is, then the mapped ECHO projects by whole name, at most ten and as many as fit, then how many
+   * more. A name is never cut: the container's own name gives way before the first ECHO project's does.
+   */
+  function describe(container: PersonToolContainerV1, mapped: readonly string[]): string {
+    const head = `${provider.noun} ${container.key}: ${container.name}`.normalize('NFC');
+    const names = mapped.map(name => name.normalize('NFC'));
+    const projects = (shown: number) => names.length === 0 ? ''
+      : `\nECHO projects: ${[...names.slice(0, shown), ...(shown < names.length ? [`and ${names.length - shown} more`] : [])].join(', ')}`;
+    let shown = Math.min(names.length, NAMES_SHOWN);
+    while (shown > 1 && Buffer.byteLength(head + projects(shown), 'utf8') > TEXT_BYTES) shown -= 1;
+    const tail = projects(shown);
+    return `${bound(head, TEXT_BYTES - Buffer.byteLength(tail, 'utf8'))}${tail}`;
   }
   function value(container: PersonToolContainerV1, echo: ReadonlyMap<string, readonly string[]>): Released['value'] {
     if (pinned !== undefined && !pinned.includes(container.id)) failure('unauthorized');
@@ -159,19 +187,29 @@ export async function createPersonToolContainerReaderV1(options: {
       return Object.freeze({ ...released.value, handle });
     }));
   }
-  /** A container the asker cannot see is left out, never released or counted. */
-  async function visible(id: string, signal?: AbortSignal): Promise<PersonToolContainerV1 | undefined> {
-    try {
-      const container = await provider.exact(id, signal);
-      if (container.id !== id) failure('invalid_output');
-      return container;
-    } catch (error) {
-      if (error instanceof AuthorityOperationError && (error.code === 'not_found' || error.code === 'unauthorized')) return undefined;
-      throw error;
-    }
+  /**
+   * Containers by exact read. One the asker cannot see is left out, never released or counted; one the tool answered but
+   * that cannot be shown is left out and counted. A refused connection (unauthorized: HTTP 401 or 403) says nothing about
+   * one container, so it fails the read rather than end a list without it.
+   */
+  async function visibleAll(ids: readonly string[], signal?: AbortSignal): Promise<PersonToolContainerRowsV1> {
+    const read = await parallel(ids, async id => {
+      try {
+        const container = await provider.exact(id, signal);
+        if (container.id !== id) failure('invalid_output');
+        return container;
+      } catch (error) {
+        if (error instanceof AuthorityOperationError && (error.code === 'not_found' || error.code === 'invalid_output')) return error.code;
+        throw error;
+      }
+    });
+    return { containers: read.filter((value): value is PersonToolContainerV1 => typeof value !== 'string'), left_out: read.filter(value => value === 'invalid_output').length };
   }
-  const visibleAll = async (ids: readonly string[], signal?: AbortSignal) =>
-    (await parallel(ids, id => visible(id, signal))).filter((container): container is PersonToolContainerV1 => container !== undefined);
+  /**
+   * A result that left a row out says so, so it never reads as complete (ADR-0041). A notice, not `truncated`: a list's
+   * later page replaces its `truncated`, while one page's notice keeps the whole list incomplete.
+   */
+  const leftOut = (count: number) => count === 0 ? {} : { notice: `Some ${provider.noun}s could not be shown, so these results leave them out.` };
 
   return Object.freeze({
     binding,
@@ -190,7 +228,7 @@ export async function createPersonToolContainerReaderV1(options: {
       return safe(async () => {
         await verify(input.signal);
         const echo = options.echo_projects();
-        let candidates: readonly PersonToolContainerV1[];
+        let candidates: PersonToolContainerRowsV1;
         let more = false;
         if (pinned !== undefined) candidates = await visibleAll(pinned, input.signal);
         else {
@@ -200,12 +238,13 @@ export async function createPersonToolContainerReaderV1(options: {
           const seen = new Set(found.containers.map(container => container.id));
           const mapped = probe === undefined ? [] : [...echo].filter(([id, names]) => !seen.has(id) && names.some(name => name.normalize('NFC').toLowerCase().includes(probe))).map(([id]) => id).sort();
           if (mapped.length > MAPPED_MAX) more = true;
-          candidates = [...found.containers, ...await visibleAll(mapped.slice(0, MAPPED_MAX), input.signal)];
+          const exact = await visibleAll(mapped.slice(0, MAPPED_MAX), input.signal);
+          candidates = { containers: [...found.containers, ...exact.containers], left_out: found.left_out + exact.left_out };
         }
-        const matching = candidates.filter(container => matches(container, echo.get(container.id) ?? [], terms));
+        const matching = candidates.containers.filter(container => matches(container, echo.get(container.id) ?? [], terms));
         const selected = matching.slice(0, maximum);
         await verify(input.signal);
-        return Object.freeze({ items: release(selected, echo), truncated: more || matching.length > selected.length });
+        return Object.freeze({ items: release(selected, echo), truncated: more || matching.length > selected.length, ...leftOut(candidates.left_out) });
       }, input.signal);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<Page> {
@@ -221,21 +260,25 @@ export async function createPersonToolContainerReaderV1(options: {
         let containers: readonly PersonToolContainerV1[];
         let next: string | undefined;
         let full: boolean;
+        let omitted: number;
         if (pinned !== undefined) {
           // A project scope maps a few containers, each read exactly: its pages hold only those the asker can see, and
           // its end is known. The continuation is this reader's own offset.
           const offset = previous === undefined ? 0 : Number(previous.token);
           const visible = await visibleAll(pinned, input.signal);
-          containers = visible.slice(offset, offset + maximum);
-          next = offset + maximum < visible.length ? String(offset + maximum) : undefined;
+          containers = visible.containers.slice(offset, offset + maximum);
+          next = offset + maximum < visible.containers.length ? String(offset + maximum) : undefined;
           full = false;
+          omitted = visible.left_out;
         } else {
           const page = await provider.page({ ...(previous === undefined ? {} : { cursor: previous.token }), limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-          if (page.containers.length > maximum || (page.next !== undefined && page.containers.length === 0)) failure('invalid_output');
+          const rows = page.containers.length + page.left_out;
+          if (rows > maximum || (page.next !== undefined && rows === 0)) failure('invalid_output');
           containers = page.containers;
           next = page.next;
-          // A last page that held its full size cannot confirm the list's end (ADR-0041).
-          full = page.containers.length >= maximum;
+          // A last page that held its full size, counting rows left out, cannot confirm the list's end (ADR-0041).
+          full = rows >= maximum;
+          omitted = page.left_out;
         }
         await verify(input.signal);
         const items = release(containers, echo);
@@ -245,7 +288,7 @@ export async function createPersonToolContainerReaderV1(options: {
           next_cursor = `tool_container_cursor_${randomUUID()}`;
           cursors.set(next_cursor, Object.freeze({ selection, token: next }));
         }
-        return Object.freeze({ items, truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full: next_cursor === undefined && full });
+        return Object.freeze({ items, truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full: next_cursor === undefined && full, ...leftOut(omitted) });
       }, input.signal);
     },
     async open(input): Promise<Page> {

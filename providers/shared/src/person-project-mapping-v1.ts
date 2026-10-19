@@ -106,36 +106,43 @@ export function createPersonProjectMappingAccessV1<T extends ScopedProjectMappin
      * The names of the ECHO projects mapped to each of the tool's containers that the asker can see (research tool
      * contract v1), by container id, pinned for one source: `containers` names the containers one mapping on this site
      * maps. A project the asker cannot see is left out, never named or counted; without the stores and names, nothing is.
-     * `current` refuses once any of them changes (a grant, a mapping or a name), so a container's released text is still
-     * what the asker may see at every fence, including the final synchronous one.
+     * The pin reads each mapped project's grant. `current` runs at every fence, several times per provider request, so it
+     * reads the mappings once and asks for every mapped project's name at once, which names only the projects the asker
+     * can see, never a grant per project. It refuses once that differs from the pin (a grant lost or gained, a mapping or
+     * a name), so a container's released text is still what the asker may see at every fence, including the final
+     * synchronous one.
      */
     containerProjects(token: string, organizationId: string, containers: (mapping: NonNullable<T['mapping']>) => readonly string[]) {
-      const read = (): ReadonlyMap<string, readonly string[]> => {
-        const store = options.project_mappings, authorize = options.authorize_project, names = options.project_names;
-        if (store === undefined || authorize === undefined || names === undefined) return new Map();
-        if (store.provider !== provider.id) failure('invalid_request');
-        const visible = new Map<string, readonly string[]>();
-        for (const value of store.list(organizationId)) {
-          if (value.mapping === null) continue;
-          try { authorize(token, value.project_id); }
-          catch (error) {
-            if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) continue;
-            throw error;
-          }
-          visible.set(value.project_id, containers(value.mapping as NonNullable<T['mapping']>));
-        }
-        const named = visible.size === 0 ? new Map<string, string>() : names(token, [...visible.keys()]);
+      const store = options.project_mappings, authorize = options.authorize_project, projectNames = options.project_names;
+      if (store === undefined || authorize === undefined || projectNames === undefined) {
+        return Object.freeze({ names: new Map() as ReadonlyMap<string, readonly string[]>, current: () => {} });
+      }
+      if (store.provider !== provider.id) failure('invalid_request');
+      /** Each ECHO project mapped to containers on this site, with them. */
+      const mapped = () => store.list(organizationId).flatMap(value => {
+        const ids = value.mapping === null ? [] : containers(value.mapping as NonNullable<T['mapping']>);
+        return ids.length === 0 ? [] : [[value.project_id, ids] as const];
+      });
+      /** By container id, the names of the projects mapped to it that `projectNames` named for `projects`. */
+      const byContainer = (projects: readonly (readonly [string, readonly string[]])[]): ReadonlyMap<string, readonly string[]> => {
+        const named = projects.length === 0 ? new Map<string, string>() : projectNames(token, projects.map(([project]) => project));
         const result = new Map<string, string[]>();
-        for (const [project, ids] of visible) {
+        for (const [project, ids] of projects) {
           const name = named.get(project);
           if (name === undefined) continue;
           for (const id of ids) result.set(id, [...result.get(id) ?? [], name]);
         }
         return new Map([...result].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([id, list]) => [id, Object.freeze([...new Set(list)].sort())]));
       };
-      const names = read();
+      const names = byContainer(mapped().filter(([project]) => {
+        try { authorize(token, project); return true; }
+        catch (error) {
+          if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) return false;
+          throw error;
+        }
+      }));
       const pinned = canonicalSha256([...names]);
-      return Object.freeze({ names, current: () => { if (canonicalSha256([...read()]) !== pinned) failure('stale_access_state'); } });
+      return Object.freeze({ names, current: () => { if (canonicalSha256([...byContainer(mapped())]) !== pinned) failure('stale_access_state'); } });
     },
   };
 }

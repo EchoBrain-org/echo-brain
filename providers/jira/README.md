@@ -322,16 +322,23 @@ own connection and the same audited boundary:
 - **List** pages Jira's project search, which applies the asker's Browse
   projects permission, in key order, at most 25 a call. The transport admits
   `project/search` with only its paging, keyword, order and browse selectors.
-- **Search** sends the longest significant keyword to Jira's own key-and-name
-  match, then matches every word against each project's key, name and the
-  names of the ECHO projects mapped to it, at most 10 a call. Words that only
-  name the collection, such as "Jira projects", match every project. A project
-  found only through a mapped ECHO project's name is read exactly, and one the
-  asker cannot browse is left out, never counted.
+- **Search** sends the longest significant keyword, cut at a whole character
+  to the 256 bytes the transport admits, to Jira's own key-and-name match,
+  then matches every word against each project's key, name and the names of
+  the ECHO projects mapped to it, at most 10 a call. Words that only name the
+  collection, such as "Jira projects", match every project. A project found
+  only through a mapped ECHO project's name is read exactly, and one the asker
+  cannot browse (404) is left out, never counted. Jira refusing the
+  credentials (401 or 403) fails the read.
+- **Rows it cannot show.** A project row that fails validation, such as a name
+  that is not NFC or holds a line separator, or an unexpected key shape, is
+  left out and never shown, and the result's notice says some projects could
+  not be shown, so the list or search never reads as complete.
 - **Open** is an exact project read under current permissions.
 - **Each item** is labeled by the project's name, carries its key and tool,
   cites the project with its `/browse/<key>` link, and names the mapped ECHO
-  projects the asker can see: ten, then how many more.
+  projects the asker can see by whole name: ten, or as many as fit, then how
+  many more.
 - **Scope.** A project Ask reads only the Jira project its ECHO project maps;
   an unmapped project reads none. A date window is refused before any
   provider read.

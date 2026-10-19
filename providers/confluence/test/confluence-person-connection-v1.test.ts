@@ -41,7 +41,8 @@ function fixture() {
       if (project_id !== project || !member) throw new AuthorityOperationError('unauthorized', 'Fixture project access revoked');
       return { role: 'member', authorization_sha256: canonicalSha256('member') };
     },
-    project_names: (_token, project_ids) => new Map(project_ids.map(id => [id, 'Launchscope'])),
+    // As the port promises: names only for the projects the asker can see.
+    project_names: (_token, project_ids) => new Map(project_ids.filter(id => id === project && member).map(id => [id, 'Launchscope'])),
     authenticate: token => ({ ...person, authorization_sha256: canonicalSha256({ token }) }) });
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1) => canonicalSha256(release)) };
   return { db, fetch, nango,

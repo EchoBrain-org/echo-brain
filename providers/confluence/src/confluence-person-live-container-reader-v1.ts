@@ -2,7 +2,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReaderV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
-import { createPersonToolContainerReaderV1, type PersonToolContainerV1 } from '@echo-brain/provider-runtime/person-tool-container-reader-v1';
+import { createPersonToolContainerReaderV1, personToolContainerRowsV1, type PersonToolContainerV1 } from '@echo-brain/provider-runtime/person-tool-container-reader-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
 import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
 import { confluenceArray, confluenceFailure, confluenceRecord, confluenceString, copyConfluenceBindingV1 } from './confluence-validation-v1.js';
@@ -43,7 +43,10 @@ export async function createConfluencePersonLiveContainerReaderV1(options: {
 
   function space(raw: unknown): PersonToolContainerV1 {
     const value = confluenceRecord(raw);
-    return Object.freeze({ id: confluenceString(value.id, 20, ID), key: confluenceString(value.key, 255, SPACE_KEY), name: confluenceString(value.name, 1024) });
+    const name = confluenceString(value.name, 1024);
+    // A blank name cannot label an item.
+    if (name.trim() === '') confluenceFailure('invalid_output');
+    return Object.freeze({ id: confluenceString(value.id, 20, ID), key: confluenceString(value.key, 255, SPACE_KEY), name });
   }
   /** Only the opaque cursor is taken from Confluence's next link, never the link itself. */
   function nextCursor(raw: unknown): string | undefined {
@@ -58,10 +61,10 @@ export async function createConfluencePersonLiveContainerReaderV1(options: {
   async function spaces(limit: number, cursor: string | undefined, signal?: AbortSignal) {
     const page = confluenceRecord(await transport.request({ path: '/api/v2/spaces', query: { limit: String(limit), ...(cursor === undefined ? {} : { cursor }) }, signal }));
     signal?.throwIfAborted();
-    const containers = confluenceArray(page.results, limit).map(space);
+    const { containers, left_out } = personToolContainerRowsV1(confluenceArray(page.results, limit), space);
     if (new Set(containers.map(value => value.id)).size !== containers.length) confluenceFailure('invalid_output');
     const next = nextCursor(page._links === undefined ? undefined : confluenceRecord(page._links).next);
-    return { containers: Object.freeze(containers), next };
+    return { containers, left_out, next };
   }
 
   return createPersonToolContainerReaderV1({
@@ -75,20 +78,22 @@ export async function createConfluencePersonLiveContainerReaderV1(options: {
       },
       permalink: (site, value) => `${site}/wiki/spaces/${encodeURIComponent(value.key)}`,
       async page({ cursor, limit, signal }) {
-        const { containers, next } = await spaces(limit, cursor, signal);
-        return { containers, ...(next === undefined ? {} : { next }) };
+        const { containers, left_out, next } = await spaces(limit, cursor, signal);
+        return { containers, left_out, ...(next === undefined ? {} : { next }) };
       },
       async candidates({ signal }) {
         const found: PersonToolContainerV1[] = [];
+        let left_out = 0;
         let cursor: string | undefined;
         for (let page = 0; page < SCAN_PAGES; page += 1) {
           const read = await spaces(SCAN_PAGE, cursor, signal);
           found.push(...read.containers);
+          left_out += read.left_out;
           cursor = read.next;
           if (cursor === undefined) break;
         }
         if (new Set(found.map(value => value.id)).size !== found.length) confluenceFailure('invalid_output');
-        return { containers: Object.freeze(found), more: cursor !== undefined };
+        return { containers: Object.freeze(found), left_out, more: cursor !== undefined };
       },
       async exact(id, signal) {
         const value = space(await transport.request({ path: `/api/v2/spaces/${id}`, signal }));

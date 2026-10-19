@@ -19,6 +19,8 @@ export interface JiraCloudTransportV1 {
 export type JiraCloudAuthenticatedFetchV1 = PersonProviderAuthenticatedFetchV1;
 
 export const JIRA_RESPONSE_MAX_BYTES_V1 = PERSON_PROVIDER_RESPONSE_MAX_BYTES_V1;
+/** The longest keyword, in UTF-8 bytes, the project search is sent. */
+export const JIRA_PROJECT_QUERY_MAX_BYTES_V1 = 256;
 
 /** Product-owned read endpoint/selector allowlist, over the shared bounded Atlassian transport. */
 export function createJiraCloudTransportV1(authenticated: JiraCloudAuthenticatedFetchV1): JiraCloudTransportV1 {
@@ -38,7 +40,7 @@ export function createJiraCloudTransportV1(authenticated: JiraCloudAuthenticated
       const projectKeys = key === 'expand' && value === 'projectKeys' && suffix.startsWith('project/') && !projectSearch;
       const searchSelector = projectSearch && (key === 'startAt' && /^(?:0|[1-9][0-9]{0,5})$/.test(value) ||
         key === 'maxResults' && /^(?:[1-9]|[1-4][0-9]|50)$/.test(value) || key === 'orderBy' && value === 'key' || key === 'action' && value === 'browse' ||
-        key === 'query' && value.trim() !== '' && Buffer.byteLength(value, 'utf8') <= 256 && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value));
+        key === 'query' && value.trim() !== '' && Buffer.byteLength(value, 'utf8') <= JIRA_PROJECT_QUERY_MAX_BYTES_V1 && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value));
       if (!issueFields && !projectKeys && !searchSelector) jiraFailure('invalid_request');
       url.searchParams.set(key, value);
     }

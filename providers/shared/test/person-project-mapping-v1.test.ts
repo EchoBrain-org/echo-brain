@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { describe, expect, it, vi } from 'vitest';
 import { createPersonProjectMappingAccessV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import { JiraProjectMappingStoreV1 } from '../../jira/src/jira-project-mapping-store-v1.js';
@@ -74,4 +76,65 @@ it('requires project leadership for changes and fences authorization drift indep
     expect(() => createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, {}).projectAccess('session', project)).toThrow(expect.objectContaining({ code: 'unavailable' }));
     expect(() => createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, { project_mappings: new ConfluenceProjectMappingStoreV1(db), authorize_project }).projectAccess('session', project)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
   } finally { db.close(); }
+});
+
+describe('the ECHO project names a tool container carries (research tool contract v1)', () => {
+  const projects = [10, 11, 12, 13].map(index => `prj_00000000-0000-4000-8000-0000000000${index}`);
+  /** Four mapped ECHO projects, the first two on one Jira project; the asker belongs to the first three. */
+  function fixture() {
+    const db = new Database(':memory:');
+    const project_mappings = new JiraProjectMappingStoreV1(db);
+    const map = (id: string, jira: string) => project_mappings.set(organization, id, project_mappings.read(organization, id).revision, canonicalSha256(randomUUID()), { cloud_id: cloud, project_id: jira, project_key: `K${jira}` });
+    for (const [index, jira] of ['10001', '10001', '10002', '10003'].entries()) map(projects[index]!, jira);
+    const visible = new Set(projects.slice(0, 3));
+    const names = new Map(projects.map((id, index) => [id, ['Atlas', 'Beacon', 'Comet', 'Hidden'][index]!]));
+    const authorize_project = vi.fn((_token: string, id: string) => {
+      if (!visible.has(id)) throw new AuthorityOperationError('unauthorized', 'Fixture project access is unavailable');
+      return { role: 'member' as const, authorization_sha256: canonicalSha256(id) };
+    });
+    // As the port promises: names only for the projects the asker can see.
+    const project_names = vi.fn((_token: string, ids: readonly string[]) => new Map(ids.filter(id => visible.has(id)).map(id => [id, names.get(id)!])));
+    const access = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, { project_mappings, authorize_project, project_names });
+    const named = access.containerProjects('session', organization, mapping => mapping.cloud_id === cloud ? [mapping.project_id] : []);
+    return { db, project_mappings, map, visible, names, authorize_project, project_names, named };
+  }
+
+  it('pins with each mapped project\'s grant, then fences with one mapping read and one names read, never a grant per project', () => {
+    const f = fixture();
+    try {
+      expect([...f.named.names]).toEqual([['10001', ['Atlas', 'Beacon']], ['10002', ['Comet']]]);
+      f.authorize_project.mockClear(); f.project_names.mockClear();
+      const list = vi.spyOn(f.project_mappings, 'list');
+      for (let check = 0; check < 3; check += 1) f.named.current();
+      expect(f.authorize_project).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalledTimes(3);
+      expect(f.project_names).toHaveBeenCalledTimes(3);
+      // Every mapped project at once; the port names only those the asker can see.
+      expect(f.project_names).toHaveBeenLastCalledWith('session', projects);
+    } finally { f.db.close(); }
+  });
+
+  it.each([
+    ['losing access to a mapped project', (f: ReturnType<typeof fixture>) => { f.visible.delete(projects[2]!); }],
+    ['gaining access to a mapped project', (f: ReturnType<typeof fixture>) => { f.visible.add(projects[3]!); }],
+    ['a mapping change', (f: ReturnType<typeof fixture>) => { f.map(projects[2]!, '10004'); }],
+    ['a rename', (f: ReturnType<typeof fixture>) => { f.names.set(projects[0]!, 'Atlas Two'); }],
+  ])('refuses %s at the next fence', (_change, change) => {
+    const f = fixture();
+    try {
+      f.named.current();
+      f.authorize_project.mockClear();
+      change(f);
+      expect(() => f.named.current()).toThrow(expect.objectContaining({ code: 'stale_access_state' }));
+      expect(f.authorize_project).not.toHaveBeenCalled();
+    } finally { f.db.close(); }
+  });
+
+  it('passes a change to a project the asker cannot see', () => {
+    const f = fixture();
+    try {
+      f.map(projects[3]!, '10005'); f.names.set(projects[3]!, 'Hidden Two');
+      expect(() => f.named.current()).not.toThrow();
+    } finally { f.db.close(); }
+  });
 });

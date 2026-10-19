@@ -63,7 +63,7 @@ function fixture(previousKeys: readonly string[] = []) {
   const service = createJiraPersonConnectionV1({ project_mappings: mappings, authorize_project: (_token, project_id) => {
     if (project_id !== echoProject || projectRole === null) throw new AuthorityOperationError('unauthorized', 'Fixture project access revoked');
     return { role: projectRole, authorization_sha256: canonicalSha256({ projectRole, projectTenure }) };
-  }, project_names: (_token, project_ids) => new Map(project_ids.map(id => [id, id === echoProject ? 'Launchscope' : 'Never named'])),
+  }, project_names: (_token, project_ids) => new Map(project_ids.filter(id => id === echoProject && projectRole !== null).map(id => [id, 'Launchscope'])), // As the port promises: only the projects the asker can see.
   store, nango, cloud_id: cloud, fetch: transport as typeof fetch, authenticate });
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1) => canonicalSha256(release)) };
   const token = 'synthetic-echo-access';

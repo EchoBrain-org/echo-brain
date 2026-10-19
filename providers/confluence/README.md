@@ -74,8 +74,13 @@ space's key, name and the names of the ECHO projects mapped to it. Open is an
 exact read by the space's stable ID. Each item is labeled by the space's name,
 carries its key and tool, cites the space with its `/wiki/spaces/<key>` link
 (a personal space's key encoded), and names the mapped ECHO projects the asker
-can see: ten, then how many more. A project Ask reads only the spaces its
-ECHO project maps that the asker can view, paged by the limit asked for; an
+can see by whole name: ten, or as many as fit, then how many more. A space row
+that fails validation, such as a blank or non-NFC name or an unexpected key
+shape, is left out and never shown, and the result's notice says some spaces
+could not be shown, so the list or search never reads as complete. A project
+Ask reads only the spaces its ECHO project maps that the asker can view, paged
+by the limit asked for; a space the asker cannot view (404) is left out,
+Confluence refusing the credentials (401 or 403) fails the read, and an
 unmapped project reads none. A date window is refused before any provider
 read. Checks re-read every distinct release of a space and refuse one whose
 name, key, link or named ECHO projects changed.

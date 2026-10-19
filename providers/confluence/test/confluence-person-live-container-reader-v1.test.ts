@@ -18,12 +18,15 @@ const wire = (space: Space) => ({ ...space, type: 'global', status: 'current', a
 const container = (id: string, key: string): PersonToolContainerCitationV1 => ({ kind: 'tool_container', tool_id: 'confluence', external_scope_id: CLOUD,
   container: 'confluence_space', container_id: id, permalink: `${ORIGIN}/wiki/spaces/${key}` });
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+const LEFT_OUT = 'Some Confluence spaces could not be shown, so these results leave them out.';
 
 function fixture(options: { readonly pinned?: readonly string[] } = {}) {
   const state = {
     spaces: [{ id: '42', key: 'ECHO', name: 'Echo Product' }, { id: '43', key: 'ENG', name: 'Engineering' }, { id: '44', key: 'OPS', name: 'Operations' }] as Space[],
-    /** Spaces the asker cannot view: the list leaves them out and an exact read is refused. */
+    /** Spaces the asker cannot view: the list leaves them out and an exact read answers 404, as Confluence documents. */
     hidden: new Set<string>(),
+    /** Confluence refuses the credentials on an exact read (401). */
+    rejected: false,
     echo: new Map<string, readonly string[]>([['43', ['Launchscope']]]),
     spacesResponse: undefined as unknown,
   };
@@ -44,8 +47,9 @@ function fixture(options: { readonly pinned?: readonly string[] } = {}) {
     }
     const exact = /^\/api\/v2\/spaces\/(\d+)$/.exec(path);
     if (exact !== null) {
+      if (state.rejected) return response({ private: 'never escapes' }, 401);
       const space = state.spaces.find(value => value.id === exact[1]);
-      return space === undefined ? response({}, 404) : state.hidden.has(space.id) ? response({ private: 'never escapes' }, 403) : response(wire(space));
+      return space === undefined ? response({}, 404) : state.hidden.has(space.id) ? response({ private: 'never escapes' }, 404) : response(wire(space));
     }
     throw new Error(`Unexpected synthetic endpoint: ${path}`);
   });
@@ -119,6 +123,22 @@ describe('Confluence spaces as a tool container source (research tool contract v
     expect(second).not.toHaveProperty('next_cursor');
   });
 
+  it('fails a read when Confluence refuses the credentials, never ending a project scope\'s list as empty and complete', async () => {
+    const f = fixture({ pinned: ['42', '43'] }); const source = await f.make();
+    f.state.rejected = true;
+    await expect(source.list({})).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(source.search({ query: 'eng' })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.releases).toEqual([]);
+  });
+
+  it('in a project scope leaves out a mapped space it cannot show, and says so', async () => {
+    const f = fixture({ pinned: ['42', '43'] }); f.state.spaces[1] = { id: '43', key: 'ENG', name: 'Engineering Two' };
+    const source = await f.make();
+    const listed = await source.list({});
+    expect(listed.items.map(item => item.label)).toEqual(['Echo Product']);
+    expect(listed).toMatchObject({ truncated: false, page_full: false, notice: LEFT_OUT });
+  });
+
   it('refuses a date window or a container selector before any provider read', async () => {
     const f = fixture(); const source = await f.make(); f.fetch.mockClear();
     for (const dates of [{ since: '2026-10-01' }, { until: '2026-10-01' }, { date_field: 'updated' as const }]) {
@@ -131,7 +151,8 @@ describe('Confluence spaces as a tool container source (research tool contract v
 
   it.each([
     ['renamed', 'stale_access_state', (f: ReturnType<typeof fixture>) => { f.state.spaces[1] = { id: '43', key: 'ENG', name: 'Platform Engineering' }; }],
-    ['no longer viewable', 'unauthorized', (f: ReturnType<typeof fixture>) => { f.state.hidden.add('42'); }],
+    ['no longer viewable', 'not_found', (f: ReturnType<typeof fixture>) => { f.state.hidden.add('42'); }],
+    ['refused its credentials', 'unauthorized', (f: ReturnType<typeof fixture>) => { f.state.rejected = true; }],
     ['no longer mapped to a visible ECHO project', 'stale_access_state', (f: ReturnType<typeof fixture>) => { f.state.echo.clear(); }],
   ])('revalidates every released space: one %s stops reuse', async (_change, code, change) => {
     const f = fixture(); const source = await f.make();
@@ -142,12 +163,32 @@ describe('Confluence spaces as a tool container source (research tool contract v
   });
 
   it('refuses malformed space pages before anything is released', async () => {
-    for (const results of [[wire({ id: '42', key: 'ECHO', name: 'Echo' }), wire({ id: '42', key: 'ECHO', name: 'Echo' })],
-      [wire({ id: 'not-an-id', key: 'ECHO', name: 'Echo' })], [wire({ id: '42', key: 'has space', name: 'Echo' })], [wire({ id: '42', key: 'ECHO', name: '' })]]) {
-      const f = fixture(); f.state.spacesResponse = { results };
+    for (const malformed of [{ results: [wire({ id: '42', key: 'ECHO', name: 'Echo' }), wire({ id: '42', key: 'ECHO', name: 'Echo' })] }, { results: 'not a list' }, {}]) {
+      const f = fixture(); f.state.spacesResponse = malformed;
       const source = await f.make();
       await expect(source.list({})).rejects.toMatchObject({ code: 'invalid_output' });
       expect(f.audit.record).not.toHaveBeenCalled();
     }
+  });
+
+  it.each([
+    ['an id that is not one', { id: 'not-an-id', key: 'BAD', name: 'Bad Space' }],
+    ['an unexpected key shape', { id: '45', key: 'has space', name: 'Bad Space' }],
+    ['an empty name', { id: '45', key: 'BAD', name: '' }],
+    ['a blank name', { id: '45', key: 'BAD', name: ' ' }],
+    ['a name that is not NFC', { id: '45', key: 'BAD', name: 'Bad Café' }],
+    ['a line separator in its name', { id: '45', key: 'BAD', name: 'Bad Space' }],
+  ])('leaves out a space with %s, says so, and never ends the list or search as complete', async (_case, bad) => {
+    const f = fixture(); f.state.spaces.splice(1, 0, bad);
+    const source = await f.make();
+    const listed = await source.list({});
+    expect(listed.items.map(item => item.label)).toEqual(['Echo Product', 'Engineering', 'Operations']);
+    expect(listed).toMatchObject({ truncated: false, page_full: false, notice: LEFT_OUT });
+    const found = await source.search({ query: 'confluence spaces' });
+    expect(found.items.map(item => item.label)).toEqual(['Echo Product', 'Engineering', 'Operations']);
+    expect(found).toMatchObject({ truncated: false, notice: LEFT_OUT });
+    // Nothing of the row left out is released, named or audited.
+    expect([...listed.items, ...found.items, ...f.releases.flatMap(release => release.citations.map(citation => ({ citation })))].map(item => item.citation.container_id)).not.toContain(bad.id);
+    for (const left of ['not-an-id', 'BAD', 'Bad', 'has space']) expect(JSON.stringify([...listed.items, ...found.items])).not.toContain(left);
   });
 });

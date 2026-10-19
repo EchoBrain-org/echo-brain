@@ -4,7 +4,7 @@ import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import type { JiraCloudRequestV1, JiraCloudTransportV1 } from '../src/jira-cloud-transport-v1.js';
+import { createJiraCloudTransportV1, type JiraCloudRequestV1, type JiraCloudTransportV1 } from '../src/jira-cloud-transport-v1.js';
 import { createJiraPersonLiveContainerReaderV1 } from '../src/jira-person-live-container-reader-v1.js';
 
 const cloudid = '00000000-0000-4000-8000-000000000007';
@@ -18,12 +18,16 @@ const project = (id: string, key: string, name: string) => ({ id, key, name, sel
   avatarUrls: { '48x48': 'https://never-fetch.example.test/avatar' }, isPrivate: false });
 const container = (id: string, key: string): PersonToolContainerCitationV1 => ({ kind: 'tool_container', tool_id: 'jira', external_scope_id: cloudid,
   container: 'jira_project', container_id: id, permalink: `${origin}/browse/${key}` });
+const LEFT_OUT = 'Some Jira projects could not be shown, so these results leave them out.';
 
-function fixture(options: { readonly pinned?: string } = {}) {
+/** `wire` reads through the real transport, so its request checks apply; a refusal is the status Jira answers. */
+function fixture(options: { readonly pinned?: string; readonly wire?: boolean } = {}) {
   const state = {
     projects: new Map([['10000', project('10000', 'ECHO', 'Echo Platform')], ['10001', project('10001', 'LS', 'Launch Readiness')], ['10002', project('10002', 'OPS', 'Operations')]]),
     /** Projects the asker cannot browse: Jira's search leaves them out and its exact read refuses them. */
     hidden: new Set<string>(),
+    /** Jira refuses the credentials on an exact read (401), which the transport reports as unauthorized. */
+    rejected: false,
     /** The ECHO projects mapped to each Jira project that the asker can see, as the connection reads them. */
     echo: new Map<string, readonly string[]>([['10001', ['Launchscope']]]),
     searchResponse: undefined as unknown,
@@ -42,13 +46,22 @@ function fixture(options: { readonly pinned?: string } = {}) {
     }
     const exact = /\/project\/(\d+)$/.exec(input.path);
     if (exact !== null && input.path === `${prefix}/project/${exact[1]}`) {
+      if (state.rejected) throw new AuthorityOperationError('unauthorized', 'private provider response');
       const value = state.projects.get(exact[1]!);
       if (value === undefined || state.hidden.has(value.id)) throw new AuthorityOperationError('not_found', 'private provider response');
       return value;
     }
     throw new Error(`Unexpected synthetic endpoint ${input.path}`);
   });
-  const transport: JiraCloudTransportV1 = { binding: { ...binding }, request };
+  const fetch = async (url: string) => {
+    const parsed = new URL(url);
+    try { return Response.json(await request({ path: parsed.pathname, query: Object.fromEntries(parsed.searchParams) })); }
+    catch (error) {
+      if (error instanceof AuthorityOperationError) return Response.json({}, { status: error.code === 'unauthorized' ? 401 : 404 });
+      throw error;
+    }
+  };
+  const transport: JiraCloudTransportV1 = options.wire === true ? createJiraCloudTransportV1({ binding, fetch }) : { binding: { ...binding }, request };
   const releases: PersonLiveEvidenceReleaseV1<PersonToolContainerCitationV1>[] = [];
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1<PersonToolContainerCitationV1>) => { releases.push(release); return canonicalSha256(release); }) };
   async function make() {
@@ -117,6 +130,30 @@ describe('Jira projects as a tool container source (research tool contract v1)',
     expect(item!.text).toBe(`Jira project ECHO: Echo Platform\nECHO projects: ${Array.from({ length: 10 }, (_, index) => `Project ${String(index + 1).padStart(2, '0')}`).join(', ')}, and 2 more`);
   });
 
+  it('names mapped ECHO projects only whole, as many as fit its text, then how many more', async () => {
+    const f = fixture();
+    const names = Array.from({ length: 10 }, (_, index) => `Project ${String(index + 1).padStart(2, '0')} ${'x'.repeat(150)}`);
+    f.state.echo.set('10000', names);
+    const { source } = await f.make();
+    const text = (await source.list({ limit: 1 })).items[0]!.text!;
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1024);
+    const [head, projects] = text.split('\nECHO projects: ');
+    expect(head).toBe('Jira project ECHO: Echo Platform');
+    const shown = projects!.split(', ');
+    const more = /^and (\d+) more$/.exec(shown.pop()!);
+    expect(shown).toEqual(names.slice(0, shown.length));
+    expect(shown.length + Number(more?.[1])).toBe(10);
+  });
+
+  it('keeps the first mapped ECHO project whole beside a very long project name, cutting that name instead', async () => {
+    const f = fixture(); f.state.projects.set('10000', project('10000', 'ECHO', 'E'.repeat(1000)));
+    f.state.echo.set('10000', ['Atlas', 'Launchscope']);
+    const { source } = await f.make();
+    const text = (await source.list({ limit: 1 })).items[0]!.text!;
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1024);
+    expect(text).toMatch(/^Jira project ECHO: E+\nECHO projects: Atlas, and 1 more$/);
+  });
+
   it('refuses a date window or a container selector before any provider read', async () => {
     const f = fixture(); const { source } = await f.make(); f.request.mockClear();
     for (const dates of [{ since: '2026-10-01' }, { until: '2026-10-01' }, { date_field: 'created' as const }, { since: '2026-10-01', date_field: 'any' as const }]) {
@@ -138,6 +175,33 @@ describe('Jira projects as a tool container source (research tool contract v1)',
     expect(f.searches()).toEqual([]);
     f.state.hidden.add('10001');
     expect((await source.list({})).items).toEqual([]);
+  });
+
+  it('fails a read when Jira refuses the credentials, never ending a project scope\'s list as empty and complete', async () => {
+    const pinned = fixture({ pinned: '10001' }); const scoped = (await pinned.make()).source;
+    pinned.state.rejected = true;
+    await expect(scoped.list({})).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(scoped.search({ query: 'launch' })).rejects.toMatchObject({ code: 'unauthorized' });
+    // A project found only through its ECHO project's name is read exactly too.
+    const global = fixture(); const { source } = await global.make();
+    global.state.rejected = true;
+    await expect(source.search({ query: 'Launchscope' })).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it('cuts a long keyword to what Jira\'s project search takes, at a whole character, and still matches the whole query', async () => {
+    // 89 characters with commas and no spaces: one word of 267 bytes.
+    const phrase = '季度发布计划，'.repeat(13).slice(0, 89);
+    const f = fixture({ wire: true });
+    f.state.projects.set('10003', project('10003', 'PLAN', `计划 ${phrase}`));
+    // Holds the part Jira is sent, but not the whole phrase: Jira returns it, and the reader leaves it out.
+    f.state.projects.set('10004', project('10004', 'NEAR', `${phrase.slice(0, 85)}以外`));
+    const { source } = await f.make();
+    const found = await source.search({ query: phrase });
+    expect(found.items.map(item => item.attributes?.key)).toEqual(['PLAN']);
+    const sent = f.searches().at(-1)!.query!;
+    expect(Buffer.byteLength(sent, 'utf8')).toBeLessThanOrEqual(256);
+    expect(phrase.startsWith(sent)).toBe(true);
+    expect([...sent]).toHaveLength(85);
   });
 
   it.each([
@@ -180,14 +244,62 @@ describe('Jira projects as a tool container source (research tool contract v1)',
       { isLast: true, values: [valid, valid] },
       { isLast: false, values: [] },
       { values: [valid] },
-      { isLast: true, values: [{ ...valid, self: 'https://elsewhere.example.test/rest/api/3/project/10000' }] },
-      { isLast: true, values: [{ ...valid, name: ' ' }] },
-      { isLast: true, values: [{ ...valid, key: 'not a key' }] },
     ]) {
       const f = fixture(); f.state.searchResponse = malformed;
       const { source } = await f.make();
       await expect(source.list({})).rejects.toMatchObject({ code: 'invalid_output' });
       expect(f.audit.record).not.toHaveBeenCalled();
     }
+  });
+
+  it.each([
+    ['a self link on another site', (value: ReturnType<typeof project>) => ({ ...value, self: 'https://elsewhere.example.test/rest/api/3/project/10003' })],
+    ['a blank name', (value: ReturnType<typeof project>) => ({ ...value, name: ' ' })],
+    ['a name that is not NFC', (value: ReturnType<typeof project>) => ({ ...value, name: 'Bad Café' })],
+    ['a line separator in its name', (value: ReturnType<typeof project>) => ({ ...value, name: 'Bad Project' })],
+    ['an unexpected key shape', (value: ReturnType<typeof project>) => ({ ...value, key: 'not a key' })],
+  ])('leaves out a project with %s, says so, and never ends the list or search as complete', async (_case, malform) => {
+    const f = fixture(); f.state.projects.set('10003', malform(project('10003', 'BAD', 'Bad Project')));
+    const { source } = await f.make();
+    const listed = await source.list({});
+    expect(listed.items.map(item => item.label)).toEqual(['Echo Platform', 'Launch Readiness', 'Operations']);
+    expect(listed).toMatchObject({ truncated: false, page_full: false, notice: LEFT_OUT });
+    const found = await source.search({ query: 'jira projects' });
+    expect(found.items.map(item => item.label)).toEqual(['Echo Platform', 'Launch Readiness', 'Operations']);
+    expect(found).toMatchObject({ truncated: false, notice: LEFT_OUT });
+    // Nothing of the row left out is released, named or audited.
+    expect([...listed.items, ...found.items, ...f.releases.flatMap(release => release.citations.map(citation => ({ citation })))].map(item => item.citation.container_id)).not.toContain('10003');
+    for (const left of ['BAD', 'Bad', 'not a key', 'elsewhere']) expect(JSON.stringify([...listed.items, ...found.items])).not.toContain(left);
+  });
+
+  it('finds what it can show when a project that may match cannot be shown, and says so', async () => {
+    const f = fixture(); f.state.projects.set('10003', project('10003', 'LT', 'Launch Two'));
+    const { source } = await f.make();
+    const found = await source.search({ query: 'launch' });
+    expect(found.items.map(item => item.label)).toEqual(['Launch Readiness']);
+    expect(found.notice).toBe(LEFT_OUT);
+  });
+
+  it('pages on from where Jira\'s page ended, past a project it left out', async () => {
+    const f = fixture(); f.state.projects.set('10003', project('10003', 'BAD', 'Bad Project'));
+    const { source } = await f.make();
+    const first = await source.list({ limit: 2 });
+    expect(first.items.map(item => item.label)).toEqual(['Echo Platform']);
+    expect(first).toMatchObject({ truncated: true, next_cursor: expect.any(String), notice: LEFT_OUT });
+    const second = await source.list({ limit: 2, cursor: first.next_cursor });
+    expect(second.items.map(item => item.label)).toEqual(['Launch Readiness', 'Operations']);
+    expect(f.searches().map(query => query?.startAt)).toEqual(['0', '2']);
+    // A last page that held its full size before a row was left out still cannot confirm the list's end (ADR-0041).
+    const whole = await source.list({ limit: 4 });
+    expect(whole.items).toHaveLength(3);
+    expect(whole).toMatchObject({ truncated: false, page_full: true, notice: LEFT_OUT });
+  });
+
+  it('in a project scope leaves out a mapped project it cannot show, and says so', async () => {
+    const f = fixture({ pinned: '10001' }); f.state.projects.set('10001', project('10001', 'LS', 'Launch Readiness'));
+    const { source } = await f.make();
+    const listed = await source.list({});
+    expect(listed).toMatchObject({ items: [], truncated: false, page_full: false, notice: LEFT_OUT });
+    expect(await source.search({ query: 'launch' })).toMatchObject({ items: [], truncated: false, notice: LEFT_OUT });
   });
 });
