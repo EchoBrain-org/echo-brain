@@ -108,11 +108,37 @@ describe("OpenRouter structured generation", () => {
     });
   });
 
+  it("gives Sonnet 5.5 bounded reasoning headroom without sending unsupported temperature", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(init!.body as string) as Record<string, unknown>);
+        return new Response(JSON.stringify({ choices: [{ message: { content: '{"queries":[]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+    await adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", max_output_tokens: 1_500 });
+    expect(bodies[0]).toMatchObject({
+      model: "anthropic/claude-sonnet-5.5",
+      max_tokens: 5_596,
+      reasoning: { effort: "medium" },
+      response_format: { type: "json_schema" },
+      provider: { require_parameters: true, data_collection: "deny", sort: "throughput" },
+    });
+    expect(bodies[0]).not.toHaveProperty("temperature");
+    expect((bodies[0]?.provider as Record<string, unknown>)).not.toHaveProperty("ignore");
+  });
+
   it.each([
     ["the selected endpoint in routing metadata", { openrouter_metadata: { endpoints: { total: 2, available: [
       { provider: "SiliconFlow", model: "deepseek/deepseek-v3.2", selected: false },
       { provider: "Friendli", model: "deepseek/deepseek-v3.2", selected: true },
     ] } }, provider: "DeepInfra" }, "Friendli"],
+    ["Sonnet's Anthropic endpoint", { provider: "Anthropic" }, "Anthropic"],
+    ["Sonnet's Bedrock endpoint", { provider: "Amazon Bedrock" }, "Amazon Bedrock"],
+    ["Sonnet's Azure endpoint", { provider: "Azure" }, "Azure"],
+    ["Sonnet's Claude Platform on AWS endpoint", { provider: "Claude Platform on AWS" }, "Claude Platform on AWS"],
     ["the top-level provider name", { provider: "DeepInfra" }, "DeepInfra"],
     ["an unlisted name, as other", { provider: "SOURCESECRET79a3067" }, "other"],
     ["nothing, as null", {}, null],

@@ -5,9 +5,9 @@ import type { AnswerCompositionGenerationBundleV1 } from "@echo-brain/organizati
 export const OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1 =
   "openrouter" as const;
 export const OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 =
-  "deepseek/deepseek-v3.2" as const;
+  "anthropic/claude-sonnet-5.5" as const;
 export const OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 = 60_000;
-/** OpenRouter's top provider context for deepseek-v3.2 (the model lists 163,840; routing uses the smaller). */
+/** Kept conservative so changing the model does not expand Ask's prompt-size contract. */
 export const OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 = 131_072;
 
 /**

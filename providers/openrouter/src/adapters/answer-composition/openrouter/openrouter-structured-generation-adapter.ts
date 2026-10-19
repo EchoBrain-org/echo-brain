@@ -1,4 +1,5 @@
 import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { claudeStructuredSchema } from "./claude-structured-schema.js";
 import {
   type StructuredGenerationFailureClassV1,
   type StructuredGenerationFailureDiagnosticV1,
@@ -49,13 +50,36 @@ const OPENROUTER_IGNORED_PROVIDERS_BY_MODEL: Readonly<Record<string, readonly st
   "deepseek/deepseek-v3.2": Object.freeze(["friendli", "atlas-cloud"]),
 });
 
+const CLAUDE_SONNET_5_5_MODEL = "anthropic/claude-sonnet-5.5";
+
+/**
+ * Sonnet 5.5 requires reasoning and does not advertise temperature support.
+ * Medium effort shares the completion budget with the visible JSON. Reserve
+ * 4,096 extra tokens even for small background calls, at most 8,192 combined.
+ * This is headroom, not a separate provider-enforced reasoning-token budget.
+ * Other models retain the byte-for-byte legacy sampling and output settings.
+ */
+function modelRequestCompatibility(input: StructuredGenerationInput): Readonly<Record<string, unknown>> {
+  return input.model === CLAUDE_SONNET_5_5_MODEL
+    ? Object.freeze({
+        max_tokens: input.max_output_tokens + 4_096,
+        reasoning: Object.freeze({ effort: "medium" }),
+      })
+    : Object.freeze({
+        max_tokens: input.max_output_tokens,
+        // ADR-0037: structured protocol output; sampling only adds variance.
+        temperature: 0,
+      });
+}
+
 /**
  * Upstream host display names recorded as themselves: the hosts OpenRouter
  * lists, or has listed, for the routed model. A response is never a source of
  * new labels; any other name is recorded as "other".
  */
 const OPENROUTER_UPSTREAM_PROVIDERS: readonly string[] = Object.freeze([
-  "Alibaba", "AtlasCloud", "Baidu", "DeepInfra", "DeepSeek", "DigitalOcean", "Friendli",
+  "Alibaba", "Amazon Bedrock", "Anthropic", "AtlasCloud", "Azure", "Baidu",
+  "Claude Platform on AWS", "DeepInfra", "DeepSeek", "DigitalOcean", "Friendli",
   "GMICloud", "Google", "Mara", "Phala", "SambaNova", "SiliconFlow", "Venice",
 ]);
 
@@ -367,15 +391,13 @@ export function createOpenRouterStructuredGenerationAdapter(
           { role: "user", content: input.user_prompt },
         ],
         stream: false,
-        max_tokens: input.max_output_tokens,
-        // ADR-0037: structured protocol output; sampling only adds variance.
-        temperature: 0,
+        ...modelRequestCompatibility(input),
         response_format: {
           type: "json_schema",
           json_schema: {
             name: "echo_layer4",
             strict: true,
-            schema: input.schema,
+            schema: input.model === CLAUDE_SONNET_5_5_MODEL ? claudeStructuredSchema(input.schema) : input.schema,
           },
         },
         provider: {
