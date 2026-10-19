@@ -131,7 +131,7 @@ export function describeAgenticEvidenceItemV1(entry: { readonly short: string; r
 export function citationOfAgenticEvidenceItemV1(item: EvidenceDeskItemV2, timeZone?: string): PersonAnswerCitationV7 {
   // A workspace item cites only in the V8 answer; a V7 catalog never offers its source (research tool contract v1).
   if (isPersonWorkspaceCitationV1(item.citation)) throw new AuthorityOperationError('invalid_output', 'A workspace item has no V7 citation');
-  return Object.freeze({ citation: item.citation, kind: item.kind as PersonAnswerCitationV7['kind'], label: agenticEvidenceLabelV1(item, timeZone), visibility: item.visibility, ...(item.ref === undefined ? {} : { ref: item.ref }) });
+  return Object.freeze({ citation: item.citation, kind: item.kind as PersonAnswerCitationV7['kind'], label: agenticEvidenceLabelV1(item, timeZone), visibility: item.visibility, ...(item.ref === undefined ? {} : { ref: item.ref as PersonAnswerCitationV7['ref'] }) });
 }
 
 /** The evaluation's view: released content only, no desk ids, refs, receipts or model-call records. */

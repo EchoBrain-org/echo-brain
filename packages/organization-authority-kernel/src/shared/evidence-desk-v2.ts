@@ -1,4 +1,4 @@
-import type { PersonAnswerEvidenceCitationV7, PersonAnswerOpenRefV7, PersonWorkspaceCitationV1 } from '@echo-brain/organization-api';
+import type { PersonAnswerEvidenceCitationV7, PersonAnswerOpenRefV8, PersonWorkspaceCitationV1 } from '@echo-brain/organization-api';
 import type { EvidenceDateFieldV1 } from './temporal-query-v1.js';
 import {
   evidenceDeskSourceV1,
@@ -128,8 +128,8 @@ export interface EvidenceDeskItemV2 extends Omit<EvidenceDeskItemV1, 'citation' 
   /** A workspace item (research tool contract v1) cites with a workspace citation, which only the V8 answer admits. */
   readonly citation: PersonAnswerEvidenceCitationV7 | PersonWorkspaceCitationV1;
   readonly kind: EvidenceDeskKindV2;
-  /** Server-owned ref for person open, or a follow-up's item page. Never shown to a model. */
-  readonly ref?: PersonAnswerOpenRefV7;
+  /** Server-owned ref for person open, a follow-up's item page, or a project or tool (V8). Never shown to a model. */
+  readonly ref?: PersonAnswerOpenRefV8;
   /** Request-local owner, attached by the dispatcher and never part of a citation. */
   readonly source_id?: string;
   /**
