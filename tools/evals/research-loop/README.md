@@ -53,9 +53,12 @@ every member, and correct in the answer only when the answer names every
 member. The response does not say which statements code wrote, so a statement
 names a member only when it cites one of the member's items and its text names
 the member as code writes names: the member's title on one line, cut to 120
-characters (a cut title matches on what stands before its ellipsis), ignoring
-case, as a phrase of its own, never inside a longer word or a longer name the
-text holds; members sharing a label share the one name code gives them. Citing
+characters (a cut title by code's cut name, ellipsis and all, or by its whole
+title), ignoring case, as a phrase of its own, never inside a longer word or a
+longer name the text holds. Members sharing a label share the one name code
+gives them, unless the statement cites some that record another status, owner
+or due date: code keeps those apart and writes the facts that differ after
+each label, so the text names such a member only with its own. Citing
 a row never names it alone, whether a sentence cites it beside its text for the
 row's facts, its list id brings it, or the row carries text, as a follow-up's
 does. A list longer than the 25 names an answer gives is named in full when a

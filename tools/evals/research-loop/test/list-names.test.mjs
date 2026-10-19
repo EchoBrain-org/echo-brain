@@ -100,6 +100,42 @@ test("a name inside a longer member's name names only the longer member", () => 
   assert.deepEqual(part("2 Confluence pages created on October 4, 2026: Release plan; Release plan v2."), { named: true, members_named: 2 });
 });
 
+test("members sharing a title but not their status, owner or due date are each named only with the facts code adds to tell them apart", () => {
+  // Two "Weekly notes" pages recording `facts`, then "Budget"; one statement citing the first `cites` rows gives `names`.
+  const run = (facts, names, cites = 3) => {
+    const rows = [...facts, undefined].map((attributes, index) => ({ ...pageRow([`70000${index + 1}`, index < 2 ? "Weekly notes" : "Budget", "1"], index), attributes }));
+    const testCase = { ...OCT4, id: "synthetic-weekly-notes", parts: [{ id: "p1", type: "list", requirement: "All 3 pages.", evidence: rows.map(row => ({ page: row.citation.page_id })) }] };
+    const statements = [{ text: `3 Confluence pages created on October 4, 2026: ${names}.`, cites: rows.slice(0, cites) }];
+    return scored(listPart(testCase, askRun(testCase, { items: rows, lists: [listOf(rows)], writer: rows.map(row => row.id), statements })));
+  };
+  const status = [{ status: "open" }, { status: "closed" }];
+  for (const [facts, names, expected, cites] of [
+    [status, "Weekly notes (open); Weekly notes (closed); Budget", { named: true, members_named: 3 }],
+    // One title names neither member it could be, and a count cannot cover them.
+    [status, "Weekly notes; Budget", { named: false, members_named: 1 }],
+    [status, "Weekly notes; and 1 more", { named: false, members_named: 0 }, 2],
+    [status, "Weekly notes (closed); Budget", { named: false, members_named: 2 }],
+    // The member recording no owner is the one named without one.
+    [[{ owner: "Dana Lee" }, {}], "Weekly notes (owner Dana Lee); Weekly notes; Budget", { named: true, members_named: 3 }],
+    [[{ owner: "Dana Lee" }, {}], "Weekly notes (owner Dana Lee); Budget", { named: false, members_named: 2 }],
+    [[{ due_at: "2026-10-09" }, { due_at: "2026-10-12" }], "Weekly notes (due October 9, 2026); Weekly notes (due October 12, 2026); Budget", { named: true, members_named: 3 }],
+    // Facts differing only in case or spacing are the same, so code gives both members one name.
+    [[{ status: "open" }, { status: " Open" }], "Weekly notes (2 pages); Budget", { named: true, members_named: 3 }],
+  ]) assert.deepEqual(run(facts, names, cites), expected, names);
+});
+
+test("a title cut at 120 characters stays apart from a whole title equal to what stands before its ellipsis", () => {
+  const short = "Probe drift ".repeat(10).trim();
+  assert.equal([...short].length, 119);
+  const pages = [["700011", short, "1"], ["700012", `${short} and battery sag`, "1"]];
+  const rows = pages.map((page, index) => pageRow(page, index));
+  const testCase = { ...OCT4, id: "synthetic-cut-titles", parts: [{ id: "p1", type: "list", requirement: "Both pages.", evidence: pages.map(([page]) => ({ page })) }] };
+  const named = (names, cites) => listPart(testCase, askRun(testCase, { items: rows, lists: [listOf(rows)], writer: rows.map(row => row.id),
+    statements: [{ text: `2 Confluence pages created on October 4, 2026: ${names}.`, cites }] })).members_named;
+  // Code's names; the long title whole, as a writer may give it; and code's cut name alone, which is not the short title.
+  assert.deepEqual([named(`${short}; ${short}…`, rows), named(`${short}; ${pages[1][1]}`, rows), named(`${short}…`, rows.slice(0, 1))], [2, 2, 0]);
+});
+
 test("past an answer's 25 names, code's statement and its 'and N more' name the whole list; cut, merged and lowercased names match", () => {
   // 30 pages: a title past 120 characters, which code cuts, two pages sharing a label, which code names once, and 27 others.
   const long = "Field return analysis for the mock digital thermometer: probe drift, battery sag, display rounding and fixture tolerances, with owners";
