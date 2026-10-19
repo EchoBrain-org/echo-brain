@@ -220,7 +220,8 @@ test("the open-ended family asks every goal question in development and holds ou
 });
 
 test("open-ended runs carry reach checks and trace counts into grading, and the report shows them with what each case awaits", () => {
-  const testCase = caseById("current-projects-and-leads");
+  // Every contract step has landed, so no case awaits one; a case that does still reports what it awaits.
+  const testCase = { ...caseById("current-projects-and-leads"), awaits: ["workspace_collections", "eval_full_catalog"] };
   const items = [
     { id: "E1", source: "projects", kind: "project", title: "THERM", attributes: { role: "lead", leads: "Zhen Ye, Mara Lindqvist" }, citation: { kind: "project", project_id: "prj_1" }, read_in_full: false, opened: false, preloaded: false, cited_by_plan: false },
     { id: "E2", source: "projects", kind: "project", title: "Kestrel Pilot Launch", attributes: { role: "member", leads: "Mara Lindqvist" }, citation: { kind: "project", project_id: "prj_2" }, read_in_full: false, opened: false, preloaded: false, cited_by_plan: false },

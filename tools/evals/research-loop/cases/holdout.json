@@ -706,7 +706,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["follow_ups"] },
-      "awaits": ["eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -733,7 +732,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["content"],
       "reach": { "collections": ["follow_ups", "meetings"] },
-      "awaits": ["eval_full_catalog", "dates_and_links"],
       "parts": [
         {
           "id": "p1",
@@ -775,7 +773,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["projects"] },
-      "awaits": ["workspace_collections", "eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -811,7 +808,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["meetings", "documents", "tickets", "pages"], "window": "yesterday" },
-      "awaits": ["map_and_rules", "dates_and_links", "wider_calls"],
       "parts": [],
       "expected_needs": ["meeting records dated or approved yesterday", "documents received yesterday", "tickets created or updated yesterday", "pages created or updated yesterday"],
       "gaps": [],
@@ -834,7 +830,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["content"],
       "reach": { "collections": [["projects", "confluence_spaces"]] },
-      "awaits": ["workspace_collections", "connector_containers", "eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -916,7 +911,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["meetings"], "window": "this_week" },
-      "awaits": ["map_and_rules", "dates_and_links"],
       "parts": [],
       "expected_needs": ["decisions approved this week"],
       "gaps": [],
@@ -939,7 +933,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["follow_ups", "tickets", "meetings"] },
-      "awaits": ["eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -975,7 +968,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["content"],
       "reach": { "collections": ["projects"] },
-      "awaits": ["workspace_collections", "eval_full_catalog"],
       "parts": [
         {
           "id": "p1",

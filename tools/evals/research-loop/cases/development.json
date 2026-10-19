@@ -1624,7 +1624,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["follow_ups"] },
-      "awaits": ["eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -1659,7 +1658,6 @@
       "question": "For each open item, which meeting is it from, and who was in that meeting?",
       "expected_outcome": "answerable",
       "reach": { "collections": ["follow_ups", "meetings"] },
-      "awaits": ["eval_full_catalog", "dates_and_links"],
       "parts": [
         {
           "id": "p1",
@@ -1694,7 +1692,6 @@
       "question": "How long has it been since each open item was assigned?",
       "expected_outcome": "answerable",
       "reach": { "collections": ["follow_ups"] },
-      "awaits": ["eval_full_catalog", "dates_and_links"],
       "parts": [
         {
           "id": "p1",
@@ -1724,7 +1721,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["projects"] },
-      "awaits": ["workspace_collections", "eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -1760,7 +1756,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["meetings", "documents", "tickets", "pages"], "window": "yesterday" },
-      "awaits": ["map_and_rules", "dates_and_links", "wider_calls"],
       "parts": [],
       "expected_needs": ["meeting records dated or approved yesterday", "documents received yesterday", "tickets created or updated yesterday", "pages created or updated yesterday"],
       "gaps": [],
@@ -1783,7 +1778,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["content"],
       "reach": { "collections": [["projects", "jira_projects"]] },
-      "awaits": ["workspace_collections", "connector_containers", "eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -1813,7 +1807,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["tickets", "meetings"] },
-      "awaits": ["map_and_rules"],
       "parts": [
         {
           "id": "p1",
@@ -1894,7 +1887,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["meetings"], "window": "last_week" },
-      "awaits": ["map_and_rules", "dates_and_links"],
       "parts": [],
       "expected_needs": ["decisions made or approved last week"],
       "gaps": [],
@@ -1917,7 +1909,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["follow_ups", "tickets", "meetings"] },
-      "awaits": ["eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -1959,7 +1950,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["follow_ups", "tickets", "meetings"] },
-      "awaits": ["eval_full_catalog"],
       "parts": [],
       "expected_needs": ["items the asker owns that are due this week", "their due dates"],
       "gaps": [],
@@ -1982,7 +1972,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["content"],
       "reach": { "collections": [["projects", "confluence_spaces"]] },
-      "awaits": ["workspace_collections", "connector_containers", "eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -2008,7 +1997,6 @@
       "question": "Who do I work with, and on which projects?",
       "expected_outcome": "answerable",
       "reach": { "collections": [["people", "projects"]] },
-      "awaits": ["workspace_collections", "eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
@@ -2038,7 +2026,6 @@
       "expected_outcome": "answerable",
       "expected_kinds": ["which_items"],
       "reach": { "collections": ["tools"] },
-      "awaits": ["workspace_collections", "eval_full_catalog"],
       "parts": [
         {
           "id": "p1",
