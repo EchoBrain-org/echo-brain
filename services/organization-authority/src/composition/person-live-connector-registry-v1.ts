@@ -63,6 +63,35 @@ export const JIRA_PROJECTS_LIVE_CONNECTOR_V1 = toolContainerConnectorV1('jira_pr
 export const CONFLUENCE_SPACES_LIVE_CONNECTOR_V1 = toolContainerConnectorV1('confluence_spaces', 'confluence',
   "Confluence spaces the asker can see with their own Confluence account: each space's key, name and link, and the ECHO projects mapped to it.");
 
+type OpenParametersV1 = Parameters<PersonLiveConnectorDefinitionV1['open']>;
+/**
+ * One runtime behind a tool's registrations (research tool contract v1): its items and its containers. The first
+ * registration to open it opens it, each registration gets its own close, and the last to close closes it. Every
+ * registration must open with the same authentication, project grants and project names.
+ */
+export function sharePersonLiveRuntimeV1<R extends { close(): void }>(open: (...parameters: OpenParametersV1) => R): (...parameters: OpenParametersV1) => { readonly runtime: R; close(): void } {
+  let shared: { readonly runtime: R; readonly parameters: OpenParametersV1; holders: number } | undefined;
+  return (...parameters) => {
+    if (shared !== undefined) {
+      const opened = shared.parameters;
+      for (let index = 0; index < Math.max(parameters.length, opened.length); index += 1) {
+        if (parameters[index] !== opened[index]) throw new Error('Live connectors sharing a runtime must open with the same authority');
+      }
+    }
+    const current = shared ??= { runtime: open(...parameters), parameters, holders: 0 };
+    current.holders += 1;
+    let closed = false;
+    return Object.freeze({ runtime: current.runtime, close() {
+      if (closed) return;
+      closed = true;
+      current.holders -= 1;
+      if (current.holders > 0) return;
+      if (shared === current) shared = undefined;
+      current.runtime.close();
+    } });
+  };
+}
+
 /** One translation at the boundary; all lifecycle and request code consumes the registry. */
 export function personLiveConnectorDefinitionsV1(input: {
   readonly live_connectors?: readonly PersonLiveConnectorDefinitionV1[];

@@ -52,6 +52,8 @@ export class PersonProjectMappingStoreV1<T extends ProjectMapping> {
 }
 
 export type PersonProjectAuthorizationV1 = (access_token: string, project_id: string) => Readonly<{ role: 'lead' | 'member'; authorization_sha256: Sha256Digest }>;
+/** The current names of those of `project_ids` the asker can see; any other id is left out. Read locally. */
+export type PersonProjectNamesV1 = (access_token: string, project_ids: readonly string[]) => ReadonlyMap<string, string>;
 
 /** A saved mapping that names the provider site (cloud) it reads. */
 interface ScopedProjectMapping extends ProjectMapping { readonly mapping: Readonly<{ cloud_id: string }> | null }
@@ -60,6 +62,7 @@ interface ScopedProjectMapping extends ProjectMapping { readonly mapping: Readon
 export function createPersonProjectMappingAccessV1<T extends ScopedProjectMapping>(provider: Pick<PersonProviderV1, 'id' | 'failure'>, options: {
   readonly project_mappings?: PersonProjectMappingStoreV1<T>;
   readonly authorize_project?: PersonProjectAuthorizationV1;
+  readonly project_names?: PersonProjectNamesV1;
 }) {
   const failure: PersonProviderV1['failure'] = provider.failure;
   function projectAccess(token: string, projectId: string, lead = false) {
@@ -98,6 +101,34 @@ export function createPersonProjectMappingAccessV1<T extends ScopedProjectMappin
         access.current();
         if (access.store.read(organizationId, project).revision !== mapped.revision) failure('stale_access_state');
       } };
+    },
+    /**
+     * The names of the ECHO projects mapped to each of the tool's containers that the asker can see (research tool
+     * contract v1), by container id: `containers` names the containers one mapping on this site maps. A project the
+     * asker cannot see is left out, never named or counted. Without the stores and names, nothing is named.
+     */
+    containerProjects(token: string, organizationId: string, containers: (mapping: NonNullable<T['mapping']>) => readonly string[]): ReadonlyMap<string, readonly string[]> {
+      const store = options.project_mappings, authorize = options.authorize_project, names = options.project_names;
+      if (store === undefined || authorize === undefined || names === undefined) return new Map();
+      if (store.provider !== provider.id) failure('invalid_request');
+      const visible = new Map<string, readonly string[]>();
+      for (const value of store.list(organizationId)) {
+        if (value.mapping === null) continue;
+        try { authorize(token, value.project_id); }
+        catch (error) {
+          if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) continue;
+          throw error;
+        }
+        visible.set(value.project_id, containers(value.mapping as NonNullable<T['mapping']>));
+      }
+      const named = visible.size === 0 ? new Map<string, string>() : names(token, [...visible.keys()]);
+      const result = new Map<string, string[]>();
+      for (const [project, ids] of visible) {
+        const name = named.get(project);
+        if (name === undefined) continue;
+        for (const id of ids) result.set(id, [...result.get(id) ?? [], name]);
+      }
+      return result;
     },
   };
 }

@@ -44,8 +44,9 @@ function fixture(previousKeys: readonly string[] = []) {
     let body: unknown;
     if (parsed.pathname === '/oauth/token/accessible-resources') body = [{ id: resourceCloud, url: resourceSite, scopes }];
     else if (parsed.pathname.endsWith('/myself')) body = { accountId: account, active: true, accountType: 'atlassian' };
-    else if (parsed.pathname.endsWith('/project/ECHO') || parsed.pathname.endsWith('/project/10000') || previousKeys.some(key => parsed.pathname.endsWith(`/project/${key}`))) body = { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000`, ...(parsed.searchParams.get('expand') === 'projectKeys' ? { projectKeys: [...previousKeys, 'ECHO'] } : {}) };
-    else if (parsed.pathname.endsWith('/project/OTHER') || parsed.pathname.endsWith('/project/99999')) body = { id: '99999', key: 'OTHER', self: `${site}/rest/api/3/project/99999` };
+    else if (parsed.pathname.endsWith('/project/ECHO') || parsed.pathname.endsWith('/project/10000') || previousKeys.some(key => parsed.pathname.endsWith(`/project/${key}`))) body = { id: '10000', key: 'ECHO', name: 'Echo Platform', self: `${site}/rest/api/3/project/10000`, ...(parsed.searchParams.get('expand') === 'projectKeys' ? { projectKeys: [...previousKeys, 'ECHO'] } : {}) };
+    else if (parsed.pathname.endsWith('/project/OTHER') || parsed.pathname.endsWith('/project/99999')) body = { id: '99999', key: 'OTHER', name: 'Other', self: `${site}/rest/api/3/project/99999` };
+    else if (parsed.pathname.endsWith('/project/search')) body = { isLast: true, values: [{ id: '10000', key: 'ECHO', name: 'Echo Platform', self: `${site}/rest/api/3/project/10000` }, { id: '99999', key: 'OTHER', name: 'Other', self: `${site}/rest/api/3/project/99999` }] };
     else if (parsed.pathname.endsWith('/search/jql')) body = { issues: [{ id: '10001' }], isLast: true };
     else if (parsed.pathname.endsWith('/issue/10001') || parsed.pathname.endsWith('/issue/bulkfetch')) {
       if (denied) return new Response('', { status: 403 });
@@ -62,7 +63,8 @@ function fixture(previousKeys: readonly string[] = []) {
   const service = createJiraPersonConnectionV1({ project_mappings: mappings, authorize_project: (_token, project_id) => {
     if (project_id !== echoProject || projectRole === null) throw new AuthorityOperationError('unauthorized', 'Fixture project access revoked');
     return { role: projectRole, authorization_sha256: canonicalSha256({ projectRole, projectTenure }) };
-  }, store, nango, cloud_id: cloud, fetch: transport as typeof fetch, authenticate });
+  }, project_names: (_token, project_ids) => new Map(project_ids.map(id => [id, id === echoProject ? 'Launchscope' : 'Never named'])),
+  store, nango, cloud_id: cloud, fetch: transport as typeof fetch, authenticate });
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1) => canonicalSha256(release)) };
   const token = 'synthetic-echo-access';
   async function connected() {
@@ -478,6 +480,35 @@ describe('ECHO project to Jira project setting', () => {
       expect(vi.mocked(f.nango.connection).mock.calls.every(([reference]) => reference === ownReference)).toBe(true);
       f.moveIssue();
       await expect(otherSource!.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
+    } finally { f.database.close(); }
+  });
+  it('lists the Jira projects the asker can browse, naming the mapped ECHO projects the asker can see (research tool contract v1)', async () => {
+    const f = fixture(); try {
+      await f.connected();
+      await f.service.projectSet({ access_token: f.token, request: command() });
+      const source = (await f.service.containerSource({ access_token: f.token, audit: f.audit }))!;
+      expect((await source.list({})).items.map(item => [item.label, item.text, item.citation.permalink])).toEqual([
+        ['Echo Platform', 'Jira project ECHO: Echo Platform\nECHO projects: Launchscope', `${site}/browse/ECHO`],
+        ['Other', 'Jira project OTHER: Other', `${site}/browse/OTHER`],
+      ]);
+      expect(f.audit.record).toHaveBeenCalledTimes(1);
+      // Leaving the ECHO project drops its name, and refuses reuse of the text that named it.
+      f.setProjectRole(null);
+      expect((await (await f.service.containerSource({ access_token: f.token, audit: f.audit }))!.list({})).items[0]!.text).toBe('Jira project ECHO: Echo Platform');
+      await expect(source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+    } finally { f.database.close(); }
+  });
+  it('reads only the mapped Jira project in a project scope, and nothing for an unmapped project', async () => {
+    const f = fixture(); try {
+      await f.connected();
+      expect(await f.service.containerSource({ access_token: f.token, project_id: echoProject, audit: f.audit })).toBeUndefined();
+      await f.service.projectSet({ access_token: f.token, request: command() });
+      f.transport.mockClear();
+      const source = (await f.service.containerSource({ access_token: f.token, project_id: echoProject, audit: f.audit }))!;
+      expect((await source.list({})).items.map(item => item.label)).toEqual(['Echo Platform']);
+      expect(f.transport.mock.calls.some(([url]) => String(url).includes('/project/search'))).toBe(false);
+      f.setProjectRole(null);
+      await expect(source.list({})).rejects.toMatchObject({ code: 'unauthorized' });
     } finally { f.database.close(); }
   });
   it('requires project membership and a lead grant before provider work, and rejects arbitrary coordinates', async () => {
