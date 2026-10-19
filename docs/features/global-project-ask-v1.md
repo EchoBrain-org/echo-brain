@@ -238,16 +238,10 @@ Both keyword `search` and keyword-free `list` carry date bounds. An explicit
 | Jira tickets | `created`, `updated`, `due` | `created` |
 | Confluence pages | `created`, `updated` | `updated` |
 
-Each source declares its date fields, and whether a window may match any of
-them, in its capabilities
-([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). Ask sends a
-window with no field as `date_field: any`, so it matches any of an item's
-dates on every source above, and each row says which matched; other callers
-read the default. A date field a source does not declare is refused, and the
-same refused read is not sent again. People, tools, Jira projects and
-Confluence spaces record no dates and refuse a window. Items that do not
-record the asked date are counted as `unchecked`, not listed, and an answer
-that uses such a list says how many were not checked.
+Each source declares these in its capabilities. For Ask, a window with no
+field matches any of an item's dates, and a field a source does not declare
+is refused; [ADR-0042](../decisions/ADR-0042-research-tool-contract.md#dates)
+says how items without the asked date are counted.
 
 Timestamps are compared in the request's time zone; date-only deadlines and
 all-day events retain their stated date. The evidence carries named source
