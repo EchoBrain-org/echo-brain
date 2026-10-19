@@ -8,8 +8,8 @@ import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, duration, foundBefore, liveRows, namedPlaces, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
-  type NamedPlace,
+  announceAfter, announcement, duration, foundBefore, headline, liveRows, namedPlaces, placeLabel, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, searchedWords, type AskProgress,
+  type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
   answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject, fullPageOffered,
@@ -245,7 +245,7 @@ function EarlierTurn({ turn }: { turn: AskTurn }) {
 const COPIED_MS = 1_600;
 
 /** The current answer: its sources, and what can be done with it. */
-function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
+function CurrentAnswer({ state, turn, line }: { state: State; turn: AskTurn; line: Line }) {
   const thread = state.ask!;
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -257,7 +257,7 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
     <div class="turn">
       <div class="question selectable" data-testid="question">{turn.question}</div>
       <div class="asked">{turn.scopeName}</div>
-      {turn.receipt && <Receipt state={state} receipt={turn.receipt} took={turn.took ?? 0} />}
+      {turn.receipt && <Receipt state={state} receipt={turn.receipt} took={turn.took ?? 0} line={line} />}
       <AgenticAnswer state={state} turn={turn} />
       {foundNothingInProject(turn) && (
         <div class="project-empty" data-testid="project-empty">
@@ -312,16 +312,20 @@ export function AskView({ state }: { state: State }) {
     const view = scroller.current;
     if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
   };
+  // Which Ask's line is open: the question on its way and its answer share an id, so a line opened while Ask works
+  // stays open as its receipt, and the next question's line starts closed.
+  const [openFor, setOpenFor] = useState<number | null>(null);
+  const lineFor = (id: number): Line => ({ open: openFor === id, toggle: () => setOpenFor(openFor === id ? null : id) });
   const { asking, failed } = thread;
   return (
     <section class="ask" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
       {earlierTurns(thread).map(turn => <EarlierTurn key={turn.id} turn={turn} />)}
-      {thread.shown && <CurrentAnswer key={thread.shown.id} state={state} turn={thread.shown} />}
+      {thread.shown && <CurrentAnswer key={thread.shown.id} state={state} turn={thread.shown} line={lineFor(thread.shown.id)} />}
       {asking && (
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>
           <div class="asked">{asking.scopeName}</div>
-          <Asking state={state} progress={asking.progress} follow={follow} />
+          <Asking state={state} progress={asking.progress} follow={follow} line={lineFor(thread.seq)} />
         </div>
       )}
       {failed && (
@@ -355,14 +359,21 @@ function useAnnouncement(text: string): string {
   return said?.text ?? '';
 }
 
+/** Whether an Ask's line is open, and the toggle that opens or closes it. */
+interface Line {
+  readonly open: boolean;
+  readonly toggle: () => void;
+}
+
 /**
- * The question on its way: one live line (the stage now, how long, Cancel)
- * and, once it has worked a few seconds, at most three rows of what it
- * searched and read. Each name opens beside Ask, which keeps running. The
- * section is a live region: the line, its timer and its rows are kept out of
- * it, and a screen reader hears the stage at most every few seconds instead.
+ * The question on its way: one quiet line (a pulse, the step now, how long,
+ * Cancel) that opens, once Ask has worked a few seconds and has rows, onto
+ * every search and read so far. Each name opens beside Ask, which keeps
+ * running. The section is a live region: the line, its timer and its rows are
+ * kept out of it, and a screen reader hears the stage at most every few
+ * seconds instead.
  */
-function Asking({ state, progress, follow }: { state: State; progress: AskProgress; follow: () => void }) {
+function Asking({ state, progress, follow, line }: { state: State; progress: AskProgress; follow: () => void; line: Line }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), TICK_MS);
@@ -372,18 +383,28 @@ function Asking({ state, progress, follow }: { state: State; progress: AskProgre
   // A quick Ask shows nothing more than it always did.
   const live = elapsed >= PROGRESS_AFTER_MS;
   const rows = live ? liveRows(progress) : [];
-  // Rows coming into view, and each new one, are followed by a person at the bottom; nothing before they show.
-  useLayoutEffect(() => { if (live) follow(); }, [live, progress.rows.length, progress.pending > 0, follow]);
+  const canOpen = rows.length > 0;
+  const open = line.open && canOpen;
+  // The line never changes height; its rows, opened, and each new one, are followed by a person at the bottom.
+  useLayoutEffect(() => { if (open) follow(); }, [open, open && progress.rows.length, open && progress.pending > 0, follow]);
   // Heard at once, as the line always was; then the stage, once it shows, at most every few seconds.
   const heard = useAnnouncement(live ? announcement(progress) || 'Thinking…' : 'Thinking…');
+  const words = <>
+    <i class="pulse" aria-hidden="true" />
+    <span class="headline working" data-testid="ask-stage">{live ? headline(progress) : 'Thinking…'}</span>
+    <span class="timer" data-testid="ask-timer" aria-hidden="true">{duration(elapsed)}</span>
+  </>;
   return <>
-    <div class="ask-progress" aria-live="off">
-      <div class="asking" data-testid="asking">
-        <i /><i /><i /><span data-testid="ask-stage">{live ? stageWords(progress) : 'Thinking…'}</span>
-        <span class={`timer${live && progress.stage ? ' dotted' : ''}`} aria-hidden="true">{duration(elapsed)}</span>
-        <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
+    <div class="ask-trail" aria-live="off">
+      <div class="ask-line" data-testid="asking">
+        {canOpen ? (
+          <button type="button" class={`ask-line-toggle${open ? ' open' : ''}`} data-testid="ask-line" aria-expanded={open} onClick={line.toggle}>
+            {words}<Chevron />
+          </button>
+        ) : <span class="ask-line-toggle">{words}</span>}
+        <button type="button" class="link-button faint-link" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
       </div>
-      {rows.length > 0 && (
+      {open && (
         <ul class="ask-steps" data-testid="ask-steps" aria-label="What Ask has looked through">
           {rows.map((row, index) => <LiveStep key={index} state={state} row={row} />)}
         </ul>
@@ -403,7 +424,7 @@ function SearchedStep({ state, row, earlier }: { state: State; row: AskSearched;
   return <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">{searchedWords(row, state.tools?.items, earlier)}</span></li>;
 }
 
-/** One live row: a search, a read with its names (the first few, then +N), or how many are being read. */
+/** One row of the line, opened: a search, a read with every name it has so far, or how many are being read. */
 function LiveStep({ state, row }: { state: State; row: LiveRow }) {
   if (row.type === 'searched') return <SearchedStep state={state} row={row.row} earlier={row.earlier} />;
   if (row.type === 'pending') {
@@ -412,17 +433,11 @@ function LiveStep({ state, row }: { state: State; row: LiveRow }) {
         <span class="words">Reading {row.count} {row.more ? 'more' : row.count === 1 ? 'item' : 'items'}</span></li>
     );
   }
-  const { names, more } = rowNames(row.row.items);
   return (
     <li class={`ask-step${row.done ? ' done' : ''}`} data-testid="ask-step"><Mark done={row.done} />
-      <span class="words">{row.done ? 'Read' : 'Reading'} <Names state={state} places={names} />{more > 0 && <span class="more"> +{more}</span>}</span>
+      <span class="words">{row.done ? 'Read' : 'Reading'} <Names state={state} places={namedPlaces(row.row.items)} /></span>
     </li>
   );
-}
-
-/** What a named item is called: a file's name as a person says it, otherwise its label. */
-function namedLabel(source: AnswerSource): string {
-  return source.kind === 'original' ? documentName(source.label).name : source.label;
 }
 
 /**
@@ -436,7 +451,7 @@ function Names({ state, places }: { state: State; places: readonly NamedPlace[] 
   const shown = first ? sourceKey(first) : null;
   return <>{places.map(({ source, items }, index) => {
     const on = shown === sourceKey(source);
-    const label = namedLabel(source);
+    const label = placeLabel(source);
     const count = items.length;
     return <span key={sourceKey(source)}>{index > 0 && ', '}
       <button type="button" class={`step-name${on ? ' on' : ''}`} data-testid="ask-step-name" aria-pressed={on}
@@ -446,20 +461,24 @@ function Names({ state, places }: { state: State; places: readonly NamedPlace[] 
 }
 
 /**
- * Above an answer that took a while: one dim line, "Looked through 14 items
- * · 48s ›", that opens the searches and reads the Authority audited, each
- * name opening beside the answer.
+ * Above an answer that took a while: the Ask's line, in place, as one dim
+ * receipt, "Looked through 14 items · 48s ›", that opens the searches and
+ * reads the Authority audited, each name opening beside the answer. A line
+ * opened while Ask worked stays open.
  */
-function Receipt({ state, receipt, took }: { state: State; receipt: AskReceipt; took: number }) {
-  const [open, setOpen] = useState(false);
+function Receipt({ state, receipt, took, line }: { state: State; receipt: AskReceipt; took: number; line: Line }) {
+  const { open } = line;
   const unnamed = receiptUnnamed(receipt);
   return (
-    <div class="receipt">
-      <button type="button" class={`receipt-line${open ? ' open' : ''}`} data-testid="ask-receipt" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span>{receiptWords(receipt, took)}</span><Chevron />
-      </button>
+    <div class="ask-trail">
+      <div class="ask-line">
+        <button type="button" class={`ask-line-toggle${open ? ' open' : ''}`} data-testid="ask-receipt" aria-expanded={open} onClick={line.toggle}>
+          <span>{receiptWords(receipt, took)}</span><Chevron />
+        </button>
+      </div>
       {open && (
-        <ul class="ask-steps" data-testid="receipt-rows">
+        // Kept out of the thread's live region, as the running line's rows are: a receipt that comes open is not read out row by row.
+        <ul class="ask-steps" data-testid="receipt-rows" aria-live="off">
           {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} earlier={foundBefore(receipt.rows, index)} />
             : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
           {unnamed > 0 && <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">and {unnamed} more not listed</span></li>}

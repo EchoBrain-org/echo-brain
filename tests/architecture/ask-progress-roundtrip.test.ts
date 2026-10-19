@@ -66,8 +66,8 @@ interface Views {
   openItemView(item: unknown): Json;
 }
 interface ProgressView {
-  PROGRESS_AFTER_MS: number; liveRows(progress: Progress): { type: string; row?: Row; done?: boolean }[]; stageWords(progress: Progress): string;
-  searchedWords(row: Row): string; rowNames(items: readonly Source[]): { names: readonly { source: Source; items: readonly Source[] }[]; more: number }; receiptWords(receipt: Receipt, took: number): string;
+  PROGRESS_AFTER_MS: number; liveRows(progress: Progress): { type: string; row?: Row; done?: boolean }[]; headline(progress: Progress): string;
+  searchedWords(row: Row): string; namedPlaces(items: readonly Source[]): { source: Source; items: readonly Source[] }[]; receiptWords(receipt: Receipt, took: number): string;
 }
 const ok = (value: unknown) => ({ ok: true, value });
 const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) await Promise.resolve(); };
@@ -272,17 +272,17 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(new Set(notices.map(notice => notice.cancel_id)).size).toBe(1);
       for (const notice of notices) expect(notice.expect).toEqual(account);
 
-      // --- The page while the Authority wrote: the live line and its rows, from those notices alone. ---
+      // --- The page while the Authority wrote: the line and its rows, from those notices alone. ---
       const live = writing!.progress;
-      expect(progress.stageWords(live)).toBe('Writing');
+      expect(progress.headline(live)).toBe('Writing the answer');
       expect(live.pending).toBe(0);
       expect(progress.liveRows(live).map(row => [row.type, row.done])).toEqual([['searched', undefined], ['read', true]]);
       expect(progress.searchedWords(live.rows[0]!)).toBe(`Searched ${words} · ${named.length} found`);
       const read = live.rows[1]!.items!;
       expect(read).toHaveLength(named.length);
       expect(new Set(read.map(item => item.kind))).toEqual(new Set(['record', 'original', 'ticket', 'slack']));
-      // "Read launchscope.md, #launchscope, Approved meeting +2": three names, each one place read once, the rest as +N.
-      expect(progress.rowNames(read)).toEqual({ names: read.slice(0, 3).map(source => ({ source, items: [source] })), more: named.length - 3 });
+      // "Read launchscope, #launchscope, Approved meeting, …": every item its own place, each read once.
+      expect(progress.namedPlaces(read)).toEqual(read.map(source => ({ source, items: [source] })));
 
       // --- The page with the answer: the rows folded into the receipt, its names opening the exact item. ---
       const shown = store.getState().ask!.shown!;
