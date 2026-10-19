@@ -24,7 +24,7 @@ function credentialFile(): string {
 }
 
 describe("OpenRouter answer-composition generation bundle", () => {
-  it("owns credential resolution, structured-output construction, and the V3.2 generation profile", () => {
+  it("owns credential resolution, structured-output construction, and the Sonnet 5.5 generation profile", () => {
     const bundle = createOpenRouterAnswerCompositionGenerationBundleV1({
       credential_file: credentialFile(),
     });
@@ -38,6 +38,8 @@ describe("OpenRouter answer-composition generation bundle", () => {
       timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
       context_tokens: OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1,
     });
+    expect(runtime.generation.planner_model).toBe("anthropic/claude-sonnet-5.5");
+    expect(runtime.generation.answer_model).toBe("anthropic/claude-sonnet-5.5");
     expect(runtime.structured_output.generate).toBeTypeOf("function");
   });
 

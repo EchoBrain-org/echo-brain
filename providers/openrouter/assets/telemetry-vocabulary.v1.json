@@ -5,6 +5,7 @@
   ],
   "models": [
     "anthropic/claude-sonnet-4.6",
+    "anthropic/claude-sonnet-5.5",
     "deepseek/deepseek-v3.2"
   ],
   "legacy_phases": []

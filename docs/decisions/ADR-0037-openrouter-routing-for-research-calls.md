@@ -22,6 +22,50 @@ The founder accepted this on 2026-10-16, with the other fixes from the
 LangSmith audit of 42 `echo-staging` research traces from 2026-10-11 to
 2026-10-16. Acceptance does not mean the change is deployed or qualified.
 
+**Amended 2026-10-19 (Claude Sonnet default).** The user selected Claude
+Sonnet as ECHO's default Ask/research model. The shared answer-composition
+bundle now selects `anthropic/claude-sonnet-5.5` for both model fields. Agentic
+Ask uses its `answer_model` for every research/planner step and for the answer
+writer. Its `planner_model` also feeds background person-update search-hint
+generation, related-atom projection (including readable-search generation),
+and the setup canary's retrieval-contract fingerprint. Those background paths
+therefore follow the shared default; the independently configured meeting
+decision extractor does not.
+
+The public OpenRouter
+[model page](https://openrouter.ai/anthropic/claude-sonnet-5.5),
+[endpoint metadata](https://openrouter.ai/api/v1/models/anthropic/claude-sonnet-5.5/endpoints),
+and linked Claude 5.5 migration guide were checked on 2026-10-19. JSON schema
+is supported, but endpoint metadata does not list temperature. Reasoning is
+mandatory: disabled/none is rejected, omission defaults to high, and reasoning
+shares `max_tokens` with visible output. For Sonnet 5.5 only, the adapter omits
+temperature, selects medium effort, and adds 4,096 tokens of reasoning headroom
+to the caller's output allowance. The caller's 4,096-token admission ceiling
+stays, so the combined provider budget is at most 8,192 tokens. An Ask's
+1,500-token allowance gets 5,596 combined tokens; small background calls also
+retain headroom. This is a shared completion budget, not a guaranteed split
+between reasoning and visible output. Local response bounds and normalization
+remain authoritative. The context budget stays
+at 131,072 so the switch does not expand unrelated prompt-size behavior.
+
+Claude's [structured-output constraints](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)
+also differ from the existing Ask schemas. For Sonnet 5.5 only, the adapter
+moves unsupported string, array and numeric bounds into field descriptions,
+following the documented SDK approach. It preserves required fields, enums,
+closed object shapes and supported array minima; the original schema and local
+protocol checks remain unchanged. Legacy models receive their original schema.
+
+Strict structured output, `data_collection: "deny"`, `require_parameters: true`,
+throughput routing, cancellation, caller deadlines and secret isolation remain
+unchanged; no tools are forced. Legacy models retain their old output bound and
+temperature 0. Explicit DeepSeek V3.2 callers retain the measured ignore list
+below. Sonnet gets no ignore list. The closed telemetry vocabulary adds Sonnet
+and the verified endpoint provider names Anthropic, Amazon Bedrock, Azure and
+Claude Platform on AWS; unknown labels still become `other`. The Journey
+Explorer template is regenerated normally. This does not address meeting-title
+retrieval/indexing, qualify the model live, deploy it, or change the meeting
+decision-extraction model.
+
 ## Context and options
 
 Every research call (planner, judge and writer) goes through the OpenRouter
