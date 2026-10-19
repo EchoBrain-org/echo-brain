@@ -50,7 +50,7 @@ export function codeChecks(testCase, run, dataset) {
   // The writer answers such a part by selecting the member: code states its row facts, citing the row.
   const textHanded = item => handedIds.has(item.id) && (item.read_in_full || item.text !== undefined);
   const parts = testCase.parts.map(part => {
-    if (part.type === "list") return listPart(part, items, meetings, lists, handedIds, textHanded, answer);
+    if (part.type === "list") return listPart(part, items, meetings, lists, handedIds, answer);
     // Found: research discovered a supporting item (a page counts once discovered).
     const discovered = part.evidence.flatMap(ref => matching(items, ref, meetings));
     // Read, cited and handed need the item that actually carries the evidence (for a page, its section).
@@ -140,21 +140,24 @@ function listIndex(research) {
  * A list part scores on the whole list (ADR-0041, addition 7): each measure holds only when it holds for every member,
  * so naming some members earns nothing. Found: research came across every member. Read: a complete list research
  * read holds every member. Cited: the plan cites every member, or a found which_items need cites a list holding it.
- * Handed: the writer saw every member. Named: the answer names every member (`statementOf`), or, for a list longer
- * than the 25 names an answer gives, a statement code wrote ends "and N more" and the members it names plus N are
- * exactly the list.
+ * Handed: the writer saw every member. Named: every member is named by some statement (`statementOf`), or, for a list
+ * longer than the 25 names an answer gives, a statement code wrote ends "and N more" and the members it names plus N
+ * are exactly the list. A member the key names by its meeting (a meeting record) has no name here: the research result
+ * titles a meeting record by its meeting's label, which every record of the meeting shares, while code names it by a
+ * line of its own text (its list label), which the result does not carry. So no statement names it, and the judge's
+ * yes cannot count for a list holding one.
  */
-function listPart(part, items, meetings, lists, handedIds, textHanded, answer) {
+function listPart(part, items, meetings, lists, handedIds, answer) {
   const members = part.evidence.map(ref => matching(items, ref, meetings));
   const every = holds => members.every(found => found.some(holds));
-  const statements = (answer?.parts ?? []).flatMap(value => value.statements).map(statement => statementOf(statement, items, lists, textHanded, answer));
-  const named = found => statements.some(statement => found.some(item => statement.names.has(item)));
+  const names = members.map((found, index) => part.evidence[index].meeting === undefined ? found.map(item => nameOf(item.title)) : []);
+  const statements = (answer?.parts ?? []).flatMap(value => value.statements).map(statement => statementOf(statement, members, names, items, lists, answer));
+  const named = (_, index) => statements.some(statement => statement.named.has(index));
   // Code's statement counts the members it does not name, from ECHO's own list (ADR-0041, addition 5); each
   // statement is read alone, so members another statement names by id never count twice.
   const more = statements.some(statement => {
     const counted = /; and (\d+) more\.$/u.exec(statement.text);
-    const names = members.filter(found => found.some(item => statement.names.has(item))).length;
-    return statement.code && counted !== null && names > 0 && names + Number(counted[1]) === members.length;
+    return statement.code && counted !== null && statement.named.size > 0 && statement.named.size + Number(counted[1]) === members.length;
   });
   return {
     id: part.id, type: part.type,
@@ -171,20 +174,67 @@ function listPart(part, items, meetings, lists, handedIds, textHanded, answer) {
 }
 
 /**
- * What one statement of an answer names (ADR-0041), read as W1 and W6 write statements. A statement code writes cites
- * only list members' rows, and names each member it cites (`code`). A writer's sentence stands on text: it cites an
- * item that is no list's member (a page's section, an opened body, a passage), and names the members of what it
- * cites whose text the writer was given; a row it cites beside that text, one the writer saw without text, carries
- * the row's facts and names nothing (W1), as does a private row its list id brings, unless the writer was given that
- * row's text: the response does not say how a sentence came to cite a row, so such a row reads as named. A writer's
- * sentence citing only members' rows, as one on follow-ups' text does, reads as code's: every row it cites counts, and
- * the judge decides.
+ * What one statement of an answer names (ADR-0041): the members of a list part it cites, by any of their items, whose
+ * names its text holds (`namesIn`), however the statement came to cite them. The response does not say which statements
+ * code wrote, so a statement never names a member by citing it alone: a writer's sentence citing 8 rows, as one on
+ * follow-ups' text may, names the 4 its text names. `code`: the statement reads as one code wrote, which alone may end
+ * "and N more" (addition 5): it cites only list members' rows, and its text names every item it cites, as code's
+ * statements do (a name never covers a member the statement does not cite).
  */
-function statementOf(statement, items, lists, textHanded, answer) {
-  const cited = statement.citation_indexes.map(index => items.filter(item => isDeepStrictEqual(item.citation, answer.citations[index]?.citation)));
-  const row = item => lists.of(item.id).length > 0;
-  const code = !cited.some(found => found.some(item => !row(item)));
-  return { text: statement.text, code, names: new Set(cited.filter(found => code || found.some(item => !row(item) || textHanded(item))).flat()) };
+function statementOf(statement, members, names, items, lists, answer) {
+  const resolved = statement.citation_indexes.map(index => items.filter(item => isDeepStrictEqual(item.citation, answer.citations[index]?.citation)));
+  const cited = new Set(resolved.flat());
+  const own = [...cited].map(item => nameOf(item.title));
+  const found = namesIn(statement.text, [...names.flat(), ...own]);
+  const rows = resolved.length > 0 && resolved.every(value => value.length > 0 && value.every(item => lists.of(item.id).length > 0));
+  return {
+    text: statement.text,
+    code: rows && own.every(name => found.has(name.key)),
+    named: new Set(members.flatMap((value, index) => value.some(item => cited.has(item)) && names[index].some(name => found.has(name.key)) ? [index] : [])),
+  };
+}
+
+/** Characters of a label in a code-written name (AGENTIC_LIST_NAME_CHARS_V1). */
+const NAME_CHARS = 120;
+/** One line, as code writes a label in a name. */
+function oneLine(value) {
+  return String(value ?? "").normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * An item's name as code writes it in a list statement (agenticListStatementV1, groupNames): its title on one line,
+ * cut to 120 characters, compared ignoring case. A cut title matches on what stands before its ellipsis, which code's
+ * cut name and the whole title both hold (`cut`). Members that share a label share a name, as code merges them.
+ */
+function nameOf(title) {
+  const characters = [...oneLine(title)];
+  const cut = characters.length > NAME_CHARS;
+  const text = (cut ? characters.slice(0, NAME_CHARS - 1).join("").trimEnd() : characters.join("")).toLowerCase();
+  return { key: `${cut ? "cut" : "whole"}:${text}`, text, cut };
+}
+
+const STARTS_WORD = /^[\p{L}\p{N}]/u;
+const ENDS_WORD = /[\p{L}\p{N}]$/u;
+/**
+ * The keys of `names` (nameOf) that a statement's text holds, ignoring case: each as a phrase of its own, never inside a
+ * longer word (an uncut name ends where a word ends), and longest first, each match taken out of the text, so a name
+ * that is part of a longer one the text holds ("PRD" in "PRD v2") is not named by it.
+ */
+function namesIn(text, names) {
+  let rest = oneLine(text).toLowerCase();
+  const found = new Set();
+  const unique = [...new Map(names.filter(name => name.text.length > 0).map(name => [name.key, name])).values()].sort((left, right) => right.text.length - left.text.length);
+  for (const name of unique) {
+    const opens = STARTS_WORD.test(name.text);
+    const closes = !name.cut && ENDS_WORD.test(name.text);
+    for (let at = rest.indexOf(name.text); at !== -1; at = rest.indexOf(name.text, at + 1)) {
+      const end = at + name.text.length;
+      if ((opens && ENDS_WORD.test(rest.slice(0, at))) || (closes && STARTS_WORD.test(rest.slice(end)))) continue;
+      found.add(name.key);
+      rest = `${rest.slice(0, at)}${"\u0000".repeat(name.text.length)}${rest.slice(end)}`;
+    }
+  }
+  return found;
 }
 
 /** The sweep result's verdicts in the key's terms; a null verdict (not assessed) has none. */
