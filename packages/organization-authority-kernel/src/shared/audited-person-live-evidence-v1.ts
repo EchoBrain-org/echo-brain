@@ -1,4 +1,4 @@
-import { calendarDateV1, evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFieldV1, type EvidenceDatesV1 } from "./temporal-query-v1.js";
+import { calendarDateV1, evidenceDateFilterV1, validateEvidenceDateFilterV1, EVIDENCE_ANY_DATE_V1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1, type EvidenceDatesV1 } from "./temporal-query-v1.js";
 import { createHash, randomBytes } from 'node:crypto';
 import { canonicalJsonBytes, canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
@@ -7,7 +7,7 @@ import {
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../domain/errors.js';
 import type {
-  CreatePersonLiveEvidenceSourceV1Options, PersonConnectorReadBindingV1, PersonLiveEvidenceCitationV1,
+  CreatePersonLiveEvidenceSourceV1Options, PersonConnectorReadBindingV1, PersonLiveEvidenceAttributesV1, PersonLiveEvidenceCitationV1,
   PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReleaseV1,
   PersonLiveEvidenceResultV1, PersonLiveEvidenceSourceV1, PersonLiveEvidenceValueV1, PersonLiveEvidenceCoordinatesV1,
 } from './person-live-evidence-v1.js';
@@ -15,6 +15,14 @@ import type {
 export const PERSON_LIVE_EVIDENCE_MAX_ITEMS_V1 = 50;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const ERROR_CODES = new Set(['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable']);
+/** Each attribute a live item may carry, with its UTF-8 bound: a tool item's owner, due date and status, a container's key and tool. */
+const ATTRIBUTE_BYTES: Readonly<Record<keyof PersonLiveEvidenceAttributesV1, number>> = Object.freeze({ owner: 512, due_at: 128, status: 128, key: 256, tool: 64 });
+const ATTRIBUTES = Object.freeze(Object.keys(ATTRIBUTE_BYTES) as (keyof PersonLiveEvidenceAttributesV1)[]);
+/**
+ * Every date field, and `any`, passes this boundary in shape: the reader applies the one asked for or refuses it
+ * (research tool contract v1). Its source's capabilities, not this boundary, say which it can apply.
+ */
+const DATE_SELECTIONS: readonly EvidenceDateSelectionV1[] = Object.freeze([...EVIDENCE_DATE_FIELDS_V1, EVIDENCE_ANY_DATE_V1]);
 
 function invalid(message: string): never { throw new AuthorityOperationError('invalid_request', message); }
 function invalidOutput(): never { throw new AuthorityOperationError('invalid_output', 'Live evidence output is invalid'); }
@@ -110,7 +118,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     try {
       closedRecord(value, ['citation', 'handle', 'label', 'visibility'], ['text', 'attributes', 'occurred_at', 'date_kind', 'dates']);
       const validated = reader.validateCitation(value.citation);
-      const citation = validated.citation;
+      const citation: PersonLiveEvidenceCitationV1 = validated.citation;
       closedRecord(validated.coordinates, ['object_id'], ['container_id']);
       boundedString(validated.coordinates.object_id, 512);
       if (validated.coordinates.container_id !== undefined) boundedString(validated.coordinates.container_id, 512);
@@ -119,12 +127,14 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       boundedString(value.handle, 512);
       boundedString(value.label, PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
       if (value.visibility !== 'only_me' && value.visibility !== 'team') invalidOutput();
+      // A tool container's citation commits to no text (research tool contract v1); the audit below still commits it.
+      const committed = citation.kind === 'tool_container' ? undefined : citation.text_sha256;
       if (value.text !== undefined) {
         boundedString(value.text, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, true);
         const digest = `sha256:${createHash('sha256').update(value.text, 'utf8').digest('hex')}`;
-        if (digest !== citation.text_sha256) invalidOutput();
+        if (committed !== undefined && digest !== committed) invalidOutput();
       }
-      if (value.text === undefined && citation.text_sha256 !== `sha256:${createHash('sha256').update('').digest('hex')}`) invalidOutput();
+      if (value.text === undefined && committed !== undefined && committed !== `sha256:${createHash('sha256').update('').digest('hex')}`) invalidOutput();
       if (value.occurred_at !== undefined) day(value.occurred_at);
       if (value.date_kind !== undefined && (value.occurred_at === undefined || !['created', 'version_created', 'occurred', 'updated', 'due', 'received'].includes(value.date_kind))) invalidOutput();
       let dates: EvidenceDatesV1 | undefined;
@@ -141,13 +151,13 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       }
       let attributes: PersonLiveEvidenceValueV1['attributes'];
       if (value.attributes !== undefined) {
-        closedRecord(value.attributes, [], ['owner', 'due_at', 'status']);
+        closedRecord(value.attributes, [], ATTRIBUTES);
         const keys = Object.keys(value.attributes);
-        if (keys.length === 0 || keys.some(key => !['owner', 'due_at', 'status'].includes(key))) invalidOutput();
-        const copied: { owner?: string; due_at?: string; status?: string } = {};
-        for (const field of ['owner', 'due_at', 'status'] as const) {
+        if (keys.length === 0 || keys.some(key => !(ATTRIBUTES as readonly string[]).includes(key))) invalidOutput();
+        const copied: { -readonly [K in keyof PersonLiveEvidenceAttributesV1]?: string } = {};
+        for (const field of ATTRIBUTES) {
           if (Object.hasOwn(value.attributes, field)) {
-            boundedString(value.attributes[field], field === 'owner' ? 512 : 128);
+            boundedString(value.attributes[field], ATTRIBUTE_BYTES[field]);
             copied[field] = value.attributes[field];
           }
         }
@@ -240,7 +250,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       const maximum = limit(input.limit);
       if (typeof input.query !== 'string' || input.query.trim().length === 0 || Buffer.byteLength(input.query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.query)) invalid('Live evidence query is invalid');
       current(input.signal);
-      validateEvidenceDateFilterV1(input);
+      validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const page = await safeCall(() => reader.search({ ...evidenceDateFilterV1(input), query: input.query, limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
       return release('search', page, maximum, undefined, input.signal);
     },
@@ -268,7 +278,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       try { if (input.since !== undefined) day(input.since); if (input.until !== undefined) day(input.until); }
       catch { invalid('Live evidence dates must be real YYYY-MM-DD dates'); }
       if (input.since !== undefined && input.until !== undefined && input.since > input.until) invalid('Live evidence date range is reversed');
-      validateEvidenceDateFilterV1(input);
+      validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const selection = canonicalSha256({ container: input.container ?? null, since: input.since ?? null, until: input.until ?? null, date_field: input.date_field ?? null, time_zone: input.time_zone ?? null });
       const cursor = input.cursor === undefined ? undefined : cursors.get(input.cursor);
       if (input.cursor !== undefined && (cursor === undefined || cursor.selection !== selection)) invalid('Live evidence cursor is not available for this list');

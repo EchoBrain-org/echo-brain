@@ -3,10 +3,22 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { SqlitePersonAgenticAskAuditV1 } from '../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
+import type { PersonTicketCitationV1, PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 const context = { authority_id: 'authority-fixture', organization_id: 'organization-fixture', state_lineage_id: 'lineage-fixture', principal_id: 'person-fixture', membership_id: 'membership-fixture', session_family_id: 'session-fixture', request_id: 'request-fixture' };
-const release: PersonLiveEvidenceReleaseV1 = { schema_version: 1, operation: 'search', binding: { organization_id: context.organization_id, principal_id: context.principal_id, membership_id: context.membership_id, tool_id: 'jira', external_subject_id: 'account-fixture', external_scope_id: 'site-fixture', read_grant_sha256: canonicalSha256({ grant: 1 }) }, coordinates: [{ object_id: '10001' }], value_digests: [canonicalSha256({ minimized_released_value: 1 })], citations: [{ kind: 'ticket', tool_id: 'jira', external_scope_id: 'site-fixture', ticket_id: '10001', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-1', text_sha256: canonicalSha256({ released_bytes: 'fixture' }) }] };
+const release: PersonLiveEvidenceReleaseV1<PersonTicketCitationV1> = { schema_version: 1, operation: 'search', binding: { organization_id: context.organization_id, principal_id: context.principal_id, membership_id: context.membership_id, tool_id: 'jira', external_subject_id: 'account-fixture', external_scope_id: 'site-fixture', read_grant_sha256: canonicalSha256({ grant: 1 }) }, coordinates: [{ object_id: '10001' }], value_digests: [canonicalSha256({ minimized_released_value: 1 })], citations: [{ kind: 'ticket', tool_id: 'jira', external_scope_id: 'site-fixture', ticket_id: '10001', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-1', text_sha256: canonicalSha256({ released_bytes: 'fixture' }) }] };
 describe('live release audit in existing Authority immutable storage', () => {
+  it('commits a tool container release by its citation digest alone, with no text digest (research tool contract v1)', async () => {
+    const db = openAuthorityDatabase(':memory:'); applyAuthorityBaseline(db);
+    try {
+      const citation: PersonToolContainerCitationV1 = { kind: 'tool_container', tool_id: 'jira', external_scope_id: 'site-fixture', container: 'jira_project', container_id: '10000', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO' };
+      const audit = new SqlitePersonAgenticAskAuditV1(db, () => '2026-10-01T00:00:00.000Z').forLiveRequest(context);
+      const receipt = await audit.record({ ...release, operation: 'list', coordinates: [{ object_id: '10000' }], citations: [citation] });
+      const row = db.prepare('SELECT * FROM authority_person_read_decision_audit_v2 WHERE row_sha256=?').get(receipt) as { body_json: string };
+      expect(JSON.parse(row.body_json).citations).toEqual([{ kind: 'tool_container', coordinates: { object_id: '10000' }, released_value_sha256: release.value_digests[0], citation_sha256: canonicalSha256(citation) }]);
+      expect(row.body_json).not.toContain('browse');
+    } finally { db.close(); }
+  });
   it('commits repeated identical releases in one request as separate immutable receipts at the same timestamp', async () => {
     const db = openAuthorityDatabase(':memory:'); applyAuthorityBaseline(db);
     try {

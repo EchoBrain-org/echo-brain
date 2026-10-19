@@ -62,7 +62,8 @@ export class SqlitePersonAgenticAskAuditV1 {
       const answer_sha256 = canonicalSha256(release.citations);
       // Citation objects are closed at the adapter boundary. Commit their canonical bytes as digests;
       // tool/tenant plus opaque citation commitments suffice without retaining presentation URLs.
-      const citations = release.citations.map((citation, index) => ({ kind: citation.kind, released_value_sha256: release.value_digests[index], coordinates: { object_id: release.coordinates[index]!.object_id, ...(release.coordinates[index]!.container_id === undefined ? {} : { container_id: release.coordinates[index]!.container_id }) }, text_sha256: citation.text_sha256, citation_sha256: canonicalSha256(citation) }));
+      // A tool container's citation commits to no text (research tool contract v1); its released value digest still does.
+      const citations = release.citations.map((citation, index) => ({ kind: citation.kind, released_value_sha256: release.value_digests[index], coordinates: { object_id: release.coordinates[index]!.object_id, ...(release.coordinates[index]!.container_id === undefined ? {} : { container_id: release.coordinates[index]!.container_id }) }, ...(citation.kind === 'tool_container' ? {} : { text_sha256: citation.text_sha256 }), citation_sha256: canonicalSha256(citation) }));
       const body = { schema_version: 1, kind: 'echo-person-live-evidence-release-audit-v1', context_kind: 'answer_composition', ...bound,
         release_sequence: ++releaseSequence, binding: read_binding, operation: release.operation, citations, prompt_sha256, answer_sha256, recorded_at };
       const receipt = canonicalSha256(body);
