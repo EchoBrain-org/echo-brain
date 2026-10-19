@@ -107,10 +107,6 @@ participants: a key that asks who was in a meeting accepts "not recorded",
 and charges only people named as participants who are neither recorded nor
 speakers in the meeting's transcript.
 
-Some open-ended questions have no fixed answer ("What happened yesterday?",
-"What changed in Jira this week?"): those cases have no parts and are graded on
-reach and cost alone (`../README.md`, "Open-ended family").
-
 ## Reading the keys
 
 - References name items by citation: `{ "ticket" }`, `{ "page", "section" }`
@@ -121,10 +117,8 @@ reach and cost alone (`../README.md`, "Open-ended family").
   `{ "container", "id" }` for a Jira project or Confluence space by its
   provider id (THERM's are `10003` and `1015812`), and `{ "follow_up" }` for a
   `workspace.follow_ups` entry, matched by the ticket it follows.
-- An open-ended case's `reach` names the collections holding part of its
-  answer, which research must look at, and any time window it must look at
-  them in; it is graded on reach and cost by code (`../README.md`,
-  "Open-ended family").
+- An open-ended case is graded by code on its `reach` and cost, never on
+  wording (`../README.md`, "Open-ended family").
 - A part's `evidence` lists every item in this world that supports it. Any
   other item that research reads counts as noise.
 - Approved-record cases add `affected`: the items the impact card should
