@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
+import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
+import type {
+  PersonConnectorReadBindingV1, PersonLiveEvidenceAuditV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceSourceV1,
+} from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import type { createPersonConnectionLifecycleV1, PersonConnectionAuthenticatedFetchV1 } from './person-connection-lifecycle-v1.js';
+import type { PersonConnectionStoreV1 } from './person-connection-store-v1.js';
 import { personProviderStorageNamespaceV1, type PersonProviderV1 } from './person-provider-v1.js';
 
 interface ProjectMapping { readonly schema_version: 1; readonly project_id: string; readonly revision: string | null; readonly mapping: unknown }
@@ -145,4 +152,52 @@ export function createPersonProjectMappingAccessV1<T extends ScopedProjectMappin
       return Object.freeze({ names, current: () => { if (canonicalSha256([...byContainer(mapped())]) !== pinned) failure('stale_access_state'); } });
     },
   };
+}
+
+/** What `personToolContainerSourceV1` reads a tool's containers with: the tool's connection, its project mappings and its reader. */
+export interface PersonToolContainerConnectionV1<M extends { readonly cloud_id: string }> {
+  readonly provider: Pick<PersonProviderV1, 'id'>;
+  /** The provider site (cloud) this connection reads. */
+  readonly scope_id: string;
+  readonly lifecycle: Pick<ReturnType<typeof createPersonConnectionLifecycleV1>, 'actor' | 'tags' | 'authenticated'>;
+  readonly store: Pick<PersonConnectionStoreV1, 'current' | 'requireCurrent'>;
+  /** `createPersonProjectMappingAccessV1`'s project scope and container names. */
+  readonly access: {
+    projectScope(token: string, organizationId: string, projectId: string | undefined, scopeId: string, validate: (request: unknown) => { readonly project_id: string }): { readonly mapping: M; current(): void } | null | undefined;
+    containerProjects(token: string, organizationId: string, containers: (mapping: M) => readonly string[]): { readonly names: ReadonlyMap<string, readonly string[]>; current(): void };
+  };
+  /** The tool's project read request validator, through which a project scope's id is read. */
+  readonly validate: (request: unknown) => { readonly project_id: string };
+  /** The containers one saved mapping on this site maps. */
+  readonly containers: (mapping: M) => readonly string[];
+  /** The tool's container reader over the asker's connection; in a project scope, pinned to the scope's saved mapping. */
+  readonly reader: (input: {
+    readonly binding: PersonConnectorReadBindingV1; readonly fetch: PersonConnectionAuthenticatedFetchV1; readonly expected_origin: string;
+    readonly signal: AbortSignal | undefined; readonly echo_projects: () => ReadonlyMap<string, readonly string[]>;
+  }, mapping: M | undefined) => Promise<PersonLiveEvidenceReaderV1<PersonToolContainerCitationV1>>;
+}
+
+/**
+ * A connected tool's containers as one request's audited live source (research tool contract v1), each naming the ECHO
+ * projects mapped to it that the asker can see. None without an active connection, or for an unmapped project; a project
+ * scope reads only the containers its saved mapping names. Every read is fenced on the person, the connection, the scope's
+ * mapping and grant, and the ECHO projects it named.
+ */
+export async function personToolContainerSourceV1<M extends { readonly cloud_id: string }>(tool: PersonToolContainerConnectionV1<M>, input: {
+  readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonToolContainerCitationV1>; readonly signal?: AbortSignal;
+}): Promise<PersonLiveEvidenceSourceV1<PersonToolContainerCitationV1> | undefined> {
+  const { actor, tags, authenticated } = tool.lifecycle;
+  const { person, requirePerson } = actor(input.access_token);
+  const scope = tool.access.projectScope(input.access_token, person.organization_id, input.project_id, tool.scope_id, tool.validate);
+  if (scope === null) return undefined;
+  const stored = tool.store.current(person);
+  if (stored === undefined || !stored.active) return undefined;
+  const named = tool.access.containerProjects(input.access_token, person.organization_id, mapping => mapping.cloud_id === tool.scope_id ? tool.containers(mapping) : []);
+  const current = () => { requirePerson(); tool.store.requireCurrent(stored.binding); scope?.current(); named.current(); };
+  current();
+  const reader = await tool.reader({ binding: stored.binding, fetch: authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current),
+    expected_origin: stored.site, signal: input.signal, echo_projects: () => named.names }, scope?.mapping);
+  current();
+  return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current },
+    access: { tool_id: tool.provider.id, external_scope_id: tool.scope_id, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
 }

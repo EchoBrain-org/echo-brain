@@ -1,9 +1,9 @@
 import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
-import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
+import { createPersonProjectMappingAccessV1, personToolContainerSourceV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import { validateJiraProjectReadV1, validateJiraProjectSetV1, type JiraProjectMappingV1 } from '@echo-brain/provider-jira-client/organization-api/jira-project-mapping-v1';
 import type { JiraProjectMappingStoreV1 } from './jira-project-mapping-store-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { PersonTicketCitationV1, PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
+import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { JiraConnectionStoreV1, type JiraStoredConnectionV1 } from './jira-connection-store-v1.js';
@@ -43,7 +43,8 @@ export function createJiraPersonConnectionV1(options: {
     verify: (authenticated, input) => verifyJiraConnectionV1(createJiraCloudTransportV1(authenticated), input),
   });
   const { actor, tags, authenticated } = shared;
-  const { projectAccess, mappingInput, projectScope, containerProjects } = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
+  const access = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
+  const { projectAccess, mappingInput, projectScope } = access;
   async function captureConnection(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<JiraCurrentCaptureConnectionV1> {
     const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
     const stored = options.store.current(person);
@@ -120,25 +121,13 @@ export function createJiraPersonConnectionV1(options: {
       current();
       return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current }, access: { tool_id: 'jira', external_scope_id: cloud, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
     },
-    /**
-     * The Jira projects the asker can browse, as tool containers (research tool contract v1), each naming the ECHO
-     * projects mapped to it that the asker can see. A project scope reads only its mapped Jira project, under the same
-     * mapping and grant fences as `source`.
-     */
-    async containerSource(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonToolContainerCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonToolContainerCitationV1> | undefined> {
-      const { person, requirePerson } = actor(input.access_token);
-      const scope = projectScope(input.access_token, person.organization_id, input.project_id, cloud, validateJiraProjectReadV1);
-      if (scope === null) return undefined;
-      const stored: JiraStoredConnectionV1 | undefined = options.store.current(person);
-      if (stored === undefined || !stored.active) return undefined;
-      const named = containerProjects(input.access_token, person.organization_id, mapping => mapping.cloud_id === cloud ? [mapping.project_id] : []);
-      const current = () => { requirePerson(); options.store.requireCurrent(stored.binding); scope?.current(); named.current(); };
-      current();
-      const reader = await createJiraPersonLiveContainerReaderV1({ binding: stored.binding, transport: createJiraCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current)),
-        expected_origin: stored.site, signal: input.signal, ...(scope === undefined ? {} : { project: scope.mapping.project_id }), echo_projects: () => named.names });
-      current();
-      return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current }, access: { tool_id: 'jira', external_scope_id: cloud, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
-    },
+    /** The Jira projects the asker can browse, as tool containers (research tool contract v1); a project scope reads only its mapped one. */
+    containerSource: (input: Parameters<typeof personToolContainerSourceV1>[1]) => personToolContainerSourceV1({
+      provider: JIRA_PERSON_PROVIDER_V1, scope_id: cloud, lifecycle: shared, store: options.store, access, validate: validateJiraProjectReadV1,
+      containers: mapping => [mapping.project_id],
+      reader: ({ fetch: authenticatedFetch, ...read }, mapping) => createJiraPersonLiveContainerReaderV1({ ...read, transport: createJiraCloudTransportV1(authenticatedFetch),
+        ...(mapping === undefined ? {} : { project: mapping.project_id }) }),
+    }, input),
   });
 }
 export type JiraPersonConnectionV1 = ReturnType<typeof createJiraPersonConnectionV1>;

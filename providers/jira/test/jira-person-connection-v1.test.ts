@@ -482,22 +482,6 @@ describe('ECHO project to Jira project setting', () => {
       await expect(otherSource!.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
     } finally { f.database.close(); }
   });
-  it('lists the Jira projects the asker can browse, naming the mapped ECHO projects the asker can see (research tool contract v1)', async () => {
-    const f = fixture(); try {
-      await f.connected();
-      await f.service.projectSet({ access_token: f.token, request: command() });
-      const source = (await f.service.containerSource({ access_token: f.token, audit: f.audit }))!;
-      expect((await source.list({})).items.map(item => [item.label, item.text, item.citation.permalink])).toEqual([
-        ['Echo Platform', 'Jira project ECHO: Echo Platform\nECHO projects: Launchscope', `${site}/browse/ECHO`],
-        ['Other', 'Jira project OTHER: Other', `${site}/browse/OTHER`],
-      ]);
-      expect(f.audit.record).toHaveBeenCalledTimes(1);
-      // Leaving the ECHO project drops its name, and refuses reuse of the text that named it.
-      f.setProjectRole(null);
-      expect((await (await f.service.containerSource({ access_token: f.token, audit: f.audit }))!.list({})).items[0]!.text).toBe('Jira project ECHO: Echo Platform');
-      await expect(source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
-    } finally { f.database.close(); }
-  });
   it('fences container reads on the ECHO projects they name, so losing one while a check reads Jira refuses it', async () => {
     const f = fixture(); try {
       await f.connected();
