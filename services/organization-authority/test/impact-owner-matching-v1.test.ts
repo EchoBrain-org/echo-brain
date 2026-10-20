@@ -18,7 +18,6 @@ const document = () => ({ kind: 'source_revision', source_id: 'source:fixture', 
   representation_sha256: digest('5'), anchor_sha256: digest('6') });
 const page = () => ({ kind: 'page', tool_id: 'confluence', external_scope_id: CLOUD, page_id: '200', section_id: 'section-1', version: '3',
   permalink: 'https://echo-fixture.atlassian.net/wiki/spaces/ECHO/pages/200', text_sha256: digest('7') });
-const slack = () => ({ kind: 'slack_message', team_id: 'T0FIXTURE', channel_id: 'C0FIXTURE', message_ts: '1760000000.000100' });
 const meetingAction = () => ({ kind: 'meeting_action', record_sha256: digest('3'), signal_id: 'act-1' });
 
 function fakeJira(options: { readonly assignees: ReadonlyMap<string, string> | Error; readonly people: Readonly<Record<string, readonly Person[]>> }) {
@@ -115,7 +114,6 @@ describe('impact owner matching', () => {
     // Without a Jira runtime a ticket has no account to match, and is never matched by name.
     expect(await matchImpactOwnersV1({ candidates: [
       { pointer: document(), owner_name: 'Rafael Moreno' },
-      { pointer: slack(), owner_name: 'Rafael Moreno' },
       { pointer: ticket('10046', CLOUD, 'linear'), owner_name: 'Rafael Moreno' },
       { pointer: ticket('10046'), owner_name: 'Rafael Moreno' },
       { pointer: record() },
@@ -123,7 +121,7 @@ describe('impact owner matching', () => {
       { pointer: {}, owner_name: 'Rafael Moreno' },
     ], approver: ARI, access_token: 'tok', people: directory })).toEqual([
       { owner_membership_id: 'mem_rafael', owner_match: 'name' },
-      APPROVER, APPROVER, APPROVER, APPROVER, APPROVER, APPROVER,
+      APPROVER, APPROVER, APPROVER, APPROVER, APPROVER,
     ]);
     // No ticket on the owner accounts' tool and site: no assignee read at all.
     const jira = fakeJira({ assignees: new Map(), people: {} });

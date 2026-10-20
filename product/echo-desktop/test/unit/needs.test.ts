@@ -49,8 +49,8 @@ describe('the words Home and the follow-ups use', () => {
     expect(itemTitle(item({ reach: 'not_read', decision: pilot }))).toBe('Jira ticket · Pilot planning');
     expect(itemTitle(item({ kind: 'page', reach: 'not_read', decision: pilot }))).toBe('Page · Pilot planning');
     expect(itemTitle(item({ reach: 'not_read' }))).toBe('Jira ticket');
-    expect([itemTitle(item({ kind: 'page' })), itemTitle(item({ kind: 'slack_message', reach: 'unavailable' }))])
-      .toEqual(['A page you can\'t open', 'A Slack message ECHO couldn\'t read just now']);
+    expect([itemTitle(item({ kind: 'page' })), itemTitle(item({ kind: 'page', reach: 'unavailable' }))])
+      .toEqual(['A page you can\'t open', 'A page ECHO couldn\'t read just now']);
   });
 
   it('says what kind of thing an item is, named by its tool once you can open it', () => {

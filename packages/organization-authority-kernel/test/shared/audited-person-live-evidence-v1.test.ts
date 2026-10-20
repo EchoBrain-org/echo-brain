@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonTicketCitationV1, validatePersonWorkspaceCitationV1, type PersonConnectorAccessV1, type PersonSlackMessageCitationV1, type PersonTicketCitationV1, type PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
+import { validatePersonPageCitationV1, validatePersonTicketCitationV1, validatePersonWorkspaceCitationV1, type PersonConnectorAccessV1, type PersonPageCitationV1, type PersonTicketCitationV1, type PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '../../src/shared/audited-person-live-evidence-v1.js';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceCitationV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceReleaseV1, PersonLiveEvidenceValueV1 } from '../../src/shared/person-live-evidence-v1.js';
@@ -9,20 +9,16 @@ import type { PersonConnectorReadBindingV1, PersonLiveEvidenceCitationV1, Person
 const actor = { organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'person-one', membership_id: 'mem_00000000-0000-4000-8000-000000000001' };
 const read_grant_sha256 = canonicalSha256({ grant: 1 });
 const textDigest = (text: string): Sha256Digest => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
-const access = (tool_id = 'tickets'): PersonConnectorAccessV1 => ({ tool_id, identity_status: 'linked', external_scope_id: tool_id === 'slack' ? 'T123' : 'tenant-1', external_subject_id: 'subject-one', read_status: 'connected', read_capabilities: ['live_evidence'] });
+const access = (tool_id = 'tickets'): PersonConnectorAccessV1 => ({ tool_id, identity_status: 'linked', external_scope_id: 'tenant-1', external_subject_id: 'subject-one', read_status: 'connected', read_capabilities: ['live_evidence'] });
 const binding = (tool_id = 'tickets'): PersonConnectorReadBindingV1 => ({ ...actor, tool_id, external_scope_id: access(tool_id).external_scope_id, external_subject_id: 'subject-one', read_grant_sha256 });
 const ticket = (text = 'Ship the new integration', ticket_id = 'ECHO-42'): PersonLiveEvidenceValueV1<PersonTicketCitationV1> => ({
   handle: `private:${ticket_id}`, label: ticket_id, text, visibility: 'only_me', occurred_at: '2026-09-30', attributes: { status: 'In progress', owner: 'Alex' },
   citation: { kind: 'ticket', tool_id: 'tickets', external_scope_id: 'tenant-1', ticket_id, permalink: `https://tickets.example.test/browse/${ticket_id}`, text_sha256: textDigest(text) },
 });
-const slack = (): PersonLiveEvidenceValueV1<PersonSlackMessageCitationV1> => ({
-  handle: 'private:channel-and-thread', label: '#launch · Alex', text: 'Launch is Friday', visibility: 'team',
-  citation: { kind: 'slack_message', team_id: 'T123', channel_id: 'C123', message_ts: '1758873600.000100', permalink: 'https://example.slack.com/archives/C123/p1758873600000100', text_sha256: textDigest('Launch is Friday') },
+const wikiPage = (): PersonLiveEvidenceValueV1<PersonPageCitationV1> => ({
+  handle: 'private:page-and-section', label: 'Launch plan · section 1', text: 'Launch is Friday', visibility: 'only_me',
+  citation: { kind: 'page', tool_id: 'pages', external_scope_id: 'tenant-1', page_id: '100', section_id: 's1', version: '7', permalink: 'https://pages.example.test/wiki/pages/viewpage.action?pageId=100', text_sha256: textDigest('Launch is Friday') },
 });
-const slackCitation = (value: unknown): PersonSlackMessageCitationV1 => {
-  if ((value as { readonly kind?: unknown } | null)?.kind !== 'slack_message') throw new Error('Slack citation kind is invalid');
-  return value as PersonSlackMessageCitationV1;
-};
 const page = <C extends PersonLiveEvidenceCitationV1>(items: readonly PersonLiveEvidenceValueV1<C>[], next_cursor?: string, notice?: string): PersonLiveEvidencePageV1<C> => ({ items, truncated: false, ...(next_cursor === undefined ? {} : { next_cursor }), ...(notice === undefined ? {} : { notice }) });
 
 function fixture<C extends PersonLiveEvidenceCitationV1>(tool_id: string, initial: PersonLiveEvidencePageV1<C>) {
@@ -32,8 +28,8 @@ function fixture<C extends PersonLiveEvidenceCitationV1>(tool_id: string, initia
   const reader: PersonLiveEvidenceReaderV1<C> = {
     binding: binding(tool_id),
     validateCitation(value) {
-      const citation = tool_id === 'slack' ? slackCitation(value) : validatePersonTicketCitationV1(value);
-      return { citation: citation as C, tool_id: citation.kind === 'ticket' ? citation.tool_id : 'slack', external_scope_id: citation.kind === 'ticket' ? citation.external_scope_id : citation.team_id, coordinates: { object_id: citation.kind === 'ticket' ? citation.ticket_id : citation.message_ts, ...(citation.kind === 'ticket' ? {} : { container_id: citation.channel_id }) } };
+      const citation = tool_id === 'pages' ? validatePersonPageCitationV1(value) : validatePersonTicketCitationV1(value);
+      return { citation: citation as C, tool_id: citation.tool_id, external_scope_id: citation.external_scope_id, coordinates: { object_id: citation.kind === 'ticket' ? citation.ticket_id : `${citation.page_id}:${citation.section_id}:${citation.version}` } };
     },
     search: vi.fn(async () => { events.push('read'); return selected; }),
     open: vi.fn(async () => { events.push('open'); return selected; }),
@@ -66,8 +62,8 @@ describe('shared audited live evidence source V1', () => {
     expect(drifted.authorization.assertCurrent).not.toHaveBeenCalled();
   });
 
-  it.each(['slack', 'tickets'])('uses the same person-bound release boundary for %s', async tool_id => {
-    const item = tool_id === 'slack' ? slack() : ticket();
+  it.each(['pages', 'tickets'])('uses the same person-bound release boundary for %s', async tool_id => {
+    const item = tool_id === 'pages' ? wikiPage() : ticket();
     const f = fixture(tool_id, page<PersonLiveEvidenceCitationV1>([item]));
     const source = f.make();
     const result = await source.search({ query: 'launch' });
@@ -137,7 +133,7 @@ describe('shared audited live evidence source V1', () => {
     f.select(page([ticket(), ticket('Another ticket', 'ECHO-43')]));
     await expect(f.make().search({ query: 'launch', limit: 1 })).rejects.toMatchObject({ code: 'invalid_output' });
     expect(f.audit.record).not.toHaveBeenCalled();
-    const s = fixture('slack', page([{ ...slack(), citation: { ...slack().citation, team_id: 'T999' } }]));
+    const s = fixture('pages', page([{ ...wikiPage(), citation: { ...wikiPage().citation, external_scope_id: 'tenant-2' } }]));
     await expect(s.make().search({ query: 'launch' })).rejects.toMatchObject({ code: 'invalid_output' });
     expect(s.audit.record).not.toHaveBeenCalled();
   });

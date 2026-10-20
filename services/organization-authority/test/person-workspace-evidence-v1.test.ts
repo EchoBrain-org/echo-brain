@@ -176,7 +176,7 @@ describe('workspace projects as an Ask source (research tool contract v1)', () =
     expect(labels((await projects.list({ source: 'projects', since: '2026-10-01', until: '2026-10-01' })).items)).toEqual(['Atlas']);
     expect((await projects.list({ source: 'projects', since: '2026-10-01', until: '2026-10-01', time_zone: 'Pacific/Pago_Pago' })).items).toEqual([]);
     expect(labels((await projects.search({ query: 'Atlas Beacon', since: '2026-10-02' })).items)).toEqual(['Beacon']);
-    for (const refused of [{ since: '2026-10-01', date_field: 'occurred' as const }, { until: '2026-10-01', date_field: 'due' as const }, { owner: 'Ari' }, { channel: 'general' },
+    for (const refused of [{ since: '2026-10-01', date_field: 'occurred' as const }, { until: '2026-10-01', date_field: 'due' as const }, { owner: 'Ari' },
       { kinds: ['decision' as const] }, { status: 'open' as const }, { since: '2026-10-09', until: '2026-10-05' }]) {
       await expect(projects.list({ source: 'projects', ...refused })).rejects.toThrow(INVALID);
     }
@@ -353,7 +353,7 @@ describe('workspace people and tools as Ask sources (research tool contract v1)'
   it('refuses the filters and dates people and tools do not have', async () => {
     const w = world();
     const { people, tools } = w.sources();
-    for (const refused of [{ status: 'active' as const }, { role: 'lead' as const }, { owner: 'Ari' }, { channel: 'general' }, { since: '2026-10-01' }, { date_field: 'created' as const }, { kinds: ['project' as const] }]) {
+    for (const refused of [{ status: 'active' as const }, { role: 'lead' as const }, { owner: 'Ari' }, { since: '2026-10-01' }, { date_field: 'created' as const }, { kinds: ['project' as const] }]) {
       await expect(people.list({ source: 'people', ...refused })).rejects.toThrow(INVALID);
       await expect(tools.list({ source: 'tools', ...refused })).rejects.toThrow(INVALID);
     }

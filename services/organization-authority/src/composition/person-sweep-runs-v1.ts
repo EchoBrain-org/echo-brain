@@ -64,7 +64,7 @@ const GLOBAL = Object.freeze({ kind: 'global' as const });
 const RELATION_WORDS = Object.freeze({ conflicts: 'Conflicting', needs_updating: 'Outdated', not_assessed: 'Affected' });
 const KIND_WORDS: Readonly<Record<PersonOpenItemKindV1, string>> = Object.freeze({
   // A meeting action is never swept (the sweep trigger refuses its pointer); its word only completes the map.
-  action: 'meeting action', ticket: 'Jira ticket', page: 'page', slack_message: 'Slack message', record: 'ECHO record', document: 'ECHO document',
+  action: 'meeting action', ticket: 'Jira ticket', page: 'page', record: 'ECHO record', document: 'ECHO document',
 });
 
 function ascending(left: string, right: string): number {

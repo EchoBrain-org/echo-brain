@@ -125,15 +125,14 @@ describe("an unverified end (addition 1)", () => {
 
 describe("a list's noun and its filter notice (addition 3)", () => {
   it("names a list from the catalog's selector and tool, with no source-specific rule", () => {
-    expect([{ selector: "tickets", tool_id: "jira" }, { selector: "pages", tool_id: "confluence" }, { selector: "meetings" }, { selector: "follow_ups" }, { selector: "slack", tool_id: "slack" }].map(agenticListNounV1))
-      .toEqual(["Jira tickets", "Confluence pages", "meetings", "follow-ups", "slack"]);
+    expect([{ selector: "tickets", tool_id: "jira" }, { selector: "pages", tool_id: "confluence" }, { selector: "meetings" }, { selector: "follow_ups" }, { selector: "handbook", tool_id: "handbook" }].map(agenticListNounV1))
+      .toEqual(["Jira tickets", "Confluence pages", "meetings", "follow-ups", "handbook"]);
   });
 
   it.each([
     [{ selector: "tickets", tool_id: "jira" }, ["ticket", "ticket"], ["Jira tickets", "Jira ticket", "ticket"]],
     [{ selector: "pages", tool_id: "confluence" }, ["page"], ["Confluence pages", "Confluence page", "page"]],
     [{ selector: "follow_ups" }, ["follow_up"], ["follow-ups", "follow-up", "follow_up"]],
-    [{ selector: "slack", tool_id: "slack" }, ["slack_message"], ["Slack messages", "Slack message", "slack_message"]],
     [{ selector: "meetings" }, ["decision", "decision"], ["decisions", "decision", "decision"]],
     [{ selector: "meetings" }, ["action"], ["actions", "action", "action"]],
     // Members of several kinds are items from the source; no member keeps the source's own noun.
@@ -361,13 +360,13 @@ describe("the statement code writes for a list (ADR-0041)", () => {
   const reviewed = Array.from({ length: 25 }, (_, index) => ({ title: `THERM-${index + 1}: A`, status: "In Review" }));
   const meeting = [{ title: sync, kind: "imported_meeting" }, { title: sync, kind: "decision" }, { title: "Vendor review (2026-10-04)", kind: "action", owner: "Dana" }, { title: sync, kind: "action", owner: "Dana" }, { title: sync, kind: "rationale" }];
 
-  it("reads a filter as applied: dates, channel and fields, never the model's arguments", () => {
+  it("reads a filter as applied: dates and fields, never the model's arguments", () => {
     expect([agenticCalendarDayV1("2026-10-04"), agenticCalendarDayV1("2026-10-04T08:00:00Z")]).toEqual(["October 4, 2026", "2026-10-04T08:00:00Z"]);
     expect(([
-      OCTOBER_4.filter, { date_field: "updated", since: "2026-10-01", until: "2026-10-04" }, { since: "2025-12-30", until: "2026-01-02" }, { channel: "hw-dvt", since: "2026-10-03" },
+      OCTOBER_4.filter, { date_field: "updated", since: "2026-10-01", until: "2026-10-04" }, { since: "2025-12-30", until: "2026-01-02" }, { since: "2026-10-03" },
       { date_field: "due", until: "2026-10-09" }, { kind: "action", owner: "Mara", status: "open", time_zone: "UTC" }, { time_zone: "UTC" },
     ] as const).map(filter => agenticListFilterPhraseV1(filter))).toEqual([
-      " created on October 4, 2026", " updated from October 1 to October 4, 2026", " dated from December 30, 2025 to January 2, 2026", " in #hw-dvt dated since October 3, 2026",
+      " created on October 4, 2026", " updated from October 1 to October 4, 2026", " dated from December 30, 2025 to January 2, 2026", " dated since October 3, 2026",
       " due through October 9, 2026", " with kind action, owner Mara and status open", "",
     ]);
   });

@@ -49,10 +49,9 @@ const OPENERS: { readonly [K in AnswerSource['kind']]: (source: Extract<AnswerSo
   person: () => ({ pane: 'person', page: null }),
   // One of your tools: its name and how you are connected to it, and Tools, where you connect it.
   tool: () => ({ pane: 'tool', page: { kind: 'tools' } }),
-  // Jira, Confluence and Slack open in their own apps, through the checked link: an item, or the project, space or channel it is in.
+  // Jira and Confluence open in their own apps, through the checked link: an item, or the project or space it is in.
   ticket: () => EXTERNAL,
   page: () => EXTERNAL,
-  slack: () => EXTERNAL,
   container: () => EXTERNAL,
 };
 

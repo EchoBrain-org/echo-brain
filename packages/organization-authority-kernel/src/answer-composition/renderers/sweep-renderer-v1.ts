@@ -35,9 +35,8 @@ type Entry = AgenticEvidenceBundleItemV1;
 /**
  * The sweep event: earlier findings, each with what was expected and the
  * items it cited then. A finding's own items are its first citation and every
- * further citation of an item in an outside tool (a ticket, a page, a Slack
- * message); a further ECHO record or document, such as the decision, is
- * context (R45).
+ * further citation of an item in an outside tool (a ticket or a page); a
+ * further ECHO record or document, such as the decision, is context (R45).
  */
 export interface SweepTriggerInputV1 {
   readonly findings: readonly { readonly finding: string; readonly expected: string; readonly citations: readonly unknown[] }[];
@@ -53,7 +52,7 @@ const RENDER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "r
 const JUDGMENTS: readonly Judgment[] = ["landed", "still_open", "changed"];
 const UNREADABLE_LINE = "ECHO could not read this item.";
 /** Items in an outside tool: a finding's further citation of one is its own item; a further ECHO record or document is context. */
-const OUTSIDE_KINDS: readonly unknown[] = ["ticket", "page", "slack_message"];
+const OUTSIDE_KINDS: readonly unknown[] = ["ticket", "page"];
 const NOT_ASSESSED_LINE = "Not assessed.";
 /** A line that fails a screen; its verdict stands (ruling R39). */
 const WITHHELD_LINE = "ECHO withheld this line.";

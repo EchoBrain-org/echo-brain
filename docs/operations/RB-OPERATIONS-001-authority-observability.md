@@ -629,8 +629,8 @@ Its core operations hold the detail. Each research step and answer call
 is an `ask_planner` or `ask_answer` span with its provider `model_call` inside
 (purpose `ask_planner` or `ask_answer`). Each desk call is one span:
 `evidence_search`, `evidence_open`, `evidence_list` or `evidence_revalidate`.
-Desk spans carry `included_count` and, by source, `meeting_items`,
-`document_items` and `slack_items`; `transcript_items` is the shared-transcript
+Desk spans carry `included_count` and, by source, `meeting_items` and
+`document_items`; `transcript_items` is the shared-transcript
 subset of `document_items`. The evidence HTTP doors use the same desk spans.
 
 #### Live Jira and Confluence reads in Ask

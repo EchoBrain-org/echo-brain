@@ -71,7 +71,7 @@ export type PersonAskProgressStageV1 = 'searching' | 'reading' | 'checking_acces
  * turns into the tool's display name; never a selector the model wrote.
  */
 export type PersonAskProgressSourceV1 =
-  | { readonly kind: 'meetings' | 'documents' | 'slack' }
+  | { readonly kind: 'meetings' | 'documents' }
   | { readonly kind: 'tickets' | 'pages'; readonly tool_id: string };
 
 /**
@@ -162,7 +162,7 @@ export type PersonAskProgressTerminalEventV1 = PersonAskProgressAnswerEventV1 | 
 export type PersonAskProgressEventV1 = PersonAskProgressStepEventV1 | PersonAskProgressTerminalEventV1;
 
 const V1 = askProgressCodec({
-  plain_sources: ['meetings', 'documents', 'slack'],
+  plain_sources: ['meetings', 'documents'],
   tool_sources: ['tickets', 'pages'],
   item: validatePersonAnswerCitationV6,
   answer: validatePersonAnswerResponseV6,

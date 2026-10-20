@@ -77,10 +77,10 @@ const PROVIDER_CODES = new Set<string>(['invalid_request', 'invalid_output', 'un
 interface Released { readonly container: PersonToolContainerV1; readonly value: Omit<PersonLiveEvidenceValueV1<Citation>, 'handle'> }
 
 /**
- * A connected tool's containers as an Ask source (research tool contract v1): Jira projects, Confluence spaces or Slack
- * channels the asker can see through their own connection. Each item's label is the container's name, its attributes its
- * key and tool, and its text names the ECHO projects mapped to it that the asker can see. Containers record no dates, so a
- * date window is refused, never ignored. Construct once per request from trusted ECHO state.
+ * A connected tool's containers as an Ask source (research tool contract v1): Jira projects or Confluence spaces the
+ * asker can see through their own connection. Each item's label is the container's name, its attributes its key and
+ * tool, and its text names the ECHO projects mapped to it that the asker can see. Containers record no dates, so a date
+ * window is refused, never ignored. Construct once per request from trusted ECHO state.
  */
 export async function createPersonToolContainerReaderV1(options: {
   readonly provider: PersonToolContainerProviderV1;

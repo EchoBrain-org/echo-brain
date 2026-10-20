@@ -31,7 +31,7 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "refused_read_count", "repeated_refusal_count", "unchecked_item_count", "sources_looked_at", "most_reads_in_a_step",
   "rss_bytes", "heap_used_bytes", "cpu_user_us", "cpu_system_us", "fs_read_count", "fs_write_count",
   // Items an evidence call returned, by source; transcript_items is the shared-transcript subset of document_items.
-  "meeting_items", "document_items", "transcript_items", "slack_items",
+  "meeting_items", "document_items", "transcript_items",
   "ticket_retrieved_items", "ticket_context_items", "ticket_citations",
   // Bounded rate-limit hints copied from an upstream response, never response headers or text.
   "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds",

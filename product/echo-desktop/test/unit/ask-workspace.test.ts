@@ -2,11 +2,11 @@
 // names them (research tool contract v1), in the store and on the page: each
 // opens in Ask's side panel by its name while Ask keeps running, and nothing
 // is read for it. Once the answer came, Open goes to the project, or to
-// Tools; a person has nowhere to go; a Jira project, Confluence space or Slack
-// channel says its tool and key on its source row, and opens in its tool.
+// Tools; a person has nowhere to go; a Jira project or Confluence space says
+// its tool and key on its source row, and opens in its tool.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, ConnectedTool, Expect } from '../../src/shared/protocol.js';
-import { Folder, Hash, Plug } from '../../src/renderer/screens/icons.js';
+import { Folder, Plug } from '../../src/renderer/screens/icons.js';
 import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -23,7 +23,7 @@ const unlisted: AnswerSource = { kind: 'project', label: 'Thermal recovery', pro
 const mara: AnswerSource = { kind: 'person', label: 'Mara Lind', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e' };
 const jira: AnswerSource = { kind: 'tool', label: 'Jira', tool_id: 'jira' };
 const therm: AnswerSource = { kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: 'https://example.atlassian.net/browse/THERM', container: 'jira_project', key: 'THERM' };
-const channel: AnswerSource = { kind: 'container', tool_id: 'slack', label: '#therm-dvt', permalink: 'https://acme.slack.com/archives/C0123456', container: 'slack_channel' };
+const space: AnswerSource = { kind: 'container', tool_id: 'confluence', label: 'Thermal team', permalink: 'https://example.atlassian.net/wiki/spaces/THT', container: 'confluence_space' };
 /** An answer whose one sentence cites every source given. */
 const answering = (sources: readonly AnswerSource[], receipt?: AskReceipt): Answer => ({
   text: 'Thermal recovery is led by Mara.', scope: { kind: 'global' }, sources, outcome: 'answered', ...(receipt ? { receipt } : {}),
@@ -205,14 +205,14 @@ describe('your workspace and your tools\' containers open beside Ask (research t
 
   it('names a container\'s tool and key on its source row and beside Ask, and opens it in its tool, never on a page of ECHO\'s', async () => {
     const { store, release, pane, thread } = await asking();
-    release(ok(answering([therm, channel])));
+    release(ok(answering([therm, space])));
     await flush();
     const rows = byTestId(thread(), 'source-row');
-    // "Jira · THERM"; a Slack channel has no key, so its tool alone.
-    expect(rows.map(text)).toEqual(['1ThermalJira · THERM', '2#therm-dvtSlack']);
-    // A Jira project is a folder; a Slack channel is a channel's mark.
+    // "Jira · THERM"; a container with no key says its tool alone.
+    expect(rows.map(text)).toEqual(['1ThermalJira · THERM', '2Thermal teamConfluence']);
+    // A Jira project and a Confluence space are folders.
     expect(drawn(rows[0])).toEqual(drawn(render(Folder())));
-    expect(drawn(rows[1])).toEqual(drawn(render(Hash())));
+    expect(drawn(rows[1])).toEqual(drawn(render(Folder())));
     const before = rpc.mock.calls.length;
     store.chooseSource(0);
     await flush();
@@ -226,7 +226,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     await (open!.props.onClick as () => Promise<void>)();
     expect(called('source.openExternal')).toEqual([{ kind: 'container', permalink: 'https://example.atlassian.net/browse/THERM' }]);
     store.chooseSource(1);
-    expect(heading(pane())).toBe('Slack · Channel');
-    expect(text(byTestId(pane(), 'pane-container-meta'))).toBe('Slack');
+    expect(heading(pane())).toBe('Confluence · Space');
+    expect(text(byTestId(pane(), 'pane-container-meta'))).toBe('Confluence');
   });
 });

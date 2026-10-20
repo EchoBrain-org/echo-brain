@@ -105,8 +105,8 @@ describe('Workspace answer V8 (research tool contract v1)', () => {
   it('shows a key only beside a tool container', () => {
     const { key: _key, ...unkeyed } = container;
     expect(validatePersonAnswerCitationV8(unkeyed)).toEqual(unkeyed);
-    const channel = { ...unkeyed, citation: { ...containerCitation, tool_id: 'slack', container: 'slack_channel' as const, container_id: 'C0123456', permalink: 'https://acme.slack.com/archives/C0123456' }, label: '#therm-dvt' };
-    expect(validatePersonAnswerCitationV8(channel)).toEqual(channel);
+    const space = { ...unkeyed, citation: { ...containerCitation, tool_id: 'confluence', container: 'confluence_space' as const, container_id: '123', permalink: 'https://acme.atlassian.net/wiki/spaces/THERM' }, label: 'Thermal space' };
+    expect(validatePersonAnswerCitationV8(space)).toEqual(space);
     for (const value of [{ ...project, key: 'THERM' }, { ...tool, key: 'JIRA' }, { ...person, key: 'ML' }, { ...followUp, key: 'THERM-48' }]) {
       expect(() => validatePersonAnswerCitationV8(value)).toThrow('applies only to a tool container');
     }

@@ -97,7 +97,7 @@ const LIST_FETCH = 50;
 const PREVIEW_CHARS = 240;
 /** Complete released packets admitted directly from search/list; larger bodies require open. */
 const PASSAGE_BYTES = 3 * 1024;
-/** Context items an `open` may admit beyond its anchor (a Slack thread returns up to 20 replies). */
+/** Context items an `open` may admit beyond its anchor (a page's later sections, a meeting's other records). */
 const OPEN_EXTRA_ITEMS = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
 const OPEN_NEIGHBOURS = 2;
@@ -116,8 +116,6 @@ export interface AgenticResearchSourceV1 {
   readonly description: string;
   readonly metadata_only_list?: boolean;
   readonly tool_id?: string;
-  readonly requires_channel?: boolean;
-  readonly default_since_days?: number;
   /** What the source can do (research tool contract v1); Ask checks each read against it before the desk. */
   readonly capabilities?: EvidenceSourceCapabilitiesV1;
 }
@@ -127,8 +125,6 @@ export type AgenticResearchCatalogEntryV1 = {
   readonly description: string;
   readonly metadata_only_list?: boolean;
   readonly tool_id?: string;
-  readonly requires_channel?: boolean;
-  readonly default_since_days?: number;
   /** Shown to Ask only; a task goal's catalog leaves it out, so its prompt is unchanged. */
   readonly capabilities?: EvidenceSourceCapabilitiesV1;
   readonly source: StepSource;
@@ -263,7 +259,7 @@ function inventoryMore(state: ListState): boolean { return state.paged < state.i
 /** Identity of a cited object independent of the version or text released this time. */
 function citationIdentity(value: unknown): string {
   const citation = object(value) ?? {};
-  const pick = ["kind", "tool_id", "atom_id", "item_id", "ticket_id", "page_id", "document_id", "upload_id", "transcript_id", "channel_id", "message_ts"].filter(key => typeof citation[key] === "string");
+  const pick = ["kind", "tool_id", "atom_id", "item_id", "ticket_id", "page_id", "document_id", "upload_id", "transcript_id"].filter(key => typeof citation[key] === "string");
   return JSON.stringify(pick.map(key => [key, citation[key]]));
 }
 /** Desk refusals a model can cause (a stale id, an invalid request) become tool results, not failures. */
@@ -346,7 +342,7 @@ function listDate(value: string, today: string): string | null {
  */
 type ListArgs = EvidenceDateFilterV1 & {
   readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done" | "active" | "archived"; readonly owner?: string;
-  readonly role?: "lead" | "member"; readonly channel?: string; readonly since?: string; readonly until?: string; readonly limit?: number;
+  readonly role?: "lead" | "member"; readonly since?: string; readonly until?: string; readonly limit?: number;
   readonly notes: readonly string[]; readonly applied: FilterApplication;
 };
 /**
@@ -416,29 +412,21 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
     else if (name.length === 0 || name.length > 80) return { error: "owner must be a person's name such as \"Dana\"" };
     else { owner = name; applied.owner = "applied"; kinds ??= ["action"]; }
   }
-  let channel: string | undefined;
-  if (raw.channel !== undefined) {
-    const name = raw.channel.trim().replace(/^#/u, "").trim();
-    if (!descriptor.requires_channel) { notes.push("channel is unsupported by this source; ignored"); applied.channel = "ignored"; }
-    else if (name.length === 0 || name.length > 80) return { error: "channel must be a channel name such as \"hw-dvt\"" };
-    else { channel = name; applied.channel = "applied"; }
-  }
-  if (descriptor.requires_channel && channel === undefined) return { error: `${descriptor.selector} needs a channel, such as ${JSON.stringify({ source: descriptor.selector, channel: "hw-dvt" })}` };
+  // The step schema still offers channel, which no source takes.
+  if (raw.channel !== undefined) { notes.push("channel is unsupported by this source; ignored"); applied.channel = "ignored"; }
   const since = raw.since === undefined ? undefined : listDate(raw.since, today);
   const until = raw.until === undefined ? undefined : listDate(raw.until, today);
   if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21 or an age like 7d or 2w" };
   try { validateEvidenceDateFilterV1({ since: since ?? undefined, until: until ?? undefined, date_field: raw.date_field as EvidenceDateFieldV1 | undefined }); }
   catch (error) { return { error: error instanceof Error ? error.message : 'Invalid date filter' }; }
-  const defaultSince = descriptor.default_since_days !== undefined && since === undefined ? listDate(`${descriptor.default_since_days}d`, today)! : since ?? undefined;
-  // Dates are applied or refused: a source that cannot apply a date field refuses the read, never widens it. A default
-  // since the catalog declares is in the selection but was not asked for.
+  // Dates are applied or refused: a source that cannot apply a date field refuses the read, never widens it.
   if (since !== undefined && since !== null) applied.since = "applied";
   if (until !== undefined && until !== null) applied.until = "applied";
   if (raw.date_field !== undefined) applied.date_field = "applied";
   return {
     source, notes, applied, ...(raw.date_field === undefined ? {} : { date_field: raw.date_field as EvidenceDateFieldV1 }),
-    ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(channel === undefined ? {} : { channel }),
-    ...(defaultSince === undefined ? {} : { since: defaultSince }), ...(until === undefined || until === null ? {} : { until }),
+    ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }),
+    ...(since === undefined || since === null ? {} : { since }), ...(until === undefined || until === null ? {} : { until }),
   };
 }
 
@@ -480,14 +468,8 @@ function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticR
   }
   const role = listed("role", raw.role?.trim().toLowerCase(), " or ");
   if (typeof role === "object") return role;
-  let channel: string | undefined;
-  if (raw.channel !== undefined) {
-    const name = raw.channel.trim().replace(/^#/u, "").trim();
-    if (!descriptor.requires_channel && capabilities.filters.channel === undefined) ignore("channel");
-    else if (name.length === 0 || name.length > 80) return { error: "channel must be a channel name such as \"hw-dvt\"" };
-    else { channel = name; applied.channel = "applied"; }
-  }
-  if (descriptor.requires_channel && channel === undefined) return { error: `${descriptor.selector} needs a channel, such as ${JSON.stringify({ source: descriptor.selector, channel: "hw-dvt" })}` };
+  // The step schema still offers channel, which no source takes.
+  if (raw.channel !== undefined) ignore("channel");
   const since = raw.since === undefined ? undefined : listDate(raw.since, today);
   const until = raw.until === undefined ? undefined : listDate(raw.until, today);
   if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21" };
@@ -503,14 +485,13 @@ function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticR
     limit = Number(raw.limit);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > AGENTIC_ASK_LIST_LIMIT_MAX_V1) return { error: `limit must be a whole number from 1 to ${AGENTIC_ASK_LIST_LIMIT_MAX_V1}` };
   }
-  const defaultSince = descriptor.default_since_days !== undefined && since === undefined ? listDate(`${descriptor.default_since_days}d`, today)! : since ?? undefined;
   if (since != null) applied.since = "applied";
   if (until != null) applied.until = "applied";
   if (askedField !== undefined) applied.date_field = "applied";
   return {
     source: descriptor.source_id, notes, applied, ...(dateField === undefined ? {} : { date_field: dateField }),
     ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status: status as ListArgs["status"] }), ...(owner === undefined ? {} : { owner }),
-    ...(role === undefined ? {} : { role: role as ListArgs["role"] }), ...(channel === undefined ? {} : { channel }), ...(defaultSince === undefined ? {} : { since: defaultSince }),
+    ...(role === undefined ? {} : { role: role as ListArgs["role"] }), ...(since === undefined || since === null ? {} : { since }),
     ...(until === undefined || until === null ? {} : { until }), ...(limit === undefined ? {} : { limit }),
   };
 }
@@ -534,7 +515,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     return Object.freeze(dates.length === 0 ? entry : { ...entry, description: `${entry.description} Date filters support date_field ${dates.length === 1 ? dates[0] : `${dates.slice(0, -1).join(', ')} or ${dates.at(-1)}`}.` });
   });
   const sourceCatalog: readonly AgenticResearchCatalogEntryV1[] = listAvailable ? Object.freeze(askedCatalog)
-    : Object.freeze(askedCatalog.map(({ metadata_only_list: _metadata, requires_channel: _channel, default_since_days: _since, ...entry }) => Object.freeze(entry)));
+    : Object.freeze(askedCatalog.map(({ metadata_only_list: _metadata, ...entry }) => Object.freeze(entry)));
   const budget = brief.budget;
   const wallNow = options.wall_now ?? Date.now;
   /** Research steps: the audit records them as `step` calls, in the span the runner names. */
@@ -799,14 +780,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const stateArgs: StepArgs = Object.freeze({
         ...(request.date_field === undefined || request.date_field === EVIDENCE_ANY_DATE_V1 ? {} : { date_field: request.date_field }), source: sourcesById.get(request.source)!.selector, ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
         ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(role === undefined ? {} : { role }),
-        ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
+        ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
       });
       const unfiltered = request.kinds === undefined && status === undefined && owner === undefined && role === undefined &&
-        request.channel === undefined && request.since === undefined && request.until === undefined && request.date_field === undefined;
+        request.since === undefined && request.until === undefined && request.date_field === undefined;
       // The filter as applied: the normalized selection, never the model's raw arguments (ADR-0041).
       const filter: AgenticListFilterV1 = Object.freeze({
         ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(role === undefined ? {} : { role }),
-        ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
+        ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
         ...(request.date_field === undefined ? {} : { date_field: request.date_field }), ...(request.time_zone === undefined ? {} : { time_zone: request.time_zone }),
       });
       state = {
@@ -918,7 +899,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         ...(unverified && !currentState.truncated ? ["its last page was exactly full, so more items may exist than list can show; use search"] : [])];
       const filters = Object.keys(currentState.filter_applied).length === 0 ? undefined : { ...currentState.filter_applied };
       return {
-        tool: "list", ...(ask && currentState.id !== undefined ? { list: currentState.id } : {}), source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }),
+        tool: "list", ...(ask && currentState.id !== undefined ? { list: currentState.id } : {}), source: request.source, ...(request.since === undefined ? {} : { since: request.since }),
         items: page.map(entry => describe(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }),
         ...(ask && result?.notice !== undefined ? { notice: result.notice } : {}), ...(ask && filters !== undefined ? { filters } : {}),
         ...(ask && currentState.unchecked !== undefined && currentState.unchecked.count > 0 ? { unchecked: currentState.unchecked } : {}),

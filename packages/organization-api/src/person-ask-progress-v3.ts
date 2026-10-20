@@ -85,7 +85,7 @@ export interface PersonAskProgressResultLineV3 {
 }
 
 const V3 = askProgressCodec({
-  plain_sources: ['meetings', 'documents', 'slack', 'follow_ups', 'projects', 'people', 'tools'],
+  plain_sources: ['meetings', 'documents', 'follow_ups', 'projects', 'people', 'tools'],
   tool_sources: ['tickets', 'pages', 'containers'],
   item: validatePersonAnswerCitationV8,
   answer: validatePersonAnswerResponseV8,

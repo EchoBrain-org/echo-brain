@@ -167,7 +167,7 @@ function refuseDates(input: EvidenceDateFilterV1, source: string): void {
 /** Refuses a filter of another source, or one this source does not take. */
 function otherFilters(input: EvidenceDeskListInputV2, source: WorkspaceSourceIdV1, takes: readonly ('status' | 'role')[]): void {
   const kind = WORKSPACE_SOURCE_KINDS_V1[source];
-  if (input.owner !== undefined || input.channel !== undefined || input.kinds?.some(value => value !== kind) ||
+  if (input.owner !== undefined || input.kinds?.some(value => value !== kind) ||
       (!takes.includes('status') && input.status !== undefined) || (!takes.includes('role') && input.role !== undefined)) {
     invalid(takes.length === 0 ? `${source} take no filters` : `${source} take only ${takes.join(' and ')}`);
   }

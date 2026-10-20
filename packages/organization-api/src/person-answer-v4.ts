@@ -55,27 +55,12 @@ export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 3 * 1024;
 export const PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
 export const PERSON_EVIDENCE_LABEL_MAX_BYTES_V1 = 1024;
 
-export type PersonEvidenceKindV1 = 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';
+export type PersonEvidenceKindV1 = 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage';
 export type PersonEvidenceVisibilityV1 = 'only_me' | 'team' | 'project' | 'projects' | 'approver_only';
 type ApprovedRecordPolicyV3 = Extract<PersonAnswerCitationV3, { readonly kind: 'approved_record' }>['policy_id'];
 
-/**
- * A Slack message read live with the asker's own Slack token (RFC-0003).
- * Echo never stores the message; the coordinates and a text digest identify
- * it, and the permalink opens it in Slack for anyone Slack lets read it.
- */
-export interface PersonSlackMessageCitationV1 {
-  readonly kind: 'slack_message';
-  readonly team_id: string;
-  readonly channel_id: string;
-  readonly message_ts: string;
-  readonly thread_ts?: string;
-  readonly permalink: string;
-  readonly text_sha256: `sha256:${string}`;
-}
-
 /** Every citation an Ask answer or an evidence desk item may carry. Open requests stay V3-only. */
-export type PersonAnswerEvidenceCitationV4 = PersonAnswerCitationV3 | PersonSlackMessageCitationV1;
+export type PersonAnswerEvidenceCitationV4 = PersonAnswerCitationV3;
 
 export interface PersonAnswerRequestV3 {
   readonly schema_version: 3;
@@ -110,7 +95,7 @@ export interface PersonAnswerCitationV4 {
   readonly kind: PersonEvidenceKindV1;
   readonly label: string;
   readonly visibility: PersonEvidenceVisibilityV1;
-  /** Opens the cited item with person open (ADR-0024). Never on a Slack message. */
+  /** Opens the cited item with person open (ADR-0024). */
   readonly ref?: PersonOpenRefV1;
 }
 
@@ -157,7 +142,7 @@ export interface PersonEvidenceDeskItemV1 {
   readonly label: string;
   readonly visibility: PersonEvidenceVisibilityV1;
   readonly attributes?: PersonEvidenceAttributesV1;
-  /** YYYY-MM-DD when the source knows the date (Slack messages). */
+  /** YYYY-MM-DD when the source knows the date. */
   readonly occurred_at?: string;
   readonly receipt_sha256: `sha256:${string}`;
 }
@@ -189,26 +174,6 @@ function scope(value: unknown): PersonAnswerScopeV3 {
   return validatePersonAnswerScopeV3(value, 'Ask response scope');
 }
 
-const SLACK_TEAM_ID = /^[TE][A-Z0-9]{2,30}$/;
-const SLACK_CHANNEL_ID = /^[CDG][A-Z0-9]{2,30}$/;
-const SLACK_TS = /^\d{9,11}\.\d{6}$/;
-const SLACK_PERMALINK = /^https:\/\/[a-z0-9-]+(\.enterprise)?\.slack\.com\/archives\/[CDG][A-Z0-9]{2,30}\/p\d{15,17}(\?[A-Za-z0-9_=&.%-]{0,200})?$/;
-
-function slackCitation(input: Record<string, unknown>): PersonSlackMessageCitationV1 {
-  assertExactKeys(input, ['kind', 'team_id', 'channel_id', 'message_ts', 'permalink', 'text_sha256', ...(Object.hasOwn(input, 'thread_ts') ? ['thread_ts'] : [])], 'Ask citation');
-  if (typeof input.team_id !== 'string' || !SLACK_TEAM_ID.test(input.team_id)) fail('Ask Slack citation team_id is invalid');
-  if (typeof input.channel_id !== 'string' || !SLACK_CHANNEL_ID.test(input.channel_id)) fail('Ask Slack citation channel_id is invalid');
-  if (typeof input.message_ts !== 'string' || !SLACK_TS.test(input.message_ts)) fail('Ask Slack citation message_ts is invalid');
-  if (Object.hasOwn(input, 'thread_ts') && (typeof input.thread_ts !== 'string' || !SLACK_TS.test(input.thread_ts))) fail('Ask Slack citation thread_ts is invalid');
-  if (typeof input.permalink !== 'string' || input.permalink.length > 512 || !SLACK_PERMALINK.test(input.permalink)) fail('Ask Slack citation permalink is invalid');
-  assertDigest(input.text_sha256, 'Ask Slack citation text_sha256');
-  return Object.freeze({
-    kind: 'slack_message', team_id: input.team_id, channel_id: input.channel_id, message_ts: input.message_ts,
-    ...(Object.hasOwn(input, 'thread_ts') ? { thread_ts: input.thread_ts as string } : {}),
-    permalink: input.permalink, text_sha256: input.text_sha256 as `sha256:${string}`,
-  });
-}
-
 /** The Ask answer versions these validators serve; each admits every citation kind of the one before it. */
 type AnswerVersion = 4 | 5 | 6 | 7 | 8;
 
@@ -223,7 +188,7 @@ function evidenceCitation(value: unknown, version: AnswerVersion = 4): PersonAns
   if (version >= 6 && input.kind === 'page') return validatePersonPageCitationV1(input);
   if (version >= 7 && input.kind === 'follow_up') return validatePersonFollowUpCitationV1(input);
   if (version >= 8 && workspaceKind(input.kind)) return validatePersonWorkspaceCitationV1(input);
-  return input.kind === 'slack_message' ? slackCitation(input) : citation(input);
+  return citation(input);
 }
 
 function citation(value: unknown): PersonAnswerCitationV3 {
@@ -265,7 +230,6 @@ function citationKey(value: PersonAnswerEvidenceCitationV8): string {
   if (value.kind === 'follow_up') return `follow_up:${value.item_id}`;
   if (value.kind === 'page') return `page:${value.tool_id}:${value.external_scope_id}:${value.page_id}:${value.section_id}:${value.version}`;
   if (value.kind === 'ticket') return `ticket:${value.tool_id}:${value.external_scope_id}:${value.ticket_id}`;
-  if (value.kind === 'slack_message') return `slack_message:${value.team_id}:${value.channel_id}:${value.message_ts}`;
   return value.kind === 'approved_record'
     ? `approved_record:${value.atom_id}`
     : `source_revision:${value.source_id}:${value.revision_id}:${value.representation_sha256}:${value.anchor_sha256}`;
@@ -276,7 +240,7 @@ function evidenceKind(value: unknown, label: string, version: AnswerVersion = 4)
   if (version >= 7 && value === 'follow_up') return;
   if (version >= 6 && value === 'page') return;
   if (version >= 5 && value === 'ticket') return;
-  if (!['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'].includes(value as string)) fail(`${label} is invalid`);
+  if (!['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'].includes(value as string)) fail(`${label} is invalid`);
 }
 
 function visibility(value: unknown, label: string): asserts value is PersonEvidenceVisibilityV1 {
@@ -328,7 +292,6 @@ function answerCitation(value: unknown, version: AnswerVersion = 4): PersonAnswe
   const cited = evidenceCitation(input.citation, version);
   if ((cited.kind === 'ticket') !== (input.kind === 'ticket')) fail('Ticket citation kind is inconsistent');
   if ((cited.kind === 'page') !== (input.kind === 'page')) fail('Page citation kind is inconsistent');
-  if ((cited.kind === 'slack_message') !== (input.kind === 'slack_message')) fail('Ask response citation kind is inconsistent');
   if ((cited.kind === 'follow_up') !== (input.kind === 'follow_up')) fail('Follow-up citation kind is inconsistent');
   for (const kind of PERSON_WORKSPACE_CITATION_KINDS_V1) if ((cited.kind === kind) !== (input.kind === kind)) fail('Workspace citation kind is inconsistent');
   const ref: PersonAnswerOpenRefV8 | undefined = !Object.hasOwn(input, 'ref') ? undefined
@@ -387,7 +350,6 @@ function deskItem(value: unknown) {
     attributes = Object.freeze({ ...(Object.hasOwn(raw, 'owner') ? { owner: raw.owner as string } : {}), ...(Object.hasOwn(raw, 'due_at') ? { due_at: raw.due_at as string } : {}), ...(Object.hasOwn(raw, 'status') ? { status: raw.status as string } : {}) });
   }
   const cited = evidenceCitation(input.citation);
-  if ((cited.kind === 'slack_message') !== (input.kind === 'slack_message')) fail('Evidence desk item kind is inconsistent');
   return Object.freeze({ id: input.id as string, citation: cited, kind: input.kind, ...(Object.hasOwn(input, 'text') ? { text: input.text as string } : {}), label: input.label as string, visibility: input.visibility, ...(attributes === undefined ? {} : { attributes }), ...(Object.hasOwn(input, 'occurred_at') ? { occurred_at: input.occurred_at as string } : {}), receipt_sha256: input.receipt_sha256 as `sha256:${string}` });
 }
 

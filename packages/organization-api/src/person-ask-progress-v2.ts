@@ -69,7 +69,7 @@ export type PersonAskProgressTerminalEventV2 = PersonAskProgressAnswerEventV2 | 
 export type PersonAskProgressEventV2 = PersonAskProgressStepEventV2 | PersonAskProgressTerminalEventV2;
 
 const V2 = askProgressCodec({
-  plain_sources: ['meetings', 'documents', 'slack', 'follow_ups'],
+  plain_sources: ['meetings', 'documents', 'follow_ups'],
   tool_sources: ['tickets', 'pages'],
   item: validatePersonAnswerCitationV7,
   answer: validatePersonAnswerResponseV7,

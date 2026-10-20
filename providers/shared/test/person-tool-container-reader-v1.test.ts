@@ -24,7 +24,7 @@ async function fixture(pinned?: readonly string[]) {
   };
   const shown = (rows: readonly PersonToolContainerV1[]) => ({ containers: rows.filter(row => !state.malformed.has(row.id)), left_out: rows.filter(row => state.malformed.has(row.id)).length });
   const provider = {
-    binding, tool: 'Fixture', container: 'slack_channel', noun: 'Fixture channel', failure, fence: vi.fn(),
+    binding, tool: 'Fixture', container: 'confluence_space', noun: 'Fixture channel', failure, fence: vi.fn(),
     verify: vi.fn(async () => 'https://fixture.example.test'),
     permalink: (origin, container) => `${origin}/channels/${container.key}`,
     page: vi.fn(async ({ cursor, limit }: { readonly cursor?: string; readonly limit: number }) => {

@@ -111,7 +111,7 @@ describe("agentic Ask observability through the canonical runtime channel", () =
       root: false, result: "answered", research_stop_reason: "finished",
       counts: { planned_query_count: 0, query_hit_count: 0, released_atom_count: 1, context_atom_count: 1, citation_count: 1 },
     });
-    expect(closed(f.lines, "evidence_list").map(line => line.diagnostic.counts)).toEqual([expect.objectContaining({ included_count: 1, document_items: 1, meeting_items: 0, slack_items: 0, transcript_items: 0 })]);
+    expect(closed(f.lines, "evidence_list").map(line => line.diagnostic.counts)).toEqual([expect.objectContaining({ included_count: 1, document_items: 1, meeting_items: 0, transcript_items: 0 })]);
     expect(closed(f.lines, "evidence_open").map(line => line.diagnostic.counts)).toEqual([expect.objectContaining({ included_count: 1, document_items: 1 })]);
     expect(closed(f.lines, "evidence_revalidate")).toHaveLength(5);
     expect(closed(f.lines, "ask_planner")).toHaveLength(3);

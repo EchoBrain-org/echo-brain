@@ -134,26 +134,6 @@ describe('Agentic Ask V1 public contracts', () => {
     }).items[0]?.label).toBe('🧪'.repeat(200));
   });
 
-  it('accepts a live Slack citation, marks DM statements private, and keeps open requests V3-only', () => {
-    const slack = {
-      kind: 'slack_message' as const, team_id: 'T01ABCDEF', channel_id: 'D02ABCDEF', message_ts: '1758873600.000100', thread_ts: '1758873600.000100',
-      permalink: 'https://acme.slack.com/archives/D02ABCDEF/p1758873600000100', text_sha256: `sha256:${'d'.repeat(64)}`,
-    };
-    const body = (citationValue: unknown, kind = 'slack_message', isPrivate = true) => ({
-      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
-      citations: [{ citation: citationValue, kind, label: 'DM with Dana · Priya · 2025-09-26', visibility: 'only_me' }],
-      parts: [{ question: 'Is DVT on track?', status: 'answered', statements: [{ text: 'The vendor said Oct 16 in a DM.', citation_indexes: [0], private: isPrivate }] }],
-    });
-    expect(validatePersonAnswerResponseV4(body(slack)).citations[0]!.citation).toEqual(slack);
-    expect(() => validatePersonAnswerResponseV4(body(slack, 'slack_message', false))).toThrow('private is inconsistent');
-    expect(() => validatePersonAnswerResponseV4(body(slack, 'decision'))).toThrow('kind is inconsistent');
-    expect(() => validatePersonAnswerResponseV4(body({ ...slack, permalink: 'https://evil.example/archives/D02ABCDEF/p1' }))).toThrow('permalink is invalid');
-    expect(() => validatePersonAnswerResponseV4(body({ ...slack, message_ts: '17588' }))).toThrow('message_ts is invalid');
-    expect(() => validatePersonAnswerResponseV4(body({ ...slack, text: 'leaked' }))).toThrow();
-    expect(() => validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation: slack })).toThrow('Ask citation kind is invalid');
-    expect(validatePersonEvidenceSearchRequestV1({ schema_version: 1, query: 'fixtures', kinds: ['decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'] }).kinds).toHaveLength(6);
-  });
-
   it('echoes a mine scope on answers and desk responses, but never a mine scope with a project', () => {
     const answer = (scope: unknown) => ({
       schema_version: 4, kind: 'echo-clean-person-answer-v4', scope, outcome: 'answered',
@@ -190,10 +170,6 @@ describe('Agentic Ask V1 public contracts', () => {
     };
     const note = `note:ctx_${'2'.repeat(64)}`;
     const transcript = `transcript:${citation.record_sha256}`;
-    const slack = {
-      kind: 'slack_message' as const, team_id: 'T01ABCDEF', channel_id: 'C02ABCDEF', message_ts: '1758873600.000100',
-      permalink: 'https://acme.slack.com/archives/C02ABCDEF/p1758873600000100', text_sha256: `sha256:${'d'.repeat(64)}`,
-    };
     const accepted = [
       { citation, ref: `meeting:${citation.record_sha256}` },
       { citation: { ...source, document_id }, kind: 'document_passage', ref: `document:${document_id}` },
@@ -201,10 +177,9 @@ describe('Agentic Ask V1 public contracts', () => {
       { citation: source, kind: 'note', ref: transcript },
     ];
     for (const value of accepted) expect(validatePersonAnswerResponseV4(answer(value)).citations[0]!.ref).toBe(value.ref);
-    // A citation without a ref (an older server, or Slack) still validates.
+    // A citation without a ref (from an older server) still validates.
     expect(validatePersonAnswerResponseV4(answer({ citation }))).not.toHaveProperty('citations.0.ref');
     const rejected = [
-      { citation: slack, kind: 'slack_message', visibility: 'only_me', ref: `meeting:${citation.record_sha256}` },
       { citation, ref: `meeting:sha256:${'9'.repeat(64)}` },
       { citation, ref: transcript },
       { citation: { ...source, document_id }, kind: 'document_passage', ref: note },

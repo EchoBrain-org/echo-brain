@@ -18,7 +18,7 @@ describe('one key for each item Ask cites', () => {
     expect(groupKey(followUp)).not.toBe(groupKey({ ...followUp, item_id: 'itm_launch-2' } as AnswerSource));
   });
 
-  it('keys your project, a person, a tool and a Jira project, Confluence space or Slack channel by what it names (research tool contract v1)', () => {
+  it('keys your project, a person, a tool and a Jira project or Confluence space by what it names (research tool contract v1)', () => {
     const PROJECT = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
     const project: AnswerSource = { kind: 'project', label: 'Thermal recovery', project_id: PROJECT };
     const person: AnswerSource = { kind: 'person', label: 'Mara Lind', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e' };

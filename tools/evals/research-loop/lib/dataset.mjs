@@ -23,7 +23,7 @@ const RELATIONS = new Set(["confirms", "conflicts", "needs_updating"]);
 /** The open-ended family (research tool contract v1, "Testing open-ended questions") and what each of its cases tests. */
 const FAMILIES = new Set(["open_ended"]);
 const CATEGORIES = new Set(["goal", "time", "own_work", "structure", "reach", "tools"]);
-const CONTAINERS = new Set(["jira_project", "confluence_space", "slack_channel"]);
+const CONTAINERS = new Set(["jira_project", "confluence_space"]);
 
 /** Deep-replaces the signed-in person placeholder with their directory display name. */
 export function substitutePerson(value, name) {

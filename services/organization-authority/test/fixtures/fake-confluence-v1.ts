@@ -26,12 +26,19 @@ export function fakeConfluenceNangoV1() {
   return { nango, tags: () => tags, finish: () => { connections.set(pending, { tags, access_token: ACCESS_TOKEN }); } };
 }
 
-/** Fake Cloud responses for a single space and an native ADF page. */
-export function fakeConfluenceCloudFetchV1() {
+/**
+ * Fake Cloud responses for a single space and a native ADF page: the ECHO MRD, or, with `page`, one paragraph of
+ * `text` under `title`.
+ */
+export function fakeConfluenceCloudFetchV1(options: { readonly page?: { readonly title: string; readonly text: string } } = {}) {
+  const title = options.page?.title ?? 'ECHO MRD';
+  const content = options.page === undefined
+    ? [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'ECHO MRD' }] }, { type: 'paragraph', content: [{ type: 'text', text: 'The release decision is to start EVT after PRD approval.' }] }]
+    : [{ type: 'paragraph', content: [{ type: 'text', text: options.page.text }] }];
   const page = {
-    id: '100', spaceId: '123', title: 'ECHO MRD', status: 'current', version: { number: 7 },
+    id: '100', spaceId: '123', title, status: 'current', version: { number: 7 },
     _links: { base: FIXTURE_CONFLUENCE_SITE_V1, webui: '/wiki/spaces/ECHO/pages/100/ECHO+MRD' },
-    body: { atlas_doc_format: { representation: 'atlas_doc_format', value: JSON.stringify({ type: 'doc', version: 1, content: [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'ECHO MRD' }] }, { type: 'paragraph', content: [{ type: 'text', text: 'The release decision is to start EVT after PRD approval.' }] }] }) } },
+    body: { atlas_doc_format: { representation: 'atlas_doc_format', value: JSON.stringify({ type: 'doc', version: 1, content }) } },
   };
   return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = new URL(String(input));
@@ -40,7 +47,8 @@ export function fakeConfluenceCloudFetchV1() {
     if (url.pathname.endsWith('/api/v2/spaces/123')) return Response.json({ id: '123', key: 'ECHO', name: 'ECHO' });
     if (url.pathname.endsWith('/api/v2/pages')) return Response.json({ results: [page], _links: {} });
     if (url.pathname.endsWith('/api/v2/pages/100')) return Response.json(page);
-    if (url.pathname.endsWith('/rest/api/search')) return Response.json({ results: [{ content: page }], _links: {} });
+    // CQL search answers with v1 content envelopes.
+    if (url.pathname.endsWith('/rest/api/search')) return Response.json({ results: [{ content: { type: 'page', id: page.id, title } }], _links: {} });
     throw new Error(`unexpected Confluence endpoint ${url.pathname}`);
   });
 }

@@ -521,7 +521,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     }
   });
 
-  it("N-16, N-17: Ask with mine cites only what the reader added or approved, every citation opens, and no Slack or transcript is read", async () => {
+  it("N-16, N-17: Ask with mine cites only what the reader added or approved, every citation opens, and no transcript is read", async () => {
     const f = await disclosureWorld();
     await f.admitNotes();
     const approvers = new Map<string, { readonly principal_id: string; readonly membership_id: string }>([
@@ -552,7 +552,6 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       expect(new Set(refs)).toEqual(new Set(mine));
       for (const citation of answer.citations) {
         const ref = citation.ref!;
-        expect(citation.citation.kind).not.toBe("slack_message");
         expect(ref).toMatch(/^(note|document|meeting):/);
         const owner = ref.startsWith("meeting:") ? approvers.get(ref) : added(ref);
         expect({ ref, principal_id: owner?.principal_id, membership_id: owner?.membership_id }).toEqual({ ref, principal_id: actor.principal_id, membership_id: actor.membership_id });

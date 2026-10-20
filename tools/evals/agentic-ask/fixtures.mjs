@@ -256,7 +256,6 @@ function selectedSource(kinds) {
   if (kinds.every((kind) => kind === "ticket")) return "ticket";
   if (kinds.every((kind) => ["decision", "action", "rationale"].includes(kind))) return "meeting";
   if (kinds.every((kind) => ["note", "document_passage"].includes(kind))) return "document";
-  if (kinds.every((kind) => kind === "slack_message")) return "slack";
   return "all";
 }
 
@@ -332,5 +331,5 @@ export function createFixtureDesk(caseDefinition) {
 }
 
 export function sourceForCitation(citation) {
-  return citation.kind === "ticket" ? "ticket" : citation.kind === "slack_message" ? "slack" : "meeting";
+  return citation.kind === "ticket" ? "ticket" : "meeting";
 }

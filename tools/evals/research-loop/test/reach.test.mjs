@@ -69,9 +69,9 @@ test("a structured refusal names its refused filters, and only the same refusal 
 });
 
 test("collections are named by source ids, selectors and the containers a source or item names", () => {
-  assert.deepEqual(["meetings", "meeting", "jira", "tickets", "confluence", "pages", "follow_ups", "projects", "people", "tools", "slack"].map(collectionOfSource),
-    ["meetings", "meetings", "tickets", "tickets", "pages", "pages", "follow_ups", "projects", "people", "tools", "slack"]);
-  assert.deepEqual(["jira_projects", "JIRA_PROJECTS", "confluence_spaces", "slack_channels", "calendar"].map(collectionOfSource), ["jira_projects", "jira_projects", "confluence_spaces", "slack_channels", null]);
+  assert.deepEqual(["meetings", "meeting", "jira", "tickets", "confluence", "pages", "follow_ups", "projects", "people", "tools"].map(collectionOfSource),
+    ["meetings", "meetings", "tickets", "tickets", "pages", "pages", "follow_ups", "projects", "people", "tools"]);
+  assert.deepEqual(["jira_projects", "JIRA_PROJECTS", "confluence_spaces", "calendar"].map(collectionOfSource), ["jira_projects", "jira_projects", "confluence_spaces", null]);
   const value = research([
     round(1, action("search", { query: "THERM" }, { items: ["E1", "E2"] }), action("list", { source: "pages" }, { error: "that request is not valid" })),
     finish(2),
