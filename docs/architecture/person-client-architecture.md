@@ -242,8 +242,9 @@ An ECHO record approval does not establish who authorized its business decision.
 
 The client requests optional source metadata with
 `X-Echo-Person-Record-Version: 2`. Each readable record may then include
-`source_metadata.record_approved_by.display_name`, resolved from the private
-Slack approval's exact organization, principal, and membership tuple. The lookup
+`source_metadata.record_approved_by.display_name`, resolved from the approval
+core's recorded approver (the record approver projector): its exact
+organization, principal, and membership tuple. The lookup
 uses the current directory display name, including historical revoked tenures
 when they remain available; it supplies no job title, email, or authorization.
 Participants continue to come from the approved brief. The signed envelope and
@@ -364,7 +365,7 @@ an independent `--association-project-ids-json` set that does not change the
 audience. `status-v3` returns the durable receipt and optional enrichment
 progress. `search-v3` and `search` find original uploads, and
 `person open --ref note:<context-id>` reads one, under current membership and
-stored audience, without Slack approval or a model dependency. Content/search
+stored audience, without approval or a model dependency. Content/search
 releases revalidate the session and audit before returning. Unknown submissions
 require the same request ID and exact file, title, audience, and project
 coordinates on retry; no local queue or automatic upload exists. The V2

@@ -59,5 +59,5 @@ different outcomes. Tests cover supported paraphrase, mixed valid/invalid
 references, and all-invalid retry. The exact implementation, regression, and
 live evidence scope is fixed by the refs and evidence IDs above.
 
-Remedy in progress: [meeting extraction from numbered units](../product/2026-10-10-meeting-extraction-units-v1.md),
+Remedy shipped in #316 (12a212b): [meeting extraction from numbered units](../product/2026-10-10-meeting-extraction-units-v1.md),
 where the model cites unit IDs and code resolves each one to an exact block span.

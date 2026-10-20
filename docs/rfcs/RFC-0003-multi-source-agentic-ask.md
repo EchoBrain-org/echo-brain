@@ -415,7 +415,8 @@ decision.
 ### Model and provider
 
 - The model stays DeepSeek V3.2 through OpenRouter until the test set exists.
-  After that, models are compared on it.
+  After that, models are compared on it. (Since then the default is Claude
+  Sonnet 5.5, `OPENROUTER_ANSWER_COMPOSITION_MODEL_V1`.)
 - OpenRouter requests already set `provider.data_collection: "deny"`, so no
   host that trains on or retains prompts is used. This becomes a hard
   requirement once Slack text can reach a prompt.

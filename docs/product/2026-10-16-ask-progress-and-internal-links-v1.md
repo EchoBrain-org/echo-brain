@@ -1,6 +1,9 @@
 # Ask progress and internal links v1
 
-Date: 2026-10-16. Status: approved by the founder for build on 2026-10-16; the founder validates the finished result.
+Date: 2026-10-16. Status: shipped in #330 and #331.
+[Ask progress: the quiet line v1](2026-10-19-ask-progress-quiet-line-v1.md)
+(#338) later replaced what the person sees while Ask works and when the answer
+arrives.
 
 The founder decided on 2026-10-16:
 - Direction B, "a line plus what it opened", chosen from a two-option mockup.

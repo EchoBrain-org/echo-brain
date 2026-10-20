@@ -236,3 +236,5 @@ whom, does not change.
 
 [ADR-0042](ADR-0042-research-tool-contract.md#sources) (2026-10-19) gives
 follow-ups their own dates and links, and its V8 answer on `/v7` cites them too.
+The staging research evaluation's question goal now runs Ask as `/v7` does, so
+it does measure follow-ups; the evidence note above predates that.

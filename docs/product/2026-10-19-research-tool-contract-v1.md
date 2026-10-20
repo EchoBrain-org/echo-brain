@@ -306,9 +306,10 @@ The change:
 
 ## Testing open-ended questions
 
-Today the release check asks one fixed question
-(`deploy/release/README.md:483`). The research-loop eval has 26 Ask cases (18
-development, 8 holdout), and each names a subject or a source and a date.
+At `40ba71c` the release check asked one fixed question
+(`deploy/release/README.md:483`), and the research-loop eval had 26 Ask cases
+(18 development, 8 holdout), each naming a subject or a source and a date.
+With the open-ended family below it has 51 (33 and 18).
 
 The change:
 
