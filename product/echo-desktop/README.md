@@ -4,8 +4,10 @@ The app shares its TypeScript client, host, renderer and Electron main process
 across macOS and Linux. Packages currently target macOS arm64 and Linux x64.
 Windows packaging is not implemented.
 
-Global Ask includes live Jira reads through the person's connected account and
-shows ticket citations that open directly in Jira. Project Ask includes Jira only through a saved project mapping. Mine excludes Jira.
+Global Ask includes live Jira and Confluence reads through the person's
+connected accounts, with citations that open directly in Jira or Confluence.
+Project Ask includes them only through the project's saved Jira project and
+Confluence spaces. Mine excludes them.
 
 While a global or project Ask works (ADR-0039), one line says what it is
 doing (Searching, Reading, Checking access, Writing) beside its timer and

@@ -473,9 +473,10 @@ recovery as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. No state migration operation
 exists; a schema change requires fresh state.
-If persisted state lacks the candidate's exact V14/V3/V4 databases, current retrieval schemas, and
-V2 root lineage, `stage` refuses before activating or recording the candidate. It does
-not attempt to repair, infer, or migrate the state.
+If persisted state lacks the candidate's exact
+[baselines](../../services/organization-authority/README.md#state-and-baselines)
+and V2 root lineage, `stage` refuses before activating or recording the
+candidate. It does not attempt to repair, infer, or migrate the state.
 
 ### Environment drift before staging
 
@@ -1104,7 +1105,9 @@ or IDs.
 
 The default per-user prefix is `$HOME/.local`, so the installed `echo-brain`
 normally lands in `$HOME/.local/bin`; the installer prints the one PATH command
-needed when that bin directory is not active. Re-running `./install.sh` is the
-V1 update mechanism. It replaces packaged code only; it leaves the employee's
-private session state in place. There is no background updater, MDM integration,
-public artifact bucket, signed download URL, or automatic rollback.
+needed when that bin directory is not active. This bundle has no updater of
+its own: re-running `./install.sh` updates it, replacing packaged code only and
+leaving the employee's private session state in place. There is no MDM
+integration or automatic rollback. The command-line kits and desktop packages
+update from the [signed client feed](../../docs/features/client-updates-v1.md)
+instead.
