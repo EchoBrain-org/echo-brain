@@ -175,27 +175,38 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     return current.origin;
   }
 
-  async function issue(id: string, origin: string, inventory: boolean, signal?: AbortSignal, related = false): Promise<ParsedJiraIssueV1> {
+  /** One issue under the asker's current permissions, in any project. */
+  async function readIssue(id: string, origin: string, inventory: boolean, signal?: AbortSignal, related = false): Promise<ParsedJiraIssueV1> {
     const value = await transport.request({ path: `${pathPrefix}/issue/${id}`, query: { fields: inventory ? INVENTORY_FIELDS : related ? OPEN_FIELDS : TEXT_FIELDS }, signal });
     signal?.throwIfAborted();
     const parsed = parseJiraIssueV1(value, { cloudid, origin, inventory, related });
     if (parsed.id !== id) jiraFailure('invalid_output');
+    return parsed;
+  }
+
+  async function issue(id: string, origin: string, inventory: boolean, signal?: AbortSignal, related = false): Promise<ParsedJiraIssueV1> {
+    const parsed = await readIssue(id, origin, inventory, signal, related);
     // Exact reads fence stale search pages, moved tickets and retained handles.
     if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
     return parsed;
   }
 
-  /** A direct link is only an optional navigation hint. Never release a hidden or moved target. */
+  /**
+   * A direct link is only an optional navigation hint. Never release a hidden or moved target. Jira answers 404 for a
+   * linked issue that is deleted or that the asker cannot see, and a target outside the pinned project is outside this
+   * read: either leaves the link out, and the open's `truncated` says it left something out beside the ticket
+   * (ADR-0041). A refused connection (unauthorized: HTTP 401 or 403) says nothing about one issue, so it fails the open,
+   * as transient, malformed and stale-state failures do.
+   */
   async function relatedIssue(id: string, origin: string, signal?: AbortSignal): Promise<ParsedJiraIssueV1 | undefined> {
+    let parsed: ParsedJiraIssueV1;
     try {
-      return await issue(id, origin, true, signal);
+      parsed = await readIssue(id, origin, true, signal);
     } catch (error) {
-      // Jira commonly represents an inaccessible or deleted linked issue as
-      // 403/404. Its link stub is not evidence, so omit only those targets.
-      // Transient, malformed and stale-state failures still fail closed.
-      if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) return undefined;
+      if (error instanceof AuthorityOperationError && error.code === 'not_found') return undefined;
       throw error;
     }
+    return pinnedProject !== undefined && parsed.project_id !== pinnedProject.id ? undefined : parsed;
   }
 
   async function revalidateIssues(ids: readonly string[], origin: string, signal?: AbortSignal): Promise<void> {
