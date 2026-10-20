@@ -44,7 +44,7 @@ async function fixture(pinned?: readonly string[]) {
 }
 
 describe('the shared tool container reader (research tool contract v1)', () => {
-  it('refuses dates and a container selector before reading, pins a project scope, fences every check, and rechecks what it released', async () => {
+  it('refuses dates and a container selector before reading, pins a project scope, fences every check, rechecks what it released, and refuses malformed answers', async () => {
     const f = await fixture(['1', '2', '3', '4']);
     expect(f.provider.fence).toHaveBeenCalledTimes(2);
     for (const call of [() => f.source.list({ since: '2026-10-01' }), () => f.source.search({ query: 'one', until: '2026-10-01' }), () => f.source.list({ container: 'C1' })]) {
@@ -71,9 +71,7 @@ describe('the shared tool container reader (research tool contract v1)', () => {
     // A refused connection says nothing about one channel, so a list or search fails rather than end empty and complete.
     await expect(f.source.list({})).rejects.toMatchObject({ code: 'unauthorized' });
     await expect(f.source.search({ query: 'channel' })).rejects.toMatchObject({ code: 'unauthorized' });
-  });
-
-  it('refuses a provider answer that names one channel twice, or another channel than it asked for, before anything is released', async () => {
+    // A provider answer that names one channel twice, or another channel than the one asked for, releases nothing.
     const twice = await fixture();
     twice.provider.page.mockResolvedValueOnce({ containers: [twice.state.containers.get('1')!, twice.state.containers.get('1')!], left_out: 0 });
     await expect(twice.source.list({})).rejects.toMatchObject({ code: 'invalid_output' });

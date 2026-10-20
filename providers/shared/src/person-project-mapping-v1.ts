@@ -154,10 +154,10 @@ export function createPersonProjectMappingAccessV1<T extends ScopedProjectMappin
   };
 }
 
-/** What `personToolContainerSourceV1` reads a tool's containers with: the tool's connection, its project mappings and its reader. */
+/** A tool's connection, project mappings and container reader, as `personToolContainerSourceV1` reads with them. */
 export interface PersonToolContainerConnectionV1<M extends { readonly cloud_id: string }> {
   readonly provider: Pick<PersonProviderV1, 'id'>;
-  /** The provider site (cloud) this connection reads. */
+  /** The provider site (cloud) the connection reads. */
   readonly scope_id: string;
   readonly lifecycle: Pick<ReturnType<typeof createPersonConnectionLifecycleV1>, 'actor' | 'tags' | 'authenticated'>;
   readonly store: Pick<PersonConnectionStoreV1, 'current' | 'requireCurrent'>;
@@ -166,7 +166,7 @@ export interface PersonToolContainerConnectionV1<M extends { readonly cloud_id: 
     projectScope(token: string, organizationId: string, projectId: string | undefined, scopeId: string, validate: (request: unknown) => { readonly project_id: string }): { readonly mapping: M; current(): void } | null | undefined;
     containerProjects(token: string, organizationId: string, containers: (mapping: M) => readonly string[]): { readonly names: ReadonlyMap<string, readonly string[]>; current(): void };
   };
-  /** The tool's project read request validator, through which a project scope's id is read. */
+  /** The tool's project read request validator. */
   readonly validate: (request: unknown) => { readonly project_id: string };
   /** The containers one saved mapping on this site maps. */
   readonly containers: (mapping: M) => readonly string[];

@@ -93,14 +93,13 @@ function world() {
     mina: [tool('jira', 'Jira', 'unlinked')],
   };
 
+  /** One request's workspace release witness, as `name`. */
+  const auditFor = (name: Name, request_id: string) => new SqlitePersonAgenticAskAuditV1(database).forWorkspaceRequest({ authority_id: 'authority', state_lineage_id: 'lineage',
+    organization_id: PEOPLE[name].organization_id, principal_id: PEOPLE[name].principal_id, membership_id: PEOPLE[name].membership_id, session_family_id: 'session-fixture', request_id });
   /** One Ask's workspace sources for `name`, with the audit rows of its request. */
   const sources = (name: Name = 'ari', options: { readonly scope?: Scope; readonly settings?: boolean } = {}) => {
-    const binding = PEOPLE[name];
     const request_id = `ask_${randomUUID()}`;
-    const audit = new SqlitePersonAgenticAskAuditV1(database).forWorkspaceRequest({
-      authority_id: 'authority', organization_id: binding.organization_id, state_lineage_id: 'lineage', principal_id: binding.principal_id,
-      membership_id: binding.membership_id, session_family_id: 'session-fixture', request_id,
-    });
+    const audit = auditFor(name, request_id);
     const workspace = createPersonWorkspaceEvidenceSourcesV1({
       sources: {
         projects: application, grants: personWorkspaceGrantsV1(repository), people: new SqliteOpenItemPeopleV1(database),
@@ -115,7 +114,7 @@ function world() {
     return { ...workspace, audits };
   };
   return {
-    database, application, sources, tools, atlas, beacon, comet, echo, delta,
+    database, application, sources, auditFor, tools, atlas, beacon, comet, echo, delta,
     set, create,
     /** Adds an organization member to a project, as Ari. */
     join: (project_id: string, binding: AuthorityPersonMembershipBinding) => application.setMember('ari', {
@@ -493,10 +492,7 @@ describe('workspace sources: checks and audit (research tool contract v1, ADR-00
 
   it('refuses an audit of anything but workspace items by their ids', () => {
     const w = world();
-    const audit = new SqlitePersonAgenticAskAuditV1(w.database).forWorkspaceRequest({
-      authority_id: 'authority', organization_id: ARI.organization_id, state_lineage_id: 'lineage', principal_id: ARI.principal_id,
-      membership_id: ARI.membership_id, session_family_id: 'session-fixture', request_id: 'ask_audit',
-    });
+    const audit = w.auditFor('ari', 'ask_audit');
     const digest = `sha256:${'a'.repeat(64)}` as const;
     for (const release of [
       { source: 'projects', operation: 'list', items: [{ kind: 'project', item_id: 'Atlas', linked: false, released_fields_sha256: digest }] },

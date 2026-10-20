@@ -6,12 +6,8 @@ import { PERSON_QUERY_FUNCTION_WORDS_V1 } from '../adapters/persistence/sqlite/p
  * contract v1) refuse alike, size pages alike, match whole words and page with request-owned cursors.
  */
 
-export function evidenceInvalidV1(message: string): never {
-  throw new AuthorityOperationError('invalid_request', message);
-}
-export function evidenceNotFoundV1(): never {
-  throw new AuthorityOperationError('not_found', 'Evidence item is not available in this request');
-}
+export function evidenceInvalidV1(message: string): never { throw new AuthorityOperationError('invalid_request', message); }
+export function evidenceNotFoundV1(): never { throw new AuthorityOperationError('not_found', 'Evidence item is not available in this request'); }
 
 /** A call's page: at most `maximum` items, and a limit outside 1 to 50 is refused. */
 export function evidencePageSizeV1(limit: number | undefined, maximum: number): number {
