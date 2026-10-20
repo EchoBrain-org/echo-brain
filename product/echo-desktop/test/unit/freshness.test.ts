@@ -23,6 +23,7 @@ const runs = (operation: string, match: (request: Record<string, unknown>) => bo
   calls('runs').filter(([, params]) => params.request.operation === operation && match(params.request)).length;
 /** Home's reads of its rows. */
 const homeReads = () => runs('home', request => request.read === 'rows');
+type Store = Awaited<ReturnType<typeof startStore>>;
 const meetings = (operation: string) => calls('tools.meetings').filter(([, params]) => params.request.operation === operation).length;
 const lists = (status: 'active' | 'archived') => calls('projects.list').filter(([, params]) => (params.status ?? 'active') === status).length;
 const noticeTexts = () => calls('notice.show').map(([, params]) => params.text);
@@ -100,24 +101,17 @@ describe('when a check runs (R2)', () => {
     expect(checks()).toBe(3);
   });
 
-  it('coming back on macOS: after another app was in front, with the account read again', async () => {
+  it.each([
+    ['coming back on macOS, after another app was in front', (store: Store) => { cover(store); return uncover(store); }],
+    ['the window shown from the tray', (store: Store) => show(store)],
+    ['the window restored, or uncovered by other windows', (store: Store) => { hide(store); return unhide(store); }],
+  ])('%s: a check, with the account read again; the same state again is none', async (_, back) => {
     const store = await startStore();
-    cover(store);
-    await uncover(store);
-    expect(checks()).toBe(2);
-    expect(statusReads()).toBe(2);
-  });
-
-  it('the window shown from the tray, or restored (or uncovered by other windows): the same return; the same state again is none', async () => {
-    const store = await startStore();
-    await show(store);
+    await back(store);
     expect([checks(), statusReads()]).toEqual([2, 2]);
     expect(store.windowState({ onScreen: true, front: true })).toBeNull();
     await flush();
     expect([checks(), statusReads()]).toEqual([2, 2]);
-    hide(store);
-    await unhide(store);
-    expect([checks(), statusReads()]).toEqual([3, 3]);
   });
 
   it('opening a page: at most once in ten seconds', async () => {
@@ -135,13 +129,6 @@ describe('when a check runs (R2)', () => {
     await store.openDecision('apr_1');
     await flush();
     expect(checks()).toBe(3);
-  });
-
-  it('the machine waking', async () => {
-    const store = await startStore();
-    void wake();
-    await flush();
-    expect(checks()).toBe(2);
   });
 
   it.each([false, true])('a wake during the initial check queues one fresh check, unless stopped (%s)', async stopped => {
@@ -298,28 +285,22 @@ describe('what a moved area reads again (R3)', () => {
     expect((store.followUpShown() as FollowUpList).items.filter(item => item.state === 'open')).toEqual([]);
   });
 
-  it('follow-ups: a project\'s follow-ups line', async () => {
+  const run = { run_id: 'run_00000000-0000-4000-8000-000000000020', trigger: 'approved_record' as const, event_ref: 'apr_1', state: 'done' as const,
+    error_code: null, created_at: '2026-10-14T09:00:00.000Z', updated_at: '2026-10-14T09:05:00.000Z' };
+  it.each([
+    // Only the line: the project's feed is not read again.
+    ['a project\'s follow-ups line', 'project', (store: Store) => store.openProject(apollo), () => [followUp(1)], 1],
+    ['a meeting\'s line on its decision page', 'run', (store: Store) => store.openDecision('apr_1', run), () => [sent(1, MINA)], 0],
+  ] as const)('follow-ups: %s', async (_, scope, open, items, feeds) => {
     const store = await startStore();
-    await store.openProject(apollo);
-    const lines = () => runs('items', request => request.scope === 'project' && request.read === 'counts');
-    const before = lines();
-    authority.items = [followUp(1)];
-    await nextCheck();
-    expect(lines()).toBe(before + 1);
-    expect(calls('list.page')).toHaveLength(1);
-  });
-
-  it('follow-ups: a meeting\'s line on its decision page', async () => {
-    const store = await startStore();
-    const run = { run_id: 'run_00000000-0000-4000-8000-000000000020', trigger: 'approved_record' as const, event_ref: 'apr_1', state: 'done' as const,
-      error_code: null, created_at: '2026-10-14T09:00:00.000Z', updated_at: '2026-10-14T09:05:00.000Z' };
-    await store.openDecision('apr_1', run);
+    await open(store);
     await flush();
-    const lines = () => runs('items', request => request.scope === 'run' && request.read === 'counts');
+    const lines = () => runs('items', request => request.scope === scope && request.read === 'counts');
     const before = lines();
-    authority.items = [sent(1, MINA)];
+    authority.items = items();
     await nextCheck();
     expect(lines()).toBe(before + 1);
+    expect(calls('list.page')).toHaveLength(feeds);
   });
 
   it('reviews: Home, and the decision page, keeping the choices made on it', async () => {
@@ -340,61 +321,27 @@ describe('what a moved area reads again (R3)', () => {
 });
 
 describe('what coming back reads again, on each page (R4)', () => {
-  it('Home: its rows, read live again', async () => {
-    const store = await startStore();
-    const before = homeReads();
-    await show(store);
-    await flush();
-    expect(homeReads()).toBe(before + 1);
-  });
-
-  it('a project: its feed\'s first page, its members and its line', async () => {
-    const store = await startStore();
-    await store.openProject(apollo);
-    const before = [calls('list.page').length, calls('projects.members').length, runs('items', request => request.scope === 'project')];
-    await show(store);
-    await flush();
-    expect([calls('list.page').length, calls('projects.members').length, runs('items', request => request.scope === 'project')])
-      .toEqual(before.map(count => count + 1));
-  });
-
-  it('Mine, Tools, and People & invites', async () => {
+  const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open'
+    && request.changed_since === undefined);
+  it.each([
+    ['Home: its rows, read live again', async () => undefined, () => [homeReads()]],
+    ['a project: its feed\'s first page, its members and its line', (store: Store) => store.openProject(apollo),
+      () => [calls('list.page').length, calls('projects.members').length, runs('items', request => request.scope === 'project')]],
+    ['Mine', (store: Store) => store.openMine(), () => [calls('list.page').length]],
+    ['Tools', (store: Store) => store.openTools(), () => [calls('account.tools').length]],
+    ['People & invites', (store: Store) => store.openOrganization(), () => [calls('employees.list').length]],
+    ['the Follow-ups list', (store: Store) => store.openYourFollowUps(), () => [listRows()]],
+    ['an item page', (store: Store) => store.openFollowUp(id(1)), () => [runs('item', request => request.read === 'rows')]],
+  ] as const)('%s', async (_, open, reads) => {
     account = { ...ACCOUNT, role: 'owner' };
-    const store = await startStore();
-    await store.openMine();
-    let before = calls('list.page').length;
-    await show(store);
-    await flush();
-    expect(calls('list.page').length).toBe(before + 1);
-    store.openTools();
-    await flush();
-    before = calls('account.tools').length;
-    await show(store);
-    await flush();
-    expect(calls('account.tools').length).toBe(before + 1);
-    store.openOrganization();
-    await flush();
-    before = calls('employees.list').length;
-    cover(store);
-    await uncover(store);
-    await flush();
-    expect(calls('employees.list').length).toBe(before + 1);
-  });
-
-  it('the Follow-ups list or an item page', async () => {
     authority.items = [followUp(1)];
     const store = await startStore();
-    await store.openYourFollowUps();
-    const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open' && request.changed_since === undefined);
-    const before = listRows();
+    await open(store);
+    await flush();
+    const before = reads();
     await show(store);
     await flush();
-    expect(listRows()).toBe(before + 1);
-    await store.openFollowUp(id(1));
-    const read = runs('item');
-    await show(store);
-    await flush();
-    expect(runs('item')).toBeGreaterThan(read);
+    expect(reads()).toEqual(before.map(count => count + 1));
   });
 });
 
