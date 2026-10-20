@@ -1,7 +1,7 @@
 import { once } from 'node:events';
 import { vi } from 'vitest';
 import { PERSON_ASK_PROGRESS_HEADER_V1 } from '@echo-brain/organization-api';
-import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
+import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { SqlitePersonAgenticAskAuditV1 } from '../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
@@ -41,6 +41,42 @@ export function liveAskOptions(f: OpenItemsFixtureV1, model: StructuredGeneratio
     live_sources: [{ ...JIRA_LIVE_CONNECTOR_V1, application: { source: async ({ access_token }) => jira(access_token as FixturePerson) } }],
     follow_ups: { runs: f.runs, items: f.items, people: f.directory, records: f.records, on_live_failure: () => {} },
   };
+}
+
+type StepPrompt = { readonly question?: string; readonly asked_by?: string; readonly source_catalog?: readonly { readonly source: string }[];
+  readonly last_results?: readonly { readonly tool: string; readonly args?: { readonly owner?: string }; readonly items?: readonly string[]; readonly results?: readonly string[] }[] };
+
+/**
+ * A planner that does what "my open tasks" asks: it lists the asker's open follow-ups (`asked_by`, as the route names
+ * them), runs any `probes` steps, opens the first follow-up the owner list returned, and finishes on it. The writer
+ * states one sentence from it; `on_answer` runs inside the writer call. `reset` starts the next Ask from its first step.
+ */
+export function myOpenTasksPlanner(probes: readonly (readonly unknown[])[] = [], options: { readonly on_answer?: () => void } = {}) {
+  const steps: StepPrompt[] = [];
+  const writer: string[] = [];
+  const catalogs: string[][] = [];
+  let first = 0;
+  let mine: string | undefined;
+  const model: StructuredGenerationPort = { async generate(input: StructuredGenerationInput) {
+    const prompt = JSON.parse(input.user_prompt) as StepPrompt & { readonly evidence?: readonly { readonly id: string }[] };
+    if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
+      writer.push(input.user_prompt);
+      options.on_answer?.();
+      return { sentences: [{ text: 'Your open follow-up is on the launch ticket.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    }
+    if (prompt.source_catalog !== undefined) catalogs.push(prompt.source_catalog.map(entry => entry.source));
+    steps.push(prompt);
+    mine ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.owner !== undefined)?.items?.[0];
+    const index = steps.length - 1 - first;
+    const actions = index === 0 ? [{ tool: 'list', args: { source: 'follow_ups', owner: prompt.asked_by, status: 'open' } }]
+      : index <= probes.length ? probes[index - 1]!
+        : index === probes.length + 1 && mine !== undefined ? [{ tool: 'open', args: { id: mine } }]
+          : [{ tool: 'finish', args: {} }];
+    const found = actions[0] !== undefined && (actions[0] as { readonly tool: string }).tool === 'finish' && mine !== undefined;
+    return { parts: [{ question: prompt.question!, notes: 'PLANNER-CANARY', needs: [{ need: 'Open follow-ups', status: found ? 'found' : 'open', evidence: found ? [mine] : [] }] }], actions };
+  } };
+  return { model, steps, writer, catalogs, seen: () => [...steps.map(step => JSON.stringify(step)), ...writer].join('\n'),
+    reset() { first = steps.length; mine = undefined; } };
 }
 
 /** Serves the given person routes behind the real server; its origin. */

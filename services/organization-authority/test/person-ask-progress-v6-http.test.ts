@@ -6,9 +6,9 @@ import {
   PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
   createPersonAskProgressDecoderV1, createPersonAskProgressDecoderV2, validatePersonAnswerResponseV6, validatePersonAnswerResponseV7,
 } from '@echo-brain/organization-api';
-import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
+import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-answer-route-v1.js';
-import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
+import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, myOpenTasksPlanner, serveAsk } from './fixtures/ask-over-http.js';
 import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
@@ -22,30 +22,6 @@ import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 afterEach(closeAskServers);
 
-type StepPrompt = { readonly question?: string; readonly asked_by?: string; readonly source_catalog?: readonly { readonly source: string }[];
-  readonly last_results?: readonly { readonly tool: string; readonly args?: { readonly owner?: string }; readonly items?: readonly string[] }[] };
-
-/** Lists the asker's open follow-ups, opens the first, finishes on it; the writer states one sentence from it. */
-function myOpenTasks() {
-  const catalogs: string[][] = [];
-  let steps = 0;
-  let mine: string | undefined;
-  const model: StructuredGenerationPort = { async generate(input: StructuredGenerationInput) {
-    const prompt = JSON.parse(input.user_prompt) as StepPrompt & { readonly evidence?: readonly { readonly id: string }[] };
-    if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
-      return { sentences: [{ text: 'Your open follow-up is on the launch ticket.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
-    }
-    if (prompt.source_catalog !== undefined) catalogs.push(prompt.source_catalog.map(entry => entry.source));
-    mine ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.owner !== undefined)?.items?.[0];
-    const step = steps++;
-    const actions = step === 0 ? [{ tool: 'list', args: { source: 'follow_ups', owner: prompt.asked_by, status: 'open' } }]
-      : step === 1 && mine !== undefined ? [{ tool: 'open', args: { id: mine } }] : [{ tool: 'finish', args: {} }];
-    const found = actions[0]!.tool === 'finish' && mine !== undefined;
-    return { parts: [{ question: prompt.question!, notes: 'PLANNER-CANARY', needs: [{ need: 'Open follow-ups', status: found ? 'found' : 'open', evidence: found ? [mine] : [] }] }], actions };
-  } };
-  return { model, catalogs, reset() { steps = 0; mine = undefined; } };
-}
-
 /** The `/v5` and `/v6` routes as the runtime composes them. */
 function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mount: { readonly v6?: boolean } = {}) {
   const options = liveAskOptions(f, model);
@@ -58,7 +34,7 @@ const askAudits = (f: OpenItemsFixtureV1) => auditBodies(f, 'echo-person-agentic
 describe('the V7 Ask streamed on /v6 (ADR-0039, ADR-0040)', () => {
   it('streams progress V2: searches name follow-ups, the follow-up it read is named and cited, and the receipt lists it', async () => {
     const f = await sentFixture();
-    const planner = myOpenTasks();
+    const planner = myOpenTasksPlanner();
     const base = await origin(f, planner.model);
     const plain = await ask(base, { progress: null });
     expect(plain.headers.get('content-type')).toBe('application/json; charset=utf-8');
@@ -101,7 +77,7 @@ describe('the V7 Ask streamed on /v6 (ADR-0039, ADR-0040)', () => {
     // Mina's Jira read fails, so the follow-up's title is the ECHO-held expected phrase, as its citation label is.
     const f = await sentFixture({ openFails: { ticket: new AuthorityOperationError('unavailable', 'Jira is down') } });
     f.check(f.ticket.item_id, 'still_open');
-    const planner = myOpenTasks();
+    const planner = myOpenTasksPlanner();
     const base = await origin(f, planner.model);
     const json = validatePersonAnswerResponseV7(await (await ask(base, { progress: null })).json());
     planner.reset();
@@ -119,7 +95,7 @@ describe('the V7 Ask streamed on /v6 (ADR-0039, ADR-0040)', () => {
 
   it('streams /v6 only for its own header value, and leaves /v5 streaming V1, which never names a follow-up', async () => {
     const f = await sentFixture();
-    const planner = myOpenTasks();
+    const planner = myOpenTasksPlanner();
     const base = await origin(f, planner.model);
     // A V1 client's header on /v6 gets the JSON V7 answer, never a V2 stream.
     for (const progress of [PERSON_ASK_PROGRESS_HEADER_VALUE_V1, '0', '22']) {
@@ -151,7 +127,7 @@ describe('the V7 Ask streamed on /v6 (ADR-0039, ADR-0040)', () => {
 
   it('answers /v6 as unavailable, still route-matched, on an Authority composed without the V7 Ask', async () => {
     const f = await sentFixture();
-    const base = await origin(f, myOpenTasks().model, { v6: false });
+    const base = await origin(f, myOpenTasksPlanner().model, { v6: false });
     const response = await ask(base);
     expect(response.status).toBe(503);
     expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('6');
