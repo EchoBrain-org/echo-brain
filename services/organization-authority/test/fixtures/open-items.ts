@@ -276,7 +276,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   } satisfies Partial<Record<keyof PersonTriggerRunsHttpApplicationV1, unknown>>;
   const finishImpactRun = async () => {
     await app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: run.run_id } });
-    await vi.waitFor(() => expect(runs.read(f.person, run.run_id)!.state).not.toBe('running'));
+    await vi.waitFor(() => expect(runs.read(f.person, run.run_id)!.state).not.toBe('running'), { interval: 1 });
     expect(runs.read(f.person, run.run_id)!.state).toBe('done');
   };
   const runItems = (access_token: FixturePerson = 'ari') => app.items({ access_token, request: { schema_version: 1, operation: 'items', scope: 'run', id: run.run_id } });

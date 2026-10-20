@@ -49,7 +49,7 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
   const create = (serviceRuns: SqliteTriggerRunsV1 = runs, max_running?: number) => createPersonTriggerRunsV1({ ...(max_running === undefined ? {} : { max_running }), runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordActions: () => (options.actions ?? (() => []))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [], ...(options.indexLags === undefined ? {} : { recordIndexLags: options.indexLags }) }, bindDesk: bindDesk as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
     items: new SqliteImpactItemsV1(f.db, () => now), people: new SqliteOpenItemPeopleV1(f.db) });
   const app = create();
-  const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'));
+  const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'), { interval: 1 });
   return { ...f, runs, row, app, create, research, diagnostics, desk, renderInputs, bindDesk, openCitation, settled, advance: (ms: number) => { now = new Date(now.getTime() + ms); } };
 }
 
@@ -270,9 +270,9 @@ describe('durable approved-record trigger runs', () => {
       return card;
     } });
     await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } });
-    await vi.waitFor(() => expect(f.research).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(f.research).toHaveBeenCalledTimes(1), { interval: 1 });
     f.app.close();
-    await vi.waitFor(() => expect(f.runs.read(f.person, f.row.run_id)!.state).toBe('running'));
+    await vi.waitFor(() => expect(f.runs.read(f.person, f.row.run_id)!.state).toBe('running'), { interval: 1 });
     const restarted = f.create();
     expect(await restarted.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } })).toEqual({ state: 'running' });
     f.advance(1_001);
@@ -316,7 +316,7 @@ describe('open items written when an impact check finishes', () => {
     expect([f.runs.readUnfenced(f.runId)!.state, f.runs.readUnfenced(sweep.run_id)!.state]).toEqual(['running', 'running']);
     // The desktop starts it again: claim takes over the lapsed attempt.
     await expect(f.app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: f.runId } })).resolves.toEqual({ state: 'running' });
-    await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'));
+    await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'), { interval: 1 });
   });
 
   it('matches an ECHO action owner by a name exactly one active member holds', async () => {

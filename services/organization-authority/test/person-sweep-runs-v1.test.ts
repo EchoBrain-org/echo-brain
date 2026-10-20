@@ -73,13 +73,13 @@ async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owne
       const run_id = runOf(await sweep(access_token, scope));
       const before = findings.length;
       expect(await start(access_token, run_id)).toEqual({ state: 'running' });
-      await vi.waitFor(() => expect(findings.length).toBeGreaterThan(before));
+      await vi.waitFor(() => expect(findings.length).toBeGreaterThan(before), { interval: 1 });
       return { run_id };
     },
     /** Lets every sweep's research finish, and waits until this run is no longer running. */
     async settled(run_id: string) {
       release();
-      await vi.waitFor(() => expect(f.runs.readUnfenced(run_id)!.state).not.toBe('running'));
+      await vi.waitFor(() => expect(f.runs.readUnfenced(run_id)!.state).not.toBe('running'), { interval: 1 });
     },
     /** The ticket's and the action's last verdicts, in that order. */
     verdicts: () => [f.ticket, f.action].map(item => f.items.read(item.item_id)!.check?.verdict ?? null),
@@ -214,7 +214,7 @@ describe('sweep runs record a shared last check', () => {
     f.advance(wait);
     const before = f.findings.length;
     expect(await f.start('ari', run_id)).toEqual({ state: 'running' });
-    await vi.waitFor(() => expect(f.findings.length).toBeGreaterThan(before));
+    await vi.waitFor(() => expect(f.findings.length).toBeGreaterThan(before), { interval: 1 });
     await f.settled(run_id);
     // Mina's verdict stays the last check, and Ari's run keeps which item he could not read.
     expect(f.items.read(f.ticket.item_id)!.check).toMatchObject({ verdict: 'still_open', by: f.membership('mina') });
