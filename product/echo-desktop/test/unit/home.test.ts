@@ -244,6 +244,20 @@ beforeEach(() => {
   rpc.mockImplementation(authority);
 });
 
+/** Signed in, on a meeting's follow-ups. */
+async function meetingList() {
+  const store = await start();
+  await store.openFollowUps('record', record, 'Pilot planning');
+  return store;
+}
+
+/** Nothing more is read for two minutes but the change check, which goes on at the server's pace. */
+async function expectQuiet() {
+  const calls = polls().length;
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(polls()).toHaveLength(calls);
+}
+
 describe('Home rows', () => {
   it.each([null, 'unavailable'] as const)('shows an owner item when Granola is %s, and its row opens its page over Home', async status => {
     fx.granola = status;
@@ -369,6 +383,13 @@ describe('Home rows', () => {
 });
 
 describe('Home decisions and impact checks', () => {
+  /** Signed in, with your approved meeting's impact check running. */
+  async function checking() {
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('running');
+    return start();
+  }
+
   it('covers meeting rows and a private decision when another app is in front', async () => {
     const store = await start();
     cover(store);
@@ -422,9 +443,7 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('resumes a check after spending a polling interval in another app', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     cover(store);
     const requests = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
@@ -438,9 +457,7 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('refreshes an open decision when its check finishes while the app is hidden', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     await store.openDecision(approval, fx.run);
     cover(store);
     await vi.advanceTimersByTimeAsync(5_000);
@@ -455,9 +472,7 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('keeps polling, more slowly, after a temporary runs-list failure', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     fx.failNextList = true;
     await vi.advanceTimersByTimeAsync(5_000);
     // The failed read kept the run it had: still checking.
@@ -471,9 +486,7 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('reads what waits on you on a poll only once a check ends, since that read opens each item live', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     const homeReads = () => operations().filter(operation => operation === 'home').length;
     expect(homeReads()).toBe(1);
     await vi.advanceTimersByTimeAsync(5_000);
@@ -487,9 +500,7 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('reads what a finished check found again, more slowly, until that read succeeds', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     const homeReads = rowsReads;
     expect(homeReads()).toBe(1);
     // The check ends, and the read of what it found fails on that poll.
@@ -505,16 +516,12 @@ describe('Home decisions and impact checks', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(homeReads()).toBe(3);
     expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
-    const requests = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(requests);
+    await expectQuiet();
   });
 
   it('reads what waits on you again on the next poll after that read failed', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
     fx.failNextHome = true;
-    const store = await start();
+    const store = await checking();
     expect(store.getState().home?.open).toBeNull();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(rowsReads()).toBe(2);
@@ -526,9 +533,7 @@ describe('Home decisions and impact checks', () => {
     fx.failLists = true;
     const store = await start();
     expect(store.getState().home?.failure).toBeUndefined();
-    const requests = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(requests);
+    await expectQuiet();
   });
 
   it('keeps the rows a failed home read had, and shows no error for it', async () => {
@@ -543,9 +548,7 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('keeps owing what a finished check found until a read that is still Home\'s brings it', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     // The check ends, and the poll's read of what it found is slow.
     fx.run = impactRun('done');
     fx.home = { ...emptyHome(), send: [sendRow()] };
@@ -568,10 +571,8 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('keeps an initial runs-list failure silent and recovers when Home is read again', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
     fx.failNextList = true;
-    const store = await start();
+    const store = await checking();
     expect(store.getState().home).toMatchObject({ loading: false, failure: undefined });
     const requests = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
@@ -582,9 +583,7 @@ describe('Home decisions and impact checks', () => {
   });
 
   it.each([false, true])('resumes a failed Home while work is outstanding, result owed: %s', async owed => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     if (owed) {
       fx.run = impactRun('done');
       fx.home = { ...emptyHome(), send: [sendRow()] };
@@ -605,9 +604,7 @@ describe('Home decisions and impact checks', () => {
   });
 
   it.each([false, true])('preserves and retries a failed resume with an open decision: %s', async (openCard) => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     if (openCard) await store.openDecision(approval, fx.run);
     cover(store);
     fx.failNextList = true;
@@ -634,6 +631,14 @@ describe('Home decisions and impact checks', () => {
 });
 
 describe('Sweeps from Home', () => {
+  /** Signed in, with no meeting to review and a sweep of your own items due, which the Authority queues when asked. */
+  async function dueSweep(items: OpenItemView[] = []) {
+    fx.granola = null;
+    fx.home = { ...emptyHome(), sweep_due: true, items };
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
+    return start();
+  }
+
   it('makes no Home row of a sweep, going or failed', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
     const approved = meeting('b', 'approved');
@@ -684,10 +689,7 @@ describe('Sweeps from Home', () => {
   });
 
   it('reads what a sweep found once it ends, even when no list showed it going', async () => {
-    fx.granola = null;
-    fx.home = { ...emptyHome(), sweep_due: true, items: [item('1')] };
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await start();
+    const store = await dueSweep([item('1')]);
     expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
     expect(requests('sweep')).toHaveLength(1);
     // Done before the next look.
@@ -697,9 +699,7 @@ describe('Sweeps from Home', () => {
     expect(store.homeRows().map(row => row.kind)).toEqual(['review']);
     expect(store.getState().home?.open).toMatchObject({ landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' });
     // Then Home stops looking.
-    const calls = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(calls);
+    await expectQuiet();
   });
 
   it('keeps a check queued while the Authority holds its start, looking again at the usual pace, then starts it', async () => {
@@ -729,10 +729,7 @@ describe('Sweeps from Home', () => {
   });
 
   it('starts a sweep that went back to the queue again, waiting longer after each start that starts nothing', async () => {
-    fx.granola = null;
-    fx.home = { ...emptyHome(), sweep_due: true };
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await start();
+    const store = await dueSweep();
     expect(requests('start')).toHaveLength(1);
     // Its attempt timed out: the sweep is queued again, and for a while another run goes first.
     fx.sweep = sweepRun('pending');
@@ -759,11 +756,8 @@ describe('Sweeps from Home', () => {
   });
 
   it('asks for its due sweep, and starts it, even when the runs read of that load failed (D6)', async () => {
-    fx.granola = null;
-    fx.home = { ...emptyHome(), sweep_due: true };
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
     fx.failNextList = true;
-    await start();
+    await dueSweep();
     // The list read failed once; the load still asks for its one sweep and starts it.
     expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'mine' }]);
     expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
@@ -783,11 +777,8 @@ describe('Sweeps from Home', () => {
   });
 
   it('spends the Home load\'s one sweep request only when it asks for one (D6)', async () => {
-    fx.granola = null;
     fx.run = impactRun('pending');
-    fx.home = { ...emptyHome(), sweep_due: true };
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    await start();
+    await dueSweep();
     // A queued impact check starts first: no sweep is asked for yet, so the load has not spent its request.
     expect(requests('sweep')).toEqual([]);
     fx.run = impactRun('done');
@@ -797,19 +788,14 @@ describe('Sweeps from Home', () => {
   });
 
   it('stops owing a sweep once a runs list no longer holds it', async () => {
-    fx.granola = null;
-    fx.home = { ...emptyHome(), sweep_due: true };
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    await start();
+    await dueSweep();
     expect(requests('sweep')).toHaveLength(1);
     fx.sweep = null;
     const homeReads = requests('home').length;
     await vi.advanceTimersByTimeAsync(5_000);
     // Read as ended: what waits on you is read again, and then Home stops looking.
     expect(requests('home')).toHaveLength(homeReads + 1);
-    const calls = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(calls);
+    await expectQuiet();
     expect(requests('sweep')).toHaveLength(1);
   });
 
@@ -824,9 +810,7 @@ describe('Sweeps from Home', () => {
     expect(store.homeRows()).toEqual([]);
     // A sweep that failed at once is seen ended on the next look at most; then nothing more is read.
     await vi.advanceTimersByTimeAsync(5_000);
-    const calls = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(calls);
+    await expectQuiet();
     expect(store.homeRows()).toEqual([]);
   });
 });
@@ -848,8 +832,7 @@ describe('Follow-up lists and item pages', () => {
 
   it('ticks every Not sent row you may send on a meeting\'s first read, and none on the Follow-ups page', async () => {
     fx.page = listPage([unsent('1'), unsent('2'), { ...unsent('3'), can: { set_state: false, assign: false } }, item('4')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     expect(list(store)).toMatchObject({ kind: 'list', scope: 'record', id: record, title: 'Pilot planning', loading: false });
     expect(list(store).ticks).toEqual({ itm_00000001: true, itm_00000002: true });
     // Every group of a meeting's list shows: one read of them all, rows only, then one live read of them all.
@@ -892,8 +875,7 @@ describe('Follow-up lists and item pages', () => {
 
   it('replays a send whose outcome is unknown with the same command, and gives any other choice a new one', async () => {
     fx.page = listPage([unsent('1'), unsent('2')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     store.tickFollowUp('itm_00000002');
     fx.sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
     await store.sendTicked(true);
@@ -912,8 +894,7 @@ describe('Follow-up lists and item pages', () => {
 
   it('says a send refused as a conflict changed meanwhile, keeping the account; lost access reads the account again', async () => {
     fx.page = listPage([unsent('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     const statusReads = () => rpc.mock.calls.filter(([method]) => method === 'app.status').length;
     const before = statusReads();
     const reads = requests('items').length;
@@ -994,8 +975,7 @@ describe('Follow-up lists and item pages', () => {
 
   it('reads the view under an item page again once a change was made on it, and forgets what that view said', async () => {
     fx.page = listPage([unsent('1'), item('2')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     await store.sendTicked(false);
     expect(said(store)).toEqual({ words: 'Dismissed' });
     fx.readItem = item('2');
@@ -1018,8 +998,7 @@ describe('Follow-up lists and item pages', () => {
 
   it('changes an owner at once, before Send or after, and settles an unknown outcome by reading the item', async () => {
     fx.page = listPage([unsent('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     store.toggleOwnerPicker('itm_00000001');
     await flush();
     const picker = (store.followUpShown() as FollowUpList).picker!;
@@ -1147,8 +1126,7 @@ describe('Follow-up lists: current work first, results in place', () => {
 
   it('settles a send whose outcome was unknown by the rows read again: one that went says so and replays no more', async () => {
     fx.page = listPage([unsent('1'), unsent('2')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     store.tickFollowUp('itm_00000002');
     fx.sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
     // It went: the row, read again in place, is open.
@@ -1164,8 +1142,7 @@ describe('Follow-up lists: current work first, results in place', () => {
 
   it('stops sending once the list closes, and says what went and what did not when only some did', async () => {
     fx.page = listPage([unsent('1'), unsent('2', other)]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     // The second check's send fails: the first went.
     fx.sendFailure = { code: 'unavailable', retryable: true };
     fx.sendFailsFor = other;
@@ -1189,8 +1166,7 @@ describe('Follow-up lists: current work first, results in place', () => {
 
   it('stops sending once the account changes', async () => {
     fx.page = listPage([unsent('1'), unsent('2', other)]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     fx.hold.send = true;
     const sending = store.sendTicked(true);
     await flush();
@@ -1203,8 +1179,7 @@ describe('Follow-up lists: current work first, results in place', () => {
 
   it('goes back to a meeting\'s list already open under its item page, keeping its ticks, instead of opening it again', async () => {
     fx.page = listPage([unsent('1'), unsent('2')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     store.tickFollowUp('itm_00000002');
     fx.readItem = unsent('1');
     await store.openFollowUp('itm_00000001', unsent('1'));
@@ -1219,8 +1194,7 @@ describe('Follow-up lists: current work first, results in place', () => {
   it('opens a meeting\'s decision over its list, and its follow-ups line goes back to the list', async () => {
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.page = listPage([unsent('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     await store.openListDecision();
     expect(store.followUpShown()).toMatchObject({ kind: 'decision' });
     expect(store.getState().decision).toMatchObject({ approval_id: approval, loading: false, run: { state: 'done' } });
@@ -1389,8 +1363,7 @@ describe('Follow-up lists: current work first, results in place', () => {
   it('keeps the check of a decision opened from its list when a runs list read since does not hold it', async () => {
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.page = listPage([unsent('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     await store.openListDecision();
     expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
     // Home is read again under them: its runs list holds only the newest checks, not this one.
@@ -1904,8 +1877,7 @@ describe('Rows first, then what each says now', () => {
 
   it('says what a Send did at once, while rows new to the list are still read live', async () => {
     fx.page = listPage([unsentOpened('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    const store = await meetingList();
     fx.page = listPage([{ ...opened('1'), approver: unsent('1').approver }, opened('2')]);
     fx.hold.live = true;
     const sending = store.sendTicked(true);
