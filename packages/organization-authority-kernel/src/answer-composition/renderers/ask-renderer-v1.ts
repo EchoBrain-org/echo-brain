@@ -180,10 +180,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // which_say needs cite, which research checks (W5), and whether one of them cites none (W3). The kinds alone decide;
       // what a need cites beside them never does.
       const { stated, checking, unlisted } = agenticPlanListsV1(needs, id => listById.has(id));
-      // Content needs, whatever their status, and what they cite: the members they ask about (W4). A not_found need still asks.
-      const content = needs.filter(need => (need.kind ?? "content") === "content"), contentCited = content.flatMap(need => need.evidence);
-      /** Every need that asks about members declares them by what it cites, whatever its status: a list kind its list, a content need an item (W4). */
-      const declared = !unlisted && content.every(need => need.evidence.some(id => byShort.has(id)));
       const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, short => byShort.get(short)?.full === true));
       const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short), options.context.time_zone))]));
       const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap);
@@ -365,34 +361,38 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const sentences = answer?.sentences ?? [];
       // A sentence the kept reply still rests on rows or list ids is left out, and the part says so, never what it claimed.
       if (sentences.some(restsOnRows)) listGaps.push({ text: UNSUPPORTED_GAP, partial: true });
-      // A sentence that only restates a stated list (W4), once every need declares: each text item it cites is a member, or
-      // part of one, of a stated list whose statement covers every member (named, or in "and N more"; a where selection that
-      // leaves one out covers none), that no other need asks about: no which_say list holds it, no content need cites it.
-      const covering = naming.filter(value => value.which && stated.includes(value.list.id) && rows.get(value.list.id)!.every(member => value.selected.includes(member))).map(value => value.list.id);
-      const restates = (shorts: readonly string[]) => declared && shorts.every(short => covering.some(id => {
-        const member = membership.in(id, short);
-        return member !== undefined && !checking.some(other => membership.in(other, short) !== undefined) && !contentCited.some(cited => membership.in(id, cited) === member);
-      }));
       // It stands on the items whose text the writer read (W1); after them, never as support, it cites the rows whose facts it
       // may carry: each row it cites that the writer saw, and each private row the writer saw of a list it cites (W6).
       const rowsOf = (id: string) => shownRows.has(id) ? [id] : writerById.get(parseAgenticListIdV1(id) ?? "L0")?.members.map(member => member.id).filter(short => privateItem(byShort.get(short)!.item)) ?? [];
       const writerSentences = sentences.flatMap(sentence => {
         const read = sentence.evidence.filter(short => textGiven.has(short));
-        if (read.length === 0 || restates(read)) return [];
+        if (read.length === 0) return [];
         const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
         return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read }];
       });
       // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
       const statements: Statement[] = [];
+      const statementKeys = new Set<string>();
+      const keptReads: Entry[] = [];
+      const layout: readonly { text: string; shorts: readonly string[]; read?: readonly string[] }[] = [...listStatements, ...writerSentences];
       let dropped = false;
-      for (const sentence of [...listStatements, ...writerSentences]) {
+      for (const sentence of layout) {
+        // Temporary model guardrail (ADR-0041): only exact text with the same cited objects and privacy is a repeat.
+        // Shared sources or planner kinds never establish that two sentences say the same thing.
+        const statementKey = JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
+        if (statementKeys.has(statementKey)) {
+          keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
+          continue;
+        }
         const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !usedKeys.has(key)));
         if (statements.length >= MAX_STATEMENTS || used.length + fresh.size > MAX_CITATIONS) { dropped = true; break; }
+        statementKeys.add(statementKey);
         statements.push(statementOf(sentence.text, sentence.shorts));
+        keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
       }
       const notFound = [...(answer?.not_found ?? []), ...selectionNotFound];
       // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
-      const coverageLimited = coverageIsLimitedFor(bundle, writerSentences.slice(0, Math.max(0, statements.length - listStatements.length)).flatMap(sentence => sentence.read.map(short => byShort.get(short)!)));
+      const coverageLimited = coverageIsLimitedFor(bundle, keptReads);
       const incomplete = (answer === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
       const gapText = incomplete
         ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)

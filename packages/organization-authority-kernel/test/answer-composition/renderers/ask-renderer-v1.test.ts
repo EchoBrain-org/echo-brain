@@ -11,7 +11,7 @@ import { ids } from "../fixtures/agentic-lists.js";
 import { EMPTY_BUNDLE, LIST_READ_AT, listed, record, scriptedGate } from "../fixtures/agentic-scenarios.js";
 
 /** Ask's renderer on its own: a hand-built bundle, a gate over scripted writer replies, and no desk. */
-function alone(input: { readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly version: 4 | 5 | 6; readonly remaining?: number }) {
+function alone(input: { readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly version: 4 | 5 | 6 | 8; readonly remaining?: number }) {
   const trace: string[] = [];
   const { gate, inputs } = scriptedGate(input.replies, input.bundle.budget, trace);
   const renderer = createAskRendererV1({
@@ -39,6 +39,71 @@ function bundle(entries: readonly { readonly item: EvidenceDeskItemV2; readonly 
 }
 
 describe("Ask renderer", () => {
+  it.each([false, true])("keeps both project leads when both needs are which_items (extra person citation: %s)", async extraPerson => {
+    const question = "What are the active projects, and who leads them?";
+    const projects: EvidenceDeskItemV2[] = ["Alpha", "Beta"].map((label, index) => ({
+      id: `project-${index + 1}`, kind: "project", label, visibility: "project",
+      citation: { kind: "project", project_id: `prj_00000000-0000-4000-8000-00000000000${index + 1}` },
+      attributes: { status: "active", leads: index === 0 ? "Casey" : "Morgan" },
+      text: `${label} is active. Lead: ${index === 0 ? "Casey" : "Morgan"}.`, receipt_sha256: canonicalSha256(label),
+    }));
+    const person: EvidenceDeskItemV2 = {
+      id: "person-casey", kind: "person", label: "Casey", visibility: "team",
+      citation: { kind: "person", membership_id: "mem_00000000-0000-4000-8000-000000000001" },
+      text: "Casey leads Alpha.", receipt_sha256: canonicalSha256("Casey"),
+    };
+    const research: AgenticEvidenceBundleV1 = {
+      ...EMPTY_BUNDLE,
+      plan: [{ part: 1, question, notes: "", needs: ["active projects", "project leads"].map(need => ({ need, kind: "which_items", status: "found", evidence: ["L1"] })) }],
+      lists: [createAgenticListEvidenceV1({
+        id: "L1", source: "projects", filter: { status: "active" }, filter_applied: { status: "applied" },
+        members: ["E1", "E2"], shown: 2, ended: true, unverified_end: false, available: true, truncated: false, read_at: LIST_READ_AT,
+      })],
+      items: [...projects, ...(extraPerson ? [person] : [])].map((item, index) => ({
+        short: `E${index + 1}`, source: index < 2 ? "projects" : "people", item,
+        full: true, opened: true, preloaded: false, touched: index + 1, cited_by_plan: false,
+      })),
+    };
+    const run = alone({ bundle: research, version: 8, replies: [{
+      sentences: [
+        { text: "Casey leads Alpha.", evidence: extraPerson ? ["E1", "E3"] : ["E1"] },
+        { text: "Morgan leads Beta.", evidence: ["E2"] },
+      ], not_found: [],
+    }] });
+    const rendered = await run.render(question);
+    const statements = rendered.result.response.parts[0]!.statements;
+    expect(statements[0]!.text).toMatch(/2 projects.*Alpha.*Beta/u);
+    expect(statements.slice(1).map(statement => statement.text)).toEqual(["Casey leads Alpha.", "Morgan leads Beta."]);
+    expect(statements.slice(1).map(statement => statement.citation_indexes)).toEqual(extraPerson ? [[0, 2], [1]] : [[0], [1]]);
+    expect(rendered.result.response.citations).toHaveLength(extraPerson ? 3 : 2);
+    expect(rendered.outcome).toBe("answered");
+  });
+
+  it("removes only exact repeats with the same cited objects, independent of citation order", async () => {
+    const first = record("first", "Casey owns the pilot. The pilot is due Friday.");
+    const second = record("second", "Casey owns the pilot.", { visibility: "only_me" });
+    const run = alone({
+      bundle: bundle([{ item: first, full: true, touched: 1 }, { item: second, full: true, touched: 2 }], ["E1", "E2"]), version: 6,
+      replies: [{ sentences: [
+        { text: "Casey owns the pilot.", evidence: ["E1", "E2"] },
+        { text: "Casey owns the pilot.", evidence: ["E2", "E1", "E1"] },
+        { text: "Casey owns the pilot.", evidence: ["E1"] },
+        { text: "Casey owns the pilot.", evidence: ["E2"] },
+        { text: "The pilot is due Friday.", evidence: ["E1"] },
+        { text: "The pilot belongs to Casey.", evidence: ["E1"] },
+      ], not_found: [] }],
+    });
+    const rendered = await run.render("Who owns the pilot and when is it due?");
+    expect(rendered.result.response.parts[0]!.statements).toEqual([
+      { text: "Casey owns the pilot.", citation_indexes: [0, 1], private: true },
+      { text: "Casey owns the pilot.", citation_indexes: [0], private: false },
+      { text: "Casey owns the pilot.", citation_indexes: [1], private: true },
+      { text: "The pilot is due Friday.", citation_indexes: [0], private: false },
+      { text: "The pilot belongs to Casey.", citation_indexes: [0], private: false },
+    ]);
+    expect(rendered.result.response.citations.map(value => value.citation)).toEqual([first.citation, second.citation]);
+  });
+
   it("cites only the evidence the writer was given, in first-citation order", async () => {
     const first = record("first", "Approved: ship the enclosure in October.");
     const second = record("second", "Approved: Mara owns the launch.");
@@ -227,6 +292,24 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   const FIT = "Some evidence could not fit in this response.";
   const LEG = "The list of tickets could not be read to its end, so more may exist.";
   const visibility = (...expected: readonly (readonly [string, string])[]) => (rendered: Rendered) => expect(rendered.result.response.citations.map(value => [value.kind, value.visibility])).toEqual(expected);
+  it("removes repeats before the statement bound and keeps coverage for the last retained detail", async () => {
+    const research = listBundle(1, 9, [list("L1", ["E1"])], [WI(["L1"])]);
+    const run = alone({
+      bundle: { ...research, rounds: [{ round: 1, elapsed_ms: 0, plan: [], rejected: [], actions: [
+        { tool: "open", args: { id: "E10" }, result: { items: [], opened: ["E10"], truncated: true } },
+      ] }] }, version: 6,
+      replies: [say(
+        { text: "Record 1 applies.", evidence: ["E2"] },
+        ...Array.from({ length: 9 }, (_, index) => ({ text: `Record ${index + 1} applies.`, evidence: [`E${index + 2}`] })),
+      )],
+    });
+    const rendered = await run.render("Which tickets and what applies?");
+    expect(rendered.result.response.parts[0]!.statements).toHaveLength(10);
+    expect(rendered.result.response.parts[0]!.statements.at(-1)!.text).toBe("Record 9 applies.");
+    expect(rendered.result.response.parts[0]!.gap).toBeUndefined();
+    expect(rendered.result.response.notice).toBe("Some source coverage was incomplete, so relevant context may be missing.");
+    expect(rendered.outcome).toBe("answered");
+  });
   type Rendered = Awaited<ReturnType<ReturnType<typeof alone>["render"]>>;
   interface Row {
     readonly id: string; readonly name: string; readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly q?: string;
@@ -291,9 +374,9 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     { id: "CF5b", name: "says 'at least' for a list not read to a confirmed end, and leaves out a count resting on one row and the list's id", bundle: listBundle(25, 0, [list("L1", ids(1, 25), { unverified_end: true })], [WI(["L1"])]),
       replies: Array.from({ length: 2 }, () => say({ text: "25 tickets were created on October 4, 2026.", evidence: ["L1", "E1"] })), calls: 2, status: "partial", gap: `${LEG} ${UNSUPPORTED}`, says: [st(`At least 25 tickets created on October 4, 2026: ${names(1, 25)}.`, 25)] },
     // Opened ticket rows carry their text: citing it is citing text, whatever it says.
-    ...([[[C(["E1"])], ["THERM-1 and THERM-2 were created on October 4.", "THERM-1 is in progress."]], [[WI(["L1"])], [`5 tickets created on October 4, 2026: ${names(1, 5)}.`]], [[WI(["L1"]), C(["E1"])], [`5 tickets created on October 4, 2026: ${names(1, 5)}.`, "THERM-1 and THERM-2 were created on October 4.", "THERM-1 is in progress."]]] as const)
+    ...([[[C(["E1"])], ["THERM-1 and THERM-2 were created on October 4.", "THERM-1 is in progress."]], [[WI(["L1"])], [`5 tickets created on October 4, 2026: ${names(1, 5)}.`, "THERM-1 and THERM-2 were created on October 4.", "THERM-1 is in progress."]], [[WI(["L1"]), C(["E1"])], [`5 tickets created on October 4, 2026: ${names(1, 5)}.`, "THERM-1 and THERM-2 were created on October 4.", "THERM-1 is in progress."]]] as const)
       .map(([needs, says]): Row => ({
-        id: "W4", name: `${needs.length === 2 ? "keeps sentences on what a content need asks about beside the stated list" : needs[0]!.kind === undefined ? "states no list for a content need: both sentences stand on their text" : "leaves out sentences that only restate a stated list's members"}`,
+        id: "W4", name: `${needs.length === 2 ? "keeps sentences on what a content need asks about beside the stated list" : needs[0]!.kind === undefined ? "states no list for a content need: both sentences stand on their text" : "keeps distinct text beside a stated list regardless of planner kind"}`,
         bundle: Object.freeze({ ...EMPTY_BUNDLE, lists: [list("L1", ids(1, 5))], plan: planOf(needs), items: Array.from({ length: 5 }, (_, index) => ({ short: `E${index + 1}`, source: "tickets", item: ticketRow(index + 1, `THERM-${index + 1}: work ${index + 1} is in progress.`), full: true, opened: true, preloaded: false, touched: index + 1, cited_by_plan: needs.some(need => need.evidence.includes(`E${index + 1}`)) })) }),
         replies: [say({ text: "THERM-1 and THERM-2 were created on October 4.", evidence: ["E1", "E2"] }, { text: "THERM-1 is in progress.", evidence: ["E1"] })], status: "answered", says,
       })),
