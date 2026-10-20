@@ -48,8 +48,6 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly oidc: PersonSessionOidcConfiguration;
   readonly client_authentication: OrganizationAuthorityApiRuntimeConfig["client_authentication"];
   readonly pkce_key_file: string;
-  /** Server-only agentic Ask experiment, off unless the serving profile opts in. */
-  readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Staging-only research evaluation endpoint; ignored for any other Authority origin. */
   readonly staging_research_eval_v1?: true;
   /** Explicit answer-composition bundle. This generic root does not select one. */
@@ -174,9 +172,6 @@ export async function openOrganizationAuthorityRuntime(
     record_input_codecs: config.record_input_codecs,
     ...(config.staging_research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1
       ? { research_eval_v1: true as const }
-      : {}),
-    ...(config.agentic_ask_v1_small_scope_shortcut === true
-      ? { agentic_ask_v1_small_scope_shortcut: true }
       : {}),
     ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
 

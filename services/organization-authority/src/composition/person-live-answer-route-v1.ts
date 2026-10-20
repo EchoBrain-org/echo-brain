@@ -149,7 +149,7 @@ export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAn
       capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
       const askOptions = { ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-        ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+        ...(asker === undefined ? {} : { asker }),
       };
       // Each attempt audits what it named; only the released attempt's receipt is returned.
       // The V8 answer streams progress V3, whose names may be workspace items and tool containers; the V7 answer

@@ -698,7 +698,7 @@ describe("Ask's access check over a list's members (ADR-0041)", () => {
     // The check before the second research call covers the rows the list released: no model sees them again.
     const revalidate = revoking(2);
     const stopped = harness(script(OCT4, [OCT4_NEED], [read([OCT4_LIST]), fin(WI, "L1")], [useL1]).replies, oct4({ revalidate }));
-    await expect(stopped.research.research({ trigger: "ask", brief: { goal: { kind: "question", question: OCT4 }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false } } })).rejects.toMatchObject({ code: "unauthorized" });
+    await expect(stopped.research.research({ trigger: "ask", brief: { goal: { kind: "question", question: OCT4 }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} } })).rejects.toMatchObject({ code: "unauthorized" });
     expect([stopped.generate.mock.calls.length, revalidate.mock.calls.length, stopped.audit]).toEqual([1, 2, []]);
     // A vendor's total is never read: the count is the members the desk released; the check before the writer covers them too.
     const released = [ticketRow(1), { ...ticketRow(2), visibility: "team" as const }, ticketRow(3)];
@@ -719,7 +719,7 @@ describe("a task goal keeps the rules before ADR-0041", () => {
   const approved = record("approved", "Approved: ship the DVT fixture.");
   const task: AgenticBriefV1 = {
     goal: { kind: "task", task: `Find what ${agenticStartingSlotV1(1)} affects.` }, starting: [{ citation: approved.citation, if_unreadable: "fail" }],
-    budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false },
+    budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {},
   };
   const affects = (need: string, status: "open" | "found", evidence: readonly string[], actions: readonly unknown[]) => ({ parts: [{ question: "What does E1 affect?", needs: [{ need, status, evidence }], notes: "" }], actions });
 

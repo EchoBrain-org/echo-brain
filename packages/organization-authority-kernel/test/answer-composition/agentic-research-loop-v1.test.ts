@@ -34,7 +34,7 @@ const pageOf = (input: EvidenceDeskListInputV2) => input.cursor === undefined ? 
 
 const brief = (task: string, starting: readonly unknown[], options: Partial<AgenticBriefV1["options"]> = {}, ifUnreadable: "fail" | "report" = "fail"): AgenticBriefV1 => ({
   goal: { kind: "task", task }, starting: starting.map(citation => ({ citation, if_unreadable: ifUnreadable })),
-  budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false, ...options },
+  budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { ...options },
 });
 const affects = (status: string) => step([part("What does E1 affect?", [need("tickets the record affects", status)])], status === "open" ? [] : [{ tool: "finish", args: {} }]);
 const reads = (status: string, actions: readonly { tool: string; args: Record<string, string> }[]) => ({ ...affects(status), actions });
@@ -496,7 +496,7 @@ describe("research loop: no planner (sweeps)", () => {
   it("refuses a brief with no planner and nothing to read before any read", async () => {
     const h = harness([], { openCitation: vi.fn(async () => result([therm])) });
     await expect(h.research.research({ trigger: "sweep", brief: brief("Recheck.", [], { planner: false }) })).rejects.toThrow("research goal is invalid");
-    await expect(h.research.research({ trigger: "ask", brief: { goal: { kind: "question", question: "What changed?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: true, planner: false } } }))
+    await expect(h.research.research({ trigger: "ask", brief: { goal: { kind: "question", question: "What changed?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { planner: false } } }))
       .rejects.toThrow("question is invalid");
     await expect(h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], { planner: "no" as never }) })).rejects.toThrow("research goal is invalid");
     expect(h.port.openCitation).not.toHaveBeenCalled();
@@ -801,7 +801,7 @@ describe("research core: what a task trigger's renderer was shown and cited", ()
 });
 
 describe("research loop: need kinds (ADR-0041)", () => {
-  const question = (text: string): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false } });
+  const question = (text: string): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} });
   const kinded = (text: string, kind: string | undefined, status: string, evidence: readonly string[] = []) => ({ ...need(text, status, evidence), ...(kind === undefined ? {} : { kind }) });
   /** A proposed need that names the plan's id for it. */
   const withId = (id: string, value: ReturnType<typeof need>) => ({ id, ...value });
@@ -840,7 +840,7 @@ describe("research loop: need kinds (ADR-0041)", () => {
     expect(plain.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "open", evidence: [] }] }]);
     expect(result_.plan[0]!.needs).toEqual([{ need: "launch date", status: "found", evidence: ["E1"] }]);
     // Ask always has the list tool: a question without it is refused before any read.
-    await expect(plain.research.research({ trigger: "ask", brief: { ...question("When is launch?"), options: { small_scope_preload: false, list: false } } })).rejects.toThrow("question is invalid");
+    await expect(plain.research.research({ trigger: "ask", brief: { ...question("When is launch?"), options: { list: false } } })).rejects.toThrow("question is invalid");
     expect(plain.generate).toHaveBeenCalledTimes(2);
   });
 });

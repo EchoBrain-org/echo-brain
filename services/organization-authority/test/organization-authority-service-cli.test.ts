@@ -23,7 +23,6 @@ const { runtimeState, initialRuntimeState } = vi.hoisted(() => {
     staging_synthetic_meetings_directory: undefined as string | undefined,
     core_runtime_observation: undefined as CoreRuntimeObservationScopeV1 | undefined,
     config_keys: [] as string[],
-    agentic_ask_v1_small_scope_shortcut: undefined as true | undefined,
     staging_research_eval_v1: undefined as true | undefined,
     authority_url: "https://authority.example",
     processing: "active" as "active" | "idle_until_finalize",
@@ -58,7 +57,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
-    readonly agentic_ask_v1_small_scope_shortcut?: true;
     readonly staging_research_eval_v1?: true;
     readonly nango: object;
     readonly jira_person_live?: object;
@@ -72,8 +70,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.worker_telemetry = config.on_worker_telemetry;
     runtimeState.config_keys = Object.keys(config);
     runtimeState.core_runtime_observation = config.core_runtime_observation;
-    runtimeState.agentic_ask_v1_small_scope_shortcut =
-      config.agentic_ask_v1_small_scope_shortcut;
     runtimeState.staging_research_eval_v1 = config.staging_research_eval_v1;
     runtimeState.nango = config.nango;
     runtimeState.jira_person_live = config.jira_person_live;
@@ -321,14 +317,13 @@ describe("admitted runtime CLI events", () => {
     expect(runtimeState.worker_error).toBeUndefined();
   });
 
-  it("serves agentic Ask without a flag and passes the shortcut only when it is switched on", async () => {
+  it("serves agentic Ask whatever the retired switches say, and refuses a switched-on small-scope shortcut", async () => {
     for (const input of [
       { agentic: undefined, shortcut: undefined },
-      { agentic: "false", shortcut: "true" },
+      { agentic: "false", shortcut: "false" },
       { agentic: "true", shortcut: undefined },
       { agentic: "true", shortcut: "false" },
-      { agentic: "true", shortcut: "true" },
-      { agentic: undefined, shortcut: "true" },
+      { agentic: undefined, shortcut: "false" },
     ]) {
       if (input.agentic === undefined) delete process.env.ECHO_AGENTIC_ASK_V1;
       else process.env.ECHO_AGENTIC_ASK_V1 = input.agentic;
@@ -339,13 +334,21 @@ describe("admitted runtime CLI events", () => {
       }
       const running = start({ stderr: () => undefined });
       await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-      // ECHO_AGENTIC_ASK_V1 is retired (ADR-0022): older profiles still set it, to no effect.
-      expect(runtimeState.agentic_ask_v1_small_scope_shortcut).toBe(
-        input.shortcut === "true" ? true : undefined,
-      );
+      // ECHO_AGENTIC_ASK_V1 is retired (ADR-0022) and the shortcut removed: release records still write both.
+      expect(runtimeState.config_keys).not.toContain("agentic_ask_v1_small_scope_shortcut");
       process.emit("SIGTERM");
       await expect(running).resolves.toBe(0);
       runtimeState.worker_error = undefined;
+    }
+    // A release record that still switches the shortcut on is refused before the runtime opens.
+    for (const agentic of [undefined, "true"]) {
+      if (agentic === undefined) delete process.env.ECHO_AGENTIC_ASK_V1;
+      else process.env.ECHO_AGENTIC_ASK_V1 = agentic;
+      process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT = "true";
+      const errors: string[] = [];
+      expect(await start({ stderr: (value: string) => { errors.push(value); } })).toBe(1);
+      expect(runtimeState.worker_error).toBeUndefined();
+      expect(errors.join("")).toContain("echo-clean-live-startup-failed-v1");
     }
   });
 

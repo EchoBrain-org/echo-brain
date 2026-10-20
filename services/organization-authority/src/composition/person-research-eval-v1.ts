@@ -108,7 +108,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       // Checked as the widest scope would brief it; the run rebuilds its brief for the scope it reads.
       const defined = definition.brief(event, { kind: 'global' });
       // Ask's writer runs Ask's own brief, rebuilt from the question: anything more in a question brief would be dropped, so it is refused.
-      if (defined.goal.kind === 'question' && (defined.starting.length > 0 || !defined.options.small_scope_preload)) throw new AuthorityOperationError('invalid_request', 'Research evaluation brief is invalid');
+      if (defined.goal.kind === 'question' && defined.starting.length > 0) throw new AuthorityOperationError('invalid_request', 'Research evaluation brief is invalid');
       // Only a person's question reads their own additions alone; a task's starting items are shared evidence.
       // A record's run reads where the record is, so its request names no scope.
       if ((request.mine === true && defined.goal.kind !== 'question') || (definition.scope === 'record_project' && (request.mine === true || request.project_id !== undefined))) {
@@ -137,9 +137,9 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
             { access_token: input.access_token, scope, signal, ...(question ? { response_version: WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } : {}) }, context);
           run.revalidate = readSignal => desk.revalidate({ ...(readSignal === undefined ? {} : { signal: readSignal }) });
           const asker = askerOf(options, authorization);
-          // Runs exactly as served: the brief asks for the small-scope preload where the deployment allows it.
+          // Runs exactly as served.
           const loopOptions = { desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+            ...(asker === undefined ? {} : { asker }),
           };
           const loop = createAgenticResearchV1(loopOptions);
           if (brief.goal.kind === 'question') {

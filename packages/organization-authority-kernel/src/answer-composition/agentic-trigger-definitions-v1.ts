@@ -98,7 +98,7 @@ const ask = define<AskEventV1>({
     try { return Object.freeze({ question: validatePersonQueryText(event.question) }); }
     catch (error) { return invalid(error instanceof Error ? error.message : "Ask question is invalid"); }
   },
-  brief: (event: AskEventV1) => ({ goal: { kind: "question", question: event.question }, starting: [], options: { small_scope_preload: true } }),
+  brief: (event: AskEventV1) => ({ goal: { kind: "question", question: event.question }, starting: [], options: {} }),
 });
 
 /**
@@ -128,7 +128,7 @@ const approvedRecord = define<ApprovedRecordEventV1>({
     const project = scope.kind === "project";
     return {
       goal: { kind: "task", task: approvedRecordTask(project) }, starting: [{ citation: event.record, if_unreadable: "fail" }],
-      options: { small_scope_preload: false, ...(project ? {} : { list: false }) },
+      options: project ? {} : { list: false },
     };
   },
 });
@@ -173,7 +173,7 @@ const sweep = define<SweepEventV1>({
       `${index + 1}. ${text(finding.finding)} Expected: ${text(finding.expected)}. Cited then: ${finding.citations.map(slot).join(", ")}.`);
     return {
       goal: { kind: "task", task: [SWEEP_TASK, ...lines].join("\n"), data }, starting: starting.map(value => ({ citation: value, if_unreadable: "report" })),
-      options: { small_scope_preload: false, planner: false },
+      options: { planner: false },
     };
   },
 });

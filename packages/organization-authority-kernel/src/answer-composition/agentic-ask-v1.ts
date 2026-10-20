@@ -100,8 +100,6 @@ export interface CreateAgenticAskV1Options {
   readonly today?: () => string;
   /** Captured once by the calling client, used only to interpret temporal questions. */
   readonly time_context?: PersonAskTimeContextV1;
-  /** When the whole readable scope is small, open it all before step 1. */
-  readonly small_scope_shortcut?: boolean;
   /**
    * Who is asking, as the organization's directory names them, so "I", "me"
    * and "my" resolve to a person. Only the models see it; audits never do.
@@ -165,9 +163,9 @@ function researchOnlyOutput(bundle: AgenticEvidenceBundleV1, researched: Agentic
     answer_sha256: canonicalSha256({ trigger: bundle.trigger, plan: researched.plan }),
   };
 }
-/** Ask's brief: the person's question as asked, no starting evidence, and the small-scope preload. */
+/** Ask's brief: the person's question as asked, with no starting evidence. */
 function questionBrief(question: string, budget: AgenticResearchBudgetV1): AgenticBriefV1 {
-  return { goal: { kind: "question", question }, starting: [], budget, options: { small_scope_preload: true } };
+  return { goal: { kind: "question", question }, starting: [], budget, options: {} };
 }
 /** What the model is told the desk reads. Adding a scope kind is a compile error here. */
 function scopeText(scope: EvidenceDeskPortV2["scope"]): string {
@@ -368,7 +366,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       // ---- research: the loop owns its state; the runner reads its progress and its bundle ----
       const researchStep = !researchOnly ? prompts.ask : brief.options.list === false ? prompts.search_only_task : prompts.task;
       const loop = createAgenticResearchLoopV1({
-        desk, brief: { ...brief, options: { ...brief.options, small_scope_preload: options.small_scope_shortcut === true && brief.options.small_scope_preload } },
+        desk, brief,
         ...researchStep, step_span: "ask_planner",
         context: context(requestDay), scope, catalog,
         now, remaining, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),

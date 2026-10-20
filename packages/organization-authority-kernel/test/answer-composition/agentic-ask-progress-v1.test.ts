@@ -19,7 +19,7 @@ import { createAgenticAskProgressRecorderV1, createAgenticAskProgressRequestV1 }
 import { citationOfAgenticEvidenceItemV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
-import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
+import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
 import { JIRA, pager, tickets } from "./fixtures/agentic-lists.js";
 import { result } from "./fixtures/agentic-scenarios.js";
 import { deferred } from "./fixtures/deferred.js";
@@ -67,15 +67,12 @@ const replies = (prompt: { readonly evidence?: readonly { readonly id: string }[
 /**
  * One global Ask over meetings, documents and live tickets. Step 1 searches
  * every source; step 2 opens the PRD (which brings neighbours) and searches
- * tickets again; step 3 finishes; then the writer. `inventory` is what the
- * small-scope preload's search returns; `version` 8 runs the V8 Ask, which
- * streams progress V3.
+ * tickets again; step 3 finishes; then the writer. `version` 8 runs the V8
+ * Ask, which streams progress V3.
  */
 function fixture(options: {
   readonly revalidate?: (mode: string, index: number) => void;
   readonly generate?: (input: StructuredGenerationInput, index: number) => Promise<unknown> | undefined;
-  readonly small_scope?: boolean;
-  readonly inventory?: EvidenceDeskResultV2;
   readonly version?: 6 | 8;
 } = {}) {
   const log: Log = [];
@@ -85,7 +82,6 @@ function fixture(options: {
     live_sources: [{ source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" }],
     search: vi.fn(async input => {
       log.push(`search:${input.source ?? "all"}`);
-      if (input.inventory_mode === "items") return options.inventory ?? result([launch]);
       // The ticket search releases a known item again, says it was cut short, and carries a receipt for more than it shows.
       if (input.source === "jira") return result([launch, ticket("2")], { truncated: true, receipt_digests: [canonicalSha256("unseen release"), ticket("2").receipt_sha256] });
       return result([launch, prd, ticket("1")]);
@@ -114,8 +110,7 @@ function fixture(options: {
     return replies(JSON.parse(input.user_prompt) as { evidence?: { id: string }[] }, index);
   });
   const audit: AgenticAskAuditEntryV1[] = [];
-  const core = { desk, model: { generate }, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); } },
-    ...(options.small_scope === true ? { small_scope_shortcut: true } : {}) };
+  const core = { desk, model: { generate }, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); } } };
   const ask = options.version === 8 ? createAgenticAskV5(core) : createAgenticAskV3(core);
   const events: PersonAskProgressStepEventV3[] = [];
   const sink = vi.fn((event: PersonAskProgressStepEventV3) => { events.push(event); log.push(`event:${event.type}`); });
@@ -267,49 +262,6 @@ describe("agentic Ask progress (ADR-0039)", () => {
       expect(f.events.filter(event => event.type === "read")).toEqual([{ type: "read", items: [named(launch)] }]);
       expect(f.audit).toEqual([expect.objectContaining({ outcome: "timed_out", named_citation_digests: [digest(launch)] })]);
     } finally { vi.useRealTimers(); }
-  });
-
-  it("reports the small-scope preload as one search of every source, and names what it read at the first step", async () => {
-    const f = fixture({ small_scope: true, generate: (input, index) => {
-      if (index === 0) return Promise.resolve({ parts: part("found", ["E1"]), actions: [{ tool: "finish", args: {} }] });
-      if (index === 1) return Promise.resolve({ sentences: [{ text: "Launch is Tuesday.", evidence: [(JSON.parse(input.user_prompt) as { evidence: { id: string }[] }).evidence[0]!.id] }], not_found: [] });
-      return undefined;
-    } });
-    const { receipt } = await f.ask.answerWithReceipt({ question: "When is launch?", on_progress: f.sink });
-    expect(f.events).toEqual([
-      { type: "stage", stage: "searching" },
-      { type: "searched", sources: every, found: 1 },
-      { type: "stage", stage: "reading", pending: 1 },
-      { type: "read", items: [named(launch)] },
-      { type: "stage", stage: "writing" },
-      { type: "stage", stage: "checking_access" },
-    ]);
-    expect(receipt).toMatchObject({ looked_through: 1, rows: [{ type: "searched", sources: every, found: 1 }, { type: "read", items: [named(launch)] }] });
-  });
-
-  it("adds no searched row and finds nothing for a preload research is never shown, and still says an empty one found nothing", async () => {
-    // Everything the person can see did not fit the preload, so research starts blind and its own search finds all three.
-    const cut = fixture({ small_scope: true, inventory: result([launch, prd, ticket("1")], { truncated: true }) });
-    const { receipt } = await cut.ask.answerWithReceipt({ question: "When is launch?", on_progress: cut.sink });
-    const searched = [{ type: "searched", sources: every, found: 3 }, { type: "searched", sources: [{ kind: "tickets", tool_id: "jira" }], found: 1 }];
-    expect(cut.events.filter(event => event.type === "searched")).toEqual(searched);
-    expect(receipt.rows.filter(row => row.type === "searched")).toEqual(searched);
-    // The person can see nothing: the preload is shown in full, and it found nothing.
-    const empty = fixture({ small_scope: true, inventory: result([]) });
-    await empty.ask.answerWithReceipt({ question: "When is launch?", on_progress: empty.sink });
-    expect(empty.events.filter(event => event.type === "searched")).toEqual([{ type: "searched", sources: every, found: 0 }, ...searched]);
-  });
-
-  it("counts as found only the preload items research is shown", async () => {
-    // The preload fits, but opening the ticket returns none of its text, so research is shown the launch review alone.
-    const f = fixture({ small_scope: true, inventory: result([launch, ticket("1")]), generate: (input, index) => {
-      if (index === 0) return Promise.resolve({ parts: part("found", ["E1"]), actions: [{ tool: "finish", args: {} }] });
-      if (index === 1) return Promise.resolve({ sentences: [{ text: "Launch is Tuesday.", evidence: [(JSON.parse(input.user_prompt) as { evidence: { id: string }[] }).evidence[0]!.id] }], not_found: [] });
-      return undefined;
-    } });
-    const { receipt } = await f.ask.answerWithReceipt({ question: "When is launch?", on_progress: f.sink });
-    expect(f.events.filter(event => event.type === "searched")).toEqual([{ type: "searched", sources: every, found: 1 }]);
-    expect(receipt).toMatchObject({ looked_through: 1, rows: [{ type: "searched", sources: every, found: 1 }, { type: "read", items: [named(launch)] }] });
   });
 
   it("names nothing an earlier attempt of the request named, audits each attempt's own names, and times the receipt from the request's start", async () => {

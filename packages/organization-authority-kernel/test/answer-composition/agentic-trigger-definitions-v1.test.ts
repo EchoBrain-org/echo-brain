@@ -50,9 +50,9 @@ describe("trigger definitions", () => {
 });
 
 describe("Ask definition", () => {
-  it("passes the question through as asked, with no starting evidence and the small-scope preload", () => {
+  it("passes the question through as asked, with no starting evidence", () => {
     expect(brief("ask", { question: "Why is the DVT gate on hold?" })).toEqual({
-      goal: { kind: "question", question: "Why is the DVT gate on hold?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: true },
+      goal: { kind: "question", question: "Why is the DVT gate on hold?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {},
     });
   });
 
@@ -66,7 +66,7 @@ describe("Approved record definition", () => {
     const value = brief("approved_record", { record });
     expect(value).toEqual({
       goal: { kind: "task", task: expect.any(String) }, starting: [{ citation: record, if_unreadable: "fail" }],
-      budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false },
+      budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {},
     });
     expect(filled(value, ["E1"])).toBe("A PM just approved record E1. Find the tickets, PRD sections and documents in this project whose current text its decisions confirm, contradict or make out of date. Search the record's distinctive terms and identifiers, then open the candidates and note what each says now. Finishing with nothing affected is a valid result after those searches.");
     // The impact card adds owners and dates from each item's own details: research never looks for them.
@@ -75,7 +75,7 @@ describe("Approved record definition", () => {
 
   it("searches a record in no project, never lists, and never says \"in this project\" (decision 2)", () => {
     const value = brief("approved_record", { record }, { kind: "global" });
-    expect(value.options).toEqual({ small_scope_preload: false, list: false });
+    expect(value.options).toEqual({ list: false });
     expect(filled(value, ["E1"])).toBe("A PM just approved record E1. Find the tickets, PRD sections and documents whose current text its decisions confirm, contradict or make out of date. Search the record's distinctive terms and identifiers, then open the candidates and note what each says now. Finishing with nothing affected is a valid result after those searches.");
   });
 
@@ -102,7 +102,7 @@ describe("Sweep definition", () => {
 
   it("runs no planner: research re-reads the cited items and looks for nothing newer (decision 3)", () => {
     const value = brief("sweep", { findings });
-    expect(value.options).toEqual({ small_scope_preload: false, planner: false });
+    expect(value.options).toEqual({ planner: false });
     // The task no longer says the items were already read and then asks to read them again, or to look for newer items.
     const task = filled(value, ["E1", null, "E3"]);
     for (const phrase of ["Make each finding one part", "Re-read the current items", "any newer item"]) expect(task).not.toContain(phrase);

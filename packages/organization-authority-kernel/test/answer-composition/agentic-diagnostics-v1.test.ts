@@ -3,7 +3,7 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '../../src/answer-composition/age
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from '../../src/answer-composition/agentic-research-v1.js';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
-import { checked, listed, need, part, record, replay, researchHarness, result, SCENARIOS, step } from './fixtures/agentic-scenarios.js';
+import { checked, need, part, record, replay, researchHarness, result, SCENARIOS, step } from './fixtures/agentic-scenarios.js';
 
 type Lifecycle = Extract<CoreRuntimeDiagnosticObservationV1, { readonly kind: 'lifecycle' }>;
 const lifecycle = (events: readonly CoreRuntimeDiagnosticObservationV1[]) => events.filter((event): event is Lifecycle => event.kind === 'lifecycle');
@@ -14,15 +14,16 @@ describe('shared research diagnostics lifecycle', () => {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const metadata: CoreRuntimeObservationV1[] = [];
     const body = record('display', 'Approved: show two decimals.');
-    // A sweep runs no planner: its judge makes the only model call.
+    // A sweep runs no planner: its judge makes the only model call. Ask's first step searches, and the hit carries its text.
     const h = researchHarness([
+      ...(trigger === 'ask' ? [step([part('Current state', [need('current state', 'open')])], [{ tool: 'search', args: { query: 'display decision' } }])] : []),
       ...(trigger === 'sweep' ? [] : [finish()]),
       trigger === 'approved_record' ? { decided: [{ id: 'E1', text: 'Show two decimals.' }], affected: [] }
         : trigger === 'sweep' ? { findings: [{ index: 0, verdict: 'landed', line: 'The decision shows two decimals.', cites: ['E1'] }] }
           : { sentences: [{ text: 'Show two decimals.', evidence: ['E1'] }], not_found: [] },
     ], {
-      search: async () => result([listed('display')]), open: async () => result([body]), openCitation: async () => result([body]),
-    }, { small_scope_shortcut: true });
+      search: async () => result([body]), openCitation: async () => result([body]),
+    });
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === trigger)!;
     const input = definition.parseEvent(trigger === 'ask' ? { question: 'What is the display decision?' } : trigger === 'approved_record'
       ? { record: body.citation } : { findings: [{ finding: 'Display precision', expected: 'Show two decimals', citations: [body.citation] }] });
@@ -37,8 +38,10 @@ describe('shared research diagnostics lifecycle', () => {
     for (const stage of ['brief', 'research', 'audit', 'release', 'run']) {
       expect(stages.filter(event => event.stage === stage).map(event => event.event)).toEqual(['started', 'succeeded']);
     }
+    // One access check before each model call: Ask's two steps and writer, a task's step and renderer, a sweep's judge.
+    const modelCalls = trigger === 'ask' ? 3 : trigger === 'sweep' ? 1 : 2;
     expect(stages.filter(event => event.stage === 'revalidation' && event.event === 'started').map(event => event.data?.purpose))
-      .toEqual([...(trigger === 'sweep' ? [] : ['model']), 'model', 'before_audit', 'after_audit']);
+      .toEqual([...Array<string>(modelCalls).fill('model'), 'before_audit', 'after_audit']);
     expect(stages.at(-1)).toMatchObject({ stage: 'run', event: 'succeeded', data: { result: output } });
     expect(stages.find(event => event.stage === 'release' && event.event === 'succeeded')).toMatchObject({ data: { result: output } });
     expect(new Set(events.map(event => event.operation_id)).size).toBe(1);
@@ -54,13 +57,12 @@ describe('shared research diagnostics lifecycle', () => {
     ]);
     expect(metadata.filter(event => event.phase === 'research_run' && event.event === 'succeeded')).toEqual([
       expect.objectContaining({ research_stop_reason: 'finished', result: 'answered', counts: expect.objectContaining({
-        planned_query_count: 0, query_hit_count: 0, released_atom_count: 1, context_atom_count: 1, citation_count: 1,
+        planned_query_count: trigger === 'ask' ? 1 : 0, query_hit_count: trigger === 'ask' ? 1 : 0, released_atom_count: 1, context_atom_count: 1, citation_count: 1,
       }) }),
     ]);
     if (trigger === 'ask') {
-      expect(stages.filter(event => event.stage === 'preload' && event.event === 'started').map(event => event.data?.operation)).toEqual(['search', 'open']);
-      expect(stages.find(event => event.stage === 'preload' && event.data?.released_items !== undefined && JSON.stringify(event.data).includes(body.text!)))
-        .toMatchObject({ event: 'succeeded', data: { released_items: [expect.objectContaining({ text: body.text, citation: body.citation })] } });
+      // Ask reads nothing before its first step: the planner's search is its one read, then it finishes.
+      expect(events.flatMap(event => event.kind === 'tool_request' ? [[event.tool, event.args]] : [])).toEqual([['search', { query: 'display decision' }], ['finish', {}]]);
     } else {
       expect(stages.find(event => event.stage === 'starting_read' && event.event === 'succeeded'))
         .toMatchObject({ data: { released_items: [expect.objectContaining({ text: body.text, citation: body.citation })] } });
@@ -107,7 +109,7 @@ describe('shared research diagnostics lifecycle', () => {
       openCitation: async () => result([body]), revalidate: async () => { if (++checks === 2) time = 86_001; return checked; },
     }, { now_ms: () => time });
     await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('research_run', () => h.research.research({
-      trigger: 'sweep', brief: { goal: { kind: 'task', task: 'Recheck current state.' }, starting: [{ citation: body.citation, if_unreadable: 'fail' }], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false } },
+      trigger: 'sweep', brief: { goal: { kind: 'task', task: 'Recheck current state.' }, starting: [{ citation: body.citation, if_unreadable: 'fail' }], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} },
     }), { observer: event => { metadata.push(event); } }));
     expect(events.filter(event => event.kind === 'model_request')).toHaveLength(1);
     expect(metadata).toContainEqual(expect.objectContaining({ phase: 'research_loop', event: 'succeeded', research_stop_reason: 'budget', research_admission: 'post_revalidation_no_time' }));

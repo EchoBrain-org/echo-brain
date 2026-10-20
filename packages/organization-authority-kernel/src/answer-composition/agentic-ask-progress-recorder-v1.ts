@@ -44,12 +44,11 @@ import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8 } from
 
 /** What research reports while it runs. The loop calls these; a run without progress passes none. */
 export interface AgenticResearchProgressReporterV1 {
-  /** A batch of reads starts: the small-scope preload, or one research step's reads. */
+  /** A batch of reads starts: one research step's reads. */
   reads(searching: boolean): void;
   /**
-   * The rows one search or list gives research: a search's hits, a list's page (never the rows fetched behind it), or
-   * the preload's items, only when research is shown them. `source_id` is the catalog source it chose; undefined means
-   * it read every catalog source.
+   * The rows one search or list gives research: a search's hits or a list's page (never the rows fetched behind it).
+   * `source_id` is the catalog source it chose; undefined means it read every catalog source.
    */
   returned(tool: "search" | "list", source_id: string | undefined, items: readonly EvidenceDeskItemV2[]): void;
   /** The batch's results are applied: a batch that searched or listed becomes one `searched` row. */

@@ -542,7 +542,7 @@ describe('workspace sources (research tool contract v1)', () => {
     await desk.search({ query: 'atlas', since: '2026-10-01' });
     expect(w.projects.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'atlas', since: '2026-10-01' }));
     w.projects.search.mockClear();
-    await desk.search({ limit: 5, inventory_mode: 'items' });
+    await desk.search({ limit: 5 });
     expect(w.projects.search).not.toHaveBeenCalled();
     // A kind names the sources that serve it; ECHO's own desk is not asked for a workspace kind.
     vi.mocked(f.base.search).mockClear();
@@ -565,7 +565,7 @@ describe('workspace sources (research tool contract v1)', () => {
     ]);
     await desk.search({ query: 'atlas', since: '2026-10-01' });
     expect(f.ticket.search).toHaveBeenCalledOnce(); expect(f.base.search).toHaveBeenCalledOnce(); expect(containers.search).not.toHaveBeenCalled();
-    await desk.search({ limit: 5, inventory_mode: 'items' });
+    await desk.search({ limit: 5 });
     expect(f.ticket.list).toHaveBeenCalledOnce(); expect(containers.list).not.toHaveBeenCalled();
     // A tool's containers are searched only when named: each search scans the tool's projects or spaces.
     await desk.search({ query: 'atlas' });

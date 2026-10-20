@@ -120,7 +120,6 @@ describe("originals under the mine scope", () => {
     expect(f.ownedBy(mine.items).sort()).toEqual(["owner", "owner"]);
     expect(f.ownedBy(search("member", MINE).items).sort()).toEqual(["member", "member"]);
     expect(f.ownedBy(f.retrieval.deskSearch({ access_token: "owner", scope: MINE }).items).sort()).toEqual(["owner", "owner"]);
-    expect(f.retrieval.deskSearch({ access_token: "owner", scope: MINE, inventory_mode: "items" }).items).toHaveLength(2);
     expect(() => f.retrieval.revalidateDeskRelease({ access_token: "owner", release: mine })).not.toThrow();
 
     // A teammate's team note is readable globally, but it is not the caller's.
