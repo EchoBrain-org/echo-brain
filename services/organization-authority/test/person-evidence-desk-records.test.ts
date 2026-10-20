@@ -5,7 +5,6 @@ import { canonicalJson, canonicalSha256, sha256Digest, type Sha256Digest } from 
 import { ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, OrganizationRecordAppenderV4 } from '@echo-brain/organization-record/organization-record-api-v1';
 import {
   buildReadableSearchGenerationV1,
-  expandReadableSearchRelatedAtomsV1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V2,
   READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
@@ -135,7 +134,7 @@ async function fixture(options: { readonly active?: boolean; readonly corrupt?: 
   };
   const route = createPersonRecordSearchRouteV1({
     state_directory, ...COORDINATES, retrieval_contract_sha256: RETRIEVAL_CONTRACT,
-    sessions, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority), expand_related_atoms: expandReadableSearchRelatedAtomsV1,
+    sessions, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority),
     ...(options.corrupt ? { search_generation: () => { throw new Error('corrupt readable index'); } } : {}),
   });
   const makeDesk = () => createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: route });
@@ -405,7 +404,7 @@ describe('Person evidence desk over an approval-decision record with a confirmed
     let checks = 0;
     const state_directory = stateRoot();
     publish(authority, state_directory, recordAtom);
-    const route = createPersonRecordSearchRouteV1({ state_directory, ...COORDINATES, retrieval_contract_sha256: RETRIEVAL_CONTRACT, sessions: { authenticateAccess: () => ({ ...authorization(), checked_at: new Date(Date.UTC(2026, 8, 27, 1, 0, checks++)).toISOString() }) }, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority), expand_related_atoms: expandReadableSearchRelatedAtomsV1, ...(withCodecs ? { record_input_codecs: SIGNED_APPROVAL_CODECS } : {}) });
+    const route = createPersonRecordSearchRouteV1({ state_directory, ...COORDINATES, retrieval_contract_sha256: RETRIEVAL_CONTRACT, sessions: { authenticateAccess: () => ({ ...authorization(), checked_at: new Date(Date.UTC(2026, 8, 27, 1, 0, checks++)).toISOString() }) }, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority), ...(withCodecs ? { record_input_codecs: SIGNED_APPROVAL_CODECS } : {}) });
     return createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: route });
   }
 

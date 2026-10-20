@@ -30,9 +30,10 @@ decision_ids:
   - ADR-0039
   - ADR-0040
   - ADR-0042
+  - ADR-0044
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -66,15 +67,13 @@ it does not grant generic raw-meeting access or permit a privileged model read.
 ADR-0024 adds model-free Person list and open-by-reference paths over the same
 readable set; their project and mine scopes only narrow it.
 
-ADR-0010 adds one non-serving exception to the otherwise model-free lower
-layers: during construction of a fresh Layer 2 generation, an Authority-owned
-projector may receive only approved atom IDs, kinds, and text from one exact
-visibility segment and may propose untyped cross-record pairs. It cannot see a
-raw transcript, another segment, current Person state, or a query. Authority
-validates and stores only accepted endpoint pairs; neither proposal nor
-adjacency confers visibility. The Layer 3 answer path can expand no more than
-three released decision anchors with bounded adjacent atoms and makes no model
-call for that operation.
+ADR-0010 once let an Authority-owned projector, while a fresh Layer 2
+generation was built, propose cross-record pairs from one visibility
+segment's approved atoms.
+[ADR-0044](../decisions/ADR-0044-search-rebuilds-make-no-model-call.md)
+removed it: the readable-search generation is built from approved records
+alone, with no model call, and a desk open releases only the anchor's own
+record.
 
 ## Enforcement and failure behavior
 
@@ -235,8 +234,8 @@ projectors is a 503 rather than global. Mine reads no shared transcript. The ans
 Focused Authority, retrieval, Person-client, architecture, and clean-runtime
 integration tests verify the two policy branches, exact-caller scope, final
 fence, audit digest, metadata, rejection non-disclosure, model-free Layer 1
-and query-serving Layer 3 closures, exact-segment rebuild-time projection,
-bounded Layer 3 adjacency, bounded Layer 4 calls, one request snapshot,
+and query-serving Layer 3 closures, desk opens bounded to the anchor's own
+record, bounded Layer 4 calls, one request snapshot,
 request-local citation subsets, list and open allowlists, mine and project
 subsets of global, cursor binding, and answer-audit rows. The source boundary
 keeps the Layer 4 root narrow and rejects direct lower-layer imports.

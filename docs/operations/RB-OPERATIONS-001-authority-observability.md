@@ -473,7 +473,7 @@ build number, and every business or person identifier are never dimensions.
 | `TerminalOutcome` | `1` for a succeeded stage with a bounded stage outcome, or a terminal `research_run` result | `workflow`, `stage`, `outcome` |
 | `StageFailure` | `1` for a failed stage | `workflow`, `stage`, `failure_class` |
 | `AskRetrievalFailure` | `1` for a failed `research_loop` (historical `ask_retrieval` remains supported) | none |
-| `CoreModelAttempt`, `CoreModelTotalTokens`, `CoreModelUsageReported` | actual terminal model call; non-null total tokens and total-usage coverage, across extraction, related projection, planner and answer | `workflow`, `stage` (purpose) |
+| `CoreModelAttempt`, `CoreModelTotalTokens`, `CoreModelUsageReported` | actual terminal model call; non-null total tokens and total-usage coverage, across extraction, planner and answer | `workflow`, `stage` (purpose) |
 | `LlmAttempt`, `LlmUsageReported`, `LlmUsageUnavailable`, `LlmProviderLatencyMs` | one actual terminal `model_call`, usage-status count, and provider RTT; historical role aggregates retain their original semantics | `stage`, `provider`, `model` |
 | `LlmInputTokens`, `LlmOutputTokens`, `LlmTotalTokens`, `LlmCachedInputTokens`, `LlmReasoningTokens` | the respective non-null provider-reported value only | `stage`, `provider`, `model` |
 | `LlmTotalTokensAvailable` | `1` only when that attempt has a non-null total-token value | `stage`, `provider`, `model` |
@@ -552,9 +552,8 @@ journey names it in `diagnostic.linked_journey_ids`:
 | --- | --- |
 | Gate wait and child worker execution | Separates queue admission from execution. Queued work owns a trace after its scheduling HTTP request ends. Only gated writer turns (recovery, publication, operator work) report `gate_wait_ms`; periodic cycles, card presentation turns, staging canary runs and each meeting lane are their own `worker_execution` roots. |
 | Timer delay, lateness, reason and cancellation | Distinguishes the existing 30-second poll/failure timer from gate waits; coalesced approval wakes appear on the requesting operation. |
-| Search snapshot, enrichment, model, build, validation and publication | Heads/generation identify availability or supersession. Atom/record/byte/group and selected/excluded counts identify work. |
-| Changed/unchanged/new projection groups; `reused_count: 0` | Compares with the previous observed input in this process, not persisted history or a cache. Restart loses that comparison. |
-| Model calls, purpose, nullable usage and parse/schema/grounding spans | Distinguishes provider failures from validation and separates extraction, related projection, planner and answer work. Request IDs are hashed in metadata. |
+| Search snapshot, build, validation and publication | Heads/generation identify availability or supersession. Atom, record and byte counts identify work. A rebuild makes no model call (ADR-0044). |
+| Model calls, purpose, nullable usage and parse/schema/grounding spans | Distinguishes provider failures from validation and separates extraction, planner and answer work. Request IDs are hashed in metadata. |
 | HTTP finish/close and Slack `done`/`uncertain`/failure | Server/provider observations, separate from approval commit and searchable publication; they do not measure client receipt or a person's card-view time. |
 
 Core events carry opaque run, event, output, attempt, source-revision and
@@ -569,7 +568,7 @@ was unavailable and is never treated as zero.
 
 Shared search references identify one operation covering several approvals.
 Count that build once. `CoreModel*` and legacy `Llm*` metrics overlap; do not
-add them together. Only the new projection includes related-search model calls.
+add them together.
 
 The sidecar upgrades V1 rows to historical `legacy` observations. A skip consumes
 an event sequence, not an execution attempt. Measured retries link prior failed

@@ -17,7 +17,6 @@ import { createPersonRecordSearchRouteV1 } from "../../../services/organization-
 import { readableSearchGenerationContractV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
 import { verifyAuthorityStateLineage } from "../../../packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
-import { expandReadableSearchRelatedAtomsV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 
 const ANSWER_PROFILE = Object.freeze({
   generation_adapter_id: "authority-core-deterministic-v1",
@@ -103,9 +102,9 @@ function answerResponse(userPrompt) {
 }
 
 /**
- * A provider-free structured-output port shared by answer composition and the
- * related-atom projector. It derives output solely from each current
- * request: planner question, answer evidence aliases, or projector input.
+ * A provider-free structured-output port for answer composition. It derives
+ * output solely from each current request: planner question or answer
+ * evidence aliases.
  */
 export function createCoreDeterministicStructuredGenerationPort() {
   return Object.freeze({
@@ -116,10 +115,6 @@ export function createCoreDeterministicStructuredGenerationPort() {
       }
       if (Object.hasOwn(properties, "actions")) return stepResponse(input.user_prompt);
       if (Object.hasOwn(properties, "sentences")) return answerResponse(input.user_prompt);
-      if (Object.hasOwn(properties, "relationships")) {
-        // No relation can be inferred safely from lexical overlap alone.
-        return Object.freeze({ relationships: [] });
-      }
       throw new Error("deterministic structured generation schema is unsupported");
     },
   });
@@ -127,8 +122,7 @@ export function createCoreDeterministicStructuredGenerationPort() {
 
 /**
  * Open real current-Person search and answer routes over a verified stopped
- * Authority state. The returned projector binding must also be passed to the
- * real reconciler that publishes the generation this route reads.
+ * Authority state.
  */
 export function createCoreReadRoutes({ state_directory, sessions, record_input_codecs } = {}) {
   text(state_directory, "state_directory");
@@ -137,23 +131,13 @@ export function createCoreReadRoutes({ state_directory, sessions, record_input_c
   }
   const generation = ANSWER_PROFILE;
   const structured_output = createCoreDeterministicStructuredGenerationPort();
-  const related_atom_projector = Object.freeze({
-    structured_output,
-    profile: Object.freeze({
-      generation_adapter_id: generation.generation_adapter_id,
-      model: generation.planner_model,
-      timeout_ms: generation.timeout_ms,
-    }),
-  });
   const lineage = verifyAuthorityStateLineage(state_directory);
   let authority;
   let recordDatabase;
   try {
     authority = openAuthorityDatabase(join(state_directory, "authority.sqlite"), { fileMustExist: true });
     recordDatabase = openOrganizationRecordDatabase(join(state_directory, "record-log.sqlite"), { fileMustExist: true });
-    const contract = readableSearchGenerationContractV1({
-      related_atom_projector: related_atom_projector.profile,
-    });
+    const contract = readableSearchGenerationContractV1();
     const search = createPersonRecordSearchRouteV1({
       state_directory,
       authority_id: lineage.root.authority_id,
@@ -166,7 +150,6 @@ export function createCoreReadRoutes({ state_directory, sessions, record_input_c
       audit: new SqlitePersonRecordReadAuditV1(authority),
       // A project-audience record is readable only by the project's current members.
       capture_projects: createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(authority)),
-      expand_related_atoms: expandReadableSearchRelatedAtomsV1,
       ...(record_input_codecs === undefined ? {} : { record_input_codecs }),
     });
     const answer = createPersonAnswerV3Route({
@@ -183,7 +166,6 @@ export function createCoreReadRoutes({ state_directory, sessions, record_input_c
     return Object.freeze({
       search,
       answer,
-      related_atom_projector,
       close() {
         recordDatabase?.close();
         recordDatabase = undefined;

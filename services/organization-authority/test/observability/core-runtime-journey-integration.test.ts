@@ -21,7 +21,7 @@ describe("core runtime observations through the existing journey channel", () =>
         return calls === 1 ? new Response('{"error":{"message":"fixture throttle"}}', { status: 429 }) : new Response(JSON.stringify({ id: "fixture-generation", choices: [{ finish_reason: "stop", message: { content: '{"queries":[]}' } }] }), { status: 200 });
       },
     });
-    await observeCoreRuntimeV1("related_projection", async () => {
+    await observeCoreRuntimeV1("ask_planner", async () => {
       await expect(adapter.generate(request)).rejects.toThrow();
       await expect(adapter.generate(request)).resolves.toEqual({ queries: [] });
     }, transport.core_runtime);
@@ -30,7 +30,7 @@ describe("core runtime observations through the existing journey channel", () =>
     const callsObserved = records.filter((event) => event.diagnostic?.phase === "model_call" && event.event !== "started");
     expect(callsObserved.map((event) => event.event)).toEqual(["failed", "succeeded"]);
     expect(callsObserved[0].diagnostic.counts).toMatchObject({ http_status: 429, input_tokens: null, total_tokens: null });
-    expect(callsObserved[1].diagnostic).toMatchObject({ provider: "openrouter", model: request.model, purpose: "related_projection", finish_reason: "stop", counts: { total_tokens: null } });
+    expect(callsObserved[1].diagnostic).toMatchObject({ provider: "openrouter", model: request.model, purpose: "ask_planner", finish_reason: "stop", counts: { total_tokens: null } });
     expect(lines.join("")).not.toContain("fixture-credential-never-record");
 
     const closedCall = callsObserved[1];

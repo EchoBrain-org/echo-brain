@@ -1090,6 +1090,53 @@ describe("Person Layer 2 route: mine narrows to the caller's own approvals (ADR-
   });
 });
 
+describe("Person Layer 2 route: a desk open reads the anchor's own record", () => {
+  const ids = (items: readonly { readonly atom_id: Sha256Digest }[]) => items.map((item) => item.atom_id);
+
+  it("returns the anchor, then at most nine more items of its record in the record's order, never another record's", async () => {
+    const w = await meetingWorld({ extra: [
+      { name: "big", approval_id: "apr_big", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 4, actions: 5, rationales: 3 } },
+      // Another record that the same readers read in the same project.
+      { name: "pair", approval_id: "apr_pair", projects: [SHARED], final_approver: EMP_A, issued_at: T(10), signals: { decisions: 1, actions: 1 } },
+    ] });
+    try {
+      const route = w.route();
+      const listed = route.listDeskBatch({ access_token: "emp_a", project_id: SHARED }).desk_items!;
+      const of = (name: string) => listed.filter((item) => item.record_sha256 === w.digest(name)).sort((left, right) => left.atom_order - right.atom_order);
+      const open = (item: (typeof listed)[number]) =>
+        route.openDeskCitation({ access_token: "emp_a", atom_id: item.atom_id, record_sha256: item.record_sha256, policy_id: item.policy_id });
+      // A record's own order runs decisions, then actions, then rationales.
+      const big = of("big");
+      expect(big.map((item) => item.item_kind)).toEqual([...Array<string>(4).fill("decision"), ...Array<string>(5).fill("action"), ...Array<string>(3).fill("rationale")]);
+      for (const anchor of [0, 6, 11]) {
+        const opened = open(big[anchor]!);
+        expect(ids(opened.response.items)).toEqual(ids([big[anchor]!, ...big.filter((_, index) => index !== anchor).slice(0, 9)]));
+        expect(ids(opened.desk_items!)).toEqual(ids(opened.response.items));
+        // Twelve items are more than one open releases; the anchor itself is whole.
+        expect(opened).toMatchObject({ truncated: true, anchor_truncated: false });
+      }
+      const pair = of("pair");
+      const opened = open(pair[1]!);
+      expect(ids(opened.response.items)).toEqual(ids([pair[1]!, pair[0]!]));
+      expect(opened).toMatchObject({ truncated: false, anchor_truncated: false });
+    } finally { w.close(); }
+  });
+
+  it("leaves out an anchor longer than a desk item and says so, keeping the rest of its record", async () => {
+    const w = await meetingWorld({ extra: [{
+      name: "long", approval_id: "apr_long", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 2, actions: 1 },
+      brief: (brief) => ({ ...brief, decisions: brief.decisions.map((signal, index) => (index === 0 ? { ...signal, text: `Decision 0 ${"x".repeat(3_100)}` } : signal)) }),
+    }] });
+    try {
+      const route = w.route();
+      const anchor = route.recordAnchor({ access_token: "emp_a", record_sha256: w.digest("long") });
+      const opened = route.openDeskCitation({ access_token: "emp_a", atom_id: anchor.atom_id, record_sha256: anchor.record_sha256, policy_id: anchor.policy_id });
+      expect(opened.response.items.map((item) => item.text)).toEqual(["Decision 1", "Action 0"]);
+      expect(opened).toMatchObject({ truncated: true, anchor_truncated: true });
+    } finally { w.close(); }
+  });
+});
+
 describe("Person Layer 2 route: an approved record's projects (research trigger contract v1)", () => {
   it("names only the record's projects the reader can read now, after the exact Layer 1 admission, and audits nothing", async () => {
     const w = await meetingWorld();
