@@ -151,8 +151,8 @@ and desktop-screen questions. A case of the family has `family: open_ended`,
 a `category` (`goal`, `time`, `own_work`, `structure`, `reach`, `tools`) and a
 `reach` key: the collections holding part of its answer (`meetings`,
 `documents`, `follow_ups`, `projects`, `people`, `tools`, `tickets`, `pages`,
-`slack`, `jira_projects`, `confluence_spaces`, `slack_channels`; an entry that
-lists several is met by any of them) and an optional time `window`
+`jira_projects`, `confluence_spaces`; an entry that lists several is met by any
+of them) and an optional time `window`
 (`yesterday`, `this_week`, `last_week`). Its parts name workspace items as
 `world/README.md` ("Reading the keys") says. A case whose answer the world
 cannot fix in advance ("What happened yesterday?") has no parts.

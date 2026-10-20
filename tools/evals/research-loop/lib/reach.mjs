@@ -24,10 +24,8 @@ const COLLECTIONS = Object.freeze({
   tools: { sources: ["tools"], kinds: ["tool"] },
   tickets: { sources: ["tickets", "jira"], kinds: ["ticket"] },
   pages: { sources: ["pages", "confluence"], kinds: ["page"] },
-  slack: { sources: ["slack"], kinds: ["slack_message"] },
   jira_projects: { sources: ["jira_projects"], container: "jira_project" },
   confluence_spaces: { sources: ["confluence_spaces"], container: "confluence_space" },
-  slack_channels: { sources: ["slack_channels"], container: "slack_channel" },
 });
 export const REACH_COLLECTIONS = Object.freeze(Object.keys(COLLECTIONS));
 /** The time windows a key may require each collection to be looked at in, relative to the day the question was asked. */
