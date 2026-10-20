@@ -226,13 +226,13 @@ Run \`echo-brain person tools <verb> --help\` for each tool's options.
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --live [--progress [--expected-membership-id <id> --expected-authority <origin>]]]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --progress [--expected-membership-id <id> --expected-authority <origin>]]
 
 Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved; shared transcripts are not read. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
---live selects the newest Ask route, using every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools and follow-ups. An older Authority answers on its newest route: without /v7 it cites no projects, people, tools or tool containers, and without /v6 no follow-ups. --tickets retains the prior ticket-capable response for compatibility.
+Ask uses the newest Ask route, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools, follow-ups and the workspace. An older Authority answers on its newest route: without /v7 it cites no projects, people, tools or tool containers, and without /v6 no follow-ups. --live, which once chose this route, is still accepted and changes nothing. --tickets retains the prior ticket-capable response for compatibility, and never streams progress.
 
---progress (with --live only) prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
+--progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 `,
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
@@ -939,9 +939,9 @@ export async function runPersonClientCli(
     if ((action === "ask" || action === "list") && values.project !== undefined && values.mine === true) {
       throw new Error(`--project and --mine cannot be combined with \`echo-brain person ${action}\``);
     }
-    // Only the live route streams progress (ADR-0039).
-    if (action === "ask" && values.progress === true && values.live !== true) {
-      throw new Error("--progress requires --live with `echo-brain person ask`");
+    // The ticket route never streams progress (ADR-0039).
+    if (action === "ask" && values.progress === true && values.tickets === true) {
+      throw new Error("--tickets and --progress cannot be combined with `echo-brain person ask`");
     }
     // Only the streamed Ask checks a pinned account: on any other, a pin would be silently ignored.
     if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
@@ -1216,9 +1216,10 @@ export async function runPersonClientCli(
           print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
           break;
         }
+        // The newest route, with or without its old flag --live; --tickets keeps the ticket route.
         print(stdout, {
           ok: true,
-          result: await (values.live === true ? client.askWithLiveSources.bind(client) : values.tickets === true ? client.askWithTickets.bind(client) : client.ask.bind(client))(
+          result: await (values.tickets === true ? client.askWithTickets.bind(client) : client.askWithLiveSources.bind(client))(
             question, scope, dependencies.abort_signal,
           ),
         });

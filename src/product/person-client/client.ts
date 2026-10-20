@@ -707,7 +707,11 @@ export class PersonClient {
     );
   }
 
-  /** Agentic Ask (RFC-0003), the only Ask since the one-shot routes were retired (ADR-0022). */
+  /**
+   * The oldest agentic Ask, `/v3` with V4 answers (ADR-0022). No command asks
+   * it since `person ask` moved to the newest route; it goes when `/v3` is
+   * retired.
+   */
   async ask(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswer> {
     validateAskInput(question, scope);
     return this.withReadSession((authority, token) => authority.askV3(token, question, scope, signal, captureId));
@@ -720,11 +724,12 @@ export class PersonClient {
   }
 
   /**
-   * Uses all request-advertised live evidence sources, from `/v6` ECHO's
-   * shared follow-ups (ADR-0040), and from `/v7` the asker's projects, people,
-   * tools and tool containers (research tool contract v1). It falls back from
-   * `/v7` to `/v6`, to `/v5`, and then to `/v4`, only when an older Authority
-   * has no such route. A capture also reads on `/v5`, never on `/v4`.
+   * The Ask `person ask` asks, in every scope: all request-advertised live
+   * evidence sources, from `/v6` ECHO's shared follow-ups (ADR-0040), and
+   * from `/v7` the asker's projects, people, tools and tool containers
+   * (research tool contract v1). It falls back from `/v7` to `/v6`, to `/v5`,
+   * and then to `/v4`, only when an older Authority has no such route. A
+   * capture also reads on `/v5`, never on `/v4`.
    */
   async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5> {
     validateAskInput(question, scope);
