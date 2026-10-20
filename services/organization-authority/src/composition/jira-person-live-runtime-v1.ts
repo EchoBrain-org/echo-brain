@@ -1,7 +1,7 @@
 import { JiraProjectMappingStoreV1 } from '@echo-brain/provider-jira/jira-project-mapping-store-v1';
 import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
-import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1, sharePersonLiveRuntimeV1 } from './person-live-connector-registry-v1.js';
+import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1, personToolLiveConnectorsV1 } from './person-live-connector-registry-v1.js';
 import { createJiraPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-jira/jira-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
@@ -87,22 +87,8 @@ export function openJiraPersonLiveRuntimeV1(options: {
   } catch (error) { if (owned) database.close(); throw error; }
 }
 
-/**
- * Jira's live connectors (research tool contract v1): its issues and, for the V8 answer, its projects, over one runtime
- * that `open` opens. The tool, its connection routes and its assignee accounts are the issues connector's alone, so the
- * person's tools and routes list each once.
- */
+/** Jira's live connectors (research tool contract v1): its issues and, for the V8 answer, its projects, over one runtime. */
 export function jiraPersonLiveConnectorsV1(open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => OpenedJiraPersonLiveRuntimeV1): readonly PersonLiveConnectorDefinitionV1[] {
-  const share = sharePersonLiveRuntimeV1(open);
-  return Object.freeze([
-    Object.freeze({ ...JIRA_LIVE_CONNECTOR_V1, open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => {
-      const { runtime, close } = share(...parameters);
-      return Object.freeze({ application: runtime.application, connection_http: runtime.connection_http, owners: runtime.owners, tools: (access_token: string) => runtime.tools(access_token),
-        project_setting: Object.freeze({ tool: 'jira' as const, projectRead: (input: { readonly access_token: string; readonly request: unknown }) => runtime.application.projectRead(input) }), close });
-    } }),
-    Object.freeze({ ...JIRA_PROJECTS_LIVE_CONNECTOR_V1, open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => {
-      const { runtime, close } = share(...parameters);
-      return Object.freeze({ application: Object.freeze({ source: (input: Parameters<OpenedJiraPersonLiveRuntimeV1['application']['containerSource']>[0]) => runtime.application.containerSource(input) }), close });
-    } }),
-  ]);
+  return personToolLiveConnectorsV1({ items: JIRA_LIVE_CONNECTOR_V1, containers: JIRA_PROJECTS_LIVE_CONNECTOR_V1 },
+    runtime => ({ tool: 'jira', projectRead: input => runtime.application.projectRead(input) }), open);
 }

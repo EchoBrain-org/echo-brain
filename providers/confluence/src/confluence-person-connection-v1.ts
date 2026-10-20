@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import type { ConfluenceProjectMappingStoreV1 } from './confluence-project-mapping-store-v1.js';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import type { PersonPageCitationV1, PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
+import type { PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { ConfluenceConnectionStoreV1 } from './confluence-connection-store-v1.js';
@@ -37,7 +37,8 @@ export function createConfluencePersonConnectionV1(options: {
   const { actor, tags, authenticated } = shared;
   /** Request-local picker cursors, fenced to both person tenure and live grant. */
   const space_cursors = new Map<string, Readonly<{ person_sha256: Sha256Digest; grant_sha256: Sha256Digest; provider_cursor?: string }>>();
-  const { projectAccess, mappingInput, projectScope, containerProjects } = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
+  const access = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
+  const { projectAccess, mappingInput, projectScope } = access;
   function parseProviderCursor(raw: unknown): string | undefined {
     if (raw === undefined || raw === null) return undefined;
     const value = confluenceString(raw, 4096);
@@ -167,41 +168,12 @@ export function createConfluencePersonConnectionV1(options: {
         },
       });
     },
-    /**
-     * The Confluence spaces the asker can view, as tool containers (research tool contract v1), each naming the ECHO
-     * projects mapped to it that the asker can see. A project scope reads only its mapped spaces, under the same mapping
-     * and grant fences as `source`.
-     */
-    async containerSource(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonToolContainerCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonToolContainerCitationV1> | undefined> {
-      const { person, requirePerson } = actor(input.access_token);
-      const scope = projectScope(input.access_token, person.organization_id, input.project_id, cloud, validateConfluenceProjectReadV1);
-      if (scope === null) return undefined;
-      const stored = options.store.current(person);
-      if (stored === undefined || !stored.active) return undefined;
-      const named = containerProjects(input.access_token, person.organization_id, mapping => mapping.cloud_id === cloud ? mapping.space_ids : []);
-      const current = () => { requirePerson(); options.store.requireCurrent(stored.binding); scope?.current(); named.current(); };
-      current();
-      const reader = await createConfluencePersonLiveContainerReaderV1({
-        binding: stored.binding,
-        transport: createConfluenceCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current)),
-        expected_origin: stored.site,
-        signal: input.signal,
-        ...(scope === undefined ? {} : { space_ids: scope.mapping.space_ids }),
-        echo_projects: () => named.names,
-      });
-      current();
-      return createAuditedPersonLiveEvidenceSourceV1({
-        actor: person,
-        read_grant_sha256: stored.binding.read_grant_sha256,
-        reader,
-        audit: input.audit,
-        authorization: { assertCurrent: current },
-        access: {
-          tool_id: 'confluence', external_scope_id: cloud, external_subject_id: stored.binding.external_subject_id,
-          identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'],
-        },
-      });
-    },
+    /** The Confluence spaces the asker can view, as tool containers (research tool contract v1); a project scope reads only its mapped ones. */
+    containerSource: (input: Parameters<typeof access.containerSource>[1]) => access.containerSource({
+      scope_id: cloud, validate: validateConfluenceProjectReadV1, lifecycle: shared, store: options.store, containers: mapping => mapping.space_ids,
+      reader: ({ fetch: authenticatedFetch, ...read }, mapping) => createConfluencePersonLiveContainerReaderV1({ ...read, transport: createConfluenceCloudTransportV1(authenticatedFetch),
+        ...(mapping === undefined ? {} : { space_ids: mapping.space_ids }) }),
+    }, input),
   });
 }
 export type ConfluencePersonConnectionV1 = ReturnType<typeof createConfluencePersonConnectionV1>;

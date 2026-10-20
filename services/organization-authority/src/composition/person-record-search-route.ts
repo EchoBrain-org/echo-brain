@@ -47,6 +47,7 @@ import type Database from "better-sqlite3";
 import { captureRecordProjectsV1, type CaptureRecordProjectsV1, type RecordProjectAuthorizationV1 } from "./person-record-project-scope-v1.js";
 import { readReadableSearchRecordHeadV1 as recordHead, type ReadableSearchRecordHeadV1 } from "./readable-search-generation-reconciler.js";
 import { boundedTextV1, releasableBodyV1 } from "../application/person-item-text-v1.js";
+import { createUncheckedTallyV1 } from "../application/evidence-unchecked-v1.js";
 import {
   RecordMetadataCacheV1,
   approverDisplayNameV1,
@@ -189,7 +190,6 @@ export interface PersonRecordSearchBatchResultV1 {
   readonly release: PersonRecordSearchBatchReleaseV1;
   /** Private desk projection of immutable V4 meeting metadata. */
   readonly desk_items?: readonly PersonRecordDeskItemV1[];
-  readonly notice?: string;
   readonly truncated?: boolean;
   /** An open only: the anchor record's own text was left out; `truncated` also covers its meeting's other records (ADR-0041). */
   readonly anchor_truncated?: boolean;
@@ -993,8 +993,7 @@ export function createPersonRecordSearchRouteV1(
     if (input.since === undefined && input.until === undefined) return { records: mine };
     const field = input.date_field ?? "occurred";
     const atom_orders = new Map<Sha256Digest, ReadonlySet<number>>();
-    let count = 0;
-    const carried = new Set<EvidenceDateFieldV1>();
+    const tally = createUncheckedTallyV1();
     for (const record of generationRecords(authorization, projects, pointer, projectId)) {
       if (mine !== undefined && !mine.includes(record.record_sha256)) continue;
       const approved = approvedRecord(record.record_position, record.record_sha256, record.envelope_sha256);
@@ -1007,21 +1006,14 @@ export function createPersonRecordSearchRouteV1(
       [...approved.brief.decisions, ...approved.brief.actions, ...approved.brief.rationales].forEach((signal, order) => {
         if (input.kinds !== undefined && !input.kinds.includes(signal.kind)) return;
         const dates: EvidenceDatesV1 = { ...(occurred === undefined ? {} : { occurred }), approved: approved.approved_at, ...(signal.kind === "action" && signal.due_at !== null ? { due: signal.due_at } : {}) };
-        const recorded = EVIDENCE_DATE_FIELDS_V1.filter((name) => dates[name] !== undefined);
-        const tested = field === EVIDENCE_ANY_DATE_V1 ? recorded : recorded.filter((name) => name === field);
-        if (tested.length === 0) {
-          count += 1;
-          for (const name of recorded) carried.add(name);
-          return;
-        }
+        if (!tally.tests(dates, field)) return;
+        const tested = EVIDENCE_DATE_FIELDS_V1.filter((name) => dates[name] !== undefined && (field === EVIDENCE_ANY_DATE_V1 || name === field));
         if (tested.some((name) => matchesEvidenceDateV1(dates, { ...input, date_field: name, ...(zones[name] === undefined ? {} : { time_zone: zones[name] }) }, name))) selected.add(order);
       });
       if (selected.size > 0) atom_orders.set(record.record_sha256, selected);
     }
-    return {
-      records: Object.freeze([...atom_orders.keys()].sort()), atom_orders,
-      ...(count === 0 ? {} : { unchecked: Object.freeze({ count, dates: Object.freeze(EVIDENCE_DATE_FIELDS_V1.filter((name) => carried.has(name))) }) }),
-    };
+    const unchecked = tally.unchecked();
+    return { records: Object.freeze([...atom_orders.keys()].sort()), atom_orders, ...(unchecked === undefined ? {} : { unchecked }) };
   }
 
   /** Receipt times of admitted records: cached, else one batched read bound to both digests. */

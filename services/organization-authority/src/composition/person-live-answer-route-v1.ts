@@ -22,7 +22,7 @@ import { createRegisteredPersonLiveEvidenceDeskV2, type RegisteredPersonLiveEvid
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 import { openItemViewerV1 } from './person-open-items-v1.js';
-import { createPersonWorkspaceEvidenceSourcesV1, type PersonWorkspaceReleaseAuditV1, type PersonWorkspaceSourcesV1 } from './person-workspace-evidence-v1.js';
+import { createPersonWorkspaceEvidenceSourcesV1, type PersonWorkspaceSourcesV1 } from './person-workspace-evidence-v1.js';
 
 export interface CreatePersonLiveAnswerRouteOptionsV1 extends CreatePersonAnswerV3RouteOptions {
   readonly live_sources?: readonly PersonLiveConnectorSourceV1[];
@@ -32,14 +32,7 @@ export interface CreatePersonLiveAnswerRouteOptionsV1 extends CreatePersonAnswer
    * The asker's projects, people and tools (research tool contract v1). A desk binds them only for an answer that can
    * cite them, outside Mine.
    */
-  readonly workspace?: PersonWorkspaceBindingV1;
-}
-
-/** Where a request's workspace sources read, and the content-free audit of what each request releases. */
-export interface PersonWorkspaceBindingV1 {
-  readonly sources: PersonWorkspaceSourcesV1;
-  /** One audit a request, in the same table and request context as the Ask's other release witnesses. */
-  readonly audit: (context: PersonLiveRequestContextV1) => PersonWorkspaceReleaseAuditV1;
+  readonly workspace?: PersonWorkspaceSourcesV1;
 }
 
 export interface PersonLiveRequestContextV1 {
@@ -124,15 +117,15 @@ function followUpsFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
  * project scope, as the authenticated asker. Mine reads only what the asker added, so it never binds it.
  */
 function workspaceFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Parameters<typeof bindPersonLiveEvidenceDeskV1>[2], context: PersonLiveRequestContextV1) {
-  const workspace = options.workspace;
+  const sources = options.workspace;
   const { scope } = input;
-  if (workspace === undefined || (input.response_version ?? 0) < WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine') return undefined;
+  if (sources === undefined || (input.response_version ?? 0) < WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine') return undefined;
   const authenticate = () => options.sessions.authenticateAccess({ access_token: input.access_token });
   const asker = authenticate();
   if (asker.organization_id !== context.organization_id || asker.principal_id !== context.principal_id || asker.membership_id !== context.membership_id) {
     throw new AuthorityOperationError('stale_access_state', 'The workspace belongs to another person');
   }
-  return createPersonWorkspaceEvidenceSourcesV1({ sources: workspace.sources, access_token: input.access_token, authenticate, scope, audit: workspace.audit(context) });
+  return createPersonWorkspaceEvidenceSourcesV1({ sources, access_token: input.access_token, authenticate, scope, audit: options.audit.forWorkspaceRequest(context) });
 }
 
 export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: 5): PersonAnswerV4HttpApplication;

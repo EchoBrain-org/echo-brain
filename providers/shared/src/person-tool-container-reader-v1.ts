@@ -6,7 +6,7 @@ import type {
   PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1,
 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { EvidenceDateFilterV1 } from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
-import type { PersonProviderFailureCodeV1 } from './person-provider-v1.js';
+import { boundUtf8V1 as bound, inBatchesOfFourV1, type PersonProviderFailureCodeV1 } from './person-provider-v1.js';
 
 type Citation = PersonToolContainerCitationV1;
 type Page = PersonLiveEvidencePageV1<Citation>;
@@ -25,11 +25,16 @@ export interface PersonToolContainerProviderV1 {
   readonly container: PersonToolContainerKindV1;
   /** What one container is called in its text, such as "Jira project". */
   readonly noun: string;
+  /** Fails when the reader's transport no longer carries the binding it was made for; the reader runs it around every `verify`. */
+  fence(): void;
   /** Checks the connection and returns the tool's verified site origin. */
   verify(signal?: AbortSignal): Promise<string>;
   /** The container's display link in the tool, from the verified origin and its key. */
   permalink(origin: string, container: PersonToolContainerV1): string;
-  /** One page of the containers the asker can see, in a stable order, and the provider's continuation. */
+  /**
+   * One page of the containers the asker can see, in a stable order, and the provider's continuation. The reader refuses
+   * a page, or `candidates`, that names one container twice.
+   */
   page(input: { readonly cursor?: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonToolContainerRowsV1 & { readonly next?: string }>;
   /**
    * Containers that may match `probe` by key or name, or the first containers when there is none, and whether the tool
@@ -39,7 +44,7 @@ export interface PersonToolContainerProviderV1 {
   /**
    * One container under current permissions. It refuses with not_found when the asker cannot see it (Jira and Confluence
    * answer 404 for a container that is missing or hidden from them), and with unauthorized when the tool refuses the
-   * connection itself.
+   * connection itself. The reader refuses an answer for another container.
    */
   exact(id: string, signal?: AbortSignal): Promise<PersonToolContainerV1>;
   failure(code: PersonProviderFailureCodeV1): never;
@@ -70,21 +75,6 @@ const TEXT_BYTES = 1024;
 const PROVIDER_CODES = new Set<string>(['invalid_request', 'invalid_output', 'unauthorized', 'not_found', 'stale_access_state', 'unavailable', 'rate_limited']);
 
 interface Released { readonly container: PersonToolContainerV1; readonly value: Omit<PersonLiveEvidenceValueV1<Citation>, 'handle'> }
-
-/** Bound by UTF-8 code points, never splitting one. */
-function bound(value: string, bytes: number): string {
-  let text = '';
-  for (const point of value.normalize('NFC')) {
-    if (Buffer.byteLength(text + point, 'utf8') > bytes) break;
-    text += point;
-  }
-  return text.normalize('NFC');
-}
-async function parallel<T, R>(values: readonly T[], operation: (value: T) => Promise<R>): Promise<R[]> {
-  const result: R[] = [];
-  for (let offset = 0; offset < values.length; offset += 4) result.push(...await Promise.all(values.slice(offset, offset + 4).map(operation)));
-  return result;
-}
 
 /**
  * A connected tool's containers as an Ask source (research tool contract v1): Jira projects, Confluence spaces or Slack
@@ -127,8 +117,25 @@ export async function createPersonToolContainerReaderV1(options: {
       return failure('unavailable');
     }
   }
-  let origin = await safe(() => provider.verify(options.signal), options.signal);
-  async function verify(signal?: AbortSignal): Promise<void> { origin = await provider.verify(signal); }
+  /** The connection checked, between two fences of the reader's own binding. */
+  async function verify(signal?: AbortSignal): Promise<void> {
+    provider.fence();
+    const verified = await provider.verify(signal);
+    provider.fence();
+    origin = verified;
+  }
+  let origin = '';
+  await safe(() => verify(options.signal), options.signal);
+  /** A provider answer that names one container twice is malformed. */
+  function distinct<R extends PersonToolContainerRowsV1>(rows: R): R {
+    if (new Set(rows.containers.map(container => container.id)).size !== rows.containers.length) failure('invalid_output');
+    return rows;
+  }
+  /** An exact read's answer, which must be the container asked for. */
+  function asked(id: string, container: PersonToolContainerV1): PersonToolContainerV1 {
+    if (container.id !== id) failure('invalid_output');
+    return container;
+  }
   function limit(value: number, maximum: number): number {
     if (!Number.isInteger(value) || value < 1 || value > 50) failure('invalid_request');
     return Math.min(value, maximum);
@@ -175,7 +182,6 @@ export async function createPersonToolContainerReaderV1(options: {
       attributes: Object.freeze({ key: container.key, tool: provider.tool }) });
   }
   function release(containers: readonly PersonToolContainerV1[], echo: ReadonlyMap<string, readonly string[]>): readonly PersonLiveEvidenceValueV1<Citation>[] {
-    if (new Set(containers.map(container => container.id)).size !== containers.length) failure('invalid_output');
     if (handles.size + containers.length > MAX_HANDLES) failure('unavailable');
     const values = containers.map(container => ({ container, value: value(container, echo) }));
     return Object.freeze(values.map(released => {
@@ -193,11 +199,9 @@ export async function createPersonToolContainerReaderV1(options: {
    * one container, so it fails the read rather than end a list without it.
    */
   async function visibleAll(ids: readonly string[], signal?: AbortSignal): Promise<PersonToolContainerRowsV1> {
-    const read = await parallel(ids, async id => {
+    const read = await inBatchesOfFourV1(ids, async id => {
       try {
-        const container = await provider.exact(id, signal);
-        if (container.id !== id) failure('invalid_output');
-        return container;
+        return asked(id, await provider.exact(id, signal));
       } catch (error) {
         if (error instanceof AuthorityOperationError && (error.code === 'not_found' || error.code === 'invalid_output')) return error.code;
         throw error;
@@ -232,7 +236,7 @@ export async function createPersonToolContainerReaderV1(options: {
         let more = false;
         if (pinned !== undefined) candidates = await visibleAll(pinned, input.signal);
         else {
-          const found = await provider.candidates({ ...(probe === undefined ? {} : { probe }), ...(input.signal === undefined ? {} : { signal: input.signal }) });
+          const found = distinct(await provider.candidates({ ...(probe === undefined ? {} : { probe }), ...(input.signal === undefined ? {} : { signal: input.signal }) }));
           more = found.more;
           // The tool searches its own keys and names; a mapped ECHO project's name finds a container only here.
           const seen = new Set(found.containers.map(container => container.id));
@@ -271,7 +275,7 @@ export async function createPersonToolContainerReaderV1(options: {
           full = false;
           omitted = visible.left_out;
         } else {
-          const page = await provider.page({ ...(previous === undefined ? {} : { cursor: previous.token }), limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) });
+          const page = distinct(await provider.page({ ...(previous === undefined ? {} : { cursor: previous.token }), limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }));
           const rows = page.containers.length + page.left_out;
           if (rows > maximum || (page.next !== undefined && rows === 0)) failure('invalid_output');
           containers = page.containers;
@@ -297,8 +301,7 @@ export async function createPersonToolContainerReaderV1(options: {
       if (released === undefined) failure('not_found');
       return safe(async () => {
         await verify(input.signal);
-        const current = await provider.exact(released.container.id, input.signal);
-        if (current.id !== released.container.id) failure('invalid_output');
+        const current = asked(released.container.id, await provider.exact(released.container.id, input.signal));
         const echo = options.echo_projects();
         await verify(input.signal);
         return Object.freeze({ items: release([current], echo), truncated: false });
@@ -319,11 +322,7 @@ export async function createPersonToolContainerReaderV1(options: {
         }
         // What was released must still be what the asker sees now: the container, its link, and the ECHO projects named,
         // read after the provider's so a change during its reads is seen.
-        const current = await parallel([...byContainer.keys()], async id => {
-          const container = await provider.exact(id, input.signal);
-          if (container.id !== id) failure('invalid_output');
-          return container;
-        });
+        const current = await inBatchesOfFourV1([...byContainer.keys()], async id => asked(id, await provider.exact(id, input.signal)));
         const echo = options.echo_projects();
         for (const container of current) {
           const fresh = canonicalSha256(value(container, echo));

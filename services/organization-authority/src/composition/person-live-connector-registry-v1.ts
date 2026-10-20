@@ -1,6 +1,9 @@
+import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { liveSourceDescriptorV2, type EvidenceSourceCapabilitiesV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
-import type { PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import type {
+  OpenedPersonLiveConnectorV1, PersonContextLiveApplicationV1, PersonLiveConnectorDefinitionV1, PersonLiveProjectSettingV1,
+} from '../application/ports/person-context-live-runtime-v1.js';
 
 /**
  * What each connector's sources can do (research tool contract v1), beside their descriptors. Each reader applies
@@ -69,7 +72,7 @@ type OpenParametersV1 = Parameters<PersonLiveConnectorDefinitionV1['open']>;
  * registration to open it opens it, each registration gets its own close, and the last to close closes it. Every
  * registration must open with the same authentication, project grants and project names.
  */
-export function sharePersonLiveRuntimeV1<R extends { close(): void }>(open: (...parameters: OpenParametersV1) => R): (...parameters: OpenParametersV1) => { readonly runtime: R; close(): void } {
+function sharePersonLiveRuntimeV1<R extends { close(): void }>(open: (...parameters: OpenParametersV1) => R): (...parameters: OpenParametersV1) => { readonly runtime: R; close(): void } {
   let shared: { readonly runtime: R; readonly parameters: OpenParametersV1; holders: number } | undefined;
   return (...parameters) => {
     if (shared !== undefined) {
@@ -90,6 +93,33 @@ export function sharePersonLiveRuntimeV1<R extends { close(): void }>(open: (...
       current.runtime.close();
     } });
   };
+}
+
+/** A connected tool's runtime: its connection, which reads its items and containers, its routes and the person's link to it. */
+type PersonToolLiveRuntimeV1 = Pick<OpenedPersonLiveConnectorV1, 'owners' | 'close'> & Required<Pick<OpenedPersonLiveConnectorV1, 'connection_http' | 'tools'>> & {
+  readonly application: OpenedPersonLiveConnectorV1['application'] & { containerSource: PersonContextLiveApplicationV1<PersonToolContainerCitationV1>['source'] };
+};
+
+/**
+ * A tool's live connectors (research tool contract v1): its items and, for the V8 answer, its containers, over one runtime
+ * that `open` opens. The tool, its connection routes, its project setting and its assignee accounts are the items
+ * connector's alone, so the person's tools and routes list each once.
+ */
+export function personToolLiveConnectorsV1<R extends PersonToolLiveRuntimeV1>(connectors: {
+  readonly items: Omit<PersonLiveConnectorDefinitionV1, 'open'>; readonly containers: Omit<PersonLiveConnectorDefinitionV1, 'open'>;
+}, setting: (runtime: R) => PersonLiveProjectSettingV1, open: (...parameters: OpenParametersV1) => R): readonly PersonLiveConnectorDefinitionV1[] {
+  const share = sharePersonLiveRuntimeV1(open);
+  return Object.freeze([
+    Object.freeze({ ...connectors.items, open: (...parameters: OpenParametersV1) => {
+      const { runtime, close } = share(...parameters);
+      return Object.freeze({ application: runtime.application, connection_http: runtime.connection_http, ...(runtime.owners === undefined ? {} : { owners: runtime.owners }),
+        tools: (access_token: string) => runtime.tools(access_token), project_setting: Object.freeze(setting(runtime)), close });
+    } }),
+    Object.freeze({ ...connectors.containers, open: (...parameters: OpenParametersV1) => {
+      const { runtime, close } = share(...parameters);
+      return Object.freeze({ application: Object.freeze({ source: (input: Parameters<R['application']['containerSource']>[0]) => runtime.application.containerSource(input) }), close });
+    } }),
+  ]);
 }
 
 /** One translation at the boundary; all lifecycle and request code consumes the registry. */

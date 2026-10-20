@@ -20,16 +20,15 @@ import {
 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
 import {
   EVIDENCE_ANY_DATE_V1,
-  EVIDENCE_DATE_FIELDS_V1,
   matchesEvidenceDateV1,
   validateEvidenceDateFilterV1,
-  type EvidenceDateFieldV1,
   type EvidenceDateFilterV1,
   type EvidenceDatesV1,
 } from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
 import type { ImpactItemRowV1, ImpactItemStateV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { PersonFollowUpReleaseAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
-import { PERSON_QUERY_FUNCTION_WORDS_V1, evidenceDateFieldsOfV1 } from '../adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
+import { evidenceDateFieldsOfV1 } from '../adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
+import { createUncheckedTallyV1 } from '../application/evidence-unchecked-v1.js';
 import {
   assessOpenItemsV1,
   errorCodeV1,
@@ -48,6 +47,9 @@ import {
   type OpenItemViewerV1,
 } from './person-open-items-v1.js';
 import { openItemAccessV1 } from './open-items-policy-v1.js';
+import {
+  createEvidenceCursorsV1, evidenceInvalidV1 as invalid, evidenceNotFoundV1 as notFound, evidencePageSizeV1, evidenceTermsV1, evidenceWordsV1, newestFirstV1,
+} from './person-local-source-helpers-v1.js';
 import type { PersonReadableDecisionsV1, PersonReadableDecisionV1, PersonRecordAnchorV1 } from './person-record-search-route.js';
 
 /**
@@ -153,9 +155,7 @@ const KEY_PAST_READS = 'This request has read as many follow-up items as it can,
 /** Private visibilities first: an answer statement citing any of them is private. */
 const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_only', 'project', 'projects', 'team'];
 
-const invalid = (message: string): never => { throw new AuthorityOperationError('invalid_request', message); };
 const stale = (): never => { throw new AuthorityOperationError('stale_access_state', 'A follow-up is no longer available to this person'); };
-const notFound = (): never => { throw new AuthorityOperationError('not_found', 'Evidence item is not available in this request'); };
 
 /**
  * The dates a follow-up read takes: ECHO's own, as follow-ups' capabilities declare them (research tool contract v1). A due
@@ -186,32 +186,19 @@ function inWindow(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_s
 /** The rows a window could not test because they do not record its date, and the dates they do record (research tool contract v1). */
 function uncheckedOf(rows: readonly Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'check'>[], window: EvidenceDateFilterV1 | undefined): EvidenceDeskUncheckedV1 | undefined {
   if (window === undefined) return undefined;
-  let count = 0;
-  const carried = new Set<EvidenceDateFieldV1>();
-  for (const row of rows) {
-    const dates = rowDates(row);
-    const recorded = EVIDENCE_DATE_FIELDS_V1.filter(field => dates[field] !== undefined);
-    if (window.date_field === EVIDENCE_ANY_DATE_V1 ? recorded.length > 0 : dates[window.date_field as EvidenceDateFieldV1] !== undefined) continue;
-    count += 1;
-    for (const field of recorded) carried.add(field);
-  }
-  return count === 0 ? undefined : Object.freeze({ count, dates: Object.freeze(EVIDENCE_DATE_FIELDS_V1.filter(field => carried.has(field))) });
+  // `windowOf` always names the window's field.
+  const tally = createUncheckedTallyV1();
+  for (const row of rows) tally.tests(rowDates(row), window.date_field ?? EVIDENCE_ANY_DATE_V1);
+  return tally.unchecked();
 }
-function pageSize(limit: number | undefined, maximum: number): number {
-  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)) invalid('Evidence limit is invalid');
-  return Math.min(limit ?? maximum, maximum);
-}
-
 /** A ticket key a query names, upper case, from a word that is one once punctuation around it is trimmed. */
 function keyOf(word: string): string | undefined {
   const key = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase();
   return TICKET_KEY.test(key) ? key : undefined;
 }
 /**
- * A search's words, as the desk matches stored passages: whole Unicode terms,
- * lower case, without function words unless written as an acronym. A ticket
- * key stays one key, matched against a ticket item's own key and against the
- * same key-shaped word where ECHO's text holds it.
+ * A search's terms (`evidenceTermsV1`) and ticket keys. A ticket key stays one key, matched against a ticket item's own
+ * key and against the same key-shaped word where ECHO's text holds it.
  */
 function queryOf(query: string): { readonly terms: readonly string[]; readonly keys: readonly string[] } {
   const keys = new Set<string>();
@@ -219,10 +206,7 @@ function queryOf(query: string): { readonly terms: readonly string[]; readonly k
   for (const word of query.normalize('NFC').trim().split(/\s+/u)) {
     const key = keyOf(word);
     if (key !== undefined) { keys.add(key); continue; }
-    for (const run of word.match(/[\p{L}\p{N}]+/gu) ?? []) {
-      const term = run.toLowerCase();
-      if (!PERSON_QUERY_FUNCTION_WORDS_V1.has(term) || /^[A-Z]{2,}$/u.test(run)) terms.add(term);
-    }
+    for (const term of evidenceTermsV1(word)) terms.add(term);
   }
   return { terms: [...terms], keys: [...keys] };
 }
@@ -233,9 +217,6 @@ function keysOf(values: readonly (string | null | undefined)[]): ReadonlySet<str
 /** A name as one compares it with another: NFC, lower case, runs of space as one. */
 function spelled(name: string): string {
   return name.normalize('NFC').trim().toLowerCase().replace(/\s+/gu, ' ');
-}
-function wordsOf(values: readonly (string | null | undefined)[]): ReadonlySet<string> {
-  return new Set(values.flatMap(value => (value ?? '').normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []));
 }
 /** A ticket item's key, from the browse link its stored pointer keeps. Never a page's or a message's pointer, which can hold a title. */
 function ticketKeyOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefined {
@@ -249,10 +230,7 @@ function ticketKeyOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefined 
 function narrowest(...values: readonly (EvidenceDeskVisibilityV1 | undefined)[]): EvidenceDeskVisibilityV1 {
   return NARROWEST.find(value => values.includes(value)) ?? 'only_me';
 }
-/** Newest first, as a list of a source that knows dates; then by id. */
-function newestFirst(left: Pick<ImpactItemRowV1, 'created_at' | 'item_id'>, right: Pick<ImpactItemRowV1, 'created_at' | 'item_id'>): number {
-  return left.created_at < right.created_at ? 1 : left.created_at > right.created_at ? -1 : left.item_id < right.item_id ? -1 : left.item_id > right.item_id ? 1 : 0;
-}
+const newestFirst = newestFirstV1<Pick<ImpactItemRowV1, 'created_at' | 'item_id'>>(row => row.item_id);
 
 export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollowUpsEvidenceSourceV1Options): PersonFollowUpsEvidenceSourceV1 {
   const { sources, viewer, scope } = options;
@@ -266,8 +244,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
   const reads = new Map<Sha256Digest, Promise<LiveRead>>();
   /** One open of each decision a release links to, by its record, in the request. */
   const decisionReads = new Map<Sha256Digest, Promise<DecisionRead>>();
-  const cursors = new Map<string, { readonly selection: string; readonly after: Assessed['row'] }>();
-  let cursorSequence = 0;
+  const cursors = createEvidenceCursorsV1<Assessed['row']>();
   let running = 0;
   const waiting: (() => void)[] = [];
 
@@ -477,7 +454,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
 
     async search(input) {
       const window = windowOf(input);
-      const limit = pageSize(input.limit, FOLLOW_UPS_LIMITS_V1.search_hits);
+      const limit = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.search_hits);
       if (typeof input.query !== 'string') invalid('query is required');
       const live = input.live !== false;
       const { terms, keys } = queryOf(input.query);
@@ -490,7 +467,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         if (!inWindow(entry.row, window)) return [];
         const decision = decisionPart(entry);
         const held = [decision?.title, decision?.first_line, entry.row.expected, openItemNameV1(context.people, entry.row.owner_membership_id)];
-        const words = wordsOf(held);
+        const words = evidenceWordsV1(held);
         const written = keysOf(held);
         // A key-shaped word ECHO holds as written ("EVT-2") is one of its words; the key's parts alone are not.
         const matched = terms.filter(term => words.has(term)).length + keys.filter(key => written.has(key)).length;
@@ -531,38 +508,27 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     async list(input) {
       const window = windowOf(input);
       if (input.channel !== undefined || input.kinds?.some(kind => kind !== FOLLOW_UP_EVIDENCE_KIND_V1)) invalid('follow-ups take only owner, status and their own dates');
-      const size = pageSize(input.limit, FOLLOW_UPS_LIMITS_V1.list_page);
+      const size = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.list_page);
       const owner = input.owner === undefined ? undefined : input.owner.normalize('NFC').trim().replace(/^@/u, '').trim();
       if (owner !== undefined && (owner.length === 0 || owner.length > 80)) invalid('owner must be a person\'s name such as "Dana", or "me"');
       if (input.status !== undefined && input.status !== 'open' && input.status !== 'done') invalid('status must be "open" or "done"');
       const selection = JSON.stringify({ owner: owner?.toLowerCase() ?? null, status: input.status ?? null, window: window ?? null });
-      let after: Assessed['row'] | undefined;
-      if (input.cursor !== undefined) {
-        const saved = cursors.get(input.cursor);
-        if (saved === undefined || saved.selection !== selection) invalid('Evidence list cursor is invalid');
-        after = saved!.after;
-      }
+      const after = input.cursor === undefined ? undefined : cursors.after(input.cursor, selection);
       const view = visible(input.signal);
       const { context } = view;
       // "me", or the asker's own name, which research passes for "I" and "my" (asked_by): their own follow-ups, by membership,
       // never another member whose name holds theirs.
       const asker = owner !== undefined && (ASKER.has(owner.toLowerCase()) || spelled(owner) === spelled(askerName()));
       // Filters apply before anything is released or read live.
-      // Follow-ups take open or done; a project's status never reaches them (the research loop checks capabilities first).
-      if (input.status !== undefined && input.status !== 'open' && input.status !== 'done') throw new AuthorityOperationError('invalid_request', 'Follow-ups take status open or done');
       const status = input.status;
       const selected = context.assessed.filter(({ row }) => (status === undefined || followUpInStatusV1(row.state, status)) &&
         (owner === undefined || (asker ? row.owner_membership_id === viewer.membership : followUpOwnerMatchesV1(openItemNameV1(context.people, row.owner_membership_id), owner))));
       const matching = selected.filter(({ row }) => inWindow(row, window)).sort((left, right) => newestFirst(left.row, right.row));
-      const following = after === undefined ? matching : matching.filter(({ row }) => newestFirst(after!, row) < 0);
+      const following = after === undefined ? matching : matching.filter(({ row }) => newestFirst(after, row) < 0);
       const page = following.slice(0, size);
       const entries = await withReads(page, input.signal);
       input.signal?.throwIfAborted();
-      let next_cursor: string | undefined;
-      if (following.length > page.length) {
-        next_cursor = `follow_ups_${++cursorSequence}`;
-        cursors.set(next_cursor, Object.freeze({ selection, after: page.at(-1)!.row }));
-      }
+      const next_cursor = following.length > page.length ? cursors.next('follow_ups', selection, page.at(-1)!.row) : undefined;
       // This source holds every matching follow-up, so a list's end is always confirmed (ADR-0041). What its window could not test
       // is of the whole selection, so every page says the same.
       return release('list', view, entries, false, { next_cursor, page_full: false, untested: uncheckedOf(selected.map(({ row }) => row), window), links: true, signal: input.signal });

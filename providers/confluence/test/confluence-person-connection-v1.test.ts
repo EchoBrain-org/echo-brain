@@ -30,9 +30,7 @@ function fixture() {
     if (path === '/oauth/token/accessible-resources') return Response.json([{ id: cloud, url: site, scopes: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user'] }]);
     if (path.endsWith('/rest/api/user/current')) return Response.json({ accountId: 'account-fixture', type: 'known', accountType: 'atlassian' });
     if (path.endsWith('/api/v2/pages')) return Response.json({ results: [{ id: '100', spaceId: '123', title: 'ECHO MRD', status: 'current', version: { number: 7 } }], _links: {} });
-    if (path.endsWith('/api/v2/spaces')) return Response.json({ results: [{ id: '123', key: 'ECHO', name: 'Echo Product' }, { id: '124', key: 'OPS', name: 'Operations' }], _links: {} });
     if (path.endsWith('/api/v2/spaces/123')) return Response.json({ id: '123', key: 'ECHO', name: 'Echo Product' });
-    if (path.endsWith('/api/v2/spaces/124')) return Response.json({ id: '124', key: 'OPS', name: 'Operations' });
     throw new Error(`unexpected Confluence endpoint ${path}`);
   });
   let member = true;
@@ -72,21 +70,6 @@ it('reads a project only through its saved mapping on this site, fenced to the m
     f.revoke();
     await expect(reopened.list({})).rejects.toMatchObject({ code: 'unauthorized' });
     await expect(f.source()).rejects.toMatchObject({ code: 'unauthorized' });
-  } finally { f.db.close(); }
-});
-
-it('lists the Confluence spaces the asker can view, naming the mapped ECHO projects the asker can see (research tool contract v1)', async () => {
-  const f = fixture();
-  try {
-    f.map(cloud);
-    const source = (await f.containers())!;
-    expect((await source.list({})).items.map(item => [item.label, item.text, item.citation.permalink])).toEqual([
-      ['Echo Product', 'Confluence space ECHO: Echo Product\nECHO projects: Launchscope', `${site}/wiki/spaces/ECHO`],
-      ['Operations', 'Confluence space OPS: Operations', `${site}/wiki/spaces/OPS`],
-    ]);
-    f.revoke();
-    expect((await (await f.containers())!.list({})).items[0]!.text).toBe('Confluence space ECHO: Echo Product');
-    await expect(source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
   } finally { f.db.close(); }
 });
 

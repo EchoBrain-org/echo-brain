@@ -62,20 +62,14 @@ export async function createConfluencePersonLiveContainerReaderV1(options: {
     const page = confluenceRecord(await transport.request({ path: '/api/v2/spaces', query: { limit: String(limit), ...(cursor === undefined ? {} : { cursor }) }, signal }));
     signal?.throwIfAborted();
     const { containers, left_out } = personToolContainerRowsV1(confluenceArray(page.results, limit), space);
-    if (new Set(containers.map(value => value.id)).size !== containers.length) confluenceFailure('invalid_output');
     const next = nextCursor(page._links === undefined ? undefined : confluenceRecord(page._links).next);
     return { containers, left_out, next };
   }
 
   return createPersonToolContainerReaderV1({
     provider: {
-      binding, tool: 'Confluence', container: 'confluence_space', noun: 'Confluence space', failure: confluenceFailure,
-      async verify(signal) {
-        fence();
-        origin = await verification(signal);
-        fence();
-        return origin;
-      },
+      binding, tool: 'Confluence', container: 'confluence_space', noun: 'Confluence space', failure: confluenceFailure, fence,
+      verify: async signal => (origin = await verification(signal)),
       permalink: (site, value) => `${site}/wiki/spaces/${encodeURIComponent(value.key)}`,
       async page({ cursor, limit, signal }) {
         const { containers, left_out, next } = await spaces(limit, cursor, signal);
@@ -92,13 +86,11 @@ export async function createConfluencePersonLiveContainerReaderV1(options: {
           cursor = read.next;
           if (cursor === undefined) break;
         }
-        if (new Set(found.map(value => value.id)).size !== found.length) confluenceFailure('invalid_output');
         return { containers: Object.freeze(found), left_out, more: cursor !== undefined };
       },
       async exact(id, signal) {
         const value = space(await transport.request({ path: `/api/v2/spaces/${id}`, signal }));
         signal?.throwIfAborted();
-        if (value.id !== id) confluenceFailure('invalid_output');
         return value;
       },
     },

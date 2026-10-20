@@ -60,41 +60,41 @@ async function containersOf(definitions: readonly PersonLiveConnectorDefinitionV
 }
 
 describe('tool container connectors share their tool\'s runtime (research tool contract v1)', () => {
-  it('registers Jira issues and projects over one runtime that closes when both have closed', async () => {
+  it.each([
+    { tool: 'Jira', items: 'issues', containers: 'projects', scopes: ['read:jira-work', 'read:jira-user'],
+      routes: { '/myself': { accountId: 'fixture-account', active: true, accountType: 'atlassian' },
+        '/project/search': { isLast: true, values: [{ id: '10000', key: 'ECHO', name: 'Echo Platform', self: `${SITE}/rest/api/3/project/10000` }] } },
+      registered: [['jira', 5], ['jira_projects', 8]], listed: [['tool_container', 'Echo Platform', 'Jira project ECHO: Echo Platform\nECHO projects: Launchscope']],
+      connectors(database: Database.Database, fetch: typeof globalThis.fetch) {
+        const nango = connected(new JiraConnectionStoreV1(database));
+        new JiraProjectMappingStoreV1(database).set(person.organization_id, ECHO_PROJECT, null, canonicalSha256({ command: 1 }), { cloud_id: CLOUD, project_id: '10000', project_key: 'ECHO' });
+        const runtime = counted(() => openJiraPersonLiveRuntimeV1({ state_directory: '/never-used', sessions, configuration, seams: { database, nango, fetch }, authorize_project: authorize, project_names: names }));
+        return { counts: runtime.counts, definitions: jiraPersonLiveConnectorsV1(() => runtime.open()) };
+      } },
+    { tool: 'Confluence', items: 'pages', containers: 'spaces', scopes: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user'],
+      routes: { '/rest/api/user/current': { accountId: 'fixture-account', type: 'known', accountType: 'atlassian' },
+        '/api/v2/spaces': { results: [{ id: '42', key: 'ENG', name: 'Engineering' }], _links: {} } },
+      registered: [['confluence', 6], ['confluence_spaces', 8]], listed: [['tool_container', 'Engineering', 'Confluence space ENG: Engineering\nECHO projects: Launchscope']],
+      connectors(database: Database.Database, fetch: typeof globalThis.fetch) {
+        const nango = connected(new ConfluenceConnectionStoreV1(database));
+        new ConfluenceProjectMappingStoreV1(database).set(person.organization_id, ECHO_PROJECT, null, canonicalSha256({ command: 1 }), { cloud_id: CLOUD, space_ids: ['42'] });
+        const runtime = counted(() => openConfluencePersonLiveRuntimeV1({ state_directory: '/never-used', sessions, configuration, seams: { database, nango, fetch }, authorize_project: authorize, project_names: names }));
+        return { counts: runtime.counts, definitions: confluencePersonLiveConnectorsV1(() => runtime.open()) };
+      } },
+  ])('registers $tool $items and $containers over one runtime that closes when both have closed', async tool => {
     const database = new Database(':memory:');
     try {
-      const nango = connected(new JiraConnectionStoreV1(database));
-      new JiraProjectMappingStoreV1(database).set(person.organization_id, ECHO_PROJECT, null, canonicalSha256({ command: 1 }), { cloud_id: CLOUD, project_id: '10000', project_key: 'ECHO' });
       const fetch = vi.fn(async (input: RequestInfo | URL) => {
         const path = new URL(String(input)).pathname;
-        if (path === '/oauth/token/accessible-resources') return Response.json([{ id: CLOUD, url: SITE, scopes: ['read:jira-work', 'read:jira-user'] }]);
-        if (path.endsWith('/myself')) return Response.json({ accountId: 'fixture-account', active: true, accountType: 'atlassian' });
-        if (path.endsWith('/project/search')) return Response.json({ isLast: true, values: [{ id: '10000', key: 'ECHO', name: 'Echo Platform', self: `${SITE}/rest/api/3/project/10000` }] });
-        throw new Error(`Unexpected Jira endpoint ${path}`);
+        if (path === '/oauth/token/accessible-resources') return Response.json([{ id: CLOUD, url: SITE, scopes: tool.scopes }]);
+        const route = Object.entries(tool.routes).find(([suffix]) => path.endsWith(suffix));
+        if (route === undefined) throw new Error(`Unexpected ${tool.tool} endpoint ${path}`);
+        return Response.json(route[1]);
       });
-      const runtime = counted(() => openJiraPersonLiveRuntimeV1({ state_directory: '/never-used', sessions, configuration, seams: { database, nango, fetch: fetch as typeof globalThis.fetch }, authorize_project: authorize, project_names: names }));
-      const { registered, listed } = await containersOf(jiraPersonLiveConnectorsV1((_sessions, _authorize, _names) => runtime.open()), runtime.counts);
-      expect(registered.map(definition => [definition.descriptor.source_id, definition.minimum_response_version])).toEqual([['jira', 5], ['jira_projects', 8]]);
-      expect(listed).toEqual([['tool_container', 'Echo Platform', 'Jira project ECHO: Echo Platform\nECHO projects: Launchscope']]);
-    } finally { database.close(); }
-  });
-
-  it('registers Confluence pages and spaces over one runtime that closes when both have closed', async () => {
-    const database = new Database(':memory:');
-    try {
-      const nango = connected(new ConfluenceConnectionStoreV1(database));
-      new ConfluenceProjectMappingStoreV1(database).set(person.organization_id, ECHO_PROJECT, null, canonicalSha256({ command: 1 }), { cloud_id: CLOUD, space_ids: ['42'] });
-      const fetch = vi.fn(async (input: RequestInfo | URL) => {
-        const path = new URL(String(input)).pathname;
-        if (path === '/oauth/token/accessible-resources') return Response.json([{ id: CLOUD, url: SITE, scopes: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user'] }]);
-        if (path.endsWith('/rest/api/user/current')) return Response.json({ accountId: 'fixture-account', type: 'known', accountType: 'atlassian' });
-        if (path.endsWith('/api/v2/spaces')) return Response.json({ results: [{ id: '42', key: 'ENG', name: 'Engineering' }], _links: {} });
-        throw new Error(`Unexpected Confluence endpoint ${path}`);
-      });
-      const runtime = counted(() => openConfluencePersonLiveRuntimeV1({ state_directory: '/never-used', sessions, configuration, seams: { database, nango, fetch: fetch as typeof globalThis.fetch }, authorize_project: authorize, project_names: names }));
-      const { registered, listed } = await containersOf(confluencePersonLiveConnectorsV1((_sessions, _authorize, _names) => runtime.open()), runtime.counts);
-      expect(registered.map(definition => [definition.descriptor.source_id, definition.minimum_response_version])).toEqual([['confluence', 6], ['confluence_spaces', 8]]);
-      expect(listed).toEqual([['tool_container', 'Engineering', 'Confluence space ENG: Engineering\nECHO projects: Launchscope']]);
+      const { counts, definitions } = tool.connectors(database, fetch as typeof globalThis.fetch);
+      const { registered, listed } = await containersOf(definitions, counts);
+      expect(registered.map(definition => [definition.descriptor.source_id, definition.minimum_response_version])).toEqual(tool.registered);
+      expect(listed).toEqual(tool.listed);
     } finally { database.close(); }
   });
 

@@ -1,7 +1,7 @@
 import { ConfluenceProjectMappingStoreV1 } from '@echo-brain/provider-confluence/confluence-project-mapping-store-v1';
 import type { PersonPageProjectAuthorizationV1 } from '../application/ports/person-page-live-runtime-v1.js';
 import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
-import { CONFLUENCE_LIVE_CONNECTOR_V1, CONFLUENCE_SPACES_LIVE_CONNECTOR_V1, sharePersonLiveRuntimeV1 } from './person-live-connector-registry-v1.js';
+import { CONFLUENCE_LIVE_CONNECTOR_V1, CONFLUENCE_SPACES_LIVE_CONNECTOR_V1, personToolLiveConnectorsV1 } from './person-live-connector-registry-v1.js';
 import { createConfluencePersonConnectionHttpApplicationV1 } from '@echo-brain/provider-confluence/confluence-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
@@ -86,22 +86,8 @@ export function openConfluencePersonLiveRuntimeV1(options: {
   } catch (error) { if (owned) database.close(); throw error; }
 }
 
-/**
- * Confluence's live connectors (research tool contract v1): its pages and, for the V8 answer, its spaces, over one
- * runtime that `open` opens. The tool and its connection routes are the pages connector's alone, so the person's tools
- * and routes list each once.
- */
+/** Confluence's live connectors (research tool contract v1): its pages and, for the V8 answer, its spaces, over one runtime. */
 export function confluencePersonLiveConnectorsV1(open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => OpenedConfluencePersonLiveRuntimeV1): readonly PersonLiveConnectorDefinitionV1[] {
-  const share = sharePersonLiveRuntimeV1(open);
-  return Object.freeze([
-    Object.freeze({ ...CONFLUENCE_LIVE_CONNECTOR_V1, open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => {
-      const { runtime, close } = share(...parameters);
-      return Object.freeze({ application: runtime.application, connection_http: runtime.connection_http, tools: (access_token: string) => runtime.tools(access_token),
-        project_setting: Object.freeze({ tool: 'confluence' as const, projectRead: (input: { readonly access_token: string; readonly request: unknown }) => runtime.application.projectRead(input) }), close });
-    } }),
-    Object.freeze({ ...CONFLUENCE_SPACES_LIVE_CONNECTOR_V1, open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => {
-      const { runtime, close } = share(...parameters);
-      return Object.freeze({ application: Object.freeze({ source: (input: Parameters<OpenedConfluencePersonLiveRuntimeV1['application']['containerSource']>[0]) => runtime.application.containerSource(input) }), close });
-    } }),
-  ]);
+  return personToolLiveConnectorsV1({ items: CONFLUENCE_LIVE_CONNECTOR_V1, containers: CONFLUENCE_SPACES_LIVE_CONNECTOR_V1 },
+    runtime => ({ tool: 'confluence', projectRead: input => runtime.application.projectRead(input) }), open);
 }

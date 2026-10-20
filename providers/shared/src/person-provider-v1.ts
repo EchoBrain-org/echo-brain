@@ -64,3 +64,20 @@ export function createPersonProviderValidationV1(id: string, scope: RegExp, mess
   }
   return Object.freeze({ failure, string, record, array, copyBinding });
 }
+
+/** Text bounded to `bytes` of UTF-8, cut only between code points, then NFC again. */
+export function boundUtf8V1(value: string, bytes: number): string {
+  let text = '';
+  for (const point of value.normalize('NFC')) {
+    if (Buffer.byteLength(text + point, 'utf8') > bytes) break;
+    text += point;
+  }
+  return text.normalize('NFC');
+}
+
+/** `operation` over each value, four at a time, results in order: bounded provider fan-out. */
+export async function inBatchesOfFourV1<T, R>(values: readonly T[], operation: (value: T) => Promise<R>): Promise<R[]> {
+  const result: R[] = [];
+  for (let offset = 0; offset < values.length; offset += 4) result.push(...await Promise.all(values.slice(offset, offset + 4).map(operation)));
+  return result;
+}
