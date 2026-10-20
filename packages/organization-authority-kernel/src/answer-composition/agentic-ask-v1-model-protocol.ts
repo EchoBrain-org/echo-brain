@@ -143,8 +143,6 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
   },
 }); }
 
-export const stepSchema = createStepSchema(['meetings', 'documents', 'slack']);
-
 /**
  * A list the answer uses (ADR-0041): its id, and optionally the members one row fact selects (an owner or status by
  * value, or a date within since and until), or the members it names by id for their row facts. Code names them.

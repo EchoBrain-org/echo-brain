@@ -11,11 +11,11 @@ import {
   parseStep,
   SEARCH_ONLY_STEP_PROMPT,
   STEP_PROMPT,
-  stepSchema,
   stripEvidenceIds,
 } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 
 type Schema = Readonly<Record<string, any>>;
+const stepSchema = createStepSchema(["meetings", "documents", "slack"]);
 
 /** Deterministic generator of values a JSON-schema-enforcing provider could legally return. */
 function generator(seed: number) {

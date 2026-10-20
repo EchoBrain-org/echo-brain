@@ -11,8 +11,6 @@ import {
   validatePersonAskReceiptV1,
   validatePersonAskReceiptV2,
   validatePersonAskReceiptV3,
-  type PersonAskProgressStepEventV1,
-  type PersonAskProgressStepEventV2,
   type PersonAskProgressStepEventV3,
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
@@ -406,7 +404,7 @@ describe("agentic Ask progress recorder", () => {
   }));
 
   it("names each item once, at most 100 in a run, in read events of at most 25, and keeps counting what it read", () => {
-    const events: PersonAskProgressStepEventV1[] = [];
+    const events: PersonAskProgressStepEventV3[] = [];
     const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
     const items = many(130);
     // A call given nothing in full is not reading.
@@ -442,7 +440,7 @@ describe("agentic Ask progress recorder", () => {
   });
 
   it("maps searched sources from the catalog, never a selector, and drops one with no displayable tool id", () => {
-    const events: PersonAskProgressStepEventV1[] = [];
+    const events: PersonAskProgressStepEventV3[] = [];
     const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
     recorder.research.reads(true);
     recorder.research.returned("search", undefined, [launch]);
@@ -461,7 +459,7 @@ describe("agentic Ask progress recorder", () => {
   });
 
   it("counts as found only what no earlier search or list gave research", () => {
-    const events: PersonAskProgressStepEventV1[] = [];
+    const events: PersonAskProgressStepEventV3[] = [];
     const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
     const step = (reads: () => void) => { recorder.research.reads(true); reads(); recorder.research.reads_done(); };
     step(() => recorder.research.returned("search", "document", [prd]));
@@ -486,7 +484,7 @@ describe("agentic Ask progress recorder", () => {
   });
 
   it("sends nothing after the run's signal aborts or the run settles, and drops an item its projection refuses", () => {
-    const events: PersonAskProgressStepEventV1[] = [];
+    const events: PersonAskProgressStepEventV3[] = [];
     const controller = new AbortController();
     const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: controller.signal });
     const invalid: EvidenceDeskItemV2 = { ...launch, id: "desk_bad", label: "", citation: { ...launch.citation, atom_id: canonicalSha256("bad") } as EvidenceDeskItemV2["citation"] };
@@ -520,7 +518,7 @@ describe("agentic Ask progress recorder", () => {
       return recorder.receipt(42);
     };
 
-    const v2: PersonAskProgressStepEventV2[] = [];
+    const v2: PersonAskProgressStepEventV3[] = [];
     const v2Receipt = run(createAgenticAskProgressRecorderV1({ sink: event => { v2.push(event); }, version: 2, sources: withFollowUps, signal: new AbortController().signal }));
     const asV7 = (item: EvidenceDeskItemV2) => validatePersonAnswerCitationV7(citationOfAgenticEvidenceItemV1(item));
     expect(v2).toEqual([
@@ -535,7 +533,7 @@ describe("agentic Ask progress recorder", () => {
     expect(JSON.stringify(v2)).not.toContain(CANARY.body);
 
     // The V6 answer's stream: the follow-up counts as read, but neither it nor its source kind is ever named.
-    const v1: PersonAskProgressStepEventV1[] = [];
+    const v1: PersonAskProgressStepEventV3[] = [];
     const v1Receipt = run(createAgenticAskProgressRecorderV1({ sink: event => { v1.push(event); }, sources: withFollowUps, signal: new AbortController().signal }));
     for (const event of v1) expect(validatePersonAskProgressStepEventV1(event)).toEqual(event);
     expect(JSON.stringify(v1)).not.toContain("follow_up");
@@ -546,7 +544,7 @@ describe("agentic Ask progress recorder", () => {
 
   it("shares one request's names across its attempts: none named twice, all within the bound, each attempt's digests its own", () => {
     const request = createAgenticAskProgressRequestV1();
-    const events: PersonAskProgressStepEventV1[] = [];
+    const events: PersonAskProgressStepEventV3[] = [];
     const attempt = () => createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal, named: request.named });
     const items = many(120);
     const first = attempt();

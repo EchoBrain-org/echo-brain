@@ -63,8 +63,6 @@ export type {
 } from "./agentic-ask-progress-v1.js";
 export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-recorder-v1.js";
 
-/** Request-wide model-call budget, including retries and repairs. */
-export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
 /**
  * The whole request, research through audit (ADR-0022). The Authority is
  * reached through Cloudflare, whose proxy drops an origin response that takes
@@ -73,8 +71,6 @@ export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.ma
  * generation profile.
  */
 export const AGENTIC_ASK_DEADLINE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms;
-/** Time kept for the final answer call; research never starts inside it. */
-export const AGENTIC_ASK_ANSWER_RESERVE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms;
 /** Context window assumed when the generation profile does not state one. */
 const AGENTIC_ASK_DEFAULT_CONTEXT_TOKENS_V1 = 32_768;
 /** Conservative bytes per token for prompt budgeting. */

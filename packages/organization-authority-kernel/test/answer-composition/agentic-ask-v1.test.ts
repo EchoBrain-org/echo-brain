@@ -5,15 +5,14 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { validatePersonAnswerResponseV4 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import {
-  AGENTIC_ASK_ANSWER_RESERVE_MS_V1,
   AGENTIC_ASK_DEADLINE_MS_V1,
-  AGENTIC_ASK_MAX_MODEL_CALLS_V1,
   agenticAskContextBudgetBytesV1,
   createAgenticAskV1,
   createAgenticAskV3,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";
@@ -1269,7 +1268,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model, audit, now: () => clock }).answer({ question: "When is launch?" });
     expect(result.outcome).toBe("answered");
-    for (const call of timeouts.filter(value => value.role === "step")) expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_ANSWER_RESERVE_MS_V1);
+    for (const call of timeouts.filter(value => value.role === "step")) expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms);
     expect(timeouts.at(-1)!.role).toBe("answer");
     expect(audit[0]!.outcome).toBe("answered");
   });
@@ -1309,7 +1308,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
       expect(calls[2]!.timeout).toBeLessThan(25_000);
       expect(calls[3]!.timeout).toBeLessThan(generation.timeout_ms);
       for (const call of calls.slice(0, 3)) {
-        expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_ANSWER_RESERVE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
+        expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
       }
       expect(calls[3]!.at + calls[3]!.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
       expect(evidence.revalidate).toHaveBeenCalledTimes(5);
@@ -1323,7 +1322,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
   it("never exceeds the model-call budget under repeated invalid output", async () => {
     const model: StructuredGenerationPort = { generate: vi.fn(async () => ({ nonsense: true })) };
     const result = await ask({ desk: desk(), model }).answer({ question: "When is launch?" });
-    expect((model.generate as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(AGENTIC_ASK_MAX_MODEL_CALLS_V1);
+    expect((model.generate as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls);
     expect(result.outcome).toBe("partial");
   });
 
