@@ -708,7 +708,7 @@ adapter (`openrouter-structured-generation-adapter.ts`) and the reply parsers
 | `model_entry_dropped` | Dropped a malformed entry: not an object, no text or id, an unreadable id or selection, or an argument with no text or one its tool does not take |
 | `model_repeat_dropped` | Dropped a repeated need, id, phrase, list use or card row within one reply |
 | `model_id_respelled` | Read an id in another spelling (`e4`, `[E4]`, `4`, ` n2 `, `[L3]`) as its id |
-| `model_enum_respelled` | Read a closed value (a tool, a need's status or kind, a selection field, a relation, a verdict) given in another spelling, as an alias (`browse`) or not at all, as a known value or its default |
+| `model_enum_respelled` | Read a closed value (a tool, a need's status or kind, a list's kind, status or role filter, a selection field, a relation, a verdict) given in another spelling, as an alias (`browse`, `decisions`) or not at all, as a known value or its default |
 | `model_bare_string` | Read a bare string where an object belongs: a tool's args or the old `input` field, a need, a list use |
 | `model_inline_ids_stripped` | Removed evidence ids written into model text, such as `(E4)` |
 

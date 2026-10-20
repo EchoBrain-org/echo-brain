@@ -781,6 +781,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if ("error" in normalized) return { tool: "list", args, error: normalized.error };
     if ("refused" in normalized) return refusedResult("list", args, normalized);
     const { notes, applied, status, owner, role, limit, ...selection } = normalized;
+    // A filter value in another spelling ("Decisions", "Completed"), applied as the value it names.
+    const respelledFilters = ([["kind", selection.kinds?.[0]], ["status", status], ["role", role]] as const)
+      .filter(([field, value]) => value !== undefined && args[field] !== undefined && applied[field] === "applied" && args[field] !== value).length;
+    if (respelledFilters > 0) observeCoreModelCorrectionV1("model_enum_respelled", respelledFilters);
     // For Ask a source's own filters are the desk's, applied before anything is released, except meetings': meeting actions
     // are filtered here, after each page (research tool contract v1).
     const deskFilters = ask && selection.source !== "meeting" && sourcesById.get(selection.source)?.capabilities !== undefined;

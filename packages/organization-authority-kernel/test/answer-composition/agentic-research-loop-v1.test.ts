@@ -896,6 +896,13 @@ describe("research loop: corrections of model output (model scaffolding audit 20
     expect(h.generate).toHaveBeenCalledTimes(2);
   });
 
+  it("counts a list filter value in another spelling once per read, though a read's arguments are normalized twice", async () => {
+    const list = vi.fn(async () => result([]));
+    const h = harness([reads("open", [{ tool: "list", args: { source: "meetings", kind: "Decisions", status: "Completed" } }]), affects("not_found")], { openCitation: async () => result([approved]), list });
+    expect(await corrected(research(h))).toEqual({ model_enum_respelled: 2 });
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ kinds: ["decision"] }));
+  });
+
   it("counts research code ended on a catalog read empty, and on a step no repair could use", async () => {
     const empty = harness([reads("open", [{ tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "documents" } }])]);
     expect(await corrected(() => empty.research.research({ trigger: "approved_record", brief: brief("Find what was decided.", []) }))).toEqual({ research_empty_catalog_stop: 1 });
