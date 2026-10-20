@@ -122,3 +122,19 @@ the Jira and Confluence reader tests, and the Authority desk tests
 `person-evidence-desk-records.test.ts`, `person-live-evidence-desk-v2.test.ts`
 and `person-meeting-runtime-v1.test.ts`. The time saved in staging is still to
 be measured with the same LangSmith export.
+
+## Later decisions
+
+2026-10-19, approved by the founder after a cleanup audit: a desk release of
+Person originals no longer pins the organization's authorization revision.
+That revision moves on every note anyone saves, every project or membership
+change and every display-name change, so any of those during an Ask that
+released originals refused its answer as unauthorized at the next check, the
+final one included. Each release now pins the caller's own active project
+grants, each by its grant row, as the record releases already do. Every check,
+incremental or full, still refuses once those grants change, rejoining a
+project included, so one request never mixes two snapshots of the caller's
+project grants. A change to one released item's audience or project
+association is still refused by the full check at release, as the security
+trade-off above describes. The tests are the two desk fence tests in
+`person-original-context-adversarial.test.ts`.

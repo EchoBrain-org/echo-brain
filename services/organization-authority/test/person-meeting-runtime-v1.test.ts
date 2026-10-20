@@ -967,7 +967,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(atomReads).toHaveBeenCalledTimes(1); expect(itemReads).toHaveBeenCalledTimes(1);
     // Another person's session never inherits the release.
     expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release, items_checked: true })).toThrow();
-    // Leaving the project moves the authorization pin, so even the narrow check refuses.
+    // Leaving the project moves the caller's grants pin, so even the narrow check refuses.
     f.leave(project, 'reader-a');
     expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release, items_checked: true })).toThrow();
   });

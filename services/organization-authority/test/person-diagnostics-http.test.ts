@@ -52,7 +52,7 @@ function captureFixture() {
   const originals = {
     deskAuthorize, revalidateDeskRelease,
     deskSearch: vi.fn(() => ({ items: [note], truncated: false, receipt: canonicalSha256('note release'),
-      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, authorization_revision: 0, released_atoms: [] },
+      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
     })),
   };
   const replies: unknown[] = [];

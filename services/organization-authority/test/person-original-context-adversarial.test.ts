@@ -583,6 +583,59 @@ describe("adversarial original-context retrieval", () => {
       .toThrow(expect.objectContaining({ code: "unauthorized" }));
   });
 
+  it("keeps a desk release on both checks when writes that change none of the caller's access move the org-wide revision", () => {
+    const f = fixture();
+    f.upload("Alpha plan", "orgwide-revision-marker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
+    const projects = createProjectContextApplicationV1({ authenticate: token => authorization(token === "member" ? MEMBER : OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
+    const releases = [{ kind: "global" as const }, { kind: "project" as const, project_id: PROJECT_ALPHA }]
+      .map(scope => f.retrieval.deskSearch({ access_token: "member", scope, query: "orgwide-revision-marker" }));
+    expect(releases.map(release => release.items.length)).toEqual([1, 1]);
+    const note = (token: string) => projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: "Mid-answer note", text: "saved while the Ask runs", association_project_ids: [], audience: { kind: "team" } });
+    const rename = (principalId: string, name: string) => f.database.prepare("UPDATE authority_principals SET display_name=? WHERE principal_id=?").run(name, principalId);
+    const revision = () => f.database.prepare("SELECT revision FROM authority_project_authorization_state_v1").pluck().get() as number;
+    const writes: Record<string, () => unknown> = {
+      "another person saves a note": () => note("owner"),
+      "another person renames themself": () => rename(OWNER.principal_id, "Owner Renamed"),
+      "another project is created": () => projects.createProject("owner", { schema_version: 1, kind: "echo-project-create-v1", request_id: randomUUID(), name: "Gamma" }),
+      "the caller saves a note": () => note("member"),
+      "the caller renames themself": () => rename(MEMBER.principal_id, "Member Renamed"),
+    };
+    for (const [write, run] of Object.entries(writes)) {
+      const before = revision();
+      run();
+      // Each of these refused the answer while the desk pinned the org-wide revision.
+      expect(revision(), write).toBeGreaterThan(before);
+      for (const release of releases) {
+        expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release, items_checked: true }), write).not.toThrow();
+        expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release }), write).not.toThrow();
+      }
+    }
+  });
+
+  it("refuses a desk release on both checks once the caller's own project grants change", () => {
+    const f = fixture();
+    f.upload("Alpha plan", "caller-grant-marker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
+    const search = () => f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "caller-grant-marker" });
+    const check = (release: ReturnType<typeof search>, items_checked?: true) =>
+      () => f.retrieval.revalidateDeskRelease({ access_token: "member", release, ...(items_checked === undefined ? {} : { items_checked }) });
+    const release = search();
+    expect(release.items).toHaveLength(1);
+    f.leave(PROJECT_ALPHA);
+    expect(check(release, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    expect(check(release)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    // Rejoining is a new grant, so the earlier release stays refused even though the item is readable again.
+    grant(f.database, PROJECT_ALPHA, MEMBER, "member");
+    expect(check(release, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    const rejoined = search();
+    expect(rejoined.items).toHaveLength(1);
+    expect(check(rejoined, true)).not.toThrow();
+    // Any change to the caller's own grants refuses the releases before it, so one request never mixes two snapshots of them.
+    grant(f.database, PROJECT_BETA, MEMBER, "member");
+    expect(check(rejoined, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    expect(check(rejoined)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    expect(check(search(), true)).not.toThrow();
+  });
+
   it("rejects a tampered representation body when its stored hash is unchanged", () => {
     const f = fixture();
     f.upload("Representation check", "representation-corruption-marker");

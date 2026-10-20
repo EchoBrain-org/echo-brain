@@ -168,7 +168,7 @@ function mineFixture() {
   });
   const scopes: unknown[] = [];
   const release = (scope: unknown) => ({
-    release: { authorization: { principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker", checked_at }, scope, authorization_revision: 0, released_atoms: [] },
+    release: { authorization: { principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker", checked_at }, scope, grants_sha256: canonicalSha256([]), released_atoms: [] },
     receipt: canonicalSha256({ release: scopes.length }), items: [note], truncated: false,
   });
   const originals = {
