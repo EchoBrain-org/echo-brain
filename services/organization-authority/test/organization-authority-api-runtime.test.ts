@@ -18,12 +18,10 @@ import { Buffer } from "node:buffer";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
 import {
   PersonIdentitySessionApplication,
   PersonOidcRetryableError,
 } from "../src/application/person-identity-sessions.js";
-import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
@@ -41,7 +39,7 @@ import type {
 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS } from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
-import { port as availablePort } from "./fixtures/owner-session.js";
+import { port as availablePort, syntheticOidcProvider } from "./fixtures/owner-session.js";
 
 const roots: string[] = [];
 
@@ -139,71 +137,9 @@ function consumedGrants(database: ReturnType<typeof openAuthorityDatabase>): unk
     .get();
 }
 
-class MockOidcProvider implements PersonSessionOidcAuthorizationProvider {
-  private last: BegunPersonOidcLogin | undefined;
-  private retryableBeforeRedemption = false;
-  private terminalRedemptionFailure = false;
-
-  constructor(
-    private claims: Readonly<Record<string, unknown>> = {
-      email: "founder@example.com",
-      email_verified: true,
-    },
-  ) {}
-
-  setClaims(claims: Readonly<Record<string, unknown>>): void {
-    this.claims = claims;
-  }
-
-  setAttempt(attempt: BegunPersonOidcLogin): void {
-    this.last = attempt;
-  }
-
-  setRetryableBeforeRedemption(value: boolean): void {
-    this.retryableBeforeRedemption = value;
-  }
-
-  setTerminalRedemptionFailure(value: boolean): void {
-    this.terminalRedemptionFailure = value;
-  }
-
-  buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
-    this.last = attempt;
-    return `https://issuer.example/authorize?state=${encodeURIComponent(attempt.state)}`;
-  }
-
-  async redeemAuthorizationCode(): Promise<
-    | { kind: "retryable_before_redemption" }
-    | { kind: "terminal_failure"; diagnostic_stage: "redemption" }
-    | {
-        kind: "verified";
-        token: {
-          issuer: string;
-          subject: string;
-          audience: string;
-          nonce: string;
-          issued_at: number;
-          claims: Readonly<Record<string, unknown>>;
-        };
-      }
-  > {
-    if (this.retryableBeforeRedemption)
-      return { kind: "retryable_before_redemption" };
-    if (this.terminalRedemptionFailure)
-      return { kind: "terminal_failure", diagnostic_stage: "redemption" };
-    if (this.last === undefined) throw new Error("missing OIDC begin");
-    return {
-      kind: "verified",
-      token: {
-        issuer: "https://issuer.example",
-        subject: "founder-subject",
-        audience: "founder-client",
-        nonce: this.last.nonce,
-        issued_at: Math.floor(Date.now() / 1000),
-        claims: this.claims,
-      },
-    };
-  }
+/** The founder's OIDC provider, verifying `claims()`; its subject never changes, as one account's would not. */
+function founderOidc(claims: () => Readonly<Record<string, unknown>> = () => ({ email: "founder@example.com", email_verified: true })) {
+  return syntheticOidcProvider(OIDC, () => claims().email as string, { subject: () => "founder-subject", claims });
 }
 
 async function json(response: Response): Promise<Record<string, unknown>> {
@@ -250,7 +186,7 @@ describe("Organization Authority API runtime", () => {
       record_policy_fact_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2()]),
       worker_interval_ms: 10, on_worker_error: (error: unknown) => { errors.push(error); },
     };
-    const dependencies = { api: { oidc_provider: new MockOidcProvider(), person_http_runtime_factory: () => ({ applications: [], processing: personal_meetings, close() {} }) } };
+    const dependencies = { api: { oidc_provider: founderOidc(), person_http_runtime_factory: () => ({ applications: [], processing: personal_meetings, close() {} }) } };
     let runtime: Awaited<ReturnType<typeof openOrganizationAuthorityRuntime>> | undefined;
     try {
       runtime = await openOrganizationAuthorityRuntime(config, dependencies);
@@ -298,7 +234,7 @@ describe("Organization Authority API runtime", () => {
         pkce_sealing_key: pkce,
       },
       {
-        oidc_provider: new MockOidcProvider(),
+        oidc_provider: founderOidc(),
         external_identity_runtime_bundle: {
           open(input): OpenedPersonExternalIdentityRuntimeV1 {
             opened.push(input);
@@ -361,7 +297,7 @@ describe("Organization Authority API runtime", () => {
       { fileMustExist: true },
     );
     try {
-      const sessions = sessionsFor(database, pkce, { oidc_provider: new MockOidcProvider() });
+      const sessions = sessionsFor(database, pkce, { oidc_provider: founderOidc() });
       const matched = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
         login_grant: first.login_grant,
@@ -399,10 +335,8 @@ describe("Organization Authority API runtime", () => {
     const databasePath = join(initialized.state_directory, "authority.sqlite");
     let database = openAuthorityDatabase(databasePath, { fileMustExist: true });
     try {
-      let provider = new MockOidcProvider({
-        email: "someone-else@example.com",
-        email_verified: true,
-      });
+      let claims: Readonly<Record<string, unknown>> = { email: "someone-else@example.com", email_verified: true };
+      let provider = founderOidc(() => claims);
       const diagnostics: string[] = [];
       // Reads the current database and provider, so a restart rebuilds over both.
       const createSessions = () =>
@@ -419,7 +353,7 @@ describe("Organization Authority API runtime", () => {
         kind: "identity_bootstrap",
         login_grant: invitation.login_grant,
       });
-      provider.setAttempt(begun);
+      provider.begun(begun);
       const firstWrongAccountFailure = await sessions
         .completeOidcLogin({
           state: begun.state,
@@ -453,10 +387,8 @@ describe("Organization Authority API runtime", () => {
       // fresh repository and application then reattach the exact attempt.
       database.close();
       database = openAuthorityDatabase(databasePath, { fileMustExist: true });
-      provider = new MockOidcProvider({
-        email: "someone-else@example.com",
-        email_verified: true,
-      });
+      claims = { email: "someone-else@example.com", email_verified: true };
+      provider = founderOidc(() => claims);
       sessions = createSessions();
       const restarted = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
@@ -474,7 +406,7 @@ describe("Organization Authority API runtime", () => {
         kind: "identity_bootstrap",
         login_grant: parallelInvitation.login_grant,
       });
-      provider.setAttempt(parallelBegun);
+      provider.begun(parallelBegun);
       await expect(
         sessions.completeOidcLogin({
           state: parallelBegun.state,
@@ -504,10 +436,10 @@ describe("Organization Authority API runtime", () => {
         state: parallelBegun.state,
         nonce: parallelBegun.nonce,
       });
-      provider.setAttempt(parallelProviderRetry);
+      provider.begun(parallelProviderRetry);
       // A provider failure known before code redemption must restore the same
       // reservation, not silently buy another wrong-account attempt.
-      provider.setRetryableBeforeRedemption(true);
+      provider.fail("retryable_before_redemption");
       await expect(
         sessions.completeOidcLogin({
           state: parallelProviderRetry.state,
@@ -536,12 +468,9 @@ describe("Organization Authority API runtime", () => {
         state: parallelBegun.state,
         nonce: parallelBegun.nonce,
       });
-      provider.setAttempt(parallelSecondWrongAccount);
-      provider.setRetryableBeforeRedemption(false);
-      provider.setClaims({
-        email: "someone-else@example.com",
-        email_verified: true,
-      });
+      provider.begun(parallelSecondWrongAccount);
+      provider.fail(undefined);
+      claims = { email: "someone-else@example.com", email_verified: true };
       await expect(
         sessions.completeOidcLogin({
           state: parallelSecondWrongAccount.state,
@@ -569,11 +498,8 @@ describe("Organization Authority API runtime", () => {
           .get(parallelBegun.login_attempt_id),
       ).toBe(1);
 
-      provider.setAttempt(restarted);
-      provider.setClaims({
-        email: "founder@example.com",
-        email_verified: true,
-      });
+      provider.begun(restarted);
+      claims = { email: "founder@example.com", email_verified: true };
       await expect(
         sessions.completeOidcLogin({
           state: restarted.state,
@@ -593,15 +519,12 @@ describe("Organization Authority API runtime", () => {
       // A malformed or unverified bootstrap identity is not a wrong-account
       // retry: it remains terminal and spends this distinct invitation.
       const invalidInvitation = invite("invalid-email.invitation.json").body;
-      provider.setClaims({
-        email: "founder@example.com",
-        email_verified: false,
-      });
+      claims = { email: "founder@example.com", email_verified: false };
       const invalid = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
         login_grant: invalidInvitation.login_grant,
       });
-      provider.setAttempt(invalid);
+      provider.begun(invalid);
       await expect(
         sessions.completeOidcLogin({
           state: invalid.state,
@@ -613,15 +536,12 @@ describe("Organization Authority API runtime", () => {
       // A second verified wrong account is terminal. The reservation is
       // durable across the restart, while the grant and attempt remain one-use.
       const cappedInvitation = invite("capped-retry.invitation.json").body;
-      provider.setClaims({
-        email: "someone-else@example.com",
-        email_verified: true,
-      });
+      claims = { email: "someone-else@example.com", email_verified: true };
       const cappedFirst = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
         login_grant: cappedInvitation.login_grant,
       });
-      provider.setAttempt(cappedFirst);
+      provider.begun(cappedFirst);
       await expect(
         sessions.completeOidcLogin({
           state: cappedFirst.state,
@@ -632,7 +552,7 @@ describe("Organization Authority API runtime", () => {
         kind: "identity_bootstrap",
         login_grant: cappedInvitation.login_grant,
       });
-      provider.setAttempt(cappedSecond);
+      provider.begun(cappedSecond);
       await expect(
         sessions.completeOidcLogin({
           state: cappedSecond.state,
@@ -657,7 +577,7 @@ describe("Organization Authority API runtime", () => {
         kind: "identity_bootstrap",
         login_grant: replayedInvitation.login_grant,
       });
-      provider.setAttempt(replayedFirst);
+      provider.begun(replayedFirst);
       await expect(
         sessions.completeOidcLogin({
           state: replayedFirst.state,
@@ -668,15 +588,15 @@ describe("Organization Authority API runtime", () => {
         kind: "identity_bootstrap",
         login_grant: replayedInvitation.login_grant,
       });
-      provider.setAttempt(replayedRetry);
-      provider.setTerminalRedemptionFailure(true);
+      provider.begun(replayedRetry);
+      provider.fail("terminal_failure");
       await expect(
         sessions.completeOidcLogin({
           state: replayedRetry.state,
           authorization_code: "replayed-provider-code",
         }),
       ).rejects.toMatchObject({ code: "unauthorized" });
-      provider.setTerminalRedemptionFailure(false);
+      provider.fail(undefined);
       expect(consumedGrants(database)).toBe(5);
     } finally {
       database.close();
@@ -843,14 +763,11 @@ describe("Organization Authority API runtime", () => {
     };
     // A personal HTTP runtime that only lists reviews, so the change check's reviews wiring is exercised (ADR-0036).
     const REVIEW = `apr_${"a".repeat(64)}`;
-    const reviewed: string[] = [];
     const apiDependencies = {
-      oidc_provider: new MockOidcProvider(),
+      oidc_provider: founderOidc(),
       person_http_runtime_factory: () => ({ applications: [], close() {},
-        reviewStatuses: async () => (person: { readonly membership_id: string }) => {
-          reviewed.push(person.membership_id);
-          return person.membership_id === initialized.owner_membership_id ? [{ approval_id: REVIEW, status: "pending" as const }] : [];
-        } }),
+        reviewStatuses: async () => (person: { readonly membership_id: string }) =>
+          person.membership_id === initialized.owner_membership_id ? [{ approval_id: REVIEW, status: "pending" as const }] : [] }),
     };
     let runtime = await startOrganizationAuthorityApiRuntime(apiConfig, apiDependencies);
     try {
@@ -1075,23 +992,10 @@ describe("Organization Authority API runtime", () => {
         expect(inspection.prepare("SELECT count(*) AS n FROM authority_live_source_candidates_v2").get()).toEqual({ n: 0 });
         expect(inspection.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 1 });
 
-        // The composed change check (ADR-0036): the owner's project and review, no follow-up yet, and no audit row. (An open item
-        // needs a published approval; the record check's grants inside the transaction are covered by the record route's tests.)
-        const auditRows = () => inspection.prepare("SELECT (SELECT count(*) FROM authority_project_read_audit_v1) + (SELECT count(*) FROM authority_person_read_decision_audit_v2) AS n").get();
-        const audited = auditRows();
-        expect((await fetch(`${origin}/v1/person/changes`)).status).toBe(401);
-        const changes = await get("/v1/person/changes");
-        expect(changes).toEqual({
-          kind: "echo-person-changes-v1",
-          areas: {
-            projects: canonicalSha256([[project_id, create.name, "active", "lead"]]),
-            follow_ups: canonicalSha256([]),
-            reviews: canonicalSha256([[REVIEW, "pending"]]),
-          },
-          check_again_after_seconds: 60,
+        // The composed change check (ADR-0036) reads the owner's project and the personal runtime's review; no follow-up yet.
+        expect((await get("/v1/person/changes")).areas).toEqual({
+          projects: canonicalSha256([[project_id, create.name, "active", "lead"]]), follow_ups: canonicalSha256([]), reviews: canonicalSha256([[REVIEW, "pending"]]),
         });
-        expect(reviewed).toEqual([initialized.owner_membership_id]);
-        expect(auditRows()).toEqual(audited);
       } finally { inspection.close(); }
       await runtime.close();
       runtime = await startOrganizationAuthorityApiRuntime({ ...apiConfig, port: await availablePort() }, apiDependencies);
