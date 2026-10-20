@@ -1,5 +1,5 @@
 import { canonicalJson, canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { asEnumerableRecord as object, assertExactKeys, assertPatternString, fail, validateOrganizationApiError } from './validation.js';
+import { asEnumerableRecord as object, assertExactKeys, assertToolId, fail, validateOrganizationApiError } from './validation.js';
 
 /**
  * The Ask progress stream's validators and framing, shared by every version
@@ -67,7 +67,7 @@ export function askProgressCodec(dialect: AskProgressDialect): AskProgressCodec 
     }
     if (!dialect.tool_sources.includes(input.kind as string)) fail('Ask progress source kind is invalid');
     assertExactKeys(input, ['kind', 'tool_id'], 'Ask progress source');
-    assertPatternString(input.tool_id, 'Ask progress source tool_id', 64, /^[a-z][a-z0-9-]*$/);
+    assertToolId(input.tool_id, 'Ask progress source tool_id');
     return Object.freeze({ kind: input.kind as string, tool_id: input.tool_id });
   }
 

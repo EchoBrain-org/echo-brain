@@ -184,14 +184,9 @@ Every completed run of any case also reports what its trace counts: rounds,
 calls per round, collections looked at, refused calls, repeated refusals,
 unchecked items, notices and rejected replies. The report's "Reach and cost"
 section shows them per case, with each check's rate over the case's runs (a
-failed run meets none), and what each case awaits. `awaits` names the contract
-steps a case needs (`map_and_rules`, `dates_and_links`, `workspace_collections`,
-`wider_calls`, `connector_containers`, and `eval_full_catalog`: the evaluation
-endpoint binding follow-ups, the workspace sources and tool containers): such
-a case is expected to fail until they land, and a failure there is not a
-regression. Every one of these steps is built, so no case awaits one now,
-and a failing case is a regression. The judge is told when each
-question was asked (`case.asked_at`), since these keys word time relative to it.
+failed run meets none). A failing case is a regression. The judge is told when
+each question was asked (`case.asked_at`), since these keys word time relative
+to it.
 Run the family alone with `run --family open_ended`; it needs the workspace
 seeded (`world/README.md`, "Workspace").
 

@@ -145,8 +145,8 @@ export function aggregate(gradedRuns) {
     const reached = runs.map(run => run.graded.checks.reach).filter(reach => reach !== undefined);
     return {
       case_id: checks.case_id, split: checks.split, trigger: checks.trigger, budget: checks.budget, runs: runs.length, key_status: checks.key_status ?? null,
-      // The open-ended family (research tool contract v1): its reach and cost checks met in every run, and the contract steps it awaits.
-      family: checks.family ?? null, awaits: checks.awaits ?? [], reach_met_in_every_run: reached.length === 0 ? null : reached.every(reach => reach.met),
+      // The open-ended family (research tool contract v1): its reach and cost checks met in every run.
+      family: checks.family ?? null, reach_met_in_every_run: reached.length === 0 ? null : reached.every(reach => reach.met),
       reach_missing: [...new Set(reached.flatMap(reach => reach.missing))],
       // Every completed run's needs, by declared kind, summed over the case's runs.
       kinds: kinds.length === 0 ? null : Object.fromEntries(KIND_COUNTS.map(kind => [kind, kinds.reduce((total, value) => total + value[kind], 0)])),
@@ -286,10 +286,7 @@ export function markdownReport(identity, report) {
   return lines.join("\n");
 }
 
-/**
- * Reach and cost (research tool contract v1): the open-ended family's four checks, and what every case's traces count.
- * A case awaiting contract steps is listed with them, so a reader tells an expected failure from a regression.
- */
+/** Reach and cost (research tool contract v1): the open-ended family's four checks, and what every case's traces count. */
 function reachSection(report) {
   const s = report.summary;
   const counted = report.cases.filter(entry => typeof entry.trace_refused === "number" || entry.reach_met_in_every_run !== null);
@@ -297,7 +294,7 @@ function reachSection(report) {
   return [
     "## Reach and cost",
     "",
-    "Graded on what research reached and what it spent, never on the answer's wording (research tool contract v1). An open-ended case meets them when every collection holding part of its answer was looked at (within its time window, when it names one), no refused call was sent again, unchecked items were stated wherever its answer used a list that had them, and research finished within its rounds (4 unless the case says otherwise). A case that awaits contract steps is expected to fail until they land.",
+    "Graded on what research reached and what it spent, never on the answer's wording (research tool contract v1). An open-ended case meets them when every collection holding part of its answer was looked at (within its time window, when it names one), no refused call was sent again, unchecked items were stated wherever its answer used a list that had them, and research finished within its rounds (4 unless the case says otherwise).",
     "",
     `Open-ended cases meeting reach and cost in every run: **${s.open_ended_cases_met_in_every_run} of ${s.open_ended_cases}**.`,
     "",
@@ -310,9 +307,9 @@ function reachSection(report) {
     "",
     "What each case's traces count, over its completed runs, then each check over all its runs (a failed run meets none).",
     "",
-    "| Case | Budget | Rounds | Calls per round | Refused | Repeated refusals | Unchecked | Looked at all | No repeat | Unchecked stated | Within rounds | Not looked at | Awaits |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...counted.map(entry => `| ${entry.case_id} | ${entry.budget} | ${number(entry.rounds)} | ${number(entry.trace_calls_per_round)} | ${number(entry.trace_refused)} | ${number(entry.trace_repeated_refusals)} | ${number(entry.trace_unchecked)} | ${percent(entry.reach_collections)} | ${percent(entry.reach_no_repeated_refusal)} | ${percent(entry.reach_unchecked_stated)} | ${percent(entry.reach_within_rounds)} | ${entry.reach_missing.join(", ") || "—"} | ${entry.awaits.join(", ") || "—"} |`),
+    "| Case | Budget | Rounds | Calls per round | Refused | Repeated refusals | Unchecked | Looked at all | No repeat | Unchecked stated | Within rounds | Not looked at |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...counted.map(entry => `| ${entry.case_id} | ${entry.budget} | ${number(entry.rounds)} | ${number(entry.trace_calls_per_round)} | ${number(entry.trace_refused)} | ${number(entry.trace_repeated_refusals)} | ${number(entry.trace_unchecked)} | ${percent(entry.reach_collections)} | ${percent(entry.reach_no_repeated_refusal)} | ${percent(entry.reach_unchecked_stated)} | ${percent(entry.reach_within_rounds)} | ${entry.reach_missing.join(", ") || "—"} |`),
     "",
   ];
 }

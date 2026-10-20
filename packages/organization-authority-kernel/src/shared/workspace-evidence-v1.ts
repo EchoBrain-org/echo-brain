@@ -50,7 +50,3 @@ export const TOOLS_SOURCE_DESCRIPTOR_V1: WorkspaceSourceDescriptorV1 = Object.fr
   description: "The asker's tools, such as Jira, Confluence and Slack, and whether the asker has connected each one.",
   capabilities: Object.freeze({ filters: Object.freeze({}), dates: Object.freeze({}), any_date: false, links: Object.freeze([]) }),
 });
-
-export const WORKSPACE_SOURCE_DESCRIPTORS_V1: Readonly<Record<WorkspaceSourceIdV1, WorkspaceSourceDescriptorV1>> = Object.freeze({
-  projects: PROJECTS_SOURCE_DESCRIPTOR_V1, people: PEOPLE_SOURCE_DESCRIPTOR_V1, tools: TOOLS_SOURCE_DESCRIPTOR_V1,
-});

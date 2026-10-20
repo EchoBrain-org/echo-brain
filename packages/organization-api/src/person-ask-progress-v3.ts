@@ -23,24 +23,8 @@ import { validatePersonAskReceiptV2, type PersonAskProgressSourceV2 } from './pe
 import { asEnumerableRecord as object, assertExactKeys, fail } from './validation.js';
 
 /**
- * Ask progress V3 (research tool contract v1): the same stream as V2, for the
- * V8 answer on `POST /v7/person/ask`, which may read and cite the asker's
- * projects, the people in their organization, their tools, and the
- * containers of the tools they connected. A client opts in with
- * `PERSON_ASK_PROGRESS_HEADER_V1` set to `3`; `/v6` keeps streaming V2 for
- * `2` and `/v5` V1 for `1`, so an older client never meets a workspace item.
- *
- * V3 adds exactly three things to V2, and nothing else changes: framing,
- * heartbeat, stages, every other bound, the receipt's merge and coverage
- * rules and the terminal error event are V1's.
- * - A searched row may name ECHO's workspace (`projects`, `people`, `tools`),
- *   and `containers` by a connected tool's id: that tool's Jira projects,
- *   Confluence spaces or Slack channels.
- * - A searched row names up to `PERSON_ASK_PROGRESS_SOURCES_MAX_V3` sources,
- *   as one research step's calls can cover more kinds than V1's bound.
- * - A named item, in a read event or a receipt row, is a V8 citation, so it
- *   may be a project or a tool (with the ref that opens it), a person, or a
- *   tool container (with its key). The answer event carries the V8 answer.
+ * Ask progress V3 (ADR-0042): V2's stream, under ADR-0039's rules, for the V8 answer on `POST /v7/person/ask`. A searched
+ * row may also name the workspace or a connected tool's containers, up to 16 sources; a named item is a V8 citation.
  */
 export const PERSON_ASK_PROGRESS_HEADER_VALUE_V3 = '3';
 /** Distinct sources one searched row names: twice V1's. */
@@ -81,21 +65,12 @@ export type PersonAskProgressStepEventV3 = PersonAskProgressStageEventV3 | Perso
 export type PersonAskProgressTerminalEventV3 = PersonAskProgressAnswerEventV3 | PersonAskProgressErrorEventV3;
 export type PersonAskProgressEventV3 = PersonAskProgressStepEventV3 | PersonAskProgressTerminalEventV3;
 
-/**
- * `person ask --live --progress` on a client that prefers `/v7`: one line per
- * step event. A V1 or V2 step, from an Authority that streams only `/v5` or
- * `/v6`, is a V3 step too, so one line shape serves all three.
- */
+/** `person ask --live --progress` on a `/v7` client: one line per step event, a V1 or V2 step being a V3 step too. */
 export interface PersonAskProgressLineV3 {
   readonly ok: true;
   readonly progress: PersonAskProgressStepEventV3;
 }
-/**
- * The final line: the V8 answer with a V3 receipt when `/v7` streamed, the V7
- * answer with a V2 receipt when `/v6` did, the V6 answer with a V1 receipt
- * when only `/v5` did, and no receipt when the Authority did not stream (or
- * for the `/v4` fallback).
- */
+/** The final line: each streamed answer with its own receipt (V8 with V3, V7 with V2, V6 with V1), else no receipt. */
 export interface PersonAskProgressResultLineV3 {
   readonly ok: true;
   readonly result: PersonAnswerResponseV8 | PersonAnswerResponseV7 | PersonAnswerResponseV6 | PersonAnswerResponseV5;
@@ -114,36 +89,15 @@ const V3 = askProgressCodec({
   },
 });
 
-export function validatePersonAskProgressStepEventV3(value: unknown): PersonAskProgressStepEventV3 {
-  return V3.step(value) as PersonAskProgressStepEventV3;
-}
-
-export function validatePersonAskReceiptV3(value: unknown): PersonAskReceiptV3 {
-  return V3.receipt(value) as PersonAskReceiptV3;
-}
-
+export function validatePersonAskProgressStepEventV3(value: unknown): PersonAskProgressStepEventV3 { return V3.step(value) as PersonAskProgressStepEventV3; }
+export function validatePersonAskReceiptV3(value: unknown): PersonAskReceiptV3 { return V3.receipt(value) as PersonAskReceiptV3; }
 /** Any one `/v7` stream event, terminal events included. */
-export function validatePersonAskProgressEventV3(value: unknown): PersonAskProgressEventV3 {
-  return V3.event(value) as PersonAskProgressEventV3;
-}
-
-export function formatPersonAskProgressEventV3(event: PersonAskProgressEventV3): string {
-  return V3.format(event);
-}
-
-export interface PersonAskProgressDecoderV3 {
-  push(text: string): readonly PersonAskProgressEventV3[];
-  end(): void;
-}
-
+export function validatePersonAskProgressEventV3(value: unknown): PersonAskProgressEventV3 { return V3.event(value) as PersonAskProgressEventV3; }
+export function formatPersonAskProgressEventV3(event: PersonAskProgressEventV3): string { return V3.format(event); }
+export interface PersonAskProgressDecoderV3 { push(text: string): readonly PersonAskProgressEventV3[]; end(): void }
 /** V1's decoder, for V3 events: it fails closed exactly as V1's does. */
-export function createPersonAskProgressDecoderV3(): PersonAskProgressDecoderV3 {
-  return V3.decoder() as PersonAskProgressDecoderV3;
-}
-
-export function validatePersonAskProgressLineV3(value: unknown): PersonAskProgressLineV3 {
-  return V3.line(value) as PersonAskProgressLineV3;
-}
+export function createPersonAskProgressDecoderV3(): PersonAskProgressDecoderV3 { return V3.decoder() as PersonAskProgressDecoderV3; }
+export function validatePersonAskProgressLineV3(value: unknown): PersonAskProgressLineV3 { return V3.line(value) as PersonAskProgressLineV3; }
 
 export function validatePersonAskProgressResultLineV3(value: unknown): PersonAskProgressResultLineV3 {
   const input = object(value, 'Ask result line');

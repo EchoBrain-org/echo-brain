@@ -29,7 +29,7 @@ describe('agentic Ask concurrent reads', () => {
       return input.query === 'alpha' ? alpha.promise : beta.promise;
     });
     const desk: EvidenceDeskPortV1 = {
-      scope: { kind: 'global' }, live_sources: [], search: search as never,
+      scope: { kind: 'global' }, search: search as never,
       open: vi.fn(), list: vi.fn(), revalidate: vi.fn(async () => ({ checked_at: '2026-10-05T00:00:00.000Z' })),
     };
     const inputs: StructuredGenerationInput[] = [];
@@ -76,7 +76,7 @@ describe('agentic Ask concurrent reads', () => {
     const signals: AbortSignal[] = [];
     const audit: unknown[] = [];
     const desk: EvidenceDeskPortV1 = {
-      scope: { kind: 'global' }, live_sources: [],
+      scope: { kind: 'global' },
       search: vi.fn((input: { signal?: AbortSignal }) => new Promise<EvidenceDeskResultV1>((_resolve, reject) => {
         signals.push(input.signal!);
         if (signals.length === 2) bothEntered.resolve();
@@ -103,7 +103,7 @@ describe('agentic Ask concurrent reads', () => {
     const denied = Object.assign(new Error('membership revoked'), { name: 'AuthorityOperationError' });
     let calls = 0;
     const desk: EvidenceDeskPortV1 = {
-      scope: { kind: 'global' }, live_sources: [],
+      scope: { kind: 'global' },
       search: vi.fn(() => {
         calls += 1;
         if (calls === 2) { bothEntered.resolve(); throw denied; }
@@ -130,7 +130,7 @@ describe('agentic Ask concurrent reads', () => {
     const secondOpen = deferred<EvidenceDeskResultV1>();
     const opened: string[] = [];
     const desk: EvidenceDeskPortV1 = {
-      scope: { kind: 'global' }, live_sources: [],
+      scope: { kind: 'global' },
       search: vi.fn(async () => result([first, second])) as never,
       open: vi.fn((input: { item: string }) => {
         opened.push(input.item);

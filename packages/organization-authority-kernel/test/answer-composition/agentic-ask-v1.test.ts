@@ -10,12 +10,14 @@ import {
   AGENTIC_ASK_MAX_MODEL_CALLS_V1,
   agenticAskContextBudgetBytesV1,
   createAgenticAskV1,
+  createAgenticAskV3,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";
+import type { EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
 
 const generation = { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 30_000 };
 const checked = "2026-09-27T00:00:00.000Z";
@@ -43,12 +45,10 @@ function desk(input: {
   readonly open?: (id: string) => readonly EvidenceDeskItemV1[];
   readonly revalidate?: () => Promise<{ readonly checked_at: string }>;
   readonly scope?: EvidenceDeskPortV1["scope"];
-  readonly live_sources?: EvidenceDeskPortV1["live_sources"];
 } = {}): Desk {
   const result = (items: readonly EvidenceDeskItemV1[], truncated = false): EvidenceDeskResultV1 => ({ items, truncated, receipt_digests: [canonicalSha256({ desk: items.length })] });
   return {
     scope: input.scope ?? { kind: "global" },
-    live_sources: input.live_sources ?? [],
     search: vi.fn(async (request: { readonly query?: string }) => request.query === undefined ? result(input.inventory ?? []) : result(input.search?.(request.query) ?? [])),
     open: vi.fn(async (request: { readonly item: string }) => result(input.open?.(request.item) ?? [])),
     list: vi.fn(async (request: EvidenceDeskListInputV1) => {
@@ -393,8 +393,10 @@ describe("agentic Ask: research loop", () => {
       finish([missing()]),
       finish([missing()]),
     ]);
-    const evidence = desk({ live_sources: [{ source: 'slack', tool_id: 'slack' }] });
-    await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
+    // A V1 desk binds no live source: the V6 core reads this legacy Slack source, which declares no capabilities.
+    const evidence = desk();
+    const withSlack = { ...evidence, live_sources: [{ source: "slack" as const, tool_id: "slack" }] } as unknown as EvidenceDeskPortV2;
+    await createAgenticAskV3({ desk: withSlack, model: script.model, generation, audit: { append: () => undefined }, today: () => "2026-09-28" }).answer({ question: "When is launch?" });
     expect(evidence.list).toHaveBeenCalledTimes(1);
     expect(evidence.list).toHaveBeenCalledWith(expect.objectContaining({ source: "slack", channel: "hw-dvt", since: "2026-09-21" }));
     expect(script.prompt(1).last_results.slice(1)).toEqual([

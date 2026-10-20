@@ -173,7 +173,7 @@ export interface EvidenceDeskListInputV2 extends Omit<EvidenceDeskListInputV1, '
   readonly role?: ProjectListRoleV1;
 }
 
-export interface EvidenceDeskPortV2 extends Omit<EvidenceDeskPortV1, 'search' | 'open' | 'list' | 'live_sources'> {
+export interface EvidenceDeskPortV2 extends Omit<EvidenceDeskPortV1, 'search' | 'open' | 'list'> {
   /** Request-local availability selected by server composition, without provider coordinates. */
   readonly ticket_available?: boolean;
   /** Connected live sources let research choose without provider implementation details. */

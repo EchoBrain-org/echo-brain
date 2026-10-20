@@ -19,8 +19,8 @@ export function codeChecks(testCase, run, dataset) {
   const base = {
     case_id: testCase.id, split: testCase.split, trigger: testCase.trigger, trial: run.trial, budget: run.budget, ...(listParts === 0 ? {} : { list_parts: listParts }),
     ...(testCase.key_status === undefined ? {} : { key_status: testCase.key_status }),
-    // The open-ended family (research tool contract v1): its cases carry reach and cost keys, and may await contract steps.
-    ...(testCase.family === undefined ? {} : { family: testCase.family }), ...(testCase.awaits === undefined ? {} : { awaits: testCase.awaits }),
+    // The open-ended family (research tool contract v1): its cases carry reach and cost keys.
+    ...(testCase.family === undefined ? {} : { family: testCase.family }),
   };
   // A run that delivered nothing scores zero: a sweep's findings all count as wrong, and a plan it never wrote declares no kind.
   const nothing = { parts: [], leaks: [], stop: null, cost: null, ...(testCase.trigger === "sweep" ? { sweep: gradeSweep(testCase, { findings: [] }) } : {}), ...(testCase.expected_kinds === undefined ? {} : { declared_kinds: false }),
