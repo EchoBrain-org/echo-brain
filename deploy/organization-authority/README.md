@@ -413,10 +413,8 @@ the release procedure below.
 ### Custom synthetic staging meetings
 
 On an onboarded staging Authority, the owner can submit a custom meeting through
-the installed Person CLI. Deploy a reviewed server and matching CLI that support
-this operation through the existing current-host release lane. It is additive to
-V14; no reset, Granola connection, host file copy, or source-profile change is
-needed. Production does not mount the synthetic provider.
+the installed Person CLI. It needs no reset, Granola connection, host file copy,
+or source-profile change. Production does not mount the synthetic provider.
 
 Create a UTF-8 JSON file with exactly these four fields (48 KiB maximum):
 
