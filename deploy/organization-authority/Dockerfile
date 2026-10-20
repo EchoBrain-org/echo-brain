@@ -93,7 +93,6 @@ COPY --from=build /app/providers/slack/client/package.json ./providers/slack/cli
 COPY --from=build /app/providers/slack/client/dist ./providers/slack/client/dist
 COPY --from=build /app/providers/slack/server/package.json ./providers/slack/server/package.json
 COPY --from=build /app/providers/slack/server/dist ./providers/slack/server/dist
-COPY --from=build /app/providers/slack/server/assets ./providers/slack/server/assets
 COPY --from=build /app/providers/synthetic-demo/package.json ./providers/synthetic-demo/package.json
 COPY --from=build /app/providers/synthetic-demo/dist ./providers/synthetic-demo/dist
 COPY --from=build /app/services/organization-authority/package.json ./services/organization-authority/package.json

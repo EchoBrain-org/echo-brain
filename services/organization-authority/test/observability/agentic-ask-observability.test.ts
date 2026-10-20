@@ -28,7 +28,7 @@ type Line = Record<string, any>;
 /**
  * One agentic Ask through the real staging transport: the V3 route, the
  * evidence desk, stored documents and the OpenRouter adapter with a scripted
- * provider. Everything the Explorer and dashboards read comes from `lines`.
+ * provider. Everything the dashboards and alarms read comes from `lines`.
  */
 function fixture() {
   const database = projectContextDatabase(); databases.push(database);

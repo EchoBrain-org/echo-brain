@@ -35,7 +35,6 @@
   "scripts": {
     "clean": "node tools/build.mjs --clean",
     "build:authority-image": "node tools/build-authority-image.mjs",
-    "build:staging-journey-explorer-template": "node tools/build-staging-journey-explorer-template.mjs",
     "bundle:authority-staging-host": "node tools/build-authority-staging-host-bundle.mjs",
     "authority:local": "node tools/authority-local.mjs",
     "authority:staging-connector-rehearsal": "node tools/staging-connector-rehearsal.mjs",
