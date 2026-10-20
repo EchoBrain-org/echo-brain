@@ -806,10 +806,9 @@ describe('open items: Home', () => {
     f.advance(1_000);
     await setState(f, 'ari', reopened.item_id, 'open');
     expect(ids(await quiet()).slice(0, 3)).toEqual([reopened.item_id, theirs.item_id, fresh.item_id]);
-    // A new verdict does not put an old handoff ahead of recent assignments.
-    const changed = older[0]!;
-    f.check(changed.item_id, 'changed');
-    expect(ids(await quiet()).slice(0, 2)).toEqual([reopened.item_id, theirs.item_id]);
+    // New verdicts on every older item neither put an old handoff ahead of recent ones nor push the new one out.
+    for (const row of older) f.check(row.item_id, 'changed');
+    expect(ids(await quiet()).slice(0, 3)).toEqual([reopened.item_id, theirs.item_id, fresh.item_id]);
     expect(ids(await full())).toEqual(ids(await quiet()));
   });
 
