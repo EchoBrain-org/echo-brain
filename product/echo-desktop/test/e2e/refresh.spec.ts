@@ -35,16 +35,17 @@ test('the 2026-10-15 scenario: added to a project while ECHO keeps focus, the si
 });
 
 test('added to the oldest of many projects: past the sidebar\'s pages, it is still announced, and the notification opens it', async () => {
-  test.setTimeout(90_000);
-  run = await launch('many-projects', { 'changes-seconds': '15' });
-  const { page } = run;
+  run = await launch('many-projects');
+  const { page, app } = run;
   const rows = page.getByTestId('sidebar-project');
   await expect(rows).toHaveCount(10);
   // Learned at sign-in: every page of Ari's projects, active (two pages) and archived, which filled the sidebar's first.
   await expect.poll(checks).toBe(1);
   await expect.poll(lists).toBe(3);
   writeFileSync(join(run.home, 'added-oldest'), '');
-  await expect.poll(() => notices(run), { timeout: 45_000 }).toEqual([
+  // The next check (a wake's, rather than the timer's) finds it.
+  await emit(app, 'echo-test:wake');
+  await expect.poll(() => notices(run)).toEqual([
     { title: 'ECHO', body: 'You were added to Oldest launch', target: { kind: 'project', project_id: OLDEST } },
   ]);
   // The sidebar still shows its first page; the project waits behind More, and the notification opens it all the same.
@@ -53,7 +54,8 @@ test('added to the oldest of many projects: past the sidebar\'s pages, it is sti
   await expect(page.getByTestId('title')).toHaveText('Oldest launch');
   // Told once: the next move of the projects tells nothing new.
   writeFileSync(join(run.home, 'renamed'), '');
-  await expect(rows.first()).toContainText('Project 1, renamed', { timeout: 45_000 });
+  await emit(app, 'echo-test:wake');
+  await expect(rows.first()).toContainText('Project 1, renamed');
   expect(await notices(run)).toHaveLength(1);
   // Still Ari's: read on its own, as no sidebar row has it, the project stays open.
   await expect(page.getByTestId('title')).toHaveText('Oldest launch');
@@ -73,7 +75,7 @@ test('waking the machine checks at once, and the log says so', async () => {
 });
 
 test('a hidden window is notified, and reads what shows once it is shown again', async () => {
-  run = await launch('granola-owner-later', { 'changes-seconds': '15' });
+  run = await launch('granola-owner-later');
   const { page, app } = run;
   await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
   await expect.poll(checks).toBe(1);
@@ -81,9 +83,10 @@ test('a hidden window is notified, and reads what shows once it is shown again',
   await expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
   await emit(app, 'echo-test:hidden');
   const before = homeReads();
-  // Mina sends Ari a ticket while the window is hidden: the check notifies, and Home waits.
+  // Mina sends Ari a ticket while the window is hidden: the next check notifies, and Home waits.
   writeFileSync(join(run.home, 'mina-sends'), '');
-  await expect.poll(() => notices(run), { timeout: 30_000 }).toHaveLength(1);
+  await emit(app, 'echo-test:wake');
+  await expect.poll(() => notices(run)).toHaveLength(1);
   expect(homeReads()).toBe(before);
   await emit(app, 'echo-test:shown');
   await expect.poll(homeReads).toBe(before + 1);

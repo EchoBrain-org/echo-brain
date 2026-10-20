@@ -183,8 +183,7 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
 });
 
 test('a follow-up sent to you while ECHO runs comes as a notification within one check, and opens its page', async () => {
-  // The Authority asks for a check every 15 s, its shortest.
-  app = await launch('granola-owner-later', { 'changes-seconds': '15' });
+  app = await launch('granola-owner-later');
   const { page } = app;
   const changes = () => app.calls().filter(call => call.path === '/v1/person/changes').length;
   const scans = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).map(call => call.body!.scope);
@@ -193,10 +192,11 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
   // Its open follow-ups, and those closed since just before it started.
   await expect.poll(scans).toEqual(['involved', 'involved']);
   expect(await notices(app)).toEqual([]);
-  // Mina sends Ari a ticket from a meeting Ari cannot read; the window stays as it is. The next check tells of it.
+  // Mina sends Ari a ticket from a meeting Ari cannot read; the window stays as it is. The next check (a wake's) tells of it.
   const before = changes();
   writeFileSync(join(app.home, 'mina-sends'), '');
-  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([
+  await emit(app.app, 'echo-test:wake');
+  await expect.poll(() => notices(app)).toEqual([
     { title: 'ECHO', body: 'Mina handed you Jira ticket', target: { kind: 'item', item_id: 'itm_00000000-0000-4000-8000-000000000042' } },
   ]);
   expect(changes()).toBe(before + 1);
@@ -217,19 +217,21 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
   await expect(page.getByTestId('needs')).toBeVisible();
   // Told once: the checks after it find nothing new.
   const checked = changes();
-  await expect.poll(changes, { timeout: 30_000 }).toBeGreaterThan(checked);
+  await emit(app.app, 'echo-test:wake');
+  await expect.poll(changes).toBeGreaterThan(checked);
   expect(await notices(app)).toHaveLength(1);
 });
 
 test('the person who sent a follow-up is told when its owner marks it done', async () => {
-  app = await launch('granola-checked', { 'changes-seconds': '15' });
+  app = await launch('granola-checked');
   const { page } = app;
   await expect(page.getByTestId('needs-foot')).toBeVisible();
   await expect.poll(() => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length).toBe(2);
   // Mina marks done the two Ari sent her, ECHO-12 and "Confirm the trace": one notification for that check, counting them.
   writeFileSync(join(app.home, 'mina-done'), '');
+  await emit(app.app, 'echo-test:wake');
   const counted = ['itm_00000000-0000-4000-8000-000000000031', 'itm_00000000-0000-4000-8000-000000000039'];
-  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'items', item_ids: counted } }]);
+  await expect.poll(() => notices(app)).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'items', item_ids: counted } }]);
   // Each left the open follow-ups Ari is involved in, and the read of those closed since settled it: none was read by its id.
   const itemReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'item').map(call => call.body!.item_id);
   expect(itemReads()).toEqual([]);
