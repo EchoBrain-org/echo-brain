@@ -1,7 +1,6 @@
 # Meeting extraction from numbered units (v1)
 
-Date: 2026-10-10. Status: implementing on `feat/meeting-extraction-units`. The
-founder delegated the work end to end and validates the result.
+Date: 2026-10-10. Status: shipped in #316 (12a212b).
 
 ## Why
 
@@ -178,24 +177,3 @@ These were observed or found, but are out of this change:
 - **Processor changes.** A processor change needs a reset instead of
   re-admission.
 - **Recall.** What both designs miss has not been measured.
-
-## Proof
-
-- **Focused tests** for each part, then `npm run check` on the final
-  candidate.
-- **Real-meeting rerun.** One run of the shipped new path (production Granola
-  mapping, preparation step and extractor, plus the support judge) on all 12
-  real meetings. It is compared with the earlier measurement of today's path
-  on 9 of them. OpenRouter credit, which ran out on 2026-10-10, allows only
-  this one run.
-- **Draft PR** with results, line-count deltas, and the reset note.
-
-## Tasks
-
-1. Preparation module and tests.
-2. Granola mapping and tests. This can run in parallel with task 1.
-3. Extractor v11: prompt, schema, per-item checks, evidence from units, and
-   tests. Depends on task 1.
-4. Repository fixups: cycle and evaluator tests, OpenRouter config hashes,
-   docs. Then the full check.
-5. Rerun of the real-meeting evaluation, then the PR.
