@@ -420,6 +420,10 @@ function outsideToolOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefine
   const { kind, tool_id: toolId } = row.pointer;
   return (kind === 'ticket' || kind === 'page') && typeof toolId === 'string' ? `${kind}:${toolId}` : undefined;
 }
+/** The live sources task research reads (trigger runs, sweeps, open items, the evaluation's tasks): those the V6 answer reads. */
+export function taskLiveSourcesV1(sources: CreatePersonLiveAnswerRouteOptionsV1['live_sources']): NonNullable<CreatePersonLiveAnswerRouteOptionsV1['live_sources']> {
+  return (sources ?? []).filter(source => source.minimum_response_version <= 6);
+}
 /**
  * The outside tools the viewer has connected, as `kind:tool_id`: each live source a desk binds (one of a known tool) whose tool
  * the viewer linked. A local read of their link, never a provider call. A source that keeps no link state connects nothing, and
@@ -427,7 +431,7 @@ function outsideToolOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefine
  */
 async function connectedToolsV1(sources: Pick<OpenItemSourcesV1, 'live_sources' | 'on_live_failure'>, viewer: Viewer): Promise<ReadonlySet<string>> {
   const connected = new Set<string>();
-  for (const source of (sources.live_sources ?? []).filter(value => value.minimum_response_version <= 6)) {
+  for (const source of taskLiveSourcesV1(sources.live_sources)) {
     const { kind, tool_id: toolId } = source.descriptor;
     if (toolId === undefined || source.tools === undefined) continue;
     try {
@@ -487,7 +491,7 @@ export async function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: 
 }
 
 export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options): PersonOpenItemsApplicationV1 {
-  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
+  const compatible = taskLiveSourcesV1(options.live_sources);
   const now = options.now ?? (() => new Date());
   const viewerOf = (access_token: string, signal?: AbortSignal): Viewer => {
     signal?.throwIfAborted();

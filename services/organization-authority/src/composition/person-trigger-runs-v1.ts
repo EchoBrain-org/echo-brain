@@ -19,7 +19,7 @@ import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1, withoutCoreRuntimeContentV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonDiagnosticCaptureHandleV1 } from './person-diagnostics-v1.js';
-import { openItemViewerV1 } from './person-open-items-v1.js';
+import { openItemViewerV1, taskLiveSourcesV1 } from './person-open-items-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
 import { sweepOpenItemsV1 } from './person-sweep-runs-v1.js';
@@ -134,7 +134,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   const now = options.now ?? (() => new Date());
   const controllers = new Set<AbortController>();
   let closing = false;
-  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
+  const compatible = taskLiveSourcesV1(options.live_sources);
   const context = (authorization: PersonAccessAuthorization): PersonLiveRequestContextV1 => ({
     authority_id: options.bind_options.authority_id, organization_id: authorization.organization_id, state_lineage_id: options.bind_options.state_lineage_id,
     principal_id: authorization.principal_id, membership_id: authorization.membership_id, session_family_id: authorization.session_family_id, request_id: `trigger_run_${randomUUID()}`,

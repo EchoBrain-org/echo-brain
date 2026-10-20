@@ -11,11 +11,12 @@ import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organiz
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { PersonAskScopeV2 } from '../application/ports/person-original-context-retrieval-v1.js';
-import { askerOf, scopeOf } from './person-answer-v3-route.js';
+import { askerOf, personAskRequestContextV1, scopeOf } from './person-answer-v3-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
 import { personRecordRunScopeV1, type PersonRecordProjectsV1 } from './person-record-search-route.js';
 import type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
+import { taskLiveSourcesV1 } from './person-open-items-v1.js';
 import { checkRetainedResultReleaseV1, retainedResultFailureV1, type RetainedResultFailureCodeV1, type RetainedResultFailureV1 } from './person-retained-result-v1.js';
 
 export type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
@@ -84,7 +85,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
   // A question runs as `/v7` serves it: the V8 Ask, whose desk binds follow-ups, the workspace and tool containers
   // (research tool contract v1). A task reads what task research reads.
   const questionSources = (options.live_sources ?? []).filter(source => source.minimum_response_version <= WORKSPACE_MINIMUM_RESPONSE_VERSION_V1);
-  const taskSources = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
+  const taskSources = taskLiveSourcesV1(options.live_sources);
   const runs = new Map<string, Run>();
   const purge = () => {
     const current = now();
@@ -121,11 +122,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       const runId = `rr_${randomUUID()}`;
       const run: Run = { owner, controller: new AbortController(), status: 'running', expires_at: Number.POSITIVE_INFINITY };
       runs.set(runId, run);
-      const context = {
-        authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
-        principal_id: authorization.principal_id, membership_id: authorization.membership_id,
-        session_family_id: authorization.session_family_id, request_id: runId,
-      };
+      const context = personAskRequestContextV1(options, authorization, runId);
       const brief = request.budget === undefined ? defined : { ...defined, budget: AGENTIC_RESEARCH_BUDGETS_V1[request.budget] };
       const signal = run.controller.signal;
       // The run outlives this request: it is bound to its own controller, not the caller's connection.
