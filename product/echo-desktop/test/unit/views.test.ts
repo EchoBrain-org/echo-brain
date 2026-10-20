@@ -164,9 +164,10 @@ describe('view models copy only what the renderer may see', () => {
     const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' };
     const original = { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
       representation_sha256: sha('5'), anchor_sha256: sha('6') };
-    const v4 = (citations: unknown[]) => ({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+    // V5, the /v4 answer: the oldest an Ask reads now that none asks /v3.
+    const v5 = (citations: unknown[]) => ({ schema_version: 5, kind: 'echo-clean-person-answer-v5', scope: { kind: 'global' }, outcome: 'answered',
       citations, parts: [{ question: 'What did we ship?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }] }] });
-    const answer = answerView({ ok: true, result: v4([
+    const answer = answerView({ ok: true, result: v5([
       { citation: record, kind: 'decision', label: 'Tuesday sync', visibility: 'team' },
       { citation: { ...original, label: 'Pricing call' }, kind: 'document_passage', label: 'Pricing call', visibility: 'team' },
     ]) }, { kind: 'global' });
@@ -182,7 +183,7 @@ describe('view models copy only what the renderer may see', () => {
   it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace', () => {
     const citation = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' };
     const answer = answerView({ ok: true, result: {
-      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'partial',
+      schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: { kind: 'global' }, outcome: 'partial',
       citations: [{ citation, kind: 'decision', label: 'Project review', visibility: 'project' }],
       direct: { text: 'A summary.', citation_indexes: [0], private: false },
       parts: [{ question: 'What changed?', status: 'records_only', statements: [], gap: 'No prose was available.',
@@ -197,7 +198,7 @@ describe('view models copy only what the renderer may see', () => {
 
   it('keeps not-found and off-scope outcomes, and reads a not-found answer as its gap', () => {
     const project = { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' } as const;
-    const empty = (outcome: string) => ({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: project, outcome, citations: [],
+    const empty = (outcome: string) => ({ schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: project, outcome, citations: [],
       parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }] });
     expect(answerView({ ok: true, result: empty('not_found') }, project)).toEqual({
       text: 'Not found.', scope: project, sources: [], outcome: 'not_found',
@@ -773,10 +774,21 @@ describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
 
   it('comes only with a streamed answer, and only in that answer\'s version', () => {
     expect(answerView({ ok: true, result: v6([named]) }, { kind: 'global' }).receipt).toBeUndefined();
-    const v4 = { ...v6([]), schema_version: 4, kind: 'echo-clean-person-answer-v4', outcome: 'not_found',
+    // The /v4 fallback's V5 answer never streams.
+    const v5 = { ...v6([]), schema_version: 5, kind: 'echo-clean-person-answer-v5', outcome: 'not_found',
       parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Nothing.' }] };
-    expect(() => answerView({ ok: true, result: v4, receipt: v1 }, { kind: 'global' })).toThrow(ViewError);
+    expect(answerView({ ok: true, result: v5 }, { kind: 'global' })).toMatchObject({ outcome: 'not_found', sources: [] });
+    expect(() => answerView({ ok: true, result: v5, receipt: v1 }, { kind: 'global' })).toThrow(ViewError);
     expect(() => answerView({ ok: true, result: v6([named]), receipt: v2 }, { kind: 'global' })).toThrow(ViewError);
     expect(() => answerView({ ok: true, result: v7([followUp]), receipt: v3 }, { kind: 'global' })).toThrow(ViewError);
+  });
+
+  it('reads a Mine answer as any other, from every route an Ask asks, and never /v3\'s V4 answer, which no Ask asks now', () => {
+    const mine = { kind: 'mine' } as const;
+    const answer = (version: number) => ({ ...v6([named]), scope: mine, schema_version: version, kind: `echo-clean-person-answer-v${version}` });
+    for (const version of [5, 6, 7, 8]) expect(answerView({ ok: true, result: answer(version) }, mine)).toMatchObject({ scope: mine, sources: [namedSource] });
+    expect(answerView({ ok: true, result: answer(8), receipt: v1 }, mine).receipt)
+      .toEqual({ looked_through: 14, elapsed_ms: 48_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [namedSource] }] });
+    expect(() => answerView({ ok: true, result: answer(4) }, mine)).toThrow(ViewError);
   });
 });

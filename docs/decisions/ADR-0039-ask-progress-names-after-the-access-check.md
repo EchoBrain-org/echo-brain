@@ -329,3 +329,9 @@ On 2026-10-19 the V1 stream was retired: `POST /v5/person/ask` answers in JSON
 whatever progress header it carries. Every Authority that streamed it also
 serves `/v6`, which every streaming client asks first, and clients keep their
 V1 decoder.
+
+On 2026-10-19 the founder approved moving the desktop's Mine Ask and plain
+`person ask` to the newest route, so every Ask streams under every rule above:
+`--progress` needs no `--live`, `--live` changes nothing, and `--tickets`
+still never streams
+([Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)).

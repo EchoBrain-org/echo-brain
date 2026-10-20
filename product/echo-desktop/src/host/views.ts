@@ -11,12 +11,11 @@ import type {
 } from '../shared/protocol.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAnswerResponseV4, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
+  validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonSourceEvidenceV1, validatePersonUploadSearchResultV2,
   validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2, validateProjectMembersV1,
   validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2,
-  type PersonAnswerCitationV8, type PersonAnswerResponseV4, type PersonAskProgressResultLineV3, type PersonAskReceiptRowV3,
-  type PersonAskReceiptV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
+  type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
@@ -301,25 +300,16 @@ export function isRecordRef(value: unknown): value is RecordRef {
 }
 
 /**
- * What `person ask` printed: `--mine`'s V4 answer alone, or the last line of
- * a live Ask, a V6, V7 or V8 answer with the receipt of its version when the
- * Authority streamed it (ADR-0039, ADR-0040, research tool contract v1).
- */
-function answerLine(raw: unknown): { result: PersonAnswerResponseV4 | PersonAskProgressResultLineV3['result']; receipt?: PersonAskReceiptV3 } {
-  const line = object(raw);
-  const version = object(line.result).schema_version;
-  if (version === 6 || version === 7 || version === 8) return validated(validatePersonAskProgressResultLineV3, raw);
-  if (version !== 4 || line.ok !== true || Object.hasOwn(line, 'receipt')) throw new ViewError();
-  return { result: validated(validatePersonAnswerResponseV4, line.result) };
-}
-
-/**
  * A versioned Agentic Ask answer: its statements, each with the exact
  * sources that support it, in the answer's order, and a streamed answer's
- * receipt, built by the Authority from what passed its final check.
+ * receipt, built by the Authority from what passed its final check. It is
+ * the last line `person ask --live --progress` printed, in every scope: the
+ * answer of the newest route the Authority has, V8 on `/v7` down to V5 on
+ * `/v4`, with the receipt of its version when the Authority streamed it
+ * (ADR-0039, ADR-0040, research tool contract v1).
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
-  const { result, receipt } = answerLine(raw);
+  const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
   const { direct, parts, outcome, assumption, notice } = result;
   // One part answers the question itself, so its question is not repeated.
   const single = parts.length === 1;

@@ -257,15 +257,15 @@ describe('person ask --mine', () => {
     kind: 'decision', label: 'Pricing review', visibility: 'team', ref: MEETING,
   };
   function answer(scope: unknown) {
-    return { schema_version: 4, kind: 'echo-clean-person-answer-v4', scope, outcome: 'answered', citations: [citation],
+    return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered', citations: [citation],
       parts: [{ question: 'Question', status: 'answered', statements: [{ text: 'Annual plans first.', citation_indexes: [0], private: false }] }] };
   }
 
-  it('sends mine and returns citations that carry refs', async () => {
+  it('sends mine on the newest route and returns citations that carry refs', async () => {
     const { fetch, sent } = network(() => json(answer({ kind: 'mine' })));
     const result = await run(['ask', '--question', 'What did I decide?', '--mine'], fetch);
     expect(result.code, result.stderr).toBe(0);
-    expect(sent.map(({ path, body }) => ({ path, body }))).toEqual([{ path: '/v3/person/ask', body: canonicalJson({ schema_version: 3, question: 'What did I decide?', mine: true }) }]);
+    expect(sent.map(({ path, body }) => ({ path, body }))).toEqual([{ path: '/v7/person/ask', body: canonicalJson({ schema_version: 3, question: 'What did I decide?', mine: true }) }]);
     expect(oneLine(result.stdout)).toEqual({ ok: true, result: answer({ kind: 'mine' }) });
   });
 

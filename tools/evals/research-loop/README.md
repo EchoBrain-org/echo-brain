@@ -16,7 +16,7 @@ Three triggers run the same loop:
   verdict and one line per finding).
 
 **Which Ask it runs.** The Ask trigger here runs Ask as
-`POST /v7/person/ask` runs it, as desktops and `person ask --live` ask it: V8
+`POST /v7/person/ask` runs it, as desktops and `person ask` ask it: V8
 answers on the full catalog, which may also cite ECHO's shared follow-ups
 ([ADR-0040](../../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)),
 the asker's projects, people and tools, and the Jira projects and Confluence

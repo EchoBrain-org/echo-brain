@@ -754,20 +754,20 @@ describe("Person client", () => {
     });
   });
 
-  it("asks one bounded question through the installed Person session and preserves answer bindings", async () => {
+  it("asks one bounded question on the newest Ask route through the installed Person session and preserves answer bindings", async () => {
     await withHome(async (home) => {
       await installFixtureSession(home);
 
       const timeout = vi.spyOn(AbortSignal, "timeout");
-      const answer = v4Answer({ text: "Use simple pricing.", citations: [RECORD_CITATION] });
+      const answer = { ...v4Answer({ text: "Use simple pricing.", citations: [RECORD_CITATION] }), schema_version: 8, kind: "echo-clean-person-answer-v8" };
       const result = await runCli(
         ["ask", "--question", "What is our pricing decision?"],
         {
           home_directory: home,
           now: () => NOW,
           fetch: async (input, init) => {
-            // Agentic Ask is the only Ask: no capability probe, no legacy path.
-            expect(new URL(String(input)).pathname).toBe("/v3/person/ask");
+            // Plain ask is the newest Ask: no capability probe, never /v3.
+            expect(new URL(String(input)).pathname).toBe("/v7/person/ask");
             expect(init?.method).toBe("POST");
             expect(JSON.parse(String(init?.body))).toEqual({
               schema_version: 3,
@@ -786,6 +786,62 @@ describe("Person client", () => {
       expect(timeout).toHaveBeenCalledWith(135_000);
       expect(result.stderr).toBe("");
       expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: answer });
+    });
+  });
+
+  // Plain ask and --live are one Ask: the newest route the Authority has, in every scope, Mine included.
+  it.each([
+    { argv: [], body: {} },
+    { argv: ["--live"], body: {} },
+    { argv: ["--mine"], body: { mine: true } },
+    { argv: ["--live", "--mine"], body: { mine: true } },
+    { argv: ["--project", "prj_00000000-0000-4000-8000-000000000019"], body: { project_id: "prj_00000000-0000-4000-8000-000000000019" } },
+  ])("asks $argv on the newest route an older Authority has, as the last of /v7, /v6 and /v5", async ({ argv, body }) => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const scope = "mine" in body ? { kind: "mine" } : "project_id" in body ? { kind: "project", project_id: body.project_id } : { kind: "global" };
+      const answer = v6PageAnswer({ scope });
+      const asked: unknown[] = [];
+      const result = await runCli(["ask", "--question", "What did we decide?", ...argv], {
+        home_directory: home, now: () => NOW,
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          asked.push([path, JSON.parse(String(init?.body)), new Headers(init?.headers).has("x-echo-ask-progress")]);
+          return path === "/v5/person/ask" ? json(answer) : json({ error: { code: "not_found", message: "route absent" } }, 404);
+        },
+      });
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: answer });
+      expect(asked).toEqual(["/v7", "/v6", "/v5"].map(route => [`${route}/person/ask`, { schema_version: 3, question: "What did we decide?", ...body }, false]));
+    });
+  });
+
+  it("keeps --tickets on the ticket route, /v4 with the V5 answer, with no fallback and no progress", async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const answer = { ...v4Answer({ scope: { kind: "mine" }, citations: [RECORD_CITATION] }), schema_version: 5, kind: "echo-clean-person-answer-v5" };
+      const paths: string[] = [];
+      const result = await runCli(["ask", "--question", "What did I decide?", "--tickets", "--mine"], {
+        home_directory: home, now: () => NOW,
+        fetch: async (input, init) => {
+          paths.push(new URL(String(input)).pathname);
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: "What did I decide?", mine: true });
+          expect(new Headers(init?.headers).has("x-echo-ask-progress")).toBe(false);
+          return json(answer);
+        },
+      });
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: answer });
+      expect(paths).toEqual(["/v4/person/ask"]);
+      // A route the Authority lacks is its failure, never another route's answer.
+      const missing: string[] = [];
+      const absent = await runCli(["ask", "--question", "What did I decide?", "--tickets"], {
+        home_directory: home, now: () => NOW,
+        fetch: async input => { missing.push(new URL(String(input)).pathname); return json({ error: { code: "not_found", message: "route absent" } }, 404); },
+      });
+      expect(absent.code).toBe(1);
+      expect(JSON.parse(absent.stderr)).toMatchObject({ ok: false, action: "ask", code: "not_found", status: 404 });
+      expect(missing).toEqual(["/v4/person/ask"]);
     });
   });
   it("maps --project to a strict Ask coordinate and accepts immutable source evidence", async () => {
@@ -1122,7 +1178,7 @@ describe("Person client", () => {
       expect(await runPersonClientCli(["ask", "--question", "What happened?"], options)).toBe(1);
       expect(JSON.parse(stderr)).toMatchObject({ code: "invalid_response", status: 503 });
       expect(stderr).not.toContain("private provider body");
-      vi.spyOn(PersonClient.prototype, "ask").mockRejectedValueOnce(new Error("private internal detail"));
+      vi.spyOn(PersonClient.prototype, "askWithLiveSources").mockRejectedValueOnce(new Error("private internal detail"));
       stderr = "";
       expect(await runPersonClientCli(["ask", "--question", "What happened?"], options)).toBe(1);
       expect(JSON.parse(stderr).error).toBe("Person request could not be completed");

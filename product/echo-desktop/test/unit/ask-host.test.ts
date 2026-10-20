@@ -1,7 +1,7 @@
 // The host's side of Ask progress (ADR-0039): the command an Ask runs, and
 // what of its printed lines reaches the page.
 import { describe, expect, it, vi } from 'vitest';
-import { askArgv, askProgressLines, askRecordArgv, askSourceArgv, askStreams } from '../../src/host/ask.js';
+import { askArgv, askProgressLines, askRecordArgv, askSourceArgv } from '../../src/host/ask.js';
 import type { AskProgressNotice, Expect } from '../../src/shared/protocol.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -12,15 +12,13 @@ const decision = { citation: { kind: 'approved_record', atom_id: sha('1'), recor
 const line = (value: unknown) => JSON.stringify(value);
 
 describe('the command an Ask runs', () => {
-  it('asks a live Ask for its progress, as the account the page shows, and never Mine', () => {
+  it('asks every Ask, Mine included, on the newest route with its progress, as the account the page shows', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
     // The client refuses to ask as any other account, so no step of another reaches the page.
-    const pin = [`--expected-membership-id=${EXPECT.membership_id}`, `--expected-authority=${EXPECT.authority}`];
-    expect(askArgv('What did we agree?', { kind: 'global' }, EXPECT)).toEqual(['ask', '--question=What did we agree?', '--live', '--progress', ...pin]);
-    expect(askArgv('What did we agree?', { kind: 'project', project_id: project }, EXPECT))
-      .toEqual(['ask', '--question=What did we agree?', '--live', '--progress', ...pin, `--project=${project}`]);
-    expect(askArgv('What did we agree?', { kind: 'mine' }, EXPECT)).toEqual(['ask', '--question=What did we agree?', '--mine']);
-    expect([askStreams({ kind: 'global' }), askStreams({ kind: 'project', project_id: project }), askStreams({ kind: 'mine' })]).toEqual([true, true, false]);
+    const asked = ['ask', '--question=What did we agree?', '--live', '--progress', `--expected-membership-id=${EXPECT.membership_id}`, `--expected-authority=${EXPECT.authority}`];
+    expect(askArgv('What did we agree?', { kind: 'global' }, EXPECT)).toEqual(asked);
+    expect(askArgv('What did we agree?', { kind: 'project', project_id: project }, EXPECT)).toEqual([...asked, `--project=${project}`]);
+    expect(askArgv('What did we agree?', { kind: 'mine' }, EXPECT)).toEqual([...asked, '--mine']);
   });
 
   it('reads what it cites: a meeting by its record, a passage where it was asked', () => {

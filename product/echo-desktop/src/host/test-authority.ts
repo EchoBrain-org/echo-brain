@@ -614,6 +614,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       { text: '30 Jira tickets are open, APOLLO-1 and APOLLO-2 among them.', citation_indexes: [0, 1], private: true },
     ] }],
   });
+  /** What a Mine Ask reads (ADR-0024): only what Ari added, here Ari's note, never a live tool, a follow-up or the workspace. */
+  const mineItems = () => progressItems().filter(item => 'ref' in item && item.ref.startsWith('note:'));
+  /** The answer a Mine Ask gives from Ari's note, in its route's version: V8 on `/v7`, V6 on `/v5`. */
+  const mineAnswer = (question: string, scope: Record<string, unknown>, version: 1 | 3) => ({
+    schema_version: version === 3 ? 8 : 6, kind: `echo-clean-person-answer-v${version === 3 ? 8 : 6}`, scope, outcome: 'answered', citations: mineItems(),
+    parts: [{ question, status: 'answered', statements: [{ text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0], private: false }] }],
+  });
   /**
    * A streamed Ask, framed by the contract itself: a search of meetings,
    * documents and Jira, its four reads, then, once the test lets it answer
@@ -625,17 +632,21 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * Jira's projects, reads Apollo, Mina, Jira and Apollo's Jira project, and
    * the V8 answer cites all four. `ask-progress-listed`, on `/v7` too, only
    * lists Jira's 30 rows, a page of 25 and then the other 5, and reads none
-   * in full: its receipt counts all 30 rows it looked through (ADR-0043).
+   * in full: its receipt counts all 30 rows it looked through (ADR-0043). A
+   * Mine Ask, on either route, searches meetings and documents and reads
+   * Ari's note alone.
    */
   const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, version: 1 | 3 = 1): Response => {
     const format = version === 3 ? api.formatPersonAskProgressEventV3 : api.formatPersonAskProgressEventV1;
-    const listed = mode === 'ask-progress-listed';
-    const items = listed ? [] : version === 3 ? workspaceCitations : progressItems();
+    const mine = scope.kind === 'mine';
+    const listed = !mine && mode === 'ask-progress-listed';
+    const items = listed ? [] : mine ? mineItems() : version === 3 ? workspaceCitations : progressItems();
     const searched = listed ? { type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira' }], found: 30 }
-      : version === 3 ? { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 }
-        : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
+      : mine ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }], found: items.length }
+        : version === 3 ? { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 }
+          : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
     const [part] = desktop.answer.parts as Record<string, unknown>[];
-    const response = listed ? listedAnswer(question, scope) : version === 3 ? workspaceAnswer(question, scope)
+    const response = listed ? listedAnswer(question, scope) : mine ? mineAnswer(question, scope, version) : version === 3 ? workspaceAnswer(question, scope)
       : { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
     const steps = listed
       ? [{ type: 'stage', stage: 'searching' }, { ...searched, found: 25 }, { ...searched, found: 5 }]
@@ -1693,9 +1704,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       });
     }
     // Only ask-progress-workspace's and ask-progress-listed's Authority has `/v7` (research tool contract v1); every other
-    // mode's predates it and `/v6`, so its client asks `/v5`.
+    // mode's predates it and `/v6`, so its client asks `/v5`. Every Ask asks the newest route, Mine too: none asks `/v3`.
     const v7 = (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed') && path === '/v7/person/ask';
-    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v5/person/ask' || v7)) {
+    if (method === 'POST' && (path === '/v5/person/ask' || v7)) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);
@@ -1708,8 +1719,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // One project, only what you added, or all you may read.
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : request.mine ? { kind: 'mine' } : { kind: 'global' };
       const question = request.question;
-      const live = path === '/v5/person/ask';
-      const answer = { ...desktop.answer, ...(live ? { schema_version: 6, kind: 'echo-clean-person-answer-v6' } : {}) };
+      const answer = { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6' };
       // Ask progress: a client that asks for it gets the Ask's steps as they happen, then its answer and receipt.
       const api = await contract();
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
@@ -1719,11 +1729,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         answered.headers.set('x-echo-person-ask-route', '7');
         return answered;
       }
-      if (mode.startsWith('ask-progress') && live && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V1) {
+      if (mode.startsWith('ask-progress') && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V1) {
         return progressStream(api, question, scope, init?.signal ?? undefined);
       }
       if (mode === 'ask-ticket') {
-        const included = live && (scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null));
+        const included = scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null);
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
           citations: included ? [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
             kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10007',
@@ -1736,7 +1746,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       const pageTool = mode === 'ask-confluence' ? 'confluence' : mode.startsWith('ask-page-') ? mode.slice(9) : undefined;
       if (pageTool !== undefined) {
-        const included = live && (scope.kind === 'global' || (pageTool === 'confluence' && scope.kind === 'project' && confluenceMappings.get(scope.project_id!)?.mapping != null));
+        const included = scope.kind === 'global' || (pageTool === 'confluence' && scope.kind === 'project' && confluenceMappings.get(scope.project_id!)?.mapping != null);
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
           citations: included ? [{ kind: 'page', label: 'EVT readiness · ECHO product', visibility: 'only_me', citation: {
             kind: 'page', tool_id: pageTool, external_scope_id: CONFLUENCE_CLOUD, page_id: '12345', section_id: 'evt-readiness', version: '7',

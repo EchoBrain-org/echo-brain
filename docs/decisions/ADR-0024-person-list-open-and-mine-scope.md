@@ -505,3 +505,10 @@ existed since `2bb9b25` (2026-10-05). Ask now reads no Slack messages in any
 scope, so the Slack messages "Ask may also read" in the ADR-0015 note above,
 and the Slack half of N-16, no longer apply. Slack still delivers approval
 cards and links identities.
+
+On 2026-10-19 the founder approved moving `person ask --mine` and the
+desktop's Mine Ask from `/v3/person/ask` to the newest Ask route (`/v7` with V8
+answers, falling back on an older Authority), which streams its progress. Mine
+reads there only what the asker added, as above, and no live tool, follow-up
+or workspace
+([Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)).

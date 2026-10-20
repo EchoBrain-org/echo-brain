@@ -30,7 +30,7 @@ import { runPersonClientCli } from '../../src/product/person-client/composition.
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 
 // Ask progress (ADR-0039) on the Person client: V3 on /v7 (research tool contract v1), V2 on /v6 (ADR-0040) and V1
-// on /v5, the opt-in streams, the /v7, /v6, /v5, /v4 fallback chain, and `person ask --live --progress`.
+// on /v5, the opt-in streams, the /v7, /v6, /v5, /v4 fallback chain, and `person ask --progress`.
 
 const ORIGIN = 'https://authority.example.test';
 const NOW = '2026-10-16T10:00:00.000Z';
@@ -99,6 +99,17 @@ const STEPS_V3: readonly PersonAskProgressStepEventV3[] = [
 const ANSWERED_V3: PersonAskProgressEventV3 = { type: 'answer', response: answerV8(), receipt: receiptV3() };
 const framesV3 = (events: readonly PersonAskProgressEventV3[]) => events.map(event => formatPersonAskProgressEventV3(event)).join('');
 const STREAM_V3 = `${framesV3(STEPS_V3.slice(0, 2))}${PERSON_ASK_PROGRESS_HEARTBEAT_V1}${framesV3(STEPS_V3.slice(2))}${framesV3([ANSWERED_V3])}`;
+
+// A Mine Ask's stream, in any version: only what the asker added, so meetings and documents, and never a live tool, a
+// follow-up or the workspace.
+const SEARCHED_MINE = { type: 'searched' as const, sources: [{ kind: 'meetings' as const }, { kind: 'documents' as const }], found: 1 };
+const READ_MINE = { type: 'read' as const, items: [decision] };
+const STEPS_MINE: readonly PersonAskProgressStepEventV1[] = [
+  { type: 'stage', stage: 'searching' }, SEARCHED_MINE, { type: 'stage', stage: 'reading', pending: 1 }, READ_MINE,
+  { type: 'stage', stage: 'writing' }, { type: 'stage', stage: 'checking_access' },
+];
+const receiptMine = () => ({ looked_through: 1, elapsed_ms: 12_000, rows: [SEARCHED_MINE, READ_MINE] });
+const answerMineV8 = () => ({ ...answer({ kind: 'mine' }), schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const });
 
 const encoder = new TextEncoder();
 const STREAM_HEADERS = { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' };
@@ -454,11 +465,12 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
   });
 });
 
-describe('person ask --live --progress', () => {
+// `--live` once chose the newest route; every Ask asks it now, so the flag changes nothing (the desktop still sends it).
+describe('person ask --progress', () => {
   it('prints each step as its own line, then today\'s final line with the receipt, the workspace included', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(STREAM_V3, 7, { headers: V7_HEADERS }));
     const { output, run } = cli(sessionHome(), fetch);
-    await expect(run(['ask', '--question', 'Where is Thermal recovery tracked?', '--live', '--progress'])).resolves.toBe(0);
+    await expect(run(['ask', '--question', 'Where is Thermal recovery tracked?', '--progress'])).resolves.toBe(0);
     expect(output.stderr).toBe('');
     const printed = lines(output.stdout);
     expect(printed.slice(0, -1).map(line => validatePersonAskProgressLineV3(line))).toEqual(STEPS_V3.map(progress => ({ ok: true, progress })));
@@ -477,7 +489,7 @@ describe('person ask --live --progress', () => {
     expect(lines(output.stdout)).toEqual([{ ok: true, result: answerV8({ kind: 'project', project_id: project }), receipt: receiptV3() }]);
   });
 
-  it('prints exactly today\'s line from an Authority that does not stream, and from the V4 fallback', async () => {
+  it('prints exactly today\'s line from an Authority that does not stream, and from the V4 fallback, with or without --live', async () => {
     const home = sessionHome();
     for (const [replies, result] of [
       [() => [json(answerV8(), 200, V7_HEADERS)], answerV8()],
@@ -491,24 +503,44 @@ describe('person ask --live --progress', () => {
         await expect(run(argv)).resolves.toBe(0);
         return output;
       };
-      const today = await ask(['ask', '--question', 'What did we decide?', '--live']);
-      await expect(ask(['ask', '--question', 'What did we decide?', '--live', '--progress'])).resolves.toEqual(today);
+      const today = await ask(['ask', '--question', 'What did we decide?']);
+      for (const flags of [['--live'], ['--progress'], ['--live', '--progress']]) {
+        await expect(ask(['ask', '--question', 'What did we decide?', ...flags])).resolves.toEqual(today);
+      }
       expect(lines(today.stdout)).toEqual([{ ok: true, result }]);
     }
   });
 
-  it('sends no opt-in header and prints one line without --progress, and never streams Mine on V3', async () => {
-    for (const [argv, path, body] of [
-      [['ask', '--question', 'What did we decide?', '--live'], '/v7/person/ask', answerV8()],
-      [['ask', '--question', 'What did we decide?', '--mine'], '/v3/person/ask', { ...answer({ kind: 'mine' }), schema_version: 4, kind: 'echo-clean-person-answer-v4' }],
+  it('sends no opt-in header and prints one line without --progress, on the newest route in every scope, Mine included', async () => {
+    for (const [argv, body] of [
+      [['ask', '--question', 'What did we decide?'], answerV8()],
+      [['ask', '--question', 'What did we decide?', '--live'], answerV8()],
+      [['ask', '--question', 'What did we decide?', '--mine'], answerMineV8()],
     ] as const) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body));
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body, 200, V7_HEADERS));
       const { output, run } = cli(sessionHome(), fetch);
       await expect(run(argv)).resolves.toBe(0);
-      expect(pathOf(fetch.mock.calls[0]![0])).toBe(path);
+      expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
       expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
       expect(output.stdout).toBe(`${JSON.stringify({ ok: true, result: body })}\n`);
     }
+  });
+
+  // Mine streams as every scope does, on the newest route the Authority has: V3 on /v7, or V1 on /v5 from before /v6.
+  it.each([
+    { authority: 'with /v7', routes: ['/v7'], headers: ['3'], result: answerMineV8(),
+      replies: () => [sse(framesV3([...STEPS_MINE, { type: 'answer', response: answerMineV8(), receipt: receiptMine() }]), 7, { headers: V7_HEADERS })] },
+    { authority: 'from before /v6', routes: ['/v7', '/v6', '/v5'], headers: ['3', '2', '1'], result: answer({ kind: 'mine' }),
+      replies: () => [noRoute(), noRoute(), sse(frames([...STEPS_MINE, { type: 'answer', response: answer({ kind: 'mine' }), receipt: receiptMine() }]), 7)] },
+  ])('streams a Mine Ask with --progress alone from an Authority $authority', async ({ routes, headers, result, replies }) => {
+    const queue: Response[] = replies();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => queue.shift()!);
+    const { output, run } = cli(sessionHome(), fetch);
+    await expect(run(['ask', '--question', 'What did we decide?', '--progress', '--mine'])).resolves.toBe(0);
+    expect(output.stderr).toBe('');
+    expect(fetch.mock.calls.map(([url, init]) => [pathOf(url), headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1), JSON.parse(String(init?.body))]))
+      .toEqual(routes.map((route, index) => [`${route}/person/ask`, headers[index], { schema_version: 3, question: 'What did we decide?', mine: true }]));
+    expect(lines(output.stdout)).toEqual([...STEPS_MINE.map(progress => ({ ok: true, progress })), { ok: true, result, receipt: receiptMine() }]);
   });
 
   it('pins the streamed Ask to the expected account: another one signed in prints no step and sends nothing', async () => {
@@ -525,20 +557,22 @@ describe('person ask --live --progress', () => {
     await expect(pinned.run(['ask', '--question', 'What did we decide?', '--live', '--progress', ...pin(SESSION.membership_id)])).resolves.toBe(0);
     expect(lines(pinned.output.stdout)).toHaveLength(STEPS_V3.length + 1);
 
-    // Only a streamed Ask takes a pin: the others never check it.
-    const unpinned = cli(sessionHome(), vi.fn<typeof globalThis.fetch>());
-    await expect(unpinned.run(['ask', '--question', 'What did we decide?', '--live', ...pin(SESSION.membership_id)])).resolves.toBe(2);
-    expect(JSON.parse(unpinned.output.stderr)).toEqual({ ok: false, error: '--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`' });
+    // Only a streamed Ask takes a pin: the others never check it, --live or not.
+    for (const extra of [[], ['--live'], ['--tickets']]) {
+      const unpinned = cli(sessionHome(), vi.fn<typeof globalThis.fetch>());
+      await expect(unpinned.run(['ask', '--question', 'What did we decide?', ...extra, ...pin(SESSION.membership_id)])).resolves.toBe(2);
+      expect(JSON.parse(unpinned.output.stderr)).toEqual({ ok: false, error: '--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`' });
+    }
   });
 
-  it('refuses --progress without --live as a usage error before any request', async () => {
-    for (const extra of [[], ['--mine'], ['--tickets'], ['--project', 'prj_00000000-0000-4000-8000-000000000019']]) {
+  it('refuses --progress with --tickets, whose route never streams, as a usage error before any request', async () => {
+    for (const extra of [[], ['--live'], ['--mine'], ['--project', 'prj_00000000-0000-4000-8000-000000000019']]) {
       const fetch = vi.fn<typeof globalThis.fetch>();
       const { output, run } = cli(sessionHome(), fetch);
-      await expect(run(['ask', '--question', 'What did we decide?', '--progress', ...extra])).resolves.toBe(2);
+      await expect(run(['ask', '--question', 'What did we decide?', '--progress', '--tickets', ...extra])).resolves.toBe(2);
       expect(fetch).not.toHaveBeenCalled();
       expect(output.stdout).toBe('');
-      expect(JSON.parse(output.stderr)).toEqual({ ok: false, error: '--progress requires --live with `echo-brain person ask`' });
+      expect(JSON.parse(output.stderr)).toEqual({ ok: false, error: '--tickets and --progress cannot be combined with `echo-brain person ask`' });
     }
   });
 

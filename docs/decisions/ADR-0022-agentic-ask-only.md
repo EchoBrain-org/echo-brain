@@ -124,3 +124,10 @@ provider adapter with local scripted responses and a fractional clock.
 the fallback for one case. When research found a need on a list and the writer
 gives no usable reply, code still writes that list's statement, and the part
 is partial, instead of showing up to three released records.
+
+On 2026-10-19 the founder approved moving the last clients of
+`/v3/person/ask`, plain `person ask` and the desktop's Mine Ask, to the newest
+Ask route (`/v7` and its fallbacks), whose cores keep the access check after
+the audit write that the `/v3` core never had. The Authority keeps serving
+`/v3` to installed clients until it is retired
+([Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)).

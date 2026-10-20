@@ -7,24 +7,15 @@ import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
 
 /**
- * Whether an Ask in `scope` streams its progress: a live one does. Mine reads
- * only retained context and must also work on older Authorities, so it never
- * streams.
- */
-export function askStreams(scope: AskScope): boolean {
-  return scope.kind !== 'mine';
-}
-
-/**
  * The client command for an Ask of `text` (already askText's), for the
- * account the page shows. A live Ask asks for its progress, pinned to that
- * account: a client signed in as another by then asks nothing and prints no
- * step, so the page's account check of each step is the client's own. An
- * Authority that predates progress answers as before, with none.
+ * account the page shows. Every Ask, Mine as much as global or project, asks
+ * the newest route and its progress, pinned to that account: a client signed
+ * in as another by then asks nothing and prints no step, so the page's
+ * account check of each step is the client's own. An older Authority answers
+ * on its newest route, and one that predates progress with none.
  */
 export function askArgv(text: string, scope: AskScope, expect: Expect): string[] {
-  return ['ask', `--question=${text}`,
-    ...(askStreams(scope) ? ['--live', '--progress', `--expected-membership-id=${expect.membership_id}`, `--expected-authority=${expect.authority}`] : []),
+  return ['ask', `--question=${text}`, '--live', '--progress', `--expected-membership-id=${expect.membership_id}`, `--expected-authority=${expect.authority}`,
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : scope.kind === 'mine' ? ['--mine'] : [])];
 }
 
