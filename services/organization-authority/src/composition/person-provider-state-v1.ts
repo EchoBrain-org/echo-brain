@@ -1,11 +1,12 @@
 import { chmodSync, existsSync, lstatSync } from 'node:fs';
+import { basename } from 'node:path';
 import Database from 'better-sqlite3';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 
 export function assertPrivatePersonProviderDatabaseV1(path: string): void {
   if (!existsSync(path)) return;
   const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) throw new Error('Connector database is not a private regular file');
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) throw new Error(`Connector database is not a private regular file: ${basename(path)}`);
 }
 
 /**

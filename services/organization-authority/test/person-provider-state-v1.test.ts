@@ -54,7 +54,7 @@ describe.each(Object.keys(RUNTIMES) as (keyof typeof RUNTIMES)[])('the %s connec
     runtime.open(state).close();
     // Releases before this check opened Jira's file with the process umask: 0644 under the default 022.
     chmodSync(path, 0o644);
-    expect(() => runtime.open(state)).toThrow('Connector database is not a private regular file');
+    expect(() => runtime.open(state)).toThrow(`Connector database is not a private regular file: ${runtime.file}`);
     // Refused before it is opened, never repaired: the operator makes it private.
     expect(mode(path)).toBe(0o644);
     chmodSync(path, 0o600);
