@@ -10,6 +10,7 @@ import {
   externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
+import { sameFolder } from '../shared/folders.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { askArgv, askProgressLines, askRecordArgv, askSourceArgv, askStreams } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
@@ -39,16 +40,6 @@ interface ClientModules {
   paths: SessionPaths;
   dependencies: Record<string, unknown>;
   now: () => number;
-}
-
-/** The same folder by identity, not spelling: case and /System/Volumes/Data name one many ways. A missing one is never the same. */
-function sameFolder(a: string, b: string): boolean {
-  try {
-    const [left, right] = [statSync(a, { bigint: true }), statSync(b, { bigint: true })];
-    return left.dev === right.dev && left.ino === right.ino;
-  } catch {
-    return false;
-  }
 }
 
 async function load(): Promise<ClientModules> {
@@ -396,7 +387,8 @@ function changeArgs(change: ProjectChange | undefined, requestId: string, expect
 
 type Params<M extends HostMethodName> = HostMethods[M]['params'];
 
-async function handle(method: HostMethodName, params: unknown, abortSignal?: AbortSignal): Promise<Result<unknown>> {
+/** Every call but ask.cancel, which the port answers at once. */
+async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unknown, abortSignal?: AbortSignal): Promise<Result<unknown>> {
   switch (method) {
     case 'app.status': {
       const current = await status();
@@ -622,8 +614,6 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
         : undefined;
       return forAccount(method, expect, askArgv(text, scope, expect), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
     }
-    case 'ask.cancel':
-      return ok(null);
     case 'ask.source': {
       const { expect, scope, ref } = params as Params<'ask.source'>;
       return forAccount(method, expect, askSourceArgv(ref, scope), stdout => evidenceView(lastJson(stdout)));
@@ -751,28 +741,29 @@ port.on('message', ({ data }) => {
     port.postMessage({ id: request.id, result: ok(null) });
     return;
   }
-  const write = isWriteCall(request.method, request.params);
-  const abort = request.method === 'ask.run' && typeof cancelId === 'string' && ASK_CANCEL_ID.test(cancelId) ? new AbortController() : undefined;
+  const method = request.method;
+  const write = isWriteCall(method, request.params);
+  const abort = method === 'ask.run' && typeof cancelId === 'string' && ASK_CANCEL_ID.test(cancelId) ? new AbortController() : undefined;
   if (abort && typeof cancelId === 'string') activeAsks.set(cancelId, abort);
   // A call still queued behind a refresh when its time runs out never starts.
   let expired = false;
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<Result<unknown>>(resolve => {
-    timer = setTimeout(() => { expired = true; abort?.abort(); resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[request.method]);
+    timer = setTimeout(() => { expired = true; abort?.abort(); resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[method]);
   });
   // Sign-in still runs after a refresh with no answer: it replaces the
   // session, and sign-out ends it either way. Any other call was not made,
   // so no write went out.
-  const refreshFailed = ['signin.begin', 'signin.invitation', 'account.signOut'].includes(request.method) ? undefined
+  const refreshFailed = ['signin.begin', 'signin.invitation', 'account.signOut'].includes(method) ? undefined
     : (refresh: CliRun) => {
       const failure = failureView(lastJson(refresh.stderr), 'failed', false, requestId);
       return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);
     };
   // Status goes through the gate too: mid-refresh the client reports signed out.
-  const work = gated(() => expired ? timeout : handle(request.method, request.params, abort?.signal), request.method, refreshFailed)
+  const work = gated(() => expired ? timeout : handle(method, request.params, abort?.signal), method, refreshFailed)
     // A write that threw after reaching the client may have landed.
     .catch((error: unknown) => {
-      if (__ECHO_TEST_HOOK__) console.error(`[client] ${request.method} threw:`, error);
+      if (__ECHO_TEST_HOOK__) console.error(`[client] ${method} threw:`, error);
       return write ? fail({ code: 'failed', retryable: true, mutation_outcome: 'unknown',
       ...(requestId === undefined ? {} : { request_id: requestId }) }) : code('failed');
     });

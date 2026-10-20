@@ -13,11 +13,12 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  changesLogLine, externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, noticeOf, plainJsonBytes,
+  changesLogLine, externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, MAX_PROJECT_FILES, noticeOf, plainJsonBytes,
   remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Notice, type Result, type UpdateState,
 } from '../shared/protocol.js';
+import { sameFolder } from '../shared/folders.js';
 import { installRefusal, startUpdater, updateCode, updaterSetup, type ClientUpdateModule, type Updater } from './update.js';
 
 const BUILD = __dirname;
@@ -32,8 +33,6 @@ const INVITATION_FILE = 'person-invitation.json';
 const MAX_INVITATION_BYTES = 8 * 1024;
 /** Copy answer takes what an answer can hold: 12,000 characters. */
 const MAX_COPY_CHARACTERS = 12_000;
-/** New project takes up to 20 files. */
-const MAX_PROJECT_FILES = 20;
 const test = __ECHO_TEST_HOOK__ ? process.env : {} as NodeJS.ProcessEnv;
 const smoke = process.argv.includes('--smoke');
 // Release builds: no fuse covers remote debugging, so refuse every form of it
@@ -94,16 +93,6 @@ function log(line: string): void {
     appendFileSync(file, `${new Date().toISOString()} ${line}\n`, { mode: 0o600 });
     chmodSync(file, 0o600);
   } catch { /* logging never breaks the app */ }
-}
-
-/** The same folder by identity, not spelling: case and /System/Volumes/Data name one many ways. A missing one is never the same. */
-function sameFolder(a: string, b: string): boolean {
-  try {
-    const [left, right] = [statSync(a, { bigint: true }), statSync(b, { bigint: true })];
-    return left.dev === right.dev && left.ino === right.ino;
-  } catch {
-    return false;
-  }
 }
 
 /** The commit this build was made from, read once: it never changes while the app runs. */

@@ -394,6 +394,8 @@ export type Audience =
  * read it: the API's own bound (PERSON_UPLOAD_PROJECT_SET_MAX).
  */
 export const MAX_CAPTURE_PROJECTS = 20;
+/** New project takes up to 20 files. */
+export const MAX_PROJECT_FILES = 20;
 
 /** Where a saved document's text extraction stands (the Authority's own states). */
 export type Extraction = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out'
@@ -690,7 +692,7 @@ export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
 /** Operations of a write method that only read. */
 const READ_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   'tools.meetings': new Set<PersonMeetingRequestV2['operation']>(['home', 'reviews', 'browse', 'open', 'review_open']),
-  runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'view', 'items', 'item']),
+  runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'items', 'item']),
 };
 /** Whether a call may change what the Authority stores. An operation not known to only read counts as a write. */
 export function isWriteCall(method: string, params: unknown): boolean {
@@ -700,7 +702,7 @@ export function isWriteCall(method: string, params: unknown): boolean {
 }
 /** Every runs operation: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
-  ['list', 'home', 'start', 'retry', 'view', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
+  ['list', 'home', 'start', 'retry', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
 );
 /**
  * A call as desktop.log names it, content-free: the method, and for runs its operation and how much it read ("runs.home",

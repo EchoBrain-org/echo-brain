@@ -10,7 +10,7 @@ import type {
   NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
   ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_PROJECT_FILES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { answerSentences, sourceGroups, type SourceGroup } from './answer.js';
 import { openerOf, sourceKey } from './openers.js';
@@ -2254,13 +2254,8 @@ export function askProjectSetting(action: 'archive' | 'unarchive' | 'leave'): vo
   set({ projectSettings: { ...settings, menu: false, rename: null, confirm: action } });
 }
 
-function settingsName(value: string): string | null {
-  const name = value.normalize('NFC').trim();
-  return name === '' || new TextEncoder().encode(name).byteLength > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
-}
-
 export function projectRenameValid(name: string, previous: string): boolean {
-  const valid = settingsName(name);
+  const valid = projectName(name);
   return valid !== null && valid !== previous;
 }
 
@@ -2269,7 +2264,7 @@ export function confirmProjectSetting(): void {
   const settings = state.projectSettings;
   if (!settings || projectSettingsBlocked()) return;
   if (settings.rename !== null) {
-    const name = settingsName(settings.rename);
+    const name = projectName(settings.rename);
     if (!projectRenameValid(settings.rename, settings.project.name) || name === null) return;
     void sendProjectSetting(settings.project, 'rename', { name });
     return;
@@ -2591,8 +2586,6 @@ export function confirmMemberChange(): void {
 
 // ---- new project -----------------------------------------------------------------
 
-/** New project takes up to 20 files. */
-export const MAX_PROJECT_FILES = 20;
 const TOO_MANY_FILES = 'Add up to 20 files.';
 /** Said when New project closes after Create with files that may not have been saved, people who may not have been added, or both. */
 export const UNSAVED_FILES = 'Some files may not have been saved.';
@@ -2627,7 +2620,7 @@ export function newProjectBusy(sheet: NewProjectSheet): boolean {
 /** A project's name as the API takes it: one line, trimmed, NFC, at most 200 UTF-8 bytes. */
 export function projectName(text: string): string | null {
   const name = text.normalize('NFC').trim();
-  return name === '' || new TextEncoder().encode(name).length > 200 || /[\u0000-\u001f\u007f-\u009f]/.test(name) ? null : name;
+  return name === '' || new TextEncoder().encode(name).length > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
 }
 
 /**
@@ -2949,7 +2942,7 @@ export async function chooseFiles(): Promise<void> {
   if (!sheet) return;
   const result = await rpc('dialog.openDocuments', {});
   if (!newProjectSheet(sheet.seq)) return;
-  if (!result.ok) { setNewProject({ notice: result.failure.code === 'too_many_files' ? TOO_MANY_FILES : message(result.failure) }, sheet.seq); return; }
+  if (!result.ok) { setNewProject({ notice: message(result.failure) }, sheet.seq); return; }
   const refused: Failure = { code: 'unsupported_file', retryable: false };
   addFiles(sheet.seq, [...result.value.files.map(handle => ({ name: handle.name, handle })), ...result.value.refused.map(name => ({ name, failure: refused }))]);
 }

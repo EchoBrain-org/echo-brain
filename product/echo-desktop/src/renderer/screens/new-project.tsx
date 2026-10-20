@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { MAX_PROJECT_FILES } from '../../shared/protocol.js';
 import { message } from '../messages.js';
 import {
   askSkip, canDropFiles, cancelSkip, checkFile, chooseFiles, closeSheet, confirmSkip, createProject, dropFiles, EXTRACTION, keepNewProject,
-  MAX_PROJECT_FILES, newProjectBusy, newProjectSteppable, newProjectUnsettled, pickable, pickPerson, projectName, removeRow, retryFile, retryPick, findPeople,
+  newProjectBusy, newProjectSteppable, newProjectUnsettled, pickable, pickPerson, projectName, removeRow, retryFile, retryPick, findPeople,
   setNewProjectName, setPickQuery, unsent, type FindingSheet, type NewProjectSheet, type ProjectFile, type ProjectPick, type State,
 } from '../store.js';
 import { trapTab } from './compose.js';
