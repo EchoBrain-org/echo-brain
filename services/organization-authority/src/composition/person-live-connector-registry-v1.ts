@@ -1,10 +1,9 @@
-import type { OrganizationPersonToolV4, PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
-import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
+import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { liveSourceDescriptorV2, type EvidenceSourceCapabilitiesV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
-import type { PersonLiveEvidenceCitationV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
-import type { PersonContextLiveApplicationV1, PersonLiveConnectorDefinitionV1, PersonLiveProjectSettingV1 } from '../application/ports/person-context-live-runtime-v1.js';
-import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
+import type {
+  OpenedPersonLiveConnectorV1, PersonContextLiveApplicationV1, PersonLiveConnectorDefinitionV1, PersonLiveProjectSettingV1,
+} from '../application/ports/person-context-live-runtime-v1.js';
 
 /**
  * What each connector's sources can do (research tool contract v1), beside their descriptors. Each reader applies
@@ -96,17 +95,10 @@ function sharePersonLiveRuntimeV1<R extends { close(): void }>(open: (...paramet
   };
 }
 
-/** A connected tool's runtime: its connection, whose items and containers it reads, its routes and the person's link to it. */
-export interface PersonToolLiveRuntimeV1 {
-  readonly application: PersonContextLiveApplicationV1<PersonLiveEvidenceCitationV1> & {
-    containerSource: PersonContextLiveApplicationV1<PersonToolContainerCitationV1>['source'];
-  };
-  readonly connection_http: ProviderHttpApplicationV1;
-  /** A ticket tool's assignee accounts. */
-  readonly owners?: TicketOwnerAccountsV1;
-  tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]>;
-  close(): void;
-}
+/** A connected tool's runtime: its connection, which reads its items and containers, its routes and the person's link to it. */
+type PersonToolLiveRuntimeV1 = Pick<OpenedPersonLiveConnectorV1, 'owners' | 'close'> & Required<Pick<OpenedPersonLiveConnectorV1, 'connection_http' | 'tools'>> & {
+  readonly application: OpenedPersonLiveConnectorV1['application'] & { containerSource: PersonContextLiveApplicationV1<PersonToolContainerCitationV1>['source'] };
+};
 
 /**
  * A tool's live connectors (research tool contract v1): its items and, for the V8 answer, its containers, over one runtime
