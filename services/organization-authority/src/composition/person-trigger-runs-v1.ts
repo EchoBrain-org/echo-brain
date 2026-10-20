@@ -10,7 +10,6 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import { SqliteTriggerRunsV1, triggerRunStateAtV1, type ApprovalActorV1, type TriggerRunRowV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
-import type { SqlitePersonAgenticAskAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import { matchImpactOwnersV1, type ImpactOwnerCandidateV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
 import {
@@ -48,7 +47,6 @@ export interface CreatePersonTriggerRunsV1Options {
   readonly owners?: TicketOwnerAccountsV1;
   /** Kept injectable for focused service tests and shared with the live evaluator. */
   readonly bindDesk: typeof bindPersonLiveEvidenceDeskV1;
-  readonly audit: SqlitePersonAgenticAskAuditV1;
   readonly bind_options: BoundOptions;
   readonly live_sources?: BoundOptions['live_sources'];
   readonly research: (input: { readonly desk: Desk; readonly context: PersonLiveRequestContextV1 }) => RunResearch;

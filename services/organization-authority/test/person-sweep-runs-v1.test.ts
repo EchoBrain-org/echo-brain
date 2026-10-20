@@ -578,7 +578,7 @@ describe('sweeps on the runs API', () => {
     const diagnostics = createPersonDiagnosticsV1({ sessions: f.openItemsOptions.sessions });
     captures.push(diagnostics);
     const runsApp = createPersonTriggerRunsV1({ runs: f.runs, sessions: f.openItemsOptions.sessions, records: f.records, items: f.items, people: f.directory, bindDesk: f.bindDesk as never,
-      audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: f.research as never, lease_ms: 60_000, now: f.clock });
+      bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: f.research as never, lease_ms: 60_000, now: f.clock });
     const captured = async (run_id: string) => {
       const capture = await diagnostics.prepare({ access_token: 'ari', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id } } });
       expect(await runsApp.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id, capture_id: capture.capture_id } })).toEqual({ state: 'running' });
@@ -614,7 +614,7 @@ describe('sweeps on the runs API', () => {
     const diagnostics = createPersonDiagnosticsV1({ sessions: f.openItemsOptions.sessions });
     captures.push(diagnostics);
     const runsApp = createPersonTriggerRunsV1({ runs: f.runs, sessions: f.openItemsOptions.sessions, records: f.records, items: f.items, people: f.directory, bindDesk: f.bindDesk as never,
-      audit: {} as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: f.research as never, lease_ms: 60_000, now: f.clock });
+      bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: f.research as never, lease_ms: 60_000, now: f.clock });
     const run_id = runOf(await f.sweep('ari', MINE));
     for (const item of [f.ticket, f.action]) await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: item.item_id, state: 'done' } });
     const capture = await diagnostics.prepare({ access_token: 'ari', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id } } });
@@ -660,7 +660,7 @@ describe('sweeps on the runs API', () => {
     const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'landed', approved_record: 'landed' } });
     let lags = true;
     const runsApp = createPersonTriggerRunsV1({ runs: f.runs, sessions: f.openItemsOptions.sessions, records: { ...f.records, recordIndexLags: () => lags },
-      items: f.items, people: f.directory, bindDesk: f.bindDesk as never, audit: {} as never, bind_options: f.openItemsOptions.bind_options as never,
+      items: f.items, people: f.directory, bindDesk: f.bindDesk as never, bind_options: f.openItemsOptions.bind_options as never,
       research: f.research as never, lease_ms: 60_000, now: f.clock, live_sources: f.openItemsOptions.live_sources });
     const start = (run_id: string) => runsApp.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id } });
     const run_id = runOf(await f.sweep('ari', MINE));

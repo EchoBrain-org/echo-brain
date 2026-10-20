@@ -248,7 +248,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
         external_scope_id: linked ? CLOUD : null, external_subject_id: linked ? `acct-${access_token}` : null, organization_setup: null }];
     },
   }));
-  const runsApp = createPersonTriggerRunsV1({ runs, sessions, records, bindDesk: bindDesk as never, audit: {} as never, bind_options, research: research as never,
+  const runsApp = createPersonTriggerRunsV1({ runs, sessions, records, bindDesk: bindDesk as never, bind_options, research: research as never,
     items, people: directory, owners, lease_ms: 60_000, now: clock, live_sources });
   const liveFailures: OpenItemsLiveFailureV1[] = [];
   /** The open-items service's options, so a test can build it again with one of them changed. */
