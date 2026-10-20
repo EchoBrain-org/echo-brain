@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerSource } from '../../src/shared/protocol.js';
 import { groupKey } from '../../src/renderer/answer.js';
-import { openerOf, sourceKey } from '../../src/renderer/openers.js';
+import { sourceKey } from '../../src/renderer/openers.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 const coordinates = (anchor: string) => ({ source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha(anchor) });
@@ -9,40 +9,21 @@ const decision = (atom: string, label = 'Tuesday sync'): AnswerSource =>
   ({ kind: 'record', label, record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha(atom) });
 const ticket = (key: string): AnswerSource => ({ kind: 'ticket', tool_id: 'jira', label: key, permalink: `https://example.atlassian.net/browse/${key}` });
 
-describe('one opener for each kind of item', () => {
-  it('opens a record item, a passage, a transcript and live evidence each in its place', () => {
-    expect(openerOf(decision('1'))).toEqual({ pane: 'record', page: { kind: 'reader', ref: { kind: 'meeting', id: sha('2') } } });
-    expect(openerOf({ kind: 'original', label: 'Notes', ref: coordinates('6'), item: { kind: 'note', id: `ctx_${'8'.repeat(64)}` } }))
-      .toEqual({ pane: 'passages', page: { kind: 'reader', ref: { kind: 'note', id: `ctx_${'8'.repeat(64)}` } } });
-    // An older answer's passage without a ref still shows its passages, with no page to open.
-    expect(openerOf({ kind: 'original', label: 'Notes', ref: coordinates('6') })).toEqual({ pane: 'passages', page: null });
-    expect(openerOf({ kind: 'transcript', label: 'Transcript', ref: coordinates('6'), meeting: sha('2') }))
-      .toEqual({ pane: 'meeting', meeting: sha('2'), page: { kind: 'reader', ref: { kind: 'meeting', id: sha('2') } } });
-    for (const source of [ticket('ECHO-7'), { ...ticket('ECHO-7'), kind: 'page' } as AnswerSource,
-      { kind: 'slack', tool_id: 'slack', label: '#launch', permalink: 'https://acme.slack.com/archives/C01ABCDEF/p1758873600000100' } as AnswerSource]) {
-      expect(openerOf(source)).toEqual({ pane: 'external', page: null });
-    }
-  });
-
-  it('opens a follow-up beside Ask with its title, owner, status and check, and its full page by its item id (ADR-0040)', () => {
+describe('one key for each item Ask cites', () => {
+  it('keys a follow-up by its item id (ADR-0040)', () => {
     const followUp: AnswerSource = { kind: 'follow_up', label: 'Ship the launch checklist', item_id: 'itm_launch-1' };
-    expect(openerOf(followUp)).toEqual({ pane: 'follow_up', page: { kind: 'follow_up', item_id: 'itm_launch-1' } });
     // One follow-up is one item and one source, whatever its title says; two follow-ups are two.
     expect(sourceKey(followUp)).toBe(sourceKey({ ...followUp, label: 'Renamed' } as AnswerSource));
     expect(sourceKey(followUp)).not.toBe(sourceKey({ ...followUp, item_id: 'itm_launch-2' } as AnswerSource));
     expect(groupKey(followUp)).not.toBe(groupKey({ ...followUp, item_id: 'itm_launch-2' } as AnswerSource));
   });
 
-  it('opens your project in ECHO, a person nowhere, a tool on Tools, and a Jira project, Confluence space or Slack channel in its tool (research tool contract v1)', () => {
+  it('keys your project, a person, a tool and a Jira project, Confluence space or Slack channel by what it names (research tool contract v1)', () => {
     const PROJECT = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
     const project: AnswerSource = { kind: 'project', label: 'Thermal recovery', project_id: PROJECT };
     const person: AnswerSource = { kind: 'person', label: 'Mara Lind', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e' };
     const tool: AnswerSource = { kind: 'tool', label: 'Jira', tool_id: 'jira' };
     const container: AnswerSource = { kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: 'https://example.atlassian.net/browse/THERM', container: 'jira_project', key: 'THERM' };
-    expect(openerOf(project)).toEqual({ pane: 'project', page: { kind: 'project', project_id: PROJECT } });
-    expect(openerOf(person)).toEqual({ pane: 'person', page: null });
-    expect(openerOf(tool)).toEqual({ pane: 'tool', page: { kind: 'tools' } });
-    expect(openerOf(container)).toEqual({ pane: 'external', page: null });
     // Each is one item and one source by what it names, whatever its label or key says.
     for (const source of [project, person, tool, container]) {
       expect(sourceKey({ ...source, label: 'Renamed' } as AnswerSource)).toBe(sourceKey(source));
