@@ -72,7 +72,7 @@ export interface CoreRuntimeDetailV1 extends CoreRuntimeCorrelationV1 {
   readonly grounding_stage?: (typeof CORE_RUNTIME_GROUNDING_STAGES_V1)[number];
   readonly approval_surface?: "desktop" | "slack";
   readonly delivery_step?: "open_dm" | "post_marker" | "reconcile_marker" | "publish_card";
-  readonly evidence_source?: "ticket" | "slack" | "page" | "tool_container";
+  readonly evidence_source?: "ticket" | "page" | "tool_container";
   /** Optional finite attribution for an upstream connector request. */
   readonly upstream_service?: (typeof CORE_RUNTIME_UPSTREAM_SERVICES_V1)[number];
   readonly upstream_operation?: (typeof CORE_RUNTIME_UPSTREAM_OPERATIONS_V1)[number];
@@ -269,7 +269,7 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
       (input.grounding_stage !== undefined && !CORE_RUNTIME_GROUNDING_STAGES_V1.includes(input.grounding_stage)) ||
       (input.approval_surface !== undefined && !["desktop", "slack"].includes(input.approval_surface)) ||
       (input.delivery_step !== undefined && !["open_dm", "post_marker", "reconcile_marker", "publish_card"].includes(input.delivery_step)) ||
-      (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "slack" && input.evidence_source !== "page" && input.evidence_source !== "tool_container") ||
+      (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "page" && input.evidence_source !== "tool_container") ||
       (input.upstream_service !== undefined && !CORE_RUNTIME_UPSTREAM_SERVICES_V1.includes(input.upstream_service)) ||
       (input.upstream_operation !== undefined && !CORE_RUNTIME_UPSTREAM_OPERATIONS_V1.includes(input.upstream_operation)) ||
       (input.upstream_rate_limit_reason !== undefined && !CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1.includes(input.upstream_rate_limit_reason)) ||
