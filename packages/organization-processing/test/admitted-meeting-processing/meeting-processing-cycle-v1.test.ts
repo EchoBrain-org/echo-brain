@@ -20,7 +20,6 @@ import {
   type MeetingProcessingWorkerTelemetryEventV1,
 } from "../../src/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
 import {
-  legacyRestrictedReviewerReviewPolicySnapshotV1,
   reviewInputSha256V1,
   reviewLineageIdV1,
 } from "../../src/admitted-meeting-processing/review-lineage-semantics.js";
@@ -49,7 +48,6 @@ const PROCESSOR = {
   instance_id: "founder-llm",
   version: "1.3.0",
 };
-const REVIEW_POLICY = legacyRestrictedReviewerReviewPolicySnapshotV1;
 const fixtureCursorPolicy = {
   source_adapter_id: "fixture-source",
   assert_live_cursor(cursor: string): void {
@@ -197,16 +195,7 @@ class FakeState implements AuthorityMeetingProcessingStateV1 {
       instance_id: input.meeting.provenance.source.instance_id,
       external_id: input.meeting.provenance.external_id,
     });
-    const shared = {
-      review_input_sha256: reviewInputSha256,
-      review_policy_id: input.review_policy.policy_id,
-      review_policy_contract_sha256:
-        input.review_policy.policy_contract_sha256,
-      review_policy_consequence_text:
-        input.review_policy.policy_consequence_text,
-      review_policy_consequence_sha256:
-        input.review_policy.policy_consequence_sha256,
-    };
+    const shared = { review_input_sha256: reviewInputSha256 };
     const fresh = {
       ...shared,
       candidate_id: "cnd_test",
@@ -370,10 +359,6 @@ function frozenCandidate(
     review_lineage_id: "rli_test",
     review_input_sha256: `sha256:${"c".repeat(64)}`,
     review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-    review_policy_id: REVIEW_POLICY.policy_id,
-    review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
-    review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
-    review_policy_consequence_sha256: REVIEW_POLICY.policy_consequence_sha256,
     admission: current,
     meeting: value,
     decisions: frozenDecisions,
@@ -1171,13 +1156,7 @@ describe("admitted meeting-processing cycle", () => {
     expect(extracts).toBe(0);
     expect(retried).toEqual({
       admission: current,
-      candidate: expect.objectContaining({
-        state: "queued",
-        review_policy_contract_sha256:
-          REVIEW_POLICY.policy_contract_sha256,
-        review_policy_consequence_text:
-          REVIEW_POLICY.policy_consequence_text,
-      }),
+      candidate: expect.objectContaining({ state: "queued" }),
       meeting: originalMeeting,
       decisions: originalDecisions,
     });

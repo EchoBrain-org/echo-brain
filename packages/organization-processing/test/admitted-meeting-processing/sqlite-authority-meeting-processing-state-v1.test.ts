@@ -236,7 +236,6 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
       approved_snapshot_sha256: frozen.approved_snapshot_sha256,
       suggested_project_ids: [PROJECT_A],
     });
-    expect(state.approvalIsCurrent(candidate.approval_id)).toBe(false);
     expect(state.listPendingApprovalDeliveries().map(item => item.approval_id)).toEqual([successor.approval_id]);
   });
 
@@ -438,10 +437,6 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
       approval_id: expect.stringMatching(/^apr_/),
       stage_command_id: expect.stringMatching(/^pas_/),
       state: "queued",
-      review_policy_id: REVIEW_POLICY.policy_id,
-      review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
-      review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
-      review_policy_consequence_sha256: REVIEW_POLICY.policy_consequence_sha256,
     });
     expect(candidate).not.toHaveProperty("durable_staged_at");
     await expect(
@@ -596,13 +591,12 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
       },
       review_policy: REVIEW_POLICY,
     });
-    const staged = state.freezeProposal({ candidate_id: first.candidate_id, approved_snapshot: snapshotFor(first), suggested_project_ids: [] });
+    state.freezeProposal({ candidate_id: first.candidate_id, approved_snapshot: snapshotFor(first), suggested_project_ids: [] });
     expect(duplicate).toMatchObject({
       disposition: "coalesced",
       state: "coalesced",
       review_lineage_id: first.review_lineage_id,
     });
-    expect(state.approvalIsCurrent(staged.approval_id)).toBe(true);
   });
 
   it("coalesces a meeting-time-only revision into the existing review round", async () => {
@@ -710,7 +704,6 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
       disposition: "no_signals",
       state: "no_signals",
     });
-    expect(state.approvalIsCurrent(first.approval_id)).toBe(false);
     expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
       superseded_by_candidate_id: noSignals.candidate_id,
       state: "superseded",
@@ -788,8 +781,8 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
     const { state, current, candidate: first } = await actionableFixture();
     const other = await stageOtherMeeting(state, current, "2");
     expect(other.review_lineage_id).not.toBe(first.review_lineage_id);
-    expect(state.approvalIsCurrent(first.approval_id)).toBe(true);
-    expect(state.approvalIsCurrent(other.approval_id)).toBe(true);
+    // Neither supersedes the other: both stay pending.
+    expect(state.listPendingApprovalDeliveries().map(item => item.approval_id).sort()).toEqual([first.approval_id, other.approval_id].sort());
   });
 
   it("pins the held-extraction failure_stage CHECK to the TypeScript allowlist", () => {

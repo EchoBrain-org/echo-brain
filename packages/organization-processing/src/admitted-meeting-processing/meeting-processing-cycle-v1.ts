@@ -133,10 +133,6 @@ interface MeetingProcessingCandidateBaseV1 {
   readonly review_lineage_id: string;
   readonly review_input_sha256: string;
   readonly review_semantic_sha256: string;
-  readonly review_policy_id: ReviewPolicySnapshotV1["policy_id"];
-  readonly review_policy_contract_sha256: ReviewPolicySnapshotV1["policy_contract_sha256"];
-  readonly review_policy_consequence_text: string;
-  readonly review_policy_consequence_sha256: ReviewPolicySnapshotV1["policy_consequence_sha256"];
 }
 
 /** A durable Authority candidate with a deterministic D2 handoff. */

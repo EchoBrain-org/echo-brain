@@ -9,10 +9,6 @@
       "types": "./dist/admitted-meeting-processing/extraction-attempt-store-v1.d.ts",
       "import": "./dist/admitted-meeting-processing/extraction-attempt-store-v1.js"
     },
-    "./core/ports/source": {
-      "types": "./dist/core/ports/source.d.ts",
-      "import": "./dist/core/ports/source.js"
-    },
     "./core/ports/adapters": {
       "types": "./dist/core/ports/adapters.d.ts",
       "import": "./dist/core/ports/adapters.js"
@@ -92,10 +88,6 @@
     "./admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1": {
       "types": "./dist/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.d.ts",
       "import": "./dist/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.js"
-    },
-    "./admitted-meeting-processing/review-lineage-semantics": {
-      "types": "./dist/admitted-meeting-processing/review-lineage-semantics.d.ts",
-      "import": "./dist/admitted-meeting-processing/review-lineage-semantics.js"
     },
     "./adapters/persistence/sqlite-extraction-attempt-store-v1": {
       "types": "./dist/adapters/persistence/sqlite-extraction-attempt-store-v1.d.ts",

@@ -19,6 +19,7 @@ import {
   buildMeetingEvidenceV1,
   localDateV1,
 } from "../core/index.js";
+import { canonicalProposedOwnerV1 } from "../core/processing/owner-proposals-v1.js";
 import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   DEFAULT_LLM_REQUEST_TIMEOUT_MS,
@@ -33,8 +34,6 @@ export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '2.0.0';
 export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v11';
 export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
   'decision-extraction-schema-v8';
-/** Longest proposed action owner kept, in characters. */
-export const LLM_DECISION_PROCESSOR_OWNER_MAX_CHARACTERS = 120;
 /** Most cited unit text kept per item, in characters. */
 const EVIDENCE_CHARACTERS_PER_SIGNAL = 3_000;
 /** Most evidence per meeting, as the UTF-8 bytes of each span's JSON, which keeps the approved record under 256 KiB. */
@@ -504,27 +503,13 @@ function checkedSignal(
     text: text.trim(),
     // A choice cited only from questions was not made in the meeting.
     status: status === 'decided' && units.every((unit) => unit.question) ? 'proposed' : status,
-    owner: kind === 'action' ? groundedOwner(proposedOwner(record['owner']), units) : null,
+    // A malformed owner proposal is dropped, never an extraction failure: the approver confirms owners.
+    owner: kind === 'action' ? groundedOwner(canonicalProposedOwnerV1(record['owner']), units) : null,
     dueAt: kind === 'action' ? checkedDueAt(record['due_at'], meeting, header) : null,
     confidence: normalizedConfidence(record['confidence']),
     units,
     supports: kind === 'rationale' && Array.isArray(supports) ? supports : [],
   };
-}
-
-/**
- * A proposal the approval card can show: one trimmed line of at most 120
- * characters, or none. A malformed proposal is dropped, never an extraction
- * failure: the approver confirms owners, and nothing unconfirmed is recorded.
- */
-function proposedOwner(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const owner = value.normalize('NFC').replace(/\s+/gu, ' ').trim();
-  return owner.length === 0 ||
-    owner.length > LLM_DECISION_PROCESSOR_OWNER_MAX_CHARACTERS ||
-    /[\p{Cc}\p{Cf}]/u.test(owner)
-    ? null
-    : owner;
 }
 
 function comparable(value: string): string {
