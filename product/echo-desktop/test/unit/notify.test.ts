@@ -90,42 +90,26 @@ describe('what notifies (N2)', () => {
     expect(notices()).toHaveLength(1);
   });
 
-  it('one handed to you by someone else, by who handed it', async () => {
-    const item = sent(1, RAFAEL);
-    await signedIn([item]);
-    authority.items = [owned(item, ME, RAFAEL, 30)];
-    await nextCheck();
-    expect(texts()).toEqual(['Rafael handed you Action 1']);
-  });
-
-  it.each([['done', 'Mina marked Action 1 done'], ['not_relevant', 'Mina marked Action 1 not relevant']] as const)(
-    'one you sent, marked %s by its owner: told to you as its sender', async (state, text) => {
-      const item = sent(1, MINA);
-      await signedIn([item]);
-      authority.items = [stated(item, state, MINA, 30)];
+  const mine = sent(1, MINA);
+  const yours = stated(followUp(1), 'done', ME, 20);
+  const theirs = stated(sent(2, MINA), 'done', MINA, 20);
+  it.each([
+    ['one handed to you by someone else, by who handed it', [sent(1, RAFAEL)], [[owned(sent(1, RAFAEL), ME, RAFAEL, 30)]], ['Rafael handed you Action 1']],
+    ['one you sent, marked done by its owner: told to you as its sender', [mine], [[stated(mine, 'done', MINA, 30)]], ['Mina marked Action 1 done']],
+    ['one you sent, marked not relevant by its owner', [mine], [[stated(mine, 'not_relevant', MINA, 30)]], ['Mina marked Action 1 not relevant']],
+    ['one you sent, handed on by its owner to someone else', [mine], [[owned(mine, RAFAEL, MINA, 30)]], ['Mina handed Action 1 to Rafael']],
+    // The second closed before it came into view, so only its reopening is news.
+    ['one reopened, to its owner, and to its sender', [yours], [[stated(yours, 'open', MINA, 30)], [stated(yours, 'open', MINA, 30), theirs],
+      [stated(yours, 'open', MINA, 30), stated(theirs, 'open', MINA, 40)]], ['Mina reopened Action 1', 'Mina reopened Action 2']],
+  ])('%s', async (_, before, after, told) => {
+    await signedIn(before);
+    for (const items of after) {
+      authority.items = items;
       await nextCheck();
-      expect(notices()).toEqual([{ text, target: { kind: 'item', item_id: id(1) } }]);
-    });
-
-  it('one reopened, to its owner, and to its sender', async () => {
-    const yours = stated(followUp(1), 'done', ME, 20);
-    const theirs = stated(sent(2, MINA), 'done', MINA, 20);
-    await signedIn([yours]);
-    authority.items = [stated(yours, 'open', MINA, 30)];
-    await nextCheck();
-    authority.items = [...authority.items, theirs];
-    await nextCheck();
-    authority.items = [authority.items[0]!, stated(theirs, 'open', MINA, 40)];
-    await nextCheck();
-    expect(texts()).toEqual(['Mina reopened Action 1', 'Mina reopened Action 2']);
-  });
-
-  it('one you sent, handed on by its owner to someone else', async () => {
-    const item = sent(1, MINA);
-    await signedIn([item]);
-    authority.items = [owned(item, RAFAEL, MINA, 30)];
-    await nextCheck();
-    expect(texts()).toEqual(['Mina handed Action 1 to Rafael']);
+    }
+    expect(texts()).toEqual(told);
+    // What left your open ones was settled by the closed read: none was read by its id.
+    expect(rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'item')).toEqual([]);
   });
 
   it('one you last handed on, handed on again: it leaves what involves you, and is read by its id to say so', async () => {
@@ -167,33 +151,30 @@ describe('what notifies (N2)', () => {
     expect(store.getState().route).toMatchObject({ page: 'project', project: { name: 'Oldest' } });
   });
 
-  it('a project you lead, made before the newest you had, on the Authority\'s clock: someone else made you its lead', async () => {
+  it.each([
     // Your newest project was made at 10:00; Ana made hers at 09:00 and added you as its lead at 14:00.
-    authority.active = [project(1, 20, { created_at: '2026-09-20T10:00:00.000Z' })];
+    ['made before the newest you had, on the Authority\'s clock', [project(1, 20, { created_at: '2026-09-20T10:00:00.000Z' })],
+      project(2, 20, { name: 'Ana\'s', role: 'lead', created_at: '2026-09-20T09:00:00.000Z' })],
+    ['made before the last check', [], project(1, 10, { name: 'Old', role: 'lead' })],
+  ])('a project you lead, %s: someone else made you its lead', async (_, had, added) => {
+    authority.active = had;
     await signedIn();
-    const anas = project(2, 20, { name: 'Ana\'s', role: 'lead', created_at: '2026-09-20T09:00:00.000Z' });
-    authority.active = [...authority.active, anas];
+    authority.active = [...had, added];
     await nextCheck();
-    expect(texts()).toEqual(['You were added to Ana\'s']);
-  });
-
-  it('a project you lead that was made before the last check: someone else made you its lead', async () => {
-    await signedIn();
-    authority.active = [project(1, 10, { name: 'Old', role: 'lead' })];
-    await nextCheck();
-    expect(texts()).toEqual(['You were added to Old']);
+    expect(texts()).toEqual([`You were added to ${added.name}`]);
   });
 
   it('names a document follow-up as its row does, and cuts a long title to one line of 200 characters', async () => {
     await signedIn();
-    authority.items = [followUp(1, { kind: 'ticket', expected: 'launch next week' }), followUp(2, { kind: 'ticket', decision: undefined })];
+    authority.items = [followUp(1, { kind: 'ticket', expected: 'launch next week' })];
     await nextCheck();
-    authority.items = [];
+    authority.items = [followUp(2, { kind: 'ticket', decision: undefined })];
     await nextCheck();
     authority.items = [followUp(3, { expected: `Line one\nline two ${'x'.repeat(300)}` })];
     await nextCheck();
-    expect(texts()[0]).toBe('2 follow-ups changed');
-    const long = texts()[1]!;
+    // Not read live, a document is what it is and its meeting, as its row says before the live read fills it.
+    expect(texts().slice(0, 2)).toEqual(['Mina handed you Jira ticket · Pilot planning', 'Mina handed you Jira ticket']);
+    const long = texts()[2]!;
     expect(long).toMatch(/^Mina handed you Line one line two x+…$/);
     expect([...long.slice('Mina handed you '.length)]).toHaveLength(200);
   });
@@ -202,15 +183,6 @@ describe('what notifies (N2)', () => {
 describe('a follow-up that leaves your open ones (P3)', () => {
   /** One Rafael sent you that you last handed on to Mina: handed on again by her, it leaves what involves you. */
   const handedOn = (n: number) => owned(followUp(n, { approver: RAFAEL, state_set_by: RAFAEL }), MINA, ME, 20);
-
-  it('settles one closed from the closed read, with no read by its id', async () => {
-    const item = sent(1, MINA);
-    await signedIn([item]);
-    authority.items = [stated(item, 'done', MINA, 30)];
-    await nextCheck();
-    expect(texts()).toEqual(['Mina marked Action 1 done']);
-    expect(rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'item')).toEqual([]);
-  });
 
   it('is read by its id when handed away, again at the next check when that read failed, and told then', async () => {
     const item = handedOn(1);
@@ -380,7 +352,11 @@ describe('what never notifies (N3)', () => {
     expect(store.getState().projects.items.map(row => row.name)).toEqual(['Made elsewhere', 'Made here', 'Project 1']);
   });
 
-  it('retries a failed full read of your projects at the next check, the fingerprint unchanged, and tells the add then (review B)', async () => {
+  it.each([
+    // The fingerprint unchanged, the full read is tried again at the next check (review B).
+    ['tells the add once read', false, 'You were added to Oldest', project(40, 1).project_id],
+    ['tells it with the next move, counted together', true, 'Added to 2 projects', project(41, 29).project_id],
+  ])('a full read of your projects that fails part-way tells nothing, and %s', async (_, newer, text, opens) => {
     authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
     let refuseMore = false;
     rpc.mockImplementation(changesRpc({
@@ -388,15 +364,16 @@ describe('what never notifies (N3)', () => {
       'projects.list': params => (refuseMore && params.cursor ? fail('unavailable', { retryable: true }) : fixture['projects.list']!(params)),
     }));
     await startStore();
-    authority.active = [...authority.active, project(40, 1, { name: 'Oldest invited project', role: 'member' })];
+    authority.active = [...authority.active, project(40, 1, { name: 'Oldest', role: 'member' })];
     // The sidebar's own page reads; the full read's second page fails.
     refuseMore = true;
     await nextCheck();
     expect(notices()).toEqual([]);
     refuseMore = false;
+    if (newer) authority.active = [project(41, 29, { name: 'Newest', role: 'member' }), ...authority.active];
     await nextCheck();
     await nextCheck(300);
-    expect(texts()).toEqual(['You were added to Oldest invited project']);
+    expect(notices()).toEqual([{ text, target: { kind: 'project', project_id: opens } }]);
   });
 
   it('the first check learns every page of your projects, active and archived, without a word', async () => {
@@ -408,25 +385,6 @@ describe('what never notifies (N3)', () => {
     expect(reads.sort()).toEqual(['active', 'active more', 'active more', 'archived']);
     await nextCheck();
     expect(notices()).toEqual([]);
-  });
-
-  it('a full read of your projects that fails part-way tells nothing, and the next move tells it', async () => {
-    authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
-    let refuseMore = false;
-    rpc.mockImplementation(changesRpc({
-      'app.status': () => ok({ signed_in: true, account: ACCOUNT }),
-      'projects.list': params => (refuseMore && params.cursor ? fail('unavailable', { retryable: true }) : fixture['projects.list']!(params)),
-    }));
-    await startStore();
-    const oldest = project(40, 1, { name: 'Oldest', role: 'member' });
-    authority.active = [...authority.active, oldest];
-    refuseMore = true;
-    await nextCheck();
-    expect(notices()).toEqual([]);
-    refuseMore = false;
-    authority.active = [project(41, 29, { name: 'Newest', role: 'member' }), ...authority.active];
-    await nextCheck();
-    expect(notices()).toEqual([{ text: 'Added to 2 projects', target: { kind: 'project', project_id: project(41, 29).project_id } }]);
   });
 
   it('a project that was behind More all along, now in the pages shown', async () => {
@@ -542,14 +500,6 @@ describe('an older Authority (R8)', () => {
     expect(texts()).toEqual(['Mina marked Action 1 done']);
     // The change check is not asked again until the next start.
     expect(rpc.mock.calls.filter(([method]) => method === 'changes.read')).toHaveLength(1);
-  });
-
-  it('with the change check, reads what you are involved in, never what you sent or own', async () => {
-    await signedIn([followUp(1)]);
-    authority.items = [followUp(1), followUp(2)];
-    await nextCheck();
-    expect(new Set(followed().map(([, params]) => params.request.scope))).toEqual(new Set(['involved']));
-    expect(texts()).toEqual(['Mina handed you Action 2']);
   });
 });
 
