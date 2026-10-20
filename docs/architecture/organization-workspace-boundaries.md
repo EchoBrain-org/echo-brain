@@ -36,12 +36,10 @@ The registry is
 [`tools/workspace-source-boundaries.v1.json`](../../tools/workspace-source-boundaries.v1.json).
 Every production module has an owner. The gate follows whole modules, including
 unused re-exports, namespace/side-effect imports, type queries and literal dynamic
-imports. Runtime asset references obey the same direction. The Explorer
-deployment has an explicit source assembly shared by its builder and the same
-architecture gate. Deployment JavaScript has exact external and builtin import
-allowlists shared by the gate and builder, with computed imports and loader
-acquisition rejected. The native Swift app and its assemblies are retired; the
-gate rejects any Swift source under `product/` or `providers/`.
+imports. Runtime asset references obey the same direction. The native Swift
+app, its assemblies and the JavaScript source assembly of the retired Journey
+Explorer are gone; the gate rejects any Swift source under `product/` or
+`providers/`.
 There is no provider-name registry, symbol-based
 traversal or exception mechanism.
 

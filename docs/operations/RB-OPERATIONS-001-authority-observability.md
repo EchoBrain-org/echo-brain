@@ -256,8 +256,7 @@ build verifies both values against its OCI metadata before publishing it. The
 staging update verifier also rejects a telemetry-capable image or running
 container whose label and effective environment bindings disagree.
 
-Stage metadata and heartbeat records are content-free and best effort. The
-separate opt-in development content records described below share this transport.
+Stage metadata and heartbeat records are content-free and best effort.
 At the service boundary,
 missing or malformed immutable image identity disables only the journey
 telemetry transport; it must not prevent Authority startup or request handling.
@@ -265,13 +264,12 @@ A guarded staging update rejects inconsistent telemetry-capable image metadata
 before accepting the candidate, preserving the currently accepted runtime. The
 Docker `awslogs` driver
 delivers the JSON lines using the host role's log-stream-only permission, so no
-AWS credential is exposed to a browser. Journey metrics, alarms, dashboards,
-and the operator Explorer are separate from this core liveness loop. The
+AWS credential is exposed to a browser. Journey metrics, alarms and dashboards
+are separate from this core liveness loop. The
 existing image capability label `ECHO_STAGING_JOURNEY_TELEMETRY_V1` retains its
 name for release compatibility. The service selects `environment=staging` for
 the staging origin and `environment=production` otherwise. Production EMF uses
 `EchoBrain/AuthorityJourneyV1`; staging retains `EchoBrain/StagingJourneyV1`.
-Production never enables the legacy global development-content logger.
 
 #### Follow a research execution and select private payload capture
 
@@ -341,8 +339,8 @@ Delivery spans cover actual provider attempts and state transitions. Idle
 reconciliation, unchanged cards, and review-list polls add no new events.
 An unlinked Slack reviewer has no delivery attempt; inspect the existing tool
 and identity-link status in that case. Human wait is not an open machine span.
-These fields are available in Journey Explorer's operation evidence and the
-existing CloudWatch `diagnostic` JSON; no separate log stream is introduced.
+These fields are available in the existing CloudWatch `diagnostic` JSON; no
+separate log stream is introduced.
 
 For one meeting's exact extraction evidence, use the existing Person client
 `diagnostics()` method to prepare this request **before** the next extraction:
@@ -434,12 +432,17 @@ can't open". Repeated `open` lines with `rate_limited` or `unavailable` point
 at the item's tool, not at anyone's access: people see "ECHO couldn't read
 just now" for those items.
 
-#### Staging journey overview and Explorer
+#### Staging journey overview
 
 Inspect the stack, alarm state, and current journey before relying on the
-overview or Explorer. Both remain staging-only. The shared Explorer reader
-supports one explicitly configured production metadata log group; that does
-not deploy or authorize a production Explorer.
+overview. It remains staging-only. The Journey Explorer, a separate staging
+Lambda behind the overview's custom widget, and the opt-in staging content
+telemetry were retired on 2026-10-19. Research traces go to
+[LangSmith](../../deploy/organization-authority/README.md#langsmith-staging-tracing),
+and [selected diagnostics](#follow-a-research-execution-and-select-private-payload-capture)
+capture exact payloads. Read journeys with the Logs Insights queries in this
+runbook. Remove the deployed Explorer with
+[Retire the Journey Explorer stack](#retire-the-journey-explorer-stack).
 
 The overview `authority-staging-journey-observability-v1.template.json`
 remains dedicated to staging and distinct from the
@@ -533,168 +536,6 @@ alarms are explicitly deferred until a measured staging baseline exists.
 Local verification covers formatter, transport, and template/query structure;
 dashboard journey-end semantics are not executed locally.
 
-#### Explorer backend
-
-The separate `authority-staging-journey-explorer-v1.template.json` and its
-inline Node handler select exactly one Authority runtime log group at deployment.
-The existing `StagingLogGroupName` parameter and environment-variable names remain
-compatible, with `/echo-brain/authority/authority-staging.echobrain.org` as the
-default. An explicit `/echo-brain/authority/<DNS-hostname>` selects production
-metadata; the handler derives the environment from this server configuration.
-Request parameters cannot choose a group or environment. The query role remains
-scoped to that one selected group; resource inventory and IAM actions are unchanged.
-No production stack, dashboard, or permission assignment is deployed by this change.
-The backend is invoked directly by a CloudWatch custom widget. It is not a
-public service: there is no function URL, API Gateway route,
-application-managed or end-user AWS credential, direct widget permission to
-CloudWatch Logs, or mutation operation. The companion policy grants the
-signed-in console operator only
-invocation of the exact Lambda. It does not establish the scope of other
-policies in that session; review the effective permission set separately.
-
-The handler accepts six fixed operations:
-
-1. `describe` returns safe widget metadata.
-2. `list` runs a fixed query for recent redacted journeys. The default time
-   range is eight hours, the maximum is the 14-day retained-log boundary, and
-   a page has at most 25 journeys. Its pending summary retains the latest
-   approved or superseded milestone even when a later event is non-terminal.
-3. `detail` accepts one canonical lowercase UUID journey ID and runs a fixed
-   correlated-event query over the bounded 14-day retained history, not the
-   dashboard's selected list range. It requires the canonical sequence-one
-   `ask_validation`, `meeting_source_intake`, or root `core_operation` started event; otherwise it
-   returns `journey_history_incomplete` and does not report a clipped timeline
-   or wall-clock.
-
-4. `related` accepts the selected journey UUID and finds core operations that
-   explicitly link it. Follow a shared build once to inspect its model calls.
-5. `content` lists captures for a journey or operation, and accepts one optional
-   positive `capture_sequence` to load a capture on demand. It reassembles the
-   versioned chunks, checks count/byte consistency, and labels partial capture
-   or missing/conflicting chunks. Content is escaped text in the same widget.
-6. `health` reads the latest bounded transport heartbeat observations and their
-   cumulative delivery counters and `rejection_counts`. Set `operation: health`
-   in the existing Journey Explorer widget (or select **Transport health** from a
-   detail view). Compare heartbeats from the same process lifetime: the four
-   fixed emitter/reason counters sum to `delivery.rejected_events`:
-
-   | Emitter | Reason | Local boundary |
-   | --- | --- | --- |
-   | `journey_observer` | `invalid_journey_event` | Journey event validation/formatting threw |
-   | `content_capture` | `invalid_content_record` | Enabled content formatter returned no records |
-   | `content_capture` | `content_format_error` | Enabled content observation/formatting threw |
-   | `meeting_approval_observer` | `observation_callback_failure` | Meeting approval observation or sidecar startup reported failure |
-
-   These are local rejection counts, separate from `writes_failed`,
-   `writes_dropped`, and `writes_pending`; they do not establish downstream
-   CloudWatch ingestion loss or an Ask failure. Missing or malformed historical
-   counters appear as `null` (unknown), never zero. Counters reset on process
-   restart, including restarts of the same release. Reason totals are emitted
-   only in liveness records, not as cumulative EMF count metrics or per-reject
-   log events. Content-disabled observations remain inert. The September 10
-   retained aggregate (14 to 190 rejections with zero failed/dropped/pending
-   writes) cannot identify the live emitter or reason retrospectively.
-
-`list` paginates journey IDs first, with a default page size of 20 (maximum
-25), then fetches events only for that page. A page's selected journeys must
-use fewer than 2,500 raw events. A journey with 2,500 or more events is shown
-as a non-clickable oversized placeholder and does not block browsing other
-journeys.
-The cursor fixes the selected time range and offset. The newest 2,500 distinct
-journeys are browsable; when that boundary is reached, the Explorer says so and
-asks the operator to narrow the range for older journeys. `detail` and
-`content` retain their separate 2,500-record cap and return
-`result_limit_exceeded` rather than a partial response when it is saturated.
-
-The client cannot supply Logs Insights text, a query ID, `SOURCE`, a raw log
-message, prompt, answer, source content, or other event content. Every query
-filters the environment derived from the configured log group (`staging` for
-the staging default, `production` otherwise). The handler rejects unknown parameter keys and
-uses finite allowlists for workflow, stage, event, outcome, failure class,
-provider, model, finish reason, and usage status. Returned detail is an
-allowlisted projection only: schema version, journey UUID, sequence, attempt,
-release SHA/build number, event times and elapsed latency, provider latency,
-nullable token usage, retrieval counts, retry/failure metadata, and human
-wait and the finite V2 core diagnostic projection. No operation returns
-`@message`. Only `content` returns opt-in sanitized development content.
-
-Interpret timing as follows: full wall-clock is first-to-terminal
-`observed_at`, service wall-clock subtracts the one `queue_age_ms` human-wait
-interval, and human wait stays separately labelled rather than becoming
-machine latency or an availability signal. A non-retryable `failed` stage is a
-terminal failure. An approved or superseded stage alone is still pending until
-the workflow reaches a recognized terminal boundary.
-
-The Lambda execution role may start and read queries only against that exact
-source log group, stop a query only through the AWS-required unscoped action,
-and write only to its dedicated 14-day retained function log group. The stack
-also creates the fixed `customWidget-echo-staging-journey-explorer-v1` Lambda
-and the exact-function `lambda:InvokeFunction` customer managed policy
-`echo-staging-journey-explorer-invoke-v1` at path `/`.
-Query cancellation is bounded and best-effort. If `StartQuery` times out, the
-handler aborts its SDK request and waits up to one additional second for a
-valid late query ID. An ID received in that window gets one separately bounded
-`StopQuery` attempt before the handler returns. Without an ID, the remote
-outcome is unknown and no post-response cleanup is launched.
-It is intentionally unattached: the `AWSReservedSSO` roles used by operators
-Center-protected and must not be edited directly. Before a widget is added or
-invoked, Phase 6 must reference this policy from a dedicated staging-only
-Identity Center permission set. The inline staging Lambda relies on the Node
-runtime-provided AWS SDK v3; a portable production bundle and pinned SDK
-version are deferred to a future production review.
-
-#### Explorer UI
-
-The renderer is implemented in the staging overview dashboard. It remains a
-read-only, staging-only surface; the dated inspection above does not authorize
-production use or a broader Identity Center assignment.
-The dashboard passes a static endpoint, not an operator-supplied ARN:
-
-```text
-arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:customWidget-echo-staging-journey-explorer-v1
-```
-
-The UI is read-only and intended for an authorized operator. A signed-in IAM
-Identity Center console operator may invoke that Lambda after its dedicated
-staging-only permission set references
-`echo-staging-journey-explorer-invoke-v1` at path `/`. That managed policy
-grants only exact-Lambda invocation; the effective permission set must be
-separately reviewed for broader access. The widget has no direct CloudWatch
-Logs permission, public dashboard sharing, function URL, API Gateway route,
-application-managed credential, end-user credential, production target, or
-mutation operation. Reconfiguring the existing backend for a production group
-requires a separate reviewed deployment and permission-set decision; the current
-dashboard remains staging. Development-content reads are disabled for production.
-
-The reader retains registered historical trigger labels (`ask`, `approved_record`,
-`sweep`, `other`); a contract test checks new registered triggers against that
-allowlist. Core detail includes opaque run, event, output, attempt, source-revision,
-and parent-operation links. Approval publication records its event and source
-links only after the receipt and trigger hook transaction commits, so operators
-can correlate intake, approval, and later research without a span covering the
-human approval wait. A trigger's output link names its card, while publication's
-output link names the approved record. Core LLM columns count terminal `model_call`
-spans; research summary counts come from `research_run`.
-
-The list surface shows recent Ask and approval journeys. Selected detail shows
-safe outcome, a chronological stage-and-attempt waterfall whose bars are
-positioned by validated observation time and sized by `elapsed_ms`, LLM token
-totals, retries, retrieval counts, redacted failure metadata, and human wait as
-a separate business interval and empty gap rather than machine work. A numeric
-token count of `0` means the provider reported zero; `null` means usage was
-unavailable and is never treated as zero. Metadata remains an allowlisted
-projection. Development input/output is available separately through the
-`content` action under the scoped switch below. Neither surface returns raw
-log messages or transport headers.
-
-The renderer inherits the query safety boundary. The selected range may not
-exceed the retained 14-day staging window. It preserves the list pagination and
-oversized-placeholder behavior above. `detail` and `content` still return
-`result_limit_exceeded` at their separate 2,500-record cap instead of partial
-data. Unknown/noncanonical events are rejected, and a renderer response that
-would exceed its bounded safe size returns fixed error markup rather than
-truncating data or exposing raw logs.
-
 #### Reading core runtime evidence (V2)
 
 V2 adds diagnostics and execution accounting to the existing event kind;
@@ -703,7 +544,9 @@ operation/span/parent UUIDs, and finite phase/purpose categories. The existing
 staging gate and immutable image identity enable metadata on the JSON-lines/EMF
 path. See the [implementation and acceptance record](../product/2026-09-08-core-runtime-observability-sprint-v1.md).
 
-Select a slow meeting or Ask, then use **Linked core operations**:
+For a slow meeting or Ask, read its core operations
+(`workflow = "core_runtime"`) in Logs Insights; an operation that serves another
+journey names it in `diagnostic.linked_journey_ids`:
 
 | Evidence | Interpretation |
 | --- | --- |
@@ -711,8 +554,18 @@ Select a slow meeting or Ask, then use **Linked core operations**:
 | Timer delay, lateness, reason and cancellation | Distinguishes the existing 30-second poll/failure timer from gate waits; coalesced approval wakes appear on the requesting operation. |
 | Search snapshot, enrichment, model, build, validation and publication | Heads/generation identify availability or supersession. Atom/record/byte/group and selected/excluded counts identify work. |
 | Changed/unchanged/new projection groups; `reused_count: 0` | Compares with the previous observed input in this process, not persisted history or a cache. Restart loses that comparison. |
-| Model calls, purpose, nullable usage and parse/schema/grounding spans | Distinguishes provider failures from validation and separates extraction, related projection, planner and answer work. Request IDs are hashed in metadata; sanitized content may retain them. |
+| Model calls, purpose, nullable usage and parse/schema/grounding spans | Distinguishes provider failures from validation and separates extraction, related projection, planner and answer work. Request IDs are hashed in metadata. |
 | HTTP finish/close and Slack `done`/`uncertain`/failure | Server/provider observations, separate from approval commit and searchable publication; they do not measure client receipt or a person's card-view time. |
+
+Core events carry opaque run, event, output, attempt, source-revision and
+parent-operation links. Approval publication records its event and source
+links only after the receipt and trigger hook transaction commits, so operators
+can correlate intake, approval and later research without a span covering the
+human approval wait. A trigger's output link names its card, while
+publication's output link names the approved record. Count LLM attempts from
+terminal `model_call` spans and research summaries from `research_run`. A
+numeric token count of `0` means the provider reported zero; `null` means usage
+was unavailable and is never treated as zero.
 
 Shared search references identify one operation covering several approvals.
 Count that build once. `CoreModel*` and legacy `Llm*` metrics overlap; do not
@@ -724,10 +577,8 @@ executions; interrupted work/durable-state reconstruction is `recovery`, with
 no measured failure duration or invented model retry. A competing click leaves
 the winning append/search intact. Historical retry counts remain unknown.
 
-Explorer uses UTC for correlation and monotonic elapsed durations for new work.
-Its union of machine intervals counts overlap once and exposes unaccounted time
-and sequence gaps. This is diagnostic coverage, not exclusive CPU accounting
-or a proven distributed critical path. CPU/RSS/heap, filesystem counters,
+Core events use UTC for correlation and monotonic elapsed durations for new
+work. CPU/RSS/heap, filesystem counters,
 active HTTP/model counts and event-loop delay can overlap other operations.
 Event-loop maximum is since transport startup. SQLite lock and disk-I/O latency
 are unavailable; filesystem counters are neither latency nor physical bytes.
@@ -772,18 +623,15 @@ They are counts only, never filters, queries or evidence.
 A request that fails marks the first research-to-audit stage still open as
 failed with the request's failure class, then fails `ask_response`. The deadline
 is `timeout`; a closed client connection is `cancelled`. A failed `ask_response`
-ends its journey in the Explorer even when the failure is retryable; a retry is
-a new journey.
+ends its journey even when the failure is retryable; a retry is a new journey.
 
-**Linked core operations** hold the detail. Each research step and answer call
+Its core operations hold the detail. Each research step and answer call
 is an `ask_planner` or `ask_answer` span with its provider `model_call` inside
 (purpose `ask_planner` or `ask_answer`). Each desk call is one span:
 `evidence_search`, `evidence_open`, `evidence_list` or `evidence_revalidate`.
 Desk spans carry `included_count` and, by source, `meeting_items`,
 `document_items` and `slack_items`; `transcript_items` is the shared-transcript
 subset of `document_items`. The evidence HTTP doors use the same desk spans.
-Model request and response content is captured per call under the content
-switch, except calls whose prompt carries live Slack or ticket text.
 
 #### Live Jira and Confluence reads in Ask
 
@@ -796,9 +644,8 @@ request trace. Its live-read metadata shares the `journey_id`.
 | Live `evidence_search`, `evidence_list`, `evidence_open` | `evidence_source` distinguishes `ticket` from `slack`, `page` and `tool_container` (a connected tool's Jira projects or Confluence spaces, read only for the V8 Ask, ADR-0042). `included_count` counts the items that provider operation returned, before mixed-source trimming. `empty` is a successful zero-result lookup; a failed lookup has its failure category and no result count. Queryless searches call `evidence_list`. |
 | Terminal `http_request` | `result` is the returned Ask outcome. `ticket_retrieved_items` counts distinct ticket handles returned to the Ask loop, including inventory; `ticket_context_items` counts tickets actually submitted to the answer model, without counting a repair twice; `ticket_citations` counts citations in the final response after its access fences. A failed or cancelled request has zero returned citations. |
 
-Only finite categories and counts are added. These live spans exclude provider
-payloads and errors from content capture even when development content capture
-is enabled. They do not record questions, search text, ticket text, ticket IDs,
+Only finite categories and counts are added. These live spans carry no
+provider payloads or errors. They do not record questions, search text, ticket text, ticket IDs,
 provider coordinates, or credentials. Repeated successful connection rechecks
 do not add separate live-source spans. Older releases have no Jira fields;
 their absence is not evidence that Jira was skipped or returned no data.
@@ -839,8 +686,8 @@ the nested Nango span identifies the responding service.
 For these nested spans, `succeeded` means an HTTP response arrived; it can
 still carry `http_status: 429`. The surrounding evidence operation reports
 the rejected application outcome. Inspect the HTTP status for attribution.
-Nested HTTP spans remain in the journey log and Explorer timeline; EMF
-request counts and latency continue to describe only the root HTTP request.
+Nested HTTP spans remain in the journey log; EMF request counts and latency
+continue to describe only the root HTTP request.
 
 The safe projection also retains bounded numeric `upstream_retry_after_seconds`,
 `upstream_rate_limit`, `upstream_rate_remaining`, and
@@ -879,36 +726,34 @@ request bodies, or response bodies. Rejection bodies remain unread. No
 automatic retry or retrieval behavior changes are introduced. Historical
 events without upstream fields cannot retrospectively distinguish Nango
 from an Atlassian response. The server diagnostics require a release through
-the existing operator lane; regenerating the Explorer template alone does
-not instrument the live Authority.
+the existing operator lane.
 
-#### Opt-in development content and transport completeness
-
-`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true` extends Ask capture to meeting
-input, actual model requests/responses and validation evidence. It requires the
-existing staging metadata gate and deploy identity. Production defaults,
-retention, permissions and the deployment lane are unchanged.
-
-V2 records contain `json_chunks`, capture ID/sequence, span/time, chunk index/count,
-captured bytes and `truncated`. Chunks hold 24,000 Unicode characters. Sanitization
-is bounded to 32 levels and an 8 Mi character/node budget; overflow is partial.
-Credential/key/grant fields and recognized secrets in text are redacted.
-Producers submit bodies rather than transport headers/configuration or credential
-resolvers. Redacted content cannot be reconstructed.
-
-Successful HTTP bodies, including invalid JSON, are captured. Extraction HTTP
-rejections preserve immediate failure: `not_read_after_http_rejection` explicitly
-means the body was not read. Explorer checks chunk/byte consistency and rejects
-saturated queries or output above 1 MiB instead of silently truncating. Larger
-captures require the existing bounded log-inspection lane.
+#### Transport completeness
 
 Heartbeat `delivery` counts attempted/failed/pending/dropped writes, rejected
-observations, attempted bytes, serialization/writer microseconds and partial
-captures. Pending writes and active operations are bounded at 1,000. Counts are
+observations, attempted bytes and serialization/writer microseconds. Pending
+writes and active operations are bounded at 1,000. Counts are
 process-cumulative local evidence, not CloudWatch ingestion acknowledgement.
 A dropped tail may leave no gap; compare heartbeat health and durable results,
 and treat missing terminals as incomplete. A broken writer can report failure
 only after output recovers. Observation failures never control business outcomes.
+
+Heartbeat `rejection_counts` attribute `delivery.rejected_events` to fixed
+emitter/reason counters, which sum to it:
+
+| Emitter | Reason | Local boundary |
+| --- | --- | --- |
+| `journey_observer` | `invalid_journey_event` | Journey event validation/formatting threw |
+| `meeting_approval_observer` | `observation_callback_failure` | Historical; this producer no longer reports failures |
+
+These are local rejection counts, separate from `writes_failed`,
+`writes_dropped`, and `writes_pending`; they do not establish downstream
+CloudWatch ingestion loss or an Ask failure. Compare heartbeats from the same
+process lifetime: counters reset on process restart, including restarts of the
+same release. Reason totals are emitted only in liveness records, not as
+cumulative EMF count metrics or per-reject log events. Heartbeats from releases
+before 2026-10-19 also carry `content_capture` counters and
+`delivery.partial_captures` for the retired content telemetry.
 
 #### Runtime metric and alarm attribution
 
@@ -932,7 +777,7 @@ Metric namespace/name/dimensions must match between filters and alarms. Referenc
 [metric transformations](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-logs-metricfilter-metrictransformation.html),
 [alarm actions](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudwatch-alarm.html).
 
-##### Changing the staging journey stacks
+##### Changing the staging journey overview
 
 Use an IAM Identity Center
 operator session obtained with `aws sso login --profile echo-prod`; do not use
@@ -949,42 +794,73 @@ set, or permission-set scope is not clearly staging-only.
    ```
 
 2. Create and inspect a change set for
-   `authority-staging-journey-explorer-v1.template.json` first. After editing its
-   readable handler, run `npm run build:staging-journey-explorer-template` and
-   commit the generated template; the normal checks verify its contents,
-   deployed behavior, and CloudFormation inline size limit. Use
-   `--profile echo-prod`, the staging Region, a fresh change-set name, and
-   `CAPABILITY_NAMED_IAM`. Confirm that it creates or changes only the dedicated
-   Explorer Lambda, its retained log group and execution role, and the fixed
-   `echo-staging-journey-explorer-invoke-v1` policy. Do not execute a change set
-   with an unexpected resource, a non-staging source log group, or a broader
-   Logs or invoke permission.
-3. Only after that backend change set has been approved and executed, have the
-   authorized IAM Identity Center administrator reference the named policy at
-   path `/` from a dedicated staging-only permission set. Review the effective
-   permission set and its account assignments for broader or non-staging
-   access; the narrow managed policy alone does not prove the session is narrow.
-   Do not edit an `AWSReservedSSO` role directly. Record the permission-set
-   review without copying IDs, credentials, or content into this runbook.
-4. Create and inspect the overview change set second, also with
-   `--profile echo-prod`. Confirm it remains the existing staging-only overview
-   resource set and its custom widget references only the static Explorer ARN
-   above. It must not add direct Logs permissions to the operator or dashboard,
-   enable public sharing, or touch production.
-5. After both staging stacks and the permission-set reference are verified,
-   explicitly trust the custom widget in the CloudWatch console while signed in
-   as the authorized operator. Keep dashboard sharing disabled.
-6. Run exactly one real staging Ask and one real staging approval. For each,
-   use the Explorer to find the correlated, redacted journey and confirm its
-   stage/attempt sequence, machine latency, token value or `null`, retry and
-   retrieval metadata, human wait where applicable, and terminal outcome agree
-   with the overview aggregates. Record only content-free correlation and
-   aggregate evidence. Stop and investigate any missing, partial, unredacted,
-   cross-environment, or inconsistent result.
+   `authority-staging-journey-observability-v1.template.json` with
+   `--profile echo-prod`, the staging Region and a fresh change-set name.
+   Confirm it remains the existing staging-only overview resource set with no
+   custom widget. It must not add
+   direct Logs permissions to the operator or dashboard, enable public sharing,
+   or touch production.
+3. Run exactly one real staging Ask and one real staging approval. For each,
+   use Logs Insights on the staging log group to find the correlated, redacted
+   journey and confirm its stage/attempt sequence, machine latency, token value
+   or `null`, retry and retrieval metadata, human wait where applicable, and
+   terminal outcome agree with the overview aggregates. Record only
+   content-free correlation and aggregate evidence. Stop and investigate any
+   missing, partial, unredacted, cross-environment, or inconsistent result.
 
-Use this procedure only to change the staging journey stacks or their access
-assignment. Normal journey inspection uses the existing verified configuration;
-it does not require repeating setup or a change set.
+Use this procedure only to change the staging journey overview. Normal journey
+inspection uses the existing verified configuration; it does not require
+repeating setup or a change set.
+
+##### Retire the Journey Explorer stack
+
+The Explorer was a separate staging stack created from the retired
+`authority-staging-journey-explorer-v1.template.json`: the
+`customWidget-echo-staging-journey-explorer-v1` Lambda, its execution role, the
+customer managed policy `echo-staging-journey-explorer-invoke-v1` and the
+retained log group `/echo-brain/authority/staging-journey-explorer-v1`. An
+overview update removes only the dashboard widget, not this stack. Use the
+same session and staging-only checks as above.
+
+1. Confirm with read-only inspection that the Explorer stack holds exactly
+   those four resources and that no other stack or permission set depends on
+   them:
+
+   ```sh
+   staging_region=us-west-2
+   explorer_stack=existing-journey-explorer-stack
+
+   aws cloudformation describe-stack-resources --profile echo-prod \
+     --region "$staging_region" --stack-name "$explorer_stack" \
+     --query 'StackResources[*].{LogicalId:LogicalResourceId,Type:ResourceType,Status:ResourceStatus}'
+   ```
+
+2. Have the authorized IAM Identity Center administrator remove the
+   `echo-staging-journey-explorer-invoke-v1` reference from the staging-only
+   permission set and reprovision it. Do not edit an `AWSReservedSSO` role
+   directly. CloudFormation cannot delete the policy while a role still has it.
+3. Apply the overview change set above, so the dashboard no longer invokes the
+   Lambda.
+4. Delete the Explorer stack and wait for it. Stop if the deletion fails or
+   would touch any other resource:
+
+   ```sh
+   aws cloudformation delete-stack --profile echo-prod \
+     --region "$staging_region" --stack-name "$explorer_stack"
+   aws cloudformation wait stack-delete-complete --profile echo-prod \
+     --region "$staging_region" --stack-name "$explorer_stack"
+   ```
+
+5. The stack retains the function log group by design. It holds only the
+   Explorer's own logs under 14-day retention; once no investigation needs
+   them, delete it:
+
+   ```sh
+   aws logs delete-log-group --profile echo-prod --region "$staging_region" \
+     --log-group-name /echo-brain/authority/staging-journey-explorer-v1
+   ```
+
+Record only the stack status and timestamps.
 
 ### 6. Rehearse the sanitized worker-failure signal
 

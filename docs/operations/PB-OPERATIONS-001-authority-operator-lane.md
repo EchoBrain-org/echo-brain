@@ -33,8 +33,8 @@ final decision on a candidate release.
 Reuse valid sessions and completed setup evidence. Ask for login only when
 authentication is missing or expired. Recheck evidence when its target, release,
 record head, search generation or relevant configuration changes. A completed
-Slack setup, SNS confirmation or Explorer access grant is not a new handoff on
-every round. Fresh runtime and journey evidence is still required for each run.
+Slack setup or SNS confirmation is not a new handoff on every round. Fresh
+runtime and journey evidence is still required for each run.
 
 For staging resets, reuse the designated existing Slack app. Retain its app ID
 in the operator handoff. When host `resume` reaches `connect_slack_in_app`, the

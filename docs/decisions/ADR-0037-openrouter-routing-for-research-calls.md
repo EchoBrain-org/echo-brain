@@ -171,3 +171,9 @@ parsing of the host and generation id. The per-host replay evidence is in the
 2026-09-30 garbled-dates investigation, kept outside the repository. Revisit
 the ignore list when the model changes, or when recorded hosts show a newly
 garbling or slow host.
+
+## Later decisions
+
+2026-10-19: the staging Journey Explorer was retired, so its template is no
+longer regenerated. The journey telemetry writer still reads the closed
+OpenRouter vocabulary above.
