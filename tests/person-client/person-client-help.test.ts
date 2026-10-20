@@ -88,7 +88,7 @@ describe("Person client help", () => {
   it("documents list without overstating what it covers", async () => {
     // An agent reads this help: it must not overstate what list covers, and must say how a waiting page fails.
     const listHelp = await help(["list", "--help"]);
-    expect(listHelp).toContain("not Slack messages or shared transcripts");
+    expect(listHelp).toContain("not shared transcripts");
     expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
     expect(listHelp).toContain("usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]");
   });

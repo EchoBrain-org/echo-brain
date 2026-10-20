@@ -25,9 +25,9 @@ import {
   utf8ByteLength,
 } from './validation.js';
 
-/** The Agentic Ask endpoint: the only Ask since ADR-0022 retired V1 and V2. */
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
 export const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
+/** The ordinary Agentic Ask route, with the V4 answer. ADR-0022 retired the V1 and V2 Asks. */
 export const PERSON_ANSWER_PATH_V3 = '/v3/person/ask';
 export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
 export const PERSON_EVIDENCE_OPEN_PATH_V1 = '/v3/person/evidence/open';
