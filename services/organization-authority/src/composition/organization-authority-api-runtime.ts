@@ -1,5 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validateOrganizationAuthorityOrigin, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { PROJECT_PAGE_MAX_ITEMS, validateOrganizationAuthorityOrigin, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonDocumentApplicationV1 } from '../application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../adapters/persistence/sqlite/document-v1.js';
@@ -58,7 +58,10 @@ import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-
 import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
-import type { PersonLiveConnectorDefinitionV1, OpenedPersonLiveConnectorV1, PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import { personWorkspaceGrantsV1 } from './person-workspace-evidence-v1.js';
+import type {
+  OpenedPersonLiveConnectorV1, PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1, PersonLiveConnectorSourceV1,
+} from '../application/ports/person-context-live-runtime-v1.js';
 import { personLiveConnectorDefinitionsV1 } from './person-live-connector-registry-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
@@ -269,8 +272,29 @@ export async function startOrganizationAuthorityApiRuntime(
         return Object.freeze({ role: grant.role, authorization_sha256: canonicalSha256(grant) });
       });
     };
+    /**
+     * The current names of those projects the asker can see, read locally in one read transaction with no release (research
+     * tool contract v1): a tool container names the ECHO projects mapped to it, and is refused once one of them changes.
+     */
+    const projectNames: PersonContextProjectNamesV1 = (access_token, project_ids) => {
+      const wanted = new Set(project_ids);
+      const person = sessions.authenticateAccess({ access_token });
+      return projectRepository.withReadTransaction(transaction => {
+        const snapshot = transaction.captureAuthorization(person, { operation: 'project_list_v2' });
+        const names = new Map<string, string>();
+        for (const status of ['active', 'archived'] as const) {
+          for (let cursor: string | undefined; ;) {
+            const page = transaction.listProjectsV2(snapshot, { status, limit: PROJECT_PAGE_MAX_ITEMS, ...(cursor === undefined ? {} : { cursor }) });
+            for (const project of page.items) if (wanted.has(project.project_id)) names.set(project.project_id, project.name);
+            if (page.next_cursor === null) break;
+            cursor = page.next_cursor;
+          }
+        }
+        return names;
+      });
+    };
     for (const definition of connectorDefinitions) {
-      liveConnectors.push({ definition, runtime: definition.open(sessions, authorizeLiveProject) });
+      liveConnectors.push({ definition, runtime: definition.open(sessions, authorizeLiveProject, projectNames) });
     }
     const liveSources: readonly PersonLiveConnectorSourceV1[] = liveConnectors.map(({ definition, runtime }) => ({
       descriptor: definition.descriptor, scopes: definition.scopes, minimum_response_version: definition.minimum_response_version,
@@ -362,9 +386,6 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(diagnostics === undefined ? {} : { diagnostics }),
       ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
     };
-    const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
-      ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources })
-      : undefined;
     const items = new SqliteImpactItemsV1(database);
     const people = new SqliteOpenItemPeopleV1(database);
     // The change check (ADR-0036) needs no answer model: it reads only the database, in one read transaction.
@@ -373,7 +394,20 @@ export async function startOrganizationAuthorityApiRuntime(
       database, sessions, projects: projectRepository, items, people, records: recordSearch,
       ...(reviewStatuses === undefined ? {} : { reviews: reviewStatuses }),
     });
+    const projectContext = createProjectContextApplicationV1({
+      authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
+      repository: projectRepository,
+    });
     const runs = answerOptions === undefined ? undefined : new SqliteTriggerRunsV1(database);
+    // The V7 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040); the V8 answer also reads the asker's
+    // projects, people and tools as the project pages and the tools page show them (research tool contract v1), each
+    // release audited without content.
+    const followUps = runs === undefined ? undefined : { runs, items, people, records: recordSearch };
+    const workspace = { projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools };
+    // The staging research evaluation asks a question as `/v7` does, on the same sources.
+    const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
+      ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources, ...(followUps === undefined ? {} : { follow_ups: followUps }), workspace })
+      : undefined;
     const triggerRuns: PersonTriggerRunsHttpApplicationV1 = answerOptions === undefined || runs === undefined ? unavailablePersonTriggerRunsV1(sessions) : (() => {
       // Ticket assignees match impact owners only when a live connector that reads them is configured.
       const owners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
@@ -430,9 +464,10 @@ export async function startOrganizationAuthorityApiRuntime(
         // source is configured. The request catalog still contains local context.
         person_answer_v4: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 5),
         person_answer_v5: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 6),
-        // The V7 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040); without these sources its desk would bind none.
-        ...(runs === undefined ? {} : {
-          person_answer_v6: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: { runs, items, people, records: recordSearch } }, 7),
+        // Without the follow-up sources the V7 and V8 desks would bind none, so those answers need them.
+        ...(followUps === undefined ? {} : {
+          person_answer_v6: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps }, 7),
+          person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }, 8),
         }),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
@@ -445,10 +480,7 @@ export async function startOrganizationAuthorityApiRuntime(
         on_original_saved: () => documentWorker?.wake(),
       }),
       document_upload_staging: createPersonDocumentUploadStagingV1(),
-      project_context: createProjectContextApplicationV1({
-        authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
-        repository: projectRepository,
-      }),
+      project_context: projectContext,
       person_employees: createPersonEmployeeHttpApplication(
         new PersonEmployeeLifecycleApplication(sessions, {
           next(prefix) {

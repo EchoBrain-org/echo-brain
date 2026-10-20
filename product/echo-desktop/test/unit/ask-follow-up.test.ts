@@ -2,20 +2,14 @@
 // it opens in Ask's side panel with its title, owner, status and latest check
 // while Ask keeps running; once the answer came, Open goes to its item page;
 // and its source row says "owner · status", with no kind label.
-import type { VNode } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, Expect, OpenItemView } from '../../src/shared/protocol.js';
-import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, stubWindow, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
-// Components are called as plain functions below: hooks keep their first value and run no effect.
-vi.mock('preact/hooks', async original => ({
-  ...await original<typeof import('preact/hooks')>(),
-  useRef: (value: unknown = null) => ({ current: value }), useEffect: () => undefined, useLayoutEffect: () => undefined,
-  useState: (value: unknown) => [typeof value === 'function' ? (value as () => unknown)() : value, () => undefined],
-  useCallback: (fn: unknown) => fn, useMemo: (make: () => unknown) => make(),
-}));
+// Components are called as plain functions below.
+vi.mock('preact/hooks', original => plainHooks(original));
 
 const EXPECT: Expect = { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id };
 const ITEM = 'itm_launch-1';
@@ -52,29 +46,6 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals()
 
 const itemReads = () => rpc.mock.calls.filter(([name, params]) => name === 'runs' && (params as { request: { operation: string } }).request.operation === 'item')
   .map(([, params]) => params as Record<string, unknown>);
-
-type Node = VNode<Record<string, unknown>>;
-/** A component tree as it would show: function components called, so only elements remain. */
-function render(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(render);
-  if (!value || typeof value !== 'object' || !('props' in value)) return value;
-  const node = value as Node;
-  if (typeof node.type === 'function') return render((node.type as (props: Record<string, unknown>) => unknown)(node.props));
-  return { ...node, props: { ...node.props, children: render(node.props.children) } };
-}
-function elements(value: unknown): Node[] {
-  if (Array.isArray(value)) return value.flatMap(elements);
-  if (!value || typeof value !== 'object' || !('props' in value)) return [];
-  const node = value as Node;
-  return [node, ...elements(node.props.children)];
-}
-function text(value: unknown): string {
-  if (Array.isArray(value)) return value.map(text).join('');
-  if (typeof value === 'string' || typeof value === 'number') return String(value);
-  if (!value || typeof value !== 'object' || !('props' in value)) return '';
-  return text((value as Node).props.children);
-}
-const byTestId = (tree: unknown, id: string) => elements(tree).filter(node => node.props['data-testid'] === id);
 
 /** A question on its way, its reply held; and the page's pane and thread as they show now. */
 async function asking() {

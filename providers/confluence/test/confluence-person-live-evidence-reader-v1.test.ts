@@ -16,32 +16,39 @@ const binding: PersonConnectorReadBindingV1 = Object.freeze({ organization_id: '
   tool_id: 'confluence', external_scope_id: CLOUD, external_subject_id: 'synthetic-account', read_grant_sha256: canonicalSha256({ synthetic_grant: 1 }) });
 const document = (text: string) => JSON.stringify({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
 const emptyHash = `sha256:${createHash('sha256').update('').digest('hex')}`;
-type Page = { id: string; spaceId: string; title: string; status: string; version: number; document: string; createdAt: string };
+/** `createdAt` is the current version's time; `pageCreatedAt`, when set, the page's own creation time. */
+type Page = { id: string; spaceId: string; title: string; status: string; version: number; document: string; createdAt: string; pageCreatedAt?: string };
 type Call = { path: string; query: URLSearchParams };
 const page = (overrides: Partial<Page> = {}): Page => ({ id: '123', spaceId: '42', title: 'ECHO product requirements', status: 'current', version: 3,
   document: document('EVT requirements\nThe gate requires meeting, ticket, and document context.'), createdAt: '2026-10-05T12:00:00Z', ...overrides });
 function metadata(value: Page, body = false) {
   return { id: value.id, spaceId: value.spaceId, title: value.title, status: value.status, version: { number: value.version, createdAt: value.createdAt },
+    ...(value.pageCreatedAt === undefined ? {} : { createdAt: value.pageCreatedAt }),
     // Citation URLs must come from the verified site plus stable ID, not provider-controlled links.
     _links: { webui: 'https://untrusted.invalid/never-follow', base: 'https://untrusted.invalid' },
     ...(body ? { body: { atlas_doc_format: { value: value.document, representation: 'atlas_doc_format' } } } : {}) };
 }
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+const SPACES_LEFT_OUT = "Some of this project's Confluence spaces were not found or are not visible to you, so these results leave out their pages.";
 
 async function fixture(options: { selected?: readonly string[]; pages?: Page[]; scopes?: readonly string[] } = {}) {
   const calls: Call[] = [];
   const audits: PersonLiveEvidenceReleaseV1<PersonPageCitationV1>[] = [];
   const state: {
     pages: Map<string, Page>; keys: Map<string, string>; denied: Set<string>; account: string; site: string; searchIds: string[];
+    /** A path Confluence answers with this HTTP status. */
+    statuses: Map<string, number>;
     list?: (call: Call) => unknown; bulk?: (call: Call) => unknown;
     searchNext?: string; authorizationCurrent: boolean; rejectAudit: boolean;
   } = { pages: new Map((options.pages ?? [page()]).map(value => [value.id, value])), keys: new Map([['42', 'ECHO'], ['43', '~personal:key']]),
-    denied: new Set(), account: 'synthetic-account', site: ORIGIN, searchIds: ['123'], authorizationCurrent: true, rejectAudit: false };
+    denied: new Set(), statuses: new Map(), account: 'synthetic-account', site: ORIGIN, searchIds: ['123'], authorizationCurrent: true, rejectAudit: false };
   const fetch = vi.fn(async (raw: string, _init: RequestInit) => {
     const url = new URL(raw);
     const path = url.pathname.startsWith(API_PREFIX) ? url.pathname.slice(API_PREFIX.length) : url.pathname;
     const call = { path, query: new URLSearchParams(url.searchParams) };
     calls.push(call);
+    const status = state.statuses.get(path);
+    if (status !== undefined) return response({ private: 'provider denial must not escape' }, status);
     if (state.denied.has(path)) return response({ private: 'provider denial must not escape' }, 403);
     if (path === '/oauth/token/accessible-resources') return response([{ id: CLOUD, url: state.site, scopes: options.scopes ?? SCOPES }]);
     if (path === '/rest/api/user/current') return response({ accountId: state.account, type: 'known', accountType: 'atlassian' });
@@ -221,15 +228,45 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toContain('"RENAMED_AGAIN"');
   });
 
-  it('queries only requester-visible mapped spaces and returns empty when none are visible', async () => {
-    const f = await fixture({ selected: ['42', '43'] });
-    f.state.denied.add('/api/v2/spaces/43');
-    expect((await f.source.search({ query: 'requirements' })).items).toHaveLength(1);
+  it('leaves out a mapped space Confluence does not find for the asker (404), and every page of the result says so', async () => {
+    const f = await fixture({ selected: ['42', '43'], pages: [page(), page({ id: '124' })] });
+    // Confluence answers 404 for a space that is missing or that the asker cannot view.
+    f.state.keys.delete('43');
+    const found = await f.source.search({ query: 'requirements' });
+    expect(found.items).toHaveLength(1);
+    expect(found).toMatchObject({ truncated: false, notice: SPACES_LEFT_OUT });
     expect(f.calls.find(call => call.path === '/rest/api/search')!.query.get('cql')).toBe('type = page AND text ~ "requirements" AND space IN ("ECHO")');
-    f.state.denied.add('/api/v2/spaces/42');
+    // A dated list's continuation reuses its first page's query, so it still leaves the space out and says so.
+    f.state.searchNext = '/wiki/rest/api/search?cursor=second';
+    const first = await f.source.list({ since: '2026-10-01', limit: 20 });
+    expect(first).toMatchObject({ truncated: true, next_cursor: expect.any(String), notice: SPACES_LEFT_OUT });
+    f.state.searchNext = undefined; f.state.searchIds = ['124'];
+    const second = await f.source.list({ since: '2026-10-01', limit: 20, cursor: first.next_cursor });
+    expect(second.items.map(item => item.citation.page_id)).toEqual(['124']);
+    expect(second).toMatchObject({ truncated: false, notice: SPACES_LEFT_OUT });
+    expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-09-29"');
+    // None found: no CQL read at all, and an empty result that still is not complete.
+    f.state.keys.delete('42');
     const searchCount = f.calls.filter(call => call.path === '/rest/api/search').length;
-    expect(await f.source.search({ query: 'requirements' })).toMatchObject({ items: [], truncated: false });
+    expect(await f.source.search({ query: 'requirements' })).toMatchObject({ items: [], truncated: false, notice: SPACES_LEFT_OUT });
+    expect(await f.source.list({ since: '2026-10-01', limit: 20 })).toMatchObject({ items: [], truncated: false, page_full: false, notice: SPACES_LEFT_OUT });
     expect(f.calls.filter(call => call.path === '/rest/api/search')).toHaveLength(searchCount);
+  });
+
+  it('says nothing was left out when every mapped space is found', async () => {
+    const f = await fixture({ selected: ['42', '43'] });
+    expect(await f.source.search({ query: 'requirements' })).not.toHaveProperty('notice');
+    expect(await f.source.list({ since: '2026-10-01', limit: 20 })).not.toHaveProperty('notice');
+  });
+
+  it.each([401, 403])('fails a scoped search or dated list when Confluence refuses the credentials on one mapped space (%i), never leaving its pages out', async status => {
+    const f = await fixture({ selected: ['42', '43'] });
+    // 401 is a credential rejection, never a space the asker cannot view; the space read documents no 403.
+    f.state.statuses.set('/api/v2/spaces/43', status);
+    await expect(f.source.search({ query: 'requirements' })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(f.source.list({ since: '2026-10-01', limit: 20 })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.calls.some(call => call.path === '/rest/api/search')).toBe(false);
+    expect(f.audits).toEqual([]);
   });
 
   it('opens and continues a long page in bounded, audited sections without skipping or repeating text', async () => {
@@ -539,6 +576,23 @@ describe('Confluence live reader through the audited evidence source', () => {
       await expect(f.source.search({ query: 'gate', since: '2026-10-01', until: '2026-10-05', date_field })).rejects.toMatchObject({ code: 'invalid_request' });
     }
     expect(f.calls.length).toBe(calls);
+  });
+
+  it('matches a window on any date with one CQL OR across created and last modified', async () => {
+    const f = await fixture({ selected: ['42'], pages: [
+      // Created in the window and edited after it; edited in the window; neither.
+      page({ id: '123', pageCreatedAt: '2026-10-03T12:00:00Z', createdAt: '2026-10-20T12:00:00Z' }),
+      page({ id: '124', pageCreatedAt: '2026-09-01T12:00:00Z', createdAt: '2026-10-04T12:00:00Z' }),
+      page({ id: '125', pageCreatedAt: '2026-09-01T12:00:00Z', createdAt: '2026-09-02T12:00:00Z' }),
+    ] });
+    f.state.searchIds = ['123', '124', '125'];
+    const window = { since: '2026-10-01', until: '2026-10-05', date_field: 'any' as const };
+    expect((await f.source.list(window)).items.map(item => item.citation.page_id)).toEqual(['123', '124']);
+    expect((await f.source.search({ query: 'gate', ...window })).items.map(item => item.citation.page_id)).toEqual(['123', '124']);
+    const any = '((created >= "2026-09-29" AND created < "2026-10-08") OR (lastmodified >= "2026-09-29" AND lastmodified < "2026-10-08"))';
+    expect(f.calls.filter(call => call.path === '/rest/api/search').map(call => call.query.get('cql'))).toEqual([
+      `type = page AND space IN ("ECHO") AND ${any}`, `type = page AND text ~ "gate" AND space IN ("ECHO") AND ${any}`,
+    ]);
   });
 
   it('reports truncated search discovery when more permission-visible matches exist', async () => {

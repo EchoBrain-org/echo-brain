@@ -314,3 +314,13 @@ its fixture Authority, is `product/echo-desktop/test/e2e/ask.spec.ts`.
 
 Staging delivery through Cloudflare and Caddy is a manual operator check
 after merge. Live qualification is separate.
+
+## Later decisions
+
+[ADR-0042](ADR-0042-research-tool-contract.md#answer-v8-progress-v3-and-clients) (2026-10-19)
+adds `POST /v7/person/ask` with progress V3, under every rule above.
+
+[ADR-0043](ADR-0043-ask-receipt-counts-what-research-looked-through.md)
+(2026-10-19, proposed) counts rows in progress V3's `looked_through`, keeps V1
+and V2 counting items read in full, and has every version's `found` count only
+what reads gave research.

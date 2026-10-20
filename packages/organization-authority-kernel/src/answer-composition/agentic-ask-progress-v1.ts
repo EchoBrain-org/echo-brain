@@ -1,5 +1,6 @@
 import type {
-  PersonAnswerResponseV6, PersonAnswerResponseV7, PersonAskProgressStepEventV1, PersonAskProgressStepEventV2, PersonAskReceiptV1, PersonAskReceiptV2,
+  PersonAnswerResponseV6, PersonAnswerResponseV7, PersonAnswerResponseV8, PersonAskProgressStepEventV1, PersonAskProgressStepEventV2, PersonAskProgressStepEventV3,
+  PersonAskReceiptV1, PersonAskReceiptV2, PersonAskReceiptV3,
 } from "@echo-brain/organization-api";
 
 /**
@@ -21,6 +22,8 @@ import type {
 export type AgenticAskProgressSinkV1 = (event: PersonAskProgressStepEventV1) => void;
 /** The V7 Ask's sink (ADR-0040): the same events, in progress V2, so a read may name a follow-up. */
 export type AgenticAskProgressSinkV2 = (event: PersonAskProgressStepEventV2) => void;
+/** The V8 Ask's sink (research tool contract v1): progress V3, so a read may name a workspace item or tool container. */
+export type AgenticAskProgressSinkV3 = (event: PersonAskProgressStepEventV3) => void;
 
 /**
  * One streamed request across the attempts it runs. The Authority restarts an
@@ -49,6 +52,10 @@ export interface AgenticAskProgressInputV1 {
 export interface AgenticAskProgressInputV2 extends Omit<AgenticAskProgressInputV1, "on_progress"> {
   readonly on_progress: AgenticAskProgressSinkV2;
 }
+/** One streamed V8 Ask: the V1 input with the V3 sink. */
+export interface AgenticAskProgressInputV3 extends Omit<AgenticAskProgressInputV1, "on_progress"> {
+  readonly on_progress: AgenticAskProgressSinkV3;
+}
 
 /**
  * What a streamed Ask returns once the release step has passed: the same V6
@@ -63,4 +70,9 @@ export interface AgenticAskAnswerWithReceiptV1 {
 export interface AgenticAskAnswerWithReceiptV2 {
   readonly response: PersonAnswerResponseV7;
   readonly receipt: PersonAskReceiptV2;
+}
+/** What a streamed V8 Ask returns: the V8 response `answer` returns, and its V3 receipt. */
+export interface AgenticAskAnswerWithReceiptV3 {
+  readonly response: PersonAnswerResponseV8;
+  readonly receipt: PersonAskReceiptV3;
 }

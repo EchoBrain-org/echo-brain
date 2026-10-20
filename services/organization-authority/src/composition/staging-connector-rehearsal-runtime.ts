@@ -2,7 +2,6 @@ import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/pe
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
-import type { PersonLiveEvidenceReaderV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import { verifyAuthorityStateLineage } from '@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
@@ -267,7 +266,7 @@ export async function openStagingConnectorRehearsalService(
             return connection.transport.request({ ...input, signal });
           } };
           phase = 'provider_verification';
-          const reader: PersonLiveEvidenceReaderV1 = await createJiraPersonLiveEvidenceReaderV1({ binding: transport.binding, transport, project: selected.profile.jira.project, signal });
+          const reader = await createJiraPersonLiveEvidenceReaderV1({ binding: transport.binding, transport, project: selected.profile.jira.project, signal });
           signal.throwIfAborted(); requireCurrent();
           phase = 'inventory';
           const inventory = await reader.list({ limit: 1, signal });

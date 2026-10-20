@@ -54,26 +54,31 @@ describe('ordinary request diagnostics client', () => {
   });
 
   it('attaches capture ids to the same ordinary Ask and approved-run start requests', async () => {
-    const answer = { schema_version: 7, kind: 'echo-clean-person-answer-v7', scope: { kind: 'global' }, outcome: 'not_found', citations: [], parts: [{ question: 'What changed?', status: 'not_found', statements: [], gap: 'No relevant evidence was found.' }] };
+    const answer = { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'not_found', citations: [], parts: [{ question: 'What changed?', status: 'not_found', statements: [], gap: 'No relevant evidence was found.' }] };
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer)).mockResolvedValueOnce(json({ state: 'running' }));
     const client = signedInClient(fetch);
     await expect(client.askWithLiveSources('What changed?', undefined, undefined, capture_id)).resolves.toEqual(answer);
     await expect(client.runs({ schema_version: 1, operation: 'start', run_id: 'run_example', capture_id })).resolves.toEqual({ state: 'running' });
     expect(fetch.mock.calls.map(([url, init]) => [new URL(String(url)).pathname, JSON.parse(String(init?.body))])).toEqual([
-      ['/v6/person/ask', { schema_version: 3, question: 'What changed?', capture_id }],
+      ['/v7/person/ask', { schema_version: 3, question: 'What changed?', capture_id }],
       ['/v1/person/runs', { schema_version: 1, operation: 'start', run_id: 'run_example', capture_id }],
     ]);
   });
 
-  it('captures on /v5 when the Authority lacks /v6, and never replays a captured live Ask on /v4', async () => {
+  it('captures on /v6 or /v5 when the Authority lacks /v7, and never replays a captured live Ask on /v4', async () => {
     const absent = () => json({ error: { code: 'not_found', message: 'Route absent' } }, 404);
-    const v6 = { schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: { kind: 'global' }, outcome: 'not_found', citations: [], parts: [{ question: 'What changed?', status: 'not_found', statements: [], gap: 'No relevant evidence was found.' }] };
-    const fallback = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(absent()).mockResolvedValueOnce(json(v6));
-    await expect(signedInClient(fallback).askWithLiveSources('What changed?', undefined, undefined, capture_id)).resolves.toEqual(v6);
-    expect(fallback.mock.calls.map(([url, init]) => [new URL(String(url)).pathname, JSON.parse(String(init?.body)).capture_id])).toEqual([['/v6/person/ask', capture_id], ['/v5/person/ask', capture_id]]);
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(absent()).mockResolvedValueOnce(absent());
+    const notFound = (version: 6 | 7) => ({ schema_version: version, kind: `echo-clean-person-answer-v${version}`, scope: { kind: 'global' }, outcome: 'not_found', citations: [],
+      parts: [{ question: 'What changed?', status: 'not_found', statements: [], gap: 'No relevant evidence was found.' }] });
+    const onV6 = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(absent()).mockResolvedValueOnce(json(notFound(7)));
+    await expect(signedInClient(onV6).askWithLiveSources('What changed?', undefined, undefined, capture_id)).resolves.toEqual(notFound(7));
+    expect(onV6.mock.calls.map(([url, init]) => [new URL(String(url)).pathname, JSON.parse(String(init?.body)).capture_id])).toEqual([['/v7/person/ask', capture_id], ['/v6/person/ask', capture_id]]);
+    const onV5 = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(absent()).mockResolvedValueOnce(absent()).mockResolvedValueOnce(json(notFound(6)));
+    await expect(signedInClient(onV5).askWithLiveSources('What changed?', undefined, undefined, capture_id)).resolves.toEqual(notFound(6));
+    expect(onV5.mock.calls.map(([url, init]) => [new URL(String(url)).pathname, JSON.parse(String(init?.body)).capture_id]))
+      .toEqual([['/v7/person/ask', capture_id], ['/v6/person/ask', capture_id], ['/v5/person/ask', capture_id]]);
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(absent()).mockResolvedValueOnce(absent()).mockResolvedValueOnce(absent());
     const client = signedInClient(fetch);
     await expect(client.askWithLiveSources('What changed?', undefined, undefined, capture_id)).rejects.toMatchObject({ code: 'not_found', status: 404 });
-    expect(fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual(['/v6/person/ask', '/v5/person/ask']);
+    expect(fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual(['/v7/person/ask', '/v6/person/ask', '/v5/person/ask']);
   });
 });

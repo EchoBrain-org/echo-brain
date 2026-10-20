@@ -1,5 +1,7 @@
 import { ConfluenceProjectMappingStoreV1 } from '@echo-brain/provider-confluence/confluence-project-mapping-store-v1';
 import type { PersonPageProjectAuthorizationV1 } from '../application/ports/person-page-live-runtime-v1.js';
+import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import { CONFLUENCE_LIVE_CONNECTOR_V1, CONFLUENCE_SPACES_LIVE_CONNECTOR_V1, personToolLiveConnectorsV1 } from './person-live-connector-registry-v1.js';
 import { createConfluencePersonConnectionHttpApplicationV1 } from '@echo-brain/provider-confluence/confluence-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
@@ -43,6 +45,8 @@ export function openConfluencePersonLiveRuntimeV1(options: {
   readonly configuration: ConfluencePersonLiveConfigurationV1;
   readonly seams?: ConfluencePersonLiveRuntimeSeamsV1;
   readonly authorize_project?: PersonPageProjectAuthorizationV1;
+  /** Lets a Confluence space's container item name the ECHO projects mapped to it (research tool contract v1). */
+  readonly project_names?: PersonContextProjectNamesV1;
 }): OpenedConfluencePersonLiveRuntimeV1 {
   if (options.configuration.enabled !== true) throw new Error('Confluence live evidence is not enabled');
   const owned = options.seams?.database === undefined;
@@ -66,6 +70,7 @@ export function openConfluencePersonLiveRuntimeV1(options: {
       store: new ConfluenceConnectionStoreV1(database),
       project_mappings: new ConfluenceProjectMappingStoreV1(database),
       ...(options.authorize_project === undefined ? {} : { authorize_project: options.authorize_project }),
+      ...(options.project_names === undefined ? {} : { project_names: options.project_names }),
       nango: options.seams?.nango ?? createConfluenceNangoV1({ integration_id: options.configuration.integration_id, authorization: options.configuration.nango_authorization, fetch: transport }),
       cloud_id: options.configuration.cloud_id,
       fetch: transport,
@@ -79,4 +84,9 @@ export function openConfluencePersonLiveRuntimeV1(options: {
       close() { if (owned) database.close(); },
     });
   } catch (error) { if (owned) database.close(); throw error; }
+}
+
+/** Confluence's live connectors (research tool contract v1): its pages and, for the V8 answer, its spaces, over one runtime. */
+export function confluencePersonLiveConnectorsV1(open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => OpenedConfluencePersonLiveRuntimeV1): readonly PersonLiveConnectorDefinitionV1[] {
+  return personToolLiveConnectorsV1({ items: CONFLUENCE_LIVE_CONNECTOR_V1, containers: CONFLUENCE_SPACES_LIVE_CONNECTOR_V1 }, open);
 }

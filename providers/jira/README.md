@@ -148,13 +148,19 @@ search all available evidence. Every selection keeps the current Person and
 project boundary. Open accepts only a handle minted by that reader. List
 accepts a Jira project key/id, or no project for the caller's visible inventory.
 Search and list accept inclusive calendar bounds and `date_field` of `created`
-(the default), `updated`, or `due`. Timestamps use the request's time zone (UTC
+(the default), `updated`, `due`, or `any`
+([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)): a
+window on any of the three, sent as one JQL OR, beside which a site-wide read
+keeps a created restriction, since Jira refuses an unbounded query. The
+registry declares these dates as the source's capabilities, and Ask sends
+`any` for a window with no field. Timestamps use the request's time zone (UTC
 when absent); date-only deadlines keep their calendar date. JQL literals use
 the provider account's zone, so discovery bounds include a margin and exact
 filtering runs on the current permission-checked values. The client-zone path
 uses two days of margin to cover differences between client and provider zones.
 A filtered page can be empty with an advancing continuation; lists sort by the
-selected field and stop once the oldest value precedes `since`. Keyword
+selected field and stop once the oldest value precedes `since`. A list on any
+date never stops early, since no single date orders its pages. Keyword
 searches retain date filters on the relaxed retry and exact-key lookup.
 This is a live walk, not a pinned Jira snapshot.
 Repeated issue ids or continuation tokens within a walk fail closed. There is
@@ -173,8 +179,11 @@ or project coordinates, and are never followed.
 Opening a ticket also discovers up to four directly linked ticket summaries,
 within the requested result limit. Jira's `issuelinks` contributes only numeric
 issue IDs; each selected target is exact-read under the same person and project
-boundary before its metadata is released. Inaccessible or out-of-project targets
-are omitted with a coverage limitation. The planner must use a normal `open`
+boundary before its metadata is released. A target Jira does not find for the
+asker (404: deleted, or hidden from them) or outside the pinned project is
+omitted, and the open reports `truncated` with the ticket's own text whole.
+Jira refusing the credentials on a target (401 or 403) fails the open rather
+than omit a link the asker may see. The planner must use a normal `open`
 on the returned handle to read a linked body. Missing optional link data does
 not block the anchor, and refreshing a stored citation reads only that anchor.
 Source: [Jira issue links](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-links/).
@@ -242,14 +251,14 @@ organization, grant or site selector in model arguments or connection commands.
    The desk rechecks its local snapshot after Jira I/O.
 4. V5 citations open the adapter-verified Jira permalink directly. The
    desktop's global and project Ask call `person ask --live`
-   (`POST /v6/person/ask`, strict V7 response with Jira tickets, Confluence
-   pages and ECHO's follow-ups,
-   [ADR-0040](../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md));
-   they fall back to `/v5/person/ask` (strict V6, no follow-ups) and then to
-   the V5 ticket route (`/v4/person/ask`), each only when an older Authority
-   answers 404 without the route header. The desktop validates V4 to V7
-   answers, with a safe direct-link opener. `--tickets` is kept for
-   compatibility, and `person ask` with neither flag retains strict V4 behavior.
+   (`POST /v7/person/ask`, strict V8 response,
+   [ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), which
+   falls back on an older Authority down to the V5 ticket route
+   (`/v4/person/ask`), as the
+   [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
+   describes. The desktop validates V4 to V8 answers, with a safe direct-link
+   opener. `--tickets` is kept for compatibility, and `person ask` with
+   neither flag retains strict V4 behavior.
 5. `echo-brain person tools disconnect --tool jira` calls
    `POST /v1/person/tools/jira/disconnect`. Local revocation is committed before
    remote deletion; a failed deletion cannot restore read access. Missing
@@ -300,6 +309,19 @@ is refused. There is no persistent ticket-open API, sync or index. Jira capture
 is disabled, including in the staging rehearsal. See
 [project settings](../../docs/features/project-settings-v1.md#jira-project-mapping)
 for the setting's CLI and revision checks.
+
+## Jira projects as Ask evidence
+
+The V8 Ask can also read the Jira projects the asker can browse, as the tool
+container source `jira_projects`, through the shared container reader the
+[connector contracts](../../docs/architecture/connector-contracts.md#source-capabilities-and-containers)
+describe ([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)).
+`createJiraPersonLiveContainerReaderV1` lists Jira's project search, which
+applies the asker's Browse projects permission, in key order; the transport
+admits `project/search` with only its paging, keyword, order and browse
+selectors. A search sends Jira's key-and-name match the longest significant
+keyword, cut at a whole character to the 256 bytes the transport admits. Open
+is an exact project read, and each project cites its `/browse/<key>` link.
 
 ## Remaining human inputs and live qualification
 

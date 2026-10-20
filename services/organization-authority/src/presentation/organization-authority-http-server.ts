@@ -1,6 +1,6 @@
 import { PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1 } from "@echo-brain/organization-api";
-import { PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, type PersonAskProgressErrorStatusV1 } from "@echo-brain/organization-api";
-import { startPersonAskProgressStreamV1, startPersonAskProgressStreamV2 } from "./person-ask-progress-stream-v1.js";
+import { PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, type PersonAskProgressErrorStatusV1 } from "@echo-brain/organization-api";
+import { startPersonAskProgressStreamV1, startPersonAskProgressStreamV2, startPersonAskProgressStreamV3 } from "./person-ask-progress-stream-v1.js";
 import {
   PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
@@ -67,6 +67,7 @@ import {
   PERSON_ANSWER_PATH_V4,
   PERSON_ANSWER_PATH_V5,
   PERSON_ANSWER_PATH_V6,
+  PERSON_ANSWER_PATH_V7,
   PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
@@ -93,6 +94,7 @@ import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-appl
 import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-application.js";
 import type { PersonAnswerV5HttpApplication } from "./person-answer-v5-http-application.js";
 import type { PersonAnswerV6HttpApplication } from "./person-answer-v6-http-application.js";
+import type { PersonAnswerV7HttpApplication } from "./person-answer-v7-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
 import type { PersonDiagnosticsHttpApplicationV1 } from './person-diagnostics-http-application.js';
@@ -134,6 +136,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_ANSWER_PATH_V4}`,
   `POST ${PERSON_ANSWER_PATH_V5}`,
   `POST ${PERSON_ANSWER_PATH_V6}`,
+  `POST ${PERSON_ANSWER_PATH_V7}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
@@ -184,6 +187,11 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_answer_v5?: PersonAnswerV5HttpApplication;
   /** Optional follow-up-capable Ask (`/v6`, the V7 answer, ADR-0040). It preserves `/v3` to `/v5` for installed clients. */
   readonly person_answer_v6?: PersonAnswerV6HttpApplication;
+  /**
+   * Optional workspace-capable Ask (`/v7`, the V8 answer, research tool contract v1): it may read and cite the asker's
+   * projects, people, tools and their connected tools' containers. It preserves `/v3` to `/v6` for installed clients.
+   */
+  readonly person_answer_v7?: PersonAnswerV7HttpApplication;
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
@@ -548,6 +556,15 @@ function personAskV6Post(application: PersonAnswerV6HttpApplication | undefined)
   return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, startPersonAskProgressStreamV2);
 }
 
+/**
+ * `POST /v7/person/ask`, the V8 answer (research tool contract v1), streamed
+ * exactly as `/v6` is, in Ask progress V3, for the header value `3`. Any other
+ * value gets the JSON V8 answer: a V1 or V2 client never meets a workspace item.
+ */
+function personAskV7Post(application: PersonAnswerV7HttpApplication | undefined): PersonPostHandler {
+  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, startPersonAskProgressStreamV3);
+}
+
 type StreamingAskInput = Parameters<PersonAnswerV5HttpApplication['ask']>[0];
 interface StreamingAskApplication<Step, Answered> {
   ask(input: StreamingAskInput): Promise<unknown>;
@@ -824,6 +841,7 @@ export function createOrganizationAuthorityHttpServer(
     [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
     [PERSON_ANSWER_PATH_V5, personAskV5Post(options.person_answer_v5)],
     [PERSON_ANSWER_PATH_V6, personAskV6Post(options.person_answer_v6)],
+    [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     ...(options.person_research_eval === undefined ? [] : [
@@ -1240,10 +1258,11 @@ export function createOrganizationAuthorityHttpServer(
       if (method === "POST" && url.search === "") {
         const personRead = personReadPosts.get(url.pathname);
         if (personRead !== undefined) {
-          // Distinguish a provider's not-found from an older server with no V5
-          // or V6 route. Set this before body validation or application execution.
+          // Distinguish a provider's not-found from an older server with no V5,
+          // V6 or V7 route. Set this before body validation or application execution.
           if (url.pathname === PERSON_ANSWER_PATH_V5) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '5');
           if (url.pathname === PERSON_ANSWER_PATH_V6) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '6');
+          if (url.pathname === PERSON_ANSWER_PATH_V7) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '7');
           await personRead(request, response); return;
         }
       }

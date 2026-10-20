@@ -1,6 +1,6 @@
 import type { EvidenceDeskDateKindV1 } from "../shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
-import { evidenceDayV1, matchesEvidenceDateV1, type EvidenceDateFieldV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
+import { evidenceDayV1, matchesEvidenceDateV1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
 import { agenticEvidenceAttributesV1, agenticEvidenceDatesV1, agenticEvidenceLabelV1 } from "./agentic-evidence-bundle-v1.js";
 import type { AgenticResearchNeedV1 } from "./agentic-research-v1.js";
 
@@ -43,7 +43,7 @@ export function parseAgenticListIdV1(value: unknown): AgenticListIdV1 | null {
 // ---- the record -------------------------------------------------------
 
 /** The filter fields a list request can name (the research protocol's list args other than source). */
-export const AGENTIC_LIST_FILTER_FIELDS_V1 = Object.freeze(["kind", "status", "owner", "channel", "since", "until", "date_field"] as const);
+export const AGENTIC_LIST_FILTER_FIELDS_V1 = Object.freeze(["kind", "status", "owner", "role", "channel", "since", "until", "date_field"] as const);
 export type AgenticListFilterFieldV1 = (typeof AGENTIC_LIST_FILTER_FIELDS_V1)[number];
 
 /**
@@ -58,13 +58,16 @@ const FILTER_APPLICATIONS: ReadonlySet<string> = new Set(["applied", "partial", 
 /** The filter as the list applied it, after normalization. An ignored field is absent here. */
 export interface AgenticListFilterV1 {
   readonly kind?: string;
-  readonly status?: "open" | "done";
+  /** open or done (meeting actions, follow-ups); active or archived (projects). */
+  readonly status?: "open" | "done" | "active" | "archived";
   readonly owner?: string;
+  /** lead or member (projects, people), research tool contract v1. */
+  readonly role?: "lead" | "member";
   readonly channel?: string;
   /** Inclusive YYYY-MM-DD bounds; a catalog default (Slack's 14 days) appears here unrequested. */
   readonly since?: string;
   readonly until?: string;
-  readonly date_field?: EvidenceDateFieldV1;
+  readonly date_field?: EvidenceDateSelectionV1;
   readonly time_zone?: string;
 }
 
@@ -90,6 +93,16 @@ export interface AgenticListEvidenceV1 {
   readonly truncated: boolean;
   /** When the desk returned the list's first page, RFC 3339 UTC (addition 2: a source's search can lag edits). */
   readonly read_at: string;
+  /**
+   * Items the list's date filter could not test because they do not record its date, and the dates they do carry
+   * (research tool contract v1). They are not members; an answer that uses the list says they were not checked.
+   */
+  readonly unchecked?: {
+    readonly count: number;
+    readonly dates: readonly EvidenceDateFieldV1[];
+    /** Filters the count is not narrowed by: ECHO applies a meeting list's owner and status after the desk counted. */
+    readonly any_of?: readonly ("owner" | "status")[];
+  };
   /** Derived: available, not truncated, ended, end verified and every member shown. Only then does the list support "all". */
   readonly complete: boolean;
 }
@@ -128,6 +141,8 @@ export function createAgenticListEvidenceV1(input: AgenticListEvidenceInputV1): 
     id: input.id, source: input.source, filter: Object.freeze({ ...input.filter }), filter_applied: Object.freeze({ ...input.filter_applied }),
     members: Object.freeze([...input.members]), shown: input.shown, ended: input.ended, unverified_end: input.unverified_end,
     available: input.available, truncated: input.truncated, read_at: input.read_at,
+    ...(input.unchecked === undefined || input.unchecked.count === 0 ? {} : { unchecked: Object.freeze({ count: input.unchecked.count, dates: Object.freeze([...input.unchecked.dates]),
+      ...(input.unchecked.any_of === undefined || input.unchecked.any_of.length === 0 ? {} : { any_of: Object.freeze([...input.unchecked.any_of]) }) }) }),
   };
   return Object.freeze({ ...record, complete: agenticListCompleteV1(record) });
 }
@@ -151,8 +166,10 @@ export function agenticListEndUnverifiedV1(page: { readonly returned: number; re
  * tickets", "Confluence pages", "meetings", "follow-ups"). It reads only the catalog entry, never a source-specific rule.
  */
 export function agenticListNounV1(source: { readonly selector: string; readonly tool_id?: string }): string {
-  const selector = source.selector.replace(/_/gu, "-");
   const tool = source.tool_id === undefined || source.tool_id.length === 0 || source.tool_id === source.selector ? undefined : source.tool_id;
+  // A selector that already starts with its tool says the rest after it: "jira_projects" is "Jira projects".
+  const own = tool !== undefined && source.selector.startsWith(`${tool}_`) ? source.selector.slice(tool.length + 1) : source.selector;
+  const selector = own.replace(/_/gu, "-");
   return tool === undefined ? selector : `${tool.charAt(0).toUpperCase()}${tool.slice(1)} ${selector}`;
 }
 
@@ -164,6 +181,8 @@ const KIND_NOUNS: Readonly<Record<string, readonly [string, string]>> = Object.f
   imported_meeting: ["meetings", "meeting"], decision: ["decisions", "decision"], action: ["actions", "action"], rationale: ["rationales", "rationale"],
   note: ["notes", "note"], document_passage: ["documents", "document"], slack_message: ["messages", "message"],
   ticket: ["tickets", "ticket"], page: ["pages", "page"], follow_up: ["follow-ups", "follow-up"],
+  // The asker's workspace (research tool contract v1). A tool's containers are named by their source: "Jira projects".
+  project: ["projects", "project"], person: ["people", "person"], tool: ["tools", "tool"],
 });
 function kindNoun(kind: string, count: number): string {
   const [plural, singular] = KIND_NOUNS[kind] ?? ["items", "item"];
@@ -201,7 +220,7 @@ export function agenticListMembersNounV1(source: { readonly selector: string; re
 }
 
 const FILTER_WORDS: Readonly<Record<AgenticListFilterFieldV1, string>> = Object.freeze({
-  kind: "kind", status: "status", owner: "owner", channel: "channel", since: "date", until: "date", date_field: "date",
+  kind: "kind", status: "status", owner: "owner", role: "role", channel: "channel", since: "date", until: "date", date_field: "date",
 });
 function sentence(value: string): string { return `${value.charAt(0).toUpperCase()}${value.slice(1)}`; }
 function words(fields: readonly AgenticListFilterFieldV1[]): readonly string[] { return [...new Set(fields.map(field => FILTER_WORDS[field]))]; }
@@ -221,6 +240,39 @@ export function agenticListFilterNoticeV1(list: Pick<AgenticListEvidenceV1, "fil
     ...(partial.length === 0 ? [] : [`${sentence(noun)} were filtered by ${partial.join(" and ")} only where they record ${partial.length === 1 ? "one the filter can" : "ones the filters can"} match, so this list also includes items ${partial.length === 1 ? "it" : "they"} could not filter.`]),
   ];
   return notices.length === 0 ? undefined : notices.join(" ");
+}
+
+/** A date field's absence, as a notice says it: "have no recorded time", "have never been checked". */
+const MISSING_DATE_WORDS: Readonly<Record<EvidenceDateFieldV1, readonly [one: string, many: string]>> = Object.freeze({
+  occurred: ["has no recorded time", "have no recorded time"], created: ["has no created date", "have no created date"],
+  updated: ["has no updated date", "have no updated date"], due: ["has no due date", "have no due date"],
+  received: ["has no received date", "have no received date"], approved: ["has no approval date", "have no approval date"],
+  sent: ["has not been sent", "have not been sent"], reassigned: ["has never been reassigned", "have never been reassigned"],
+  checked: ["has never been checked", "have never been checked"],
+});
+/** A date field as a notice names it. */
+const DATE_NAMES: Readonly<Record<EvidenceDateFieldV1, string>> = Object.freeze({
+  occurred: "a meeting time", created: "a created date", updated: "an updated date", due: "a due date", received: "a received date",
+  approved: "an approval date", sent: "a sent date", reassigned: "a reassigned date", checked: "a checked date",
+});
+function eitherOf(values: readonly string[]): string {
+  return values.length <= 1 ? values.join("") : `${values.slice(0, -1).join(", ")} or ${values.at(-1)}`;
+}
+
+/**
+ * What the person is told about the items a list's date filter could not test (research tool contract v1): how many,
+ * that they were not checked against the list's dates, and which dates they do carry. Undefined when there are none.
+ */
+export function agenticListUncheckedNoticeV1(list: Pick<AgenticListEvidenceV1, "unchecked" | "filter">, noun: AgenticListNounFormsV1): string | undefined {
+  const unchecked = list.unchecked;
+  if (unchecked === undefined || unchecked.count === 0) return undefined;
+  const one = unchecked.count === 1;
+  const field = list.filter.date_field;
+  const lacking = field === undefined || field === "any" ? (one ? "has none of the dates this list was filtered by" : "have none of the dates this list was filtered by") : MISSING_DATE_WORDS[field][one ? 0 : 1];
+  const carry = unchecked.dates.length === 0 ? "" : ` ${one ? "It has" : "They have"} ${eitherOf(unchecked.dates.map(date => DATE_NAMES[date]))}.`;
+  // A count the desk took before ECHO's own owner or status filter covers every owner or status: said, never narrowed.
+  const wider = unchecked.any_of === undefined || unchecked.any_of.length === 0 ? "" : ` This count is of ${noun.plural} with any ${eitherOf(unchecked.any_of)}.`;
+  return `${unchecked.count} ${one ? noun.singular : noun.plural} ${lacking}, so ${one ? "it was" : "they were"} not checked against these dates.${carry}${wider}`;
 }
 
 // ---- what a need's declared kind asks of lists --------------------------
@@ -369,6 +421,12 @@ export interface AgenticWriterListMemberV1 {
   /** A meeting action with no confirmed owner says "none recorded" (ADR-0021). */
   readonly owner?: string;
   readonly due?: string;
+  /** Row facts of meetings, projects and tool containers (research tool contract v1), when the source records them. */
+  readonly participants?: string;
+  readonly approved_by?: string;
+  readonly role?: string;
+  readonly leads?: string;
+  readonly key?: string;
   /** Research read its text through an open that was not truncated and carried no notice (addition 4). */
   readonly checked: boolean;
 }
@@ -391,6 +449,8 @@ export interface AgenticWriterListV1 {
   readonly members: readonly AgenticWriterListMemberV1[];
   /** Members past the writer's bound; present only when some were left out. */
   readonly members_omitted?: number;
+  /** Items the list's date filter could not test (research tool contract v1): never members, never "none of them". */
+  readonly unchecked?: AgenticListEvidenceV1["unchecked"];
 }
 
 /**
@@ -407,6 +467,11 @@ export function agenticWriterListMemberV1(entry: { readonly short: string; reado
     ...(attributes?.status === undefined ? {} : { status: attributes.status }),
     ...(attributes?.owner === undefined ? {} : { owner: attributes.owner }),
     ...(attributes?.due_at === undefined ? {} : { due: attributes.due_at }),
+    ...(attributes?.participants === undefined ? {} : { participants: attributes.participants }),
+    ...(attributes?.approved_by === undefined ? {} : { approved_by: attributes.approved_by }),
+    ...(attributes?.role === undefined ? {} : { role: attributes.role }),
+    ...(attributes?.leads === undefined ? {} : { leads: attributes.leads }),
+    ...(attributes?.key === undefined ? {} : { key: attributes.key }),
     checked,
   });
 }
@@ -425,11 +490,12 @@ export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readon
     id: list.id, source: list.source, filter: list.filter, filter_applied: list.filter_applied, complete: list.complete,
     count: list.members.length, checked: members.filter(member => member.checked).length, read_at: list.read_at, stated,
     members: Object.freeze(shown), ...(shown.length === members.length ? {} : { members_omitted: members.length - shown.length }),
+    ...(list.unchecked === undefined ? {} : { unchecked: list.unchecked }),
   });
 }
 
 /** The row fields a writer may select members by: an owner or status by value, or one of a row's dates by range. */
-export const AGENTIC_LIST_SELECTION_FIELDS_V1 = Object.freeze(["owner", "status", "due", "created", "updated", "received", "occurred"] as const);
+export const AGENTIC_LIST_SELECTION_FIELDS_V1 = Object.freeze(["owner", "status", "due", "created", "updated", "received", "occurred", "approved", "sent", "reassigned", "checked"] as const);
 /** A writer's selection (ADR-0041): members whose owner or status is `value`, or whose date of `field` is within `since` and `until`, inclusive. */
 export type AgenticListSelectionV1 =
   | { readonly field: "owner" | "status"; readonly value: string }
@@ -492,7 +558,7 @@ export function agenticCalendarDayV1(value: string): string {
   return match === null || month === undefined ? value : `${month} ${Number(match[3])}, ${match[1]}`;
 }
 /** How a date filter reads after its noun. Occurred, and a filter with no field, read as "dated". */
-const DATE_WORDS: Readonly<Record<EvidenceDateFieldV1, string>> = Object.freeze({ created: "created", updated: "updated", due: "due", received: "received", occurred: "dated" });
+const DATE_WORDS: Readonly<Record<EvidenceDateFieldV1, string>> = Object.freeze({ created: "created", updated: "updated", due: "due", received: "received", occurred: "dated", approved: "approved", sent: "sent", reassigned: "reassigned", checked: "checked" });
 function dateRange(since: string | undefined, until: string | undefined): string | undefined {
   if (since !== undefined && until !== undefined) {
     if (since === until) return `on ${agenticCalendarDayV1(since)}`;
@@ -523,11 +589,13 @@ export function agenticListFilterPhraseV1(filter: AgenticListFilterV1): string {
     ...(filter.kind === undefined ? [] : [`kind ${filter.kind}`]),
     ...(filter.owner === undefined ? [] : [`owner ${filter.owner}`]),
     ...(filter.status === undefined ? [] : [`status ${filter.status}`]),
+    // The asker's own role in each member (research tool contract v1): "with your role lead".
+    ...(filter.role === undefined ? [] : [`your role ${filter.role}`]),
   ];
   const range = dateRange(filter.since, filter.until);
   return [
     ...(filter.channel === undefined ? [] : [` in #${filter.channel}`]),
-    ...(range === undefined ? [] : [` ${DATE_WORDS[filter.date_field ?? "occurred"]} ${range}`]),
+    ...(range === undefined ? [] : [` ${filter.date_field === "any" ? "dated" : DATE_WORDS[filter.date_field ?? "occurred"]} ${range}`]),
     ...(fields.length === 0 ? [] : [` with ${joined(fields)}`]),
   ].join("");
 }

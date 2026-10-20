@@ -229,7 +229,10 @@ list I/O runs concurrently; code admits results in action order so evidence
 ids and the next prompt remain deterministic. Repeated lists with the same
 normalized filters wait for the previous page's state. A terminal failure
 aborts sibling reads and preserves the original error. Retrieval timing
-measures the union of overlapping desk-call intervals, not their sum.
+measures the union of overlapping desk-call intervals, not their sum. (For
+Ask, [ADR-0042](../decisions/ADR-0042-research-tool-contract.md) raises the
+reads per step to ten, adds `role` and `limit` to `list`, and checks every
+filter against what the source declares; a task goal keeps four reads.)
 
 **Filters for `list`.** They are named fields that the model fills in from
 the question.

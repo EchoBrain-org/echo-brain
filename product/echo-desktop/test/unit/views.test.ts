@@ -849,3 +849,90 @@ describe('follow-ups in a V7 answer and its progress (ADR-0040)', () => {
     expect(askReceiptView(receipt, 2).looked_through).toBe(2);
   });
 });
+
+// Your workspace and your tools' containers as the V8 answer and Ask progress V3 cite them (research tool contract v1).
+const PROJECT = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
+const MEMBER = 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e';
+const project = { citation: { kind: 'project', project_id: PROJECT }, kind: 'project', label: 'Thermal recovery', visibility: 'project', ref: `project:${PROJECT}` };
+const person = { citation: { kind: 'person', membership_id: MEMBER }, kind: 'person', label: 'Mara Lind', visibility: 'team' };
+const tool = { citation: { kind: 'tool', tool_id: 'jira' }, kind: 'tool', label: 'Jira', visibility: 'only_me', ref: 'tool:jira' };
+const containerCitation = { kind: 'tool_container', tool_id: 'jira', external_scope_id: 'cloud-1', container: 'jira_project', container_id: '10001',
+  permalink: 'https://example.atlassian.net/browse/THERM' };
+const container = { citation: containerCitation, kind: 'tool_container', label: 'Thermal', visibility: 'only_me', key: 'THERM' };
+const v8 = (citations: unknown[]) => ({ ...v6(citations), schema_version: 8, kind: 'echo-clean-person-answer-v8' });
+const workspaceSources = [
+  { kind: 'project', label: 'Thermal recovery', project_id: PROJECT },
+  { kind: 'person', label: 'Mara Lind', membership_id: MEMBER },
+  { kind: 'tool', label: 'Jira', tool_id: 'jira' },
+  { kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: 'https://example.atlassian.net/browse/THERM', container: 'jira_project', key: 'THERM' },
+];
+
+describe('your workspace and your tools\' containers in a V8 answer and its progress (research tool contract v1)', () => {
+  it('reads a V8 answer that cites your project, a person, a tool and a Jira project, by what each names, beside the kinds V7 cites', () => {
+    const answer = answerView({ ok: true, result: v8([project, person, tool, container, followUp, named, ticket]) }, { kind: 'global' });
+    expect(answer.sources).toEqual([...workspaceSources, followUpSource,
+      { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') },
+      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' }]);
+    // A container's scope and its own id in its tool stay behind, as a ticket's do; refs stay with the host.
+    for (const behind of ['cloud-1', '10001', 'project:', 'tool:', 'tool_container']) expect(JSON.stringify(answer)).not.toContain(behind);
+  });
+
+  it('keeps a Slack channel, which has no key, and a Confluence space, each by its link', () => {
+    const { key: _key, ...unkeyed } = container;
+    const channel = { ...unkeyed, label: '#therm-dvt', citation: { ...containerCitation, tool_id: 'slack', container: 'slack_channel', container_id: 'C0123456',
+      permalink: 'https://acme.slack.com/archives/C0123456' } };
+    const space = { ...container, label: 'Thermal team', key: 'THT', citation: { ...containerCitation, tool_id: 'confluence', container: 'confluence_space',
+      container_id: '98765', permalink: 'https://example.atlassian.net/wiki/spaces/THT' } };
+    const [slack, confluence] = answerView({ ok: true, result: v8([channel, space]) }, { kind: 'global' }).sources;
+    expect(slack).toEqual({ kind: 'container', tool_id: 'slack', label: '#therm-dvt', permalink: 'https://acme.slack.com/archives/C0123456', container: 'slack_channel' });
+    expect(slack).not.toHaveProperty('key');
+    expect(confluence).toEqual({ kind: 'container', tool_id: 'confluence', label: 'Thermal team', permalink: 'https://example.atlassian.net/wiki/spaces/THT',
+      container: 'confluence_space', key: 'THT' });
+  });
+
+  it('refuses your workspace in any answer before V8', () => {
+    for (const citation of [project, person, tool, container]) {
+      expect(() => answerView({ ok: true, result: v7([citation]) }, { kind: 'global' })).toThrow(ViewError);
+      expect(() => answerView({ ok: true, result: v6([citation]) }, { kind: 'global' })).toThrow(ViewError);
+    }
+  });
+
+  it('refuses a workspace item the V8 contract refuses, and a workspace ref or a key on any other kind', () => {
+    for (const citation of [
+      // The contract's own validator decides each workspace item (packages/organization-api/test/person-answer-v8.test.ts).
+      { ...project, ref: 'tool:jira' },
+      // The page's own rules decide every other kind.
+      { ...named, ref: `project:${PROJECT}` },
+      { ...ticket, key: 'THERM' },
+    ]) expect(() => answerView({ ok: true, result: v8([citation]) }, { kind: 'global' })).toThrow(ViewError);
+  });
+
+  it('carries a V3 step that searched your workspace or a tool\'s containers, or read one of them, and refuses one that says more', () => {
+    const sources = [{ kind: 'meetings' }, { kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }];
+    expect(askStepView({ ok: true, progress: { type: 'searched', sources, found: 9 } })).toEqual({ type: 'searched', sources, found: 9 });
+    expect(askStepView({ ok: true, progress: { type: 'read', items: [project, person, tool, container] } })).toEqual({ type: 'read', items: workspaceSources });
+    // A V2 step is a V3 step too.
+    expect(askStepView({ ok: true, progress: { type: 'read', items: [followUp] } })).toEqual({ type: 'read', items: [followUpSource] });
+    for (const progress of [
+      { type: 'read', items: [{ ...project, text: 'Lead: Mara' }] },
+      { type: 'read', items: [{ ...person, ref: `project:${PROJECT}` }] },
+      { type: 'searched', sources: [{ kind: 'projects', tool_id: 'jira' }], found: 1 },
+      { type: 'searched', sources: [{ kind: 'containers' }], found: 1 },
+    ]) expect(() => askStepView({ ok: true, progress })).toThrow(ViewError);
+  });
+
+  it('keeps a V8 answer\'s V3 receipt, which may name your workspace, and a V7 answer\'s receipt only as V2', () => {
+    const receipt = { looked_through: 4, elapsed_ms: 31_000, rows: [
+      { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 9 }, { type: 'read', items: [project, person, tool, container] },
+    ] };
+    expect(answerView({ ok: true, result: v8([project]), receipt }, { kind: 'global' }).receipt).toEqual({ looked_through: 4, elapsed_ms: 31_000, rows: [
+      { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 9 }, { type: 'read', items: workspaceSources },
+    ] });
+    expect(() => answerView({ ok: true, result: v7([followUp]), receipt }, { kind: 'global' })).toThrow(ViewError);
+    expect(() => askReceiptView(receipt, 2)).toThrow(ViewError);
+    expect(askReceiptView(receipt, 3).looked_through).toBe(4);
+    // A V8 answer's receipt that names no workspace item is still its own.
+    const older = { looked_through: 1, elapsed_ms: 1_000, rows: [{ type: 'read', items: [named] }] };
+    expect(answerView({ ok: true, result: v8([named]), receipt: older }, { kind: 'global' }).receipt?.looked_through).toBe(1);
+  });
+});

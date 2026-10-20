@@ -1,4 +1,4 @@
-import { evidenceDateFilterV1, evidenceDayV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
+import { evidenceDateFilterV1, evidenceDayV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, EVIDENCE_ANY_DATE_V1, type EvidenceDateFieldV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
@@ -84,21 +84,31 @@ function shiftDay(day: string, days: number): string | undefined {
 }
 
 /**
- * Inventory JQL. JQL dates use the account timezone, so the created bounds are
+ * The dates a Jira issue records, by their JQL names, and a window on any of them (research tool contract v1). The Jira
+ * connector's registered capabilities declare exactly these.
+ */
+const DATE_FIELDS: readonly EvidenceDateFieldV1[] = Object.freeze(["created", "updated", "due"]);
+const DATE_SELECTIONS = Object.freeze([...DATE_FIELDS, EVIDENCE_ANY_DATE_V1]);
+
+/**
+ * Inventory JQL. JQL dates use the account timezone, so the date bounds are
  * coarse, with one day of margin either side; the exact UTC filter stays in code.
- * A bound past four-digit years is left out rather than sent malformed.
+ * A bound past four-digit years is left out rather than sent malformed. A window
+ * on any date is an OR of the same window on each field, ordered by created.
  */
 function listJql(projectId: string | undefined, since: string | undefined, until: string | undefined, selection: EvidenceDateFilterV1 = {}): string {
-  const field = selection.date_field ?? "created";
+  const fields: readonly string[] = selection.date_field === "any" ? DATE_FIELDS : [selection.date_field ?? "created"];
   const lower = since === undefined ? undefined : shiftDay(since, selection.time_zone === undefined ? -1 : -2);
   const upper = until === undefined ? undefined : shiftDay(until, selection.time_zone === undefined ? 2 : 3);
+  const window = (field: string) => [...(lower === undefined ? [] : [`${field} >= "${lower}"`]), ...(upper === undefined ? [] : [`${field} < "${upper}"`])].join(' AND ');
+  const bounded = lower !== undefined || upper !== undefined;
   const clauses = [
     ...(projectId === undefined ? [] : [`project = ${projectId}`]),
-    // The search endpoint refuses an unbounded query; a site-wide list keeps a created restriction.
-    ...(lower !== undefined ? [`${field} >= "${lower}"`] : projectId === undefined ? ['created >= "1970-01-01"'] : []),
-    ...(upper === undefined ? [] : [`${field} < "${upper}"`]),
+    // The search endpoint refuses an unbounded query; a site-wide list keeps a created restriction, which an OR is not.
+    ...(projectId === undefined && (lower === undefined || fields.length > 1) ? ['created >= "1970-01-01"'] : []),
+    ...(!bounded ? [] : [fields.length === 1 ? window(fields[0]!) : `(${fields.map(field => `(${window(field)})`).join(' OR ')})`]),
   ];
-  return `${clauses.join(' AND ')} ORDER BY ${field} DESC, id DESC`;
+  return `${clauses.join(' AND ')} ORDER BY ${fields.length === 1 ? fields[0] : "created"} DESC, id DESC`;
 }
 
 /** Construct once per request from trusted ECHO state, never from model arguments. */
@@ -165,27 +175,38 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     return current.origin;
   }
 
-  async function issue(id: string, origin: string, inventory: boolean, signal?: AbortSignal, related = false): Promise<ParsedJiraIssueV1> {
+  /** One issue under the asker's current permissions, in any project. */
+  async function readIssue(id: string, origin: string, inventory: boolean, signal?: AbortSignal, related = false): Promise<ParsedJiraIssueV1> {
     const value = await transport.request({ path: `${pathPrefix}/issue/${id}`, query: { fields: inventory ? INVENTORY_FIELDS : related ? OPEN_FIELDS : TEXT_FIELDS }, signal });
     signal?.throwIfAborted();
     const parsed = parseJiraIssueV1(value, { cloudid, origin, inventory, related });
     if (parsed.id !== id) jiraFailure('invalid_output');
+    return parsed;
+  }
+
+  async function issue(id: string, origin: string, inventory: boolean, signal?: AbortSignal, related = false): Promise<ParsedJiraIssueV1> {
+    const parsed = await readIssue(id, origin, inventory, signal, related);
     // Exact reads fence stale search pages, moved tickets and retained handles.
     if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
     return parsed;
   }
 
-  /** A direct link is only an optional navigation hint. Never release a hidden or moved target. */
+  /**
+   * A direct link is only an optional navigation hint. Never release a hidden or moved target. Jira answers 404 for a
+   * linked issue that is deleted or that the asker cannot see, and a target outside the pinned project is outside this
+   * read: either leaves the link out, and the open's `truncated` says it left something out beside the ticket
+   * (ADR-0041). A refused connection (unauthorized: HTTP 401 or 403) says nothing about one issue, so it fails the open,
+   * as transient, malformed and stale-state failures do.
+   */
   async function relatedIssue(id: string, origin: string, signal?: AbortSignal): Promise<ParsedJiraIssueV1 | undefined> {
+    let parsed: ParsedJiraIssueV1;
     try {
-      return await issue(id, origin, true, signal);
+      parsed = await readIssue(id, origin, true, signal);
     } catch (error) {
-      // Jira commonly represents an inaccessible or deleted linked issue as
-      // 403/404. Its link stub is not evidence, so omit only those targets.
-      // Transient, malformed and stale-state failures still fail closed.
-      if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) return undefined;
+      if (error instanceof AuthorityOperationError && error.code === 'not_found') return undefined;
       throw error;
     }
+    return pinnedProject !== undefined && parsed.project_id !== pinnedProject.id ? undefined : parsed;
   }
 
   async function revalidateIssues(ids: readonly string[], origin: string, signal?: AbortSignal): Promise<void> {
@@ -345,7 +366,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       return Object.freeze({ citation, tool_id: 'jira', external_scope_id: cloudid, coordinates: Object.freeze({ object_id: citation.ticket_id }) });
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
-      validateEvidenceDateFilterV1(input, ["created", "updated", "due"]);
+      validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const maximum = Math.min(limit(input.limit), 5);
       const { terms, keys, keyed } = searchTerms(input.query);
       const projectId = pinnedProject?.id;
@@ -390,7 +411,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       return openIssue(citation.ticket_id, maximum, input.signal, false);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
-      validateEvidenceDateFilterV1(input, ["created", "updated", "due"]);
+      validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const maximum = Math.min(limit(input.limit), LIST_MAX_ITEMS);
       if (input.container !== undefined && (typeof input.container !== 'string' || !(JIRA_ID.test(input.container) || JIRA_PROJECT_KEY.test(input.container)))) jiraFailure('invalid_request');
       if (pinnedProject !== undefined && input.container !== undefined && input.container !== fixedProject && !jiraProjectMatches(pinnedProject, input.container)) jiraFailure('unauthorized');
@@ -412,7 +433,8 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         const selected = page.selected.filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
         // Pages run newest first: once a page's oldest issue predates since, no later page can match.
         const oldest = page.selected.at(-1);
-        const oldestDay = evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
+        // A window on any date has no single field the pages are ordered by, so it never stops early.
+        const oldestDay = input.date_field === "any" ? undefined : evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
         const passedSince = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since;
         const token = passedSince ? undefined : page.token;
         await verifyConnection(input.signal);

@@ -6,7 +6,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticToolV1, type CoreRuntimeDiagnosticObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import type { JiraCloudRequestV1, JiraCloudTransportV1 } from '../src/jira-cloud-transport-v1.js';
+import { createJiraCloudTransportV1, type JiraCloudRequestV1, type JiraCloudTransportV1 } from '../src/jira-cloud-transport-v1.js';
 import { createJiraPersonLiveEvidenceReaderV1 } from '../src/jira-person-live-evidence-reader-v1.js';
 
 const cloudid = '00000000-0000-4000-8000-000000000007';
@@ -62,15 +62,26 @@ function fixture() {
   const authorization = { assertCurrent: vi.fn(() => {}) };
   const releases: PersonLiveEvidenceReleaseV1<PersonTicketCitationV1>[] = [];
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1<PersonTicketCitationV1>) => { releases.push(release); return canonicalSha256(release); }) };
-  async function make(fixedProject?: string) {
-    const reader = await createJiraPersonLiveEvidenceReaderV1({ binding, transport, ...(fixedProject === undefined ? {} : { project: fixedProject }) });
+  /** The same synthetic Jira behind the real transport, where a path answers with the HTTP status `statuses` gives it. */
+  function overHttp(statuses: ReadonlyMap<string, number>): JiraCloudTransportV1 {
+    const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+    return createJiraCloudTransportV1({ binding, async fetch(url, init) {
+      const target = new URL(url);
+      const status = statuses.get(target.pathname);
+      if (status !== undefined) return json({ errorMessages: ['private provider response'] }, status);
+      return json(await request({ path: target.pathname, method: init.method as 'GET' | 'POST', query: Object.fromEntries(target.searchParams),
+        ...(typeof init.body === 'string' ? { body: JSON.parse(init.body) as Record<string, unknown> } : {}) }));
+    } });
+  }
+  async function make(fixedProject?: string, via = transport) {
+    const reader = await createJiraPersonLiveEvidenceReaderV1({ binding, transport: via, ...(fixedProject === undefined ? {} : { project: fixedProject }) });
     const source = createAuditedPersonLiveEvidenceSourceV1({ actor: binding,
       access: { tool_id: 'jira', identity_status: 'linked', external_scope_id: cloudid, external_subject_id: binding.external_subject_id,
         read_status: 'connected', read_capabilities: ['live_evidence'] }, read_grant_sha256: binding.read_grant_sha256, reader, authorization, audit });
     return { reader, source };
   }
   const jqls = () => request.mock.calls.filter(([input]) => input.path.endsWith('/search/jql')).map(([input]) => input.body?.jql);
-  return { ...f, state: f, request, transport, authorization, releases, audit, make, jqls };
+  return { ...f, state: f, request, transport, overHttp, authorization, releases, audit, make, jqls };
 }
 
 describe('person-bound Jira live reader through the shared audited wrapper', () => {
@@ -360,13 +371,14 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   });
 
   it('omits an inaccessible or out-of-project linked issue without leaking its metadata', async () => {
-    for (const state of ['outside_project', 'denied'] as const) {
+    for (const state of ['outside_project', 'hidden'] as const) {
       const f = fixture();
       const related = ticket('10002', 'Private linked issue');
       f.state.tickets.set('10002', state === 'outside_project' ? { ...related, key: 'OTHER-2', fields: { ...related.fields,
         project: { id: '20000', key: 'OTHER', self: `${origin}/rest/api/3/project/20000` } } } : related);
       f.state.tickets.set('10001', withFields({ issuelinks: [{ outwardIssue: { id: '10002' } }] }));
-      if (state === 'denied') f.state.denied.set('10002', 'unauthorized');
+      // Jira answers not found for an issue the asker cannot see.
+      if (state === 'hidden') f.state.denied.set('10002', 'not_found');
       const { source } = await f.make('ECHO');
       const anchor = (await source.search({ query: 'ship' })).items[0]!;
 
@@ -377,6 +389,33 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
       expect(JSON.stringify(f.releases)).not.toContain('Private linked issue');
       expect(JSON.stringify(f.releases)).not.toContain('OTHER-2');
     }
+  });
+
+  it('leaves out a linked issue Jira does not find for the asker (404), and says the open left something out beside the ticket', async () => {
+    const f = fixture();
+    f.state.tickets.set('10003', ticket('10003', 'Visible linked issue'));
+    f.state.tickets.set('10001', withFields({ issuelinks: [{ outwardIssue: { id: '10002' } }, { outwardIssue: { id: '10003' } }] }));
+    const { source } = await f.make('ECHO', f.overHttp(new Map([[`${prefix}/issue/10002`, 404]])));
+    const anchor = (await source.search({ query: 'ship' })).items[0]!;
+
+    const opened = await source.open({ item: anchor.id });
+    expect(opened.items.map(item => item.citation.ticket_id)).toEqual(['10001', '10003']);
+    // `truncated` says the open left something out; the ticket's own text is whole, so the open does not make research's
+    // read of the ticket partial, as a notice would (ADR-0041).
+    expect(opened).toMatchObject({ truncated: true, anchor_truncated: false });
+    expect(opened).not.toHaveProperty('notice');
+    expect(JSON.stringify(f.releases)).not.toContain('Review security');
+  });
+
+  it.each([401, 403])('fails the open when Jira refuses the credentials on a linked issue (%i), never leaving the link out', async status => {
+    const f = fixture();
+    f.state.tickets.set('10001', withFields({ issuelinks: [{ outwardIssue: { id: '10002' } }] }));
+    const { source } = await f.make('ECHO', f.overHttp(new Map([[`${prefix}/issue/10002`, status]])));
+    const anchor = (await source.search({ query: 'ship' })).items[0]!;
+
+    // 401 is a credential rejection, never an issue the asker cannot see; the issue read documents no 403.
+    await expect(source.open({ item: anchor.id })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.audit.record).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed for a transient linked-issue error after the final connection fence', async () => {
@@ -877,6 +916,28 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(second.next_cursor).toBeUndefined(); expect(second.truncated).toBe(false);
     expect(f.jqls()).toEqual(Array(2).fill('created >= "2026-09-30" AND created < "2026-10-03" ORDER BY created DESC, id DESC'));
     expect(f.releases[0]!.citations).toEqual([]); expect(f.releases).toHaveLength(2);
+  });
+
+  it('matches a window on any date with one JQL OR across created, updated and due, and never stops paging early', async () => {
+    const f = fixture();
+    // Newest created first: updated in the window; due in the window; no date in the window.
+    f.state.tickets.set('10003', withFields({ created: '2026-09-01T12:00:00Z', updated: '2026-10-16T12:00:00Z', duedate: null }, ticket('10003')));
+    f.state.tickets.set('10002', withFields({ created: '2026-08-01T12:00:00Z', updated: '2026-08-02T12:00:00Z', duedate: '2026-10-16' }, ticket('10002')));
+    f.state.tickets.set('10001', withFields({ created: '2026-07-01T12:00:00Z', updated: '2026-07-02T12:00:00Z', duedate: '2026-07-03' }));
+    f.state.pages = [page(['10003', '10002', '10001'], 'page-2'), page(['10003', '10002', '10001'])];
+    const { source } = await f.make();
+    const window = { since: '2026-10-16', until: '2026-10-16', date_field: 'any' as const };
+    const listed = await source.list({ ...window, limit: 3 });
+    expect(listed.items.map(item => item.citation.ticket_id)).toEqual(['10003', '10002']);
+    // Every issue on the page was created before since, yet a later one may still have been updated in the window.
+    expect(listed.next_cursor).toBeDefined();
+    const searched = await source.search({ query: 'ship', ...window });
+    expect(searched.items.map(item => item.citation.ticket_id)).toEqual(['10003', '10002']);
+    const any = '((created >= "2026-10-15" AND created < "2026-10-18") OR (updated >= "2026-10-15" AND updated < "2026-10-18") OR (due >= "2026-10-15" AND due < "2026-10-18"))';
+    expect(f.jqls()).toEqual([
+      `created >= "1970-01-01" AND ${any} ORDER BY created DESC, id DESC`,
+      `(text ~ "\\"ship\\"") AND created >= "1970-01-01" AND ${any} ORDER BY created DESC, id DESC`,
+    ]);
   });
 
   it('keeps paging an inventory with no since, and bounds until alone without dropping the site-wide restriction', async () => {

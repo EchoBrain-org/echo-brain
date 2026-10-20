@@ -1,6 +1,8 @@
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { Answer, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, OpenItemView, RecordItem } from '../../shared/protocol.js';
+import type {
+  Answer, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, OpenItemView, RecordItem, ToolContainerKind,
+} from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import { answerSentences, documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
@@ -8,15 +10,15 @@ import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { openerOf, sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, duration, foundBefore, liveRows, namedPlaces, PROGRESS_AFTER_MS, receiptUnnamed, receiptWords, rowNames, searchedWords, stageWords, type AskProgress, type LiveRow,
-  type NamedPlace,
+  announceAfter, announcement, duration, foundBefore, headline, liveRows, namedPlaces, placeLabel, PROGRESS_AFTER_MS, receiptWords, searchedWords, type AskProgress,
+  type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
   answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject, fullPageOffered,
   litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
   submitBar, widenScope, type AskTurn, type PaneTarget, type Read, type RecordSectionKey, type SourcesState, type State,
 } from '../store.js';
-import { Check, Chevron, Close, Doc, Hash, Lock, Meeting, Plus, Ticks, Up } from './icons.js';
+import { Check, Chevron, Close, Doc, Folder, Hash, Lock, Meeting, OnePerson, Plug, Plus, Ticks, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -193,14 +195,29 @@ function originalMeta(source: Extract<AnswerSource, { kind: 'original' }>, group
   return [version, count > 1 ? `${count} ${passages}` : undefined].filter(Boolean).join(' · ');
 }
 
-function KindIcon({ kind }: { kind: SourceGroup['kind'] }) {
-  return kind === 'record' || kind === 'transcript' ? <Meeting /> : kind === 'slack' ? <Hash /> : kind === 'follow_up' ? <Ticks /> : <Doc />;
+/**
+ * A source's mark: a meeting, a Slack message or channel, a follow-up, a
+ * project (yours in ECHO, a Jira project or a Confluence space), a person, a
+ * tool, or a document, ticket or page.
+ */
+function KindIcon({ source }: { source: AnswerSource }) {
+  if (source.kind === 'record' || source.kind === 'transcript') return <Meeting />;
+  if (source.kind === 'slack' || (source.kind === 'container' && source.container === 'slack_channel')) return <Hash />;
+  if (source.kind === 'follow_up') return <Ticks />;
+  if (source.kind === 'project' || source.kind === 'container') return <Folder />;
+  if (source.kind === 'person') return <OnePerson />;
+  return source.kind === 'tool' ? <Plug /> : <Doc />;
 }
 
 /** A follow-up's row as read now, once it is: its owner and status ("Mara · Open"), nothing while it is read or when it could not be. */
 function followUpRow(state: State, source: Extract<AnswerSource, { kind: 'follow_up' }>): OpenItemView | null {
   const read = state.sources?.followUps[source.item_id];
   return read !== undefined && !read.loading && 'value' in read ? read.value : null;
+}
+
+/** A Jira project's, Confluence space's or Slack channel's tool, and its key there when it has one: "Jira · THERM", "Slack". */
+function containerMeta(source: Extract<AnswerSource, { kind: 'container' }>, provider: string): string {
+  return source.key === undefined ? provider : `${provider} · ${source.key}`;
 }
 
 /** One row per source, numbered as the sentences cite it. The one the pane shows is lit. */
@@ -212,14 +229,17 @@ function SourceList({ state }: { state: State }) {
     <div class="source-list" data-testid="source-list">
       {groups.map((group, index) => {
         const source = firstSource(state, group);
-        // One short qualifier only where it helps: a document's version and passages, a follow-up's owner and status.
+        // One short qualifier only where it helps: a document's version and passages, a follow-up's owner and status, a
+        // container's tool and key. A project, a person and a tool are named by their label alone.
         const row = source.kind === 'follow_up' ? followUpRow(state, source) : null;
-        const meta = source.kind === 'original' ? originalMeta(source, group, 'passages') : row ? ownerAndStatus(row, state.status?.account?.membership_id) : '';
+        const meta = source.kind === 'original' ? originalMeta(source, group, 'passages')
+          : source.kind === 'container' ? containerMeta(source, externalSourceProvider(source, state.tools?.items))
+            : row ? ownerAndStatus(row, state.status?.account?.membership_id) : '';
         return (
           <button type="button" key={index} class={`source-row${open === index ? ' on' : ''}`} data-testid="source-row" aria-pressed={open === index}
             title={source.kind === 'original' ? source.label : undefined} onClick={() => chooseSource(index)}>
             <span class="marker">{index + 1}</span>
-            <KindIcon kind={group.kind} />
+            <KindIcon source={source} />
             <span class="label">{sourceName(source, state.sources)}</span>
             {meta && <span class="meta">{meta}</span>}
           </button>
@@ -245,7 +265,7 @@ function EarlierTurn({ turn }: { turn: AskTurn }) {
 const COPIED_MS = 1_600;
 
 /** The current answer: its sources, and what can be done with it. */
-function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
+function CurrentAnswer({ state, turn, line }: { state: State; turn: AskTurn; line: Line }) {
   const thread = state.ask!;
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -257,7 +277,7 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
     <div class="turn">
       <div class="question selectable" data-testid="question">{turn.question}</div>
       <div class="asked">{turn.scopeName}</div>
-      {turn.receipt && <Receipt state={state} receipt={turn.receipt} took={turn.took ?? 0} />}
+      {turn.receipt && <Receipt state={state} receipt={turn.receipt} took={turn.took ?? 0} line={line} />}
       <AgenticAnswer state={state} turn={turn} />
       {foundNothingInProject(turn) && (
         <div class="project-empty" data-testid="project-empty">
@@ -312,16 +332,20 @@ export function AskView({ state }: { state: State }) {
     const view = scroller.current;
     if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
   };
+  // Which Ask's line is open: the question on its way and its answer share an id, so a line opened while Ask works
+  // stays open as its receipt, and the next question's line starts closed.
+  const [openFor, setOpenFor] = useState<number | null>(null);
+  const lineFor = (id: number): Line => ({ open: openFor === id, toggle: () => setOpenFor(openFor === id ? null : id) });
   const { asking, failed } = thread;
   return (
     <section class="ask" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
       {earlierTurns(thread).map(turn => <EarlierTurn key={turn.id} turn={turn} />)}
-      {thread.shown && <CurrentAnswer key={thread.shown.id} state={state} turn={thread.shown} />}
+      {thread.shown && <CurrentAnswer key={thread.shown.id} state={state} turn={thread.shown} line={lineFor(thread.shown.id)} />}
       {asking && (
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>
           <div class="asked">{asking.scopeName}</div>
-          <Asking state={state} progress={asking.progress} follow={follow} />
+          <Asking state={state} progress={asking.progress} follow={follow} line={lineFor(thread.seq)} />
         </div>
       )}
       {failed && (
@@ -355,14 +379,21 @@ function useAnnouncement(text: string): string {
   return said?.text ?? '';
 }
 
+/** Whether an Ask's line is open, and the toggle that opens or closes it. */
+interface Line {
+  readonly open: boolean;
+  readonly toggle: () => void;
+}
+
 /**
- * The question on its way: one live line (the stage now, how long, Cancel)
- * and, once it has worked a few seconds, at most three rows of what it
- * searched and read. Each name opens beside Ask, which keeps running. The
- * section is a live region: the line, its timer and its rows are kept out of
- * it, and a screen reader hears the stage at most every few seconds instead.
+ * The question on its way: one quiet line (a pulse, the step now, how long,
+ * Cancel) that opens, once Ask has worked a few seconds and has rows, onto
+ * every search and read so far. Each name opens beside Ask, which keeps
+ * running. The section is a live region: the line, its timer and its rows are
+ * kept out of it, and a screen reader hears the stage at most every few
+ * seconds instead.
  */
-function Asking({ state, progress, follow }: { state: State; progress: AskProgress; follow: () => void }) {
+function Asking({ state, progress, follow, line }: { state: State; progress: AskProgress; follow: () => void; line: Line }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), TICK_MS);
@@ -372,18 +403,28 @@ function Asking({ state, progress, follow }: { state: State; progress: AskProgre
   // A quick Ask shows nothing more than it always did.
   const live = elapsed >= PROGRESS_AFTER_MS;
   const rows = live ? liveRows(progress) : [];
-  // Rows coming into view, and each new one, are followed by a person at the bottom; nothing before they show.
-  useLayoutEffect(() => { if (live) follow(); }, [live, progress.rows.length, progress.pending > 0, follow]);
+  const canOpen = rows.length > 0;
+  const open = line.open && canOpen;
+  // The line never changes height; its rows, opened, and each new one, are followed by a person at the bottom.
+  useLayoutEffect(() => { if (open) follow(); }, [open, open && progress.rows.length, open && progress.pending > 0, follow]);
   // Heard at once, as the line always was; then the stage, once it shows, at most every few seconds.
   const heard = useAnnouncement(live ? announcement(progress) || 'Thinking…' : 'Thinking…');
+  const words = <>
+    <i class="pulse" aria-hidden="true" />
+    <span class="headline working" data-testid="ask-stage">{live ? headline(progress) : 'Thinking…'}</span>
+    <span class="timer" data-testid="ask-timer" aria-hidden="true">{duration(elapsed)}</span>
+  </>;
   return <>
-    <div class="ask-progress" aria-live="off">
-      <div class="asking" data-testid="asking">
-        <i /><i /><i /><span data-testid="ask-stage">{live ? stageWords(progress) : 'Thinking…'}</span>
-        <span class={`timer${live && progress.stage ? ' dotted' : ''}`} aria-hidden="true">{duration(elapsed)}</span>
-        <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
+    <div class="ask-trail" aria-live="off">
+      <div class="ask-line" data-testid="asking">
+        {canOpen ? (
+          <button type="button" class={`ask-line-toggle${open ? ' open' : ''}`} data-testid="ask-line" aria-expanded={open} onClick={line.toggle}>
+            {words}<Chevron />
+          </button>
+        ) : <span class="ask-line-toggle">{words}</span>}
+        <button type="button" class="link-button faint-link" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
       </div>
-      {rows.length > 0 && (
+      {open && (
         <ul class="ask-steps" data-testid="ask-steps" aria-label="What Ask has looked through">
           {rows.map((row, index) => <LiveStep key={index} state={state} row={row} />)}
         </ul>
@@ -403,7 +444,7 @@ function SearchedStep({ state, row, earlier }: { state: State; row: AskSearched;
   return <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">{searchedWords(row, state.tools?.items, earlier)}</span></li>;
 }
 
-/** One live row: a search, a read with its names (the first few, then +N), or how many are being read. */
+/** One row of the line, opened: a search, a read with every name it has so far, or how many are being read. */
 function LiveStep({ state, row }: { state: State; row: LiveRow }) {
   if (row.type === 'searched') return <SearchedStep state={state} row={row.row} earlier={row.earlier} />;
   if (row.type === 'pending') {
@@ -412,17 +453,11 @@ function LiveStep({ state, row }: { state: State; row: LiveRow }) {
         <span class="words">Reading {row.count} {row.more ? 'more' : row.count === 1 ? 'item' : 'items'}</span></li>
     );
   }
-  const { names, more } = rowNames(row.row.items);
   return (
     <li class={`ask-step${row.done ? ' done' : ''}`} data-testid="ask-step"><Mark done={row.done} />
-      <span class="words">{row.done ? 'Read' : 'Reading'} <Names state={state} places={names} />{more > 0 && <span class="more"> +{more}</span>}</span>
+      <span class="words">{row.done ? 'Read' : 'Reading'} <Names state={state} places={namedPlaces(row.row.items)} /></span>
     </li>
   );
-}
-
-/** What a named item is called: a file's name as a person says it, otherwise its label. */
-function namedLabel(source: AnswerSource): string {
-  return source.kind === 'original' ? documentName(source.label).name : source.label;
 }
 
 /**
@@ -436,7 +471,7 @@ function Names({ state, places }: { state: State; places: readonly NamedPlace[] 
   const shown = first ? sourceKey(first) : null;
   return <>{places.map(({ source, items }, index) => {
     const on = shown === sourceKey(source);
-    const label = namedLabel(source);
+    const label = placeLabel(source);
     const count = items.length;
     return <span key={sourceKey(source)}>{index > 0 && ', '}
       <button type="button" class={`step-name${on ? ' on' : ''}`} data-testid="ask-step-name" aria-pressed={on}
@@ -446,23 +481,26 @@ function Names({ state, places }: { state: State; places: readonly NamedPlace[] 
 }
 
 /**
- * Above an answer that took a while: one dim line, "Looked through 14 items
- * · 48s ›", that opens the searches and reads the Authority audited, each
- * name opening beside the answer.
+ * Above an answer that took a while: the Ask's line, in place, as one dim
+ * receipt, "Looked through 58 items · 48s ›", that opens the searches and
+ * reads the Authority audited, each name opening beside the answer. A line
+ * opened while Ask worked stays open. The searches' found counts and the
+ * names account for what it looked through (ADR-0043).
  */
-function Receipt({ state, receipt, took }: { state: State; receipt: AskReceipt; took: number }) {
-  const [open, setOpen] = useState(false);
-  const unnamed = receiptUnnamed(receipt);
+function Receipt({ state, receipt, took, line }: { state: State; receipt: AskReceipt; took: number; line: Line }) {
+  const { open } = line;
   return (
-    <div class="receipt">
-      <button type="button" class={`receipt-line${open ? ' open' : ''}`} data-testid="ask-receipt" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span>{receiptWords(receipt, took)}</span><Chevron />
-      </button>
+    <div class="ask-trail">
+      <div class="ask-line">
+        <button type="button" class={`ask-line-toggle${open ? ' open' : ''}`} data-testid="ask-receipt" aria-expanded={open} onClick={line.toggle}>
+          <span>{receiptWords(receipt, took)}</span><Chevron />
+        </button>
+      </div>
       {open && (
-        <ul class="ask-steps" data-testid="receipt-rows">
+        // Kept out of the thread's live region, as the running line's rows are: a receipt that comes open is not read out row by row.
+        <ul class="ask-steps" data-testid="receipt-rows" aria-live="off">
           {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} earlier={foundBefore(receipt.rows, index)} />
             : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
-          {unnamed > 0 && <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">and {unnamed} more not listed</span></li>}
         </ul>
       )}
     </div>
@@ -545,10 +583,16 @@ export function RecordDetail({ record, headed = true, lit }: { record: ApprovedR
   );
 }
 
+/**
+ * Live evidence beside Ask: its label, and Open in its own app, where the tool
+ * checks your access. A Jira project, Confluence space or Slack channel also
+ * says its tool and key, in its source row's words ("Jira · THERM").
+ */
 function ExternalSource({ source, provider }: { source: ExternalAnswerSource; provider: string }) {
   const [failed, setFailed] = useState(false);
   return <div class="source-detail">
     <h2>{source.label}</h2>
+    {source.kind === 'container' && <div class="meta" data-testid="pane-container-meta">{containerMeta(source, provider)}</div>}
     <button type="button" class="link-button" data-testid={`open-${source.kind}-source`} title={source.permalink}
       onClick={async () => { setFailed(false); setFailed(!(await openExternalSource(source))); }}>Open in {provider}</button>
     {failed && <div class="error">The source could not be opened. Try again.</div>}
@@ -625,13 +669,21 @@ function ReadRecord<T>({ read, children }: { read: Read<T> | undefined; children
   return <>{children(read.value)}</>;
 }
 
+/** A container, as the pane's head names it after its tool: "Jira · Project", "Confluence · Space", "Slack · Channel". */
+const CONTAINER_WORDS: Readonly<Record<ToolContainerKind, string>> = { jira_project: 'Project', confluence_space: 'Space', slack_channel: 'Channel' };
+
 /** What the pane's head calls an item: its kind, or a live tool's name and kind. */
 function paneHeading(source: AnswerSource, state: State): string {
   if (source.kind === 'record') return 'Meeting · Approved record';
   if (source.kind === 'transcript') return 'Meeting · Transcript';
   if (source.kind === 'original') return 'Original source';
   if (source.kind === 'follow_up') return 'Follow-up';
-  return `${externalSourceProvider(source, state.tools?.items)} · ${source.kind === 'slack' ? 'Message' : source.kind === 'ticket' ? 'Ticket' : 'Page'}`;
+  if (source.kind === 'project') return 'Project';
+  if (source.kind === 'person') return 'Person';
+  if (source.kind === 'tool') return 'Tool';
+  const provider = externalSourceProvider(source, state.tools?.items);
+  if (source.kind === 'container') return `${provider} · ${CONTAINER_WORDS[source.container]}`;
+  return `${provider} · ${source.kind === 'slack' ? 'Message' : source.kind === 'ticket' ? 'Ticket' : 'Page'}`;
 }
 
 /**
@@ -652,10 +704,27 @@ function FollowUpSource({ state, source, item }: { state: State; source: Extract
 }
 
 /**
+ * One of your projects, a person in your organization, or one of your tools
+ * beside Ask (research tool contract v1): its name, as the answer cites it,
+ * and nothing is read for it. A tool's connection is the answer's to say, as
+ * the Authority read it for this Ask; a state Tools read earlier may be stale.
+ * Once the answer came, Open goes to the project, or to Tools; a person has no
+ * page to open.
+ */
+function WorkspaceSource({ source }: { source: Extract<AnswerSource, { kind: 'project' | 'person' | 'tool' }> }) {
+  return (
+    <div class="source-detail selectable" data-testid={`pane-${source.kind}`}>
+      <h2>{source.label}</h2>
+    </div>
+  );
+}
+
+/**
  * Beside Ask: one of the answer's sources, or an item Ask named, opened by
  * its kind (openers.ts): a meeting's approved record with the cited items lit,
- * a transcript's meeting, an original's cited passages, a follow-up, or Open
- * in its own app. Once the answer came, Open goes to the item's own page.
+ * a transcript's meeting, an original's cited passages, a follow-up, a
+ * project, a person or a tool, or Open in its own app. Once the answer came,
+ * Open goes to the item's own page.
  */
 export function SourcePane({ state }: { state: State }) {
   const sources = state.sources!;
@@ -679,6 +748,8 @@ export function SourcePane({ state }: { state: State }) {
     body = <OriginalSource state={state} target={target} source={source} />;
   } else if (source.kind === 'follow_up') {
     body = <ReadRecord read={sources.followUps[source.item_id]}>{item => <FollowUpSource state={state} source={source} item={item} />}</ReadRecord>;
+  } else if (source.kind === 'project' || source.kind === 'person' || source.kind === 'tool') {
+    body = <WorkspaceSource source={source} />;
   }
   return (
     <aside class="source-pane" data-testid="source-pane" aria-label="Source">

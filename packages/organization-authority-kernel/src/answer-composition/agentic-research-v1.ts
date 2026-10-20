@@ -91,6 +91,12 @@ export interface AgenticResearchActionV1 {
     readonly anchor_truncated?: false;
     readonly more?: boolean;
     readonly notice?: boolean;
+    /** Ask only (research tool contract v1): each filter's outcome on this read. */
+    readonly filters?: Readonly<Record<string, unknown>>;
+    /** Ask only: what a refused read's source supports. */
+    readonly supports?: Readonly<Record<string, unknown>>;
+    /** Ask only: the items a date filter could not test, and the dates they carry. */
+    readonly unchecked?: Readonly<Record<string, unknown>>;
   };
 }
 

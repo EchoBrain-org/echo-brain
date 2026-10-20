@@ -206,9 +206,28 @@ button.marker:hover { background: rgba(240, 236, 230, 0.18); }
 .asking i { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); animation: pulse 1.2s infinite ease-in-out; }
 .asking i:nth-child(2) { animation-delay: 0.15s; } .asking i:nth-child(3) { animation-delay: 0.3s; }
 @keyframes pulse { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
-/* While Ask works: one live line, and under it at most three rows of what it searched and read. */
-.ask-progress { display: flex; flex-direction: column; gap: 8px; }
-.asking .timer.dotted::before { content: '·'; margin-right: 6px; }
+/* While Ask works: one quiet line (a pulse, the step now, how long) that opens onto every row of what it searched and read. */
+.ask-trail { display: flex; flex-direction: column; gap: 6px; }
+.ask-line { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: var(--faint); }
+.ask-line-toggle { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-left: -6px; padding: 3px 6px; border: 0; border-radius: 6px; font-size: inherit; text-align: left; color: inherit; background: transparent; }
+button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
+.ask-line-toggle svg { flex-shrink: 0; transition: transform 0.15s ease; }
+.ask-line-toggle.open svg { transform: rotate(90deg); }
+.ask-line .pulse { flex-shrink: 0; width: 6px; height: 6px; border-radius: 3px; background: var(--accent); animation: pulse 1.2s infinite ease-in-out; }
+.ask-line .headline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The step now, shimmering while Ask works: a band of brighter text that sweeps across it. */
+.ask-line .headline.working {
+  background-image: linear-gradient(90deg, var(--faint) 0%, var(--faint) 38%, rgba(240, 236, 230, 0.96) 50%, var(--faint) 62%, var(--faint) 100%);
+  background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 2.2s linear infinite;
+}
+@keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0% 0; } }
+.ask-line .timer { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.ask-line .timer::before { content: '·'; margin-right: 6px; }
+.ask-line .link-button { flex-shrink: 0; padding: 3px 8px; font-size: 12.5px; }
+@media (prefers-reduced-motion: reduce) {
+  .ask-line .headline.working { animation: none; background: none; color: var(--muted); }
+  .ask-line .pulse { animation: none; opacity: 0.85; }
+}
 .ask-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0 0 0 2px; list-style: none; font-size: 13px; color: var(--faint); }
 .ask-step { display: flex; align-items: flex-start; gap: 8px; min-width: 0; line-height: 1.45; }
 .ask-step .mark { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 19px; color: var(--muted); }
@@ -220,12 +239,7 @@ button.marker:hover { background: rgba(240, 236, 230, 0.18); }
 .step-name:hover, .step-name.on { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
 /* How many of a place's items Ask read, after its name: dim, never underlined. */
 .step-name .count { display: inline-block; margin-left: 1px; color: var(--faint); }
-/* After the answer: one dim receipt line above it, which opens its rows. */
-.receipt { display: flex; flex-direction: column; gap: 6px; margin-top: -4px; }
-.receipt-line { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; margin-left: -6px; padding: 2px 6px; border: 0; border-radius: 6px; font-size: 12.5px; color: var(--faint); background: transparent; }
-.receipt-line:hover { color: var(--muted); background: var(--hover); }
-.receipt-line svg { transition: transform 0.15s ease; }
-.receipt-line.open svg { transform: rotate(90deg); }
+/* After the answer, the same line in place: one dim receipt above it, which opens its rows. */
 .pane-actions { display: flex; flex-shrink: 0; align-items: center; gap: 2px; }
 /* The decision, action or rationale an answer or a name cites, lit in its meeting. */
 .record-item.on { background: var(--accent-soft); }

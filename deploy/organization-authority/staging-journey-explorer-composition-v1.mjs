@@ -5,9 +5,9 @@ import slack from '@echo-brain/provider-slack-server/assets/telemetry-vocabulary
 
 // The reader retains known historical labels across the fixed 14-day query window.
 const selected = [...legacyProviderTelemetryVocabulariesV1, openrouter, slack];
-const explorer = createStagingJourneyExplorerModuleV1({
-  providers: selected.flatMap(value => value.providers),
-  models: selected.flatMap(value => value.models),
-  legacy_phases: selected.flatMap(value => value.legacy_phases),
+const values = field => selected.flatMap(value => value[field]);
+export const { createStagingJourneyExplorerHandlerV1, parseRequestV1, summarizeJourneyEventsV1, timelineV1, handler } = createStagingJourneyExplorerModuleV1({
+  providers: values('providers'),
+  models: values('models'),
+  legacy_phases: values('legacy_phases'),
 });
-export const { createStagingJourneyExplorerHandlerV1, parseRequestV1, summarizeJourneyEventsV1, timelineV1, handler } = explorer;

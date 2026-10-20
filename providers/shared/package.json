@@ -48,6 +48,10 @@
     "./person-provider-mcp-transport-v1": {
       "types": "./dist/person-provider-mcp-transport-v1.d.ts",
       "import": "./dist/person-provider-mcp-transport-v1.js"
+    },
+    "./person-tool-container-reader-v1": {
+      "types": "./dist/person-tool-container-reader-v1.d.ts",
+      "import": "./dist/person-tool-container-reader-v1.js"
     }
   },
   "files": [

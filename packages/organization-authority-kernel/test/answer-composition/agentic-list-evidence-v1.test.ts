@@ -83,7 +83,7 @@ describe("the list record", () => {
     const tickets = createAgenticListEvidenceV1({ ...OCTOBER_4, id: "L2", source: "tickets", filter: { status: "open" }, filter_applied: { owner: "ignored", status: "partial" } });
     expect([tickets.filter, tickets.filter_applied]).toEqual([{ status: "open" }, { owner: "ignored", status: "partial" }]);
     expectTypeOf<AgenticListFilterApplicationV1>().toEqualTypeOf<"applied" | "partial" | "ignored">();
-    expect(AGENTIC_LIST_FILTER_FIELDS_V1).toEqual(["kind", "status", "owner", "channel", "since", "until", "date_field"]);
+    expect(AGENTIC_LIST_FILTER_FIELDS_V1).toEqual(["kind", "status", "owner", "role", "channel", "since", "until", "date_field"]);
   });
 
   it.each([
@@ -260,12 +260,12 @@ describe("the writer's view", () => {
   });
 
   it("lets the writer choose a list and select by one row fact other than its title, never write names", () => {
-    expect(AGENTIC_LIST_SELECTION_FIELDS_V1).toEqual(["owner", "status", "due", "created", "updated", "received", "occurred"]);
+    expect(AGENTIC_LIST_SELECTION_FIELDS_V1).toEqual(["owner", "status", "due", "created", "updated", "received", "occurred", "approved", "sent", "reassigned", "checked"]);
     const mine: AgenticAnswerListUseV1 = { id: "L1", where: { field: "owner", value: "Dana Lee" } };
     const week: AgenticAnswerListUseV1 = { id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } };
     expect([mine.where?.field, week.where?.field]).toEqual(["owner", "due"]);
     expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>>().toEqualTypeOf<AgenticListSelectionV1>();
-    expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>["field"]>().toEqualTypeOf<"owner" | "status" | "due" | "created" | "updated" | "received" | "occurred">();
+    expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>["field"]>().toEqualTypeOf<"owner" | "status" | "due" | "created" | "updated" | "received" | "occurred" | "approved" | "sent" | "reassigned" | "checked">();
     // @ts-expect-error a selection is never by title
     const byTitle: AgenticAnswerListUseV1 = { id: "L1", where: { field: "title", value: "PRD" } };
     // @ts-expect-error the writer names lists, never member names

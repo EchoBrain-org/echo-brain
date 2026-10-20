@@ -311,7 +311,7 @@ state. Meetings enter only through a person's own sources, so ordinary startup
 requires no meeting source. A staging-only synthetic personal source exercises
 the retained meeting pipeline without Granola. It separately
 composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter
-DeepSeek planner/answer model. This is an allowed selecting composition
+Claude Sonnet 5.5 planner/answer model. This is an allowed selecting composition
 profile, not evidence that every active provider has completed qualification.
 
 The Jira live runtime (`jira-person-live-runtime-v1.ts`) is a selected,

@@ -3,9 +3,11 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
-import { liveSourceDescriptorV2, type EvidenceDeskPortV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import { liveSourceDescriptorV2, type EvidenceDeskItemV2, type EvidenceDeskPortV2, type EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import { PEOPLE_SOURCE_DESCRIPTOR_V1, PROJECTS_SOURCE_DESCRIPTOR_V1, TOOLS_SOURCE_DESCRIPTOR_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { PersonLiveEvidenceCitationV1, PersonLiveEvidenceItemV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createRegisteredPersonLiveEvidenceDeskV2, type RegisteredPersonLiveEvidenceSourceV2 } from '../src/composition/person-live-evidence-desk-v2.js';
+import type { PersonWorkspaceEvidenceSourcesV1 } from '../src/composition/person-workspace-evidence-v1.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 const empty = { items: [], truncated: false, receipt_digests: [] };
 /** Test shorthand: registers ticket, page and Slack readers in the fixed order production composition uses. */
@@ -298,9 +300,9 @@ describe('thin live ticket dispatcher', () => {
     expect(await desk.list({ source: 'ticket', limit: 50 })).toMatchObject({ truncated: false, page_full: true });
     vi.mocked(f.base.list).mockResolvedValueOnce({ ...empty, page_full: false });
     expect(await desk.list({ source: 'meeting', limit: 50 })).toMatchObject({ page_full: false });
-    for (const filter of [{ owner: 'Dana' }, { status: 'open' as const }]) {
+    for (const filter of [{ owner: 'Dana' }, { status: 'open' as const }, { role: 'lead' as const }]) {
       for (const source of ['ticket', 'slack', 'meeting', 'document']) {
-        await expect(desk.list({ source, ...filter, ...(source === 'slack' ? { channel: 'launch' } : {}) })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source cannot be filtered by owner or status' });
+        await expect(desk.list({ source, ...filter, ...(source === 'slack' ? { channel: 'launch' } : {}) })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source cannot be filtered by owner, status or role' });
       }
     }
     expect(f.ticket.list).toHaveBeenCalledOnce(); expect(f.base.list).toHaveBeenCalledOnce(); expect(f.slack.list).not.toHaveBeenCalled();
@@ -457,5 +459,152 @@ describe('open by an earlier citation', () => {
     await expect(desk.openCitation!({ citation: f.pages[0]!.citation })).rejects.toMatchObject({ code: 'unauthorized' });
     await expect(desk.openCitation!({ citation: f.local[0]!.citation })).rejects.toMatchObject({ code: 'unauthorized' });
     await expect(desk.openCitation!({ citation: 'not-a-citation' })).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+});
+
+describe('workspace sources (research tool contract v1)', () => {
+  const item = (id: string, kind: 'project' | 'person' | 'tool', links?: Readonly<Record<string, readonly string[]>>): EvidenceDeskItemV2 => ({
+    id, kind, label: id, text: id, visibility: 'project', receipt_sha256: receipt(id), citation: { kind } as never, ...(links === undefined ? {} : { links }),
+  });
+  const page = (items: readonly EvidenceDeskItemV2[], linked: readonly EvidenceDeskItemV2[] = []): EvidenceDeskResultV2 => ({
+    items, truncated: false, receipt_digests: [receipt(items[0]?.kind ?? 'none')], ...(linked.length === 0 ? {} : { linked }),
+  });
+  /** Atlas and Beacon with their members beside them; Mina with her project beside her; Jira. */
+  function workspace() {
+    const atlas = item('project_atlas', 'project', { members: ['person_mina'] });
+    const beacon = item('project_beacon', 'project', { members: ['person_rafael'] });
+    const mina = item('person_mina', 'person', { projects: ['project_atlas'] });
+    const rafael = item('person_rafael', 'person', { projects: ['project_beacon'] });
+    const jira = item('tool_jira', 'tool');
+    const projects = { descriptor: PROJECTS_SOURCE_DESCRIPTOR_V1, search: vi.fn(async () => page([atlas, beacon], [mina, rafael])), list: vi.fn(async () => page([atlas, beacon], [mina, rafael])),
+      open: vi.fn(async () => page([atlas], [mina])), revalidate: vi.fn(() => {}) };
+    const people = { descriptor: PEOPLE_SOURCE_DESCRIPTOR_V1, search: vi.fn(async () => page([mina], [atlas])), list: vi.fn(async () => page([mina], [atlas])),
+      open: vi.fn(async () => page([mina], [atlas])), revalidate: vi.fn(() => {}) };
+    const tools = { descriptor: TOOLS_SOURCE_DESCRIPTOR_V1, search: vi.fn(async () => page([jira])), list: vi.fn(async () => page([jira])),
+      open: vi.fn(async () => page([jira])), revalidate: vi.fn(async () => {}) };
+    const sources: PersonWorkspaceEvidenceSourcesV1 = { projects, people, tools };
+    return { sources, projects, people, tools, atlas, beacon, mina, rafael, jira };
+  }
+
+  it('describes the workspace sources, and refuses a live source named like one', () => {
+    const f = fixture(); const w = workspace();
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [], undefined, w.sources);
+    expect((desk.live_sources ?? []).map(source => 'source_id' in source ? source.source_id : undefined)).toEqual(['projects', 'people', 'tools']);
+    for (const name of ['projects', 'people', 'tools']) {
+      const registration: RegisteredPersonLiveEvidenceSourceV2 = { source: f.ticket, scope: { kind: 'global' }, descriptor: { ...liveSourceDescriptorV2({ source: 'ticket', tool_id: 'jira' }), source_id: name } };
+      expect(() => createRegisteredPersonLiveEvidenceDeskV2(f.base, [registration], undefined, w.sources)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    }
+  });
+
+  it('lists a workspace source with its own filters, and opens an item released beside a row through the source of its kind', async () => {
+    const f = fixture(); const w = workspace();
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [], undefined, w.sources);
+    const listed = await desk.list({ source: 'projects', status: 'active', role: 'lead', limit: 20 });
+    expect(w.projects.list).toHaveBeenCalledWith(expect.objectContaining({ source: 'projects', status: 'active', role: 'lead', limit: 20 }));
+    expect(listed.items.map(value => [value.id, value.source_id])).toEqual([['project_atlas', 'projects'], ['project_beacon', 'projects']]);
+    expect(listed.linked!.map(value => [value.id, value.source_id])).toEqual([['person_mina', 'people'], ['person_rafael', 'people']]);
+    // Mina was released beside Atlas by projects; people opens her, as it opens every person.
+    await desk.open({ item: 'person_mina' });
+    expect(w.people.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'person_mina' }));
+    expect(w.projects.open).not.toHaveBeenCalled();
+    await desk.open({ item: 'project_atlas' });
+    expect(w.projects.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'project_atlas' }));
+    // A selected workspace source reads its own search, with no words its list.
+    await desk.search({ source: 'tools', query: 'jira' });
+    expect(w.tools.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'jira' }));
+    await desk.search({ source: 'people', limit: 5 });
+    expect(w.people.list).toHaveBeenCalledWith(expect.objectContaining({ source: 'people', limit: 5 }));
+    await expect(desk.search({ source: 'people', query: 'mina', kinds: ['project'] })).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it('reads the asker\'s projects in a search across sources after the content sources, with only the items beside the rows it keeps', async () => {
+    const f = fixture(); const w = workspace();
+    const meeting: EvidenceDeskItemV1 = { id: 'local-1', kind: 'note', label: 'Atlas kickoff', text: 'Atlas kickoff', visibility: 'team', receipt_sha256: receipt('local'),
+      citation: { kind: 'source_revision', source_id: `source:${'1'.repeat(64)}`, revision_id: 'revision-1', source_sha256: receipt('source'), representation_sha256: receipt('representation'), anchor_sha256: receipt('anchor-1') } };
+    vi.mocked(f.base.search).mockResolvedValue({ items: [meeting], truncated: false, receipt_digests: [receipt('local')] });
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [], undefined, w.sources);
+    // What was said comes first; the projects fill what is left. People and tools are searched only when named.
+    const found = await desk.search({ query: 'atlas', limit: 2 });
+    expect(found.items.map(value => value.id)).toEqual(['local-1', 'project_atlas']);
+    expect(found.linked!.map(value => [value.id, value.source_id])).toEqual([['person_mina', 'people']]);
+    expect(found.truncated).toBe(true);
+    const wider = await desk.search({ query: 'atlas', limit: 4 });
+    expect(wider.items.map(value => value.id)).toEqual(['local-1', 'project_atlas', 'project_beacon']);
+    expect(wider.linked!.map(value => value.id)).toEqual(['person_mina', 'person_rafael']);
+    expect(w.people.search).not.toHaveBeenCalled(); expect(w.tools.search).not.toHaveBeenCalled();
+    // Projects record when they were created, so a dated search reads them on that date; a search with no words reads none.
+    w.projects.search.mockClear();
+    await desk.search({ query: 'atlas', since: '2026-10-01' });
+    expect(w.projects.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'atlas', since: '2026-10-01' }));
+    w.projects.search.mockClear();
+    await desk.search({ limit: 5, inventory_mode: 'items' });
+    expect(w.projects.search).not.toHaveBeenCalled();
+    // A kind names the sources that serve it; ECHO's own desk is not asked for a workspace kind.
+    vi.mocked(f.base.search).mockClear();
+    await desk.search({ query: 'atlas', kinds: ['project'] });
+    expect(w.projects.search).toHaveBeenCalledOnce(); expect(f.base.search).not.toHaveBeenCalled();
+    // A workspace source briefly unavailable becomes a coverage notice beside what the others found.
+    w.projects.search.mockRejectedValueOnce(new AuthorityOperationError('unavailable', 'busy'));
+    const noticed = await desk.search({ query: 'atlas', limit: 4 });
+    expect(noticed.items.map(value => value.id)).toEqual(['local-1']);
+    expect(noticed.notice).toBe('Your projects could not be searched just now, so these results leave them out.');
+  });
+
+  it('leaves a source with no dates out of a dated search across sources, and a tool\'s containers out of every search across them', async () => {
+    const f = fixture();
+    const containers: PersonLiveEvidenceSourceV1 = { tool_id: 'jira', search: vi.fn(async () => empty), open: vi.fn(async () => empty), list: vi.fn(async () => empty), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) };
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [
+      { source: f.ticket, scope: { kind: 'global' }, descriptor: liveSourceDescriptorV2({ source: 'ticket', tool_id: 'jira' }) },
+      { source: containers, scope: { kind: 'global' }, descriptor: { source_id: 'jira_projects', selector: 'jira_projects', kind: 'tool_container', tool_id: 'jira', description: 'Jira projects',
+        metadata_only_list: false, capabilities: { filters: {}, dates: {}, any_date: false, links: [] } } },
+    ]);
+    await desk.search({ query: 'atlas', since: '2026-10-01' });
+    expect(f.ticket.search).toHaveBeenCalledOnce(); expect(f.base.search).toHaveBeenCalledOnce(); expect(containers.search).not.toHaveBeenCalled();
+    await desk.search({ limit: 5, inventory_mode: 'items' });
+    expect(f.ticket.list).toHaveBeenCalledOnce(); expect(containers.list).not.toHaveBeenCalled();
+    // A tool's containers are searched only when named: each search scans the tool's projects or spaces.
+    await desk.search({ query: 'atlas' });
+    expect(containers.search).not.toHaveBeenCalled();
+    // Chosen, a source answers as its reader does, dates included.
+    await desk.search({ source: 'jira_projects', query: 'atlas', since: '2026-10-01' });
+    expect(containers.search).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'atlas', since: '2026-10-01' }));
+    // A window on any date reaches a source that reads one date only as its own default date.
+    await desk.search({ query: 'atlas', since: '2026-10-01', date_field: 'any' });
+    expect(f.ticket.search).toHaveBeenLastCalledWith(expect.not.objectContaining({ date_field: expect.anything() }));
+    expect(f.base.search).toHaveBeenLastCalledWith(expect.objectContaining({ date_field: 'any' }));
+  });
+
+  it('refuses workspace reads on a desk that bound no workspace', async () => {
+    const f = fixture();
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, []);
+    expect(desk.live_sources).toEqual([]);
+    await expect(desk.list({ source: 'projects' })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(desk.search({ source: 'people', query: 'mina' })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(desk.search({ query: 'mina', kinds: ['person'] })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(desk.list({ source: 'meeting', kinds: ['tool'] })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.base.search).not.toHaveBeenCalled(); expect(f.base.list).not.toHaveBeenCalled();
+  });
+
+  it('awaits the tools check with the providers\' and runs the projects and people checks with the final synchronous ones', async () => {
+    const f = mixedFixture(); const w = workspace();
+    const order: string[] = [];
+    vi.mocked(f.base.revalidate).mockImplementation(async () => { order.push('base'); return { checked_at: '2026-10-01T00:00:00.000Z' }; });
+    w.tools.revalidate.mockImplementation(async () => { order.push('tools'); });
+    vi.mocked(f.ticket.revalidate).mockImplementation(async () => { order.push('jira'); });
+    w.projects.revalidate.mockImplementation(() => { order.push('projects'); });
+    w.people.revalidate.mockImplementation(() => { order.push('people'); });
+    vi.mocked(f.ticket.assertCurrent).mockImplementation(() => { order.push('jira grant'); });
+    const registration: RegisteredPersonLiveEvidenceSourceV2 = { source: f.ticket, scope: { kind: 'global' }, descriptor: liveSourceDescriptorV2({ source: 'ticket', tool_id: 'jira' }) };
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [registration], undefined, w.sources);
+    await desk.revalidate({ mode: 'incremental' });
+    expect(order).toEqual(['base', 'tools', 'jira', 'base', 'projects', 'people', 'jira grant']);
+    expect(w.projects.revalidate).toHaveBeenCalledWith(expect.objectContaining({ mode: 'incremental' }));
+    // A workspace release no longer the asker's fails the check.
+    w.people.revalidate.mockImplementation(() => { throw new AuthorityOperationError('stale_access_state', 'A workspace item is no longer available to this person'); });
+    await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+    // With no live source, the tools check comes first, so the base check is the last await before the local checks.
+    order.length = 0; w.people.revalidate.mockImplementation(() => { order.push('people'); });
+    await createRegisteredPersonLiveEvidenceDeskV2(f.base, [], undefined, w.sources).revalidate({});
+    expect(order).toEqual(['tools', 'base', 'projects', 'people']);
   });
 });

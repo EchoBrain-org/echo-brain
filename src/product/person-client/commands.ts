@@ -7,7 +7,7 @@ import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/orga
 import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
-import { validatePersonAskProgressLineV2, validatePersonAskProgressResultLineV2 } from '@echo-brain/organization-api';
+import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbNameV1, type PersonToolVerbV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -228,11 +228,11 @@ Removes the local session. A revoked session is also removed locally.
 `,
   ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --live [--progress [--expected-membership-id <id> --expected-authority <origin>]]]
 
-Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved; Slack and shared transcripts are not read. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}'.
+Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved; Slack and shared transcripts are not read. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
---live selects the newest Ask route, using every configured request-local live source, including Jira tickets and Confluence pages, and ECHO's shared follow-ups as Home shows them. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools and follow-ups. An older Authority answers on its newest route without follow-ups. --tickets retains the prior ticket-capable response for compatibility.
+--live selects the newest Ask route, using every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools and follow-ups. An older Authority answers on its newest route: without /v7 it cites no projects, people, tools or tool containers, and without /v6 no follow-ups. --tickets retains the prior ticket-capable response for compatibility.
 
---progress (with --live only) prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
+--progress (with --live only) prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 `,
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
@@ -1210,10 +1210,10 @@ export async function runPersonClientCli(
           : values.mine === true ? { mine: true } as const : undefined;
         if (values.progress === true) {
           // One line per step event as it arrives; the last line is today's, with the receipt when the Authority streamed.
-          // Progress V2 lines: a `/v6` step may name a follow-up, and a `/v5` step is a V2 step too.
+          // Progress V3 lines: a `/v7` step may name a project, a person, a tool or a tool container, and a `/v6` or `/v5` step is a V3 step too.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
-            progress => print(stdout, validatePersonAskProgressLineV2({ ok: true, progress })), expectedAccount(values));
-          print(stdout, validatePersonAskProgressResultLineV2({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
+            progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), expectedAccount(values));
+          print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
           break;
         }
         print(stdout, {

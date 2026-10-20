@@ -19,12 +19,37 @@ function meetingTitle(meetings, id) {
   return lower(meeting.title);
 }
 
+/** A name compared as code shows it: one line, NFC, ignoring case and spacing. */
+const sameName = (left, right) => typeof left === "string" && typeof right === "string" &&
+  left.normalize("NFC").trim().replace(/\s+/gu, " ").toLowerCase() === right.normalize("NFC").trim().replace(/\s+/gu, " ").toLowerCase();
+
+/**
+ * Whether a follow-up item follows the world follow-up `spec` (world/additions.json, `workspace.follow_ups`). A listed
+ * or searched follow-up is read live as the asker, so its title is its ticket's own ("THERM-47: …"), which decides.
+ * Only a title naming no ticket (ECHO's own phrase) lets its text name the ticket as a whole key; text never overrides a
+ * title that names another ticket.
+ */
+function followUpMatches(item, spec) {
+  if (item.kind !== "follow_up" || spec === undefined) return false;
+  const titled = ticketKey({ title: item.title });
+  if (titled !== undefined) return titled === spec.follows;
+  const key = new RegExp(`(?<![A-Za-z0-9-])${spec.follows}(?![0-9])`, "u");
+  return key.test(item.title ?? "") || key.test(item.text ?? "");
+}
+
 /**
  * True when the item is the referenced evidence. A page matches by id; a
  * section, when named, must appear in the released section text or title.
  * Meeting records match by kind and meeting title; transcripts by title.
+ * Workspace items (research tool contract v1) match by name (a project, a
+ * person) or id (a tool, a tool container), and follow-ups by what they follow.
  */
 export function itemMatches(item, ref, meetings) {
+  if (ref.project !== undefined) return item.kind === "project" && sameName(item.title, ref.project);
+  if (ref.person !== undefined) return item.kind === "person" && sameName(item.title, ref.person);
+  if (ref.tool !== undefined) return item.kind === "tool" && item.citation?.tool_id === ref.tool;
+  if (ref.container !== undefined) return item.kind === "tool_container" && item.citation?.container === ref.container && String(item.citation?.container_id ?? "") === ref.id;
+  if (ref.follow_up !== undefined) return followUpMatches(item, meetings.follow_ups?.get(ref.follow_up));
   if (ref.ticket !== undefined) return item.kind === "ticket" && ticketKey(item) === ref.ticket;
   if (ref.jira_project !== undefined) return item.kind === "ticket" && (ticketKey(item) ?? "").startsWith(`${ref.jira_project}-`);
   if (ref.page !== undefined) return item.kind === "page" && String(item.citation?.page_id ?? "") === ref.page;
@@ -70,7 +95,10 @@ export function matching(items, ref, meetings) {
 }
 
 export function meetingIndex(additions) {
-  return new Map(additions.meetings.map(meeting => [meeting.id, meeting]));
+  const index = new Map(additions.meetings.map(meeting => [meeting.id, meeting]));
+  // The world's follow-ups (research tool contract v1) ride on the same index, so every matcher that takes it can name one.
+  index.follow_ups = new Map((additions.workspace?.follow_ups ?? []).map(entry => [entry.id, entry]));
+  return index;
 }
 
 /** Distinctive text from restricted meetings; any trace of it in a run is a leak. */

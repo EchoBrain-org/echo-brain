@@ -3,8 +3,9 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  validatePersonAskProgressLineV1, validatePersonAskProgressLineV2, validatePersonAskProgressResultLineV2, validatePersonRunsRequestV1, validatePersonRunsResultV1,
-  type PersonAnswerCitationV7, type PersonAskProgressStepEventV2, type PersonAskReceiptV2,
+  PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_V1, formatPersonAskProgressEventV3, validatePersonAskProgressLineV1, validatePersonAskProgressLineV2,
+  validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV2, validatePersonAskProgressResultLineV3, validatePersonRunsRequestV1, validatePersonRunsResultV1,
+  type PersonAnswerCitationV7, type PersonAnswerCitationV8, type PersonAskProgressEventV3, type PersonAskProgressStepEventV2, type PersonAskReceiptV2,
 } from '@echo-brain/organization-api';
 import { derivedAtomIdentity } from '@echo-brain/organization-record/application/atom-identity';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
@@ -20,9 +21,11 @@ import { JIRA_TEXT, SLACK_TEXT } from '../../services/organization-authority/tes
 // desktop host runs it; the host's own line reader turns the printed lines
 // into page notices; and the desktop's store takes them, then the answer, and
 // opens what Ask named. A change on any of the three sides meets the others.
-// The client streams the V7 answer on /v6 (progress V2, ADR-0040), whose Ask
-// may cite a follow-up, and falls back to V1 on /v5 for an Authority without
-// /v6, as an older one answers.
+// The client asks /v7 first (the V8 answer, research tool contract v1); here
+// each Authority is one from before /v7, which answers it with a 404 without
+// the route header. So the client streams the V7 answer on /v6 (progress V2,
+// ADR-0040), whose Ask may cite a follow-up, and falls back to V1 on /v5 for
+// an Authority without /v6 either, as an older one answers.
 //
 // The desktop's modules are loaded by path, as approval-proposal-roundtrip
 // loads the Authority's: the root typecheck never reads the app (its DOM and
@@ -40,7 +43,7 @@ type Json = Record<string, unknown>;
 type Scope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'mine' };
 type Expect = { readonly authority: string; readonly membership_id: string };
 interface CliRun { readonly exit: number; readonly stdout: string; readonly stderr: string; readonly overflow: boolean }
-type Source = Json & { readonly kind: 'record' | 'original' | 'transcript' | 'follow_up' | 'ticket' | 'page' | 'slack'; readonly label: string };
+type Source = Json & { readonly kind: 'record' | 'original' | 'transcript' | 'follow_up' | 'ticket' | 'page' | 'slack' | 'project' | 'person' | 'tool' | 'container'; readonly label: string };
 interface Row { readonly type: 'searched' | 'read'; readonly sources?: readonly Json[]; readonly found?: number; readonly items?: readonly Source[] }
 interface Progress { readonly started: number; readonly stage: string | null; readonly pending: number; readonly rows: readonly Row[] }
 interface Receipt { readonly looked_through: number; readonly elapsed_ms: number; readonly rows: readonly Row[] }
@@ -55,7 +58,7 @@ interface Store {
   openFullPage(): void;
   followUpShown(): { kind: string; item_id?: string; item?: Json | null } | null;
   getState(): {
-    ask: { asking: { progress: Progress } | null; shown: { answer: { sources: readonly Source[]; receipt?: Receipt }; receipt?: Receipt; took?: number } | null; failed: unknown } | null;
+    ask:{ asking: { progress: Progress } | null; shown: { answer: { sources: readonly Source[]; receipt?: Receipt }; receipt?: Receipt; took?: number } | null; failed: unknown } | null;
     sources: { records: Record<string, { loading: boolean; value?: { decisions: { items: { atom_id?: string; text: string }[] } } }>;
       evidence: { reads: Record<number, { loading: boolean; value?: { text: string } }> } | null;
       followUps: Record<string, { loading: boolean; value?: { item_id: string; state: string; owner: { membership_id: string; name: string }; expected: string | null } }> } | null;
@@ -66,8 +69,8 @@ interface Views {
   openItemView(item: unknown): Json;
 }
 interface ProgressView {
-  PROGRESS_AFTER_MS: number; liveRows(progress: Progress): { type: string; row?: Row; done?: boolean }[]; stageWords(progress: Progress): string;
-  searchedWords(row: Row): string; rowNames(items: readonly Source[]): { names: readonly { source: Source; items: readonly Source[] }[]; more: number }; receiptWords(receipt: Receipt, took: number): string;
+  PROGRESS_AFTER_MS: number; liveRows(progress: Progress): { type: string; row?: Row; done?: boolean }[]; headline(progress: Progress): string;
+  searchedWords(row: Row): string; namedPlaces(items: readonly Source[]): { source: Source; items: readonly Source[] }[]; receiptWords(receipt: Receipt, took: number): string;
 }
 const ok = (value: unknown) => ({ ok: true, value });
 const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) await Promise.resolve(); };
@@ -98,7 +101,11 @@ afterEach(() => {
  * client command the host would, through the host's own views and line
  * reader, and every step the reader posts goes to the page's store.
  */
-async function app(options: { readonly older?: boolean } = {}) {
+/**
+ * `route`: the newest Ask route the Authority has; one before /v7 answers it with a 404. `v7`: instead, a scripted
+ * /v7 stream (progress V3) the loopback answers with, as an Authority that serves the V8 answer would.
+ */
+async function app(options: { readonly route?: '/v6' | '/v5'; readonly v7?: () => string } = {}) {
   const f = await allSourceAskFixture(roots, { notes: NOTE });
   const [{ runCli, lastJson }, ask, views, { askText }, progress, { openerOf }] = await Promise.all([
     desktop<{ runCli(cli: unknown, argv: readonly string[], dependencies: Json, onLine?: (line: string) => void): Promise<CliRun>; lastJson(text: string): unknown }>('host/cli.ts'),
@@ -117,12 +124,17 @@ async function app(options: { readonly older?: boolean } = {}) {
   mkdirSync(home, { mode: 0o700 });
   new PersonSessionStore(home).install(AUTHORITY, f.initialized.authority_id, f.session);
   const asked: string[] = [];
+  /** The progress version each streamed Ask asked for, in order. */
+  const opted: (string | null)[] = [];
   const loopback: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     expect(url.origin).toBe(AUTHORITY);
-    if (url.pathname.endsWith('/person/ask')) asked.push(url.pathname);
-    // An Authority from before /v6 has no such route: a 404 without the route header.
-    if (options.older === true && url.pathname === '/v6/person/ask') {
+    if (url.pathname.endsWith('/person/ask')) { asked.push(url.pathname); opted.push(new Headers(init?.headers).get(PERSON_ASK_PROGRESS_HEADER_V1)); }
+    if (url.pathname === '/v7/person/ask' && options.v7 !== undefined) {
+      return new Response(options.v7(), { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', [PERSON_ANSWER_ROUTE_HEADER_V5]: '7' } });
+    }
+    // An Authority from before /v7, and from before /v6 for the /v5 proof, has no such route: a 404 without the route header.
+    if (url.pathname === '/v7/person/ask' || (options.route === '/v5' && url.pathname === '/v6/person/ask')) {
       return new Response(JSON.stringify({ error: { code: 'not_found', message: 'request failed' } }), { status: 404, headers: { 'content-type': 'application/json; charset=utf-8' } });
     }
     return fetch(`${f.origin}${url.pathname}${url.search}`, init);
@@ -177,7 +189,7 @@ async function app(options: { readonly older?: boolean } = {}) {
   await store.refreshStatus();
   await flush();
   const audits = () => (f.database.prepare(ASK_AUDIT).all() as { body_json: string }[]).map(row => JSON.parse(row.body_json) as Json);
-  return { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits, asked };
+  return { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits, asked, opted };
 }
 
 /** The steps the client printed before its last line. */
@@ -191,10 +203,10 @@ const SEARCHED_V2 = [...SEARCHED_V1, { kind: 'follow_ups' }];
 
 describe('Ask progress from the Authority through the Person client to the desktop page', () => {
   it.each([
-    { route: '/v6', older: false, schema: 7, sources: SEARCHED_V2, words: 'meetings, documents, Jira, Slack and follow-ups' },
-    { route: '/v5', older: true, schema: 6, sources: SEARCHED_V1, words: 'meetings, documents, Jira and Slack' },
+    { route: '/v6' as const, older: false, schema: 7, sources: SEARCHED_V2, words: 'meetings, documents, Jira, Slack and follow-ups' },
+    { route: '/v5' as const, older: true, schema: 6, sources: SEARCHED_V1, words: 'meetings, documents, Jira and Slack' },
   ])('streams each step to the page while the Authority works on $route, then folds into the audited receipt, and opens what it named', async ({ route, older, schema, sources, words }) => {
-    const { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits, asked } = await app({ older });
+    const { f, store, views, progress, openerOf, account, lines, notices, refused, runs, audits, asked } = await app({ route });
     try {
       // The desktop's atom ids are the Authority's own.
       expect(views.atomId(f.seeded.approved_record_sha256, 'd1')).toBe(derivedAtomIdentity(f.seeded.approved_record_sha256, 'd1'));
@@ -214,7 +226,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
 
       // --- The client: every step, in order, then the one final line, from the newest route this Authority has. ---
-      expect(asked).toEqual(older ? ['/v6/person/ask', '/v5/person/ask'] : ['/v6/person/ask']);
+      expect(asked).toEqual(older ? ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask'] : ['/v7/person/ask', '/v6/person/ask']);
       expect(asked.at(-1)).toBe(`${route}/person/ask`);
       const steps = stepsOf(lines.slice(0, -1));
       // A /v5 stream is V1 throughout: a V1 client reads every step of it.
@@ -272,17 +284,17 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(new Set(notices.map(notice => notice.cancel_id)).size).toBe(1);
       for (const notice of notices) expect(notice.expect).toEqual(account);
 
-      // --- The page while the Authority wrote: the live line and its rows, from those notices alone. ---
+      // --- The page while the Authority wrote: the line and its rows, from those notices alone. ---
       const live = writing!.progress;
-      expect(progress.stageWords(live)).toBe('Writing');
+      expect(progress.headline(live)).toBe('Writing the answer');
       expect(live.pending).toBe(0);
       expect(progress.liveRows(live).map(row => [row.type, row.done])).toEqual([['searched', undefined], ['read', true]]);
       expect(progress.searchedWords(live.rows[0]!)).toBe(`Searched ${words} · ${named.length} found`);
       const read = live.rows[1]!.items!;
       expect(read).toHaveLength(named.length);
       expect(new Set(read.map(item => item.kind))).toEqual(new Set(['record', 'original', 'ticket', 'slack']));
-      // "Read launchscope.md, #launchscope, Approved meeting +2": three names, each one place read once, the rest as +N.
-      expect(progress.rowNames(read)).toEqual({ names: read.slice(0, 3).map(source => ({ source, items: [source] })), more: named.length - 3 });
+      // "Read launchscope, #launchscope, Approved meeting, …": every item its own place, each read once.
+      expect(progress.namedPlaces(read)).toEqual(read.map(source => ({ source, items: [source] })));
 
       // --- The page with the answer: the rows folded into the receipt, its names opening the exact item. ---
       const shown = store.getState().ask!.shown!;
@@ -405,6 +417,82 @@ describe('Ask progress from the Authority through the Person client to the deskt
       await vi.waitFor(() => expect(audits()).toHaveLength(1), { timeout: 10_000, interval: 10 });
       expect(audits()[0]).toMatchObject({ outcome: 'cancelled', named_citation_digests: named.map(commitment), citation_count: 0 });
     } finally { release(); await f.close(); }
+  });
+});
+
+// The V8 answer on /v7 (research tool contract v1), whose Ask may cite the asker's projects, the people in their
+// organization, their tools and their tools' containers. The Authority's kernel builds it; here a scripted /v7 stream
+// stands in for it, exactly as progress V3 frames one, so the proof is the client's, the host's and the page's.
+const WORKSPACE_PROJECT_ID = 'prj_00000000-0000-4000-8000-0000000000a1';
+const WORKSPACE = {
+  project: { citation: { kind: 'project', project_id: WORKSPACE_PROJECT_ID }, kind: 'project', label: 'Launchscope', visibility: 'project', ref: `project:${WORKSPACE_PROJECT_ID}` },
+  person: { citation: { kind: 'person', membership_id: 'mem_00000000-0000-4000-8000-0000000000a2' }, kind: 'person', label: 'Mara Lind', visibility: 'team' },
+  tool: { citation: { kind: 'tool', tool_id: 'jira' }, kind: 'tool', label: 'Jira', visibility: 'only_me', ref: 'tool:jira' },
+  container: {
+    citation: { kind: 'tool_container', tool_id: 'jira', external_scope_id: 'cloud-1', container: 'jira_project', container_id: '10001', permalink: 'https://example.atlassian.net/browse/LAUNCH' },
+    kind: 'tool_container', label: 'Launchscope delivery', visibility: 'only_me', key: 'LAUNCH',
+  },
+} as const satisfies Record<string, PersonAnswerCitationV8>;
+const WORKSPACE_ITEMS: readonly PersonAnswerCitationV8[] = [WORKSPACE.project, WORKSPACE.person, WORKSPACE.tool, WORKSPACE.container];
+const WORKSPACE_SEARCHED = { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 } as const;
+const WORKSPACE_QUESTION = 'Who leads Launchscope, and where is its Jira project?';
+const WORKSPACE_EVENTS: readonly PersonAskProgressEventV3[] = [
+  { type: 'stage', stage: 'searching' },
+  WORKSPACE_SEARCHED,
+  { type: 'stage', stage: 'reading', pending: WORKSPACE_ITEMS.length },
+  { type: 'read', items: WORKSPACE_ITEMS },
+  { type: 'stage', stage: 'writing' },
+  { type: 'stage', stage: 'checking_access' },
+  {
+    type: 'answer', receipt: { looked_through: WORKSPACE_ITEMS.length, elapsed_ms: 21_000, rows: [WORKSPACE_SEARCHED, { type: 'read', items: WORKSPACE_ITEMS }] },
+    response: { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered', citations: WORKSPACE_ITEMS,
+      parts: [{ question: WORKSPACE_QUESTION, status: 'answered', statements: [
+        { text: 'Mara Lind leads Launchscope.', citation_indexes: [0, 1], private: false },
+        { text: 'Its work is in the LAUNCH Jira project, which your Jira connection reads.', citation_indexes: [2, 3], private: true },
+      ] }] },
+  },
+];
+const WORKSPACE_STREAM = () => WORKSPACE_EVENTS.map(event => formatPersonAskProgressEventV3(event)).join('');
+
+describe('The V8 Ask on /v7, through the Person client to the desktop page (research tool contract v1)', () => {
+  it('streams workspace names as progress V3, keeps them in the receipt, and gives the page a project, a person, a tool and a container', async () => {
+    const { f, store, views, progress, lines, notices, refused, runs, asked, opted } = await app({ v7: WORKSPACE_STREAM });
+    try {
+      await store.ask(WORKSPACE_QUESTION, { kind: 'global' });
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
+
+      // --- The client: /v7 alone, opted in to progress V3; every step a V3 line, then the V8 answer with its V3 receipt. ---
+      expect(asked).toEqual(['/v7/person/ask']);
+      expect(opted).toEqual(['3']);
+      const steps = lines.slice(0, -1).map(line => validatePersonAskProgressLineV3(JSON.parse(line)).progress);
+      expect(steps).toEqual(WORKSPACE_EVENTS.slice(0, -1));
+      const final = validatePersonAskProgressResultLineV3(JSON.parse(lines.at(-1)!));
+      expect(final.result.schema_version).toBe(8);
+      expect(final.result.citations).toEqual(WORKSPACE_ITEMS);
+      expect(final.receipt!.rows.flatMap(row => row.type === 'read' ? row.items : [])).toEqual(WORKSPACE_ITEMS);
+      // An older client's line validator never takes a workspace name.
+      for (const line of lines.slice(0, -1)) if (line.includes('"project"')) expect(() => validatePersonAskProgressLineV2(JSON.parse(line))).toThrow();
+
+      // --- The host: each step became one notice for this Ask; nothing was refused. ---
+      expect(refused).not.toHaveBeenCalled();
+      expect(notices).toHaveLength(steps.length);
+
+      // --- The page: the answer's sources and the receipt's names are the four kinds, each as the page keeps it. ---
+      const project = { kind: 'project', label: 'Launchscope', project_id: WORKSPACE_PROJECT_ID };
+      const person = { kind: 'person', label: 'Mara Lind', membership_id: WORKSPACE.person.citation.membership_id };
+      const tool = { kind: 'tool', label: 'Jira', tool_id: 'jira' };
+      const container = { kind: 'container', label: 'Launchscope delivery', tool_id: 'jira', container: 'jira_project', key: 'LAUNCH', permalink: WORKSPACE.container.citation.permalink };
+      const shown = store.getState().ask!.shown!;
+      expect(shown.answer.sources).toEqual([project, person, tool, container]);
+      expect(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).sources).toEqual([project, person, tool, container]);
+      const named = shown.receipt!.rows.flatMap(row => row.type === 'read' ? row.items! : []);
+      expect(named).toEqual([project, person, tool, container]);
+      // No tools list was read here, so Jira is named by its id.
+      expect(progress.searchedWords(shown.receipt!.rows[0]!)).toBe('Searched projects, people, tools and Jira · 4 found');
+      expect(progress.receiptWords(shown.receipt!, shown.took!)).toMatch(/^Looked through 4 items · \d+s$/);
+      // How each opens from here is the page's own: ask-workspace.test.ts and openers.test.ts in product/echo-desktop/test/unit.
+    } finally { await f.close(); }
   });
 });
 

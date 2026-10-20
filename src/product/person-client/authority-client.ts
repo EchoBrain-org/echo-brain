@@ -5,10 +5,12 @@ import { PERSON_CHANGES_ROUTE_V1, validatePersonChangesV1, type PersonChangesV1 
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
-  PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
-  createPersonAskProgressDecoderV1, createPersonAskProgressDecoderV2,
-  type PersonAskProgressEventV1, type PersonAskProgressEventV2, type PersonAskProgressStepEventV1, type PersonAskProgressStepEventV2, type PersonAskProgressTerminalEventV1,
-  type PersonAskProgressTerminalEventV2, type PersonAskReceiptV1, type PersonAskReceiptV2,
+  PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
+  createPersonAskProgressDecoderV1, createPersonAskProgressDecoderV2, createPersonAskProgressDecoderV3,
+  type PersonAskProgressEventV1, type PersonAskProgressEventV2, type PersonAskProgressEventV3, type PersonAskProgressStepEventV1, type PersonAskProgressStepEventV2,
+  type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV1, type PersonAskProgressTerminalEventV2, type PersonAskProgressTerminalEventV3,
+  type PersonAskReceiptV1, type PersonAskReceiptV2, type PersonAskReceiptV3,
 } from '@echo-brain/organization-api';
 import {
   PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
@@ -16,6 +18,7 @@ import {
   PERSON_ANSWER_PATH_V4,
   PERSON_ANSWER_PATH_V5,
   PERSON_ANSWER_PATH_V6,
+  PERSON_ANSWER_PATH_V7,
   PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
@@ -52,6 +55,7 @@ import {
   validatePersonAnswerResponseV5,
   validatePersonAnswerResponseV6,
   validatePersonAnswerResponseV7,
+  validatePersonAnswerResponseV8,
   validatePersonCapabilitiesV1,
   validatePersonEvidenceSearchRequestV1,
   validatePersonEvidenceOpenRequestV1,
@@ -65,6 +69,7 @@ import {
   type PersonAnswerResponseV5 as OrganizationPersonAnswerV5,
   type PersonAnswerResponseV6 as OrganizationPersonAnswerV6,
   type PersonAnswerResponseV7 as OrganizationPersonAnswerV7,
+  type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
   type PersonCapabilitiesV1,
   type PersonEvidenceSearchRequestV1,
   type PersonEvidenceOpenRequestV1,
@@ -183,6 +188,8 @@ export type PersonAnswerV5 = OrganizationPersonAnswerV5;
 export type PersonAnswerV6 = OrganizationPersonAnswerV6;
 /** The live Ask on `/v6`, which may cite follow-ups (ADR-0040). */
 export type PersonAnswerV7 = OrganizationPersonAnswerV7;
+/** The live Ask on `/v7`, which may also cite projects, people, tools and tool containers (research tool contract v1). */
+export type PersonAnswerV8 = OrganizationPersonAnswerV8;
 export type PersonAnswer = PersonAnswerV4;
 export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
 export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
@@ -210,6 +217,22 @@ export interface PersonLiveAnswerV2 {
 }
 /** Receives each step of a streamed Ask in progress V2, whose reads may name follow-ups; a `/v5` stream's V1 steps are V2 steps too. */
 export type PersonAskProgressSinkV2 = (event: PersonAskProgressStepEventV2) => void;
+/**
+ * A live Ask's answer from a client that prefers `/v7` (research tool contract
+ * v1): the V8 answer with a V3 receipt when `/v7` streamed, the V7 answer with
+ * a V2 receipt when only `/v6` did, the V6 answer with a V1 receipt when only
+ * `/v5` did, and no receipt from JSON or the `/v4` fallback.
+ */
+export interface PersonLiveAnswerV3 {
+  readonly result: PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5;
+  readonly receipt?: PersonAskReceiptV3;
+}
+/**
+ * Receives each step of a streamed Ask in progress V3, whose reads may name
+ * projects, people, tools and tool containers; a `/v6` or `/v5` stream's
+ * steps are V3 steps too.
+ */
+export type PersonAskProgressSinkV3 = (event: PersonAskProgressStepEventV3) => void;
 
 export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
@@ -399,8 +422,8 @@ function lostAskStream(): PersonAuthorityClientError {
   return new PersonAuthorityClientError("transport_failed", null, "Person Authority request failed");
 }
 
-/** A progress version's decoder: V1 for `/v5`, V2 for `/v6`. A V1 step is a V2 step too. */
-type AskProgressDecoder = { push(text: string): readonly (PersonAskProgressEventV1 | PersonAskProgressEventV2)[]; end(): void };
+/** A progress version's decoder: V1 for `/v5`, V2 for `/v6`, V3 for `/v7`. Each version's steps are the next one's too. */
+type AskProgressDecoder = { push(text: string): readonly (PersonAskProgressEventV1 | PersonAskProgressEventV2 | PersonAskProgressEventV3)[]; end(): void };
 
 /**
  * Reads a streamed Ask (ADR-0039) to its end with its version's shared decoder, hands
@@ -410,9 +433,9 @@ type AskProgressDecoder = { push(text: string): readonly (PersonAskProgressEvent
  * its byte bound is `response_too_large`. Either failure cancels the body, so
  * the Authority sees the disconnect and stops the Ask.
  */
-async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV2,
-  createDecoder: () => AskProgressDecoder): Promise<PersonAskProgressTerminalEventV1 | PersonAskProgressTerminalEventV2> {
-  // Only the V5 and V6 routes stream, and each marks the stream as its own, so an in-band 404 is never a missing route.
+async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3,
+  createDecoder: () => AskProgressDecoder): Promise<PersonAskProgressTerminalEventV1 | PersonAskProgressTerminalEventV2 | PersonAskProgressTerminalEventV3> {
+  // Only the V5, V6 and V7 routes stream, and each marks the stream as its own, so an in-band 404 is never a missing route.
   if (response.status !== 200 || response.body === null || !response.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)) {
     throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
   }
@@ -422,7 +445,7 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
   signal.addEventListener("abort", cancel, { once: true });
   const utf8 = new TextDecoder("utf-8", { fatal: true });
   const frames = createDecoder();
-  const decode = (chunk: Uint8Array | undefined): readonly (PersonAskProgressEventV1 | PersonAskProgressEventV2)[] => {
+  const decode = (chunk: Uint8Array | undefined): readonly (PersonAskProgressEventV1 | PersonAskProgressEventV2 | PersonAskProgressEventV3)[] => {
     try {
       if (chunk !== undefined) return frames.push(utf8.decode(chunk, { stream: true }));
       const events = frames.push(utf8.decode());
@@ -433,7 +456,7 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
       throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
     }
   };
-  let terminal: PersonAskProgressTerminalEventV1 | PersonAskProgressTerminalEventV2 | undefined;
+  let terminal: PersonAskProgressTerminalEventV1 | PersonAskProgressTerminalEventV2 | PersonAskProgressTerminalEventV3 | undefined;
   let size = 0;
   try {
     // Nothing is handed on once the request is cancelled, even from bytes already received.
@@ -1491,6 +1514,15 @@ export class PersonAuthorityClient {
   }
 
   /**
+   * The V8 Ask (research tool contract v1): the V6 Ask's sources and
+   * follow-ups, and the asker's projects, people, tools and tool containers,
+   * on the same V3 request.
+   */
+  askV7(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV8> {
+    return this.ask(PERSON_ANSWER_PATH_V7, validatePersonAnswerResponseV8, accessToken, question, scope, signal, captureId);
+  }
+
+  /**
    * V5 Ask that streams its progress (ADR-0039). Each step event reaches
    * `onProgress` as it arrives; the answer comes back with the receipt the
    * Authority built after its final check. An Authority that predates the
@@ -1502,7 +1534,7 @@ export class PersonAuthorityClient {
     onProgress: PersonAskProgressSinkV1): Promise<PersonLiveAnswerV1> {
     // The V1 decoder hands on only V1 steps, and only a V6 answer with its V1 receipt.
     return this.askWithProgress(PERSON_ANSWER_PATH_V5, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, validatePersonAnswerResponseV6, createPersonAskProgressDecoderV1,
-      accessToken, question, scope, signal, onProgress as PersonAskProgressSinkV2) as Promise<PersonLiveAnswerV1>;
+      accessToken, question, scope, signal, onProgress as PersonAskProgressSinkV3) as Promise<PersonLiveAnswerV1>;
   }
 
   /**
@@ -1512,15 +1544,28 @@ export class PersonAuthorityClient {
    */
   askV6WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV2): Promise<PersonLiveAnswerV2> {
+    // The V2 decoder hands on only V2 steps, and only a V7 answer with its V2 receipt.
     return this.askWithProgress(PERSON_ANSWER_PATH_V6, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, validatePersonAnswerResponseV7, createPersonAskProgressDecoderV2,
+      accessToken, question, scope, signal, onProgress as PersonAskProgressSinkV3) as Promise<PersonLiveAnswerV2>;
+  }
+
+  /**
+   * V7 Ask (the V8 answer, research tool contract v1) that streams its
+   * progress in Ask progress V3, exactly as `askV6WithProgress` streams V2: a
+   * step may name a project, a person, a tool or a tool container, and the
+   * answer comes with its V3 receipt.
+   */
+  askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
+    onProgress: PersonAskProgressSinkV3): Promise<PersonLiveAnswerV3> {
+    return this.askWithProgress(PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, validatePersonAnswerResponseV8, createPersonAskProgressDecoderV3,
       accessToken, question, scope, signal, onProgress);
   }
 
   /** One streamed live Ask route: its path, its progress version's header value and decoder, and its JSON answer. */
-  private async askWithProgress(path: string, headerValue: string, validateJson: (value: unknown) => PersonAnswerV7 | PersonAnswerV6,
+  private async askWithProgress(path: string, headerValue: string, validateJson: (value: unknown) => PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6,
     createDecoder: () => AskProgressDecoder,
     accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV2): Promise<PersonLiveAnswerV2> {
+    onProgress: PersonAskProgressSinkV3): Promise<PersonLiveAnswerV3> {
     const body = askRequest(question, scope, undefined);
     const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
     const response = await this.post({ path, body, validate_request: validatePersonAnswerRequestV3, access_token: accessToken,

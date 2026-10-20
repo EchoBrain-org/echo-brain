@@ -1,9 +1,15 @@
 import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "./temporal-query-v1.js";
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
-import type { EvidenceDeskDateKindV1, EvidenceDeskRevalidationModeV1 } from './evidence-desk-v1.js';
-import type { PersonConnectorAccessV1, PersonEvidenceAttributesV1, PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import type { EvidenceDeskAttributesV1, EvidenceDeskDateKindV1, EvidenceDeskRevalidationModeV1 } from './evidence-desk-v1.js';
+import type { PersonConnectorAccessV1, PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1, PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 
-export type PersonLiveEvidenceCitationV1 = PersonSlackMessageCitationV1 | PersonTicketCitationV1 | PersonPageCitationV1;
+/**
+ * A tool container (research tool contract v1) is a Jira project, Confluence space or Slack channel. Its citation names
+ * the container and commits to no text: what it says is read again wherever it is shown.
+ */
+export type PersonLiveEvidenceCitationV1 = PersonSlackMessageCitationV1 | PersonTicketCitationV1 | PersonPageCitationV1 | PersonToolContainerCitationV1;
+/** A live item's row facts: a tool item's owner, due date and status, and a tool container's key and tool. */
+export type PersonLiveEvidenceAttributesV1 = Pick<EvidenceDeskAttributesV1, 'owner' | 'due_at' | 'status' | 'key' | 'tool'>;
 
 /** Trusted construction input. Neither an OAuth claim nor a model argument can supply this binding. */
 export interface PersonConnectorReadBindingV1 {
@@ -31,7 +37,7 @@ export interface PersonLiveEvidenceValueV1<C extends PersonLiveEvidenceCitationV
   /** Omitted for an inventory result. */
   readonly text?: string;
   readonly visibility: 'only_me' | 'team';
-  readonly attributes?: PersonEvidenceAttributesV1;
+  readonly attributes?: PersonLiveEvidenceAttributesV1;
   readonly occurred_at?: string;
   readonly date_kind?: EvidenceDeskDateKindV1;
   readonly dates?: EvidenceDatesV1;
@@ -109,7 +115,7 @@ export interface PersonLiveEvidenceItemV1<C extends PersonLiveEvidenceCitationV1
   readonly label: string;
   readonly text?: string;
   readonly visibility: 'only_me' | 'team';
-  readonly attributes?: PersonEvidenceAttributesV1;
+  readonly attributes?: PersonLiveEvidenceAttributesV1;
   readonly occurred_at?: string;
   readonly date_kind?: EvidenceDeskDateKindV1;
   readonly dates?: EvidenceDatesV1;

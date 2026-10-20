@@ -29,9 +29,10 @@ decision_ids:
   - ADR-0038
   - ADR-0039
   - ADR-0040
+  - ADR-0042
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -107,10 +108,12 @@ and cancellation failures release no answer.
 
 [ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)
 adds one release path before the final response. A `POST /v5/person/ask`
-request that sends `x-echo-ask-progress: 1`, or a `POST /v6/person/ask`
+request that sends `x-echo-ask-progress: 1`, a `POST /v6/person/ask`
 request that sends `x-echo-ask-progress: 2` (progress V2, whose names may be
-follow-ups, ADR-0040), receives progress events while it runs. Before the
-answer, an event may carry only:
+follow-ups, ADR-0040), or a `POST /v7/person/ask` request that sends
+`x-echo-ask-progress: 3` (progress V3, whose names may also be projects,
+people, tools and tool containers, ADR-0042) receives progress events while
+it runs. Before the answer, an event may carry only:
 
 - the stage;
 - the source kinds a research step searched, from the request's own catalog,
@@ -215,6 +218,14 @@ release check puts all of them through it; one the asker can no longer see
 refuses the answer. Its negative disclosure tests are
 `services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`
 and `person-follow-ups-ask-integration.test.ts`.
+
+[ADR-0042](../decisions/ADR-0042-research-tool-contract.md) adds the asker's
+workspace and their tools' containers to Ask on V8 answers, served by the
+additive `POST /v7/person/ask`, which streams under the ADR-0039 rules above
+in progress V3. Who sees what, its audit and its checks are ADR-0042's
+[Permissions, audit and checks](../decisions/ADR-0042-research-tool-contract.md#permissions-audit-and-checks),
+and its negative disclosure tests are listed under
+[Migration, rollback, and evidence](../decisions/ADR-0042-research-tool-contract.md#migration-rollback-and-evidence).
 
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
 Both original and approved-record citations bind the exact released evidence.

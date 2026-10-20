@@ -17,7 +17,8 @@
     "providers/shared/src/bounded-json-response-v1.ts",
     "providers/shared/src/atlassian-document-text-v1.ts",
     "providers/shared/src/person-project-mapping-v1.ts",
-    "providers/shared/src/person-provider-mcp-transport-v1.ts"
+    "providers/shared/src/person-provider-mcp-transport-v1.ts",
+    "providers/shared/src/person-tool-container-reader-v1.ts"
   ],
   "owned_source_paths": [
     "providers/shared/src/**"

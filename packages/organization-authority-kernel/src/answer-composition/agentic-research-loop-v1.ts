@@ -1,4 +1,4 @@
-import { calendarDateV1, evidenceDateFilterV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
+import { calendarDateV1, EVIDENCE_ANY_DATE_V1, evidenceDateFilterV1, matchedEvidenceDatesV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1 } from "../shared/temporal-query-v1.js";
 import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1, type AskResearchObservationV1 } from './agentic-ask-research-state-v1.js';
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
@@ -9,9 +9,12 @@ import {
   type EvidenceDeskPortV2,
   type EvidenceDeskResultV2,
   type EvidenceDeskSourceV2,
+  type EvidenceDeskUncheckedV1,
+  type EvidenceSourceCapabilitiesV1,
 } from "../shared/evidence-desk-v2.js";
-import { FOLLOW_UP_EVIDENCE_KIND_V1, followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
+import { followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
 import {
+  AGENTIC_ASK_LIST_LIMIT_MAX_V1,
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
   AgenticAskOutputErrorV1,
@@ -116,6 +119,8 @@ export interface AgenticResearchSourceV1 {
   readonly tool_id?: string;
   readonly requires_channel?: boolean;
   readonly default_since_days?: number;
+  /** What the source can do (research tool contract v1); Ask checks each read against it before the desk. */
+  readonly capabilities?: EvidenceSourceCapabilitiesV1;
 }
 
 /** One source as the research model sees it in `source_catalog`: its selector and capabilities, never its desk id or kinds. */
@@ -125,6 +130,8 @@ export type AgenticResearchCatalogEntryV1 = {
   readonly tool_id?: string;
   readonly requires_channel?: boolean;
   readonly default_since_days?: number;
+  /** Shown to Ask only; a task goal's catalog leaves it out, so its prompt is unchanged. */
+  readonly capabilities?: EvidenceSourceCapabilitiesV1;
   readonly source: StepSource;
 };
 
@@ -177,6 +184,12 @@ export interface AgenticResearchProgressV1 {
   readonly search_hits: number;
   /** Distinct ticket items any read returned. */
   readonly retrieved_tickets: number;
+  /** Ask (research tool contract v1): reads refused before or at the desk, refused reads sent again and answered from memory, items a date filter could not test, sources searched or listed, and the most reads one step made. */
+  readonly refused_reads: number;
+  readonly repeated_refusals: number;
+  readonly unchecked_items: number;
+  readonly sources_looked_at: number;
+  readonly most_reads_in_a_step: number;
 }
 
 export interface AgenticResearchLoopV1 {
@@ -207,6 +220,8 @@ type Entry = {
   query?: string;
   /** A research step admitted after its access check showed it, under opened or seen: a list member counts once shown (ADR-0041). */
   shown?: boolean;
+  /** Which of its dates fell in the window of the dated read that returned it (research tool contract v1). */
+  matched?: readonly EvidenceDateFieldV1[];
 };
 type ToolResult = Readonly<Record<string, unknown>>;
 /** A completed desk read waits here until earlier planned reads have updated state. */
@@ -239,6 +254,10 @@ type ListState = {
   unverified_end: boolean;
   /** When the desk returned its first page (addition 2). */
   read_at?: string;
+  /** Items the date filter could not test (research tool contract v1), as the desk last counted them. */
+  unchecked?: EvidenceDeskUncheckedV1 & { readonly any_of?: readonly ("owner" | "status")[] };
+  /** Items the desk released beside its rows, by desk id, each shown with the first page whose members link to it. */
+  linked?: Map<string, EvidenceDeskItemV2>;
 };
 /** An inventory has more to show: listed items not yet shown, or another page. */
 function inventoryMore(state: ListState): boolean { return state.paged < state.items.length || state.cursor !== undefined; }
@@ -321,28 +340,60 @@ function listDate(value: string, today: string): string | null {
   base.setUTCDate(base.getUTCDate() - amount * unit);
   return isoDay(base);
 }
-/** Follow-ups take owner and status at the desk, before anything is released or read live (ADR-0040). */
-function followUpSource(source: AgenticResearchSourceV1 | undefined): boolean {
-  return source !== undefined && source.kinds.length === 1 && source.kinds[0] === FOLLOW_UP_EVIDENCE_KIND_V1;
-}
-/** A follow-up has no date of its own, so a dated read of follow-ups is refused before the desk. */
-function followUpDatesError(selector: string): string { return `${selector} have no dates; omit since, until and date_field`; }
 /**
  * A list request after normalization. `applied` says how the selection applies each filter field the model asked for
- * (ADR-0041): a field this source cannot apply is `ignored`, with a note, and absent from the selection.
+ * (ADR-0041): a field this source cannot apply is `ignored`, with a note, and absent from the selection. `limit` is how
+ * many rows this one call pages out (research tool contract v1); it never starts another list.
  */
-type ListArgs = EvidenceDateFilterV1 & { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[]; readonly applied: FilterApplication };
-/** One inventory per normalized selection: notes and ignored filters never start another, and owner matching ignores case. */
-function listKey({ notes: _notes, applied: _applied, status, owner, ...request }: ListArgs): string {
+type ListArgs = EvidenceDateFilterV1 & {
+  readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done" | "active" | "archived"; readonly owner?: string;
+  readonly role?: "lead" | "member"; readonly channel?: string; readonly since?: string; readonly until?: string; readonly limit?: number;
+  readonly notes: readonly string[]; readonly applied: FilterApplication;
+};
+/**
+ * A read Ask refused before the desk, because the source's capabilities do not take it (research tool contract v1). It
+ * is a result, never an error: nothing was read, and `supports` says what the source does take.
+ */
+type ReadRefusal = { readonly refused: { readonly field: AgenticListFilterFieldV1; readonly reason: string; readonly supports: Readonly<Record<string, unknown>> } };
+/** Two copies' links, each name's ids once, in the order first seen. */
+function linksUnion(left: EvidenceDeskItemV2["links"], right: EvidenceDeskItemV2["links"]): EvidenceDeskItemV2["links"] {
+  if (left === undefined || right === undefined) return left ?? right;
+  const union: Record<string, readonly string[]> = { ...left };
+  for (const [name, ids] of Object.entries(right)) union[name] = Object.freeze([...new Set([...(union[name] ?? []), ...ids])]);
+  return Object.freeze(union);
+}
+/** What a refusal shows of a source's capabilities. */
+function supportsOf(capabilities: EvidenceSourceCapabilitiesV1): Readonly<Record<string, unknown>> {
+  return Object.freeze({ filters: capabilities.filters, dates: Object.keys(capabilities.dates), any_date: capabilities.any_date });
+}
+/** A read refused for one field, naming its source and what the source does take. */
+function readRefusal(source: AgenticResearchSourceV1, capabilities: EvidenceSourceCapabilitiesV1, field: AgenticListFilterFieldV1, reason: string): ReadRefusal {
+  return { refused: Object.freeze({ field, reason: `${source.selector}: ${reason}`, supports: supportsOf(capabilities) }) };
+}
+/**
+ * The dates a search or list asks of a source its capabilities do not take: a date field it does not record, or a window
+ * when it records no dates. `askedField` is the read's date_field, "any" already read as none where the source takes any.
+ */
+function dateRefusal(source: AgenticResearchSourceV1, capabilities: EvidenceSourceCapabilitiesV1, askedField: string | undefined, args: StepArgs): ReadRefusal | undefined {
+  const declared = Object.keys(capabilities.dates);
+  const none = "it records no dates to filter by";
+  if (askedField !== undefined) return declared.includes(askedField) ? undefined : readRefusal(source, capabilities, "date_field", declared.length === 0 ? none : `date_field must be ${declared.join(", ")}`);
+  return (args.since !== undefined || args.until !== undefined) && declared.length === 0 ? readRefusal(source, capabilities, args.since !== undefined ? "since" : "until", none) : undefined;
+}
+/** A refused read's result, for search and list alike. */
+function refusedResult(tool: "search" | "list", args: StepArgs, { refused: { field, reason, supports } }: ReadRefusal): ToolResult {
+  return { tool, args, refused: true, filters: { [field]: "refused" }, supports, note: `refused: ${reason}` };
+}
+/** One inventory per normalized selection: notes and ignored filters never start another, owner matching ignores case, and a limit is one call's page. */
+function listKey({ notes: _notes, applied: _applied, limit: _limit, status, owner, ...request }: ListArgs): string {
   return JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
 }
-function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<string, AgenticResearchSourceV1>, readSource: (value: string | undefined) => string | undefined): ListArgs | { readonly error: string } {
+function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<string, AgenticResearchSourceV1>, readSource: (value: string | undefined) => string | undefined, ask = false): ListArgs | ReadRefusal | { readonly error: string } {
   const source = readSource(raw.source);
   if (source === undefined) return { error: `source must be ${[...sources.values()].map(value => value.selector).join(", ")}` };
   const descriptor = sources.get(source)!;
-  const followUps = followUpSource(descriptor);
-  // owner and status filter meeting actions here, after each page, and follow-ups at the desk.
-  const filterable = [...sources.values()].some(followUpSource) ? "meeting actions and follow-ups" : "meeting actions";
+  if (ask && descriptor.capabilities !== undefined) return normalizeAskListArgs(raw, today, descriptor, descriptor.capabilities);
+  // owner and status filter meeting actions here, after each page.
   const notes: string[] = [];
   const applied: FilterApplication = {};
   let kinds: EvidenceDeskKindV2[] | undefined;
@@ -355,16 +406,16 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
   let status: "open" | "done" | undefined;
   if (raw.status !== undefined) {
     const group = statusGroup(raw.status);
-    if (source !== "meeting" && !followUps) { notes.push(`status applies to ${filterable} only; ignored`); applied.status = "ignored"; }
+    if (source !== "meeting") { notes.push("status applies to meeting actions only; ignored"); applied.status = "ignored"; }
     else if (group === null) return { error: "status must be \"open\" or \"done\"" };
-    else { status = group; applied.status = "applied"; if (!followUps) kinds ??= ["action"]; }
+    else { status = group; applied.status = "applied"; kinds ??= ["action"]; }
   }
   let owner: string | undefined;
   if (raw.owner !== undefined) {
     const name = raw.owner.trim().replace(/^@/u, "").trim();
-    if (source !== "meeting" && !followUps) { notes.push(`owner applies to ${filterable} only; ignored`); applied.owner = "ignored"; }
+    if (source !== "meeting") { notes.push("owner applies to meeting actions only; ignored"); applied.owner = "ignored"; }
     else if (name.length === 0 || name.length > 80) return { error: "owner must be a person's name such as \"Dana\"" };
-    else { owner = name; applied.owner = "applied"; if (!followUps) kinds ??= ["action"]; }
+    else { owner = name; applied.owner = "applied"; kinds ??= ["action"]; }
   }
   let channel: string | undefined;
   if (raw.channel !== undefined) {
@@ -374,7 +425,6 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
     else { channel = name; applied.channel = "applied"; }
   }
   if (descriptor.requires_channel && channel === undefined) return { error: `${descriptor.selector} needs a channel, such as ${JSON.stringify({ source: descriptor.selector, channel: "hw-dvt" })}` };
-  if (followUps && (raw.since !== undefined || raw.until !== undefined || raw.date_field !== undefined)) return { error: followUpDatesError(descriptor.selector) };
   const since = raw.since === undefined ? undefined : listDate(raw.since, today);
   const until = raw.until === undefined ? undefined : listDate(raw.until, today);
   if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21 or an age like 7d or 2w" };
@@ -394,6 +444,79 @@ function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<st
 }
 
 /**
+ * Ask's list arguments against the source's capabilities (research tool contract v1). A filter the source does not take
+ * is ignored, with a note, as ADR-0041 ignores it; a value outside the source's allowed values, or a date it does not
+ * record, refuses the read, which never widens it. A window with no date field matches any of an item's dates where the
+ * source declares `any_date`; otherwise the source's own default date reads it.
+ */
+function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticResearchSourceV1, capabilities: EvidenceSourceCapabilitiesV1): ListArgs | ReadRefusal | { readonly error: string } {
+  const notes: string[] = [];
+  const applied: FilterApplication = {};
+  const ignore = (field: AgenticListFilterFieldV1) => { notes.push(`${descriptor.selector} takes no ${field}; ignored`); applied[field] = "ignored"; };
+  /** A filter whose values the source lists: ignored where it takes none, refused outside its values, otherwise applied. */
+  const listed = (field: "kind" | "status" | "role", value: string | undefined, join: string): string | ReadRefusal | undefined => {
+    if (value === undefined) return undefined;
+    const allowed = capabilities.filters[field];
+    if (allowed === undefined) { ignore(field); return undefined; }
+    if (!Array.isArray(allowed) || !allowed.includes(value)) return readRefusal(descriptor, capabilities, field, `${field} must be ${Array.isArray(allowed) ? allowed.join(join) : `a ${field} it lists`}`);
+    applied[field] = "applied";
+    return value;
+  };
+  const meeting = descriptor.source_id === "meeting";
+  const kind = listed("kind", raw.kind === undefined ? undefined : MEETING_KINDS[raw.kind.trim().toLowerCase()] ?? raw.kind.trim().toLowerCase(), ", ");
+  if (typeof kind === "object") return kind;
+  let kinds: EvidenceDeskKindV2[] | undefined = kind === undefined ? undefined : [kind as EvidenceDeskKindV2];
+  // A source's own value wins ("active" is a project's status); otherwise a loose word reads as open or done.
+  const literal = raw.status?.trim().toLowerCase();
+  const statuses = capabilities.filters.status;
+  const status = listed("status", literal === undefined || (Array.isArray(statuses) && statuses.includes(literal)) ? literal : statusGroup(literal) ?? literal, " or ");
+  if (typeof status === "object") return status;
+  if (status !== undefined && meeting) kinds ??= ["action"];
+  let owner: string | undefined;
+  if (raw.owner !== undefined) {
+    const name = raw.owner.trim().replace(/^@/u, "").trim();
+    if (capabilities.filters.owner === undefined) ignore("owner");
+    else if (name.length === 0 || name.length > 80) return { error: "owner must be a person's name such as \"Dana\"" };
+    else { owner = name; applied.owner = "applied"; if (meeting) kinds ??= ["action"]; }
+  }
+  const role = listed("role", raw.role?.trim().toLowerCase(), " or ");
+  if (typeof role === "object") return role;
+  let channel: string | undefined;
+  if (raw.channel !== undefined) {
+    const name = raw.channel.trim().replace(/^#/u, "").trim();
+    if (!descriptor.requires_channel && capabilities.filters.channel === undefined) ignore("channel");
+    else if (name.length === 0 || name.length > 80) return { error: "channel must be a channel name such as \"hw-dvt\"" };
+    else { channel = name; applied.channel = "applied"; }
+  }
+  if (descriptor.requires_channel && channel === undefined) return { error: `${descriptor.selector} needs a channel, such as ${JSON.stringify({ source: descriptor.selector, channel: "hw-dvt" })}` };
+  const since = raw.since === undefined ? undefined : listDate(raw.since, today);
+  const until = raw.until === undefined ? undefined : listDate(raw.until, today);
+  if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21" };
+  try { validateEvidenceDateFilterV1({ since: since ?? undefined, until: until ?? undefined }); }
+  catch (error) { return { error: error instanceof Error ? error.message : 'Invalid date filter' }; }
+  // "any" is what leaving date_field out means where the source reads any of its dates: the same request.
+  const askedField = raw.date_field === EVIDENCE_ANY_DATE_V1 && capabilities.any_date ? undefined : raw.date_field;
+  const refusedDate = dateRefusal(descriptor, capabilities, askedField, raw);
+  if (refusedDate !== undefined) return refusedDate;
+  const dateField: EvidenceDateSelectionV1 | undefined = askedField !== undefined ? askedField as EvidenceDateFieldV1 : (since != null || until != null) && capabilities.any_date ? EVIDENCE_ANY_DATE_V1 : undefined;
+  let limit: number | undefined;
+  if (raw.limit !== undefined) {
+    limit = Number(raw.limit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > AGENTIC_ASK_LIST_LIMIT_MAX_V1) return { error: `limit must be a whole number from 1 to ${AGENTIC_ASK_LIST_LIMIT_MAX_V1}` };
+  }
+  const defaultSince = descriptor.default_since_days !== undefined && since === undefined ? listDate(`${descriptor.default_since_days}d`, today)! : since ?? undefined;
+  if (since != null) applied.since = "applied";
+  if (until != null) applied.until = "applied";
+  if (askedField !== undefined) applied.date_field = "applied";
+  return {
+    source: descriptor.source_id, notes, applied, ...(dateField === undefined ? {} : { date_field: dateField }),
+    ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status: status as ListArgs["status"] }), ...(owner === undefined ? {} : { owner }),
+    ...(role === undefined ? {} : { role: role as ListArgs["role"] }), ...(channel === undefined ? {} : { channel }), ...(defaultSince === undefined ? {} : { since: defaultSince }),
+    ...(until === undefined || until === null ? {} : { until }), ...(limit === undefined ? {} : { limit }),
+  };
+}
+
+/**
  * One request's research. Its state lives here; the runner reads it only
  * through `progress()` and the bundle `run` returns.
  */
@@ -403,11 +526,17 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const { by_id: sourcesById, resolve: readSource } = options.catalog;
   /** A search-only brief has no list tool, and its catalog shows nothing only list uses. */
   const listAvailable = brief.options.list !== false;
-  const sourceCatalog: readonly AgenticResearchCatalogEntryV1[] = listAvailable ? options.catalog.entries
-    : Object.freeze(options.catalog.entries.map(({ metadata_only_list: _metadata, requires_channel: _channel, default_since_days: _since, ...entry }) => Object.freeze(entry)));
-  const budget = brief.budget;
   /** A question goal (Ask) keeps every list it reads as evidence of which items exist (ADR-0041); a task goal does not. */
   const ask = brief.goal.kind === "question";
+  // Only Ask is shown sources' capabilities (research tool contract v1). A task goal's catalog says a connected tool's date
+  // fields in its description, as the tool's description did before its capabilities said them; nothing else changes.
+  const askedCatalog = ask ? options.catalog.entries : options.catalog.entries.map(({ capabilities, ...entry }) => {
+    const dates = entry.tool_id === undefined || capabilities === undefined ? [] : Object.keys(capabilities.dates);
+    return Object.freeze(dates.length === 0 ? entry : { ...entry, description: `${entry.description} Date filters support date_field ${dates.length === 1 ? dates[0] : `${dates.slice(0, -1).join(', ')} or ${dates.at(-1)}`}.` });
+  });
+  const sourceCatalog: readonly AgenticResearchCatalogEntryV1[] = listAvailable ? Object.freeze(askedCatalog)
+    : Object.freeze(askedCatalog.map(({ metadata_only_list: _metadata, requires_channel: _channel, default_since_days: _since, ...entry }) => Object.freeze(entry)));
+  const budget = brief.budget;
   /** Ask with the list tool declares each need's kind (ADR-0041); a task goal and a search-only brief have no kind. */
   const needKinds = ask && listAvailable;
   const wallNow = options.wall_now ?? Date.now;
@@ -415,6 +544,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const stepCall: AgenticModelCallV1 = Object.freeze({ role: "step", span: options.step_span });
   const requestDay = context.today;
   let fallbacks = 0; let steps = 0; let searchHits = 0;
+  // Ask's read accounting (research tool contract v1): refusals, refused reads answered from memory, unchecked items,
+  // sources looked at, and the widest step.
+  let refusedReadsCount = 0; let repeatedRefusals = 0; let uncheckedItems = 0; let mostReadsInAStep = 0;
+  const sourcesLookedAt = new Set<string>();
+  /** Ask's refused reads by their exact arguments: one sent again is answered from here, never re-sent. */
+  const refusedReads = new Map<string, ToolResult>();
   const receipts: Sha256Digest[] = [];
   const notice = new Set<string>();
   const entries = new Map<string, Entry>();
@@ -431,8 +566,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const cover = (tool: 'search' | 'open' | 'list', source: string | undefined, result?: EvidenceDeskResultV2) => {
     readCoverage.push({ tool, source: source === undefined ? 'available_sources' : sourcesById.get(source)?.selector ?? source,
       returned_items: result?.items.length ?? 0, truncated: result?.truncated ?? false, notice: result?.notice !== undefined, unavailable: result === undefined });
-    // Progress counts only what a read released to this person.
-    if (result !== undefined) report?.returned(tool, source, result.items);
   };
   /** Sources whose complete, unfiltered inventory was observed empty. */
   const exhaustivelyEmptySources = new Set<EvidenceDeskSourceV2>();
@@ -458,8 +591,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const observe = (result: EvidenceDeskResultV2) => {
     if (result.notice !== undefined) notice.add(result.notice);
     for (const item of result.items) if (item.citation.kind === "ticket") retrievedTickets.add(item.id);
-    // Audits bind every released item, even one that never reaches a prompt.
-    for (const item of result.items) if (!receipts.includes(item.receipt_sha256)) receipts.push(item.receipt_sha256);
+    // Audits bind every released item, even one that never reaches a prompt: an item released beside a row too.
+    for (const item of [...result.items, ...(result.linked ?? [])]) if (!receipts.includes(item.receipt_sha256)) receipts.push(item.receipt_sha256);
     for (const receipt of result.receipt_digests) if (!receipts.includes(receipt)) receipts.push(receipt);
   };
   /**
@@ -470,7 +603,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const existing = entries.get(item.id);
     touch += 1;
     if (existing !== undefined) {
+      // Each copy's links are kept, name by name: an item first released beside another's row carries none of its own
+      // until a read returns it as a row (research tool contract v1). Links are never novelty.
+      const links = linksUnion(existing.item.links, item.links);
       if (item.text !== undefined && existing.item.text === undefined) { existing.item = item; evidenceNovelty += 1; }
+      if (links !== undefined) existing.item = Object.freeze({ ...existing.item, links });
       existing.touched = touch;
       return existing;
     }
@@ -488,7 +625,36 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** The source selector the models see for an item. */
   const selectorOf = (item: EvidenceDeskItemV2): string => item.source_id === undefined ? evidenceDeskSourceV2(item) : sourcesById.get(item.source_id)?.selector ?? item.source_id;
   // The scratchpad describes each item once, with its body; a tool result names items by id only (lastResult).
-  const describe = (entry: Entry): Record<string, unknown> => describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item }, ask ? context.time_zone ?? 'UTC' : undefined);
+  /** An item's links as research sees them: each link's E ids, only for items this request has released (research tool contract v1). */
+  const linksOf = (item: EvidenceDeskItemV2): Readonly<Record<string, readonly string[]>> | undefined => {
+    if (item.links === undefined) return undefined;
+    const view: Record<string, readonly string[]> = {};
+    for (const [name, ids] of Object.entries(item.links)) {
+      const shorts = [...new Set(ids.map(id => entries.get(id)?.short).filter((short): short is string => short !== undefined))];
+      if (shorts.length > 0) view[name] = shorts;
+    }
+    return Object.keys(view).length === 0 ? undefined : view;
+  };
+  // A task goal's item view is unchanged; Ask also sees an item's links and which of its dates matched. Never a URL: a
+  // provider's host and coordinates stay out of every prompt, and an answer's citation carries an item's link.
+  const describe = (entry: Entry): Record<string, unknown> => {
+    const base = describeAgenticEvidenceItemV1({ short: entry.short, source: selectorOf(entry.item), item: entry.item }, ask ? context.time_zone ?? 'UTC' : undefined);
+    if (!ask) return base;
+    const links = linksOf(entry.item);
+    return { ...base, ...(links === undefined ? {} : { links }), ...(entry.matched === undefined || entry.matched.length === 0 ? {} : { matched: entry.matched }) };
+  };
+  /** Registers items a read released beside its own, because its items link to them: seen, never rows of the read. */
+  const registerLinked = (result: EvidenceDeskResultV2): Entry[] => (result.linked ?? []).map(item => {
+    if (!receipts.includes(item.receipt_sha256)) receipts.push(item.receipt_sha256);
+    return register(item);
+  });
+  /** Ask marks which of an item's dates fell in a dated read's window. */
+  const markMatched = (entry: Entry, filter: EvidenceDateFilterV1) => {
+    if (!ask || (filter.since === undefined && filter.until === undefined)) return;
+    // The latest dated read that returned the item says which of its dates fell in that read's window.
+    const matched = matchedEvidenceDatesV1(entry.item.dates, filter);
+    if (matched.length > 0) entry.matched = matched; else delete entry.matched;
+  };
   /** Released source projections for automatic starting/preload reads, before short ids are assigned. */
   const releasedView = (result: EvidenceDeskResultV2): Record<string, unknown> => ({
     released_items: result.items.map(item => {
@@ -504,10 +670,20 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
     const source = readSource(args.source);
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
-    if (args.date_field !== undefined && source === undefined) return { tool: 'search', args, error: 'Choose a source when selecting date_field; sources support different date meanings' };
-    if (source !== undefined && followUpSource(sourcesById.get(source)) && (args.since !== undefined || args.until !== undefined || args.date_field !== undefined)) return { tool: 'search', args, error: followUpDatesError(sourcesById.get(source)!.selector) };
-    const dates = { ...(args.since === undefined ? {} : { since: listDate(args.since, requestDay) ?? args.since }), ...(args.until === undefined ? {} : { until: listDate(args.until, requestDay) ?? args.until }), ...(args.date_field === undefined ? {} : { date_field: args.date_field as EvidenceDateFieldV1 }), ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }) };
-    try { validateEvidenceDateFilterV1(dates); } catch (error) { return { tool: 'search', args, error: error instanceof Error ? error.message : 'Invalid date filter' }; }
+    // Ask checks a dated search against the source's capabilities (research tool contract v1): a date it does not record
+    // refuses the read, and a window with no date field reads any of an item's dates where the source declares that.
+    const capabilities = ask && source !== undefined ? sourcesById.get(source)?.capabilities : undefined;
+    // "any" is what leaving date_field out means wherever a window reads any date: the same request.
+    const askedField = args.date_field === EVIDENCE_ANY_DATE_V1 && ask && (source === undefined || capabilities?.any_date === true) ? undefined : args.date_field;
+    if (askedField !== undefined && source === undefined) return { tool: 'search', args, error: 'Choose a source when selecting date_field; sources support different date meanings' };
+    const refused = capabilities === undefined ? undefined : dateRefusal(sourcesById.get(source!)!, capabilities, askedField, args);
+    if (refused !== undefined) return refusedResult('search', args, refused);
+    const windowed = args.since !== undefined || args.until !== undefined;
+    // Across sources, Ask's window reads any of each item's dates too; the desk keeps a source that reads one date to it.
+    const anyDate = windowed && askedField === undefined && (capabilities?.any_date === true || (ask && source === undefined));
+    const dates = { ...(args.since === undefined ? {} : { since: listDate(args.since, requestDay) ?? args.since }), ...(args.until === undefined ? {} : { until: listDate(args.until, requestDay) ?? args.until }), ...(askedField === undefined ? (anyDate ? { date_field: EVIDENCE_ANY_DATE_V1 } : {}) : { date_field: askedField as EvidenceDateFieldV1 }), ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }) };
+    // A field Ask's capabilities admitted, or any date, is the source's to apply; only the bounds and zone are checked here.
+    try { validateEvidenceDateFilterV1(capabilities === undefined && !anyDate ? dates : { ...dates, date_field: undefined }); } catch (error) { return { tool: 'search', args, error: error instanceof Error ? error.message : 'Invalid date filter' }; }
     const fingerprint = JSON.stringify({ query: query.toLowerCase(), source: source ?? null, ...dates });
     const repeat = searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase() && JSON.stringify(evidenceDateFilterV1(previous)) === JSON.stringify(dates));
     // A source that could not be searched then (a notice) may answer now, so one repeat runs again; a complete or truncated
@@ -519,15 +695,23 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const apply = () => {
       observe(result);
       cover('search', source, result);
+      // Progress finds what a read gives research: every hit of a search (ADR-0043).
+      report?.returned('search', source, result.items);
       const complete = !result.truncated && result.notice === undefined;
       if (!repeat && result.notice !== undefined) noticedSearches.add(fingerprint);
       researchObservations.push({ operation: 'search', fingerprint, complete });
       if (complete) searchedSources.add(source ?? null);
       retrievalProgress += 1;
       const found = result.items.map(item => register(item));
-      for (const entry of found) { entry.query = query; entry.direct = true; }
+      for (const entry of found) { entry.query = query; entry.direct = true; markMatched(entry, dates); }
+      const linked = registerLinked(result);
       searchHits += found.length;
-      return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => describe(entry)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
+      sourcesLookedAt.add(source ?? '(all sources)');
+      if (ask && result.unchecked !== undefined) uncheckedItems += result.unchecked.count;
+      return {
+        tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => describe(entry)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }),
+        ...(ask && linked.length > 0 ? { linked: linked.map(entry => describe(entry)) } : {}), ...(ask && result.unchecked !== undefined && result.unchecked.count > 0 ? { unchecked: result.unchecked } : {}),
+      };
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -590,34 +774,41 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const metadata = result.items
         .filter(item => item.text === undefined && item.id !== entry.item.id)
         .map(item => register(item));
-      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }), ...(truncated ? { truncated: true } : {}), ...(truncated && !cut ? { anchor_truncated: false } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+      const linked = registerLinked(result);
+      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }),
+        ...(ask && linked.length > 0 ? { linked: linked.map(value => describe(value)) } : {}), ...(truncated ? { truncated: true } : {}), ...(truncated && !cut ? { anchor_truncated: false } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
     };
     return admit === undefined ? apply() : admit(apply);
   };
   const list = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
     if (!listAvailable) return { tool: "list", args, error: LIST_UNAVAILABLE };
-    const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource);
+    const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource, ask);
     if ("error" in normalized) return { tool: "list", args, error: normalized.error };
-    const { notes, applied, status, owner, ...selection } = normalized;
-    // Follow-ups are filtered by the desk, before anything is released; meeting actions are filtered here, after each page.
-    const deskFilters = followUpSource(sourcesById.get(selection.source));
+    if ("refused" in normalized) return refusedResult("list", args, normalized);
+    const { notes, applied, status, owner, role, limit, ...selection } = normalized;
+    // For Ask a source's own filters are the desk's, applied before anything is released, except meetings': meeting actions
+    // are filtered here, after each page (research tool contract v1).
+    const deskFilters = ask && selection.source !== "meeting" && sourcesById.get(selection.source)?.capabilities !== undefined;
     const request = {
-      ...selection, ...(deskFilters && status !== undefined ? { status } : {}), ...(deskFilters && owner !== undefined ? { owner } : {}),
+      ...selection, ...(deskFilters && status !== undefined ? { status } : {}), ...(deskFilters && owner !== undefined ? { owner } : {}), ...(role === undefined ? {} : { role }),
       ...(context.time_zone === undefined ? {} : { time_zone: context.time_zone }),
     };
+    sourcesLookedAt.add(selection.source);
     const key = listKey(normalized);
     let state = lists.get(key);
     if (state === undefined) {
+      // The list's args as research sees them and sends them again: a window with no date_field reads any date by itself,
+      // so the internal any-date selection never appears there (research tool contract v1).
       const stateArgs: StepArgs = Object.freeze({
-        ...(request.date_field === undefined ? {} : { date_field: request.date_field }), source: sourcesById.get(request.source)!.selector, ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
-        ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }),
+        ...(request.date_field === undefined || request.date_field === EVIDENCE_ANY_DATE_V1 ? {} : { date_field: request.date_field }), source: sourcesById.get(request.source)!.selector, ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
+        ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(role === undefined ? {} : { role }),
         ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
       });
-      const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
+      const unfiltered = request.kinds === undefined && status === undefined && owner === undefined && role === undefined &&
         request.channel === undefined && request.since === undefined && request.until === undefined && request.date_field === undefined;
       // The filter as applied: the normalized selection, never the model's raw arguments (ADR-0041).
       const filter: AgenticListFilterV1 = Object.freeze({
-        ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }),
+        ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(role === undefined ? {} : { role }),
         ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
         ...(request.date_field === undefined ? {} : { date_field: request.date_field }), ...(request.time_zone === undefined ? {} : { time_zone: request.time_zone }),
       });
@@ -648,6 +839,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         observe(result);
         cover('list', request.source, result);
         currentState.available = currentState.available && result.notice === undefined;
+        // The desk counts what the filter could not test for the whole selection; a later page's count replaces it. A meeting
+        // list's owner and status are ECHO's own filters, applied after the desk counted, so the count says it covers any.
+        if (result.unchecked !== undefined) {
+          if (ask && currentState.unchecked === undefined) uncheckedItems += result.unchecked.count;
+          const anyOf = deskFilters ? [] : [...(owner === undefined ? [] : ["owner" as const]), ...(status === undefined ? [] : ["status" as const])];
+          currentState.unchecked = Object.freeze({ ...result.unchecked, ...(anyOf.length === 0 ? {} : { any_of: Object.freeze(anyOf) }) });
+        }
         if (!currentState.fetched || result.next_cursor !== currentState.cursor) retrievalProgress += 1;
         // A list's id and read time come from its first page, in plan order (ADR-0041, addition 2: search can lag edits).
         if (!currentState.fetched) { currentState.id = agenticListIdV1(++listsRead); currentState.read_at = new Date(wallNow()).toISOString(); }
@@ -675,9 +873,28 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         if (owner !== undefined && currentState.items.length === 0 && result.items.length > 0) currentState.note = `no listed item records ${owner} as owner; owners shown are exact names from the records`;
       }
 
-      const page = currentState.items.slice(currentState.paged, currentState.paged + LIST_PAGE).map(item => register(item));
+      // Ask's limit pages out fewer rows for a short look; repeating the call continues the same list.
+      const page = currentState.items.slice(currentState.paged, currentState.paged + Math.min(limit ?? LIST_PAGE, LIST_PAGE)).map(item => register(item));
+      // Progress finds the page research is given, never the rows fetched behind it or left out by ECHO's own filter
+      // (ADR-0043). A repeat that read nothing and paged nothing out is no read.
+      if (result !== undefined || page.length > 0) report?.returned('list', request.source, page.map(entry => entry.item));
+      // Items released beside the fetched rows wait for the page that shows a member linking to them, so a short page
+      // (a small limit) shows only its own members' links (research tool contract v1).
+      if (result !== undefined && result.linked !== undefined && result.linked.length > 0) {
+        currentState.linked ??= new Map();
+        for (const item of result.linked) if (!currentState.linked.has(item.id)) currentState.linked.set(item.id, item);
+      }
+      const wanted = new Set(page.flatMap(entry => Object.values(entry.item.links ?? {}).flat()));
+      const shownBeside = [...wanted].flatMap(id => {
+        const item = currentState.linked?.get(id);
+        if (item === undefined) return [];
+        currentState.linked!.delete(id);
+        return [item];
+      });
+      const linked = registerLinked({ items: [], truncated: false, receipt_digests: [], linked: shownBeside });
       for (const entry of page) {
         entry.direct = true;
+        markMatched(entry, request);
         // Members are each once, in list order. For a question goal, a page that adds members no list had shown is
         // progress (ADR-0041); re-listing the same items under another filter is not.
         if (!currentState.members.includes(entry)) currentState.members.push(entry);
@@ -695,15 +912,20 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // of an inventory read to its end makes no desk call and no progress, and says so; only a complete one is "in full".
       // For a question goal, an exactly full last page is not trusted as the end (addition 1).
       const unverified = ask && !more && currentState.unverified_end;
+      // A page the source could not read completely (a notice) is never "nothing more": its list is incomplete.
       const emptyNote = page.length > 0 ? [] : more ? ["this page was empty (for example because of a date filter); more pages remain"]
-        : result !== undefined ? ["nothing more to list"]
+        : result !== undefined ? [currentState.available ? "nothing more to list" : "this source could not be read completely, so its list is incomplete; use search"]
         : !currentState.available ? ["already listed; this source was unavailable, so its list is incomplete; use search"]
         : currentState.truncated || unverified ? ["already listed; nothing more to list"] : ["already listed in full; nothing more to list"];
       const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...emptyNote, ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : []),
         ...(unverified && !currentState.truncated ? ["its last page was exactly full, so more items may exist than list can show; use search"] : [])];
+      const filters = Object.keys(currentState.filter_applied).length === 0 ? undefined : { ...currentState.filter_applied };
       return {
         tool: "list", ...(ask && currentState.id !== undefined ? { list: currentState.id } : {}), source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }),
         items: page.map(entry => describe(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }),
+        ...(ask && result?.notice !== undefined ? { notice: result.notice } : {}), ...(ask && filters !== undefined ? { filters } : {}),
+        ...(ask && currentState.unchecked !== undefined && currentState.unchecked.count > 0 ? { unchecked: currentState.unchecked } : {}),
+        ...(ask && linked.length > 0 ? { linked: linked.map(entry => describe(entry)) } : {}),
       };
     };
     return admit === undefined ? apply() : admit(apply);
@@ -714,16 +936,22 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
    * seen, never repeated here.
    */
   const lastResult = (action: StepAction, value: ToolResult): ToolResult => {
-    const ids = (key: "results" | "items") => (value[key] as readonly Record<string, unknown>[]).map(row => row.id);
+    const ids = (key: "results" | "items" | "linked") => (value[key] as readonly Record<string, unknown>[]).map(row => row.id);
     return Object.freeze({
       tool: action.tool, args: action.args, ...(typeof value.list === "string" ? { list: value.list } : {}),
       ...(Array.isArray(value.opened) ? { opened: value.opened } : {}),
       ...(Array.isArray(value.results) ? { results: ids("results") } : {}), ...(Array.isArray(value.items) ? { items: ids("items") } : {}),
       ...(typeof value.more === "boolean" ? { more: value.more } : {}), ...(value.truncated === true ? { truncated: true } : {}),
+      // Ask (research tool contract v1): each filter's outcome, what a refused read's source supports, the items a date
+      // filter could not test, and the items released beside this read because its items link to them.
+      ...(value.filters !== undefined ? { filters: value.filters } : {}), ...(value.supports !== undefined ? { supports: value.supports } : {}),
+      ...(value.unchecked !== undefined ? { unchecked: value.unchecked } : {}), ...(Array.isArray(value.linked) ? { linked: ids("linked") } : {}),
       ...(typeof value.notice === "string" ? { notice: value.notice } : {}), ...(typeof value.note === "string" ? { note: value.note } : {}),
       ...(typeof value.error === "string" ? { error: value.error } : {}),
     });
   };
+  /** A read's exact arguments, for Ask's memory of refused reads. */
+  const readKey = (action: StepAction) => `${action.tool}:${JSON.stringify(Object.keys(action.args).sort().map(key => [key, action.args[key as keyof StepArgs]]))}`;
   let toolCalls = 0;
   const run = async (action: StepAction, admit?: OrderedAdmission, signal?: AbortSignal): Promise<ToolResult> => {
     // Only planner-selected reads enter this function; finish has no tool result.
@@ -732,7 +960,18 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     return withCoreRuntimeDiagnosticToolV1(identity, async () => {
     observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: action.args });
     try {
+      // Ask never sends a refused read again (research tool contract v1): the same arguments get the same refusal, unsent.
+      const key = readKey(action);
+      const refusedBefore = ask ? refusedReads.get(key) : undefined;
+      if (refusedBefore !== undefined) {
+        repeatedRefusals += 1;
+        const again = "refused again: this exact request was already refused in this Ask, so it was not sent; change the source, the filter or the approach";
+        const value: ToolResult = Object.freeze({ ...refusedBefore, note: typeof refusedBefore.note === "string" ? `${refusedBefore.note}; ${again}` : again });
+        observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result: lastResult(action, value) });
+        return value;
+      }
       const value = await (tool === 'search' ? search(action.args, admit, signal) : tool === 'open' ? open(action.args, admit, signal) : list(action.args, admit, signal));
+      if (ask && (typeof value.error === "string" || value.refused === true)) { refusedReads.set(key, value); refusedReadsCount += 1; }
       observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result: lastResult(action, value) });
       return value;
     } catch (error) {
@@ -785,16 +1024,20 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       pending.clear();
     };
     const listTasks = new Map<string, Promise<ToolResult>>();
+    // Ask: the same read twice in one step waits for the first, so a refusal is remembered before its copy runs.
+    const readTasks = new Map<string, Promise<ToolResult>>();
     const tasks = actions.map((action, index) => {
       let key: string | undefined;
       if (action.tool === 'list') {
-        const normalized = normalizeListArgs(action.args, requestDay, sourcesById, readSource);
-        if (!('error' in normalized)) key = listKey(normalized);
+        const normalized = normalizeListArgs(action.args, requestDay, sourcesById, readSource, ask);
+        if (!('error' in normalized) && !('refused' in normalized)) key = listKey(normalized);
       }
-      const previous = key === undefined ? undefined : listTasks.get(key);
+      const read = ask ? readKey(action) : undefined;
+      const previous = [...new Set([key === undefined ? undefined : listTasks.get(key), read === undefined ? undefined : readTasks.get(read)])]
+        .filter((value): value is Promise<ToolResult> => value !== undefined);
       const task = (async () => {
         try {
-          if (previous !== undefined) await previous;
+          if (previous.length > 0) await Promise.all(previous);
           signal.throwIfAborted(); assertLive();
           const value = await run(action, admit(index), signal);
           skip(index);
@@ -805,6 +1048,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         }
       })();
       if (key !== undefined) listTasks.set(key, task);
+      if (read !== undefined) readTasks.set(read, task);
       return task;
     });
     const settled = await Promise.allSettled(tasks);
@@ -893,6 +1137,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     id: state.id, source: state.args.source!, filter: state.filter, filter_applied: { ...state.filter_applied },
     members: state.members.map(entry => entry.short), shown: state.members.filter(entry => entry.shown === true || extraShown.has(entry)).length,
     ended: !inventoryMore(state), unverified_end: state.unverified_end, available: state.available, truncated: state.truncated, read_at: state.read_at!,
+    ...(state.unchecked === undefined ? {} : { unchecked: state.unchecked }),
   });
   /**
    * Ask's persistent lists (ADR-0041): each list by id, with its members, as the step being built will see it. `complete`
@@ -904,6 +1149,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     return Object.freeze({
       id: state.id, args: state.args, members: evidence.members, shown_count: state.paged, more: inventoryMore(state), complete: evidence.complete,
       available: state.available, truncated: state.truncated, unverified_end: state.unverified_end, ...(notes.length === 0 ? {} : { notes }),
+      ...(evidence.unchecked === undefined ? {} : { unchecked: evidence.unchecked }),
     });
   });
   /** What the finish check knows about each list (ADR-0041). */
@@ -993,6 +1239,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       ...(typeof value?.note === "string" ? { note: value.note } : {}), ...(typeof value?.error === "string" ? { error: value.error } : {}),
       ...(value?.truncated === true ? { truncated: true } : {}), ...(raw?.anchor_truncated === false ? { anchor_truncated: false as const } : {}),
       ...(typeof value?.more === "boolean" ? { more: value.more } : {}), ...(typeof value?.notice === "string" ? { notice: true } : {}),
+      // Ask (research tool contract v1): what the step saw of each filter's outcome, a refused read's supports and the
+      // items its dates could not test, so an evaluation reads them from the round as the model did.
+      ...(ask && value?.filters !== undefined ? { filters: value.filters as Readonly<Record<string, unknown>> } : {}),
+      ...(ask && value?.supports !== undefined ? { supports: value.supports as Readonly<Record<string, unknown>> } : {}),
+      ...(ask && value?.unchecked !== undefined ? { unchecked: value.unchecked as Readonly<Record<string, unknown>> } : {}),
     }) });
   };
   const recordRound = (startedAt: number, actions: readonly AgenticResearchActionV1[]) => {
@@ -1088,6 +1339,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       cover('search', undefined, inventory);
       if (!inventory.truncated && inventory.items.length <= SHORTCUT_ITEMS) {
         let used = 0;
+        const shown: EvidenceDeskItemV2[] = [];
         for (const listed of inventory.items) {
           assertLive();
           const opened = await observeAgenticLifecycleV1('preload', 'research_preload', { operation: 'open', citation: listed.citation },
@@ -1097,7 +1349,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
           if (exact === undefined || used + bytes(exact.text) > researchBudget / 2) continue;
           const entry = register(exact); entry.opened = true; entry.preloaded = true; entry.direct = true; used += bytes(exact.text);
+          shown.push(exact);
         }
+        // Research is shown the preload only when everything fits, and then only what fits: progress finds that alone
+        // (ADR-0043). An empty inventory still says the search found nothing.
+        if (shown.length > 0 || inventory.items.length === 0) report?.returned('search', undefined, shown);
       }
       report?.reads_done();
     } else observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'preload', event: 'skipped' });
@@ -1142,7 +1398,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const user = { ...head, opened: pad.opened, seen: pad.seen, ...tailWith(new Set(pad.entries)) };
       const openIds = [...entries.values()].map(entry => entry.short);
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
-      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, needKinds);
+      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, needKinds, ask);
       let step: Step;
       // The need holds after the access check too: a check retried after a transient failure can spend the margin, and a
       // step call sent below it would likely time out with no time to repair. No time here is the gate's budget stop. The one
@@ -1211,6 +1467,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       plan = proposedPlan(step.parts);
       // Batched reads must be observed in another step before completion.
       const reads = step.actions.filter(action => action.tool !== "finish");
+      mostReadsInAStep = Math.max(mostReadsInAStep, reads.length);
       if (reads.length === 0) {
         const identity = { tool_call_id: ++toolCalls, round: steps, tool: 'finish' } as const;
         observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: {} });
@@ -1293,11 +1550,16 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         }
         // Everything the call shows, text or row, has been shown to research: a list counts once every member has (ADR-0041).
         for (const entry of researchPromptShown) entry.shown = true;
-        // This call's access check has passed: the items it reads in full may now be named (ADR-0039).
-        report?.given(researchPromptEntries.filter(entry => entry.direct === true).map(entry => entry.item));
+        // This call's access check has passed: the items it reads in full may now be named (ADR-0039), and every item it
+        // shows, row or text, counts as looked through (ADR-0043).
+        const direct = (prompted: readonly Entry[]) => prompted.filter(entry => entry.direct === true).map(entry => entry.item);
+        report?.given(direct(researchPromptEntries), direct(researchPromptShown));
       },
     }),
-    progress: () => Object.freeze({ receipts, rounds: steps, fallbacks, searches: searchesRun.length, search_hits: searchHits, retrieved_tickets: retrievedTickets.size }),
+    progress: () => Object.freeze({
+      receipts, rounds: steps, fallbacks, searches: searchesRun.length, search_hits: searchHits, retrieved_tickets: retrievedTickets.size,
+      refused_reads: refusedReadsCount, repeated_refusals: repeatedRefusals, unchecked_items: uncheckedItems, sources_looked_at: sourcesLookedAt.size, most_reads_in_a_step: mostReadsInAStep,
+    }),
     async run(gate: AgenticModelGateV1) {
       const researchStartedAt = now();
       await research(gate);

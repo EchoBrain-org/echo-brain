@@ -193,11 +193,11 @@ describe('"What are my open tasks?" through the real Authority composition (ADR-
 
     expect(validatePersonAnswerResponseV7(answer)).toEqual(answer);
     expect(answer).toMatchObject({ schema_version: 7, kind: 'echo-clean-person-answer-v7', outcome: 'answered' });
-    // Research read "my" as her name, and the desk applied owner and status: only her follow-up came back, with no
-    // note that either was ignored.
+    // Research read "my" as her name, and the desk applied owner and status, as the result says: only her follow-up came
+    // back, with its decision beside it (research tool contract v1).
     expect(planner.steps[0]!.asked_by).toBe('Mina Patel');
     expect(planner.steps[1]!.last_results).toEqual([{
-      tool: 'list', args: { source: 'follow_ups', owner: 'Mina Patel', status: 'open' }, list: 'L1', items: ['E1'], more: false,
+      tool: 'list', args: { source: 'follow_ups', owner: 'Mina Patel', status: 'open' }, filters: { owner: 'applied', status: 'applied' }, list: 'L1', items: ['E1'], linked: ['E2'], more: false,
     }]);
     expect(planner.steps[2]!.last_results).toEqual([expect.objectContaining({ tool: 'open', opened: ['E1'] })]);
     // The answer cites it as a follow-up, with the open ref that names its item for the desktop.
@@ -205,12 +205,13 @@ describe('"What are my open tasks?" through the real Authority composition (ADR-
       citation: { kind: 'follow_up', item_id: f.ticket.item_id }, kind: 'follow_up', label: `ECHO-12 ${f.outsideText}`, visibility: 'only_me', ref: `follow_up:${f.ticket.item_id}`,
     }]);
     expect(answer.parts.flatMap(part => part.statements)).toEqual([expect.objectContaining({ citation_indexes: [0], private: true })]);
-    // The writer read what the follow-up is: its owner, status and due date, and its decision.
+    // The writer read what the follow-up is: its owner, status and due date, and its decision; and beside it the ticket it
+    // follows, as Mina's own Jira read gave it (research tool contract v1).
     const evidence = (JSON.parse(planner.writer[0]!) as { evidence: unknown[] }).evidence;
     expect(evidence).toEqual([expect.objectContaining({
       id: 'E1', source: 'follow_ups', kind: 'follow_up', title: `ECHO-12 ${f.outsideText}`, provenance: { kind: 'follow_up' },
       attributes: { owner: 'Mina Patel', status: 'open', due_at: '2026-10-30' }, text: expect.stringContaining('Decision: Pilot planning'),
-    })]);
+    }), expect.objectContaining({ id: 'E2', source: 'tickets', kind: 'ticket', title: `ECHO-12 ${f.outsideText}`, provenance: { kind: 'ticket' } })]);
     // Ari's follow-up never left the desk, and the list and the open were each audited, as Mina, before release.
     expect(planner.seen()).not.toContain(f.action.item_id);
     expect(planner.seen()).not.toContain('Thermostat rollout plan');
@@ -228,7 +229,7 @@ describe('"What are my open tasks?" through the real Authority composition (ADR-
     const planner = myOpenTasks();
     const answer = await myTasksRoute(f, planner.model).ask({ access_token: 'ari', request: { schema_version: 3, question: 'What are my open tasks?' } });
     expect(planner.steps[0]!.asked_by).toBe('Ari');
-    expect(planner.steps[1]!.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: 'Ari', status: 'open' }, list: 'L1', items: ['E1'], more: false }]);
+    expect(planner.steps[1]!.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: 'Ari', status: 'open' }, filters: { owner: 'applied', status: 'applied' }, list: 'L1', items: ['E1'], more: false }]);
     expect(answer.citations).toEqual([expect.objectContaining({ kind: 'follow_up', citation: { kind: 'follow_up', item_id: f.action.item_id } })]);
     expect(new Set(followUpReleases(f).flatMap(release => release.items.map(item => item.item_id)))).toEqual(new Set([f.action.item_id]));
   });

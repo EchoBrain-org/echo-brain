@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { assertCanonicalMeetingDocument } from "@echo-brain/organization-processing/core";
 import {
   createStagingSyntheticPersonalMeetingProviderV1,
   readStagingSyntheticCheckpointV1,
   readStagingSyntheticMeetingFixturesV1,
   STAGING_SYNTHETIC_CANARY_MEETING_ID_V1,
   stagingSyntheticCanaryEntryV1,
+  stagingSyntheticCanaryMeetingTimeV1,
   stagingSyntheticCanaryMeetingV1,
   stagingSyntheticCanaryReleaseV1,
   writeStagingSyntheticCheckpointV1,
@@ -52,6 +54,19 @@ describe("staging synthetic personal meeting provider", () => {
     expect(batch.meetings[0]!.title).toBe("SYNTHETIC STAGING CANARY clean-v1-release-one - Release approval check");
     expect(readStagingSyntheticCheckpointV1(batch.next_cursor!).manual).toEqual([]);
     await expect(adapter.pull({ cursor: cursor([]), limit: 1 })).resolves.toEqual({ meetings: [] });
+  });
+
+  it("records the canary meeting as held at noon UTC on its release's date, the same for every run of one release", () => {
+    const meeting = stagingSyntheticCanaryMeetingV1("clean-v1-20261019-sonnet-quiet-40ba71c");
+    expect(meeting.time).toEqual({ actual_start_at: "2026-10-19T12:00:00.000Z", actual_end_at: "2026-10-19T12:15:00.000Z", timezone: "UTC", all_day: false });
+    expect(() => assertCanonicalMeetingDocument(meeting)).not.toThrow();
+    expect(stagingSyntheticCanaryMeetingV1("clean-v1-20261019-sonnet-quiet-40ba71c")).toEqual(meeting);
+    expect(stagingSyntheticCanaryMeetingTimeV1("clean-v1-20260822-001").actual_start_at).toBe("2026-08-22T12:00:00.000Z");
+    // A release id that names no real date keeps a recorded time: the fixture's own day.
+    for (const releaseId of ["clean-v1-release-one", "clean-v1-20261332-x", "clean-v1-20260230-x", "clean-v1-202610190"]) {
+      expect(stagingSyntheticCanaryMeetingTimeV1(releaseId).actual_start_at).toBe("2026-10-07T12:00:00.000Z");
+    }
+    expect(() => stagingSyntheticCanaryMeetingTimeV1("release-two")).toThrow("release id is invalid");
   });
 
   it("gives every release one canary meeting id with its own revision, and refuses anything else", async () => {

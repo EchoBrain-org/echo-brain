@@ -1,7 +1,10 @@
-import { MISSING_EVENT_DATE_NOTICE_V1 } from "../../shared/temporal-query-v1.js";
+import { AuthorityOperationError } from "../../domain/errors.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
+  isPersonWorkspaceCitationV1,
   personAnswerCitationKeyV7,
+  personAnswerCitationKeyV8,
+  type PersonAnswerResponseV8,
   type PersonAnswerPartV4,
   type PersonAnswerResponseV4,
   type PersonAnswerResponseV5,
@@ -20,12 +23,13 @@ import {
   type AnswerSentence,
 } from "../agentic-ask-v1-model-protocol.js";
 import { compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
-import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
+import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_WRITER_LISTS_MAX_V1,
   AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
   agenticListCheckedNoteV1,
   agenticListFilterNoticeV1,
+  agenticListUncheckedNoticeV1,
   agenticListMembershipV1,
   agenticListMembersNounV1,
   agenticListNameSharesV1,
@@ -58,9 +62,10 @@ import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 
  */
 
 const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
+/** An empty list whose date filter could not test some items (research tool contract v1): none of those it tested matched. */
+const UNCHECKED_EMPTY_GAP = "None of the items that record the date asked for matched.";
 const RECORDS_GAP = "I found these records, but could not write a verified summary.";
 const INCOMPLETE_SEARCH_GAP = "I couldn't complete the search. Please try again.";
-const MISSING_DATE_GAP = "I can't verify the requested date because some accessible meeting sources have no recorded event date.";
 const INCOMPLETE_SEARCH_NOTICE = "Research stopped before it finished, so relevant context may be missing.";
 const LIMITED_COVERAGE_GAP = "Some source coverage was incomplete, so relevant context may be missing.";
 const LIST_FALLBACK_GAP = "I found these items, but could not write the rest of the answer.";
@@ -79,7 +84,7 @@ const MAX_STATEMENTS = AGENTIC_ASK_MAX_SENTENCES_V1;
 const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
 
 type Entry = AgenticEvidenceBundleItemV1;
-type AskResponse = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7;
+type AskResponse = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8;
 
 export interface AskRendererInputV1 {
   readonly question: string;
@@ -92,7 +97,7 @@ export interface AskRenderedV1 {
 
 export interface CreateAskRendererV1Options {
   /** 4 (V1 core), 5 (V2), 6 (V3 and the research core) or 7 (V4: follow-ups, ADR-0040). */
-  readonly response_version: 4 | 5 | 6 | 7;
+  readonly response_version: 4 | 5 | 6 | 7 | 8;
   /** The writer's system prompt, with the live-source guidance when live sources are available. */
   readonly answer_prompt: string;
   /** The sources research could read, as the research model saw them. */
@@ -187,10 +192,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // The writer sees at most 5 lists, the plan's first.
       const writerOrder = [...new Set([...stated, ...checking, ...lists.map(list => list.id)])].slice(0, AGENTIC_LIST_WRITER_LISTS_MAX_V1).map(id => listById.get(id)!);
       const writerListsWith = (cap: number) => writerOrder.map(list => viewOf(list, cap));
-      /** What a list's members are called: their desk kinds, after the catalog's tool (ADR-0041). */
+      /** What a list's members are called: their desk kinds, after the catalog's tool (ADR-0041); an empty list's, its kind filter's. */
       const nounOf = (list: AgenticWriterListV1) => {
         const tool = options.source_catalog.find(entry => entry.source === list.source)?.tool_id;
-        return agenticListMembersNounV1({ selector: list.source, ...(typeof tool === "string" ? { tool_id: tool } : {}) }, rows.get(list.id)!.map(member => member.kind));
+        const members = rows.get(list.id)!.map(member => member.kind);
+        return agenticListMembersNounV1({ selector: list.source, ...(typeof tool === "string" ? { tool_id: tool } : {}) },
+          members.length === 0 && list.filter.kind !== undefined ? [list.filter.kind] : members);
       };
 
       // ---- final answer ---------------------------------------------------
@@ -274,7 +281,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const usedKeys = new Map<string, number>();
       // One citation per key, the key the Ask response checks for duplicates: a listed ticket's row and its opened body
       // are two items with one key, so they share one citation.
-      const keyOf = (short: string) => personAnswerCitationKeyV7(byShort.get(short)!.item.citation);
+      // A workspace item cites only in the V8 answer, whose renderer keys it (research tool contract v1).
+      const keyOf = (short: string) => {
+        const citation = byShort.get(short)!.item.citation;
+        if (responseVersion === 8) return personAnswerCitationKeyV8(citation);
+        if (isPersonWorkspaceCitationV1(citation)) throw new AuthorityOperationError("invalid_output", "A workspace item has no V7 citation");
+        return personAnswerCitationKeyV7(citation);
+      };
       /** Citation indexes of `shorts`, each once; a new cited object becomes the next citation. */
       const cite = (shorts: readonly string[]): number[] => {
         const indexes: number[] = [];
@@ -340,6 +353,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const unchecked = checking.map(id => views.get(id)!).filter(list => agenticListCheckedNoteV1(list) !== undefined);
       if (unchecked.length > 0) listGaps.push({ text: UNCHECKED_GAP, partial: false });
       if (unlisted) listGaps.push({ text: WHICH_GAP, partial: true });
+      // A list whose date filter could not test some items (research tool contract v1) supports neither "none" nor "all" of
+      // them: the part says how many were not checked, and is partial, even when the list is empty.
+      let uncheckedEmpty = false;
+      for (const list of [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])]) {
+        const text = agenticListUncheckedNoticeV1(list, nounOf(list));
+        if (text === undefined) continue;
+        listGaps.push({ text, partial: true });
+        if (list.count === 0) uncheckedEmpty = true;
+      }
       const sentences = answer?.sentences ?? [];
       // A sentence the kept reply still rests on rows or list ids is left out, and the part says so, never what it claimed.
       if (sentences.some(restsOnRows)) listGaps.push({ text: UNSUPPORTED_GAP, partial: true });
@@ -372,10 +394,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
       const coverageLimited = coverageIsLimitedFor(bundle, writerSentences.slice(0, Math.max(0, statements.length - listStatements.length)).flatMap(sentence => sentence.read.map(short => byShort.get(short)!)));
       const incomplete = (answer === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
-      const dateCoverageMissing = bundle.coverage.notices.some(notice => notice.includes(MISSING_EVENT_DATE_NOTICE_V1));
-      const incompleteGap = dateCoverageMissing ? MISSING_DATE_GAP : INCOMPLETE_SEARCH_GAP;
       const gapText = incomplete
-        ? cleanLine(`${incompleteGap}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
+        ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
         : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
       // What the lists add to the gap: a list not read to its end, a which_say list not fully checked, a list kind with no
       // list, a sentence left out for resting on rows, and what did not fit.
@@ -398,7 +418,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const records = fallback.map(entry => statementOf(entry.item.text!, [entry.short]));
         draft = records.length > 0
           ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
-          : { status: "not_found", statements: [], gap: withGaps(gapText ?? (dateCoverageMissing ? MISSING_DATE_GAP : incomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP))! };
+          : { status: "not_found", statements: [], gap: withGaps(gapText ?? (uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
       }
       const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
       // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
@@ -412,17 +432,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       ];
       const outcome = !anyEvidence ? (incomplete || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
       const result = Object.freeze({
-        schema_version: responseVersion, kind: responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
+        schema_version: responseVersion, kind: responseVersion === 8 ? "echo-clean-person-answer-v8" : responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
         parts: Object.freeze([Object.freeze({
           question, status: draft.status,
           statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
           ...(draft.gap === undefined ? {} : { gap: draft.gap }),
           ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
         })]),
-        citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV1(entry.item, options.context.time_zone ?? 'UTC')) : []),
+        citations: Object.freeze(anyEvidence ? used.map(entry => (responseVersion === 8 ? citationOfAgenticEvidenceItemV8 : citationOfAgenticEvidenceItemV1)(entry.item, options.context.time_zone ?? 'UTC')) : []),
         ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
       });
-      const validated: AskResponse = responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
+      const validated: AskResponse = responseVersion === 8 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV8) : responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
       return Object.freeze({
         result: Object.freeze({ response: validated, writer_evidence: writerEvidence }),
         // `used` is in first-citation order, and fitting the byte bound drops
