@@ -394,6 +394,8 @@ export type Audience =
  * read it: the API's own bound (PERSON_UPLOAD_PROJECT_SET_MAX).
  */
 export const MAX_CAPTURE_PROJECTS = 20;
+/** New project takes up to 20 files. */
+export const MAX_PROJECT_FILES = 20;
 
 /** Where a saved document's text extraction stands (the Authority's own states). */
 export type Extraction = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out'
@@ -566,12 +568,9 @@ export interface HostMethods {
   /** The project as it is now, with your role in it. */
   'projects.read': { params: { expect: Expect; project_id: string }; result: ProjectSummary };
   'projects.members': { params: { expect: Expect; project_id: string; cursor?: string }; result: MemberPage };
-  /** People in the organization a lead can add, by name. */
-  'projects.directory': { params: { expect: Expect; project_id: string; query?: string; cursor?: string }; result: MemberPage };
   /**
    * People in your own organization, by name, for any member and with no
-   * project: New project's people before the project exists. An Authority
-   * without it answers not_found.
+   * project: New project's people, and those a lead adds in People.
    */
   'people.directory': { params: { expect: Expect; query?: string; cursor?: string }; result: MemberPage };
   /** A change to a project. Only the Authority's receipt says it was made. */
@@ -675,7 +674,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'changes.read', 'list.page', 'open.ref',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
-  'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
+  'projects.members', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
   'employees.reissue', 'employees.revoke', 'tools.meetings', 'runs', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
@@ -690,7 +689,7 @@ export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
 /** Operations of a write method that only read. */
 const READ_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   'tools.meetings': new Set<PersonMeetingRequestV2['operation']>(['home', 'reviews', 'browse', 'open', 'review_open']),
-  runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'view', 'items', 'item']),
+  runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'items', 'item']),
 };
 /** Whether a call may change what the Authority stores. An operation not known to only read counts as a write. */
 export function isWriteCall(method: string, params: unknown): boolean {
@@ -700,7 +699,7 @@ export function isWriteCall(method: string, params: unknown): boolean {
 }
 /** Every runs operation: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
-  ['list', 'home', 'start', 'retry', 'view', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
+  ['list', 'home', 'start', 'retry', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
 );
 /**
  * A call as desktop.log names it, content-free: the method, and for runs its operation and how much it read ("runs.home",

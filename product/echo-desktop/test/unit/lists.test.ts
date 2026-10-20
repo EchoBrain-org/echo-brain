@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -11,10 +11,8 @@ let signedIn: boolean;
 let members: typeof ann[];
 let directories: { query: string | undefined; cursor: string | undefined }[];
 
+storeLifecycle();
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  stubWindow();
   held = new Held();
   signedIn = true;
   members = [];
@@ -42,8 +40,6 @@ beforeEach(() => {
     'account.signOut': () => ok({ signed_in: false, account: null }),
   }, () => ({ active: [apollo], archived: [] })));
 });
-
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('a project\'s members', () => {
   it('are the latest read: an older reply does not replace a newer one', async () => {

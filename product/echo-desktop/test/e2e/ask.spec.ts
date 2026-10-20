@@ -486,51 +486,6 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   await expect(page.getByTestId('reader-text')).toHaveText('Apollo moves to usage-based pricing tiers from October.');
 });
 
-test('an answer that cites a follow-up opens it beside the running Ask, with its owner, status and check, then its item page (ADR-0040)', async () => {
-  run = await launch('ask-progress-follow-up');
-  const { page } = run;
-  const ITEM = 'itm_00000000-0000-4000-8000-000000000051';
-  const itemReads = () => run.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'item').map(call => call.body);
-  await askFromHome(page, 'What does Mina still owe?');
-  // The newest route this Authority has, streamed in progress V2: never /v5.
-  await expect.poll(() => run.calls().filter(call => call.path === '/v6/person/ask').map(call => call.progress)).toEqual(['2']);
-  expect(run.calls().filter(call => call.path === '/v5/person/ask')).toEqual([]);
-  // Follow-ups are a kind of source it searched; the follow-up it read is named by its title alone.
-  await expect(page.getByTestId('ask-stage')).toHaveText('Reading Tuesday sync and 1 more', { timeout: 10_000 });
-  await openLine(page);
-  await expect(progressSteps(page)).toHaveText(['Searched meetings and follow-ups · 2 found', 'Reading Tuesday sync, Ship the launch checklist']);
-
-  // Its name opens it beside Ask, which keeps working: its title, owner, status and latest check, read as Home reads its row, and no Open.
-  await page.getByTestId('ask-steps').getByTestId('ask-step-name').nth(1).click();
-  const pane = page.getByTestId('source-pane');
-  await expect(pane).toContainText('Follow-up');
-  await expect(pane.getByTestId('pane-follow-up').locator('h2')).toHaveText('Ship the launch checklist');
-  await expect(pane.getByTestId('pane-follow-up-meta')).toHaveText('Mina · Open');
-  await expect(pane.getByTestId('pane-follow-up-check')).toHaveText(/^Checked .+ · not updated yet$/);
-  await expect(pane.getByTestId('source-open')).toHaveCount(0);
-  await expect(page.getByTestId('asking')).toBeVisible();
-  expect(itemReads()).toEqual([{ schema_version: 1, operation: 'item', item_id: ITEM, read: 'rows' }]);
-
-  // The answer cites it: its source row says who owns it and its status, and no kind; the pane, still on it, offers Open.
-  writeFileSync(join(run.home, 'release-ask'), '');
-  await expect(page.getByTestId('answer')).toBeVisible();
-  await expect(page.getByTestId('asking')).toHaveCount(0);
-  await expect(page.getByTestId('statement-text')).toHaveText('Mina still owes the launch checklist.');
-  await expect(page.getByTestId('source-row')).toHaveText(/^1\s*Ship the launch checklist\s*Mina · Open$/);
-  await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 2 items · \d+s$/);
-  await expect(pane.getByTestId('pane-follow-up-meta')).toHaveText('Mina · Open');
-  await pane.getByTestId('source-open').click();
-
-  // Its item page, in place of Ask, read again: its title, its status and its check.
-  await expect(page.getByTestId('ask-view')).toHaveCount(0);
-  const item = page.getByTestId('follow-up');
-  await expect(item.locator('h1')).toHaveText('Ship the launch checklist');
-  await expect(item.getByTestId('follow-up-state')).toHaveText('Open');
-  await expect(item.getByTestId('follow-up-check')).toHaveText(/^Checked .+ · not updated yet$/);
-  await expect.poll(() => itemReads().length).toBeGreaterThanOrEqual(2);
-  expect(run.calls().filter(call => call.path === '/v6/person/ask')).toHaveLength(1);
-});
-
 test('an answer that cites your project, a person, a tool and a Jira project opens each by its kind (research tool contract v1)', async () => {
   run = await launch('ask-progress-workspace');
   const { page, app } = run;
@@ -666,37 +621,4 @@ test('a quick Ask shows nothing more, and its source opens the cited decision li
   await expect(reader.locator('.record-item.on')).toHaveCount(1);
   await expect(reader.locator('.record-item.on')).toHaveText(/^Cited: Ship Apollo with annual plans first\./);
   expect(opens()).toEqual([`meeting:${RECORD}`]);
-});
-
-test('Cancel while Ask works removes what it named, and the pane with it', async () => {
-  run = await launch('ask-progress');
-  const { page } = run;
-  await askFromHome(page, 'What did we agree?');
-  await openLine(page);
-  await expect(progressSteps(page)).toHaveCount(2);
-  await page.getByTestId('ask-steps').getByTestId('ask-step-name').nth(1).click();
-  await expect(page.getByTestId('source-pane').getByTestId('evidence-text')).toHaveText('We agreed to ship.');
-  await page.getByTestId('ask-cancel').click();
-  await expect(page.getByTestId('ask-view')).toHaveCount(0);
-  await expect(page.getByTestId('source-pane')).toHaveCount(0);
-  // Its answer would come now; nothing of it shows.
-  writeFileSync(join(run.home, 'release-ask'), '');
-  await page.evaluate(() => (window as unknown as { echo: { rpc(method: string, params: object): Promise<unknown> } }).echo.rpc('app.status', {}));
-  await expect(page.getByTestId('ask-view')).toHaveCount(0);
-});
-
-test('an Ask that ends without an answer removes its rows and anything they opened, and leaves no receipt', async () => {
-  run = await launch('ask-progress-fails');
-  const { page } = run;
-  await askFromHome(page, 'What did we agree?');
-  await openLine(page);
-  await expect(progressSteps(page)).toHaveCount(2);
-  await page.getByTestId('ask-steps').getByTestId('ask-step-name').nth(0).click();
-  await expect(page.getByTestId('source-pane')).toBeVisible();
-  writeFileSync(join(run.home, 'release-ask'), '');
-  await expect(page.getByTestId('ask-error')).toHaveText('ECHO is unavailable right now. Try again.');
-  await expect(page.getByTestId('ask-steps')).toHaveCount(0);
-  await expect(page.getByTestId('ask-receipt')).toHaveCount(0);
-  await expect(page.getByTestId('source-pane')).toHaveCount(0);
-  await expect(page.getByTestId('ask-retry')).toBeVisible();
 });

@@ -218,41 +218,6 @@ test('an add whose reply was lost brings the sheet back and holds back the rest:
   expect(uploads()).toHaveLength(1);
 });
 
-test('an Authority without the organization directory: people are added after Create, from the project’s own', async () => {
-  run = await launch('no-person-directory');
-  const { page } = run;
-  await page.getByTestId('sidebar-new-project').click();
-  await expect(page.getByTestId('people-later')).toHaveText('Add people after Create');
-  await expect(page.getByTestId('people-find')).toHaveCount(0);
-  await expect(page.getByTestId('candidate-row')).toHaveCount(0);
-  // Everything else stays on the one page.
-  await chooseInDialog(onDisk('Notes.txt'));
-  await page.getByTestId('new-project-add-files').click();
-  await expect(page.getByTestId('new-project-file')).toHaveText(['Notes.txt']);
-  await page.getByTestId('new-project-name').fill('Cedar');
-  await page.getByTestId('new-project-create').click();
-  await expect(page.getByTestId('new-project-title')).toHaveText('Cedar');
-  await expect(page.getByTestId('new-project-file')).toHaveText(['Notes.txt · Saved · Extracting text']);
-  await expect(page.getByTestId('title')).toHaveText('Cedar');
-
-  // Then as People does: you lead it, and someone is added at once, with Undo.
-  await expect(page.getByTestId('people-later')).toHaveCount(0);
-  await expect(page.getByTestId('people-find')).toBeFocused();
-  await expect(page.getByTestId('member-row')).toHaveText(['AAriLead']);
-  await page.getByTestId('people-find').fill('raj');
-  await expect(page.getByTestId('candidate-row')).toHaveText(['RKRaj KumarAdd']);
-  await page.getByTestId('candidate-add').click();
-  await expect(page.getByTestId('people-added')).toContainText('Added Raj Kumar.');
-  await expect(page.getByTestId('member-row')).toHaveCount(2);
-  expect(directory()).toEqual([{ limit: 10 }]);
-  const project = String(run.calls().find(call => call.method === 'GET' && call.path.startsWith('/v2/person/projects/prj_'))!.path.split('/').pop());
-  expect(run.calls().filter(call => call.path === '/v1/person/projects/directory').at(-1)!.body).toMatchObject({ project_id: project, query: 'raj' });
-  expect(adds()).toEqual([expect.objectContaining({ project_id: project, membership_id: RAJ })]);
-  await page.getByTestId('new-project-done').click();
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveCount(0);
-});
-
 test('with another app in front New project hides its people but takes a drop; a file whose outcome is unknown holds back the rest', async () => {
   run = await launch('document-reply-lost');
   const { page, app } = run;

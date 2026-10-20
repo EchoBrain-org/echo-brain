@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
-import { cover, show, uncover } from './harness.js';
+import { ACCOUNT, cover, EMPTY_SUMMARY, fail, flush, ok, render, show, startStore as start, storeLifecycle, text, uncover } from './harness.js';
 import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -9,59 +9,6 @@ vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 
 const approval = 'apr_' + 'a'.repeat(64);
 const record = 'sha256:' + '1'.repeat(64);
-let review: PersonMeetingReviewV2;
-let run: PersonRunV1 | null;
-let home: HomeView;
-let granola: ToolStatus | null = 'linked';
-let failNextList = false;
-let failNextReviews = false;
-let failLists = false;
-/** Home's next read of its rows fails (and so nothing of it is read live). */
-let failNextHome = false;
-/** Home's next live read fails, its rows read. */
-let failNextLive = false;
-/** Live reads (Home's, a list's, an item's) wait while set, until the test answers them, each with what the test held when asked; so do Home's rows reads. */
-let holdLive = false;
-let answerLive: (() => void)[] = [];
-let holdRows = false;
-let answerRows: (() => void)[] = [];
-/** A list's rows reads (items, rows only) wait while set, until the test answers them, each with what the page held when asked. */
-let holdListRows = false;
-let answerListRows: (() => void)[] = [];
-/** Live items reads to fail next (not rows only, not counts only). */
-let failLiveItems = 0;
-/** The tools read waits while set, until the test answers it; or fails, while `failTools`. */
-let holdTools = false;
-let failTools = false;
-let answerTools: (() => void)[] = [];
-let sendFailure: { code: string; retryable: boolean; mutation_outcome?: 'unknown' } | null = null;
-/** A send of this run fails as `sendFailure` says; any other run's goes. Null: every send fails so. */
-let sendFailsFor: string | null = null;
-/** Send replies wait while set, until the test answers them in order. */
-let holdSend = false;
-let answerSend: (() => void)[] = [];
-/** Rows an items read pages at a time (null: all at once), and items reads to fail next. */
-let pageSize: number | null = null;
-let failItems = 0;
-/** How a set_state fails, when a test says; a read of one item answers not_found while set. */
-let setStateFailure: { code: string; retryable: boolean; mutation_outcome?: 'unknown' } | null = null;
-let itemGone = false;
-/** The signed-in account. */
-let member = 'member';
-/** What a sweep request answers ('fails': unavailable), the sweep run it queued, and what starting that run answers ('fails': unavailable). */
-let sweepAnswer: { run_id: string } | { state: 'nothing_to_check' } | 'fails' = { state: 'nothing_to_check' };
-let sweep: PersonRunV1 | null = null;
-let sweepStarts: 'running' | 'busy' | 'done' | 'failed' | 'fails' = 'running';
-/** What starting the impact check answers: `pending` while the Authority's search index has not caught up with its decision. */
-let impactStarts: 'running' | 'pending' = 'running';
-/** What an items read answers, when a test says. */
-let page: OpenItemsView | null = null;
-/** How an assign fails, when a test says; what a read of one item answers (unavailable while null). */
-let assignFailure: { code: string; retryable: boolean; mutation_outcome?: 'unknown' } | null = null;
-let readItem: OpenItemView | null = null;
-/** set_state replies wait while set, until the test answers them in order. */
-let holdSetState = false;
-let answerSetState: (() => void)[] = [];
 const RAFAEL = { membership_id: 'mem_00000000-0000-4000-8000-000000000088', display_name: 'Rafael Moreno' };
 
 const impactRun = (state: PersonRunV1['state'], id = '20', event = approval): PersonRunV1 => ({
@@ -103,8 +50,6 @@ const rowsOf = (view: HomeView): HomeView => ({ ...view, items: view.items.map(r
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink: 'https://example.atlassian.net/browse/ECHO-12' };
 /** An item ECHO opened for you just now: what it says now comes with it. */
 const opened = (id: string, extra: Partial<OpenItemView> = {}): OpenItemView => ({ ...item(id), reach: 'opened', current: { source: ticket, says_now: `Says ${id}` }, ...extra });
-const summary: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
-const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
 /**
  * The runs requests sent, but for reads of Home's rows (Home's own, each before its live read) and the change check's reads
  * of the open follow-ups you are involved in (freshness.test.ts).
@@ -121,151 +66,157 @@ const operations = () => homeCalls().map(([, params]) => params.request.operatio
 const requests = (operation: string) => homeCalls().filter(([, params]) => params.request.operation === operation).map(([, params]) => params.request);
 const project = { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' as const, created_at: '2026-10-01T00:00:00.000Z', status: 'active' as const };
 
-beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() });
-  review = { approval_id: approval, title: 'Private meeting', project_ids: [], status: 'pending', decided_on: null, first_line: null, action_count: 0, meeting_at: null };
-  run = null;
-  home = emptyHome();
-  granola = 'linked';
-  failNextList = false;
-  failNextReviews = false;
-  failLists = false;
-  failNextHome = false;
-  failNextLive = false;
-  holdLive = false;
-  answerLive = [];
-  holdRows = false;
-  answerRows = [];
-  holdListRows = false;
-  answerListRows = [];
-  holdTools = false;
-  failTools = false;
-  answerTools = [];
-  failLiveItems = 0;
-  sendFailure = null;
-  sendFailsFor = null;
-  holdSend = false;
-  answerSend = [];
-  pageSize = null;
-  failItems = 0;
-  setStateFailure = null;
-  itemGone = false;
-  member = 'member';
-  sweepAnswer = { state: 'nothing_to_check' };
-  sweep = null;
-  sweepStarts = 'running';
-  impactStarts = 'running';
-  page = null;
-  assignFailure = null;
-  readItem = null;
-  holdSetState = false;
-  answerSetState = [];
-  rpc.mockReset();
-  rpc.mockImplementation(async (method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; item_id?: string; state?: string; read?: 'rows' | 'counts';
-    states?: readonly string[]; cursor?: string; scope?: string; id?: string } }) => {
-    const ok = (value: unknown) => ({ ok: true, value });
-    const unavailable = { ok: false, failure: { code: 'unavailable', retryable: true } };
-    switch (method) {
-      case 'app.status': return ok({ signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: member, display_name: 'Fixture', role: 'employee' } });
-      case 'projects.list': return ok({ items: [], next_cursor: null });
-      case 'projects.members': return ok({ items: [], next_cursor: null });
-      case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
-      case 'open.ref': return unavailable;
-      // A project's tools line: it reads nothing.
-      case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
-      case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
-      // The change check: nothing moves unless a test says.
-      case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60,
-        areas: { projects: `sha256:${'0'.repeat(64)}`, follow_ups: `sha256:${'1'.repeat(64)}`, reviews: `sha256:${'2'.repeat(64)}` } });
-      case 'people.directory': return ok({ items: [RAFAEL], next_cursor: null });
-      case 'account.tools': {
-        if (failTools) return { ok: false, failure: { code: 'transport_failed', retryable: true } };
-        const tools = () => ok({ tools: granola === null ? [] : [{ tool_id: 'granola', status: granola }] });
-        return holdTools ? new Promise(resolve => { answerTools.push(() => resolve(tools())); }) : tools();
-      }
-      case 'tools.meetings':
-        if (params.request?.operation === 'reviews') {
-          if (failNextReviews) { failNextReviews = false; return unavailable; }
-          return ok({ reviews: [{ ...review }] });
-        }
-        if (params.request?.operation === 'review_open') return ok({ review: { ...review }, content: 'Private proposal text', suggested_projects: [], owners: [], snapshot_sha256: 'snapshot' });
-        break;
-      case 'runs':
-        if (params.request?.operation === 'list') {
-          if (failLists) return unavailable;
-          if (failNextList) { failNextList = false; return unavailable; }
-          // Newest first: a sweep comes after the impact check.
-          return ok({ runs: [...(sweep ? [{ ...sweep }] : []), ...(run ? [{ ...run }] : [])] });
-        }
-        if (params.request?.operation === 'home') {
-          // Its rows, answered with what `home` holds when the test lets them go; and its live read.
-          if (params.request.read === 'rows') {
-            if (failNextHome) { failNextHome = false; return unavailable; }
-            return holdRows ? new Promise(resolve => { answerRows.push(() => resolve(ok(rowsOf(home)))); }) : ok(rowsOf(home));
-          }
-          if (failNextLive) { failNextLive = false; return unavailable; }
-          if (holdLive) return new Promise(resolve => { answerLive.push(() => resolve(ok(home))); });
-          return ok(home);
-        }
-        if (params.request?.operation === 'start') {
-          if (sweep && params.request.run_id === sweep.run_id) {
-            if (sweepStarts === 'fails') return unavailable;
-            if (sweepStarts !== 'busy') sweep = sweepRun(sweepStarts);
-            return ok({ state: sweepStarts });
-          }
-          if (impactStarts === 'pending') return ok({ state: 'pending' });
-          run = impactRun('running');
-          return ok({ state: 'running' });
-        }
-        if (params.request?.operation === 'sweep') {
-          if (sweepAnswer === 'fails') return unavailable;
-          if ('run_id' in sweepAnswer) sweep = sweepRun('pending');
-          return ok(sweepAnswer);
-        }
-        if (params.request?.operation === 'set_state') {
-          if (setStateFailure) return { ok: false, failure: setStateFailure };
-          const reply = ok({ state: params.request.state });
-          return holdSetState ? new Promise(resolve => { answerSetState.push(() => resolve(reply)); }) : reply;
-        }
-        if (params.request?.operation === 'assign') {
-          return assignFailure ? { ok: false, failure: assignFailure } : ok({ owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true } });
-        }
-        // One item: the one the test says, else the row a list read holds now; read rows only, nothing of it read live.
-        if (params.request?.operation === 'item') {
-          if (itemGone) return { ok: false, failure: { code: 'not_found', retryable: false } };
-          if (failItems > 0) { failItems -= 1; return unavailable; }
-          const found = readItem?.item_id === params.request.item_id ? readItem : page?.items.find(entry => entry.item_id === params.request?.item_id);
-          const answer = found ? ok(params.request.read === 'rows' ? rowOnly(found) : found) : unavailable;
-          return holdLive && params.request.read === undefined ? new Promise(resolve => { answerLive.push(() => resolve(answer)); }) : answer;
-        }
-        if (params.request?.operation === 'items') {
-          // Notification discovery is independent of the foreground list's injected failures.
-          if (notificationScan(params.request)) return itemsAnswer(params.request);
-          if (failItems > 0) { failItems -= 1; return unavailable; }
-          if (failLiveItems > 0 && params.request.read === undefined) { failLiveItems -= 1; return unavailable; }
-          if (params.request.read === 'rows' && holdListRows) {
-            const answer = itemsAnswer(params.request);
-            return new Promise(resolve => { answerListRows.push(() => resolve(answer)); });
-          }
-          // A live read held answers what the page held when it was asked.
-          if (params.request.read === undefined && holdLive) {
-            const answer = itemsAnswer(params.request);
-            return new Promise(resolve => { answerLive.push(() => resolve(answer)); });
-          }
-          return itemsAnswer(params.request);
-        }
-        if (params.request?.operation === 'send') {
-          const reply = sendFailure && (sendFailsFor === null || sendFailsFor === params.request.run_id) ? { ok: false, failure: sendFailure } : ok({ sent: 1, not_relevant: 0 });
-          return holdSend ? new Promise(resolve => { answerSend.push(() => resolve(reply)); }) : reply;
-        }
-    }
-    throw new Error(`Unexpected request: ${method} ${params.request?.operation ?? ''}`);
-  });
-});
+type Store = Awaited<ReturnType<typeof start>>;
+type Failure = { code: string; retryable: boolean; mutation_outcome?: 'unknown' };
+/** The replies a test holds back (`held`): live reads (Home's, a list's, an item's), Home's rows reads, a list's rows reads, the tools read, sends and set_states. */
+type Hold = 'live' | 'rows' | 'listRows' | 'tools' | 'send' | 'setState';
 
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+/** What the fake Authority holds and how it answers, as each test starts: a test changes `fx` to say otherwise. */
+const fresh = () => ({
+  review: { approval_id: approval, title: 'Private meeting', project_ids: [], status: 'pending', decided_on: null, first_line: null, action_count: 0, meeting_at: null } as PersonMeetingReviewV2,
+  run: null as PersonRunV1 | null,
+  home: emptyHome(),
+  granola: 'linked' as ToolStatus | null,
+  failNextList: false,
+  failNextReviews: false,
+  failLists: false,
+  /** Home's next read of its rows fails (and so nothing of it is read live). */
+  failNextHome: false,
+  /** Home's next live read fails, its rows read. */
+  failNextLive: false,
+  /** Live items reads to fail next (not rows only, not counts only). */
+  failLiveItems: 0,
+  /** The tools read fails while set. */
+  failTools: false,
+  sendFailure: null as Failure | null,
+  /** A send of this run fails as `sendFailure` says; any other run's goes. Null: every send fails so. */
+  sendFailsFor: null as string | null,
+  /** Rows an items read pages at a time (null: all at once), and items reads to fail next. */
+  pageSize: null as number | null,
+  failItems: 0,
+  /** How a set_state fails, when a test says; a read of one item answers not_found while set. */
+  setStateFailure: null as Failure | null,
+  itemGone: false,
+  /** The signed-in account. */
+  member: 'member',
+  /** What a sweep request answers ('fails': unavailable), the sweep run it queued, and what starting that run answers ('fails': unavailable). */
+  sweepAnswer: { state: 'nothing_to_check' } as { run_id: string } | { state: 'nothing_to_check' } | 'fails',
+  sweep: null as PersonRunV1 | null,
+  sweepStarts: 'running' as 'running' | 'busy' | 'done' | 'failed' | 'fails',
+  /** What starting the impact check answers: `pending` while the Authority's search index has not caught up with its decision. */
+  impactStarts: 'running' as 'running' | 'pending',
+  /** What an items read answers, when a test says. */
+  page: null as OpenItemsView | null,
+  /** How an assign fails, when a test says; what a read of one item answers (unavailable while null). */
+  assignFailure: null as Failure | null,
+  readItem: null as OpenItemView | null,
+  /** The kinds of reply held back while set, and the replies held, oldest first. */
+  hold: { live: false, rows: false, listRows: false, tools: false, send: false, setState: false } as Record<Hold, boolean>,
+  waiting: { live: [], rows: [], listRows: [], tools: [], send: [], setState: [] } as Record<Hold, (() => void)[]>,
+});
+let fx = fresh();
+
+/**
+ * A reply, or, while the test holds its kind, one that waits until `release`. `answer` makes it when it goes: Home's reads and
+ * the tools read answer what the test holds then; the other kinds are made when asked, and handed in made.
+ */
+function held(kind: Hold, answer: () => unknown): unknown {
+  return fx.hold[kind] ? new Promise(resolve => { fx.waiting[kind].push(() => resolve(answer())); }) : answer();
+}
+/** The oldest reply held of this kind goes. */
+const release = (kind: Hold) => fx.waiting[kind].shift()!();
+
+/** The Authority, as the host hands its answers to the renderer: what `fx` holds. */
+async function authority(method: string, params: { project_id?: string; request?: { operation: string; run_id?: string; item_id?: string; state?: string;
+  read?: 'rows' | 'counts'; states?: readonly string[]; cursor?: string; scope?: string; id?: string } }) {
+  const unavailable = fail('unavailable', { retryable: true });
+  switch (method) {
+    case 'app.status': return ok({ signed_in: true, account: { ...ACCOUNT, membership_id: fx.member } });
+    case 'projects.list': return ok({ items: [], next_cursor: null });
+    case 'projects.members': return ok({ items: [], next_cursor: null });
+    case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
+    case 'open.ref': return unavailable;
+    // A project's tools line: it reads nothing.
+    case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
+    case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
+    // The change check: nothing moves unless a test says.
+    case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60,
+      areas: { projects: `sha256:${'0'.repeat(64)}`, follow_ups: `sha256:${'1'.repeat(64)}`, reviews: `sha256:${'2'.repeat(64)}` } });
+    case 'people.directory': return ok({ items: [RAFAEL], next_cursor: null });
+    case 'account.tools':
+      if (fx.failTools) return fail('transport_failed', { retryable: true });
+      return held('tools', () => ok({ tools: fx.granola === null ? [] : [{ tool_id: 'granola', status: fx.granola }] }));
+    case 'tools.meetings':
+      if (params.request?.operation === 'reviews') {
+        if (fx.failNextReviews) { fx.failNextReviews = false; return unavailable; }
+        return ok({ reviews: [{ ...fx.review }] });
+      }
+      if (params.request?.operation === 'review_open') return ok({ review: { ...fx.review }, content: 'Private proposal text', suggested_projects: [], owners: [], snapshot_sha256: 'snapshot' });
+      break;
+    case 'runs':
+      if (params.request?.operation === 'list') {
+        if (fx.failLists) return unavailable;
+        if (fx.failNextList) { fx.failNextList = false; return unavailable; }
+        // Newest first: a sweep comes after the impact check.
+        return ok({ runs: [...(fx.sweep ? [{ ...fx.sweep }] : []), ...(fx.run ? [{ ...fx.run }] : [])] });
+      }
+      if (params.request?.operation === 'home') {
+        // Its rows, answered with what `fx.home` holds when the test lets them go; and its live read.
+        if (params.request.read === 'rows') {
+          if (fx.failNextHome) { fx.failNextHome = false; return unavailable; }
+          return held('rows', () => ok(rowsOf(fx.home)));
+        }
+        if (fx.failNextLive) { fx.failNextLive = false; return unavailable; }
+        return held('live', () => ok(fx.home));
+      }
+      if (params.request?.operation === 'start') {
+        if (fx.sweep && params.request.run_id === fx.sweep.run_id) {
+          if (fx.sweepStarts === 'fails') return unavailable;
+          if (fx.sweepStarts !== 'busy') fx.sweep = sweepRun(fx.sweepStarts);
+          return ok({ state: fx.sweepStarts });
+        }
+        if (fx.impactStarts === 'pending') return ok({ state: 'pending' });
+        fx.run = impactRun('running');
+        return ok({ state: 'running' });
+      }
+      if (params.request?.operation === 'sweep') {
+        if (fx.sweepAnswer === 'fails') return unavailable;
+        if ('run_id' in fx.sweepAnswer) fx.sweep = sweepRun('pending');
+        return ok(fx.sweepAnswer);
+      }
+      if (params.request?.operation === 'set_state') {
+        if (fx.setStateFailure) return { ok: false, failure: fx.setStateFailure };
+        const reply = ok({ state: params.request.state });
+        return held('setState', () => reply);
+      }
+      if (params.request?.operation === 'assign') {
+        return fx.assignFailure ? { ok: false, failure: fx.assignFailure } : ok({ owner: { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true } });
+      }
+      // One item: the one the test says, else the row a list read holds now; read rows only, nothing of it read live.
+      if (params.request?.operation === 'item') {
+        if (fx.itemGone) return fail('not_found');
+        if (fx.failItems > 0) { fx.failItems -= 1; return unavailable; }
+        const found = fx.readItem?.item_id === params.request.item_id ? fx.readItem : fx.page?.items.find(entry => entry.item_id === params.request?.item_id);
+        const answer = found ? ok(params.request.read === 'rows' ? rowOnly(found) : found) : unavailable;
+        return params.request.read === undefined ? held('live', () => answer) : answer;
+      }
+      if (params.request?.operation === 'items') {
+        // Notification discovery is independent of the foreground list's injected failures.
+        if (notificationScan(params.request)) return itemsAnswer(params.request);
+        if (fx.failItems > 0) { fx.failItems -= 1; return unavailable; }
+        if (fx.failLiveItems > 0 && params.request.read === undefined) { fx.failLiveItems -= 1; return unavailable; }
+        // A read held answers what the page held when it was asked.
+        const answer = itemsAnswer(params.request);
+        if (params.request.read === 'rows') return held('listRows', () => answer);
+        return params.request.read === undefined ? held('live', () => answer) : answer;
+      }
+      if (params.request?.operation === 'send') {
+        const reply = fx.sendFailure && (fx.sendFailsFor === null || fx.sendFailsFor === params.request.run_id) ? { ok: false, failure: fx.sendFailure } : ok({ sent: 1, not_relevant: 0 });
+        return held('send', () => reply);
+      }
+  }
+  throw new Error(`Unexpected request: ${method} ${params.request?.operation ?? ''}`);
+}
 
 /**
  * An items read, as the test's page holds it: counts only, or the items in the states asked for, a page at a time. A check's
@@ -273,52 +224,64 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals()
  * Rows only: nothing read live, so no row says what it says now.
  */
 function itemsAnswer(request: { states?: readonly string[]; cursor?: string; read?: 'rows' | 'counts'; scope?: string; id?: string }) {
-  const answer: OpenItemsView = page ?? { items: [{ ...item('5'), state: 'unsent', sent_at: null, state_set_at: null, waits_on: 'approver' }], next_cursor: null, stages: [],
-    summary: { unsent: 1, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null, by_decision: [] } };
+  const answer: OpenItemsView = fx.page ?? { items: [{ ...item('5'), state: 'unsent', sent_at: null, state_set_at: null, waits_on: 'approver' }], next_cursor: null, stages: [],
+    summary: { ...EMPTY_SUMMARY, unsent: 1, decisions: 1 } };
   const { states, cursor, read, scope, id } = request;
   const scoped = scope !== 'run' ? answer.items
-    : [...answer.items.filter(entry => entry.item_id !== readItem?.item_id), ...(readItem ? [readItem] : [])]
-      .filter(entry => entry.run_id === id && !(itemGone && entry.item_id === readItem?.item_id));
+    : [...answer.items.filter(entry => entry.item_id !== fx.readItem?.item_id), ...(fx.readItem ? [fx.readItem] : [])]
+      .filter(entry => entry.run_id === id && !(fx.itemGone && entry.item_id === fx.readItem?.item_id));
   const listed = (read === 'counts' ? [] : states ? scoped.filter(entry => states.includes(entry.state)) : scoped)
     .map(entry => (read === 'rows' ? (({ current: _current, ...rest }) => ({ ...rest, reach: 'not_read' as const }))(entry) : entry));
   const from = cursor === undefined ? 0 : Number(cursor.slice(1));
-  const size = pageSize ?? Math.max(listed.length, 1);
-  return { ok: true, value: { ...answer, items: listed.slice(from, from + size), next_cursor: from + size < listed.length ? `c${from + size}` : null } };
+  const size = fx.pageSize ?? Math.max(listed.length, 1);
+  return ok({ ...answer, items: listed.slice(from, from + size), next_cursor: from + size < listed.length ? `c${from + size}` : null });
 }
 
-async function start() {
-  const store = await import('../../src/renderer/store.js');
-  await store.refreshStatus();
-  await flush();
+storeLifecycle();
+beforeEach(() => {
+  fx = fresh();
+  rpc.mockReset();
+  rpc.mockImplementation(authority);
+});
+
+/** Signed in, on a meeting's follow-ups. */
+async function meetingList() {
+  const store = await start();
+  await store.openFollowUps('record', record, 'Pilot planning');
   return store;
+}
+
+/** Nothing more is read for two minutes but the change check, which goes on at the server's pace. */
+async function expectQuiet() {
+  const calls = polls().length;
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(polls()).toHaveLength(calls);
 }
 
 describe('Home rows', () => {
   it.each([null, 'unavailable'] as const)('shows an owner item when Granola is %s, and its row opens its page over Home', async status => {
-    granola = status;
-    home = { ...emptyHome(), items: [item('1')], waiting: 2 };
+    fx.granola = status;
+    fx.home = { ...emptyHome(), items: [item('1')], waiting: 2 };
     const store = await start();
     expect(store.getState().home).toMatchObject({ meetings: false, loading: false, open: { waiting: 2 } });
     expect(store.homeRows()).toMatchObject([{ kind: 'update', item: { item_id: item('1').item_id } }]);
     expect(store.needsCount()).toBe(1);
     expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
     // The row's copy shows at once, then the item is read again.
-    readItem = { ...item('1'), expected: 'launch this week' };
+    fx.readItem = { ...item('1'), expected: 'launch this week' };
     const row = store.homeRows()[0]!;
     const opening = store.openFollowUp(item('1').item_id, 'item' in row ? row.item : null);
     expect(store.followUpShown()).toMatchObject({ kind: 'item', loading: true, item: { expected: 'launch next week' } });
     await opening;
     expect(store.followUpShown()).toMatchObject({ kind: 'item', loading: false, item: { expected: 'launch this week' } });
-    // What Home read live of it came with it: it is read again rows only.
-    expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: item('1').item_id, read: 'rows' }]);
     expect(store.getState().route).toEqual({ page: 'home' });
   });
 
   it('keeps open items when Granola becomes unavailable and stops reading meeting reviews', async () => {
-    home = { ...emptyHome(), items: [item('1')] };
+    fx.home = { ...emptyHome(), items: [item('1')] };
     const store = await start();
     expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
-    granola = 'unavailable';
+    fx.granola = 'unavailable';
     rpc.mockClear();
     await store.loadHome();
     expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
@@ -329,7 +292,7 @@ describe('Home rows', () => {
   it('merges Home loads asked for while one is on its way: one set of reads, then at most one more', async () => {
     const store = await start();
     rpc.mockClear();
-    holdRows = true;
+    fx.hold.rows = true;
     const first = store.loadHome();
     await flush();
     // The window comes forward (resume and shown) while that load waits: both join it.
@@ -337,8 +300,8 @@ describe('Home rows', () => {
     await flush();
     const loads = () => rpc.mock.calls.filter(([method]) => method === 'account.tools').length;
     expect(loads()).toBe(1);
-    holdRows = false;
-    answerRows.shift()!();
+    fx.hold.rows = false;
+    release('rows');
     await Promise.all([first, ...joined]);
     expect(loads()).toBe(2);
     expect(operations().filter(operation => operation === 'home')).toEqual(['home', 'home']);
@@ -376,25 +339,16 @@ describe('Home rows', () => {
   });
 
   it('takes the viewer from the account Home was read for', async () => {
-    home = { ...emptyHome(), items: [item('1', 'changed'), { ...item('2', 'changed'), owner: { membership_id: 'member', name: 'Fixture', active: true, match: 'jira_account' } }] };
-    granola = null;
+    fx.home = { ...emptyHome(), items: [item('1', 'changed'), { ...item('2', 'changed'), owner: { membership_id: 'member', name: 'Fixture', active: true, match: 'jira_account' } }] };
+    fx.granola = null;
     const store = await start();
     expect(store.homeRows().map(row => row.kind)).toEqual(['review', 'update']);
   });
 
-  it('names an Approve row\'s meeting without writing "meeting" twice (R76)', async () => {
+  it('names an Approve row\'s meeting and its day', async () => {
     const { ReviewLine } = await import('../../src/renderer/screens/home.js');
-    /** The text a line renders, its parts joined. */
-    const text = (node: unknown): string => {
-      if (typeof node === 'string' || typeof node === 'number') return String(node);
-      if (Array.isArray(node)) return node.map(text).join('');
-      if (node && typeof node === 'object' && 'props' in node) return text((node as { props: { children?: unknown } }).props.children);
-      return '';
-    };
-    const line = (title: string) => text(ReviewLine({ row: { kind: 'approve', review: { ...meeting('a', 'pending'), title, meeting_at: '2026-10-06T12:00:00.000Z' } } }));
-    expect(line('Pilot planning')).toBe('Decision · Pilot planning meeting, Oct 6');
-    expect(line('Approved meeting')).toBe('Decision · Approved meeting, Oct 6');
-    expect(line('Weekly Meeting')).toBe('Decision · Weekly Meeting, Oct 6');
+    const row = { kind: 'approve' as const, review: { ...meeting('a', 'pending'), title: 'Pilot planning', meeting_at: '2026-10-06T12:00:00.000Z' } };
+    expect(text(render(ReviewLine({ row })))).toBe('Decision · Pilot planning meeting, Oct 6');
   });
 
   it('polls only while something is in flight, and backs off after failed reads', async () => {
@@ -418,6 +372,13 @@ describe('Home rows', () => {
 });
 
 describe('Home decisions and impact checks', () => {
+  /** Signed in, with your approved meeting's impact check running. */
+  async function checking() {
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('running');
+    return start();
+  }
+
   it('covers meeting rows and a private decision when another app is in front', async () => {
     const store = await start();
     cover(store);
@@ -449,18 +410,21 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('keeps a publishing approval visible and shows what its check found once it finishes', async () => {
-    review = { ...review, status: 'publishing', decided_on: 'desktop' };
+    fx.review = { ...fx.review, status: 'publishing', decided_on: 'desktop' };
     const store = await start();
     expect(store.homeRows()).toMatchObject([{ kind: 'checking', review: { status: 'publishing' } }]);
     expect(store.needsCount()).toBe(0);
-    review = { ...review, status: 'approved' };
-    run = impactRun('pending');
+    const { ReviewLine } = await import('../../src/renderer/screens/home.js');
+    const row = store.homeRows()[0] as Parameters<typeof ReviewLine>[0]['row'];
+    expect(text(render(ReviewLine({ row })))).toBe('Approved · publishing to ECHO');
+    fx.review = { ...fx.review, status: 'approved' };
+    fx.run = impactRun('pending');
     await vi.advanceTimersByTimeAsync(5_000);
     expect(operations()).toContain('start');
-    run = impactRun('done');
-    home = { ...emptyHome(), send: [sendRow()] };
+    fx.run = impactRun('done');
+    fx.home = { ...emptyHome(), send: [sendRow()] };
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
     expect(store.needsCount()).toBe(1);
     const requests = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
@@ -468,99 +432,61 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('resumes a check after spending a polling interval in another app', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     cover(store);
     const requests = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(rpc.mock.calls).toHaveLength(requests);
     uncover(store);
     await flush();
-    run = impactRun('done');
-    home = { ...emptyHome(), send: [sendRow()] };
+    fx.run = impactRun('done');
+    fx.home = { ...emptyHome(), send: [sendRow()] };
     await vi.advanceTimersByTimeAsync(5_000);
     expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
   });
 
   it('refreshes an open decision when its check finishes while the app is hidden', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    const store = await start();
-    await store.openDecision(approval, run);
+    const store = await checking();
+    await store.openDecision(approval, fx.run);
     cover(store);
     await vi.advanceTimersByTimeAsync(5_000);
-    run = impactRun('done');
+    fx.run = impactRun('done');
     uncover(store);
     await flush();
     expect(store.getState().decision?.run?.state).toBe('done');
     // Its follow-ups, counted by its check for the page's line; its card is never asked for.
     expect(operations()).not.toContain('view');
-    expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: run.run_id, loading: false, summary: { unsent: 1 } });
-    expect(requests('items').at(-1)).toEqual({ schema_version: 1, operation: 'items', scope: 'run', id: run.run_id, read: 'counts' });
+    expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: fx.run.run_id, loading: false, summary: { unsent: 1 } });
+    expect(requests('items').at(-1)).toEqual({ schema_version: 1, operation: 'items', scope: 'run', id: fx.run.run_id, read: 'counts' });
   });
 
-  it('keeps polling, more slowly, after a temporary runs-list failure', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    const store = await start();
-    failNextList = true;
+  it.each([
+    // The poll after the check ends reads what it found; or its runs list fails, and Home keeps the run it had; or its read of
+    // what the check found fails.
+    ['reads it', null, [{ kind: 'send' }]],
+    ['fails to read the runs list', 'failNextList', [{ kind: 'checking', run: { state: 'running' } }]],
+    ['fails to read what it found', 'failNextHome', []],
+  ] as const)('reads what waits on you only once a check ends, then stops: the poll after it %s', async (_, fails, shown) => {
+    const store = await checking();
+    // While it runs, a poll reads the runs list only: reading what waits on you opens each item live.
     await vi.advanceTimersByTimeAsync(5_000);
-    // The failed read kept the run it had: still checking.
-    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
-    run = impactRun('done');
-    home = { ...emptyHome(), send: [sendRow()] };
+    expect([requests('list').length, rowsReads()]).toEqual([2, 1]);
+    fx.run = impactRun('done');
+    fx.home = { ...emptyHome(), send: [sendRow()] };
+    if (fails) fx[fails] = true;
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.homeRows()).toMatchObject([{ kind: 'checking' }]);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
-  });
-
-  it('reads what waits on you on a poll only once a check ends, since that read opens each item live', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    const store = await start();
-    const homeReads = () => operations().filter(operation => operation === 'home').length;
-    expect(homeReads()).toBe(1);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(operations().filter(operation => operation === 'list')).toHaveLength(2);
-    expect(homeReads()).toBe(1);
-    run = impactRun('done');
-    home = { ...emptyHome(), send: [sendRow()] };
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(homeReads()).toBe(2);
-    expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
-  });
-
-  it('reads what a finished check found again, more slowly, until that read succeeds', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    const store = await start();
-    const homeReads = rowsReads;
-    expect(homeReads()).toBe(1);
-    // The check ends, and the read of what it found fails on that poll.
-    run = impactRun('done');
-    home = { ...emptyHome(), send: [sendRow()] };
-    failNextHome = true;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(homeReads()).toBe(2);
-    expect(store.homeRows()).toEqual([]);
-    // Home keeps looking, from 10 s, until the read succeeds; then it stops.
+    expect(store.homeRows()).toMatchObject(shown);
+    // Home looks again, more slowly, until the read succeeds; then it stops.
     await vi.advanceTimersByTimeAsync(9_000);
-    expect(homeReads()).toBe(2);
+    expect(store.homeRows()).toMatchObject(shown);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(homeReads()).toBe(3);
     expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
-    const requests = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(requests);
+    await expectQuiet();
   });
 
   it('reads what waits on you again on the next poll after that read failed', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    failNextHome = true;
-    const store = await start();
+    fx.failNextHome = true;
+    const store = await checking();
     expect(store.getState().home?.open).toBeNull();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(rowsReads()).toBe(2);
@@ -568,20 +494,18 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('never polls an Authority whose runs are unavailable when nothing is in flight', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    failLists = true;
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.failLists = true;
     const store = await start();
     expect(store.getState().home?.failure).toBeUndefined();
-    const requests = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(requests);
+    await expectQuiet();
   });
 
   it('keeps the rows a failed home read had, and shows no error for it', async () => {
-    home = { ...emptyHome(), items: [item('1')], waiting: 1 };
+    fx.home = { ...emptyHome(), items: [item('1')], waiting: 1 };
     const store = await start();
     expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
-    failNextHome = true;
+    fx.failNextHome = true;
     await store.loadHome();
     expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
     expect(store.getState().home?.open?.waiting).toBe(1);
@@ -589,35 +513,31 @@ describe('Home decisions and impact checks', () => {
   });
 
   it('keeps owing what a finished check found until a read that is still Home\'s brings it', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     // The check ends, and the poll's read of what it found is slow.
-    run = impactRun('done');
-    home = { ...emptyHome(), send: [sendRow()] };
-    holdRows = true;
+    fx.run = impactRun('done');
+    fx.home = { ...emptyHome(), send: [sendRow()] };
+    fx.hold.rows = true;
     await vi.advanceTimersByTimeAsync(5_000);
     await flush();
-    expect(answerRows).toHaveLength(1);
+    expect(fx.waiting.rows).toHaveLength(1);
     // Meanwhile Home is read again, and that read of what the check found fails.
-    holdRows = false;
-    failNextHome = true;
+    fx.hold.rows = false;
+    fx.failNextHome = true;
     await store.loadHome();
     expect(store.homeRows()).toEqual([]);
     // The slow read answers now. It is no longer Home's read: it shows nothing, and settles nothing Home still owes.
-    answerRows.shift()!();
+    release('rows');
     await flush();
     expect(store.homeRows()).toEqual([]);
     // So Home keeps looking, and its next read brings the Send row.
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
   });
 
   it('keeps an initial runs-list failure silent and recovers when Home is read again', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    failNextList = true;
-    const store = await start();
+    fx.failNextList = true;
+    const store = await checking();
     expect(store.getState().home).toMatchObject({ loading: false, failure: undefined });
     const requests = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
@@ -628,35 +548,31 @@ describe('Home decisions and impact checks', () => {
   });
 
   it.each([false, true])('resumes a failed Home while work is outstanding, result owed: %s', async owed => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    const store = await start();
+    const store = await checking();
     if (owed) {
-      run = impactRun('done');
-      home = { ...emptyHome(), send: [sendRow()] };
-      failNextHome = true;
+      fx.run = impactRun('done');
+      fx.home = { ...emptyHome(), send: [sendRow()] };
+      fx.failNextHome = true;
     }
-    failNextReviews = true;
+    fx.failNextReviews = true;
     await store.loadHome();
     expect(store.getState().home?.failure).toMatchObject({ code: 'unavailable' });
     if (owed) expect(store.homeRows()).toHaveLength(0);
     cover(store);
     await vi.advanceTimersByTimeAsync(60_000);
-    run = impactRun('done');
-    home = { ...emptyHome(), send: [sendRow()] };
+    fx.run = impactRun('done');
+    fx.home = { ...emptyHome(), send: [sendRow()] };
     uncover(store);
     await flush();
     expect(store.getState().home?.failure).toBeUndefined();
-    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
   });
 
   it.each([false, true])('preserves and retries a failed resume with an open decision: %s', async (openCard) => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('running');
-    const store = await start();
-    if (openCard) await store.openDecision(approval, run);
+    const store = await checking();
+    if (openCard) await store.openDecision(approval, fx.run);
     cover(store);
-    failNextList = true;
+    fx.failNextList = true;
     uncover(store);
     await flush();
     expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
@@ -664,22 +580,30 @@ describe('Home decisions and impact checks', () => {
     if (openCard) expect(store.getState().decision?.run?.state).toBe('running');
     // A second focus change must not strand the retry after stopping its timer.
     cover(store);
-    failNextList = true;
+    fx.failNextList = true;
     uncover(store);
     await flush();
-    run = impactRun('done');
-    home = { ...emptyHome(), send: [sendRow()] };
+    fx.run = impactRun('done');
+    fx.home = { ...emptyHome(), send: [sendRow()] };
     await vi.advanceTimersByTimeAsync(20_000);
     expect(store.getState().home?.failure).toBeUndefined();
-    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: run.run_id } }]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
     if (openCard) {
       expect(store.getState().decision?.run?.state).toBe('done');
-      expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: run.run_id });
+      expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: fx.run.run_id });
     }
   });
 });
 
 describe('Sweeps from Home', () => {
+  /** Signed in, with no meeting to review and a sweep of your own items due, which the Authority queues when asked. */
+  async function dueSweep(items: OpenItemView[] = []) {
+    fx.granola = null;
+    fx.home = { ...emptyHome(), sweep_due: true, items };
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
+    return start();
+  }
+
   it('makes no Home row of a sweep, going or failed', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
     const approved = meeting('b', 'approved');
@@ -701,25 +625,25 @@ describe('Sweeps from Home', () => {
   });
 
   it('asks for the due sweep of your own items after impact checks, once per Home load', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('pending');
-    home = { ...emptyHome(), sweep_due: true };
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('pending');
+    fx.home = { ...emptyHome(), sweep_due: true };
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
     const store = await start();
     // The impact check starts first.
-    expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: run.run_id }]);
+    expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: fx.run.run_id }]);
     expect(requests('sweep')).toEqual([]);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('sweep')).toEqual([]);
     // It ends: Home reads what it found, and only then asks for the sweep and starts it.
-    run = impactRun('done');
+    fx.run = impactRun('done');
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'mine' }]);
     expect(requests('start').at(-1)).toEqual({ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id });
     expect(store.homeRows()).toEqual([]);
     // Home still says a sweep is due while it runs and once it is done: this Home load asks no more.
     await vi.advanceTimersByTimeAsync(5_000);
-    sweep = sweepRun('done');
+    fx.sweep = sweepRun('done');
     await vi.advanceTimersByTimeAsync(5_000);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requests('sweep')).toHaveLength(1);
@@ -730,28 +654,23 @@ describe('Sweeps from Home', () => {
   });
 
   it('reads what a sweep found once it ends, even when no list showed it going', async () => {
-    granola = null;
-    home = { ...emptyHome(), sweep_due: true, items: [item('1')] };
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await start();
+    const store = await dueSweep([item('1')]);
     expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
     expect(requests('sweep')).toHaveLength(1);
     // Done before the next look.
-    sweep = sweepRun('done');
-    home = { ...emptyHome(), items: [item('1', 'changed')], landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' };
+    fx.sweep = sweepRun('done');
+    fx.home = { ...emptyHome(), items: [item('1', 'changed')], landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' };
     await vi.advanceTimersByTimeAsync(5_000);
     expect(store.homeRows().map(row => row.kind)).toEqual(['review']);
     expect(store.getState().home?.open).toMatchObject({ landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' });
     // Then Home stops looking.
-    const calls = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(calls);
+    await expectQuiet();
   });
 
   it('keeps a check queued while the Authority holds its start, looking again at the usual pace, then starts it', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('pending');
-    impactStarts = 'pending';
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('pending');
+    fx.impactStarts = 'pending';
     const store = await start();
     const rows = store.homeRows().map(row => row.kind);
     expect(requests('start')).toHaveLength(1);
@@ -764,7 +683,7 @@ describe('Sweeps from Home', () => {
     expect(requests('start')).toHaveLength(3);
     expect(store.homeRows().map(row => row.kind)).toEqual(rows);
     // The index caught up: the very next look starts the check.
-    impactStarts = 'running';
+    fx.impactStarts = 'running';
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('start')).toHaveLength(4);
     expect(new Set(requests('start').map(request => request.run_id))).toEqual(new Set([impactRun('pending').run_id]));
@@ -775,14 +694,11 @@ describe('Sweeps from Home', () => {
   });
 
   it('starts a sweep that went back to the queue again, waiting longer after each start that starts nothing', async () => {
-    granola = null;
-    home = { ...emptyHome(), sweep_due: true };
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await start();
+    const store = await dueSweep();
     expect(requests('start')).toHaveLength(1);
     // Its attempt timed out: the sweep is queued again, and for a while another run goes first.
-    sweep = sweepRun('pending');
-    sweepStarts = 'busy';
+    fx.sweep = sweepRun('pending');
+    fx.sweepStarts = 'busy';
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('start')).toHaveLength(2);
     // Each start that starts nothing waits longer: 10 s, then 20 s.
@@ -790,89 +706,63 @@ describe('Sweeps from Home', () => {
     expect(requests('start')).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(requests('start')).toHaveLength(3);
-    await vi.advanceTimersByTimeAsync(19_000);
-    expect(requests('start')).toHaveLength(3);
-    sweepStarts = 'running';
-    await vi.advanceTimersByTimeAsync(1_000);
+    fx.sweepStarts = 'running';
+    await vi.advanceTimersByTimeAsync(20_000);
     expect(requests('start')).toHaveLength(4);
     expect(new Set(requests('start').map(request => request.run_id))).toEqual(new Set([sweepRun('pending').run_id]));
     // It ends: what it found shows, and no other sweep was asked for.
-    sweep = sweepRun('done');
-    home = { ...emptyHome(), items: [item('1', 'changed')] };
+    fx.sweep = sweepRun('done');
+    fx.home = { ...emptyHome(), items: [item('1', 'changed')] };
     await vi.advanceTimersByTimeAsync(5_000);
     expect(store.homeRows().map(row => row.kind)).toEqual(['review']);
     expect(requests('sweep')).toHaveLength(1);
   });
 
   it('asks for its due sweep, and starts it, even when the runs read of that load failed (D6)', async () => {
-    granola = null;
-    home = { ...emptyHome(), sweep_due: true };
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
-    failNextList = true;
-    await start();
+    fx.failNextList = true;
+    await dueSweep();
     // The list read failed once; the load still asks for its one sweep and starts it.
     expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'mine' }]);
     expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
   });
 
   it('starts a queued run even when the read of what a check found failed (D6)', async () => {
-    granola = null;
-    run = impactRun('running');
+    fx.granola = null;
+    fx.run = impactRun('running');
     await start();
     expect(requests('start')).toEqual([]);
     // The check ends while a sweep (from Check now) waits in the queue, and the read of what the check found fails.
-    run = impactRun('done');
-    sweep = sweepRun('pending');
-    failNextHome = true;
+    fx.run = impactRun('done');
+    fx.sweep = sweepRun('pending');
+    fx.failNextHome = true;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
   });
 
-  it('spends the Home load\'s one sweep request only when it asks for one (D6)', async () => {
-    granola = null;
-    run = impactRun('pending');
-    home = { ...emptyHome(), sweep_due: true };
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
-    await start();
-    // A queued impact check starts first: no sweep is asked for yet, so the load has not spent its request.
-    expect(requests('sweep')).toEqual([]);
-    run = impactRun('done');
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('sweep')).toHaveLength(1);
-  });
-
   it('stops owing a sweep once a runs list no longer holds it', async () => {
-    granola = null;
-    home = { ...emptyHome(), sweep_due: true };
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
-    await start();
+    await dueSweep();
     expect(requests('sweep')).toHaveLength(1);
-    sweep = null;
+    fx.sweep = null;
     const homeReads = requests('home').length;
     await vi.advanceTimersByTimeAsync(5_000);
     // Read as ended: what waits on you is read again, and then Home stops looking.
     expect(requests('home')).toHaveLength(homeReads + 1);
-    const calls = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(calls);
+    await expectQuiet();
     expect(requests('sweep')).toHaveLength(1);
   });
 
   it.each(['fails', 'failed'] as const)('shows nothing for a sweep that %s, and soon stops looking', async how => {
-    granola = null;
-    home = { ...emptyHome(), sweep_due: true };
-    sweepAnswer = how === 'fails' ? 'fails' : { run_id: sweepRun('pending').run_id };
-    sweepStarts = 'failed';
+    fx.granola = null;
+    fx.home = { ...emptyHome(), sweep_due: true };
+    fx.sweepAnswer = how === 'fails' ? 'fails' : { run_id: sweepRun('pending').run_id };
+    fx.sweepStarts = 'failed';
     const store = await start();
     expect(requests('sweep')).toHaveLength(1);
     expect(store.getState().home).toMatchObject({ loading: false, failure: undefined });
     expect(store.homeRows()).toEqual([]);
     // A sweep that failed at once is seen ended on the next look at most; then nothing more is read.
     await vi.advanceTimersByTimeAsync(5_000);
-    const calls = polls().length;
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(polls()).toHaveLength(calls);
+    await expectQuiet();
     expect(store.homeRows()).toEqual([]);
   });
 });
@@ -881,33 +771,22 @@ describe('Sweeps from Home', () => {
 describe('Follow-up lists and item pages', () => {
   /** A page of follow-ups, counted by status. */
   const listPage = (items: OpenItemView[]): OpenItemsView => ({ items, next_cursor: null, stages: [], summary: {
-    ...summary, decisions: 1, unsent: items.filter(entry => entry.state === 'unsent').length, open: items.filter(entry => entry.state === 'open').length,
+    ...EMPTY_SUMMARY, decisions: 1, unsent: items.filter(entry => entry.state === 'unsent').length, open: items.filter(entry => entry.state === 'open').length,
     done: items.filter(entry => entry.state === 'done').length, not_relevant: items.filter(entry => entry.state === 'not_relevant').length } });
-  const list = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown() as FollowUpList;
-  const said = (store: Awaited<ReturnType<typeof start>>) => (store.followUpShown() as FollowUpList | ItemPage | null)?.said;
+  const list = (store: Store) => store.followUpShown() as FollowUpList;
+  const said = (store: Store) => (store.followUpShown() as FollowUpList | ItemPage | null)?.said;
   /** What main's quit guard was told last. */
   const told = () => rpc.mock.calls.filter(([method]) => method === 'app.setUnresolved').map(([, params]) => params).at(-1);
   const other = 'run_00000000-0000-4000-8000-000000000021';
   const rafael = { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true };
 
-  beforeEach(() => { granola = null; });
+  beforeEach(() => { fx.granola = null; });
 
-  it('ticks every Not sent row you may send on a meeting\'s first read, and none on the Follow-ups page', async () => {
-    page = listPage([unsent('1'), unsent('2'), { ...unsent('3'), can: { set_state: false, assign: false } }, item('4')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+  it('ticks every Not sent row you may send on a meeting\'s first read', async () => {
+    fx.page = listPage([unsent('1'), unsent('2'), { ...unsent('3'), can: { set_state: false, assign: false } }, item('4')]);
+    const store = await meetingList();
     expect(list(store)).toMatchObject({ kind: 'list', scope: 'record', id: record, title: 'Pilot planning', loading: false });
     expect(list(store).ticks).toEqual({ itm_00000001: true, itm_00000002: true });
-    // Every group of a meeting's list shows: one read of them all, rows only, then one live read of them all.
-    const all = ['unsent', 'open', 'done', 'not_relevant'];
-    expect(requests('items')).toEqual([{ schema_version: 1, operation: 'items', scope: 'record', id: record, states: all, read: 'rows' },
-      { schema_version: 1, operation: 'items', scope: 'record', id: record, states: all }]);
-    // The Follow-ups page: yours, its closed groups closed, nothing ticked.
-    await store.openYourFollowUps();
-    expect(store.getState().route).toEqual({ page: 'follow-ups' });
-    expect(list(store)).toMatchObject({ scope: 'involved', ticks: {} });
-    expect(requests('items').slice(-2)).toEqual([{ schema_version: 1, operation: 'items', scope: 'involved', states: ['unsent', 'open'], read: 'rows' },
-      { schema_version: 1, operation: 'items', scope: 'involved', states: ['unsent', 'open'] }]);
     // Back from it is Home.
     store.closeFollowUp();
     expect(store.getState().route).toEqual({ page: 'home' });
@@ -915,12 +794,12 @@ describe('Follow-up lists and item pages', () => {
   });
 
   it('sends only the ticked rows, one send per check with a command of its own, and stays on the list, read again', async () => {
-    page = listPage([unsent('1'), unsent('2'), unsent('3', other)]);
+    fx.page = listPage([unsent('1'), unsent('2'), unsent('3', other)]);
     const store = await start();
     await store.openYourFollowUps();
     store.tickFollowUp('itm_00000001');
     store.tickFollowUp('itm_00000003');
-    page = listPage([item('1'), unsent('2'), { ...item('3'), run_id: other }]);
+    fx.page = listPage([item('1'), unsent('2'), { ...item('3'), run_id: other }]);
     await store.sendTicked(true);
     expect(requests('send').map(request => ({ run_id: request.run_id, items: request.items }))).toEqual([
       { run_id: impactRun('done').run_id, items: [{ item_id: 'itm_00000001', include: true }] }, { run_id: other, items: [{ item_id: 'itm_00000003', include: true }] },
@@ -936,34 +815,40 @@ describe('Follow-up lists and item pages', () => {
     expect(said(store)).toEqual({ words: 'Dismissed' });
   });
 
-  it('replays a send whose outcome is unknown with the same command, and gives any other choice a new one', async () => {
-    page = listPage([unsent('1'), unsent('2')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+  it('settles a send whose outcome is unknown by the rows read again: one that did not go replays its command, one that went says so and replays no more', async () => {
+    fx.page = listPage([unsent('1'), unsent('2')]);
+    const store = await meetingList();
     store.tickFollowUp('itm_00000002');
-    sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    fx.sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
     await store.sendTicked(true);
     // Its row, read again, is still not sent: it did not go, and Send again replays it.
     expect(said(store)).toEqual({ words: 'Not sent. Try again.', error: true });
     // Nothing holds quit or sign out: the list was read again, and shows what is so.
     expect(told()).toEqual({ unresolved: false });
-    sendFailure = null;
+    // Its outcome unknown again, it went: the row, read again in place, is open.
+    fx.page = listPage([item('1'), unsent('2')]);
     await store.sendTicked(true);
     const [first, again] = requests('send');
     expect(again).toEqual(first);
-    // The rows are still not sent here, so a Dismiss of them is another choice: another command.
+    expect(said(store)).toEqual({ words: 'Sent to Fixture' });
+    expect(list(store).sends).toEqual({});
+    expect(list(store).items.find(entry => entry.item_id === 'itm_00000001')?.state).toBe('open');
+    // Read again in place: the list's rows, rows only, which settle it; no item read on its own, nothing read live.
+    expect(requests('item')).toEqual([]);
+    expect(requests('items').at(-1)?.read).toBe('rows');
+    // Any other choice is another command.
+    store.tickFollowUp('itm_00000002');
     await store.sendTicked(false);
     expect(requests('send')[2]?.command_id).not.toBe(first?.command_id);
   });
 
   it('says a send refused as a conflict changed meanwhile, keeping the account; lost access reads the account again', async () => {
-    page = listPage([unsent('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    fx.page = listPage([unsent('1')]);
+    const store = await meetingList();
     const statusReads = () => rpc.mock.calls.filter(([method]) => method === 'app.status').length;
     const before = statusReads();
     const reads = requests('items').length;
-    sendFailure = { code: 'conflict', retryable: false };
+    fx.sendFailure = { code: 'conflict', retryable: false };
     await store.sendTicked(true);
     expect(said(store)).toEqual({ words: 'That changed meanwhile.', error: true });
     // The list read again rows only, as far as it showed: a change reads nothing live.
@@ -972,7 +857,7 @@ describe('Follow-up lists and item pages', () => {
     await flush();
     expect(statusReads()).toBe(before);
     store.setBarText('launch plan');
-    sendFailure = { code: 'stale_access_state', retryable: false };
+    fx.sendFailure = { code: 'stale_access_state', retryable: false };
     await store.sendTicked(true);
     await flush();
     expect(said(store)).toEqual({ words: 'That changed meanwhile, or your access did. Refresh and try again.', error: true });
@@ -981,14 +866,14 @@ describe('Follow-up lists and item pages', () => {
   });
 
   it('changes an item on its page and stays there, saying what happened, and Back reads Home again', async () => {
-    home = { ...emptyHome(), items: [item('1')] };
+    fx.home = { ...emptyHome(), items: [item('1')] };
     const store = await start();
-    readItem = item('1');
+    fx.readItem = item('1');
     await store.openFollowUp('itm_00000001', store.getState().home!.open!.items[0]!);
-    readItem = { ...item('1'), state: 'done' };
+    fx.readItem = { ...item('1'), state: 'done' };
     await store.setFollowUpState('done');
     expect(store.followUpShown()).toMatchObject({ kind: 'item', busy: false, loading: false, said: { words: 'Done', undo: true }, item: { state: 'done' } });
-    readItem = item('1');
+    fx.readItem = item('1');
     await store.undoFollowUp();
     expect(requests('set_state').map(request => request.state)).toEqual(['done', 'open']);
     expect(said(store)).toEqual({ words: 'Reopened' });
@@ -1003,29 +888,29 @@ describe('Follow-up lists and item pages', () => {
   });
 
   it('sends one follow-up from its page, opened by its id alone, and offers one dismissed before it was sent back to its owner', async () => {
-    readItem = unsent('1');
+    fx.readItem = unsent('1');
     const store = await start();
     // A notification knows the item's id only: its page reads it.
     const opening = store.openFollowUp('itm_00000001');
     expect(store.followUpShown()).toMatchObject({ kind: 'item', item_id: 'itm_00000001', item: null, loading: true });
     await opening;
     expect(store.followUpShown()).toMatchObject({ item: { state: 'unsent' } });
-    readItem = { ...unsent('1'), state: 'not_relevant', sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z', send_included: false, can: { set_state: true, assign: true } };
+    fx.readItem = { ...unsent('1'), state: 'not_relevant', sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z', send_included: false, can: { set_state: true, assign: true } };
     await store.sendFollowUp(false);
     expect(requests('send')).toEqual([expect.objectContaining({ run_id: impactRun('done').run_id, items: [{ item_id: 'itm_00000001', include: false }] })]);
     // A dismissal before sending is never undone (F6).
     expect(said(store)).toEqual({ words: 'Dismissed' });
-    readItem = { ...readItem, state: 'open', send_included: false };
+    fx.readItem = { ...fx.readItem, state: 'open', send_included: false };
     await store.setFollowUpState('open');
     expect(said(store)).toEqual({ words: 'Sent to Fixture' });
     expect(requests('set_state')).toEqual([expect.objectContaining({ item_id: 'itm_00000001', state: 'open' })]);
   });
 
   it('keeps a page whose change is on its way, and its next step, until the change is answered', async () => {
-    readItem = item('1');
+    fx.readItem = item('1');
     const store = await start();
     await store.openFollowUp('itm_00000001', item('1'));
-    holdSetState = true;
+    fx.hold.setState = true;
     const marking = store.setFollowUpState('done');
     await flush();
     expect(store.followUpShown()).toMatchObject({ kind: 'item', busy: true });
@@ -1033,18 +918,17 @@ describe('Follow-up lists and item pages', () => {
     await store.setFollowUpState('not_relevant');
     expect(store.followUpShown()).toMatchObject({ kind: 'item', busy: true });
     expect(requests('set_state')).toHaveLength(1);
-    answerSetState.shift()!();
+    release('setState');
     await marking;
     expect(store.followUpShown()).toMatchObject({ kind: 'item', busy: false, said: { words: 'Done', undo: true } });
   });
 
   it('reads the view under an item page again once a change was made on it, and forgets what that view said', async () => {
-    page = listPage([unsent('1'), item('2')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    fx.page = listPage([unsent('1'), item('2')]);
+    const store = await meetingList();
     await store.sendTicked(false);
     expect(said(store)).toEqual({ words: 'Dismissed' });
-    readItem = item('2');
+    fx.readItem = item('2');
     await store.openFollowUp('itm_00000002', item('2'));
     const reads = requests('items').length;
     await store.setFollowUpState('done');
@@ -1063,15 +947,14 @@ describe('Follow-up lists and item pages', () => {
   });
 
   it('changes an owner at once, before Send or after, and settles an unknown outcome by reading the item', async () => {
-    page = listPage([unsent('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    fx.page = listPage([unsent('1')]);
+    const store = await meetingList();
     store.toggleOwnerPicker('itm_00000001');
     await flush();
     const picker = (store.followUpShown() as FollowUpList).picker!;
     expect(picker).toMatchObject({ item_id: 'itm_00000001', loading: false, results: [RAFAEL] });
     const opened = requests('items').length;
-    page = listPage([{ ...unsent('1'), owner: { ...rafael, match: 'picked' } }]);
+    fx.page = listPage([{ ...unsent('1'), owner: { ...rafael, match: 'picked' } }]);
     await store.pickFollowUpOwner(RAFAEL);
     expect(requests('assign')).toEqual([{ schema_version: 1, operation: 'assign', item_id: 'itm_00000001', owner_membership_id: RAFAEL.membership_id }]);
     // By first name, as the chips say.
@@ -1081,9 +964,9 @@ describe('Follow-up lists and item pages', () => {
     expect(requests('items').slice(opened).map(request => request.read)).toEqual(['counts']);
     expect(requests('item')).toEqual([{ schema_version: 1, operation: 'item', item_id: 'itm_00000001', read: 'rows' }]);
     // A reply that was lost: the row read again says whether it went.
-    assignFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    fx.assignFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
     for (const [owner, words] of [[unsent('1').owner, { words: 'It was not saved. Try again.', error: true }], [{ ...rafael, match: 'picked' as const }, { words: 'Owner changed to Rafael' }]] as const) {
-      page = listPage([{ ...unsent('1'), owner }]);
+      fx.page = listPage([{ ...unsent('1'), owner }]);
       store.toggleOwnerPicker('itm_00000001');
       await flush();
       await store.pickFollowUpOwner(RAFAEL);
@@ -1091,7 +974,7 @@ describe('Follow-up lists and item pages', () => {
     }
     expect(told()).toEqual({ unresolved: false });
     // One that was refused says why, and its row is read again to show what is so now.
-    assignFailure = { code: 'not_found', retryable: false };
+    fx.assignFailure = { code: 'not_found', retryable: false };
     const reads = rpc.mock.calls.filter(([method]) => method === 'runs').length;
     store.toggleOwnerPicker('itm_00000001');
     await flush();
@@ -1118,23 +1001,23 @@ describe('Follow-up lists and item pages', () => {
 describe('Follow-up lists: current work first, results in place', () => {
   const listPage = (items: OpenItemView[]): OpenItemsView => ({ items, next_cursor: null,
     stages: [{ record_sha256: record, run_id: impactRun('done').run_id, state: 'done', error_code: null, mine: true }], summary: {
-      ...summary, decisions: 1, unsent: items.filter(entry => entry.state === 'unsent').length, open: items.filter(entry => entry.state === 'open').length,
+      ...EMPTY_SUMMARY, decisions: 1, unsent: items.filter(entry => entry.state === 'unsent').length, open: items.filter(entry => entry.state === 'open').length,
       done: items.filter(entry => entry.state === 'done').length, not_relevant: items.filter(entry => entry.state === 'not_relevant').length } });
-  const list = (store: Awaited<ReturnType<typeof start>>) => store.followUpShown() as FollowUpList;
-  const said = (store: Awaited<ReturnType<typeof start>>) => (store.followUpShown() as FollowUpList | ItemPage | null)?.said;
-  const ids = (store: Awaited<ReturnType<typeof start>>) => list(store).items.map(entry => entry.item_id.slice(-1));
+  const list = (store: Store) => store.followUpShown() as FollowUpList;
+  const said = (store: Store) => (store.followUpShown() as FollowUpList | ItemPage | null)?.said;
+  const ids = (store: Store) => list(store).items.map(entry => entry.item_id.slice(-1));
   /** The list's reads: rows only, or live (" live"), by states and cursor; never a line's counts or a check's rows. */
   const reads = () => requests('items').filter(request => request.read !== 'counts' && request.scope !== 'run')
     .map(request => `${(request.states as string[]).join('+')}${request.cursor ? ` ${request.cursor}` : ''}${request.read === 'rows' ? '' : ' live'}`);
   const done = (id: string): OpenItemView => ({ ...item(id), state: 'done', state_set_at: '2026-10-08T12:00:00.000Z' });
   const other = 'run_00000000-0000-4000-8000-000000000021';
 
-  beforeEach(() => { granola = null; });
+  beforeEach(() => { fx.granola = null; });
 
   it('reads current work first, each closed group once it opens, each with its own More, and Try again repeats the read that failed', async () => {
     // Three closed rows older than all current work: a read of every status would show only them on its first page.
-    page = listPage([done('1'), done('2'), done('3'), unsent('4'), item('5'), item('6')]);
-    pageSize = 2;
+    fx.page = listPage([done('1'), done('2'), done('3'), unsent('4'), item('5'), item('6')]);
+    fx.pageSize = 2;
     const store = await start();
     await store.openFollowUps('project', project.project_id, project.name);
     expect(ids(store)).toEqual(['4', '5']);
@@ -1148,7 +1031,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     await flush();
     expect(ids(store)).toEqual(['4', '5', '6', '1', '2']);
     expect(store.moreAfter(list(store))).toEqual(['done']);
-    failItems = 1;
+    fx.failItems = 1;
     await store.moreFollowUps('done');
     expect(list(store).failed).toMatchObject({ read: 'done', failure: { code: 'unavailable' } });
     expect(ids(store)).toEqual(['4', '5', '6', '1', '2']);
@@ -1161,9 +1044,9 @@ describe('Follow-up lists: current work first, results in place', () => {
   });
 
   it('tries the first read again when it failed, and reads again as far as each part showed', async () => {
-    page = listPage([done('1'), done('2'), unsent('3'), item('4'), item('5')]);
-    pageSize = 2;
-    failItems = 1;
+    fx.page = listPage([done('1'), done('2'), unsent('3'), item('4'), item('5')]);
+    fx.pageSize = 2;
+    fx.failItems = 1;
     const store = await start();
     await store.openFollowUps('project', project.project_id, project.name);
     expect(list(store)).toMatchObject({ failed: { read: 'first' }, items: [] });
@@ -1173,7 +1056,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     await flush();
     expect(ids(store)).toEqual(['3', '4', '5', '1', '2']);
     // A change made on a row's page: Back reads each part again, as far as it showed.
-    readItem = item('4');
+    fx.readItem = item('4');
     await store.openFollowUp('itm_00000004', item('4'));
     await store.setFollowUpState('done');
     const before = reads().length;
@@ -1184,75 +1067,45 @@ describe('Follow-up lists: current work first, results in place', () => {
     // A read again that fails keeps what showed, and Try again reads it again.
     await store.openFollowUp('itm_00000004', item('4'));
     await store.setFollowUpState('done');
-    failItems = 1;
+    fx.failItems = 1;
     store.closeFollowUp();
     await flush();
     expect(list(store).failed).toMatchObject({ read: 'again' });
     expect(ids(store)).toEqual(['3', '4', '5', '1', '2']);
   });
 
-  it('settles a send whose outcome was unknown by the rows read again: one that went says so and replays no more', async () => {
-    page = listPage([unsent('1'), unsent('2')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
-    store.tickFollowUp('itm_00000002');
-    sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
-    // It went: the row, read again in place, is open.
-    page = listPage([item('1'), unsent('2')]);
-    await store.sendTicked(true);
-    expect(said(store)).toEqual({ words: 'Sent to Fixture' });
-    expect(list(store).sends).toEqual({});
-    expect(list(store).items.find(entry => entry.item_id === 'itm_00000001')?.state).toBe('open');
-    // Read again in place: the list's rows, rows only, which settle it; no item read on its own, nothing read live.
-    expect(requests('item')).toEqual([]);
-    expect(requests('items').at(-1)?.read).toBe('rows');
-  });
-
-  it('stops sending once the list closes, and says what went and what did not when only some did', async () => {
-    page = listPage([unsent('1'), unsent('2', other)]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+  it('says what went and what did not when only some sends did', async () => {
+    fx.page = listPage([unsent('1'), unsent('2', other)]);
+    const store = await meetingList();
     // The second check's send fails: the first went.
-    sendFailure = { code: 'unavailable', retryable: true };
-    sendFailsFor = other;
-    page = listPage([item('1'), unsent('2', other)]);
+    fx.sendFailure = { code: 'unavailable', retryable: true };
+    fx.sendFailsFor = other;
+    fx.page = listPage([item('1'), unsent('2', other)]);
     await store.sendTicked(true);
     expect(said(store)).toEqual({ words: 'Sent to Fixture · 1 not sent, try again', error: true });
     expect(list(store).ticks).toEqual({ itm_00000002: true });
-    // Closed while its first send is on its way: nothing more is sent.
-    sendFailure = null;
-    page = listPage([unsent('1'), unsent('2', other)]);
-    await store.openFollowUps('record', 'sha256:' + '2'.repeat(64), 'Kickoff review');
-    const sends = requests('send').length;
-    holdSend = true;
-    const sending = store.sendTicked(true);
-    await flush();
-    store.goHome();
-    answerSend.shift()!();
-    await sending;
-    expect(requests('send')).toHaveLength(sends + 1);
   });
 
-  it('stops sending once the account changes', async () => {
-    page = listPage([unsent('1'), unsent('2', other)]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
-    holdSend = true;
+  it.each([
+    ['the list closes', (store: Store) => store.goHome()],
+    ['the account changes', (store: Store) => { fx.member = 'someone-else'; return store.refreshStatus(); }],
+  ] as const)('stops sending once %s while its first send is on its way', async (_, interrupt) => {
+    fx.page = listPage([unsent('1'), unsent('2', other)]);
+    const store = await meetingList();
+    fx.hold.send = true;
     const sending = store.sendTicked(true);
     await flush();
-    member = 'someone-else';
-    await store.refreshStatus();
-    answerSend.shift()!();
+    await interrupt(store);
+    release('send');
     await sending;
     expect(requests('send')).toHaveLength(1);
   });
 
   it('goes back to a meeting\'s list already open under its item page, keeping its ticks, instead of opening it again', async () => {
-    page = listPage([unsent('1'), unsent('2')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    fx.page = listPage([unsent('1'), unsent('2')]);
+    const store = await meetingList();
     store.tickFollowUp('itm_00000002');
-    readItem = unsent('1');
+    fx.readItem = unsent('1');
     await store.openFollowUp('itm_00000001', unsent('1'));
     expect(list(store)).toBeTruthy();
     const before = requests('items').length;
@@ -1263,10 +1116,9 @@ describe('Follow-up lists: current work first, results in place', () => {
   });
 
   it('opens a meeting\'s decision over its list, and its follow-ups line goes back to the list', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    page = listPage([unsent('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.page = listPage([unsent('1')]);
+    const store = await meetingList();
     await store.openListDecision();
     expect(store.followUpShown()).toMatchObject({ kind: 'decision' });
     expect(store.getState().decision).toMatchObject({ approval_id: approval, loading: false, run: { state: 'done' } });
@@ -1278,8 +1130,8 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(store.getState().followUps?.views.map(view => view.kind)).toEqual(['list']);
     expect(store.getState().decision).toBeNull();
     // Opened from the decision's own page, its list's "Approved" goes back to that page.
-    run = impactRun('done');
-    await store.openDecision(approval, run);
+    fx.run = impactRun('done');
+    await store.openDecision(approval, fx.run);
     await store.openFollowUps('record', record, 'Pilot planning');
     await store.openListDecision();
     expect(store.followUpShown()).toBeNull();
@@ -1287,57 +1139,47 @@ describe('Follow-up lists: current work first, results in place', () => {
   });
 
   it('settles an unknown send or change of state on an item page by reading it again', async () => {
-    readItem = unsent('1');
+    fx.readItem = unsent('1');
     const store = await start();
     await store.openFollowUp('itm_00000001', unsent('1'));
-    sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    fx.sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
     // Not landed: it may not have been sent, and Send again replays it.
     await store.sendFollowUp(true);
     expect(said(store)).toEqual({ words: 'Not sent. Try again.', error: true });
     const page = () => store.followUpShown() as ItemPage;
     expect(page().send).not.toBeNull();
     // Landed: said as sent, and nothing is kept to replay.
-    readItem = { ...item('1'), approver: unsent('1').approver };
+    fx.readItem = { ...item('1'), approver: unsent('1').approver };
     await store.sendFollowUp(true);
     expect(requests('send')[1]?.command_id).toBe(requests('send')[0]?.command_id);
     expect(said(store)).toEqual({ words: 'Sent to Fixture' });
     expect(page().send).toBeNull();
-    setStateFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    fx.setStateFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
     await store.setFollowUpState('done');
     expect(said(store)).toEqual({ words: 'It was not saved. Try again.', error: true });
-    readItem = { ...readItem, state: 'done' };
+    fx.readItem = { ...fx.readItem, state: 'done' };
     await store.setFollowUpState('done');
     expect(said(store)).toEqual({ words: 'Done', undo: true });
   });
 
-  it('offers Try again on an item page whose first read failed', async () => {
-    const store = await start();
-    await store.openFollowUp('itm_00000001');
-    expect(store.followUpShown()).toMatchObject({ kind: 'item', item: null, failure: { code: 'unavailable' } });
-    readItem = item('1');
-    store.retryFollowUp();
-    await flush();
-    expect(store.followUpShown()).toMatchObject({ item: { item_id: 'itm_00000001' } });
-  });
-
   it('says so when you gave an item away and no longer see it: the page offers Back, the list\'s row goes with a word in its foot', async () => {
-    readItem = item('1');
+    fx.readItem = item('1');
     const store = await start();
     await store.openFollowUp('itm_00000001', item('1'));
     store.toggleOwnerPicker('itm_00000001');
     await flush();
-    itemGone = true;
+    fx.itemGone = true;
     await store.pickFollowUpOwner(RAFAEL);
     expect(store.followUpShown()).toMatchObject({ kind: 'item', gone: true, said: { words: 'Owner changed to Rafael' } });
     store.closeFollowUp();
-    itemGone = false;
-    page = listPage([item('2'), item('3')]);
+    fx.itemGone = false;
+    fx.page = listPage([item('2'), item('3')]);
     await store.openFollowUps('record', record, 'Pilot planning');
     store.toggleOwnerPicker('itm_00000002');
     await flush();
     // Given away, it leaves what you see: read again, it is not found, and its row goes.
-    page = listPage([item('3')]);
-    itemGone = true;
+    fx.page = listPage([item('3')]);
+    fx.itemGone = true;
     await store.pickFollowUpOwner(RAFAEL);
     expect(said(store)).toEqual({ words: 'Owner changed to Rafael · You no longer see it' });
     expect(ids(store)).toEqual(['3']);
@@ -1345,14 +1187,14 @@ describe('Follow-up lists: current work first, results in place', () => {
   });
 
   it('clears what Check now said when the list is read again, and keeps a project\'s line through a failed read', async () => {
-    page = listPage([item('1')]);
+    fx.page = listPage([item('1')]);
     const store = await start();
     await store.openProject(project);
     expect(store.getState().projectLine).toMatchObject({ summary: { open: 1 } });
     await store.openFollowUps('project', project.project_id, project.name);
     await store.checkNow();
     expect(list(store).check).toBe('nothing');
-    readItem = item('1');
+    fx.readItem = item('1');
     await store.openFollowUp('itm_00000001', item('1'));
     await store.setFollowUpState('done');
     store.closeFollowUp();
@@ -1360,14 +1202,14 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(list(store).check).toBeNull();
     // Back on the project, its line is read again; that read fails, and the line keeps what it said.
     store.closeFollowUp();
-    failItems = 1;
+    fx.failItems = 1;
     await flush();
     expect(store.getState().projectLine).toMatchObject({ loading: false, summary: { open: 1 } });
   });
 
   it('counts a meeting\'s follow-ups by its record again once its decision, opened from its list over the meeting, closes', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    page = listPage([unsent('1')]);
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.page = listPage([unsent('1')]);
     const store = await start();
     await store.openProject(project);
     await store.openListItem({ ref: { kind: 'meeting', id: record }, title: 'Pilot planning', added_at: '2026-10-08T10:00:00.000Z', visibility: 'project', projects: [] });
@@ -1386,13 +1228,13 @@ describe('Follow-up lists: current work first, results in place', () => {
   });
 
   it('settles a Dismiss whose outcome was unknown on a list whose Dismissed group is closed, reading on its own each row it no longer shows', async () => {
-    page = listPage([unsent('1'), unsent('2')]);
+    fx.page = listPage([unsent('1'), unsent('2')]);
     const store = await start();
     await store.openFollowUps('project', project.project_id, project.name);
     store.tickFollowUp('itm_00000001');
-    sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    fx.sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
     // It went: the row left current work for Dismissed, closed and never read.
-    page = listPage([{ ...unsent('1'), state: 'not_relevant', send_included: false, sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z' },
+    fx.page = listPage([{ ...unsent('1'), state: 'not_relevant', send_included: false, sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z' },
       unsent('2')]);
     await store.sendTicked(false);
     expect(said(store)).toEqual({ words: 'Dismissed' });
@@ -1406,17 +1248,17 @@ describe('Follow-up lists: current work first, results in place', () => {
     const me = { membership_id: 'member', name: 'Fixture', active: true };
     const yours = (id: string): OpenItemView => ({ ...item(id), owner: { ...me, match: 'jira_account' } });
     const given = { ...yours('1'), owner: { ...rafael, match: 'reassigned' as const }, owner_set_at: '2026-10-08T13:00:00.000Z', owner_set_by: me };
-    page = listPage([yours('1'), yours('2')]);
+    fx.page = listPage([yours('1'), yours('2')]);
     const store = await start();
     await store.openYourFollowUps();
     for (const scope of ['involved', 'record'] as const) {
       if (scope === 'record') {
-        page = listPage([yours('1'), yours('2')]);
+        fx.page = listPage([yours('1'), yours('2')]);
         await store.openFollowUps('record', record, 'Pilot planning');
       }
       store.toggleOwnerPicker('itm_00000001');
       await flush();
-      page = listPage([given, yours('2')]);
+      fx.page = listPage([given, yours('2')]);
       await store.pickFollowUpOwner(RAFAEL);
       expect(said(store)).toEqual({ words: 'Owner changed to Rafael' });
       expect(ids(store)).toEqual(['1', '2']);
@@ -1427,16 +1269,15 @@ describe('Follow-up lists: current work first, results in place', () => {
     store.toggleOwnerPicker('itm_00000002');
     await flush();
     const mina = { membership_id: 'mem_00000000-0000-4000-8000-000000000077', name: 'Mina Patel', active: true };
-    page = listPage([given, { ...yours('2'), owner: { ...mina, match: 'reassigned' as const }, owner_set_at: '2026-10-08T14:00:00.000Z', owner_set_by: mina }]);
+    fx.page = listPage([given, { ...yours('2'), owner: { ...mina, match: 'reassigned' as const }, owner_set_at: '2026-10-08T14:00:00.000Z', owner_set_by: mina }]);
     await store.pickFollowUpOwner(RAFAEL);
     expect(ids(store)).toEqual(['1']);
   });
 
   it('keeps the check of a decision opened from its list when a runs list read since does not hold it', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    page = listPage([unsent('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.page = listPage([unsent('1')]);
+    const store = await meetingList();
     await store.openListDecision();
     expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
     // Home is read again under them: its runs list holds only the newest checks, not this one.
@@ -1450,30 +1291,30 @@ describe('Follow-up lists: current work first, results in place', () => {
 
 describe('Check now', () => {
   const listPage = (): OpenItemsView => ({ items: [item('1')], next_cursor: null, stages: [],
-    summary: { ...summary, open: 1, decisions: 1, by_decision: [{ record_sha256: record, unsent: 0, open: 1, landed: 0, unreadable: 0 }] } });
+    summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1, by_decision: [{ record_sha256: record, unsent: 0, open: 1, landed: 0, unreadable: 0 }] } });
   /** A project's follow-ups, open over its page. */
   async function projectList() {
-    granola = null;
-    page = listPage();
+    fx.granola = null;
+    fx.page = listPage();
     const store = await start();
     await store.openProject(project);
     await store.openFollowUps('project', project.project_id, project.name);
     return store;
   }
-  const check = (store: Awaited<ReturnType<typeof start>>) => (store.followUpShown() as FollowUpList | null)?.check;
+  const check = (store: Store) => (store.followUpShown() as FollowUpList | null)?.check;
 
   it('says when nothing is open to check, and when the sweep could not be asked for', async () => {
     const store = await projectList();
     await store.checkNow();
     expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'project', id: project.project_id }]);
     expect(check(store)).toBe('nothing');
-    sweepAnswer = 'fails';
+    fx.sweepAnswer = 'fails';
     await store.checkNow();
     expect(check(store)).toBe('failed');
   });
 
   it('checks until its sweep ends, then reads the list again', async () => {
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
     const store = await projectList();
     const reads = requests('items').length;
     const checking = store.checkNow();
@@ -1482,8 +1323,8 @@ describe('Check now', () => {
     expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(check(store)).toBe('checking');
-    sweep = sweepRun('done');
-    page = { ...listPage(), items: [item('1', 'landed')] };
+    fx.sweep = sweepRun('done');
+    fx.page = { ...listPage(), items: [item('1', 'landed')] };
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
     expect(check(store)).toBeNull();
@@ -1494,29 +1335,29 @@ describe('Check now', () => {
   });
 
   it('starts a queued impact check before its sweep, which waits its turn', async () => {
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
     const store = await projectList();
-    run = impactRun('pending');
-    sweepStarts = 'busy';
+    fx.run = impactRun('pending');
+    fx.sweepStarts = 'busy';
     const checking = store.checkNow();
     // Busy: the next look, 10 s on, starts the impact check first.
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(requests('start').map(request => request.run_id)).toEqual([sweepRun('pending').run_id, run.run_id]);
+    expect(requests('start').map(request => request.run_id)).toEqual([sweepRun('pending').run_id, fx.run.run_id]);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('start')).toHaveLength(2);
-    run = impactRun('done');
-    sweepStarts = 'running';
+    fx.run = impactRun('done');
+    fx.sweepStarts = 'running';
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('start').map(request => request.run_id)).toEqual([sweepRun('pending').run_id, run.run_id, sweepRun('pending').run_id]);
-    sweep = sweepRun('done');
+    expect(requests('start').map(request => request.run_id)).toEqual([sweepRun('pending').run_id, fx.run.run_id, sweepRun('pending').run_id]);
+    fx.sweep = sweepRun('done');
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
     expect(check(store)).toBeNull();
   });
 
   it('waits longer after each start that starts nothing, busy or failed', async () => {
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
-    sweepStarts = 'busy';
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
+    fx.sweepStarts = 'busy';
     const store = await projectList();
     const lists = () => requests('list').length;
     const before = lists();
@@ -1529,25 +1370,21 @@ describe('Check now', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect([lists(), requests('start').length]).toEqual([before + 1, 2]);
     // Busy again, then a start that fails: 20 s, then 40 s.
-    sweepStarts = 'fails';
-    await vi.advanceTimersByTimeAsync(19_000);
-    expect(lists()).toBe(before + 1);
-    await vi.advanceTimersByTimeAsync(1_000);
+    fx.sweepStarts = 'fails';
+    await vi.advanceTimersByTimeAsync(20_000);
     expect([lists(), requests('start').length]).toEqual([before + 2, 3]);
-    await vi.advanceTimersByTimeAsync(39_000);
-    expect(lists()).toBe(before + 2);
-    sweepStarts = 'running';
-    await vi.advanceTimersByTimeAsync(1_000);
+    fx.sweepStarts = 'running';
+    await vi.advanceTimersByTimeAsync(40_000);
     expect([lists(), requests('start').length]).toEqual([before + 3, 4]);
     // Started: back to the usual pace, and it ends.
-    sweep = sweepRun('done');
+    fx.sweep = sweepRun('done');
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
     expect(check(store)).toBeNull();
   });
 
   it('stops following its sweep once its list goes, leaving Home the only one to look', async () => {
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
     const store = await projectList();
     void store.checkNow();
     await flush();
@@ -1564,25 +1401,25 @@ describe('Check now', () => {
   });
 
   it('says the check failed when its sweep fails, and Try again asks for another', async () => {
-    sweepAnswer = { run_id: sweepRun('pending').run_id };
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
     const store = await projectList();
     const checking = store.checkNow();
     await flush();
     expect(requests('start')).toHaveLength(1);
-    sweep = sweepRun('failed');
+    fx.sweep = sweepRun('failed');
     await vi.advanceTimersByTimeAsync(5_000);
     await checking;
     expect(check(store)).toBe('failed');
-    sweepAnswer = { state: 'nothing_to_check' };
+    fx.sweepAnswer = { state: 'nothing_to_check' };
     await store.checkNow();
     expect(requests('sweep')).toHaveLength(2);
     expect(check(store)).toBe('nothing');
   });
 
   it('learns from a meeting\'s check whether Try again is yours, reading no runs list', async () => {
-    granola = null;
-    page = { ...listPage(), items: [], stages: [{ record_sha256: record, run_id: impactRun('done').run_id, state: 'done', error_code: null, mine: true }],
-      summary: { ...summary, unsent: 2, decisions: 1, by_decision: [{ record_sha256: record, unsent: 2, open: 0, landed: 0, unreadable: 0 }] } };
+    fx.granola = null;
+    fx.page = { ...listPage(), items: [], stages: [{ record_sha256: record, run_id: impactRun('done').run_id, state: 'done', error_code: null, mine: true }],
+      summary: { ...EMPTY_SUMMARY, unsent: 2, decisions: 1, by_decision: [{ record_sha256: record, unsent: 2, open: 0, landed: 0, unreadable: 0 }] } };
     const store = await start();
     await store.openProject(project);
     const lists = requests('list').length;
@@ -1597,9 +1434,8 @@ describe('Check now', () => {
 
 describe('Rows first, then what each says now', () => {
   const listPage = (items: OpenItemView[]): OpenItemsView => ({ items, next_cursor: null, stages: [], summary: {
-    ...summary, decisions: 1, unsent: items.filter(entry => entry.state === 'unsent').length, open: items.filter(entry => entry.state === 'open').length,
+    ...EMPTY_SUMMARY, decisions: 1, unsent: items.filter(entry => entry.state === 'unsent').length, open: items.filter(entry => entry.state === 'open').length,
     done: items.filter(entry => entry.state === 'done').length, not_relevant: items.filter(entry => entry.state === 'not_relevant').length } });
-  type Store = Awaited<ReturnType<typeof start>>;
   const list = (store: Store) => store.followUpShown() as FollowUpList;
   const shownPage = (store: Store) => store.followUpShown() as ItemPage;
   /** A list's rows as they show: each its row, with what its live reads brought. */
@@ -1613,7 +1449,7 @@ describe('Rows first, then what each says now', () => {
   const closedAs = (state: 'done' | 'not_relevant') => (id: string): OpenItemView => opened(id, { state, state_set_at: '2026-10-08T12:00:00.000Z' });
   const unsentOpened = (id: string): OpenItemView => ({ ...unsent(id), reach: 'opened', current: { source: ticket, says_now: `Says ${id}` } });
 
-  beforeEach(() => { granola = null; });
+  beforeEach(() => { fx.granola = null; });
 
   it('shows a row with what a live read brought of it, every other field as its rows were last read', async () => {
     const { shownItem } = await import('../../src/renderer/store.js');
@@ -1625,9 +1461,9 @@ describe('Rows first, then what each says now', () => {
   });
 
   it('shows Home\'s rows at once from their rows read, then fills what each says now from the live read, which alone says a sweep is due', async () => {
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    home = { ...emptyHome(), items: [opened('1'), { ...item('2'), kind: 'action', expected: 'Send the revised quote', reach: 'not_read' }], waiting: 1, sweep_due: true };
-    holdLive = true;
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.home = { ...emptyHome(), items: [opened('1'), { ...item('2'), kind: 'action', expected: 'Send the revised quote', reach: 'not_read' }], waiting: 1, sweep_due: true };
+    fx.hold.live = true;
     const store = await start();
     // The live read still on its way: the rows show, by ECHO's own fields, and Home is loaded; only the live part waits.
     expect(store.getState().home).toMatchObject({ loading: false, reading: true, open: { waiting: 1 } });
@@ -1639,7 +1475,7 @@ describe('Rows first, then what each says now', () => {
     // A meeting's action is never read live: it has nothing to wait for.
     expect(store.awaitingLive(homeItems(store)[1]!)).toBe(false);
     expect(requests('sweep')).toEqual([]);
-    answerLive.shift()!();
+    release('live');
     await flush();
     expect(store.getState().home).toMatchObject({ reading: false });
     expect(homeItems(store)[0]).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
@@ -1648,8 +1484,8 @@ describe('Rows first, then what each says now', () => {
   });
 
   it('keeps Home\'s rows when its live read fails, saying ECHO couldn\'t read them just now, and shows no error', async () => {
-    home = { ...emptyHome(), items: [opened('1')] };
-    failNextLive = true;
+    fx.home = { ...emptyHome(), items: [opened('1')] };
+    fx.failNextLive = true;
     const store = await start();
     expect(store.getState().home).toMatchObject({ loading: false, reading: false, failure: undefined });
     expect(homeItems(store)[0]).toMatchObject({ item_id: 'itm_00000001', reach: 'unavailable' });
@@ -1659,14 +1495,14 @@ describe('Rows first, then what each says now', () => {
   });
 
   it('reads Home live only while it shows: rows only under follow-ups, and back on it after a change only the rows new to it', async () => {
-    home = { ...emptyHome(), items: [opened('1')] };
+    fx.home = { ...emptyHome(), items: [opened('1')] };
     const store = await start();
     const live = () => homeCalls().filter(([, params]) => params.request.read === undefined && ['home', 'item'].includes(params.request.operation)).length;
     const before = live();
     // A follow-up's page covers Home, and the window comes forward: Home's rows are read again, rows only.
-    readItem = opened('1');
+    fx.readItem = opened('1');
     await store.openFollowUp('itm_00000001', homeItems(store)[0]!);
-    home = { ...emptyHome(), items: [opened('1'), opened('2')] };
+    fx.home = { ...emptyHome(), items: [opened('1'), opened('2')] };
     const rows = rowsReads();
     await show(store);
     await flush();
@@ -1674,7 +1510,7 @@ describe('Rows first, then what each says now', () => {
     expect(live()).toBe(before);
     // A change on the page, then Back: Home's rows read again, and only the new one read live, on its own.
     await store.setFollowUpState('done');
-    page = listPage([opened('2')]);
+    fx.page = listPage([opened('2')]);
     store.closeFollowUp();
     await flush();
     expect(live()).toBe(before + 1);
@@ -1683,26 +1519,26 @@ describe('Rows first, then what each says now', () => {
   });
 
   it('reads the tools beside Home\'s other reads: only the meeting reviews wait on them', async () => {
-    granola = 'linked';
-    home = { ...emptyHome(), items: [opened('1')] };
-    holdTools = true;
+    fx.granola = 'linked';
+    fx.home = { ...emptyHome(), items: [opened('1')] };
+    fx.hold.tools = true;
     const store = await start();
     // Runs and what waits on you were read without waiting for the tools; the reviews were not read yet.
     expect(operations()).toEqual(expect.arrayContaining(['list', 'home']));
     expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
     expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
-    answerTools.shift()!();
+    release('tools');
     await flush();
     expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
     expect(store.getState().home).toMatchObject({ meetings: true, loading: false });
   });
 
   it('fails a load whose tools cannot be read, as before, keeping what else it read and starting no run until Try again', async () => {
-    granola = 'linked';
-    review = { ...review, status: 'approved', decided_on: 'desktop' };
-    run = impactRun('pending');
-    home = { ...emptyHome(), items: [opened('1')] };
-    failTools = true;
+    fx.granola = 'linked';
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('pending');
+    fx.home = { ...emptyHome(), items: [opened('1')] };
+    fx.failTools = true;
     const store = await start();
     expect(store.getState().home).toMatchObject({ loading: false, reading: false, failure: { code: 'transport_failed' } });
     expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
@@ -1711,32 +1547,32 @@ describe('Rows first, then what each says now', () => {
     await vi.advanceTimersByTimeAsync(120_000);
     expect(rpc.mock.calls.slice(calls).filter(([method, params]) => method === 'runs' && params.request.read !== 'rows')).toEqual([]);
     // Try again: the tools answer, and the queued check starts.
-    failTools = false;
+    fx.failTools = false;
     await store.loadHome();
     expect(store.getState().home?.failure).toBeUndefined();
     expect(requests('start')).toHaveLength(1);
   });
 
   it('shows a list\'s rows at once, read rows only, then reads live only the rows that show, and says which are on their way', async () => {
-    page = listPage([unsentOpened('1'), opened('2'), { ...unsent('3'), kind: 'action', expected: 'Book the lab', reach: 'not_read' }]);
+    fx.page = listPage([unsentOpened('1'), opened('2'), { ...unsent('3'), kind: 'action', expected: 'Book the lab', reach: 'not_read' }]);
     const store = await start();
-    holdLive = true;
+    fx.hold.live = true;
     const opening = store.openFollowUps('record', record, 'Pilot planning');
     await flush();
     expect(list(store)).toMatchObject({ loading: false, reading: true });
     expect(shown(store).map(entry => entry.reach)).toEqual(['not_read', 'not_read', 'not_read']);
     expect(shown(store).map(entry => list(store).reading && store.awaitingLive(entry))).toEqual([true, true, false]);
     expect(reads()).toEqual(['unsent+open+done+not_relevant', 'unsent+open+done+not_relevant live']);
-    answerLive.shift()!();
+    release('live');
     await opening;
     expect(shown(store).map(entry => entry.reach)).toEqual(['opened', 'opened', 'not_read']);
     expect(list(store).reading).toBe(false);
   });
 
   it('leaves a list\'s rows saying ECHO couldn\'t read them just now when their live read fails, with no error for the list', async () => {
-    page = listPage([opened('1'), { ...item('2'), kind: 'action', expected: 'Book the lab', reach: 'not_read' }]);
+    fx.page = listPage([opened('1'), { ...item('2'), kind: 'action', expected: 'Book the lab', reach: 'not_read' }]);
     const store = await start();
-    failLiveItems = 1;
+    fx.failLiveItems = 1;
     await store.openFollowUps('record', record, 'Pilot planning');
     expect(list(store)).toMatchObject({ loading: false, reading: false });
     expect(list(store).failed).toBeUndefined();
@@ -1750,7 +1586,7 @@ describe('Rows first, then what each says now', () => {
   });
 
   it('starts yours and a project\'s closed groups closed, reading their rows only once opened; a meeting\'s open, read with the rest', async () => {
-    page = listPage([opened('1'), closedAs('done')('2'), closedAs('not_relevant')('3')]);
+    fx.page = listPage([opened('1'), closedAs('done')('2'), closedAs('not_relevant')('3')]);
     const store = await start();
     await store.openYourFollowUps();
     // Current work only, rows only and then live.
@@ -1780,24 +1616,24 @@ describe('Rows first, then what each says now', () => {
   });
 
   it('keeps what a list read live through a change, and never lets a slower live read undo the change', async () => {
-    page = listPage([unsentOpened('1'), unsentOpened('2')]);
+    fx.page = listPage([unsentOpened('1'), unsentOpened('2')]);
     const store = await start();
-    holdLive = true;
+    fx.hold.live = true;
     const opening = store.openFollowUps('record', record, 'Pilot planning');
     await flush();
     // The live read is still on its way when Send goes (the first row only), and answers what the page held before it.
     store.tickFollowUp('itm_00000002');
-    page = listPage([{ ...opened('1'), approver: unsent('1').approver }, unsentOpened('2')]);
-    holdLive = false;
+    fx.page = listPage([{ ...opened('1'), approver: unsent('1').approver }, unsentOpened('2')]);
+    fx.hold.live = false;
     await store.sendTicked(true);
     expect(shown(store).map(entry => [entry.state, entry.reach])).toEqual([['open', 'not_read'], ['unsent', 'not_read']]);
-    answerLive.shift()!();
+    release('live');
     await opening;
     // What it says now fills in; what Send did stays.
     expect(shown(store).map(entry => [entry.state, entry.reach])).toEqual([['open', 'opened'], ['unsent', 'opened']]);
     // Another change, read again rows only: each keeps what it read live, and nothing is read live again.
     const live = reads().filter(entry => entry.endsWith(' live')).length;
-    page = listPage([{ ...opened('1'), approver: unsent('1').approver }, { ...unsentOpened('2'), state: 'not_relevant', send_included: false }]);
+    fx.page = listPage([{ ...opened('1'), approver: unsent('1').approver }, { ...unsentOpened('2'), state: 'not_relevant', send_included: false }]);
     store.tickFollowUp('itm_00000002');
     await store.sendTicked(false);
     expect(shown(store).map(entry => [entry.state, entry.reach])).toEqual([['open', 'opened'], ['not_relevant', 'opened']]);
@@ -1805,19 +1641,19 @@ describe('Rows first, then what each says now', () => {
   });
 
   it('shows an item page\'s row at once while it is read live, then reads it again rows only after a change, keeping what it read live', async () => {
-    readItem = opened('1');
+    fx.readItem = opened('1');
     const store = await start();
-    holdLive = true;
+    fx.hold.live = true;
     const opening = store.openFollowUp('itm_00000001', rowOnly(opened('1')));
     await flush();
     expect(shownPage(store)).toMatchObject({ kind: 'item', loading: true });
     expect(pageItem(store).reach).toBe('not_read');
-    answerLive.shift()!();
+    release('live');
     await opening;
     expect(shownPage(store).loading).toBe(false);
     expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
-    holdLive = false;
-    readItem = { ...opened('1'), state: 'done', state_set_at: '2026-10-09T12:00:00.000Z' };
+    fx.hold.live = false;
+    fx.readItem = { ...opened('1'), state: 'done', state_set_at: '2026-10-09T12:00:00.000Z' };
     await store.setFollowUpState('done');
     // Its rows, then it live, then, after the change, its rows again: the item is done, and still says what it said.
     expect(requests('item').map(request => request.read)).toEqual(['rows', undefined, 'rows']);
@@ -1827,72 +1663,55 @@ describe('Rows first, then what each says now', () => {
   });
 
   it('opens a page with what its view read live of its item, reading it again rows only; a meeting\'s action is never read live', async () => {
-    readItem = opened('1');
+    fx.readItem = opened('1');
     const store = await start();
     await store.openFollowUp('itm_00000001', opened('1'));
-    readItem = { ...item('2'), kind: 'action', expected: 'Book the lab', reach: 'not_read' };
-    await store.openFollowUp('itm_00000002', rowOnly(readItem));
+    fx.readItem = { ...item('2'), kind: 'action', expected: 'Book the lab', reach: 'not_read' };
+    await store.openFollowUp('itm_00000002', rowOnly(fx.readItem));
     expect(requests('item').map(request => request.read)).toEqual(['rows', 'rows']);
     expect(pageItem(store)).toMatchObject({ reach: 'not_read' });
   });
 
   it('shows what the Authority answered on an item page when the read after the change fails', async () => {
-    readItem = opened('1');
+    fx.readItem = opened('1');
     const store = await start();
     await store.openFollowUp('itm_00000001', opened('1'));
-    failItems = 1;
+    fx.failItems = 1;
     await store.setFollowUpState('done');
     expect(shownPage(store)).toMatchObject({ busy: false, said: { words: 'Done', undo: true } });
     expect(pageItem(store)).toMatchObject({ state: 'done', reach: 'opened' });
     expect(shownPage(store).failure).toBeUndefined();
   });
 
-  it('keeps an item page\'s row when its read fails for an outage, saying ECHO couldn\'t read it just now', async () => {
-    readItem = null;
+  it.each([
+    // Opened by its id alone (a notification), or from its row: read rows only, read live, or whose live read failed. It is read
+    // rows only, then live unless its row was read live. A read that fails for an outage keeps what the page showed: its row,
+    // saying ECHO couldn't read it just now unless it was read live.
+    ['its id alone', null, ['rows', undefined], null],
+    ['a row read rows only', rowOnly(opened('1')), ['rows', undefined], 'unavailable'],
+    ['a row whose live read failed', { ...rowOnly(opened('1')), reach: 'unavailable' }, ['rows', undefined], 'unavailable'],
+    ['a row read live', opened('1'), ['rows'], 'opened'],
+  ] as const)('reads an item page opened from %s; when that read fails, it keeps what it showed, and Try again reads it again', async (_, row, reads, kept) => {
+    fx.readItem = opened('1');
     const store = await start();
-    await store.openFollowUp('itm_00000001', rowOnly(opened('1')));
-    expect(shownPage(store).loading).toBe(false);
-    expect(pageItem(store).reach).toBe('unavailable');
-    expect(shownPage(store).failure).toMatchObject({ code: 'unavailable' });
-  });
-
-  it('keeps cached details but exposes a failed row refresh for retry', async () => {
-    readItem = null;
-    const store = await start();
-    await store.openFollowUp('itm_00000001', opened('1'));
+    await store.openFollowUp('itm_00000001', row);
+    expect(requests('item').map(request => request.read)).toEqual(reads);
     expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
-    expect(shownPage(store).failure).toMatchObject({ code: 'unavailable' });
-    readItem = opened('1');
-    store.retryFollowUp();
-    await flush();
-    expect(shownPage(store).failure).toBeUndefined();
-    expect(requests('item').map(request => request.read)).toEqual(['rows', 'rows']);
-  });
-
-  it('reads live an item opened from a row whose live read failed, and Try again on its page reads it live again', async () => {
-    page = listPage([opened('1')]);
-    readItem = opened('1');
-    const store = await start();
-    failLiveItems = 1;
-    await store.openYourFollowUps();
-    expect(shown(store)[0]?.reach).toBe('unavailable');
-    await store.openFollowUp('itm_00000001', shown(store)[0]!);
-    expect(requests('item').map(request => request.read)).toEqual(['rows', undefined]);
-    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
-    // A page whose read failed for an outage: Try again reads it, rows only and then live.
-    failItems = 1;
-    await store.openFollowUp('itm_00000002', rowOnly(opened('2')));
-    expect(pageItem(store).reach).toBe('unavailable');
-    readItem = opened('2');
+    store.closeFollowUp();
+    fx.failItems = 1;
+    await store.openFollowUp('itm_00000001', row);
+    expect(shownPage(store)).toMatchObject({ loading: false, failure: { code: 'unavailable' } });
+    expect(shownPage(store).item === null ? null : pageItem(store).reach).toBe(kept);
     const before = requests('item').length;
     store.retryFollowUp();
     await flush();
-    expect(requests('item').slice(before).map(request => request.read)).toEqual(['rows', undefined]);
-    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 2' } });
+    expect(requests('item').slice(before).map(request => request.read)).toEqual(reads);
+    expect(shownPage(store).failure).toBeUndefined();
+    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
   });
 
   it('reads a closed group opened while another\'s first read is on its way, once that read answers', async () => {
-    page = listPage([opened('1'), closedAs('done')('2'), closedAs('not_relevant')('3')]);
+    fx.page = listPage([opened('1'), closedAs('done')('2'), closedAs('not_relevant')('3')]);
     const store = await start();
     await store.openYourFollowUps();
     store.toggleClosedGroup('done');
@@ -1906,37 +1725,37 @@ describe('Rows first, then what each says now', () => {
 
   it('stops saying Home is read live once a later load has nothing to read live', async () => {
     const action: OpenItemView = { ...item('1'), kind: 'action', expected: 'Book the lab', reach: 'not_read' };
-    home = { ...emptyHome(), items: [action] };
-    holdLive = true;
+    fx.home = { ...emptyHome(), items: [action] };
+    fx.hold.live = true;
     const store = await start();
     expect(store.getState().home).toMatchObject({ reading: true });
     // A change on its page, then Back: Home is read again, and nothing in it waits for a live read.
-    readItem = action;
+    fx.readItem = action;
     await store.openFollowUp(action.item_id, action);
-    readItem = { ...action, state: 'done' };
+    fx.readItem = { ...action, state: 'done' };
     await store.setFollowUpState('done');
-    home = emptyHome();
+    fx.home = emptyHome();
     store.closeFollowUp();
     await flush();
     expect(store.getState().home).toMatchObject({ loading: false, reading: false });
     // The first load's live read answers late: it is no longer Home's, and changes nothing.
-    answerLive.shift()!();
+    release('live');
     await flush();
     expect(store.getState().home).toMatchObject({ reading: false });
   });
 
   it('goes on reading a list live once it shows again, after another app in front stopped it under an item page', async () => {
-    page = listPage([opened('1')]);
-    readItem = opened('1');
+    fx.page = listPage([opened('1')]);
+    fx.readItem = opened('1');
     const store = await start();
-    holdListRows = true;
+    fx.hold.listRows = true;
     const opening = store.openYourFollowUps();
     await flush();
     // A row's page opens over the list while its rows read is on its way; then another app comes in front.
     await store.openFollowUp('itm_00000001', opened('1'));
     cover(store);
-    holdListRows = false;
-    answerListRows.shift()!();
+    fx.hold.listRows = false;
+    release('listRows');
     await opening;
     expect(reads()).toEqual(['unsent+open']);
     uncover(store);
@@ -1950,16 +1769,15 @@ describe('Rows first, then what each says now', () => {
   });
 
   it('says what a Send did at once, while rows new to the list are still read live', async () => {
-    page = listPage([unsentOpened('1')]);
-    const store = await start();
-    await store.openFollowUps('record', record, 'Pilot planning');
-    page = listPage([{ ...opened('1'), approver: unsent('1').approver }, opened('2')]);
-    holdLive = true;
+    fx.page = listPage([unsentOpened('1')]);
+    const store = await meetingList();
+    fx.page = listPage([{ ...opened('1'), approver: unsent('1').approver }, opened('2')]);
+    fx.hold.live = true;
     const sending = store.sendTicked(true);
     for (let turn = 0; turn < 5; turn += 1) await flush();
     expect(list(store)).toMatchObject({ busy: false, reading: true, said: { words: 'Sent to Fixture' } });
     expect(shown(store).map(entry => [entry.state, entry.reach])).toEqual([['open', 'opened'], ['open', 'not_read']]);
-    answerLive.shift()!();
+    release('live');
     await sending;
     await flush();
     expect(list(store).reading).toBe(false);

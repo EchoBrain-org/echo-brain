@@ -1,9 +1,9 @@
 // Ask progress and internal links v1 (ADR-0039), in the store: the steps of
 // the Ask on its way, the items they name opening beside a running Ask, and
 // the receipt an answer keeps.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, AskStep, Expect } from '../../src/shared/protocol.js';
-import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, asking as askingWith, fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -27,10 +27,8 @@ const record = { title: 'Tuesday sync', all_day: false, participants: [], partic
   decisions: { items: [{ text: 'Ship it.', excerpts: [], atom_id: sha('1') }], more: false }, actions: { items: [], more: false }, rationales: { items: [], more: false } };
 
 let held: Held;
+storeLifecycle();
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  stubWindow();
   held = new Held();
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
@@ -40,21 +38,10 @@ beforeEach(() => {
     'source.openExternal': () => ok(null),
   }, () => ({ active: [project(1, 30, { name: 'Apollo' })], archived: [] })));
 });
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params as Record<string, unknown>);
-
-/** A question on its way, its reply held: the store, its cancel id, and the release. */
-async function asking(question = 'What did we agree?') {
-  const store = await startStore();
-  const release = held.hold('ask.run');
-  void store.ask(question);
-  await flush();
-  const cancelId = calls('ask.run').at(-1)!.cancel_id as string;
-  const step = (value: AskStep, notice: Partial<{ cancel_id: string; expect: Expect }> = {}) =>
-    store.askProgress({ cancel_id: cancelId, expect: EXPECT, step: value, ...notice });
-  return { store, release, cancelId, step };
-}
+/** A question on its way, its reply held. */
+const asking = (question?: string) => askingWith(rpc, held, question);
 
 describe('the steps of the Ask on its way', () => {
   it('build its stage and rows; a step of another Ask, a cancelled one or another account is dropped', async () => {

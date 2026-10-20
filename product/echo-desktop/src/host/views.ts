@@ -1,17 +1,23 @@
 // Turns the person client's validated JSON output into the token-free view
-// models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
-// the client prints beyond these fields can reach the renderer.
+// models of ../shared/protocol.ts. The client checks each reply with the
+// organization API's validators before printing it; each view takes what it
+// printed through the same validator, and copies explicitly only the fields
+// the renderer needs, so nothing else the client prints can reach it.
 import type {
-  Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskRead, AskReceipt, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
-  CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
-  ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
+  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
+  CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
+  ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef,
   ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_WORKSPACE_CITATION_KINDS_V1, validatePersonAnswerCitationV8, validatePersonAskProgressLineV3, validatePersonAskReceiptV1, validatePersonAskReceiptV2,
-  validatePersonAskReceiptV3, type PersonAnswerCitationV8, type PersonAskProgressLineV3, type PersonAskReceiptRowV3, type PersonAskReceiptV3, type PersonOpenItemV1,
-  type PersonRunsResultsV1,
+  validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAnswerResponseV4, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
+  validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonSourceEvidenceV1, validatePersonUploadSearchResultV2,
+  validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2, validateProjectMembersV1,
+  validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2,
+  type PersonAnswerCitationV8, type PersonAnswerResponseV4, type PersonAskProgressResultLineV3, type PersonAskReceiptRowV3,
+  type PersonAskReceiptV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
+  type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
 
@@ -24,9 +30,6 @@ function object(value: unknown): Json {
 function text(value: unknown): string {
   if (typeof value !== 'string') throw new ViewError();
   return value;
-}
-function optionalText(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
 }
 function list(value: unknown): unknown[] {
   if (!Array.isArray(value)) throw new ViewError();
@@ -48,6 +51,11 @@ export function unwrap(raw: unknown): unknown {
   const value = object(raw);
   if (value.ok !== true) throw new ViewError();
   return value.result;
+}
+
+/** What the client printed, through the API validator it was checked with before printing; anything else is not its output. */
+function validated<T>(validate: (value: unknown) => T, raw: unknown): T {
+  try { return validate(raw); } catch { throw new ViewError(); }
 }
 
 /** The account signed in, if any; `now` is the host's clock, for how long the weekly sign-in has left. */
@@ -78,93 +86,49 @@ export function statusView(raw: unknown, now: number): AppStatus {
   return { signed_in: true, account, client_version: version };
 }
 
-function projectSummary(raw: unknown): ProjectSummary {
-  const value = object(raw);
-  const role = value.role;
-  if (role !== 'lead' && role !== 'member') throw new ViewError();
-  const status = value.status;
-  if (status !== 'active' && status !== 'archived') throw new ViewError();
-  return { project_id: text(value.project_id), name: text(value.name), role, created_at: text(value.created_at), status };
+/** A project as the renderer has it. */
+function projectSummary({ project_id, name, role, created_at, status }: ProjectSummaryV2): ProjectSummary {
+  return { project_id, name, role, created_at, status };
 }
 
 export function projectPageView(raw: unknown): ProjectPage {
-  const value = object(raw);
-  if (value.kind !== 'echo-project-list-v2') throw new ViewError();
-  return { items: list(value.items).map(projectSummary), next_cursor: optionalText(value.next_cursor) ?? null };
+  const page = validated(validateProjectListV2, raw);
+  return { items: page.items.map(projectSummary), next_cursor: page.next_cursor };
 }
 
 /** The project asked for, as it is now: your role in it may have changed. */
 export function projectView(raw: unknown, projectId: string): ProjectSummary {
-  const project = projectSummary(raw);
-  if (object(raw).kind !== 'echo-project-summary-v2' || project.project_id !== projectId) throw new ViewError();
-  return project;
+  const project = validated(validateProjectSummaryV2, raw);
+  if (project.project_id !== projectId) throw new ViewError();
+  return projectSummary(project);
 }
 
 /** A rename, archive/unarchive, or leave receipt, checked against exactly the request we sent. */
 export function projectSettingsView(raw: unknown, requestId: string, projectId: string, operation: ProjectSettingsReceipt['operation']): ProjectSettingsReceipt {
-  const value = object(raw);
-  if (value.schema_version !== 1 || value.kind !== 'echo-project-settings-receipt-v1' || value.state !== 'applied' ||
-      value.request_id !== requestId || value.project_id !== projectId || value.operation !== operation) throw new ViewError();
+  const receipt = validated(validateProjectSettingsReceiptV1, raw);
+  if (receipt.request_id !== requestId || receipt.project_id !== projectId || receipt.operation !== operation) throw new ViewError();
   return { request_id: requestId, project_id: projectId, operation };
 }
 
 /** Who can read an item, in the list's three words: a project row says nothing more about its projects. */
-function visibility(value: unknown): Visibility {
-  if (value === 'only_me') return 'only-me';
-  if (value === 'team' || value === 'project') return value;
-  throw new ViewError();
-}
+const VISIBILITY: Readonly<Record<PersonListVisibilityV1, Visibility>> = { only_me: 'only-me', team: 'team', project: 'project' };
 
-const MEDIA: Record<string, DocumentSummary['type']> = {
+const MEDIA: Readonly<Record<PersonDocumentMediaTypeV1, DocumentSummary['type']>> = {
   'application/pdf': 'pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'word',
   'text/markdown': 'markdown', 'text/plain': 'text',
 };
 
-/** The id after each kind of ref, as the API writes it: `note:ctx_…`, `document:doc_…`, `meeting:sha256:…`. */
-const ITEM_REF: Readonly<Record<ItemRef['kind'], RegExp>> = {
-  imported_meeting: /^cap_[0-9a-f]{64}$/, note: /^ctx_[0-9a-f]{64}$/, document: /^doc_[0-9a-f]{64}$/, meeting: /^sha256:[0-9a-f]{64}$/,
-};
-
-function itemRef(raw: unknown): ItemRef {
-  const value = text(raw);
-  const at = value.indexOf(':');
-  const kind = value.slice(0, at);
-  const id = value.slice(at + 1);
-  if (at < 0 || !Object.hasOwn(ITEM_REF, kind) || !ITEM_REF[kind as ItemRef['kind']].test(id)) throw new ViewError();
-  return { kind: kind as ItemRef['kind'], id };
+/** A ref's kind, and the id after it, as the API writes one: `note:ctx_…`, `document:doc_…`, `meeting:sha256:…`. */
+function itemRef(ref: string): ItemRef {
+  const at = ref.indexOf(':');
+  return { kind: ref.slice(0, at) as ItemRef['kind'], id: ref.slice(at + 1) };
 }
 
 /** A row: its ref, title, when it was added, who can read it, and the names of your projects it is filed in. */
-function listItem(raw: unknown): ListItem {
-  const item = object(raw);
-  const ref = itemRef(item.ref);
-  const added = text(item.added_at);
-  if (item.kind !== ref.kind || Number.isNaN(Date.parse(added))) throw new ViewError();
-  const base = {
-    ref, title: text(item.title), added_at: added, visibility: visibility(item.visibility),
-    projects: list(item.projects).map(project => text(object(project).name)),
-  };
-  if (ref.kind === 'document') {
-    const type = MEDIA[text(item.media_type)];
-    const size = item.size_bytes;
-    const state = text(item.extraction_state);
-    if (type === undefined || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 1 || !EXTRACTION.has(state)) throw new ViewError();
-    return { ...base, document: { type, size, extraction: state as Extraction } };
-  }
-  if (ref.kind === 'meeting' && item.meeting_date !== undefined) {
-    const date = text(item.meeting_date);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ViewError();
-    return { ...base, meeting_date: date };
-  }
-  return base;
-}
-
-/** Rows a list page holds. */
-const MAX_LIST_ITEMS = 25;
-
-function nextCursor(value: unknown): string | null {
-  if (value !== null && typeof value !== 'string') throw new ViewError();
-  return value;
+function listItem(row: PersonListRowV1): ListItem {
+  const base = { ref: itemRef(row.ref), title: row.title, added_at: row.added_at, visibility: VISIBILITY[row.visibility], projects: row.projects.map(project => project.name) };
+  if (row.kind === 'document') return { ...base, document: { type: MEDIA[row.media_type], size: row.size_bytes, extraction: row.extraction_state } };
+  return row.kind === 'meeting' && row.meeting_date !== undefined ? { ...base, meeting_date: row.meeting_date } : base;
 }
 
 /**
@@ -173,15 +137,10 @@ function nextCursor(value: unknown): string | null {
  * projects it is filed in, never their ids.
  */
 export function listView(raw: unknown, scope: ListScope): ListPage {
-  const value = object(unwrap(raw));
-  if (value.schema_version !== 1 || value.kind !== 'echo-person-list-v1') throw new ViewError();
-  const project = scope.kind === 'project' ? scope.project_id : undefined;
-  const echoed = object(value.scope);
-  if (echoed.kind !== scope.kind || echoed.project_id !== project) throw new ViewError();
-  if (value.project !== undefined && object(value.project).project_id !== project) throw new ViewError();
-  const items = list(value.items);
-  if (items.length > MAX_LIST_ITEMS) throw new ViewError();
-  return { items: items.map(listItem), next_cursor: nextCursor(value.next_cursor), meetings_held: value.notice === 'meetings_unavailable' };
+  const page = validated(validatePersonListResponseV1, unwrap(raw));
+  const echoed = page.scope.kind === 'project' ? page.scope.project_id : undefined;
+  if (page.scope.kind !== scope.kind || echoed !== (scope.kind === 'project' ? scope.project_id : undefined)) throw new ViewError();
+  return { items: page.items.map(listItem), next_cursor: page.next_cursor, meetings_held: page.notice === 'meetings_unavailable' };
 }
 
 /**
@@ -190,43 +149,34 @@ export function listView(raw: unknown, scope: ListScope): ListPage {
  * the page was read without a cursor.
  */
 export function openView(raw: unknown, ref: ItemRef, first: boolean): Opened {
-  const value = object(unwrap(raw));
-  if (value.schema_version !== 1 || value.kind !== 'echo-person-open-v1' || value.ref !== `${ref.kind}:${ref.id}`) throw new ViewError();
-  const item = listItem(value.item);
-  if (item.ref.kind !== ref.kind || item.ref.id !== ref.id) throw new ViewError();
+  const opened = validated(validatePersonOpenResponseV1, unwrap(raw));
+  if (opened.ref !== `${ref.kind}:${ref.id}` || !('item' in opened)) throw new ViewError();
+  const item = listItem(opened.item);
   // Where an original is filed crosses here only, so the reader can add it to another project.
-  const project_ids = list(object(value.item).projects).map(project => text(object(project).project_id));
-  const next = nextCursor(value.next_cursor);
+  const project_ids = opened.item.projects.map(project => project.project_id);
+  const next = opened.next_cursor;
   switch (ref.kind) {
-    case 'imported_meeting':
-      return { kind: 'imported_meeting', content: { context_id: ref.id, title: item.title, text: typeof value.text === 'string' ? value.text : (() => { throw new ViewError(); })(), received_at: item.added_at, audience: item.visibility, project_ids }, next_cursor: next };
-    case 'note':
-      if (next !== null) throw new ViewError();
-      return { kind: 'note', content: {
-        context_id: ref.id, title: item.title, text: text(value.text), received_at: item.added_at, audience: item.visibility, project_ids,
-      } };
+    case 'imported_meeting': {
+      const { text } = opened as PersonOpenImportedMeetingV1;
+      return { kind: 'imported_meeting', content: { context_id: ref.id, title: item.title, text, received_at: item.added_at, audience: item.visibility, project_ids }, next_cursor: next };
+    }
+    case 'note': {
+      const { text } = opened as PersonOpenNoteV1;
+      return { kind: 'note', content: { context_id: ref.id, title: item.title, text, received_at: item.added_at, audience: item.visibility, project_ids } };
+    }
     case 'document': {
-      if (!item.document) throw new ViewError();
-      const chunks: TextChunk[] = list(value.chunks).map(entry => {
-        const chunk = object(entry);
-        const anchor = object(chunk.anchor);
-        const start = anchor.start;
-        if ((anchor.kind !== 'page' && anchor.kind !== 'paragraph') || typeof start !== 'number' || !Number.isSafeInteger(start) || start < 1) {
-          throw new ViewError();
-        }
-        return { anchor: anchor.kind, start, text: text(chunk.text) };
-      });
-      const { type, size, extraction } = item.document;
+      const { filename, chunks } = opened as PersonOpenDocumentV1;
+      const { type, size, extraction } = item.document!;
       return { kind: 'document', document: {
         document: {
-          document_id: ref.id, title: item.title, filename: text(value.filename), received_at: item.added_at, type, size, audience: item.visibility,
+          document_id: ref.id, title: item.title, filename, received_at: item.added_at, type, size, audience: item.visibility,
           extraction, project_ids,
         },
-        chunks, next_cursor: next,
+        chunks: chunks.map(chunk => ({ anchor: chunk.anchor.kind, start: chunk.anchor.start, text: chunk.text })), next_cursor: next,
       } };
     }
     case 'meeting':
-      return { kind: 'meeting', record: meetingRecord(value, item, first), next_cursor: next };
+      return { kind: 'meeting', record: meetingRecord(opened as PersonOpenMeetingV1, item, first), next_cursor: next };
   }
 }
 
@@ -237,65 +187,47 @@ export function savedOriginalView(raw: unknown, documentId: string): null {
   return null;
 }
 
-function member(raw: unknown, directory: boolean): Member {
-  const value = object(raw);
-  const role = value.role;
-  if (!directory && role !== 'lead' && role !== 'member') throw new ViewError();
-  return {
-    membership_id: text(value.membership_id), display_name: text(value.display_name),
-    ...(directory ? {} : { role: role as 'lead' | 'member' }),
-  };
-}
-
-/** One page of a project's members, or of the people its directory found, only for that project. */
-export function membersView(raw: unknown, projectId: string, directory = false): MemberPage {
-  const value = object(raw);
-  const kind = directory ? 'echo-project-directory-v1' : 'echo-project-members-v1';
-  if (value.kind !== kind || value.project_id !== projectId) throw new ViewError();
-  return { items: list(value.items).map(item => member(item, directory)), next_cursor: optionalText(value.next_cursor) ?? null };
+/** One page of a project's members, only for that project: each one's id, name and role. */
+export function membersView(raw: unknown, projectId: string): MemberPage {
+  const page = validated(validateProjectMembersV1, raw);
+  if (page.project_id !== projectId) throw new ViewError();
+  return { items: page.items.map(({ membership_id, display_name, role }) => ({ membership_id, display_name, role })), next_cursor: page.next_cursor };
 }
 
 /** One page of the people in your organization, as `person directory` finds them: a name and a membership id each. */
 export function directoryView(raw: unknown): MemberPage {
-  const value = object(raw);
-  if (value.schema_version !== 1 || value.kind !== 'echo-organization-directory-v1') throw new ViewError();
-  return { items: list(value.items).map(item => member(item, true)), next_cursor: optionalText(value.next_cursor) ?? null };
+  const page = validated(validateOrganizationDirectoryV1, raw);
+  return { items: page.items.map(({ membership_id, display_name }) => ({ membership_id, display_name })), next_cursor: page.next_cursor };
+}
+
+/** What a change's receipt says it did: its operation, and the member, note or document it names. */
+function receiptOf(change: ProjectChange): readonly [string, string] {
+  switch (change.kind) {
+    case 'member-add':
+    case 'member-set': return ['member_set', change.membership_id];
+    case 'member-remove': return ['member_remove', change.membership_id];
+    case 'associate':
+    case 'dissociate': return [change.kind, change.context_id];
+    case 'document-associate':
+    case 'document-dissociate': return [change.kind.slice('document-'.length), change.document_id];
+  }
 }
 
 /** The receipt for exactly the change that was sent: applied. */
 export function changeView(raw: unknown, requestId: string, change: ProjectChange): null {
-  const document = change.kind === 'document-associate' || change.kind === 'document-dissociate';
-  const value = object(document ? unwrap(raw) : raw);
-  if (value.state !== 'applied' || value.request_id !== requestId || value.project_id !== change.project_id) throw new ViewError();
-  switch (change.kind) {
-    case 'member-add':
-    case 'member-set':
-    case 'member-remove': {
-      const operation = change.kind === 'member-remove' ? 'member_remove' : 'member_set';
-      if (value.kind !== 'echo-project-mutation-receipt-v1' || value.operation !== operation || value.membership_id !== change.membership_id) {
-        throw new ViewError();
-      }
-      return null;
-    }
-    case 'associate':
-    case 'dissociate':
-      if (value.kind !== 'echo-project-mutation-receipt-v1' || value.operation !== change.kind || value.context_id !== change.context_id) {
-        throw new ViewError();
-      }
-      return null;
-    case 'document-associate':
-    case 'document-dissociate':
-      if (value.kind !== 'echo-person-document-association-receipt-v1' || value.operation !== change.kind.slice('document-'.length) ||
-          value.document_id !== change.document_id) throw new ViewError();
-      return null;
-  }
+  const receipt = change.kind === 'document-associate' || change.kind === 'document-dissociate'
+    ? validated(validatePersonDocumentAssociationReceiptV1, unwrap(raw)) : validated(validateProjectMutationReceiptV1, raw);
+  const [operation, id] = receiptOf(change);
+  const named = 'membership_id' in receipt ? receipt.membership_id : 'context_id' in receipt ? receipt.context_id : receipt.document_id;
+  if (receipt.request_id !== requestId || receipt.project_id !== change.project_id || receipt.operation !== operation || named !== id) throw new ViewError();
+  return null;
 }
 
 /** The receipt for exactly the create that was sent: its new project's id. */
 export function createdView(raw: unknown, requestId: string): CreatedProject {
-  const value = object(raw);
-  if (value.kind !== 'echo-project-create-receipt-v1' || value.state !== 'created' || value.request_id !== requestId) throw new ViewError();
-  return { project_id: text(value.project_id) };
+  const receipt = validated(validateProjectCreateReceiptV1, raw);
+  if (receipt.request_id !== requestId) throw new ViewError();
+  return { project_id: receipt.project_id };
 }
 
 const MEMBERSHIPS: ReadonlySet<string> = new Set<Employee['membership']>(['active', 'revoked']);
@@ -334,35 +266,28 @@ export function revokedView(raw: unknown): null {
   return null;
 }
 
-function match(raw: unknown): Match {
-  const item = object(raw);
-  return { context_id: text(item.context_id), title: text(item.title), excerpt: text(item.excerpt), received_at: text(item.received_at) };
+function match({ context_id, title, excerpt, received_at }: Match): Match {
+  return { context_id, title, excerpt, received_at };
 }
 
 /** A project's search results, only for the project that was searched. */
 export function projectMatchesView(raw: unknown, projectId: string): Matches {
-  const value = object(raw);
-  if (value.kind !== 'echo-project-context-search-result-v2' || value.project_id !== projectId) throw new ViewError();
-  return { items: list(value.items).map(match) };
+  const page = validated(validateProjectContextSearchResultV2, raw);
+  if (page.project_id !== projectId) throw new ViewError();
+  return { items: page.items.map(match) };
 }
 
 /** Saved notes of one version found by a search. Either version opens by its ref. */
 export function noteMatchesView(raw: unknown, version: 2 | 3): Match[] {
-  const value = object(raw);
-  if (value.kind !== `echo-person-upload-search-v${version}`) throw new ViewError();
-  return list(value.results).map(match);
+  const page = version === 3 ? validated(validatePersonUploadSearchResultV3, raw) : validated(validatePersonUploadSearchResultV2, raw);
+  return page.results.map(match);
 }
 
-function sourceRef(citation: Json): SourceRef {
-  const document = optionalText(citation.document_id);
-  return {
-    source_id: text(citation.source_id),
-    revision_id: text(citation.revision_id),
-    source_sha256: text(citation.source_sha256),
-    representation_sha256: text(citation.representation_sha256),
-    anchor_sha256: text(citation.anchor_sha256),
-    ...(document === undefined ? {} : { document_id: document }),
-  };
+/** A cited passage of an original, as the contract has it. */
+type SourceRevision = Extract<PersonAnswerCitationV8['citation'], { readonly kind: 'source_revision' }>;
+
+function sourceRef({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256, document_id }: SourceRevision): SourceRef {
+  return { source_id, revision_id, source_sha256, representation_sha256, anchor_sha256, ...(document_id === undefined ? {} : { document_id }) };
 }
 
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
@@ -376,66 +301,40 @@ export function isRecordRef(value: unknown): value is RecordRef {
 }
 
 /**
- * A versioned Agentic Ask answer: its statements,
- * each with the exact sources that support it, in the answer's order. An
- * approved record is kept by its digest and policy, an original by its
- * revision and anchor, a live Slack message by its permalink, a follow-up,
- * a project, a person or a tool by its id, and a tool's container by its
- * link; a source without a label is "Evidence n".
+ * What `person ask` printed: `--mine`'s V4 answer alone, or the last line of
+ * a live Ask, a V6, V7 or V8 answer with the receipt of its version when the
+ * Authority streamed it (ADR-0039, ADR-0040, research tool contract v1).
+ */
+function answerLine(raw: unknown): { result: PersonAnswerResponseV4 | PersonAskProgressResultLineV3['result']; receipt?: PersonAskReceiptV3 } {
+  const line = object(raw);
+  const version = object(line.result).schema_version;
+  if (version === 6 || version === 7 || version === 8) return validated(validatePersonAskProgressResultLineV3, raw);
+  if (version !== 4 || line.ok !== true || Object.hasOwn(line, 'receipt')) throw new ViewError();
+  return { result: validated(validatePersonAnswerResponseV4, line.result) };
+}
+
+/**
+ * A versioned Agentic Ask answer: its statements, each with the exact
+ * sources that support it, in the answer's order, and a streamed answer's
+ * receipt, built by the Authority from what passed its final check.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
-  const value = object(unwrap(raw));
-  // V8 (`/v7`, research tool contract v1) is V7 that may also cite your projects, people and tools, and your tools' containers.
-  const workspace = value.schema_version === 8 && value.kind === 'echo-clean-person-answer-v8';
-  // V7 (`/v6`, ADR-0040) is V6 that may also cite follow-ups.
-  const followUps = workspace || (value.schema_version === 7 && value.kind === 'echo-clean-person-answer-v7');
-  const tickets = value.schema_version === 5 && value.kind === 'echo-clean-person-answer-v5';
-  const pages = followUps || (value.schema_version === 6 && value.kind === 'echo-clean-person-answer-v6');
-  if (!tickets && !pages && (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4')) throw new ViewError();
-  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`, tickets || pages, pages, followUps, workspace));
-  const direct = value.direct === undefined ? undefined : v4Statement(value.direct, sources.length);
-  const parts = list(value.parts).map(part => v4Part(part, sources.length));
-  if (parts.length === 0) throw new ViewError();
-  const outcome = value.outcome;
-  if (outcome !== 'answered' && outcome !== 'partial' && outcome !== 'not_found' && outcome !== 'off_scope') throw new ViewError();
-  const assumption = optionalText(value.assumption);
-  const notice = optionalText(value.notice);
-  // A receipt comes only with a streamed answer: V8 with a V3 receipt from `/v7`, V7 with a V2 receipt from `/v6`, V6 with a
-  // V1 receipt from `/v5` (ADR-0039).
-  const printed = object(raw);
-  if (Object.hasOwn(printed, 'receipt') && !pages) throw new ViewError();
-  const receipt = Object.hasOwn(printed, 'receipt') ? askReceiptView(printed.receipt, workspace ? 3 : followUps ? 2 : 1) : undefined;
+  const { result, receipt } = answerLine(raw);
+  const { direct, parts, outcome, assumption, notice } = result;
   // One part answers the question itself, so its question is not repeated.
   const single = parts.length === 1;
   const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
     ...(part.records?.map(record => record.text) ?? []), part.gap])]
     .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
-  return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }), ...(receipt === undefined ? {} : { receipt }) };
+  return { text: textValue, scope, sources: (result.citations as readonly PersonAnswerCitationV8[]).map(answerSource), ...(direct === undefined ? {} : { direct }), parts, outcome,
+    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }),
+    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) } }) };
 }
-
-/** A name Ask shows while it works, or in its receipt, is a citation as an answer's: it opens the same way. */
-const NAMED = 'Item';
 
 function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {
   return row.type === 'searched'
     ? { type: 'searched', sources: row.sources.map(source => 'tool_id' in source ? { kind: source.kind, tool_id: source.tool_id } : { kind: source.kind }), found: row.found }
-    : { type: 'read', items: row.items.map(item => v4Source(item, NAMED, true, true, true, true)) };
-}
-
-/**
- * The receipt of a streamed Ask, as the contract has it: built by the
- * Authority from what passed its final check, in the progress version of the
- * answer it came with (V2, which may name follow-ups, with a V7 answer; V3,
- * which may also name your workspace and your tools' containers, with a V8
- * answer). Anything else is refused.
- */
-export function askReceiptView(raw: unknown, version: 1 | 2 | 3): AskReceipt {
-  let receipt: PersonAskReceiptV3;
-  try {
-    receipt = version === 3 ? validatePersonAskReceiptV3(raw) : version === 2 ? validatePersonAskReceiptV2(raw) : validatePersonAskReceiptV1(raw);
-  } catch { throw new ViewError(); }
-  return { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) };
+    : { type: 'read', items: row.items.map(answerSource) };
 }
 
 /**
@@ -447,104 +346,50 @@ export function askReceiptView(raw: unknown, version: 1 | 2 | 3): AskReceipt {
  * tool's container included. Anything else is refused.
  */
 export function askStepView(raw: unknown): AskStep {
-  let line: PersonAskProgressLineV3;
-  try { line = validatePersonAskProgressLineV3(raw); } catch { throw new ViewError(); }
-  const step = line.progress;
+  const step = validated(validatePersonAskProgressLineV3, raw).progress;
   if (step.type !== 'stage') return askRow(step);
   return { type: 'stage', stage: step.stage, ...(step.pending === undefined ? {} : { pending: step.pending }) };
-}
-
-/** The Authority's open refs (ADR-0024), by kind: each names exactly one item. */
-const OPEN_REF = /^(imported_meeting:cap_[a-f0-9]{64}|note:ctx_[0-9a-f]{64}|document:doc_[0-9a-f]{64}|meeting:sha256:[a-f0-9]{64}|transcript:sha256:[a-f0-9]{64})$/;
-
-/** A citation's open ref, when it has one: absent, or one of the Authority's own shapes. */
-function openRef(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !OPEN_REF.test(value)) throw new ViewError();
-  return value;
 }
 
 /**
  * An original's passage, by what its ref opens: a transcript's opens its
  * meeting, any other its note, document or imported meeting. A document's id
- * opens it when no ref came. As the contract has it, a document's passage
- * names its own document and any other passage never names a document or a
- * meeting; anything else is refused.
+ * opens it when no ref came.
  */
-function originalSource(citation: Json, label: string, ref: string | undefined): AnswerSource {
+function originalSource(citation: SourceRevision, label: string, ref: string | undefined): AnswerSource {
   const passage = sourceRef(citation);
-  const document = passage.document_id;
-  if (ref !== undefined && (document === undefined ? /^(document|meeting):/.test(ref) : ref !== `document:${document}`)) throw new ViewError();
   if (ref?.startsWith('transcript:')) return { kind: 'transcript', label, ref: passage, meeting: ref.slice('transcript:'.length) };
-  const opens = ref ?? (document === undefined ? undefined : `document:${document}`);
-  if (opens === undefined) return { kind: 'original', label, ref: passage };
-  const at = opens.indexOf(':');
-  return { kind: 'original', label, ref: passage, item: { kind: opens.slice(0, at) as ItemRef['kind'], id: opens.slice(at + 1) } };
+  const opens = ref ?? (passage.document_id === undefined ? undefined : `document:${passage.document_id}`);
+  return opens === undefined ? { kind: 'original', label, ref: passage } : { kind: 'original', label, ref: passage, item: itemRef(opens) };
 }
 
-/** A follow-up's item id, as the runs API names it. */
-const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
-/** What the V8 answer cites of your workspace: a project, a person, a tool, or a container in a tool you connected. */
-const WORKSPACE: ReadonlySet<unknown> = new Set(PERSON_WORKSPACE_CITATION_KINDS_V1);
-
 /**
- * One of your projects, a person in your organization, one of your tools, or
- * a container in a tool you connected (V8 only, research tool contract v1),
- * exactly as the V8 answer's citation validator takes it, kept by what it
- * names alone: a container's link opens it in its tool, and its scope and its
- * own id stay behind. Anything the contract refuses is refused.
+ * One cited item, as the contract has it, kept by what it names: an approved
+ * record by its digest and policy, an original by its revision and anchor, a
+ * live Slack message, ticket or page by its permalink, a follow-up, a project,
+ * a person or a tool by its id, and a container in a tool you connected by its
+ * link, its scope and own id left behind. A name Ask shows while it works, or
+ * in its receipt, is such a citation too: it opens the same way.
  */
-function workspaceSource(raw: unknown): AnswerSource {
-  let cited: PersonAnswerCitationV8;
-  try { cited = validatePersonAnswerCitationV8(raw); } catch { throw new ViewError(); }
-  const { citation, label } = cited;
+function answerSource({ citation, label, ref, key }: PersonAnswerCitationV8): AnswerSource {
   switch (citation.kind) {
+    case 'approved_record':
+      return { kind: 'record', label, record: { record_sha256: citation.record_sha256, policy_id: citation.policy_id }, atom_id: citation.atom_id };
+    case 'source_revision': return originalSource(citation, label, ref);
+    case 'follow_up': return { kind: 'follow_up', label, item_id: citation.item_id };
     case 'project': return { kind: 'project', label, project_id: citation.project_id };
     case 'person': return { kind: 'person', label, membership_id: citation.membership_id };
     case 'tool': return { kind: 'tool', label, tool_id: citation.tool_id };
     case 'tool_container':
-      return { kind: 'container', tool_id: citation.tool_id, label, permalink: citation.permalink, container: citation.container, ...(cited.key === undefined ? {} : { key: cited.key }) };
-    default: throw new ViewError();
+      return { kind: 'container', tool_id: citation.tool_id, label, permalink: citation.permalink, container: citation.container, ...(key === undefined ? {} : { key }) };
+    default: {
+      // Live evidence opens in its own app, by a link the page and main check by its kind's rule.
+      const kind = citation.kind === 'slack_message' ? 'slack' : citation.kind;
+      const permalink = externalSourcePermalink(kind, citation.permalink);
+      if (permalink === null) throw new ViewError();
+      return { kind, tool_id: citation.kind === 'slack_message' ? 'slack' : citation.tool_id, label, permalink };
+    }
   }
-}
-
-function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = false, followUps = false, workspace = false): AnswerSource {
-  const item = object(raw);
-  const citation = object(item.citation);
-  const label = text(item.label);
-  // Only a tool's container says its key (V8): on any other citation the contract refuses one, and so does the page.
-  if (Object.hasOwn(item, 'key') && !(workspace && citation.kind === 'tool_container')) throw new ViewError();
-  // A follow-up (V7 only, ADR-0040) always carries the ref that opens its item page, and nothing else does.
-  if (citation.kind === 'follow_up' || item.kind === 'follow_up') {
-    const id = citation.item_id;
-    if (!followUps || citation.kind !== 'follow_up' || item.kind !== 'follow_up' || typeof id !== 'string' || !ITEM_ID.test(id) || item.ref !== `follow_up:${id}`) throw new ViewError();
-    return { kind: 'follow_up', label: label || fallback, item_id: id };
-  }
-  // Your workspace and your tools' containers (V8 only): a project, a person, a tool or a container, each named alone.
-  if (WORKSPACE.has(citation.kind) || WORKSPACE.has(item.kind)) {
-    if (!workspace) throw new ViewError();
-    return workspaceSource(raw);
-  }
-  const ref = openRef(item.ref);
-  if (citation.kind === 'approved_record') {
-    const record = { record_sha256: citation.record_sha256, policy_id: citation.policy_id };
-    if (!isRecordRef(record) || typeof citation.atom_id !== 'string' || !SHA256.test(citation.atom_id) ||
-        (ref !== undefined && ref !== `meeting:${record.record_sha256}`)) throw new ViewError();
-    return { kind: 'record', label: label || fallback, record, atom_id: citation.atom_id };
-  }
-  if (citation.kind === 'source_revision') return originalSource(citation, label || fallback, ref);
-  // Live evidence has no ref: it opens in its own app.
-  if (ref !== undefined) throw new ViewError();
-  const kind = citation.kind === 'slack_message' ? 'slack'
-    : tickets && item.kind === 'ticket' && citation.kind === 'ticket' ? 'ticket'
-    : pages && item.kind === 'page' && citation.kind === 'page' ? 'page' : null;
-  if (kind !== null) {
-    const permalink = externalSourcePermalink(kind, citation.permalink);
-    const tool_id = kind === 'slack' ? 'slack' : citation.tool_id;
-    if (permalink === null || typeof tool_id !== 'string' || !TOOL_ID.test(tool_id)) throw new ViewError();
-    return { kind, tool_id, label: label || fallback, permalink };
-  }
-  throw new ViewError();
 }
 
 /**
@@ -559,7 +404,7 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
     item_id: item.item_id, run_id: item.run_id, kind: item.kind,
     ...(item.decision === undefined ? {} : { decision: item.decision }),
     ...(current === undefined ? {} : { current: {
-      source: v4Source(current.citation, 'Item', true, true), says_now: current.says_now,
+      source: answerSource(current.citation), says_now: current.says_now,
       ...(current.assignee === undefined ? {} : { assignee: current.assignee }),
       ...(current.status === undefined ? {} : { status: current.status }),
       ...(current.due_at === undefined ? {} : { due_at: current.due_at }),
@@ -581,27 +426,6 @@ export function homeView(result: PersonRunsResultsV1['home']): HomeView {
 /** A page of a scope's open items, with the scope's summary and each decision's check. */
 export function openItemsView(result: PersonRunsResultsV1['items']): OpenItemsView {
   return { items: result.items.map(openItemView), next_cursor: result.next_cursor, summary: result.summary, stages: result.stages };
-}
-
-function v4Statement(raw: unknown, sourceCount: number): AnswerStatement {
-  const item = object(raw);
-  if (typeof item.private !== 'boolean') throw new ViewError();
-  const indexes = list(item.citation_indexes).map(value => {
-    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value >= sourceCount) throw new ViewError();
-    return value;
-  });
-  if (indexes.length === 0 || new Set(indexes).size !== indexes.length) throw new ViewError();
-  return { text: text(item.text), citation_indexes: indexes, private: item.private };
-}
-
-function v4Part(raw: unknown, sourceCount: number): AnswerPart {
-  const item = object(raw);
-  const status = item.status;
-  if (status !== 'answered' && status !== 'partial' && status !== 'not_found' && status !== 'records_only') throw new ViewError();
-  const gap = optionalText(item.gap);
-  const records = item.records === undefined ? undefined : list(item.records).map(value => v4Statement(value, sourceCount));
-  return { question: text(item.question), status, statements: list(item.statements).map(value => v4Statement(value, sourceCount)),
-    ...(gap === undefined ? {} : { gap }), ...(records === undefined ? {} : { records }) };
 }
 
 /** Longest text the source pane shows, in characters; longer is cut and marked. */
@@ -741,18 +565,21 @@ export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
   };
 }
 
-/** Parts a meeting's page holds. */
-const MAX_OPEN_ATOMS = 25;
-const SECTIONS: Readonly<Record<string, 'decisions' | 'actions' | 'rationales'>> = { decision: 'decisions', action: 'actions', rationale: 'rationales' };
+const SECTIONS: Readonly<Record<PersonOpenMeetingAtomV1['kind'], 'decisions' | 'actions' | 'rationales'>> = { decision: 'decisions', action: 'actions', rationale: 'rationales' };
 
 /**
  * One part of a long approved item: controls made spaces, but not trimmed,
  * since the parts join exactly as they were cut.
  */
-function partText(value: unknown): string {
-  const part = text(value).replace(/[\p{Cc}\p{Cf}]/gu, ' ');
-  if (part === '' || [...part].length > MAX_READER_TEXT) throw new ViewError();
-  return part;
+function partText(text: string): string {
+  return text.replace(/[\p{Cc}\p{Cf}]/gu, ' ');
+}
+
+/** Text the reader shows, controls made spaces and trimmed: a page with nothing left of it is refused. */
+function shownText(text: string): string {
+  const shown = sourceText(text, MAX_READER_TEXT);
+  if (shown === undefined) throw new ViewError();
+  return shown;
 }
 
 /** A long item whose parts are all read: its whole text, trimmed, and no parts left to join. */
@@ -771,26 +598,15 @@ function whole(item: RecordItem): RecordItem {
  * before. Who can read it follows the row: everyone, a project's members, or
  * the approver. Its transcript's ref and every id stay behind.
  */
-function meetingRecord(value: Json, item: ListItem, first: boolean): ApprovedRecord {
-  if ((value.meeting !== undefined) !== first) throw new ViewError();
-  const atoms = list(value.atoms);
-  if (atoms.length > MAX_OPEN_ATOMS) throw new ViewError();
+function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean): ApprovedRecord {
+  if ((page.meeting !== undefined) !== first) throw new ViewError();
   const sections: Record<'decisions' | 'actions' | 'rationales', RecordItem[]> = { decisions: [], actions: [], rationales: [] };
   // The section of a long item whose parts are not all read yet: the next part must go on it.
   let open: 'decisions' | 'actions' | 'rationales' | null = null;
-  atoms.forEach((entry, position) => {
-    const atom = object(entry);
-    const kind = text(atom.kind);
-    const section = Object.hasOwn(SECTIONS, kind) ? SECTIONS[kind]! : null;
-    if (!section) throw new ViewError();
+  page.atoms.forEach((atom, position) => {
+    const section = SECTIONS[atom.kind];
     const items = sections[section];
-    let part: { index: number; count: number } | null = null;
-    if (atom.part !== undefined) {
-      const { index, count } = object(atom.part);
-      if (typeof index !== 'number' || typeof count !== 'number' || !Number.isSafeInteger(index) || !Number.isSafeInteger(count) ||
-          count < 2 || index < 1 || index > count) throw new ViewError();
-      part = { index, count };
-    }
+    const part = atom.part ?? null;
     if (part && part.index > 1) {
       const { index, count } = part;
       const last = items.at(-1);
@@ -811,37 +627,29 @@ function meetingRecord(value: Json, item: ListItem, first: boolean): ApprovedRec
     }
     // A long item's parts all come before the next item.
     if (open !== null) throw new ViewError();
-    const status: RecordItem['status'] = kind === 'decision' && (atom.status === 'proposed' || atom.status === 'unresolved') ? atom.status : undefined;
-    const owner = kind === 'action' ? sourceText(atom.owner) : undefined;
+    // Only a decision has a status, and only an action an owner.
+    const status = atom.status === 'proposed' || atom.status === 'unresolved' ? atom.status : undefined;
+    const owner = sourceText(atom.owner);
     const attributes = { ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }) };
     if (part) {
       items.push({ text: partText(atom.text), ...attributes, excerpts: [], parts: { from: 1, to: 1, count: part.count } });
       open = section;
       return;
     }
-    const itemText = sourceText(atom.text, MAX_READER_TEXT);
-    if (itemText === undefined) throw new ViewError();
-    items.push({ text: itemText, ...attributes, excerpts: [] });
+    items.push({ text: shownText(atom.text), ...attributes, excerpts: [] });
   });
 
-  const detail = first ? object(value.meeting) : {};
-  const participants = first ? list(detail.participants).map(name => {
-    const shown = sourceText(name);
-    if (shown === undefined) throw new ViewError();
-    return shown;
-  }) : [];
-  if (participants.length > MAX_RECORD_ITEMS || new Set(participants).size !== participants.length) throw new ViewError();
-  if (first && typeof detail.participants_more !== 'boolean') throw new ViewError();
-  const startedAt = isoTime(detail.started_at);
-  const timezone = typeof detail.timezone === 'string' && /^[A-Za-z0-9_+\-/]{1,64}$/.test(detail.timezone) ? detail.timezone : undefined;
-  const approver = sourceText(detail.approved_by);
+  const meeting = page.meeting;
+  const participants = meeting?.participants.map(shownText) ?? [];
+  if (new Set(participants).size !== participants.length) throw new ViewError();
+  const approver = sourceText(meeting?.approved_by);
   return {
     title: item.title, added_at: item.added_at,
-    ...(startedAt === undefined ? {} : { started_at: startedAt }),
-    ...(timezone === undefined ? {} : { timezone }),
-    all_day: detail.all_day === true,
+    ...(meeting?.started_at === undefined ? {} : { started_at: meeting.started_at }),
+    ...(meeting?.timezone === undefined ? {} : { timezone: meeting.timezone }),
+    all_day: meeting?.all_day === true,
     ...(approver === undefined ? {} : { approved_by: approver }),
-    participants, participants_more: detail.participants_more === true,
+    participants, participants_more: meeting?.participants_more === true,
     visibility: item.visibility === 'team' ? 'organization' : item.visibility === 'project' ? 'project' : 'approver',
     decisions: { items: sections.decisions, more: false },
     actions: { items: sections.actions, more: false },
@@ -850,28 +658,15 @@ function meetingRecord(value: Json, item: ListItem, first: boolean): ApprovedRec
 }
 
 export function evidenceView(raw: unknown): SourceEvidence {
-  const value = object(unwrap(raw));
-  if (value.kind !== 'echo-person-source-evidence-v1') throw new ViewError();
-  return { label: text(object(value.citation).label), text: text(value.text) };
+  const evidence = validated(validatePersonSourceEvidenceV1, unwrap(raw));
+  return { label: evidence.citation.label, text: evidence.text };
 }
 
 /** Connected tools: each tool's id, name and your connection. External workspace and account ids stay behind. */
 export function toolsView(raw: unknown, membershipId: string): ConnectedTools {
-  const value = object(unwrap(raw));
-  if (value.schema_version !== 4 || value.kind !== 'echo-organization-person-tools' || value.membership_id !== membershipId) {
-    throw new ViewError();
-  }
-  const tools = list(value.tools);
-  if (tools.length > 32) throw new ViewError();
-  return {
-    tools: tools.map(entry => {
-      const tool = object(entry);
-      const status = tool.availability === 'enabled' ? tool.personal_status : 'unavailable';
-      if (typeof tool.tool_id !== 'string' || !TOOL_ID.test(tool.tool_id) ||
-        (status !== 'linked' && status !== 'unlinked' && status !== 'revoked' && status !== 'unavailable')) throw new ViewError();
-      return { tool_id: tool.tool_id, name: text(tool.display_name), status };
-    }),
-  };
+  const tools = validated(validateOrganizationPersonToolsV4, unwrap(raw));
+  if (tools.membership_id !== membershipId) throw new ViewError();
+  return { tools: tools.tools.map(tool => ({ tool_id: tool.tool_id, name: tool.display_name, status: tool.personal_status })) };
 }
 
 /** A tool id as the client takes it after --tool. */

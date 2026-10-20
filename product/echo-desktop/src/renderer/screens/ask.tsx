@@ -589,14 +589,21 @@ export function RecordDetail({ record, headed = true, lit }: { record: ApprovedR
  * says its tool and key, in its source row's words ("Jira · THERM").
  */
 function ExternalSource({ source, provider }: { source: ExternalAnswerSource; provider: string }) {
-  const [failed, setFailed] = useState(false);
   return <div class="source-detail">
     <h2>{source.label}</h2>
     {source.kind === 'container' && <div class="meta" data-testid="pane-container-meta">{containerMeta(source, provider)}</div>}
-    <button type="button" class="link-button" data-testid={`open-${source.kind}-source`} title={source.permalink}
-      onClick={async () => { setFailed(false); setFailed(!(await openExternalSource(source))); }}>Open in {provider}</button>
-    {failed && <div class="error">The source could not be opened. Try again.</div>}
+    <OpenIn source={source} provider={provider} />
   </div>;
+}
+
+/** Open in its own app, beside Ask or on a follow-up's page (`item`): the tool checks your access, and one it could not open says so. */
+export function OpenIn({ source, provider, item = false }: { source: ExternalAnswerSource; provider: string; item?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  return <>
+    <button type="button" class={item ? 'link-button card-side-link' : 'link-button'} data-testid={item ? undefined : `open-${source.kind}-source`}
+      title={source.permalink} onClick={async () => { setFailed(false); setFailed(!(await openExternalSource(source))); }}>Open in {provider}</button>
+    {failed && <div class="error">The {item ? 'item' : 'source'} could not be opened. Try again.</div>}
+  </>;
 }
 
 /** A run of a passage: bold and code as the document marks them. */

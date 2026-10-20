@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changesLogLine, hostGoneFailure, isWriteCall, MAIN_METHODS, noticeOf, remoteDebuggingRequested, rpcLogName, versionLine } from '../../src/shared/protocol.js';
+import { changesLogLine, hostGoneFailure, isWriteCall, noticeOf, remoteDebuggingRequested, rpcLogName, versionLine } from '../../src/shared/protocol.js';
 
 describe('remote debugging refusal', () => {
   const none = () => false;
@@ -74,11 +74,6 @@ describe('desktop.log and the Account menu', () => {
 describe('a notification', () => {
   const item = 'itm_00000000-0000-4000-8000-000000000001';
   const project = 'prj_00000001-1111-4111-8111-111111111111';
-
-  it('is a method main answers, beside the change check\'s log line', () => {
-    expect(MAIN_METHODS).toContain('notice.show');
-    expect(MAIN_METHODS).toContain('log.changes');
-  });
 
   it('carries one line and what a click opens: an item, the follow-ups it counted, or a project', () => {
     expect(noticeOf({ text: 'Mina handed you Update the pricing page', target: { kind: 'item', item_id: item } }))

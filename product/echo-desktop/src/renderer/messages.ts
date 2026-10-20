@@ -43,7 +43,7 @@ export function message(failure: Failure): string {
   return Object.hasOwn(MESSAGES, failure.code) ? MESSAGES[failure.code]! : 'Something went wrong. Try again.';
 }
 
-/** Where you stand with a tool, in the renderer's words: on its row in Tools, and beside Ask for a tool an answer cites. */
+/** Where you stand with a tool, in the renderer's words: on its row in Tools. */
 export const TOOL_STATES: Readonly<Record<ToolStatus, string>> = {
   linked: 'Connected',
   unlinked: 'Not connected',

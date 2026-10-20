@@ -263,7 +263,7 @@ test('a lead adds someone at once, Undo removes only them, and making a lead or 
   await expect(page.getByTestId('candidate-row')).toHaveText(['RKRaj KumarAdd', 'AMAna MillsAdd']);
   await page.getByTestId('people-find').fill('raj');
   await expect(page.getByTestId('candidate-row')).toHaveText(['RKRaj KumarAdd']);
-  expect(run.calls().filter(call => call.path === '/v1/person/projects/directory').at(-1)!.body).toMatchObject({ project_id: APOLLO, query: 'raj' });
+  expect(run.calls().filter(call => call.path === '/v1/person/directory').at(-1)!.body).toEqual({ limit: 10, query: 'raj' });
 
   await page.getByTestId('candidate-add').click();
   await expect(page.getByTestId('people-added')).toContainText('Added Raj Kumar.');
@@ -313,7 +313,7 @@ test('a member sees who is in a project and cannot change it', async () => {
   await expect(page.getByTestId('people-find')).toHaveCount(0);
   await expect(page.getByTestId('member-more')).toHaveCount(0);
   await expect(page.getByTestId('candidate-row')).toHaveCount(0);
-  expect(run.calls().filter(call => call.path === '/v1/person/projects/directory')).toHaveLength(0);
+  expect(run.calls().filter(call => call.path === '/v1/person/directory')).toHaveLength(0);
 });
 
 test('People reads your role again, and a new one empties the bar', async () => {

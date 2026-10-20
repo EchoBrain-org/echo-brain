@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { externalSourcePermalink, MAIN_METHODS, pagePermalink, ticketPermalink } from '../../src/shared/protocol.js';
+import { externalSourcePermalink, pagePermalink, ticketPermalink } from '../../src/shared/protocol.js';
 
 it('dispatches generic external opening through the correct closed link policy', () => {
   const page = 'https://wiki.example.test/page?id=12345';
-  expect(MAIN_METHODS).toContain('source.openExternal');
   expect(externalSourcePermalink('page', page)).toBe(page);
   expect(externalSourcePermalink('ticket', page)).toBeNull();
   expect(externalSourcePermalink('slack', page)).toBeNull();

@@ -10,7 +10,7 @@ import type {
   NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
   ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_PROJECT_FILES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { answerSentences, sourceGroups, type SourceGroup } from './answer.js';
 import { openerOf, sourceKey } from './openers.js';
@@ -182,11 +182,9 @@ export interface ToolManageSheet {
 }
 
 /**
- * Finding people by name. People finds them in the project's directory and
- * adds one at once, with an Undo; making a lead or removing someone is asked
- * first. New project finds them in the organization's directory and lists
- * the ones picked, or, on an Authority without it, uses People's way once
- * its project exists.
+ * Finding people by name, in the organization's directory. People adds one
+ * at once, with an Undo; making a lead or removing someone is asked first.
+ * New project lists the ones picked.
  */
 export interface Finding {
   /** The name typed to find someone. */
@@ -248,7 +246,7 @@ export interface ProjectPick {
  * comes back only for one whose outcome needs you, and closes by itself once
  * nothing does.
  */
-export interface NewProjectSheet extends Finding {
+export interface NewProjectSheet extends Pick<Finding, 'query' | 'directory'> {
   kind: 'new-project';
   seq: number;
   /** Stepped aside after Create: the work goes on, and the toast says where it is. */
@@ -264,15 +262,8 @@ export interface NewProjectSheet extends Finding {
   createdId: string | null;
   opening: boolean;
   openFailure?: Failure;
-  /** The project opened behind the sheet, once nothing more could start. */
-  opened: boolean;
   /** The people to add, in the order picked. You lead the project, so you are never one of them. */
   picks: ProjectPick[];
-  /**
-   * This Authority has no organization directory (an older one): people are
-   * added after Create, from the project's own directory, as People does.
-   */
-  peopleLater: boolean;
   files: ProjectFile[];
   /** The person or file whose Skip… is being asked. */
   skip: number | null;
@@ -1015,11 +1006,6 @@ async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknow
   }
   if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
   return result.value as T;
-}
-
-/** Open in Jira, Confluence or Slack, from an impact card: the tool checks your access when it opens. */
-export async function openImpactSource(source: ExternalAnswerSource): Promise<boolean> {
-  return !state.concealed && (await rpc('source.openExternal', { kind: source.kind, permalink: source.permalink })).ok;
 }
 
 export function manageTool(tool: ConnectedTool): void {
@@ -1891,7 +1877,8 @@ interface MappingAdapter<Tool extends MappingTool> {
   read(account: Expect, project_id: string): Promise<Result<MappingValue<Tool>>>;
   write(account: Expect, project_id: string, setting: MappingSetting<Tool>, remove: boolean, request_id: string): Promise<Result<MappingValue<Tool>>>;
   accepted(setting: MappingSetting<Tool>, value: MappingValue<Tool>): MappingSetting<Tool>;
-  valid(setting: MappingSetting<Tool>): boolean;
+  /** What Save would do to a setting that was read: see ToolChange. */
+  change(setting: MappingSetting<Tool>, value: MappingValue<Tool>): ToolChange;
 }
 
 const jiraMapping: MappingAdapter<'jira'> = {
@@ -1901,7 +1888,13 @@ const jiraMapping: MappingAdapter<'jira'> = {
   write: (expect, project_id, setting, remove, request_id) => rpc('projects.jiraSet', { expect, project_id, request_id,
     expected_revision: setting.value!.revision, jira_project: remove ? null : setting.key.trim() }),
   accepted: (setting, value) => ({ seq: setting.seq, status: 'ready', key: value.mapping?.project_key ?? '', value }),
-  valid: setting => /^[A-Z][A-Z0-9_]{0,63}$/.test(setting.key.trim()) && setting.key.trim() !== setting.value?.mapping?.project_key,
+  change: (setting, value) => {
+    const key = setting.key.trim();
+    const current = value.mapping?.project_key ?? null;
+    if (key === '') return current ? 'remove' : null;
+    if (key === current) return null;
+    return /^[A-Z][A-Z0-9_]{0,63}$/.test(key) ? 'set' : 'invalid';
+  },
 };
 const confluenceMapping: MappingAdapter<'confluence'> = {
   reads: value => value.mapping ? value.mapping.space_ids.length : null,
@@ -1910,8 +1903,14 @@ const confluenceMapping: MappingAdapter<'confluence'> = {
   write: (expect, project_id, setting, remove, request_id) => rpc('projects.confluenceSet', { expect, project_id, request_id,
     expected_revision: setting.value!.revision, space_ids: remove ? null : setting.selected }),
   accepted: (setting, value) => ({ ...setting, status: 'ready', value, selected: value.mapping?.space_ids ?? [] }),
-  valid: setting => setting.pickerFailure === undefined && setting.selected.length > 0,
+  change: (setting, value) => {
+    const current = value.mapping?.space_ids ?? [];
+    if (current.length === setting.selected.length && current.every(id => setting.selected.includes(id))) return null;
+    if (setting.selected.length === 0) return current.length > 0 ? 'remove' : null;
+    return setting.pickerFailure === undefined ? 'set' : 'invalid';
+  },
 };
+const MAPPINGS: { readonly [Tool in MappingTool]: MappingAdapter<Tool> } = { jira: jiraMapping, confluence: confluenceMapping };
 
 /** Every reply belongs to this account and this opening of the project sheet. */
 function mappingAt<Tool extends MappingTool>(tool: Tool, account: Expect, opening: number) {
@@ -2042,22 +2041,15 @@ export function projectToolFailureWords(settings: ProjectSettingsState, tool: Ma
 
 /** What Save would do to a tool's setting: nothing, set it, remove it, or nothing yet, as what is typed is not valid. */
 export type ToolChange = 'set' | 'remove' | 'invalid' | null;
-export function projectToolChange(settings: ProjectSettingsState, tool: MappingTool): ToolChange {
-  if (tool === 'jira') {
-    const setting = settings.jira;
-    if (setting?.status !== 'ready' || !setting.value) return null;
-    const key = setting.key.trim();
-    const current = setting.value.mapping?.project_key ?? null;
-    if (key === '') return current ? 'remove' : null;
-    if (key === current) return null;
-    return jiraMapping.valid(setting) ? 'set' : 'invalid';
-  }
-  const setting = settings.confluence;
-  if (setting?.status !== 'ready' || !setting.value) return null;
-  const current = setting.value.mapping?.space_ids ?? [];
-  if (current.length === setting.selected.length && current.every(id => setting.selected.includes(id))) return null;
-  if (setting.selected.length === 0) return current.length > 0 ? 'remove' : null;
-  return confluenceMapping.valid(setting) ? 'set' : 'invalid';
+export function projectToolChange<Tool extends MappingTool>(settings: ProjectSettingsState, tool: Tool): ToolChange {
+  const setting = settings[tool] as MappingSetting<Tool> | undefined;
+  return setting?.status === 'ready' && setting.value ? MAPPINGS[tool].change(setting, setting.value as MappingValue<Tool>) : null;
+}
+
+/** What a project reads from a tool, as the Authority last said; undefined until it was read. */
+export function projectToolReads<Tool extends MappingTool>(settings: ProjectSettingsState, tool: Tool): ProjectReads[Tool] | undefined {
+  const value = settings[tool]?.value as MappingValue<Tool> | undefined;
+  return value ? MAPPINGS[tool].reads(value) : undefined;
 }
 
 /** Save is offered to a lead with something changed, nothing invalid, and no connection still waiting on the browser. */
@@ -2101,8 +2093,7 @@ export async function saveProjectTools(): Promise<void> {
   let saved = true;
   const done: typeof changes = [];
   for (const [tool, change] of changes) {
-    const ok = tool === 'jira' ? await writeProjectMapping(jiraMapping, account, change === 'remove')
-      : await writeProjectMapping(confluenceMapping, account, change === 'remove');
+    const ok = await writeProjectMapping(MAPPINGS[tool], account, change === 'remove');
     saved &&= ok;
     if (ok) done.push([tool, change]);
     if (!toolsAt(account, opening)) return;
@@ -2148,16 +2139,9 @@ export function reloadProjectTool(tool: MappingTool): void {
   const settings = state.projectSettings;
   const account = expect();
   if (!settings?.tools || !account || settings.tools.saving) return;
-  const { project_id } = settings.project;
-  if (tool === 'jira') {
-    const initial = jiraMapping.initial(++seq);
-    setMapping(settings, 'jira', initial);
-    void readProjectMapping(jiraMapping, account, project_id, initial.seq);
-  } else {
-    const initial = confluenceMapping.initial(++seq);
-    setMapping(settings, 'confluence', initial);
-    void readProjectMapping(confluenceMapping, account, project_id, initial.seq);
-  }
+  const initial = MAPPINGS[tool].initial(++seq);
+  setMapping(settings, tool, initial);
+  void readProjectMapping(MAPPINGS[tool], account, settings.project.project_id, initial.seq);
 }
 
 /** Connect, in a row of Tools: the row waits on the browser, then lets you pick. Nothing else on the sheet is lost. */
@@ -2254,13 +2238,8 @@ export function askProjectSetting(action: 'archive' | 'unarchive' | 'leave'): vo
   set({ projectSettings: { ...settings, menu: false, rename: null, confirm: action } });
 }
 
-function settingsName(value: string): string | null {
-  const name = value.normalize('NFC').trim();
-  return name === '' || new TextEncoder().encode(name).byteLength > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
-}
-
 export function projectRenameValid(name: string, previous: string): boolean {
-  const valid = settingsName(name);
+  const valid = projectName(name);
   return valid !== null && valid !== previous;
 }
 
@@ -2269,7 +2248,7 @@ export function confirmProjectSetting(): void {
   const settings = state.projectSettings;
   if (!settings || projectSettingsBlocked()) return;
   if (settings.rename !== null) {
-    const name = settingsName(settings.rename);
+    const name = projectName(settings.rename);
     if (!projectRenameValid(settings.rename, settings.project.name) || name === null) return;
     void sendProjectSetting(settings.project, 'rename', { name });
     return;
@@ -2409,25 +2388,19 @@ function forgetLeftProject(projectId: string): void {
 
 // ---- people ----------------------------------------------------------------------
 
-/**
- * A sheet that finds people in a project's directory: People, or New project
- * once its project exists when the Authority has no organization directory.
- */
-export type FindingSheet = PeopleSheet | (NewProjectSheet & { project: ProjectSummary });
-
-export function findingSheet(current: State = state): FindingSheet | null {
-  const sheet = current.sheet;
-  return sheet?.kind === 'people' || (sheet?.kind === 'new-project' && sheet.project && sheet.peopleLater) ? sheet as FindingSheet : null;
+/** People, when it is up. */
+export function findingSheet(current: State = state): PeopleSheet | null {
+  return current.sheet?.kind === 'people' ? current.sheet : null;
 }
 
-function peopleSheet(mine?: number): FindingSheet | null {
+function peopleSheet(mine?: number): PeopleSheet | null {
   const sheet = findingSheet();
   return sheet && (mine === undefined || sheet.seq === mine) ? sheet : null;
 }
 
 function setPeople(patch: Partial<Finding> & Partial<Pick<PeopleSheet, 'project' | 'failure'>>, mine?: number): void {
   const sheet = peopleSheet(mine);
-  if (sheet) set({ sheet: { ...sheet, ...patch } as Sheet });
+  if (sheet) set({ sheet: { ...sheet, ...patch } });
 }
 
 /** A lead can change who is in the project, while no other change is unsettled. */
@@ -2482,20 +2455,19 @@ export function setPeopleQuery(query: string): void {
 }
 
 /**
- * The current people picker's directory, searched by name or paged with More.
- * New project uses the organization's directory; a project's People sheet
- * (including New project's fallback) uses its directory and requires a lead.
- * Replies for a search or sheet that has moved on are discarded.
+ * The organization's directory, searched by name or paged with More, for New
+ * project, or for People when you lead its project. Replies for a search or
+ * sheet that has moved on are discarded.
  */
 export async function findPeople(more = false): Promise<void> {
   clearTimeout(peopleTimer);
   const account = expect();
   const sheet = newProjectSheet() ?? peopleSheet();
   if (!account || !sheet) return;
-  const wholeOrganization = sheet.kind === 'new-project' && !sheet.peopleLater;
-  if (!wholeOrganization && sheet.project?.role !== 'lead') return;
+  const newProject = sheet.kind === 'new-project';
+  if (!newProject && sheet.project.role !== 'lead') return;
   const patch = (value: Partial<Finding>) => {
-    if (wholeOrganization) setNewProject(value, sheet.seq);
+    if (newProject) setNewProject(value, sheet.seq);
     else setPeople(value, sheet.seq);
   };
   const query = askText(sheet.query);
@@ -2505,20 +2477,13 @@ export async function findPeople(more = false): Promise<void> {
   if (more && !cursor) return;
   const mine = ++seq;
   const shown = more ? sheet.directory?.items ?? [] : [];
-  // A new project-directory search ends the last add's Undo.
+  // A new search in People ends the last add's Undo.
   patch({ directory: { seq: mine, query, items: shown, next: sheet.directory?.next ?? null, loading: true },
-    ...(!wholeOrganization && !more ? { added: null } : {}) });
-  const params = { expect: account, ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) };
-  const result = wholeOrganization ? await rpc('people.directory', params)
-    : await rpc('projects.directory', { ...params, project_id: sheet.project!.project_id });
-  const current = wholeOrganization ? newProjectSheet(sheet.seq) : peopleSheet(sheet.seq);
+    ...(!newProject && !more ? { added: null } : {}) });
+  const result = await rpc('people.directory', { expect: account, ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) });
+  const current = newProject ? newProjectSheet(sheet.seq) : peopleSheet(sheet.seq);
   if (!current || current.directory?.seq !== mine) return;
   if (!result.ok) {
-    if (wholeOrganization && NO_DIRECTORY.includes(result.failure.code)) {
-      // Once the project exists its people were picked or are added in People; the sheet's way of working stays.
-      setNewProject(current.project ? { directory: null } : { peopleLater: true, query: '', directory: null }, sheet.seq);
-      return;
-    }
     patch({ directory: { seq: mine, query, items: shown, next: null, loading: false, failure: result.failure } });
     accountLost(result.failure);
     return;
@@ -2591,8 +2556,6 @@ export function confirmMemberChange(): void {
 
 // ---- new project -----------------------------------------------------------------
 
-/** New project takes up to 20 files. */
-export const MAX_PROJECT_FILES = 20;
 const TOO_MANY_FILES = 'Add up to 20 files.';
 /** Said when New project closes after Create with files that may not have been saved, people who may not have been added, or both. */
 export const UNSAVED_FILES = 'Some files may not have been saved.';
@@ -2600,8 +2563,6 @@ const UNADDED_PEOPLE = 'Some people may not have been added.';
 const UNFINISHED = 'Some people and files may not have been added.';
 /** The toasts that warn, shown with the warning mark. */
 export const WARNINGS: ReadonlySet<string> = new Set([UNSAVED_FILES, UNADDED_PEOPLE, UNFINISHED]);
-/** How an Authority without the organization directory answers it: the route is not there. */
-const NO_DIRECTORY = ['not_found', 'unsupported'];
 
 /** New project's people and files, numbered in one sequence. */
 let rowIds = 0;
@@ -2627,7 +2588,7 @@ export function newProjectBusy(sheet: NewProjectSheet): boolean {
 /** A project's name as the API takes it: one line, trimmed, NFC, at most 200 UTF-8 bytes. */
 export function projectName(text: string): string | null {
   const name = text.normalize('NFC').trim();
-  return name === '' || new TextEncoder().encode(name).length > 200 || /[\u0000-\u001f\u007f-\u009f]/.test(name) ? null : name;
+  return name === '' || new TextEncoder().encode(name).length > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
 }
 
 /**
@@ -2644,8 +2605,7 @@ export function openNewProject(): void {
     toast: null,
     sheet: {
       kind: 'new-project', seq: ++seq, hidden: false, name: '', create: { requestId: crypto.randomUUID(), name: '', status: 'editing' }, confirmClose: false,
-      project: null, createdId: null, opening: false, opened: false, picks: [], peopleLater: false, files: [], skip: null,
-      query: '', directory: null, menu: null, confirm: null, added: null,
+      project: null, createdId: null, opening: false, picks: [], files: [], skip: null, query: '', directory: null,
     },
   });
   void findPeople();
@@ -2693,9 +2653,7 @@ export async function createProject(): Promise<void> {
 
 /**
  * The project Create made, read: it joins your projects and opens, the sheet
- * steps aside, and the people and files picked go into it. Without the
- * organization's directory the sheet stays: a lead now finds people in the
- * project's own.
+ * steps aside, and the people and files picked go into it.
  */
 async function openCreated(): Promise<void> {
   const account = expect();
@@ -2715,14 +2673,8 @@ async function openCreated(): Promise<void> {
     set({ projects: { ...state.projects, items: [project, ...state.projects.items] } });
     listChanged();
   }
-  setNewProject({ opening: false, project, notice: undefined }, mine);
-  if (newProjectSheet(mine)?.peopleLater && project.role === 'lead') {
-    void loadRoster(project.project_id);
-    void findPeople();
-  } else {
-    setNewProject({ hidden: true, opened: true }, mine);
-    void openProject(project);
-  }
+  setNewProject({ opening: false, project, notice: undefined, hidden: true }, mine);
+  void openProject(project);
   pumpNewProject();
 }
 
@@ -2730,8 +2682,7 @@ async function openCreated(): Promise<void> {
  * Once the project exists, New project works down its list one request at a
  * time: each person, then each file. One whose outcome is unknown holds back
  * the rest until it is settled. When nothing more can start, the sheet comes
- * back for what needs you, or closes. Without the organization's directory
- * the sheet stays for finding people, and the project opens behind it, once.
+ * back for what needs you, or closes.
  */
 function pumpNewProject(): void {
   const sheet = newProjectSheet();
@@ -2742,17 +2693,12 @@ function pumpNewProject(): void {
   if (person) { void addPick(sheet.seq, person.id, false); return; }
   const file = held || sheet.files.some(entry => entry.status === 'unknown') ? undefined : sheet.files.find(entry => entry.status === 'waiting');
   if (file) { void saveFile(sheet.seq, file.id, false); return; }
-  if (!sheet.opened) {
-    setNewProject({ opened: true }, sheet.seq);
-    void openProject(sheet.project);
-    return;
-  }
-  if (!sheet.peopleLater || sheet.hidden) settleNewProject(sheet);
+  settleNewProject(sheet);
 }
 
 /** Once its project is open, New project can step aside while it works, and come back. */
 export function newProjectSteppable(sheet: NewProjectSheet): boolean {
-  return sheet.project !== null && sheet.opened && !sheet.peopleLater;
+  return sheet.project !== null;
 }
 
 /**
@@ -2861,8 +2807,7 @@ function releaseCopy(requestId: string, account: Expect | null = expect()): void
 
 /** Typing a name finds the organization's people once it pauses. */
 export function setPickQuery(query: string): void {
-  const sheet = newProjectSheet();
-  if (!sheet || sheet.peopleLater) return;
+  if (!newProjectSheet()) return;
   setNewProject({ query });
   clearTimeout(peopleTimer);
   peopleTimer = setTimeout(() => void findPeople(), SEARCH_PAUSE_MS);
@@ -2871,7 +2816,7 @@ export function setPickQuery(query: string): void {
 /** The people found who can be picked: not you, who lead it, and not picked already. */
 export function pickable(current: State = state): readonly Member[] {
   const sheet = current.sheet;
-  if (sheet?.kind !== 'new-project' || sheet.peopleLater || !sheet.directory) return [];
+  if (sheet?.kind !== 'new-project' || !sheet.directory) return [];
   const me = current.status?.account?.membership_id;
   const picked = new Set(sheet.picks.map(pick => pick.person.membership_id));
   return sheet.directory.items.filter(person => person.membership_id !== me && !picked.has(person.membership_id));
@@ -2949,7 +2894,7 @@ export async function chooseFiles(): Promise<void> {
   if (!sheet) return;
   const result = await rpc('dialog.openDocuments', {});
   if (!newProjectSheet(sheet.seq)) return;
-  if (!result.ok) { setNewProject({ notice: result.failure.code === 'too_many_files' ? TOO_MANY_FILES : message(result.failure) }, sheet.seq); return; }
+  if (!result.ok) { setNewProject({ notice: message(result.failure) }, sheet.seq); return; }
   const refused: Failure = { code: 'unsupported_file', retryable: false };
   addFiles(sheet.seq, [...result.value.files.map(handle => ({ name: handle.name, handle })), ...result.value.refused.map(name => ({ name, failure: refused }))]);
 }
@@ -3719,7 +3664,7 @@ export function openNamed(items: readonly AnswerSource[]): void {
   readPane(sources.gen, source);
 }
 
-/** External providers check current access when the person opens a cited or named link; main checks the link again. */
+/** External providers check current access when the person opens a cited or named link, or a follow-up's; main checks the link again. */
 export async function openExternalSource(source: ExternalAnswerSource): Promise<boolean> {
   return !state.concealed && (await rpc('source.openExternal', { kind: source.kind, permalink: source.permalink })).ok;
 }
