@@ -116,7 +116,7 @@
       {
         "name": "Slack approval integration API",
         "path": "providers/slack/server/src/organization-control-plane/slack-approval-integration-v1.ts",
-        "export": "resolveCurrentSlackDmApprovalReviewerTargetV1"
+        "export": "resolveSlackDmApprovalTargetV1"
       },
       {
         "name": "Slack web identity provider",

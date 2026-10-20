@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type ExternalHumanIdentityLinkContractV2, type PersonMembershipType } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { canonicalJson, canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
-import { isCurrentSlackDmApprovalTargetV1, matchSlackApprovalClickActorV1, resolveCurrentSlackDmApprovalReviewerTargetV1, resolveSlackDmApprovalTargetV1, type SlackDmApprovalReviewerTargetCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
-import { slackNangoAppPublicConfigurationSha256V1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
+import { isCurrentSlackDmApprovalTargetV1, matchSlackApprovalClickActorV1, resolveSlackDmApprovalTargetV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
+import { slackNangoAppPublicConfigurationSha256V1, type SlackConnectionCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { applyOrganizationControlBaselineV4 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 
 const CONNECTION_ID = "con_00000000-0000-4000-8000-000000000001";
@@ -105,7 +105,7 @@ function seed(
     readonly observed_scope_without: string;
     readonly connection_enterprise_id: string | null;
     readonly connection_state_status: "active" | "revoked";
-    readonly connection_coordinates: SlackDmApprovalReviewerTargetCoordinatesV1;
+    readonly connection_coordinates: SlackConnectionCoordinatesV1;
     readonly link: Parameters<typeof insertLink>[1];
     readonly include_link: boolean;
     /** Builds the contract and state for another connection but stores them under CONNECTION_ID. */
@@ -166,46 +166,27 @@ function seed(
   return database;
 }
 
+/** The owner's card target on the active connection, as the Authority picks one. */
 function resolve(database: Database.Database) {
-  return resolveCurrentSlackDmApprovalReviewerTargetV1(
-    database,
-    COORDINATES,
-    CONNECTION_ID,
-    OWNER,
-  );
+  return resolveSlackDmApprovalTargetV1(database, COORDINATES, OWNER);
 }
 
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
+describe("a reviewer's Slack DM target", () => {
   it.each(["U012ABC", "W012ABC"])(
-    "resolves an exact current %s Slack identity and freezes its proof chain",
+    "resolves an exact current %s Slack identity on the active connection",
     (provider_subject_id) => {
-      const database = seed({ link: { provider_subject_id } });
-
-      const result = resolve(database);
-
-      expect(result).toMatchObject({
-        connection: { body: { connection_id: CONNECTION_ID } },
-        connection_state: { body: { connection_status: "active" } },
-        current_slack_identity_link: {
-          provider: "slack",
-          provider_subject_id,
-        },
-      });
-      expect(Object.isFrozen(result)).toBe(true);
-      expect(Object.isFrozen(result!.connection)).toBe(true);
-      expect(Object.isFrozen(result!.connection_state)).toBe(true);
-      expect(Object.isFrozen(result!.current_slack_identity_link)).toBe(true);
+      expect(resolve(seed({ link: { provider_subject_id } }))).toMatchObject({ connection_id: CONNECTION_ID, slack_subject_id: provider_subject_id });
     },
   );
 
   it.each(SLACK_PRIVATE_APP_BOT_SCOPES_V1)(
     "does not select a DM target without %s",
     (missingScope) => {
-      expect(resolve(seed({ observed_scope_without: missingScope }))).toBeUndefined();
+      expect(resolve(seed({ observed_scope_without: missingScope }))).toBeNull();
     },
   );
 
@@ -224,12 +205,10 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
     ["the linked membership is not an owner", { link: { membership_type: "employee" } }],
     ["the linked subject is not a Slack human", { link: { provider_subject_id: "X012ABC" } }],
     ["the connection is inactive", { connection_state_status: "revoked" }],
-    [
-      "the connection belongs to another lineage",
-      { connection_coordinates: { ...COORDINATES, state_lineage_id: "lineage-foreign" } },
-    ],
+    // A body stored under another connection's row is no target.
+    ["the connection row holds another connection's body", { contract_connection_id: "con_00000000-0000-4000-8000-000000000002" }],
   ])("returns no target when %s", (_label, input) => {
-    expect(resolve(seed(input))).toBeUndefined();
+    expect(resolve(seed(input))).toBeNull();
   });
 
   it("returns no target for an ambiguous current member link set", () => {
@@ -242,7 +221,7 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
       provider_subject_id: "U012DEF",
     });
 
-    expect(resolve(database)).toBeUndefined();
+    expect(resolve(database)).toBeNull();
   });
 
   it("throws when the stored canonical link digest or body is corrupt", () => {
@@ -262,10 +241,8 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
     expect(() => resolve(bodyCorrupt)).toThrow("external human link contract v2");
   });
 
-  it("throws when valid canonical bodies do not match their selected relational rows", () => {
-    expect(() =>
-      resolve(seed({ include_link: false, contract_connection_id: "con_00000000-0000-4000-8000-000000000002" })),
-    ).toThrow("connection state is inconsistent");
+  it("throws when the connection belongs to another lineage, or a valid canonical body does not match its selected row", () => {
+    expect(() => resolve(seed({ connection_coordinates: { ...COORDINATES, state_lineage_id: "lineage-foreign" } }))).toThrow("drifted");
     expect(() =>
       resolve(
         seed({
