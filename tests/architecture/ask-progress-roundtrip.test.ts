@@ -12,7 +12,7 @@ import { PersonSessionStore } from '../../src/product/person-client/session-stor
 import {
   allSourceAskFixture, AUTHORITY, CROSS_SOURCE_NEED, DOCUMENT_TEXT, PRIVATE_DOCUMENT_TEXT,
 } from '../../services/organization-authority/test/fixtures/cross-source-ask-runtime.js';
-import { JIRA_TEXT, SLACK_TEXT } from '../../services/organization-authority/test/fixtures/cross-source-live-fixture.js';
+import { CONFLUENCE_TEXT, JIRA_TEXT } from '../../services/organization-authority/test/fixtures/cross-source-live-fixture.js';
 
 // Ask progress and internal links v1 (ADR-0039), end to end, where the root
 // build is: the real Authority runtime streams a scripted research run; the
@@ -42,7 +42,7 @@ type Json = Record<string, unknown>;
 type Scope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'mine' };
 type Expect = { readonly authority: string; readonly membership_id: string };
 interface CliRun { readonly exit: number; readonly stdout: string; readonly stderr: string; readonly overflow: boolean }
-type Source = Json & { readonly kind: 'record' | 'original' | 'transcript' | 'follow_up' | 'ticket' | 'page' | 'slack' | 'project' | 'person' | 'tool' | 'container'; readonly label: string };
+type Source = Json & { readonly kind: 'record' | 'original' | 'transcript' | 'follow_up' | 'ticket' | 'page' | 'project' | 'person' | 'tool' | 'container'; readonly label: string };
 interface Row { readonly type: 'searched' | 'read'; readonly sources?: readonly Json[]; readonly found?: number; readonly items?: readonly Source[] }
 interface Progress { readonly started: number; readonly stage: string | null; readonly pending: number; readonly rows: readonly Row[] }
 interface Receipt { readonly looked_through: number; readonly elapsed_ms: number; readonly rows: readonly Row[] }
@@ -70,8 +70,8 @@ interface Views {
 interface ProgressView { PROGRESS_AFTER_MS: number; searchedWords(row: Row): string }
 const ok = (value: unknown) => ({ ok: true, value });
 const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) await Promise.resolve(); };
-const QUESTION = 'Combine the Launchscope approved meeting, document, Jira ticket, and Slack message.';
-const NOTE = 'Private planner note: weigh the Jira review against Slack.';
+const QUESTION = 'Combine the Launchscope approved meeting, document, Jira ticket, and Confluence page.';
+const NOTE = 'Private planner note: weigh the Jira review against Confluence.';
 const ASK_AUDIT = "SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-agentic-ask-audit-v1%'";
 const commitment = (item: PersonAnswerCitationV8) => canonicalSha256(item.citation);
 
@@ -186,7 +186,7 @@ function stepsOf(lines: readonly string[]): PersonAskProgressStepEventV3[] {
 }
 
 /** The catalog's sources, as a step names them: follow-ups only on /v6, which alone reads them (ADR-0040). */
-const SEARCHED_V1 = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'slack' }];
+const SEARCHED_V1 = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'pages', tool_id: 'confluence' }];
 const SEARCHED_V2 = [...SEARCHED_V1, { kind: 'follow_ups' }];
 
 describe('Ask progress from the Authority through the Person client to the desktop page', () => {
@@ -232,7 +232,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(searched).toHaveLength(1);
       expect(searched[0]!.sources).toEqual(sources);
       const named = steps.flatMap(step => step.type === 'read' ? step.items : []);
-      expect(named.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'slack_message', 'slack_message', 'ticket']);
+      expect(named.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'page', 'ticket']);
       // The private document, the hidden meeting and the unapproved one match the search too: no count includes them.
       expect(searched[0]!.found).toBe(named.length);
 
@@ -240,7 +240,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       for (const line of lines.slice(0, -1)) {
         const keys = keysOf(JSON.parse(line));
         for (const key of NEVER_KEYS) expect(keys.has(key), `${key} in ${line}`).toBe(false);
-        for (const secret of [NOTE, CROSS_SOURCE_NEED, DOCUMENT_TEXT, PRIVATE_DOCUMENT_TEXT, JIRA_TEXT, SLACK_TEXT, f.seeded.approved_text, f.seeded.hidden_text, f.seeded.unapproved_text]) {
+        for (const secret of [NOTE, CROSS_SOURCE_NEED, DOCUMENT_TEXT, PRIVATE_DOCUMENT_TEXT, JIRA_TEXT, CONFLUENCE_TEXT, f.seeded.approved_text, f.seeded.hidden_text, f.seeded.unapproved_text]) {
           expect(line).not.toContain(secret);
         }
         expect(line).not.toMatch(/"E\d+"/);
@@ -339,7 +339,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(shown.answer.sources).toContainEqual(source);
       expect(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).sources).toContainEqual(source);
       expect(openerOf(source as Source)).toEqual({ pane: 'follow_up', page: { kind: 'follow_up', item_id } });
-      expect(progress.searchedWords(shown.receipt!.rows[0]!)).toBe(`Searched meetings, documents, Jira, Slack and follow-ups · ${named.length} found`);
+      expect(progress.searchedWords(shown.receipt!.rows[0]!)).toBe(`Searched meetings, documents, Jira, Confluence and follow-ups · ${named.length} found`);
       // The audited answer names it, so the pane stays on it, and now offers Open: its item page, read again.
       expect(store.fullPageOffered()).toBe(true);
       store.openFullPage();
