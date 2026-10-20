@@ -1162,16 +1162,6 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(said(store)).toEqual({ words: 'Done', undo: true });
   });
 
-  it('offers Try again on an item page whose first read failed', async () => {
-    const store = await start();
-    await store.openFollowUp('itm_00000001');
-    expect(store.followUpShown()).toMatchObject({ kind: 'item', item: null, failure: { code: 'unavailable' } });
-    fx.readItem = item('1');
-    store.retryFollowUp();
-    await flush();
-    expect(store.followUpShown()).toMatchObject({ item: { item_id: 'itm_00000001' } });
-  });
-
   it('says so when you gave an item away and no longer see it: the page offers Back, the list\'s row goes with a word in its foot', async () => {
     fx.readItem = item('1');
     const store = await start();
@@ -1693,48 +1683,31 @@ describe('Rows first, then what each says now', () => {
     expect(shownPage(store).failure).toBeUndefined();
   });
 
-  it('keeps an item page\'s row when its read fails for an outage, saying ECHO couldn\'t read it just now', async () => {
-    fx.readItem = null;
-    const store = await start();
-    await store.openFollowUp('itm_00000001', rowOnly(opened('1')));
-    expect(shownPage(store).loading).toBe(false);
-    expect(pageItem(store).reach).toBe('unavailable');
-    expect(shownPage(store).failure).toMatchObject({ code: 'unavailable' });
-  });
-
-  it('keeps cached details but exposes a failed row refresh for retry', async () => {
-    fx.readItem = null;
-    const store = await start();
-    await store.openFollowUp('itm_00000001', opened('1'));
-    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
-    expect(shownPage(store).failure).toMatchObject({ code: 'unavailable' });
-    fx.readItem = opened('1');
-    store.retryFollowUp();
-    await flush();
-    expect(shownPage(store).failure).toBeUndefined();
-    expect(requests('item').map(request => request.read)).toEqual(['rows', 'rows']);
-  });
-
-  it('reads live an item opened from a row whose live read failed, and Try again on its page reads it live again', async () => {
-    fx.page = listPage([opened('1')]);
+  it.each([
+    // Opened by its id alone (a notification), or from its row: read rows only, read live, or whose live read failed. It is read
+    // rows only, then live unless its row was read live. A read that fails for an outage keeps what the page showed: its row,
+    // saying ECHO couldn't read it just now unless it was read live.
+    ['its id alone', null, ['rows', undefined], null],
+    ['a row read rows only', rowOnly(opened('1')), ['rows', undefined], 'unavailable'],
+    ['a row whose live read failed', { ...rowOnly(opened('1')), reach: 'unavailable' }, ['rows', undefined], 'unavailable'],
+    ['a row read live', opened('1'), ['rows'], 'opened'],
+  ] as const)('reads an item page opened from %s; when that read fails, it keeps what it showed, and Try again reads it again', async (_, row, reads, kept) => {
     fx.readItem = opened('1');
     const store = await start();
-    fx.failLiveItems = 1;
-    await store.openYourFollowUps();
-    expect(shown(store)[0]?.reach).toBe('unavailable');
-    await store.openFollowUp('itm_00000001', shown(store)[0]!);
-    expect(requests('item').map(request => request.read)).toEqual(['rows', undefined]);
+    await store.openFollowUp('itm_00000001', row);
+    expect(requests('item').map(request => request.read)).toEqual(reads);
     expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
-    // A page whose read failed for an outage: Try again reads it, rows only and then live.
+    store.closeFollowUp();
     fx.failItems = 1;
-    await store.openFollowUp('itm_00000002', rowOnly(opened('2')));
-    expect(pageItem(store).reach).toBe('unavailable');
-    fx.readItem = opened('2');
+    await store.openFollowUp('itm_00000001', row);
+    expect(shownPage(store)).toMatchObject({ loading: false, failure: { code: 'unavailable' } });
+    expect(shownPage(store).item === null ? null : pageItem(store).reach).toBe(kept);
     const before = requests('item').length;
     store.retryFollowUp();
     await flush();
-    expect(requests('item').slice(before).map(request => request.read)).toEqual(['rows', undefined]);
-    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 2' } });
+    expect(requests('item').slice(before).map(request => request.read)).toEqual(reads);
+    expect(shownPage(store).failure).toBeUndefined();
+    expect(pageItem(store)).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
   });
 
   it('reads a closed group opened while another\'s first read is on its way, once that read answers', async () => {
