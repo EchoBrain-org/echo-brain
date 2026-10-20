@@ -40,8 +40,8 @@ import {
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
 import type {
-  AgenticAskAnswerWithReceiptV1, AgenticAskAnswerWithReceiptV2, AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV1, AgenticAskProgressInputV2, AgenticAskProgressInputV3,
-  AgenticAskProgressRequestV1, AgenticAskProgressSinkV1, AgenticAskProgressSinkV2, AgenticAskProgressSinkV3,
+  AgenticAskAnswerWithReceiptV2, AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV2, AgenticAskProgressInputV3,
+  AgenticAskProgressRequestV1, AgenticAskProgressSinkV2, AgenticAskProgressSinkV3,
 } from "./agentic-ask-progress-v1.js";
 import { createAgenticAskProgressRecorderV1 } from "./agentic-ask-progress-recorder-v1.js";
 import type { AgenticRendererV1, AgenticRenderOutputV1 } from "./agentic-renderer-v1.js";
@@ -59,8 +59,8 @@ export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./age
 export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
 export type {
-  AgenticAskAnswerWithReceiptV1, AgenticAskAnswerWithReceiptV2, AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV1, AgenticAskProgressInputV2, AgenticAskProgressInputV3,
-  AgenticAskProgressRequestV1, AgenticAskProgressSinkV1, AgenticAskProgressSinkV2, AgenticAskProgressSinkV3,
+  AgenticAskAnswerWithReceiptV2, AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV2, AgenticAskProgressInputV3,
+  AgenticAskProgressRequestV1, AgenticAskProgressSinkV2, AgenticAskProgressSinkV3,
 } from "./agentic-ask-progress-v1.js";
 export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-recorder-v1.js";
 
@@ -114,9 +114,9 @@ export interface AgenticResearchInputV1 {
   readonly signal?: AbortSignal;
   /**
    * A streamed Ask's progress sink (ADR-0039); a run without one names nothing and audits no names.
-   * A V6 run sends it only V1 events, a V7 run V2 events (ADR-0040), a V8 run V3 events (research tool contract v1).
+   * A V7 run sends it V2 events (ADR-0040), a V8 run V3 events (research tool contract v1).
    */
-  readonly on_progress?: AgenticAskProgressSinkV1 | AgenticAskProgressSinkV2 | AgenticAskProgressSinkV3;
+  readonly on_progress?: AgenticAskProgressSinkV2 | AgenticAskProgressSinkV3;
   /** With `on_progress`: the streamed request this run is one attempt of. */
   readonly progress_request?: AgenticAskProgressRequestV1;
 }
@@ -210,13 +210,12 @@ export function createAgenticResearchV1(options: CreateAgenticAskV2Options) {
   };
 }
 /**
- * V3 core: V6 answers, the first that may read and cite live pages.
- * `answerWithReceipt` is the same Ask, streaming its progress in V1 (ADR-0039).
+ * V3 core: V6 answers, the first that may read and cite live pages. It does not stream: its progress V1 was retired on
+ * 2026-10-19 (ADR-0039).
  */
 export function createAgenticAskV3(options: CreateAgenticAskV2Options) {
   return createAgenticAskCore(options, 6) as unknown as {
     answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV6>;
-    answerWithReceipt(input: AgenticAskProgressInputV1): Promise<AgenticAskAnswerWithReceiptV1>;
   };
 }
 /**
@@ -349,9 +348,9 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       });
       let terminalAudited = false;
       // A streamed Ask's record of what it searched and named (ADR-0039); it stops sending once the request's signal aborts.
-      // The V7 answer streams progress V2 and the V8 answer V3, so their reads may name follow-ups; the V6 answer streams V1, which never does.
+      // The V7 answer streams progress V2 and the V8 answer V3, so their reads may name follow-ups.
       const progress = input.on_progress === undefined ? undefined : createAgenticAskProgressRecorderV1({
-        sink: input.on_progress as AgenticAskProgressSinkV3, version: responseVersion === 8 ? 3 : responseVersion === 7 ? 2 : 1, sources: researchSources, signal: activeSignal,
+        sink: input.on_progress as AgenticAskProgressSinkV3, version: responseVersion === 8 ? 3 : 2, sources: researchSources, signal: activeSignal,
         ...(input.progress_request === undefined ? {} : { named: input.progress_request.named }) });
       let selectedTicketCount = 0; let ticketContextCount = 0; let ticketCitationCount = 0;
       const scope = scopeText(options.desk.scope);
@@ -506,14 +505,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     },
     /**
      * Ask with its progress sent to `on_progress` while it runs, and the receipt
-     * built after release (ADR-0039). Only the V6 core (progress V1), the V7
-     * core (progress V2, ADR-0040) and the V8 core (progress V3) stream.
+     * built after release (ADR-0039). Only the V7 core (progress V2, ADR-0040)
+     * and the V8 core (progress V3) stream.
      */
-    async answerWithReceipt(input: AgenticAskProgressInputV1 | AgenticAskProgressInputV2 | AgenticAskProgressInputV3): Promise<AgenticAskAnswerWithReceiptV1 | AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3> {
-      if ((responseVersion !== 6 && responseVersion !== 7 && responseVersion !== 8) || typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");
+    async answerWithReceipt(input: AgenticAskProgressInputV2 | AgenticAskProgressInputV3): Promise<AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3> {
+      if ((responseVersion !== 7 && responseVersion !== 8) || typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");
       const output = await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal), on_progress: input.on_progress,
         ...(input.request === undefined ? {} : { progress_request: input.request }) });
-      return Object.freeze({ response: output.response as PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8, receipt: output.receipt! }) as AgenticAskAnswerWithReceiptV1 | AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3;
+      return Object.freeze({ response: output.response as PersonAnswerResponseV7 | PersonAnswerResponseV8, receipt: output.receipt! }) as AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3;
     },
     /** Ask plus its research result and writer input, for the research evaluation. */
     async answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }) {

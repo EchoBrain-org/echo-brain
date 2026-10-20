@@ -1,6 +1,6 @@
 import type {
   PersonAnswerRequestV3, PersonAnswerResponseV5, PersonAnswerResponseV6, PersonAnswerResponseV7, PersonAnswerResponseV8, PersonAskTimeContextV1,
-  PersonAskProgressStepEventV1, PersonAskProgressStepEventV2, PersonAskProgressStepEventV3, PersonAskReceiptV1, PersonAskReceiptV2, PersonAskReceiptV3,
+  PersonAskProgressStepEventV2, PersonAskProgressStepEventV3, PersonAskReceiptV2, PersonAskReceiptV3,
 } from '@echo-brain/organization-api';
 
 /** One Ask as the HTTP boundary hands it on, on the unchanged V3 request; the bearer and the cancellation signal stay in it. */
@@ -13,7 +13,7 @@ export interface PersonAnswerHttpInputV1 {
 
 /**
  * A live Ask route: each version answers in its own response, and the older
- * routes and their answers stay as they are for installed clients. From `/v5`
+ * routes and their answers stay as they are for installed clients. From `/v6`
  * the same Ask can stream its progress (ADR-0039): `on_start` once, after the
  * request authenticated and validated and before any research, so a failure
  * before it is the JSON error and one after it travels in the stream;
@@ -30,8 +30,8 @@ export interface PersonLiveAnswerHttpApplication<Response, Step = never, Receipt
 
 /** `/v4`: the ticket-capable V5 answer; it never streams. */
 export type PersonAnswerV4HttpApplication = Pick<PersonLiveAnswerHttpApplication<PersonAnswerResponseV5>, 'ask'>;
-/** `/v5`: the live-page V6 answer, streamed in Ask progress V1. */
-export type PersonAnswerV5HttpApplication = PersonLiveAnswerHttpApplication<PersonAnswerResponseV6, PersonAskProgressStepEventV1, PersonAskReceiptV1>;
+/** `/v5`: the live-page V6 answer. It no longer streams: its Ask progress V1 was retired on 2026-10-19. */
+export type PersonAnswerV5HttpApplication = Pick<PersonLiveAnswerHttpApplication<PersonAnswerResponseV6>, 'ask'>;
 /** `/v6`: the V7 answer, which may read and cite follow-ups (ADR-0040), streamed in Ask progress V2, whose steps may name one. */
 export type PersonAnswerV6HttpApplication = PersonLiveAnswerHttpApplication<PersonAnswerResponseV7, PersonAskProgressStepEventV2, PersonAskReceiptV2>;
 /**

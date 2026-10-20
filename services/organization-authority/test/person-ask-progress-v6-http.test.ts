@@ -13,7 +13,7 @@ import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 /**
  * The V7 Ask over HTTP (ADR-0039, ADR-0040): `POST /v6/person/ask` behind the
  * real server, over the real open-items Authority state, streamed as Ask
- * progress V2 exactly as `/v5` streams V1. "What are my open tasks?" lists the
+ * progress V2 (`/v5` no longer streams V1). "What are my open tasks?" lists the
  * asker's follow-ups, reads one, and cites it: its name reaches the stream
  * only after the access check before the call that reads it, and its owner,
  * decision and check never do.

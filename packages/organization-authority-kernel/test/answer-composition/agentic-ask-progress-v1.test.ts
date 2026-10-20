@@ -3,18 +3,15 @@ import {
   PERSON_ASK_PROGRESS_NAMED_MAX_V1,
   PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1,
   PERSON_ASK_RECEIPT_MAX_BYTES_V1,
-  validatePersonAnswerCitationV6,
   validatePersonAnswerCitationV7,
-  validatePersonAnswerResponseV6,
-  validatePersonAskProgressStepEventV1,
+  validatePersonAnswerResponseV7,
   validatePersonAskProgressStepEventV2,
-  validatePersonAskReceiptV1,
   validatePersonAskReceiptV2,
   validatePersonAskReceiptV3,
   type PersonAskProgressStepEventV3,
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
-import { AGENTIC_ASK_DEADLINE_MS_V1, createAgenticAskV3, createAgenticAskV4, createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { AGENTIC_ASK_DEADLINE_MS_V1, createAgenticAskV4, createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { createAgenticAskProgressRecorderV1, createAgenticAskProgressRequestV1 } from "../../src/answer-composition/agentic-ask-progress-recorder-v1.js";
 import { citationOfAgenticEvidenceItemV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
@@ -67,13 +64,13 @@ const replies = (prompt: { readonly evidence?: readonly { readonly id: string }[
 /**
  * One global Ask over meetings, documents and live tickets. Step 1 searches
  * every source; step 2 opens the PRD (which brings neighbours) and searches
- * tickets again; step 3 finishes; then the writer. `version` 8 runs the V8
- * Ask, which streams progress V3.
+ * tickets again; step 3 finishes; then the writer. The V7 Ask streams
+ * progress V2; `version` 8 runs the V8 Ask, which streams progress V3.
  */
 function fixture(options: {
   readonly revalidate?: (mode: string, index: number) => void;
   readonly generate?: (input: StructuredGenerationInput, index: number) => Promise<unknown> | undefined;
-  readonly version?: 6 | 8;
+  readonly version?: 7 | 8;
 } = {}) {
   const log: Log = [];
   let checks = 0; let calls = 0;
@@ -111,19 +108,19 @@ function fixture(options: {
   });
   const audit: AgenticAskAuditEntryV1[] = [];
   const core = { desk, model: { generate }, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); } } };
-  const ask = options.version === 8 ? createAgenticAskV5(core) : createAgenticAskV3(core);
+  const ask = options.version === 8 ? createAgenticAskV5(core) : createAgenticAskV4(core);
   const events: PersonAskProgressStepEventV3[] = [];
   const sink = vi.fn((event: PersonAskProgressStepEventV3) => { events.push(event); log.push(`event:${event.type}`); });
   return { desk, generate, prompts, audit, ask, events, sink, log };
 }
 
 const digest = (item: EvidenceDeskItemV2) => canonicalSha256(item.citation);
-const named = (item: EvidenceDeskItemV2) => validatePersonAnswerCitationV6(citationOfAgenticEvidenceItemV1(item));
+const named = (item: EvidenceDeskItemV2) => validatePersonAnswerCitationV7(citationOfAgenticEvidenceItemV1(item));
 const every = [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }];
 
 /** Nothing the model wrote, nothing the plan holds, no body, scratchpad id, desk id or receipt. */
 function expectNoDisclosure(events: readonly PersonAskProgressStepEventV3[]) {
-  for (const event of events) expect(validatePersonAskProgressStepEventV1(event)).toEqual(event);
+  for (const event of events) expect(validatePersonAskProgressStepEventV2(event)).toEqual(event);
   const wire = JSON.stringify(events);
   for (const canary of Object.values(CANARY)) expect(wire).not.toContain(canary);
   expect(wire).not.toMatch(/\bE\d+\b/u);
@@ -168,8 +165,8 @@ describe("agentic Ask progress (ADR-0039)", () => {
     expect(f.log.slice(0, f.log.indexOf("event:read")).filter(entry => entry === "revalidate:incremental")).toHaveLength(2);
     expectNoDisclosure(f.events);
 
-    expect(validatePersonAnswerResponseV6(response)).toMatchObject({ outcome: "answered" });
-    expect(validatePersonAskReceiptV1(receipt)).toEqual(receipt);
+    expect(validatePersonAnswerResponseV7(response)).toMatchObject({ outcome: "answered" });
+    expect(validatePersonAskReceiptV2(receipt)).toEqual(receipt);
     expect(receipt).toMatchObject({
       looked_through: 2,
       rows: [
@@ -333,14 +330,14 @@ describe("the receipt counts what research looked through (ADR-0043)", () => {
     const { receipt } = await v3.ask.answerWithReceipt({ question: "When is launch?", on_progress: v3.sink });
     expect(validatePersonAskReceiptV3(receipt)).toEqual(receipt);
     // Read in full: the launch review and the PRD research opened. Shown as rows only: both metadata-only tickets. Not
-    // counted: the passages around the PRD that its open brought along. Named, as in V1: only what was read in full.
+    // counted: the passages around the PRD that its open brought along. Named, as in V2: only what was read in full.
     expect(receipt).toMatchObject({ looked_through: 4, rows: [
       { type: "searched", sources: every, found: 3 }, { type: "read", items: [named(launch)] },
       { type: "searched", sources: [{ kind: "tickets", tool_id: "jira" }], found: 1 }, { type: "read", items: [named(prd)] },
     ] });
     expectNoDisclosure(v3.events);
-    const v1 = fixture();
-    expect((await v1.ask.answerWithReceipt({ question: "When is launch?", on_progress: v1.sink })).receipt.looked_through).toBe(2);
+    const v2 = fixture();
+    expect((await v2.ask.answerWithReceipt({ question: "When is launch?", on_progress: v2.sink })).receipt.looked_through).toBe(2);
   });
 });
 
@@ -357,7 +354,7 @@ describe("agentic Ask progress recorder", () => {
 
   it("names each item once, at most 100 in a run, in read events of at most 25, and keeps counting what it read", () => {
     const events: PersonAskProgressStepEventV3[] = [];
-    const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
+    const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, version: 2, sources, signal: new AbortController().signal });
     const items = many(130);
     // A call given nothing in full is not reading.
     recorder.research.before_check([]);
@@ -379,7 +376,7 @@ describe("agentic Ask progress recorder", () => {
   });
 
   it("fits the receipt to its byte bound by dropping names from the end, keeping looked_through", () => {
-    const recorder = createAgenticAskProgressRecorderV1({ sink: () => undefined, sources, signal: new AbortController().signal });
+    const recorder = createAgenticAskProgressRecorderV1({ sink: () => undefined, version: 2, sources, signal: new AbortController().signal });
     const items = many(100, index => `Decision ${index} ${"x".repeat(980)}`);
     recorder.research.given(items);
     const receipt = recorder.receipt(10);
@@ -393,7 +390,7 @@ describe("agentic Ask progress recorder", () => {
 
   it("maps searched sources from the catalog, never a selector, and drops one with no displayable tool id", () => {
     const events: PersonAskProgressStepEventV3[] = [];
-    const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
+    const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, version: 2, sources, signal: new AbortController().signal });
     recorder.research.reads(true);
     recorder.research.returned("search", undefined, [launch]);
     recorder.research.returned("list", "slack", [launch]);
@@ -412,7 +409,7 @@ describe("agentic Ask progress recorder", () => {
 
   it("counts as found only what no earlier search or list gave research", () => {
     const events: PersonAskProgressStepEventV3[] = [];
-    const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
+    const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, version: 2, sources, signal: new AbortController().signal });
     const step = (reads: () => void) => { recorder.research.reads(true); reads(); recorder.research.reads_done(); };
     step(() => recorder.research.returned("search", "document", [prd]));
     step(() => recorder.research.returned("search", "meeting", [launch, prd]));
@@ -420,8 +417,8 @@ describe("agentic Ask progress recorder", () => {
     expect(events.filter(event => event.type === "searched").map(event => event.type === "searched" ? event.found : null)).toEqual([1, 1, 3]);
   });
 
-  it("counts in V3 each item a research call was shown, as a row or in full, once, while V1 counts what it read in full", () => {
-    const run = (version: 1 | 3) => {
+  it("counts in V3 each item a research call was shown, as a row or in full, once, while V2 counts what it read in full", () => {
+    const run = (version: 2 | 3) => {
       const recorder = createAgenticAskProgressRecorderV1({ sink: () => undefined, version, sources, signal: new AbortController().signal });
       recorder.research.given([launch], [launch, ticket("1"), ticket("2")]);
       // The next call shows both rows again and reads the PRD in full.
@@ -432,13 +429,13 @@ describe("agentic Ask progress recorder", () => {
     expect(validatePersonAskReceiptV3(v3)).toEqual(v3);
     expect(v3.looked_through).toBe(4);
     expect(v3.rows.flatMap(row => row.type === "read" ? row.items.map(item => item.label) : [])).toEqual(["Launch review", "Launch PRD"]);
-    expect(run(1).looked_through).toBe(2);
+    expect(run(2).looked_through).toBe(2);
   });
 
   it("sends nothing after the run's signal aborts or the run settles, and drops an item its projection refuses", () => {
     const events: PersonAskProgressStepEventV3[] = [];
     const controller = new AbortController();
-    const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: controller.signal });
+    const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, version: 2, sources, signal: controller.signal });
     const invalid: EvidenceDeskItemV2 = { ...launch, id: "desk_bad", label: "", citation: { ...launch.citation, atom_id: canonicalSha256("bad") } as EvidenceDeskItemV2["citation"] };
     recorder.research.given([invalid, launch]);
     expect(events).toEqual([{ type: "read", items: [named(launch)] }]);
@@ -447,7 +444,7 @@ describe("agentic Ask progress recorder", () => {
     recorder.stage("writing");
     expect(events).toHaveLength(1);
     expect(recorder.named_citation_digests()).toEqual([digest(launch)]);
-    const settled = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
+    const settled = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, version: 2, sources, signal: new AbortController().signal });
     settled.settle();
     settled.research.reads(true);
     settled.research.given([launch]);
@@ -455,7 +452,7 @@ describe("agentic Ask progress recorder", () => {
     expect(settled.named_citation_digests()).toEqual([]);
   });
 
-  it("names follow-ups only in progress V2 (ADR-0040): a V1 run reads one but never names it or its source", () => {
+  it("names follow-ups and their source in progress V2 (ADR-0040), never their text", () => {
     const withFollowUps = [...sources, { source_id: "follow_ups", kinds: ["follow_up"] }];
     const followUp: EvidenceDeskItemV2 = Object.freeze<EvidenceDeskItemV2>({
       id: "desk_follow_up", kind: "follow_up", text: `Owner: Mara Lind. ${CANARY.body}`, label: "Ship fan curve v2", visibility: "team",
@@ -483,21 +480,13 @@ describe("agentic Ask progress recorder", () => {
     expect(validatePersonAskReceiptV2(v2Receipt)).toEqual(v2Receipt);
     expect(v2Receipt.rows.at(-1)).toEqual({ type: "read", items: [asV7(followUp), asV7(launch)] });
     expect(JSON.stringify(v2)).not.toContain(CANARY.body);
-
-    // The V6 answer's stream: the follow-up counts as read, but neither it nor its source kind is ever named.
-    const v1: PersonAskProgressStepEventV3[] = [];
-    const v1Receipt = run(createAgenticAskProgressRecorderV1({ sink: event => { v1.push(event); }, sources: withFollowUps, signal: new AbortController().signal }));
-    for (const event of v1) expect(validatePersonAskProgressStepEventV1(event)).toEqual(event);
-    expect(JSON.stringify(v1)).not.toContain("follow_up");
-    expect(v1.filter(event => event.type === "read")).toEqual([{ type: "read", items: [named(launch)] }]);
-    expect(validatePersonAskReceiptV1(v1Receipt)).toEqual(v1Receipt);
-    expect(v1Receipt.looked_through).toBe(2);
+    expect(v2Receipt.looked_through).toBe(2);
   });
 
   it("shares one request's names across its attempts: none named twice, all within the bound, each attempt's digests its own", () => {
     const request = createAgenticAskProgressRequestV1();
     const events: PersonAskProgressStepEventV3[] = [];
-    const attempt = () => createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal, named: request.named });
+    const attempt = () => createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, version: 2, sources, signal: new AbortController().signal, named: request.named });
     const items = many(120);
     const first = attempt();
     first.research.given(items.slice(0, 90));

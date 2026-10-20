@@ -24,10 +24,11 @@ import { askProgressCodec } from './person-ask-progress-codec.js';
  *
  * The V7 answer on `POST /v6/person/ask` streams the same way as Ask progress
  * V2 (`person-ask-progress-v2.ts`), which only adds follow-ups; V1 never
- * carries one.
+ * carries one. The Authority stopped streaming V1 on 2026-10-19: `/v5` answers
+ * in JSON whatever the header says. Clients keep this decoder.
  */
 
-/** The opt-in request header. On `/v5/person/ask` only this exact value streams; `/v6` takes `PERSON_ASK_PROGRESS_HEADER_VALUE_V2`. */
+/** The opt-in request header. This value asked `/v5/person/ask` for V1, which no longer streams; `/v6` takes `PERSON_ASK_PROGRESS_HEADER_VALUE_V2`. */
 export const PERSON_ASK_PROGRESS_HEADER_V1 = 'x-echo-ask-progress';
 export const PERSON_ASK_PROGRESS_HEADER_VALUE_V1 = '1';
 /** The streamed response's media type; a JSON response means the Authority did not stream. */
