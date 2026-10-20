@@ -39,16 +39,14 @@ every round. Fresh runtime and journey evidence is still required for each run.
 For staging resets, reuse the designated existing Slack app. Retain its app ID
 in the operator handoff. When host `resume` reaches `connect_slack_in_app`, the
 human reruns `sudo ./onboard-clean-v1.sh resume --existing-slack-app <app-id>` with
-that ID. The wrapper emits the exact `person tools setup --tool slack
---existing-app <app-id>` command for the owner Mac. With no choice it asks for
-one instead of printing bare setup. A reset clears ECHO's setup state; it does not delete
-the app in Slack. If setup already saved that app's credentials and consent
-needs resuming, use `--reconnect` instead. Never combine the two flags. Creating
-a new Slack app requires the owner's explicit `resume --create-slack-app` choice
-for that invocation; do not default to bare setup after a reset. These flags
-select only the printed handoff and never create an app or grant consent on the
-host. The linked [existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection)
-owns the hidden prompts and connection checks.
+that ID; the [existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection)
+owns the owner-Mac command it prints, the hidden prompts and the connection
+checks. A reset clears ECHO's setup state; it does not delete the app in Slack.
+If setup already saved that app's credentials and consent needs resuming, use
+`--reconnect` instead. Never combine the two flags. Creating a new Slack app
+requires the owner's explicit `resume --create-slack-app` choice for that
+invocation; do not default to bare setup after a reset. These flags select only
+the printed handoff and never create an app or grant consent on the host.
 
 ## Coordinated server and client release
 
@@ -97,7 +95,7 @@ entry in its signed feed.
 | Compile or test locally | [`npm run authority:local`](../../README.md#local-authority-exercise), which needs a local Nango key file for `up` and `reset`. For the simulated staging journey, run `npm run test:staging-journey`, fix failures and run `npm run check` before review. Local tests are not live delivery proof. |
 | Inspect staging | `authority:staging status` for the slot; the release CLI's fresh `status` action for a current-host release; human host-wrapper `status` during initial onboarding. |
 | Capture full research traces in LangSmith | Use the [staging tracing selection](../../deploy/organization-authority/README.md#langsmith-staging-tracing). The human chooses the external project, region and duration (a timed window or until disabled) and enters its API key at the installed wrapper's hidden prompt. The operator verifies a normal Ask trace and the finite export status. This does not replace release or canary approval. |
-| Rehearse staged connector intake | After deploying the explicit staging connector profile through the existing release/onboarding lanes, use the [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal) from the owner Mac. It uses the existing Person session for bounded, release/profile-bound observations. It neither deploys nor resets the host, enables Jira Ask, or grants provider qualification. |
+| Verify a staging Jira read | After deploying the explicit staging connector profile through the existing release/onboarding lanes, use the [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal)'s `status` and `verify-read` from the owner Mac; it captures nothing. It uses the existing Person session for bounded, release/profile-bound observations. It neither deploys nor resets the host, enables Jira Ask, or grants provider qualification. |
 | Update the current accepted host | Follow the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane): install reviewed tooling (repeat `inspect-install`, then `install --inspection <succeeded-inspect-install-receipt>`, until every tool is `new`), stage, canary, human approval of the canary meeting (desktop or Slack), operator client checks, human final decision, promote. For a matching client release, also follow [coordinated server and client release](../../deploy/release/README.md#coordinated-server-and-client-release). Execute reviewed merged tooling from a clean checkout. `stage` accepts only the current persisted baseline and never migrates older state. |
 | Move staging from an older baseline to a V14 release | Authority V14 and control-plane V4 are fresh-state only; no migration reaches them ([release guide](../../deploy/release/README.md)). With no live users, first install the target release's reviewed host tooling through the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane) while the old rehearsal is still present: the transfer's `doctor` and `prepare`, `resume --existing-slack-app` and `langsmith-tracing` all run the installed wrapper, and the lane refuses to install between the reset and `prepare`. Then the human host operator runs the [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state) `sudo ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users`, then prepares the organization again with the V14 release record and matching runtime profile. The reset empties the record log too, so earlier approvals do not carry over, and no organization meeting source is prepared: meetings come only from a person's own sources. To keep provider credentials, use the provider-reuse row below instead. Continue with onboarding and the canary gates. |
 | First onboarding | Follow [resumable onboarding](../../deploy/organization-authority/README.md#resumable-initial-owner-onboarding) and the actor table below. Host-local onboarding remains in the human Session Manager lane. An original pre-Slack candidate staged during initial onboarding may use the documented human-only continuation after Slack setup and personal linking; ordinary `resume` remains blocked while any candidate is staged. |
@@ -136,10 +134,9 @@ Use the actor below; preserve the underlying identity, approval and health check
 
 In Session Manager, run each installed host wrapper from
 `/srv/echo-authority-clean-v1` as `sudo ./<wrapper> ...`, including the rerun
-commands a wrapper prints. This is non-interactive elevation scoped to that one
-command; never use `sudo -i`, `su` or a root shell. Without `sudo`, the
-root-owned deployment directory and service-owned `clean-data` make a wrapper
-fail with a misleading "operation in progress" or "run prepare first" error.
+commands a wrapper prints; never use `sudo -i`, `su` or a root shell. The
+[deployment guide](../../deploy/organization-authority/README.md) explains why
+an unelevated run fails.
 
 | Task | Actor |
 | --- | --- |
@@ -155,15 +152,13 @@ fail with a misleading "operation in progress" or "run prepare first" error.
 
 For browser onboarding, the local operator privately transfers the invitation
 and accepted record through the reviewed export CLI, verifies the matching
-command-line kit, runs `"<release-matched-kit>/Start-ECHO.sh" --install-only`,
-then runs
-`"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser`.
-Keep invitation mode `0600`; never print or paste its grant. The human completes
-browser login, any required logout, and Slack setup and connect: an owner follows
-the organization Slack setup row above, then everyone runs
-`person tools connect --tool slack` (or, without a browser,
-`person tools connect --tool slack --method dm-code --slack-user U…`). Export
-does not advance onboarding.
+command-line kit, then installs it and runs `person login` as the
+[invitation export guide](../../deploy/organization-authority/README.md#private-invitation-export-to-the-initial-owner-mac)
+shows. Keep invitation mode `0600`; never print or paste its grant. The human
+completes browser login, any required logout, and Slack setup and connect: an
+owner follows the organization Slack setup row above, then everyone runs
+`person tools connect --tool slack` (or its DM-code fallback without a
+browser). Export does not advance onboarding.
 
 For the ordinary release-canary path, after initial approval the local operator
 on the designated owner Mac verifies the kit-installed client against the
@@ -188,15 +183,13 @@ and owner/employee read checks instead of this single-canary query.
 For an update, use the candidate's two checks in the
 [release loop](../../deploy/release/README.md#ec2-authority-replacement), which
 include a cited Ask. After `stage` and synthetic `canary`, stop for the founder's
-approval of the canary meeting, on the desktop or in Slack if linked. The local operator installs the verified candidate
-client and runs its checks. Only after both checks pass, show their evidence
-and ask the founder for the final decision on that exact candidate.
-Preserve the separate release- and client-digest-bound authorization before
-`promote`. For a coordinated release, retain the exact prepared manifest,
-channel, all four targets and predecessor binding in the existing feed approval
-records as well. Never create it merely because the PR was approved or the
-founder authorized automation. Nor create either approval because the candidate
-was staged. If checks fail, run a fresh release `status` action and roll back
+approval of the canary meeting, on the desktop or in Slack if linked. Only after
+the operator's candidate-client checks pass, show their evidence and ask the
+founder for the final decision on that exact candidate. Preserve the separate
+release- and client-digest-bound authorization before `promote`, and the
+feed approvals above for a coordinated release. Never create it merely because
+the PR was approved or the founder authorized automation. Nor create either
+approval because the candidate was staged. If checks fail, run a fresh release `status` action and roll back
 the exact candidate.
 
 ## Evidence and completion
@@ -234,18 +227,15 @@ activation.
 
 ## Exceptions and recovery
 
-Use the [release guide](../../deploy/release/README.md#automated-current-host-staging-lane)
-for `inspect-install` and its hash inventory. [Environment drift](../../deploy/release/README.md#environment-drift-before-staging)
+[Environment drift](../../deploy/release/README.md#environment-drift-before-staging)
 blocks staging: stop and leave the investigation to the human host operator.
 Never edit environment files by hand; preserving observability takes precedence
 over making a status check pass. Before installing the current release tooling,
-run a distinct `inspect-install` plan with the same inputs and
-`--previous-tooling-source`. Its `ready` result confirms that
-`clean-data/release/environment-repair.pending.json` is absent. Any other
-inspection refusal follows its existing diagnostic and recovery rules. A present
-or unsafe repair marker requires the human host operator's repair lane. Finish
-or poll every unfinished
-release receipt with the commit that planned it before switching tooling.
+run the distinct `inspect-install` plan the
+[release guide](../../deploy/release/README.md#live-operator-boundary)
+describes; a present or unsafe repair marker requires the human host
+operator's repair lane. Finish or poll every unfinished release receipt with the
+commit that planned it before switching tooling.
 
 One operator controls the slot. Coding agents do not start interactive SSM sessions.
 Agents use only the reviewed repository CLIs for bounded remote actions, never
