@@ -13,7 +13,6 @@ import {
   validateProjectContextDissociateV1,
   validateProjectContextFeedV1,
   validateProjectContextReadV1,
-  validateProjectContextReadRequestV1,
   validateProjectContextSearchV1,
   validateProjectContextSearchResultV1,
   validateProjectCreateReceiptV1,
@@ -237,7 +236,6 @@ describe('project context V1 public codecs', () => {
     ['project page', validateProjectPageRequestV1, { limit: 10, cursor: 'AQ' }],
     ['context browse', validateProjectContextBrowseV1, { project_id, limit: 10, cursor: 'AQ' }],
     ['context search', validateProjectContextSearchV1, { project_id, query: 'Source', limit: 10, cursor: 'AQ' }],
-    ['context read request', validateProjectContextReadRequestV1, { project_id, context_id }],
   ] as const)('admits the exact V1 %s request shape and rejects forged version/global fields', (_name, validate, valid) => {
     expect(validate(valid)).toBeTruthy();
     expect(() => validate({ ...valid, schema_version: 2 })).toThrow();

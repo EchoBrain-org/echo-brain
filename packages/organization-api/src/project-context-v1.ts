@@ -155,7 +155,6 @@ export interface ProjectContextDissociateV1 extends Omit<ProjectContextAssociate
 export interface ProjectPageRequestV1 { readonly limit?: number; readonly cursor?: string }
 export interface ProjectContextBrowseV1 { readonly project_id: ProjectIdV1; readonly limit?: number; readonly cursor?: string }
 export interface ProjectContextSearchV1 extends ProjectContextBrowseV1 { readonly query: string }
-export interface ProjectContextReadRequestV1 { readonly project_id: ProjectIdV1; readonly context_id: string }
 export type ProjectContextAudienceV1 =
   | { readonly kind: 'only_me' }
   | { readonly kind: 'team' }
@@ -372,10 +371,6 @@ function browse(value: unknown, search: boolean): ProjectContextBrowseV1 | Proje
 }
 export function validateProjectContextBrowseV1(value: unknown): ProjectContextBrowseV1 { return browse(value, false) as ProjectContextBrowseV1; }
 export function validateProjectContextSearchV1(value: unknown): ProjectContextSearchV1 { return browse(value, true) as ProjectContextSearchV1; }
-export function validateProjectContextReadRequestV1(value: unknown): ProjectContextReadRequestV1 {
-  const record = snapshot(value, 'Project context read request'); assertExactKeys(record, ['project_id', 'context_id'], 'Project context read request');
-  return { project_id: project(record, 'Project context read request'), context_id: validatePersonUploadContextId(record.context_id) };
-}
 function item(value: unknown): ProjectContextItemV1 {
   const record = object(value, 'Project context item'); assertExactKeys(record, ['context_id', 'received_at', 'title', 'excerpt', 'audience'], 'Project context item');
   validatePersonUploadContextId(record.context_id); assertTimestamp(record.received_at, 'Project context item received_at'); text(record.title, 'Project context item title', 200); text(record.excerpt, 'Project context item excerpt', 1200, true);
