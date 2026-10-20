@@ -185,9 +185,6 @@ readers to the dates their sources declare.
   can see, from the optional `project_names` its connector opens with, read
   locally with no provider call; each connection pins and fences them
   (`containerProjects` in `providers/shared/src/person-project-mapping-v1.ts`).
-- **Project settings.** A tool's item connector also carries its
-  `project_setting`, which the projects source reads as the asker
-  ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md#sources)).
 
 Slack registers no containers: no Slack reader is composed.
 

@@ -29,12 +29,12 @@ export interface WorkspaceSourceDescriptorV1 extends Omit<PersonLiveSourceDescri
 
 export const PROJECTS_SOURCE_DESCRIPTOR_V1: WorkspaceSourceDescriptorV1 = Object.freeze({
   source_id: 'projects', kind: 'project', selector: 'projects', metadata_only_list: false,
-  description: "Projects the asker belongs to: each project's name, whether it is active or archived, the asker's role in it, its leads and members, and its Jira project key and number of Confluence spaces where those tools are set up.",
+  description: "Projects the asker belongs to: each project's name, whether it is active or archived, the asker's role in it, and its leads and members.",
   capabilities: Object.freeze({
     filters: Object.freeze({ status: Object.freeze(['active', 'archived']), role: Object.freeze(['lead', 'member']) }),
     dates: Object.freeze({ created: 'when the project was created in ECHO; every project has it' }),
     any_date: true,
-    // A project's Jira project and Confluence spaces are named in its text; their own sources name the projects mapped to them.
+    // A project's Jira project and Confluence spaces are their own sources, which name the projects mapped to them.
     links: Object.freeze(['members']),
   }),
 });

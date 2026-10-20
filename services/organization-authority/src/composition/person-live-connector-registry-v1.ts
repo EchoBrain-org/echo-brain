@@ -2,7 +2,7 @@ import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api
 import { liveSourceDescriptorV2, type EvidenceSourceCapabilitiesV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type {
-  OpenedPersonLiveConnectorV1, PersonContextLiveApplicationV1, PersonLiveConnectorDefinitionV1, PersonLiveProjectSettingV1,
+  OpenedPersonLiveConnectorV1, PersonContextLiveApplicationV1, PersonLiveConnectorDefinitionV1,
 } from '../application/ports/person-context-live-runtime-v1.js';
 
 /**
@@ -102,18 +102,18 @@ type PersonToolLiveRuntimeV1 = Pick<OpenedPersonLiveConnectorV1, 'owners' | 'clo
 
 /**
  * A tool's live connectors (research tool contract v1): its items and, for the V8 answer, its containers, over one runtime
- * that `open` opens. The tool, its connection routes, its project setting and its assignee accounts are the items
- * connector's alone, so the person's tools and routes list each once.
+ * that `open` opens. The tool, its connection routes and its assignee accounts are the items connector's alone, so the
+ * person's tools and routes list each once.
  */
 export function personToolLiveConnectorsV1<R extends PersonToolLiveRuntimeV1>(connectors: {
   readonly items: Omit<PersonLiveConnectorDefinitionV1, 'open'>; readonly containers: Omit<PersonLiveConnectorDefinitionV1, 'open'>;
-}, setting: (runtime: R) => PersonLiveProjectSettingV1, open: (...parameters: OpenParametersV1) => R): readonly PersonLiveConnectorDefinitionV1[] {
+}, open: (...parameters: OpenParametersV1) => R): readonly PersonLiveConnectorDefinitionV1[] {
   const share = sharePersonLiveRuntimeV1(open);
   return Object.freeze([
     Object.freeze({ ...connectors.items, open: (...parameters: OpenParametersV1) => {
       const { runtime, close } = share(...parameters);
       return Object.freeze({ application: runtime.application, connection_http: runtime.connection_http, ...(runtime.owners === undefined ? {} : { owners: runtime.owners }),
-        tools: (access_token: string) => runtime.tools(access_token), project_setting: Object.freeze(setting(runtime)), close });
+        tools: (access_token: string) => runtime.tools(access_token), close });
     } }),
     Object.freeze({ ...connectors.containers, open: (...parameters: OpenParametersV1) => {
       const { runtime, close } = share(...parameters);

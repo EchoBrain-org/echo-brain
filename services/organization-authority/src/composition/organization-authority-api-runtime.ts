@@ -60,7 +60,7 @@ import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from './person-workspace-evidence-v1.js';
 import type {
-  OpenedPersonLiveConnectorV1, PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1, PersonLiveConnectorSourceV1, PersonLiveProjectSettingV1,
+  OpenedPersonLiveConnectorV1, PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1, PersonLiveConnectorSourceV1,
 } from '../application/ports/person-context-live-runtime-v1.js';
 import { personLiveConnectorDefinitionsV1 } from './person-live-connector-registry-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
@@ -296,11 +296,6 @@ export async function startOrganizationAuthorityApiRuntime(
     for (const definition of connectorDefinitions) {
       liveConnectors.push({ definition, runtime: definition.open(sessions, authorizeLiveProject, projectNames) });
     }
-    /** A tool's saved setting for each ECHO project, from the connector that carries it, for the projects source to name. */
-    const projectSetting = <T extends PersonLiveProjectSettingV1['tool']>(tool: T) => liveConnectors.map(({ runtime }) => runtime.project_setting)
-      .find((value): value is Extract<PersonLiveProjectSettingV1, { readonly tool: T }> => value?.tool === tool);
-    const jiraSetting = projectSetting('jira');
-    const confluenceSetting = projectSetting('confluence');
     const liveSources: readonly PersonLiveConnectorSourceV1[] = liveConnectors.map(({ definition, runtime }) => ({
       descriptor: definition.descriptor, scopes: definition.scopes, minimum_response_version: definition.minimum_response_version,
       application: runtime.application, ...(runtime.tools === undefined ? {} : { tools: runtime.tools.bind(runtime) }),
@@ -408,10 +403,7 @@ export async function startOrganizationAuthorityApiRuntime(
     // projects, people and tools as the project pages and the tools page show them (research tool contract v1), each
     // release audited without content.
     const followUps = runs === undefined ? undefined : { runs, items, people, records: recordSearch };
-    const workspace = {
-      projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools,
-      ...(jiraSetting === undefined ? {} : { jira: jiraSetting }), ...(confluenceSetting === undefined ? {} : { confluence: confluenceSetting }),
-    };
+    const workspace = { projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools };
     // The staging research evaluation asks a question as `/v7` does, on the same sources.
     const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
       ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources, ...(followUps === undefined ? {} : { follow_ups: followUps }), workspace })

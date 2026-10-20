@@ -89,6 +89,5 @@ export function openJiraPersonLiveRuntimeV1(options: {
 
 /** Jira's live connectors (research tool contract v1): its issues and, for the V8 answer, its projects, over one runtime. */
 export function jiraPersonLiveConnectorsV1(open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => OpenedJiraPersonLiveRuntimeV1): readonly PersonLiveConnectorDefinitionV1[] {
-  return personToolLiveConnectorsV1({ items: JIRA_LIVE_CONNECTOR_V1, containers: JIRA_PROJECTS_LIVE_CONNECTOR_V1 },
-    runtime => ({ tool: 'jira', projectRead: input => runtime.application.projectRead(input) }), open);
+  return personToolLiveConnectorsV1({ items: JIRA_LIVE_CONNECTOR_V1, containers: JIRA_PROJECTS_LIVE_CONNECTOR_V1 }, open);
 }

@@ -88,6 +88,5 @@ export function openConfluencePersonLiveRuntimeV1(options: {
 
 /** Confluence's live connectors (research tool contract v1): its pages and, for the V8 answer, its spaces, over one runtime. */
 export function confluencePersonLiveConnectorsV1(open: (...parameters: Parameters<PersonLiveConnectorDefinitionV1['open']>) => OpenedConfluencePersonLiveRuntimeV1): readonly PersonLiveConnectorDefinitionV1[] {
-  return personToolLiveConnectorsV1({ items: CONFLUENCE_LIVE_CONNECTOR_V1, containers: CONFLUENCE_SPACES_LIVE_CONNECTOR_V1 },
-    runtime => ({ tool: 'confluence', projectRead: input => runtime.application.projectRead(input) }), open);
+  return personToolLiveConnectorsV1({ items: CONFLUENCE_LIVE_CONNECTOR_V1, containers: CONFLUENCE_SPACES_LIVE_CONNECTOR_V1 }, open);
 }

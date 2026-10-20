@@ -37,19 +37,10 @@ export interface PersonLiveConnectorDefinitionV1 {
   /** A connector whose containers name their mapped ECHO projects reads `project_names`; any other ignores it. */
   open(authentication: Parameters<PersonContextLiveRuntimeFactoryV1<PersonLiveEvidenceCitationV1>>[0], authorize_project: PersonContextProjectAuthorizationV1, project_names?: PersonContextProjectNamesV1): OpenedPersonLiveConnectorV1;
 }
-/**
- * A tool's saved setting for one ECHO project, as its project read returns it to the project's members (research tool
- * contract v1): Jira's project, or Confluence's spaces. A project item names it beside its members.
- */
-export type PersonLiveProjectSettingV1 =
-  | { readonly tool: 'jira'; projectRead(input: { readonly access_token: string; readonly request: unknown }): { readonly mapping: { readonly project_key: string } | null } }
-  | { readonly tool: 'confluence'; projectRead(input: { readonly access_token: string; readonly request: unknown }): { readonly mapping: { readonly space_ids: readonly string[] } | null } };
 export interface OpenedPersonLiveConnectorV1 extends Omit<OpenedPersonContextLiveRuntimeV1<PersonLiveEvidenceCitationV1>, 'connection_http'> {
   readonly connection_http?: ProviderHttpApplicationV1;
   /** A ticket tool's assignee accounts, for matching an impact check's owners to members; absent for tools without them. */
   readonly owners?: TicketOwnerAccountsV1;
-  /** The tool's saved setting for each ECHO project; only the connector that owns the tool's routes carries it. */
-  readonly project_setting?: PersonLiveProjectSettingV1;
 }
 export interface PersonLiveConnectorSourceV1 extends Omit<PersonLiveConnectorDefinitionV1, 'open'> {
   readonly application: PersonContextLiveApplicationV1<PersonLiveEvidenceCitationV1>;

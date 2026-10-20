@@ -41,11 +41,6 @@ import {
  * list. A request reads what its scope shows once, at its first call, and audits every release before it leaves.
  */
 
-/** A tool's saved setting for a project, as that tool's project read returns it to the project's members. */
-export interface PersonWorkspaceProjectSettingV1<M> {
-  projectRead(input: { readonly access_token: string; readonly request: unknown }): { readonly mapping: M | null };
-}
-
 /** Where the workspace sources read. */
 export interface PersonWorkspaceSourcesV1 {
   /** The asker's project list (V2), each project's roster and the organization directory: each read authorized and audited there. */
@@ -54,10 +49,6 @@ export interface PersonWorkspaceSourcesV1 {
   readonly grants: (person: PersonAccessAuthorization) => readonly Pick<ProjectMembershipGrantV1, 'project_id' | 'project_membership_id'>[];
   /** Whether each released person is still an active member of the organization. The checks read it. */
   readonly people: Pick<SqliteOpenItemPeopleV1, 'people'>;
-  /** Jira's saved project for each project; absent where Jira is not set up. */
-  readonly jira?: PersonWorkspaceProjectSettingV1<{ readonly project_key: string }>;
-  /** Confluence's saved spaces for each project; absent where Confluence is not set up. */
-  readonly confluence?: PersonWorkspaceProjectSettingV1<{ readonly space_ids: readonly string[] }>;
   /** The asker's tools, as the person tools list (`/v4/person/tools`) lists them, read locally with no provider call. */
   readonly tools: (access_token: string) => Promise<readonly OrganizationPersonToolV4[]>;
 }
@@ -130,9 +121,6 @@ interface View {
   readonly members: ReadonlyMap<string, readonly ProjectMemberV1[]>;
   /** Each member's projects in scope, in the projects' order, with their role in each. */
   readonly memberships: ReadonlyMap<string, readonly { readonly project: ProjectSummaryV2; readonly role: ProjectRoleV1 }[]>;
-  /** Each project's Jira key and Confluence space count; absent where that tool is not set up, null where the project has none. */
-  readonly jira?: ReadonlyMap<string, string | null>;
-  readonly confluence?: ReadonlyMap<string, number | null>;
 }
 /** What a release must still be at a check. */
 type Release =
@@ -260,17 +248,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
         memberships.set(member.membership_id, entries);
       }
     }
-    const setting = <M, V>(reader: PersonWorkspaceProjectSettingV1<M> | undefined, value: (mapping: M) => V): ReadonlyMap<string, V | null> | undefined => {
-      if (reader === undefined) return undefined;
-      return new Map(projects.map(project => {
-        signal?.throwIfAborted();
-        const { mapping } = reader.projectRead({ access_token: token, request: { schema_version: 1, project_id: project.project_id } });
-        return [project.project_id, mapping === null ? null : value(mapping)];
-      }));
-    };
-    const jira = setting(sources.jira, mapping => mapping.project_key);
-    const confluence = setting(sources.confluence, mapping => mapping.space_ids.length);
-    view = Object.freeze({ projects, grants, members, memberships, ...(jira === undefined ? {} : { jira }), ...(confluence === undefined ? {} : { confluence }) });
+    view = Object.freeze({ projects, grants, members, memberships });
     return view;
   };
   let directory: readonly Person[] | undefined;
@@ -294,11 +272,8 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   const project = (shown: View, value: ProjectSummaryV2, members?: readonly string[]): Shaped | undefined => {
     const roster = shown.members.get(value.project_id) ?? [];
     const leads = roster.filter(member => member.role === 'lead').map(member => member.display_name);
-    const lines = [
-      `Members: ${named(roster.map(member => `${member.display_name} (${member.role})`), PERSON_WORKSPACE_LIMITS_V1.names)}`,
-      ...(shown.jira === undefined ? [] : [`Jira project: ${shown.jira.get(value.project_id) ?? 'none set'}`]),
-      ...(shown.confluence === undefined ? [] : [`Confluence spaces: ${shown.confluence.get(value.project_id) ?? 'none set'}`]),
-    ];
+    // A project's Jira project and Confluence spaces are their own sources, which name the projects mapped to them.
+    const lines = [`Members: ${named(roster.map(member => `${member.display_name} (${member.role})`), PERSON_WORKSPACE_LIMITS_V1.names)}`];
     return item('project', value.project_id, { kind: 'project', project_id: value.project_id, grant: shown.grants.get(value.project_id)! }, {
       ref: `project:${value.project_id}` as const, label: value.name,
       attributes: Object.freeze({ status: value.status, role: value.role, ...(leads.length === 0 ? {} : { leads: named(leads, PERSON_WORKSPACE_LIMITS_V1.leads, false) }) }),
@@ -436,10 +411,10 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
     };
   };
 
-  /** Projects ranked by the query's words in their names or Jira keys, then in their members' names; active, then newest, first. */
+  /** Projects ranked by the query's words in their names, then in their members' names; active, then newest, first. */
   const findProjects = (shown: View, terms: readonly string[], dated: EvidenceDateFilterV1) => shown.projects.flatMap(value => {
     if (!matchesEvidenceDateV1({ created: value.created_at }, dated, 'created')) return [];
-    const own = evidenceWordsV1([value.name, shown.jira?.get(value.project_id)]);
+    const own = evidenceWordsV1([value.name]);
     const members = evidenceWordsV1((shown.members.get(value.project_id) ?? []).map(member => member.display_name));
     const strong = terms.filter(term => own.has(term)).length;
     const weak = terms.filter(term => !own.has(term) && members.has(term)).length;

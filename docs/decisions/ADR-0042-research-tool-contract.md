@@ -179,10 +179,9 @@ the desk (`normalizeAskListArgs` and the search date checks in
 
 - **Projects** are those the asker belongs to, newest first, with the asker's
   role and the project's leads as row facts. A project's text names its
-  members with their roles and, where those tools are set up, its Jira project
-  key and how many Confluence spaces it maps, read through each tool's own
-  project read as the asker. A project Ask reads only its project. Projects
-  declare `count`.
+  members with their roles; its Jira project and Confluence spaces are found
+  through `jira_projects` and `confluence_spaces`. A project Ask reads only its
+  project. Projects declare `count`.
 - **People** are the organization directory, or in a project Ask that
   project's roster. Each names the projects they share with the asker and
   their role in each.
@@ -260,8 +259,7 @@ by name answers or refuses as asked.
   3: one content-free row of kind `echo-person-workspace-release-audit-v1` in
   `authority_person_read_decision_audit_v2`, with the source, the operation,
   and each item's kind, id, whether it was released beside a row, and a digest
-  of its released fields
-  (`services/organization-authority/src/composition/person-workspace-release-audit-v1.ts`).
+  of its released fields (`SqlitePersonAgenticAskAuditV1.forWorkspaceRequest`).
   Empty releases are audited too. A container release is its connector's
   durable live-read audit. A container's citation commits to no text, so the
   audit commits its released value.
@@ -294,9 +292,10 @@ The counts an Ask records for its research, and container calls'
 - **Connector items carry no links yet.** Jira issues and Confluence pages
   declare none. An opened ticket still discovers its linked tickets as before.
 - **Containers declare no dates, filters or links.**
-- **Projects link only their members.** Their Jira key and Confluence space
-  count are text. `jira_projects` and `confluence_spaces` name the ECHO
-  projects mapped to them.
+- **Projects link only their members.** A project's Jira project and
+  Confluence spaces are found through `jira_projects` and `confluence_spaces`,
+  which name the ECHO projects mapped to them; the founder chose that one
+  direction over also naming them in each project's text.
 - **The receipt still counts only items read in full.** The design left that
   fix outside research.
 - **A task goal sees neither `unchecked` nor the missing-date notice.** No desk
@@ -328,9 +327,8 @@ The workspace sources read existing project, directory and tool state, and
 their audit rows go to the existing read-decision table. The API runtime
 mounts the V8 route (`createPersonLiveAnswerRouteV1(options, 8)`) at `/v7`
 with follow-ups, as `/v6` binds them, and the workspace: the project context
-application, the project grants, the people read, the person tools list and,
-where set up, each tool's project setting, with
-`createPersonWorkspaceReleaseAuditV1`. Without the workspace option a V8 desk
+application, the project grants, the people read and the person tools list,
+each release witnessed by `forWorkspaceRequest`. Without the workspace option a V8 desk
 binds no workspace and raises no error. The composition root registers each
 tool's items and containers over one runtime (`jiraPersonLiveConnectorsV1`,
 `confluencePersonLiveConnectorsV1`), and the API runtime opens every
@@ -376,8 +374,8 @@ in `services/organization-authority/test/` unless shown in full:
   rechecked, with the ECHO names read after the provider answers
   (`providers/jira/test/jira-person-live-container-reader-v1.test.ts`,
   `providers/confluence/test/confluence-person-live-container-reader-v1.test.ts`);
-- containers and each tool's project setting bind for the V8 Ask alone and
-  name only the asker's projects (`cross-source-ask-e2e.test.ts`);
+- containers bind for the V8 Ask alone and name only the asker's projects
+  (`cross-source-ask-e2e.test.ts`);
 - an unchecked count never counts records outside the asker's scope
   (`person-evidence-desk-records.test.ts`);
 - every answer version below V8 refuses a workspace or container citation

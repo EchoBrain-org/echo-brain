@@ -81,17 +81,16 @@ it('registers two page connectors through one lifecycle, catalog, HTTP and versi
   for (const call of calls) expect(call.close).toHaveBeenCalledTimes(1);
 });
 
-it('binds a tool\'s containers and its project setting for the V8 Ask alone, naming only the asker\'s projects (research tool contract v1)', async () => {
+it('binds a tool\'s containers for the V8 Ask alone, naming only the asker\'s projects (research tool contract v1)', async () => {
   const f = await fixture();
   const empty = Object.freeze({ items: Object.freeze([]), truncated: false, receipt_digests: Object.freeze([]) });
   const reader = (): PersonLiveEvidenceSourceV1 => ({ tool_id: 'jira', search: vi.fn(async () => empty), open: vi.fn(async () => empty), list: vi.fn(async () => empty),
     revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) });
   const names: (PersonContextProjectNamesV1 | undefined)[] = [];
-  const projectRead = vi.fn(() => ({ mapping: { project_key: 'ATL' } }));
   const live_connectors: PersonLiveConnectorDefinitionV1[] = [
     { ...JIRA_LIVE_CONNECTOR_V1, open: (_authentication, _authorize, project_names) => {
       names.push(project_names);
-      return { application: { source: async () => reader() }, close: vi.fn(), project_setting: { tool: 'jira', projectRead } };
+      return { application: { source: async () => reader() }, close: vi.fn() };
     } },
     { ...JIRA_PROJECTS_LIVE_CONNECTOR_V1, open: (_authentication, _authorize, project_names) => {
       names.push(project_names);
@@ -128,16 +127,14 @@ it('binds a tool\'s containers and its project setting for the V8 Ask alone, nam
     const v6Catalog = prompts[0]!.source_catalog!.map(entry => entry.source);
     expect(v6Catalog).toContain(JIRA_LIVE_CONNECTOR_V1.descriptor.selector);
     for (const source of [JIRA_PROJECTS_LIVE_CONNECTOR_V1.descriptor.selector, 'projects', 'people', 'tools']) expect(v6Catalog).not.toContain(source);
-    expect(projectRead).not.toHaveBeenCalled();
 
     prompts.length = 0;
     const v7 = await ask(7);
     expect(v7.status).toBe(200);
     expect(await v7.json()).toMatchObject({ schema_version: 8 });
     expect(prompts[0]!.source_catalog!.map(entry => entry.source)).toEqual(expect.arrayContaining([JIRA_LIVE_CONNECTOR_V1.descriptor.selector, 'jira_projects', 'projects', 'people', 'tools']));
-    // The project's Jira project came from the tool's own project read, as the asker, and reached research in its text.
-    expect(projectRead).toHaveBeenCalledWith({ access_token: token, request: { schema_version: 1, project_id } });
-    expect(JSON.stringify(prompts[1])).toContain('Jira project: ATL');
+    // Research listed the asker's project: its row names its members, and its Jira project is the jira_projects source's.
+    expect(JSON.stringify(prompts[1])).toContain('Atlas');
   } finally { await runtime.close(); }
 });
 

@@ -44,7 +44,7 @@ function tool(tool_id: string, display_name: string, personal_status: Organizati
 /**
  * Ari's organization over a real Authority database (the project context fixture and application). Ari leads Atlas, with
  * Mina Patel and Rafael Moreno; Beacon, with Mina Patel as a second lead; and the archived Comet. Ari is a member of Mina's
- * Echo. Mina's Delta, with S. Okafor, is not Ari's. Atlas has a Jira project and two Confluence spaces; nothing else does.
+ * Echo. Mina's Delta, with S. Okafor, is not Ari's.
  */
 function world() {
   const database = projectContextDatabase(); databases.push(database);
@@ -76,17 +76,6 @@ function world() {
   const delta = create('mina', 'Delta', '2026-10-14T09:00:00.000Z'); set('mina', delta, 'okafor', 'member');
   now = '2026-10-19T09:00:00.000Z';
 
-  /** Each tool's saved project setting, read as the tool's project read reads it: only a member of the project may. */
-  const setting = <M>(mappings: ReadonlyMap<string, M>) => Object.freeze({
-    projectRead: ({ access_token, request: body }: { readonly access_token: string; readonly request: unknown }) => {
-      const project_id = (body as { readonly project_id: string }).project_id;
-      application.readProjectV2(access_token, project_id);
-      const mapping = mappings.get(project_id) ?? null;
-      return Object.freeze({ schema_version: 1 as const, project_id, revision: mapping === null ? null : '00000000-0000-4000-8000-00000000a001', mapping });
-    },
-  });
-  const jira = setting(new Map([[atlas, { cloud_id: CLOUD, project_id: '10001', project_key: 'ATL' }]]));
-  const confluence = setting(new Map([[atlas, { cloud_id: CLOUD, space_ids: ['98304', '131073'] }]]));
   const tools: Record<string, OrganizationPersonToolV4[]> = {
     ari: [tool('jira', 'Jira', 'linked'), tool('confluence', 'Confluence', 'unlinked'), tool('granola', 'Granola', 'revoked'),
       tool('slack', 'Slack', 'unavailable', { organization_setup: 'not_set_up' })],
@@ -97,13 +86,13 @@ function world() {
   const auditFor = (name: Name, request_id: string) => new SqlitePersonAgenticAskAuditV1(database).forWorkspaceRequest({ authority_id: 'authority', state_lineage_id: 'lineage',
     organization_id: PEOPLE[name].organization_id, principal_id: PEOPLE[name].principal_id, membership_id: PEOPLE[name].membership_id, session_family_id: 'session-fixture', request_id });
   /** One Ask's workspace sources for `name`, with the audit rows of its request. */
-  const sources = (name: Name = 'ari', options: { readonly scope?: Scope; readonly settings?: boolean } = {}) => {
+  const sources = (name: Name = 'ari', options: { readonly scope?: Scope } = {}) => {
     const request_id = `ask_${randomUUID()}`;
     const audit = auditFor(name, request_id);
     const workspace = createPersonWorkspaceEvidenceSourcesV1({
       sources: {
         projects: application, grants: personWorkspaceGrantsV1(repository), people: new SqliteOpenItemPeopleV1(database),
-        ...(options.settings === false ? {} : { jira, confluence }), tools: async (token: string) => tools[token] ?? [],
+        tools: async (token: string) => tools[token] ?? [],
       },
       access_token: name, authenticate: () => session(name), scope: options.scope ?? { kind: 'global' }, audit,
     });
@@ -148,10 +137,10 @@ describe('workspace projects as an Ask source (research tool contract v1)', () =
     expect(atlas).toEqual({
       id: `project_${w.atlas}`, kind: 'project', citation: { kind: 'project', project_id: w.atlas }, ref: `project:${w.atlas}`,
       label: 'Atlas', attributes: { status: 'active', role: 'lead', leads: 'Ari' }, dates: { created: '2026-10-01T09:00:00.000Z' },
-      text: 'Members: Ari (lead), Mina Patel (member), Rafael Moreno (member)\nJira project: ATL\nConfluence spaces: 2',
+      text: 'Members: Ari (lead), Mina Patel (member), Rafael Moreno (member)',
       links: { members: [person(ARI), person(MINA), person(RAFAEL)] }, visibility: 'project', receipt_sha256: RECEIPT,
     });
-    expect(result.items[2]!.text).toBe('Members: Ari (lead), Mina Patel (lead)\nJira project: none set\nConfluence spaces: none set');
+    expect(result.items[2]!.text).toBe('Members: Ari (lead), Mina Patel (lead)');
     // Each member once, released beside the page, without links of their own.
     expect(labels(result.linked)).toEqual(['Ari', 'Mina Patel', 'Rafael Moreno']);
     expect(result.linked!.find(item => item.label === 'Rafael Moreno')).toEqual({
@@ -160,14 +149,8 @@ describe('workspace projects as an Ask source (research tool contract v1)', () =
     });
     expect(result).toMatchObject({ truncated: false, page_full: false });
     expect(result.next_cursor).toBeUndefined();
-    // Nothing of Delta, which is not Ari's, nor any tool coordinate of a setting.
-    expect(JSON.stringify(result)).not.toMatch(/Delta|Okafor|98304|10001|00000000-0000-4000-8000-0000000000c1/);
-  });
-
-  it('names no Jira project or Confluence spaces where those tools are not set up', async () => {
-    const w = world();
-    const result = await w.sources('ari', { settings: false }).projects.search({ query: 'Atlas' });
-    expect(result.items.map(item => item.text)).toEqual(['Members: Ari (lead), Mina Patel (member), Rafael Moreno (member)']);
+    // Nothing of Delta, which is not Ari's.
+    expect(JSON.stringify(result)).not.toMatch(/Delta|Okafor/);
   });
 
   it('filters by status and by the asker\'s role before anything is released', async () => {
@@ -218,11 +201,10 @@ describe('workspace projects as an Ask source (research tool contract v1)', () =
     for (const limit of [0, 51, 1.5]) await expect(projects.list({ source: 'projects', limit })).rejects.toThrow(INVALID);
   });
 
-  it('finds projects by the words of their names, their Jira key and their members\' names, best match first, and never one the asker is not in', async () => {
+  it('finds projects by the words of their names and their members\' names, best match first, and never one the asker is not in', async () => {
     const w = world();
     const { projects } = w.sources();
     expect(labels((await projects.search({ query: 'atlas' })).items)).toEqual(['Atlas']);
-    expect(labels((await projects.search({ query: 'ATL' })).items)).toEqual(['Atlas']);
     expect(labels((await projects.search({ query: 'Rafael' })).items)).toEqual(['Atlas']);
     expect(labels((await projects.search({ query: 'Mina Beacon' })).items)).toEqual(['Beacon', 'Echo', 'Atlas']);
     // Equal matches: active projects first, newest first.
