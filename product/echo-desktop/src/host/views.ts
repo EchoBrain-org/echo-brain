@@ -5,12 +5,13 @@ import type {
   Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskRead, AskReceipt, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
   CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
-  ToolAttempt, ToolAttemptStatus, ToolContainerKind, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
+  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  validatePersonAskProgressLineV3, validatePersonAskReceiptV1, validatePersonAskReceiptV2, validatePersonAskReceiptV3, type PersonAskProgressLineV3, type PersonAskReceiptRowV3,
-  type PersonAskReceiptV3, type PersonOpenItemV1, type PersonRunsResultsV1,
+  PERSON_WORKSPACE_CITATION_KINDS_V1, validatePersonAnswerCitationV8, validatePersonAskProgressLineV3, validatePersonAskReceiptV1, validatePersonAskReceiptV2,
+  validatePersonAskReceiptV3, type PersonAnswerCitationV8, type PersonAskProgressLineV3, type PersonAskReceiptRowV3, type PersonAskReceiptV3, type PersonOpenItemV1,
+  type PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
 
@@ -483,51 +484,28 @@ function originalSource(citation: Json, label: string, ref: string | undefined):
 
 /** A follow-up's item id, as the runs API names it. */
 const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
-/** A project's and a member's ids, as the API writes them. */
-const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
-const PROJECT_ID = new RegExp(`^prj_${UUID}$`);
-const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
 /** What the V8 answer cites of your workspace: a project, a person, a tool, or a container in a tool you connected. */
-const WORKSPACE: ReadonlySet<unknown> = new Set(['project', 'person', 'tool', 'tool_container']);
-const CONTAINERS: ReadonlySet<unknown> = new Set<ToolContainerKind>(['jira_project', 'confluence_space', 'slack_channel']);
-
-/** A container's key in its tool ("THERM"), as the contract has it: one line, trimmed and normalized, of at most 256 bytes. */
-function containerKey(value: unknown): string {
-  if (typeof value !== 'string' || value === '' || value.trim() !== value || value.normalize('NFC') !== value || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) ||
-    new TextEncoder().encode(value).length > 256) throw new ViewError();
-  return value;
-}
+const WORKSPACE: ReadonlySet<unknown> = new Set(PERSON_WORKSPACE_CITATION_KINDS_V1);
 
 /**
  * One of your projects, a person in your organization, one of your tools, or
  * a container in a tool you connected (V8 only, research tool contract v1),
- * each by what it names alone. A project and a tool always carry the ref that
- * opens them in ECHO, a person and a container never do, and only a container
- * may say its key; its link opens it in its tool, and its scope and its own id
- * stay behind. Anything else is refused.
+ * exactly as the V8 answer's citation validator takes it, kept by what it
+ * names alone: a container's link opens it in its tool, and its scope and its
+ * own id stay behind. Anything the contract refuses is refused.
  */
-function workspaceSource(item: Json, citation: Json, label: string): AnswerSource {
-  if (item.kind !== citation.kind) throw new ViewError();
-  if (citation.kind === 'project') {
-    const id = citation.project_id;
-    if (typeof id !== 'string' || !PROJECT_ID.test(id) || item.ref !== `project:${id}`) throw new ViewError();
-    return { kind: 'project', label, project_id: id };
+function workspaceSource(raw: unknown): AnswerSource {
+  let cited: PersonAnswerCitationV8;
+  try { cited = validatePersonAnswerCitationV8(raw); } catch { throw new ViewError(); }
+  const { citation, label } = cited;
+  switch (citation.kind) {
+    case 'project': return { kind: 'project', label, project_id: citation.project_id };
+    case 'person': return { kind: 'person', label, membership_id: citation.membership_id };
+    case 'tool': return { kind: 'tool', label, tool_id: citation.tool_id };
+    case 'tool_container':
+      return { kind: 'container', tool_id: citation.tool_id, label, permalink: citation.permalink, container: citation.container, ...(cited.key === undefined ? {} : { key: cited.key }) };
+    default: throw new ViewError();
   }
-  if (citation.kind === 'person') {
-    const id = citation.membership_id;
-    if (typeof id !== 'string' || !MEMBERSHIP_ID.test(id) || item.ref !== undefined) throw new ViewError();
-    return { kind: 'person', label, membership_id: id };
-  }
-  if (citation.kind === 'tool') {
-    const id = citation.tool_id;
-    if (typeof id !== 'string' || !TOOL_ID.test(id) || item.ref !== `tool:${id}`) throw new ViewError();
-    return { kind: 'tool', label, tool_id: id };
-  }
-  const permalink = externalSourcePermalink('container', citation.permalink);
-  const { tool_id, container } = citation;
-  if (citation.kind !== 'tool_container' || permalink === null || typeof tool_id !== 'string' || !TOOL_ID.test(tool_id) || !CONTAINERS.has(container) ||
-    item.ref !== undefined) throw new ViewError();
-  return { kind: 'container', tool_id, label, permalink, container: container as ToolContainerKind, ...(item.key === undefined ? {} : { key: containerKey(item.key) }) };
 }
 
 function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = false, followUps = false, workspace = false): AnswerSource {
@@ -545,7 +523,7 @@ function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = fals
   // Your workspace and your tools' containers (V8 only): a project, a person, a tool or a container, each named alone.
   if (WORKSPACE.has(citation.kind) || WORKSPACE.has(item.kind)) {
     if (!workspace) throw new ViewError();
-    return workspaceSource(item, citation, label || fallback);
+    return workspaceSource(raw);
   }
   const ref = openRef(item.ref);
   if (citation.kind === 'approved_record') {

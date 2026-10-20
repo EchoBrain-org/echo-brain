@@ -220,31 +220,12 @@ refuses the answer. Its negative disclosure tests are
 and `person-follow-ups-ask-integration.test.ts`.
 
 [ADR-0042](../decisions/ADR-0042-research-tool-contract.md) adds the asker's
-workspace to Ask on V8 answers, served by the additive `POST /v7/person/ask`,
-which streams under the ADR-0039 rules above in progress V3. Three ECHO
-sources release only what the asker's own reads show them: their project list
-and each project's roster, the organization directory (in a project Ask, only
-that project and its roster), and their person tools list, never a tool's site
-or account. Two connector sources release the Jira projects and Confluence
-spaces the asker's own connection can see, through the audited live-evidence
-path that tickets and pages use: in a project Ask only the containers its lead
-mapped, and none for an unmapped project. A container names only the mapped
-ECHO projects the asker can see. None of them binds in Mine, in trigger
-research or for V4 to V7 answers. Every workspace release is audited before
-its bytes leave Layer 3 (`echo-person-workspace-release-audit-v1`: item kinds,
-ids and digests only), and a container release is its connector's audited
-live release. A link names only items this request released to the asker,
-and a link to anything the asker cannot read is left out. Counts, including
-how many items a date filter could not test, cover only what the asker can
-read. Each check before a model call rechecks the workspace items
-and containers released since the last check, and the release check all of
-them: a lost or replaced project grant, a released person no longer active, a
-changed tool connection, or a container whose name, key, link or named ECHO
-projects changed refuses the answer. Its negative disclosure tests are listed
-in ADR-0042: `services/organization-authority/test/person-workspace-evidence-v1.test.ts`,
-`person-live-evidence-desk-v2.test.ts`, `person-ask-progress-v7-http.test.ts`
-and `cross-source-ask-e2e.test.ts`, and the Jira and Confluence container
-reader tests.
+workspace and their tools' containers to Ask on V8 answers, served by the
+additive `POST /v7/person/ask`, which streams under the ADR-0039 rules above
+in progress V3. Who sees what, its audit and its checks are ADR-0042's
+[Permissions, audit and checks](../decisions/ADR-0042-research-tool-contract.md#permissions-audit-and-checks),
+and its negative disclosure tests are listed under
+[Migration, rollback, and evidence](../decisions/ADR-0042-research-tool-contract.md#migration-rollback-and-evidence).
 
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
 Both original and approved-record citations bind the exact released evidence.

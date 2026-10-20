@@ -188,11 +188,11 @@ lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
 [Confluence spaces](project-settings-v1.md#confluence-space-mapping). Mine and
 unmapped projects exclude live tools, and Mine excludes follow-ups and the
 workspace. The desktop uses `--live` for every question outside Mine. An older
-Authority without the `/v7` route gets `POST /v6/person/ask` with V7 answers,
-one without `/v6` `POST /v5/person/ask` with V6 answers, and one without `/v5`
-either the ticket-capable fallback, `POST /v4/person/ask` with V5 answers;
-only a 404 without the route header falls back, and permission failures never
-do. `person ask --tickets` keeps that `/v4` route for compatibility.
+Authority gets the newest route it has, down to the ticket-capable
+`POST /v4/person/ask`, as the
+[Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)
+describes; permission failures never fall back. `person ask --tickets` keeps
+that `/v4` route for compatibility.
 `--live --progress` streams Ask's progress
 ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)): one JSON line per step before the final
 line, which adds the answer's receipt; on `/v6` a step may name a follow-up,
@@ -238,16 +238,10 @@ Both keyword `search` and keyword-free `list` carry date bounds. An explicit
 | Jira tickets | `created`, `updated`, `due` | `created` |
 | Confluence pages | `created`, `updated` | `updated` |
 
-Each source declares its date fields, and whether a window may match any of
-them, in its capabilities
-([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). Ask sends a
-window with no field as `date_field: any`, so it matches any of an item's
-dates on every source above, and each row says which matched; other callers
-read the default. A date field a source does not declare is refused, and the
-same refused read is not sent again. People, tools, Jira projects and
-Confluence spaces record no dates and refuse a window. Items that do not
-record the asked date are counted as `unchecked`, not listed, and an answer
-that uses such a list says how many were not checked.
+Each source declares these in its capabilities. For Ask, a window with no
+field matches any of an item's dates, and a field a source does not declare
+is refused; [ADR-0042](../decisions/ADR-0042-research-tool-contract.md#dates)
+says how items without the asked date are counted.
 
 Timestamps are compared in the request's time zone; date-only deadlines and
 all-day events retain their stated date. The evidence carries named source

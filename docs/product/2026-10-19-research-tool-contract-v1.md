@@ -3,8 +3,7 @@
 Date: 2026-10-19. Status: approved by the founder on 2026-10-19 with the five
 recommended decisions, and built end to end the same day.
 [ADR-0042](../decisions/ADR-0042-research-tool-contract.md) records the
-contract; "As built" below lists where the build differs. Built is not
-deployed or qualified.
+contract and where the build differs. Built is not deployed or qualified.
 
 Code references are at staging release `40ba71c`. Trace ids are in the
 `echo-staging` LangSmith project.
@@ -415,31 +414,5 @@ field, the new collections, and the new citation kinds and answer version.
 ## As built (2026-10-19)
 
 [ADR-0042](../decisions/ADR-0042-research-tool-contract.md) records the
-contract as built. Where the build differs from this design:
-
-- **No URL reaches the model.** Rows and opens carry no link. An item's link
-  in its tool travels with the answer's citation, and the client opens it.
-  Above, each row carried its link.
-- **Projects link only their members.** A project's Jira project key and how
-  many Confluence spaces it maps are in its text. `jira_projects` and
-  `confluence_spaces` name the ECHO projects mapped to them. People link only
-  to the projects they share with the asker.
-- **Fewer links.** Follow-ups link to their decision and to the tool item they
-  follow; their meeting is reached through the decision. Meetings, their
-  records, documents, Jira issues and Confluence pages declare no links yet.
-- **No `total`.** A list returns no total. Only projects declare a `count`.
-  A list's size is its number of members (ADR-0041).
-- **The map is the source catalog.** The first prompt carries the asker, today's
-  date and time zone, and each source's description and capabilities. The
-  asker's projects and tools are sources research lists, not entries of the
-  map.
-- **No Slack containers.** Production has had no Slack reader since
-  2026-10-05, so Slack channels and messages stay out of scope, and the open
-  question on Slack stays open.
-- **Containers declare no dates, filters or links.** A date window on
-  `jira_projects` or `confluence_spaces` is refused.
-- **Bounds.** Per call, a workspace source returns at most 10 search hits or
-  20 list rows, and a container source at most 10 search hits or 25 list
-  rows. `limit` takes 1 to 25.
-- **Not built.** A step schema per collection (the third open question). The
-  receipt still counts only items read in full, as "Not in this design" says.
+contract as built and says where the build differs from this design, chiefly
+under its "Links", "Sources" and "Known limits".

@@ -171,31 +171,23 @@ readers to the dates their sources declare.
   answer binds and cites them, and the registry refuses a container without
   capabilities. They declare no filters, dates or links, and refuse a date
   window. A tool's items and containers share one runtime
-  (`jiraPersonLiveConnectorsV1`, `confluencePersonLiveConnectorsV1`): the
-  first registration to open it opens it, the last to close it closes it, and
-  every registration must open with the same authority. Each person
-  connection's `containerSource` binds behind the same fences as its item
-  source and through the same audited boundary, pinned in a project scope to
-  the mapped containers; an unmapped project reads none. The shared reader
+  (`sharePersonLiveRuntimeV1` in the registry). Each person connection's
+  `containerSource` binds behind the same fences as its item source and
+  through the same audited boundary, pinned in a project scope to the mapped
+  containers; an unmapped project reads none. The shared reader
   (`providers/shared/src/person-tool-container-reader-v1.ts`) keeps handles
   and cursors in the request, labels a container by its name with its key and
   tool as attributes, cites it with its permalink, and rechecks every distinct
   release. A row that fails validation is left out and counted, and the result
   carries a notice that some could not be shown; a credential rejection fails
   the read, and only "not found" leaves a container out.
-- **Project names.** `PersonLiveConnectorDefinitionV1.open` takes an optional
-  third argument, `project_names` (`PersonContextProjectNamesV1`): the current
-  names of those ECHO projects the asker can see, read locally with no
-  provider call. A connector whose containers name their mapped ECHO projects
-  reads it; any other ignores it. The API runtime supplies it from the asker's
-  own project list, in one read transaction with no release. A connection pins
-  the names when its container source opens, reading each mapped project's
-  grant once; every later fence reads the mappings once and asks for all their
-  names at once, and refuses once they change.
-- **Project settings.** A tool's item connector also carries its project
-  setting, so the workspace's projects source names each project's Jira
-  project key and Confluence space count from that tool's own project read,
-  as the asker.
+- **Project names.** A container names the mapped ECHO projects the asker
+  can see, from the optional `project_names` its connector opens with, read
+  locally with no provider call; each connection pins and fences them
+  (`containerProjects` in `providers/shared/src/person-project-mapping-v1.ts`).
+- **Project settings.** A tool's item connector also carries its
+  `project_setting`, which the projects source reads as the asker
+  ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md#sources)).
 
 Slack registers no containers: no Slack reader is composed.
 

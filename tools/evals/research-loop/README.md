@@ -154,11 +154,9 @@ a `category` (`goal`, `time`, `own_work`, `structure`, `reach`, `tools`) and a
 `slack`, `jira_projects`, `confluence_spaces`, `slack_channels`; an entry that
 lists several is met by any of them), an optional time `window` (`yesterday`,
 `this_week`, `last_week`) and its rounds (`max_rounds`, 4 unless it says
-otherwise). Its parts name workspace items as `{ "project" }`, `{ "person" }`,
-`{ "tool" }`, `{ "container", "id" }` (a Jira project or Confluence space by
-its provider id) and `{ "follow_up" }` (a follow-up of `world/additions.json`
-`workspace`, matched by the ticket it follows). A case whose answer the world
-cannot fix in advance ("What happened yesterday?") has no parts.
+otherwise). Its parts name workspace items as `world/README.md` ("Reading the
+keys") says. A case whose answer the world cannot fix in advance ("What
+happened yesterday?") has no parts.
 
 Every case of the family is graded on reach and cost, never on wording, by code
 reading the research result its run saves:

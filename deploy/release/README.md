@@ -525,15 +525,13 @@ check from a checkout at the candidate's source:
 npm run eval:research-loop -- release-check --out /absolute/private/release-ask-check --release-sha <candidate-source-sha>
 ```
 
-It prints one line per question from its latest trace: rounds and stop reason,
-calls per round, refused calls and repeated refusals, unchecked items, and the
-collections research looked at, and writes `release-check.json` beside the
-runs. A question passes when its trace ran the candidate, its capture is
-complete, research looked at every collection its case names (for
-"yesterday": meetings, documents, Jira tickets and Confluence pages, each within
-yesterday), sent no refused call again, stated the unchecked items its answer
-used, and finished within 4 rounds; otherwise the command exits non-zero and
-names what failed. Keep its output with the canary evidence. A candidate that
+It prints one line per question from its latest trace, with the trace's
+counts, and writes `release-check.json` beside the runs. A question passes
+when its trace ran the candidate, its capture is complete, and it meets the
+four checks of the research-loop evaluation's
+[open-ended family](../../tools/evals/research-loop/README.md#open-ended-family);
+otherwise the command exits non-zero and names what failed. Keep its output
+with the canary evidence. A candidate that
 ships the research tool contract must pass it, and a failure stops acceptance
 like any failing required check; for an earlier candidate, record the result,
 which is expected to fail.

@@ -897,42 +897,13 @@ describe('your workspace and your tools\' containers in a V8 answer and its prog
     }
   });
 
-  it('refuses a workspace item that opens anything else, names another item, or says more than it names', () => {
-    const { ref: _projectRef, ...unopenedProject } = project;
-    const { ref: _toolRef, ...unopenedTool } = tool;
+  it('refuses a workspace item the V8 contract refuses, and a workspace ref or a key on any other kind', () => {
     for (const citation of [
-      // A project and a tool always open by their own ref, and only by it.
-      unopenedProject,
-      { ...project, ref: 'project:prj_00000000-0000-4000-8000-000000000000' },
+      // The contract's own validator decides each workspace item (packages/organization-api/test/person-answer-v8.test.ts).
       { ...project, ref: 'tool:jira' },
-      { ...project, ref: `meeting:${sha('2')}` },
-      { ...project, citation: { kind: 'project', project_id: 'prj_1' }, ref: 'project:prj_1' },
-      { ...project, kind: 'decision' },
-      { ...project, key: 'THERM' },
-      unopenedTool,
-      { ...tool, ref: 'tool:confluence' },
-      { ...tool, citation: { kind: 'tool', tool_id: 'Jira' }, ref: 'tool:Jira' },
-      { ...tool, kind: 'tool_container' },
-      // A person and a container open no page of ECHO's.
-      { ...person, ref: `project:${PROJECT}` },
-      { ...person, citation: { kind: 'person', membership_id: PROJECT } },
-      { ...person, kind: 'team' },
-      { ...person, key: 'ML' },
-      { ...container, ref: 'tool:jira' },
-      { ...container, kind: 'page' },
-      { ...container, citation: { ...containerCitation, container: 'jira_board' } },
-      { ...container, citation: { ...containerCitation, tool_id: 'Jira' } },
-      // Its link is a display link: https, no credentials, no query, no fragment.
-      ...['http://example.atlassian.net/browse/THERM', 'https://user:pass@example.atlassian.net/browse/THERM', 'https://example.atlassian.net/browse/THERM?x=1',
-        'https://example.atlassian.net/browse/THERM#top', 'javascript:alert(1)'].map(permalink => ({ ...container, citation: { ...containerCitation, permalink } })),
-      // Its key is one trimmed, normalized line.
-      ...['', ' THERM', 'THE\nRM', 'THÉRM', 'x'.repeat(257), 7].map(key => ({ ...container, key })),
-      // No other kind opens like one, or says a key.
+      // The page's own rules decide every other kind.
       { ...named, ref: `project:${PROJECT}` },
-      { ...ticket, ref: 'tool:jira' },
-      { ...followUp, ref: 'tool:jira' },
       { ...ticket, key: 'THERM' },
-      { ...followUp, key: 'THERM' },
     ]) expect(() => answerView({ ok: true, result: v8([citation]) }, { kind: 'global' })).toThrow(ViewError);
   });
 

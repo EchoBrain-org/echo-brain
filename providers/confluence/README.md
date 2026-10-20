@@ -30,11 +30,10 @@ The desktop **Tools** screen uses the same per-person connect, reconnect, cancel
 status, and disconnect flow as Jira. The equivalent initial connection is
 `echo-brain person tools connect --tool confluence`; consent occurs in the browser.
 Desktop Ask selects the additive `/v7/person/ask` route with a strict V8 response
-([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), then
-`/v6/person/ask` with a strict V7 response
-([ADR-0040](../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)) on an
-Authority without `/v7`, and `/v5/person/ask` with a strict V6 response on one
-without `/v6`.
+([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)) and falls
+back on an older Authority as the
+[Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
+describes.
 The CLI uses `echo-brain person ask --live --question '<question>'`, optionally
 with `--project <id>`. Older ticket-only and local-context response contracts remain
 unchanged; an older Authority that has no new route receives the ticket-capable
@@ -62,25 +61,11 @@ historical activity log. Keyword searches can combine text with date bounds.
 ## Confluence spaces as Ask evidence
 
 The V8 Ask can also read the Confluence spaces the asker can view, as the tool
-container source `confluence_spaces`
-([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)),
-registered over the same runtime as the page source and bound only for the V8
-answer. `createConfluencePersonLiveContainerReaderV1` reads through the
-asker's own connection and the same audited boundary. List pages the REST v2
-spaces list, at most 25 a call, carrying only its opaque cursor. Confluence
-has no space search, so a search looks through at most four pages of 250
-spaces and says when it was cut short, then matches every word against each
-space's key, name and the names of the ECHO projects mapped to it. Open is an
-exact read by the space's stable ID. Each item is labeled by the space's name,
-carries its key and tool, cites the space with its `/wiki/spaces/<key>` link
-(a personal space's key encoded), and names the mapped ECHO projects the asker
-can see by whole name: ten, or as many as fit, then how many more. A space row
-that fails validation, such as a blank or non-NFC name or an unexpected key
-shape, is left out and never shown, and the result's notice says some spaces
-could not be shown, so the list or search never reads as complete. A project
-Ask reads only the spaces its ECHO project maps that the asker can view, paged
-by the limit asked for; a space the asker cannot view (404) is left out,
-Confluence refusing the credentials (401 or 403) fails the read, and an
-unmapped project reads none. A date window is refused before any provider
-read. Checks re-read every distinct release of a space and refuse one whose
-name, key, link or named ECHO projects changed.
+container source `confluence_spaces`, through the shared container reader the
+[connector contracts](../../docs/architecture/connector-contracts.md#source-capabilities-and-containers)
+describe ([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)).
+`createConfluencePersonLiveContainerReaderV1` lists the REST v2 spaces list,
+carrying only its opaque cursor, and opens a space by an exact read of its
+stable ID. Confluence has no space search, so a search looks through at most
+four pages of 250 spaces and says when it was cut short. Each space cites its
+`/wiki/spaces/<key>` link (a personal space's key encoded).
