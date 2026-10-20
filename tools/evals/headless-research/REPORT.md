@@ -1,5 +1,10 @@
 # Claude research-loop feasibility trial
 
+The latest follow-up is the [limit-removal comparison](#limit-removal-comparison).
+It confirms that numerical caps can truncate a complete inventory and stop a
+successful research path, while also exposing a separate missed-read problem.
+The original feasibility trial below is retained as historical evidence.
+
 The SDK can research ECHO-shaped evidence and hand a usable bundle to the
 existing Ask and sweep renderers. This is a promising synthetic prototype,
 not a staged replacement or proof of live permission equivalence.
@@ -79,3 +84,116 @@ outbound SDK model request, including retries, repairs and compaction. Tool hook
 alone do not establish that. Then integrate the shared audit/progress lifecycle
 and exercise real provider and trigger contracts. The current prototype keeps
 those requirements explicit and cannot be selected by the live Authority.
+
+## Limit-removal comparison
+
+Removing application caps improved the synthetic SDK prototype from 8/14 to
+12/14 passing comparisons. The same `claude-sonnet-5-5` model ran seven question
+types twice per arm. Three additional writer replays held the research evidence
+fixed. These results establish specific failure mechanisms, not a general
+production success rate.
+
+| Question type | Original bounded prototype | Unbounded prototype | Interpretation |
+| --- | --- | --- | --- |
+| Two active projects and leads | 2/2 pass | 2/2 pass | Both answer the ordinary question correctly. |
+| Yesterday across meetings, Jira and Confluence | 2/2 pass | 2/2 pass | Both include the decision, action and source changes. |
+| All 60 active projects and their leads | 0/2 pass | 2/2 pass | The bounded list renderer names 25 and says “and 35 more”; unbounded names and cites all 60. |
+| Open items across 105 tickets plus a meeting action | 0/2 pass | 0/2 pass | The bounded writer declares a gap for five hidden rows. Unbounded research skips the action body and the answer omits its checklist detail and owner. |
+| Eighteen separate briefing entries | 2/2 pass | 2/2 pass | Bounded fits all 18 entries into nine statement objects; unbounded uses 18. No requested facts were lost in this case. |
+| Follow a 16-document handoff chain | 0/2 pass | 2/2 pass | Bounded stops at the 12-turn SDK cap. Unbounded reaches the final page and returns `TEMPEST-816` with its citation. |
+| Acquisition approval date absent from the records | 2/2 pass | 2/2 pass | Both correctly return not found without inventing a date. |
+
+### Where the limits caused harm
+
+The project roster demonstrates loss after successful research. Both arms
+retrieved all 60 projects. The bounded renderer then applied its 25-name cap.
+One bounded answer additionally mentioned the last project in a range, but
+neither supplied the full requested list. Replaying the exact first bounded
+research bundle through the unbounded writer produced all 60 names and citations.
+The model did not need to search better to fix this failure.
+
+The ticket comparison isolates another handoff problem. Bounded research read
+all 105 ticket rows and opened the meeting action. Its answer correctly named
+all six open tickets, their owners, and the action to publish the calibration
+checklist. Nevertheless, the writer saw only 100 list rows and added a gap for
+the five rows it could not inspect. Replaying that exact research bundle with
+the unbounded writer produced the complete answer with no gap. This is evidence
+against the 100-row writer cap, even though unbounded end-to-end research had
+its own omission.
+
+The linked-chain failure occurred in research itself. Both bounded runs ended
+with `Reached maximum number of turns (12)` after 15.3 and 16.4 seconds. The
+unbounded runs completed in 31.4 and 28.7 seconds. They needed more work and time;
+the artificial turn ceiling prevented them from finishing that work.
+
+### What removing limits did not fix
+
+Both unrestricted open-items runs listed all 105 tickets in one call but did
+not open the meeting action. Its generic title did not contain the checklist
+instruction. Although the research notes included the action's owner, the final
+answer omitted that owner too. Both answers marked themselves answered. More
+allowance did not guarantee sufficient reading or a complete final answer.
+
+The ten-statement limit constrained representation in the briefing test, but
+the model retained all 18 separately numbered entries, codes, owners and dates.
+The first scorer incorrectly equated one renderer statement with one requested
+entry. The corrected scorer accepts multiple separately numbered entries in a
+statement; original scores and outputs remain in the evidence. An unbounded
+writer replay also produced all 18 entries from the same saved research bundle.
+
+No trial hit the old time or estimated-cost ceiling. The runs do not establish
+whether those specific ceilings help or hurt representative workloads. Shorter
+times in some unbounded cases can reflect fewer pages, prompt caching and model
+variation; these are not production speed measurements.
+
+### Scope and experiment integrity
+
+The unbounded path removes the prototype's numerical deadlines, turn/call/cost
+caps, page maximum, plan/notes/reference size bounds, writer input budget,
+list/name/statement/citation/output-size maxima, and application repair-count
+restrictions. It retains source access checks, citation validity, types and
+source-grounded answer rules. Four production source files are transformed into
+a disposable renderer bundle inside the experiment cache; production source and
+compiled workspaces are not edited. Each unbounded result records the patch
+hashes and bundled hash.
+
+Model context/output capacity, SDK defaults and account rate limits still apply.
+Neither trial arm forwards production's OpenRouter output-token allowance to
+the SDK, so this study does not test that allowance. Synthetic sources do not
+exercise production network, database or external-service limits. Responses
+from the unbounded writer can exceed the current client/server schema sizes;
+they are prototype evidence, not release-compatible payloads.
+
+Investigation found a prototype adapter bug: metadata-only plan citations were
+incorrectly promoted into the writer's full-text evidence. That differs from
+the real research loop and could mask the 100-row problem. The adapter now
+prioritizes only actual full text. All four affected open-items runs were kept
+but excluded, and both arms were rerun twice after the fix. No other case had
+that invalid metadata state. The first comparison round also retained one
+semantic-repair restriction; no additional model repair was observed there.
+The final variant removes that restriction too.
+
+There are 35 saved executions: 28 valid end-to-end comparisons, three valid
+writer replays and four excluded pre-fix executions. SDK usage was unavailable
+for the two turn-cap failures; their costs are unknown, not zero. Automated
+checks are fixture-specific factual checks, not a semantic judge; final prose,
+gaps and citation associations were also inspected.
+
+### Follow-up validation and evidence
+
+- 24 focused prototype tests pass, including larger plans, all 105 writer rows,
+  more than five lists, 60 names/citations, more than ten statements, responses
+  over 64 KiB, metadata/body separation and rejection of invented evidence or
+  revoked access.
+- `npm run check` passes: architecture, documentation, lint, build, TypeScript,
+  and 366 test files with 5,841 passing tests, two expected failures and two
+  skipped. The final suite took 260.37 seconds; focused prototype tests run
+  separately from that repository suite.
+- [Limit comparison evidence](limit-trial-results.json) preserves outputs,
+  metrics, original/corrected checks, exclusions and raw-result hashes.
+- [Limit validation record](limit-validation.json) records the final local check
+  results and source hashes. [README](README.md#limit-removal-comparison) gives
+  reproduction commands and the remaining integration boundaries.
+
+This remains an isolated synthetic prototype. Nothing in this follow-up is
+staged or released, and it does not qualify the SDK for live user data.

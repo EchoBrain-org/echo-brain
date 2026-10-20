@@ -1,14 +1,14 @@
 import { canonicalSha256, createAgenticListEvidenceV1, agenticListEndUnverifiedV1, describeAgenticEvidenceItemV1, fillAgenticTaskV1, parseStep } from './core.mjs';
 
 /** Experiment-only adapter. Its public constructor refuses anything but the bundled synthetic fixture. */
-export function createBridge(fixture, brief, { signal = new AbortController().signal, onEvent = () => {} } = {}) {
+export function createBridge(fixture, brief, { signal = new AbortController().signal, onEvent = () => {}, unbounded = false, parsePlan = parseStep } = {}) {
   if (fixture.synthetic !== true) throw new Error('Only synthetic fixtures are supported; live access fencing is not qualified.');
   const { desk, sources, context } = fixture;
   const items = new Map(), byShort = new Map(), lists = new Map(), receipts = new Set(), unreadable = [];
   const rounds = [], reads = [];
   let goal = brief.goal, terminal, serial = Promise.resolve(), checkedAt = null, deskMs = 0;
   const started = performance.now();
-  const deadline = started + brief.budget.deadline_ms - brief.budget.writer_reserve_ms - 1000;
+  const deadline = unbounded ? Infinity : started + brief.budget.deadline_ms - brief.budget.writer_reserve_ms - 1000;
   const assertLive = () => { signal.throwIfAborted(); if (terminal) throw terminal; if (performance.now() >= deadline) throw new Error('research_deadline'); };
   async function check() { assertLive(); checkedAt = (await desk.revalidate({ signal, mode: 'incremental' })).checked_at; }
   function register(raw, opened = false, preloaded = false) {
@@ -58,7 +58,7 @@ export function createBridge(fixture, brief, { signal = new AbortController().si
         if (!allowed || (Array.isArray(allowed) && !allowed.includes(args[field]))) throw new Error(`Unsupported ${field} filter. Available capabilities: ${JSON.stringify(capabilities)}`);
       }
       if (args.date_field && args.date_field !== 'any' && !capabilities?.dates?.[args.date_field]) throw new Error('Unsupported date_field. Consult source_catalog.');
-      input = { ...(source ? { source: source.source_id } : {}), ...(args.query ? { query: args.query } : {}), limit: args.limit ?? 25, time_zone: context.time_zone };
+      input = { ...(source ? { source: source.source_id } : {}), ...(args.query ? { query: args.query } : {}), limit: args.limit ?? (unbounded ? Number.MAX_SAFE_INTEGER : 25), time_zone: context.time_zone };
       if (args.kind) input.kinds = [args.kind];
       for (const key of ['status', 'owner', 'role', 'since', 'until', 'date_field']) if (args[key] !== undefined) input[key] = args[key];
       if (tool === 'list') {
@@ -107,7 +107,7 @@ export function createBridge(fixture, brief, { signal = new AbortController().si
     },
     async bundle(output, metrics = {}) {
       await serial; await check(); await desk.revalidate({ signal, mode: 'full' });
-      const parts = parseStep({ parts: output.parts, actions: [] }, { lists: true }).parts;
+      const parts = parsePlan({ parts: output.parts, actions: [] }, { lists: true }).parts;
       const plan = parts.map((part, index) => ({ ...part, part: index + 1, needs: part.needs.map(need => {
         if (goal.kind !== 'task') return need;
         const { kind: _kind, ...taskNeed } = need; return taskNeed;
@@ -117,7 +117,9 @@ export function createBridge(fixture, brief, { signal = new AbortController().si
         for (const id of need.evidence) {
           const entry = byShort.get(id), list = listById.get(id);
           if (!entry && !list) throw new Error(`Unknown evidence ${id}`);
-          if (entry) entry.cited_by_plan = true;
+          // Match the real research loop: only released full text can enter the writer's text-evidence priority queue.
+          // A cited metadata row remains list evidence; it must never become a body with undefined text.
+          if (entry?.full) entry.cited_by_plan = true;
         }
         if (need.status === 'found') {
           if (!need.evidence.length) throw new Error('Found need requires evidence.');

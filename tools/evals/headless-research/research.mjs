@@ -2,6 +2,7 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { createBridge } from './bridge.mjs';
 import { runClaude } from './client.mjs';
+import { stripSizeBounds, unlimitedCore } from './unlimited-core.mjs';
 
 export const PLAN_SCHEMA = { type: 'object', additionalProperties: false, required: ['completed', 'parts'], properties: {
   completed: { type: 'boolean' },
@@ -34,10 +35,11 @@ const common = {
   limit: z.number().int().min(1).max(25).optional(),
 };
 
-export async function sdkResearch(fixture, brief, { onEvent = () => {}, signal } = {}) {
+export async function sdkResearch(fixture, brief, { onEvent = () => {}, signal, unbounded = false } = {}) {
   const stop = new AbortController();
   const activeSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
-  const bridge = createBridge(fixture, brief, { onEvent, signal: activeSignal });
+  const core = unbounded ? await unlimitedCore() : undefined;
+  const bridge = createBridge(fixture, brief, { onEvent, signal: activeSignal, unbounded, ...(core ? { parsePlan: core.parseStep } : {}) });
   const initial = await bridge.initialize();
   if (brief.options.planner === false) {
     const bundle = await bridge.bundle({ completed: true, parts: [{ question: initial.goal.task, notes: 'Starting evidence reread; trigger disables planning.', needs: [{ need: 'starting evidence', kind: 'content', status: initial.starting.length ? 'found' : 'not_found', evidence: initial.starting.map(i => i.id) }] }] });
@@ -50,12 +52,13 @@ export async function sdkResearch(fixture, brief, { onEvent = () => {}, signal }
       return { isError: true, content: [{ type: 'text', text: error.message }] };
     }
   };
+  const fields = unbounded ? { ...common, limit: z.number().int().positive().optional().describe('Optional page size; omit to return all matching synthetic rows.') } : common;
   const tools = [
-    tool('search', 'Find relevant records by words. Use for focused facts, decisions or explanations. Returns E ids, metadata and text where available; metadata alone does not establish body content. Results may be truncated. Open relevant E ids; use list for an exhaustive set. Example: {"source":"meetings","query":"calibration"}.', { ...common, source: common.source.optional(), query: z.string() }, handler('search')),
+    tool('search', 'Find relevant records by words. Use for focused facts, decisions or explanations. Returns E ids, metadata and text where available; metadata alone does not establish body content. Results may be truncated. Open relevant E ids; use list for an exhaustive set. Example: {"source":"meetings","query":"calibration"}.', { ...fields, source: common.source.optional(), query: z.string() }, handler('search')),
     tool('open', 'Read a previously discovered item\'s content and related released items. Use when an answer depends on what an item says. Accepts only an E id returned in this request, never a URL or guessed identifier. May return bounded or unavailable content. Example: {"id":"E1"}.', { id: z.string() }, handler('open')),
-    ...(brief.options.list === false ? [] : [tool('list', 'Enumerate items in one source using its supported filters. Use for all/which/count questions or date windows. Returns rows, an L id and completeness. Repeating identical filters fetches the next page; continue while more=true for a full set. Maximum 25 rows per call. Rows establish titles, dates, owners and status, not body content; use open for bodies. Example: {"source":"projects","status":"active"}.', common, handler('list'))]),
+    ...(brief.options.list === false ? [] : [tool('list', `Enumerate items in one source using its supported filters. Use for all/which/count questions or date windows. Returns rows, an L id and completeness. Repeating identical filters fetches the next page; continue while more=true for a full set. ${unbounded ? 'No prototype row cap; omit limit for all matching rows.' : 'Maximum 25 rows per call.'} Rows establish titles, dates, owners and status, not body content; use open for bodies. Example: {"source":"projects","status":"active"}.`, fields, handler('list'))]),
   ];
-  const result = await runClaude({ prompt: JSON.stringify(initial), system: SYSTEM, schema: PLAN_SCHEMA, signal: activeSignal,
+  const result = await runClaude({ prompt: JSON.stringify(initial), system: SYSTEM, schema: unbounded ? stripSizeBounds(PLAN_SCHEMA) : PLAN_SCHEMA, signal: activeSignal, unbounded,
     timeoutMs: brief.budget.deadline_ms - brief.budget.writer_reserve_ms - 1000,
     servers: { echo_trial: createSdkMcpServer({ name: 'echo_trial', version: '0.0.1', tools }) },
     tools: tools.map(t => `mcp__echo_trial__${t.name}`),

@@ -30,10 +30,10 @@ export const FIXTURE_ITEMS = Object.freeze([
 ]);
 
 /** Synthetic permission fixture only; deliberately cannot accept a live desk or credentials. */
-export function fixture({ scope = 'global', connected = true, revokeAfter = Infinity } = {}) {
+export function fixture({ scope = 'global', connected = true, revokeAfter = Infinity, items = FIXTURE_ITEMS, pageMaximum = 25 } = {}) {
   let reads = 0; let revoked = false;
   const sources = SOURCES.filter(s => scope === 'mine' ? ['meeting', 'document'].includes(s.source_id) : connected || !['tickets', 'pages'].includes(s.source_id));
-  const allowed = FIXTURE_ITEMS.filter(i => sources.some(s => s.source_id === i.source_id) && (scope !== 'project' || i.project === 'alpha'));
+  const allowed = items.filter(i => sources.some(s => s.source_id === i.source_id) && (scope !== 'project' || i.project === 'alpha'));
   const released = new Set();
   const check = () => { if (revoked || reads >= revokeAfter) throw new Error('access_revoked'); };
   const deskScope = scope === 'project' ? { kind: 'project', project_id: projectId(1) } : { kind: scope };
@@ -49,7 +49,7 @@ export function fixture({ scope = 'global', connected = true, revokeAfter = Infi
       rows = rows.filter(i => terms.some(t => `${i.label} ${i.text}`.toLowerCase().includes(t)));
     }
     const offset = input.cursor ? Number(input.cursor) : 0;
-    const limit = Math.min(input.limit ?? 25, 25);
+    const limit = Math.min(input.limit ?? pageMaximum, pageMaximum);
     const page = rows.slice(offset, offset + limit).map(({ project: _project, ...i }) => {
       released.add(i.id);
       if (['ticket', 'page'].includes(i.kind) || (!search && i.source_id === 'meeting')) { const { text: _text, ...metadata } = i; return metadata; }

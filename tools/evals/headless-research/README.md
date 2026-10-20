@@ -96,3 +96,62 @@ References: [Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overv
 [custom tools](https://code.claude.com/docs/en/agent-sdk/custom-tools),
 [hooks](https://code.claude.com/docs/en/agent-sdk/hooks),
 [structured output](https://code.claude.com/docs/en/agent-sdk/structured-outputs).
+
+## Limit-removal comparison
+
+`run-limit-suite.mjs` compares the original SDK prototype with an experimental
+variant that omits the application's deadline, turn and estimated-cost caps,
+removes the synthetic desk's page-size maximum and research-plan size bounds,
+and uses a disposable copy of the actual Ask renderer with numeric size/count
+bounds removed. It does not change production source, compiled workspaces, the
+original trial results, provider capabilities or access/citation validity rules.
+
+```sh
+node tools/evals/headless-research/run-limit-suite.mjs tools/evals/headless-research/results/limits-round1
+# Repeat selected cases, with separate output paths:
+node tools/evals/headless-research/run-limit-suite.mjs tools/evals/headless-research/results/limits-repeat open_items roster briefing chain
+# Replay the exact saved research bundle with only the writer unbounded:
+node tools/evals/headless-research/limit-trial.mjs writer-only roster tools/evals/headless-research/results/roster-writer-only.json tools/evals/headless-research/results/limits-round1/bounded-roster.json
+```
+
+Seven cases cover two ordinary controls, late rows in a 105-ticket inventory,
+all 60 project names/citations, 18 separately requested briefing entries, a
+16-document linked chain, and an absent acquisition date. The linked-chain
+fixture deliberately requires successor discovery; both arms see the same graph.
+The roster/briefing/chain are stress cases, not a production workload sample.
+Bounded and unbounded runs alternate order; each uses a new SDK session and the
+same model alias. Results preserve the actual model, outputs, evidence, calls,
+estimated cost, errors, and source hashes of the disposable renderer patches.
+
+"Unbounded" means no experiment-imposed numerical ceiling. Model/provider context
+and output limits, SDK defaults/repair behavior and account rate limits still
+apply. The trial does not supply an output-token maximum to the SDK in either
+arm; it cannot establish the effect of production's OpenRouter token allowance.
+There is no automatic experiment timeout in that arm: the operator may cancel a
+stalled run, which must then be reported as interrupted, never as a model failure.
+Infinity in in-memory budgets serializes as null in saved JSON; the mode and
+patch manifest record why. Synthetic sources have no production HTTP, transport,
+Jira body-normalization or database-scan limits, so those cannot be evaluated here.
+
+The unbounded writer retains the original citation/privacy checks, source-only
+answer prompt, list counting/selection and layout. `unlimited-core.mjs` bundles
+four patched source files into ignored `.cache/unlimited`; numerical schema
+maxima are removed before the SDK call. Its normal output validators still check
+types, citations and outcomes with only size/count bounds removed. These outputs
+are experimental: they may exceed the current desktop/server response contract.
+Focused tests prove the size caps are removed and that invented evidence and
+revoked access still fail. No production path imports this experiment.
+
+Automated scoring checks requested names/codes, completeness, briefing dates and
+separate entries, and abstention on the negative control. It is not a semantic
+judge; review the full rendered evidence and citation associations before drawing
+conclusions. Latency and SDK cost estimates are descriptive, sensitive to caching,
+and are not a production cost or latency benchmark.
+
+The [comparison report](REPORT.md#limit-removal-comparison) and
+[saved evidence](limit-trial-results.json) include two runs per arm/case and three
+writer-only replays. A prototype adapter correction ensures that citing a
+metadata row does not promote it to full-text writer evidence. Four affected
+pre-fix executions remain recorded but excluded; the open-items comparisons
+were rerun after that correction. Normalize a set of result directories with
+`node tools/evals/headless-research/summarize-limits.mjs <directory> ...`.

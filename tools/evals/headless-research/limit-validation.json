@@ -1,0 +1,78 @@
+{
+  "base_commit": "819a9efac47b6e53355f6227936c7c6c68ddfbb8",
+  "candidate_parent": "86be445052952a1d3d585d609449ff835d698fc6",
+  "validated_at": "2026-10-20T22:47:49.333501+00:00",
+  "validation_scope": "Completed prototype source; report and normalized evidence finalized after full check. Source hashes identify the tested candidate.",
+  "commands": [
+    {
+      "command": "npm test --prefix tools/evals/headless-research",
+      "exit_code": 0,
+      "tests_passed": 24,
+      "tests_failed": 0
+    },
+    {
+      "command": "npm run check",
+      "exit_code": 0,
+      "test_files_passed": 366,
+      "tests_passed": 5841,
+      "expected_failures": 2,
+      "skipped": 2,
+      "duration_seconds": 260.37
+    },
+    {
+      "command": "npm run check:docs (after report and evidence finalization)",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "logs": {
+    "results/limit-unit-tests.log": "07d5031ac54c541205031541126c862647cf99accf23dd6d193f64bd4bb443d1",
+    "results/limits-full-check.log": "fc91426e0adff480cd83e6c6a46ebd66017d28717ba50222e81fef57a0579361",
+    "results/limits-docs-check.log": "619168bf35fc068b7fddd7dc9e841e4197c6c44324f8a2617c168fff81131f1c"
+  },
+  "experiment": {
+    "model": "claude-sonnet-5-5",
+    "sdk_version": "0.3.305",
+    "cli_version": "2.1.302",
+    "raw_executions": 35,
+    "excluded_adapter_bug_executions": 4,
+    "valid_end_to_end_executions": 28,
+    "valid_fixed_evidence_writer_replays": 3,
+    "cases": 7,
+    "repetitions_per_arm": 2,
+    "bounded_passed": 8,
+    "unbounded_passed": 12,
+    "writer_replays_passed": 3,
+    "same_bundle_replays_verified": true,
+    "all_raw_hashes_verified": true
+  },
+  "files": {
+    "README.md": "89d1cada4195d2a6918b7a853abb002e4405f237ce8e52f984c1cc093d38f6a0",
+    "REPORT.md": "30d87666436b2a8668844b3226cd5d52f874b99c5d0a47178fbd7cedbf6d4873",
+    "assess.mjs": "785eb3f58860650a3203c21c11a284331fe2fb920954da0ca6bd1eded3822c0f",
+    "bridge.mjs": "a97bfa6d7dd22212751ef98a70c10f1cc88a3e5ba5dd67d5bc040a1b7234a8c3",
+    "client.mjs": "1d568e41c97177c8e81701f6eca9de60b641b453aacff875bf9324eed1846869",
+    "core.mjs": "ec0f05438b22724ceac3d2c60b2fef53600b4c0f44999349e40aa2fd1cb44bec",
+    "fixtures.mjs": "54c36dc59480649d816948ca69bc90f703ff822d53cd3fc65ca29bc16d58bab8",
+    "limit-fixtures.mjs": "2163706352a82ce5658a11bdb0f28acbaa28c2c967868901702855e12d6dac01",
+    "limit-trial-results.json": "cc2913c03b5116ffc055523d053cbe7557ef56c6103de91f0eb30a983dc7836a",
+    "limit-trial.mjs": "32f2ec2d8fa0ea7edfa5cf7333aaccf5ade325fa25dcbe837a4aae7b675542bc",
+    "package-lock.json": "786a3eb0b45bc74ca0f187d11ff9b53373e513ccf623278a1c6a6eca84035cfb",
+    "package.json": "90a2f5407828fb3d51af84eaa84f82b3fb0f653af7d8e064cf0347ce2543b3f6",
+    "research.mjs": "64b0758c6255e0d8ac265aa6a5266ee51944edcd3e17415d5863b8fc31caac61",
+    "run-limit-suite.mjs": "2139b6b4ada9fbc83014bc08ec53150951b7b1d278594dd942679e4d024ca197",
+    "run.mjs": "4b0cd39506db71525465ba446845c2c1baa841fa02a8862b4f787803e10fd75d",
+    "summarize-limits.mjs": "15b65235ea15de6a52bc5bc0715f8ea8fbd6f615b1833cf5420ff93c3fc2ee70",
+    "test/assess.test.mjs": "5c4551b127c34956ee43ebcf88bae0f4ef86fcd3d539dbcbcff35004d93f79e7",
+    "test/bridge.test.mjs": "f0f11f22a899b98bdc14e57bb0a3b9ce2374dd0830d69478fa9e76f5f71cf8b1",
+    "test/limits.test.mjs": "4ffee40054943e700be58de8814e9b6b341c7ccf172fdb766e3c7a4ebb1cf3af",
+    "unlimited-core.mjs": "f7c588713024b1e20bde92f029ab7f036ec79efae55a7cd9978bdab33fd9f3da"
+  },
+  "live_trial": false,
+  "staged": false,
+  "released": false,
+  "ci": "not run; local synthetic experiment only"
+}
