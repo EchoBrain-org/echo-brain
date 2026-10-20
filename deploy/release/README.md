@@ -290,9 +290,8 @@ host commands below remain the installed-wrapper contract and human fallback;
 they are not permission for an agent to open a shell session. A human in
 Session Manager runs them from `/srv/echo-authority-clean-v1` with `sudo`
 scoped to each command, as shown; never use `sudo -i`, `su` or a root shell.
-The deployment directory is root-owned and `clean-data` belongs to the service
-account, so an unelevated wrapper fails with a misleading "operation in
-progress" error.
+The [deployment guide](../organization-authority/README.md) explains why an
+unelevated wrapper fails.
 
 Keep the three operator lanes separate:
 
@@ -362,18 +361,13 @@ editing `.env.clean-v1` after promotion: that creates environment drift and
 blocks the next release.
 
 `agentic_ask_v1` and `small_scope_shortcut` are the only candidate
-configuration settings accepted by this release record. They are booleans in
-the canonical candidate bytes, default to `false` for legacy records that
-predate them, and are materialized as `ECHO_AGENTIC_ASK_V1=true|false` and
-`ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true|false` in that candidate's saved
-environment tuple. A true `small_scope_shortcut` requires
-`agentic_ask_v1=true`. Since
-[ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md) the Authority
-ignores `ECHO_AGENTIC_ASK_V1`: agentic Ask is the only Ask and is on whenever
-an answer model is configured. The field stays in the record so earlier
-records keep their bytes; set it to `true` in new records. The candidate record SHA already bound to the staging
-request covers both values. Rollback restores the accepted tuple verbatim,
-including earlier flag values or legacy absence. No command accepts arbitrary
+configuration settings in the release record: booleans materialized as
+`ECHO_AGENTIC_ASK_V1` and `ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT` in the
+candidate's saved environment tuple, and covered by the record SHA bound to the
+staging request. A true `small_scope_shortcut` requires `agentic_ask_v1=true`.
+Since [ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md) the
+Authority ignores `ECHO_AGENTIC_ASK_V1`; set it to `true` in new records.
+Rollback restores the accepted tuple verbatim. No command accepts arbitrary
 environment names or values.
 
 Run the bounded canary through the selected running release. It prefers a
@@ -382,8 +376,7 @@ except Authority staging, verifies the exact running release, and calls only
 the in-container private socket. It queues the release's canary meeting into
 the owner's synthetic personal source (no organization meeting source exists),
 runs one processing pass and reports the staged proposal. The printed receipt
-has only the release identity, outcome, and opaque approval identity. The
-receipt kind and field names are unchanged from the earlier private-DM canary.
+has only the release identity, outcome, and opaque approval identity.
 Every release uses one stable canary meeting with one new revision per release,
 so a later release supersedes an earlier undecided canary. Only `staged`
 succeeds. Other outcomes (`not_actionable`, `not_staged`) stop the command
@@ -702,24 +695,20 @@ is `unconfirmed`, not proof that the runtime stopped or recovery succeeded.
 These semantics follow the [Run Command API](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html)
 and [invocation status contract](https://docs.aws.amazon.com/cli/latest/reference/ssm/get-command-invocation.html).
 
-Plans use request version 4 and a checksum-bound XZ-compressed text bundle
-containing the exact reviewed runner and non-secret artifacts. Installed tools travel as checksum witnesses;
-`install` carries bytes for the changed tools that fit, and witnesses for the rest.
-Every installed file still passes owner, mode and old/new hash checks before
-any action. Candidate records and profiles always include their exact bytes. The fixed loader
-checks its digest and size, reconstructs the canonical request and checks its
-digest before invoking the runner. Compression uses the existing operator
-Python 3 standard-library `lzma` module with preset 6; only a bundle that otherwise exceeds the command
-cap retries preset 6 with extreme search and zero position bits for unaligned
-text, retaining the same dictionary size.
-Decoding is bounded by both output size and memory. No third-party package or
-manual courier is needed. The 60-KiB command cap is unchanged. The CLI and host
-runner accept only the current version-4 request, which has no
-`content_telemetry` field. Receipts planned by earlier tooling, including
-earlier version-4 receipts, can no longer be polled with this CLI: before
-switching to it, finish or poll every `planned`, `submitting`, `submitted` or
-`unconfirmed` receipt with the commit that planned it. Reconcile any unfinished
-command before planning a new operation.
+Plans use request version 4: a checksum-bound, XZ-compressed text bundle of
+the exact reviewed runner and non-secret artifacts, decoded with bounded output
+size and memory under the 60-KiB command cap. Compression uses the operator's
+Python 3 standard-library `lzma`; no third-party package is needed. Installed
+tools travel as
+checksum witnesses; `install` carries bytes for the changed tools that fit, and
+witnesses for the rest. Every installed file still passes owner, mode and
+old/new hash checks before any action. Candidate records and profiles always
+include their exact bytes. The fixed loader checks the bundle and the canonical
+request digests before invoking the runner. The CLI and host runner accept only
+the current version-4 request. Receipts planned by earlier tooling cannot be
+polled with this CLI: before switching to it, finish or poll every `planned`,
+`submitting`, `submitted` or `unconfirmed` receipt with the commit that planned
+it. Reconcile any unfinished command before planning a new operation.
 
 Host-side request/result journals live under
 `clean-data/release/remote-operations/<operation-id>/`. A duplicate exact request
@@ -770,9 +759,8 @@ does not stage a candidate or require inventing a future release.
 
 ## Person command-line kits
 
-The Person kit is command-line only. The native Swift app, its paired
-installer and the graphical `ECHO Setup.app` setup are retired, and no kit
-carries a desktop app. There are two kits. Both are built by the same command
+The Person kit is command-line only; no kit carries a desktop app. There are
+two kits. Both are built by the same command
 from the same accepted release record and exact Person-client tarball:
 
 | Kit | Builder flags | Manifest | Stable command |
@@ -923,69 +911,19 @@ its already-built Mac kit through `--kit-root`; the helper copies it before
 negative tests. This is isolated native-host proof, **not a pristine OS image or
 real browser-login proof**; host libraries remain available.
 
-| Validation | What it establishes | Still required before distribution |
-| --- | --- | --- |
-| Linux shell tests on Mac | Mocked OS/libc/ELF failure paths, staged write failure, reinstall preservation | Native Linux kit smoke; a Mac skip is not a Linux pass |
-| Native Mac smoke and existing Mac CI | Real packaged client and command-line kit, fresh user state, restricted tool PATH, install/start/reinstall | Clean macOS 14 and current macOS machines; downloaded archive/quarantine and browser sign-in |
-| Native Linux smoke in existing Ubuntu CI | Real Linux Node and packaged client, fresh state, offline install/start/reinstall | Ubuntu 22.04 and Debian 12 floor-class hosts; actual browser opening, deadlines, invitation transfer modes and permission-aware reads |
+To check one candidate on both targets, give the helper the same canonical
+release and tarball (`--release <record> --artifact <tarball>`). Its receipt
+holds their hashes, the client source and kind, the platform and
+`serving_authority: "not-observed-offline"`; compare both platforms' hashes.
+`--kit-root` verifies an already-built kit instead. `person status` reports
+`installed_version` and `client_build: { source_sha, source_kind }`; only
+`materialized-commit` identifies a committed package. Neither names the
+Authority serving a request; use the release lane's image evidence for that.
 
-The previous 3b663a7 Linux rehearsal on Debian 13/glibc 2.41 is evidence for
-that earlier artifact and host, not this PR's resulting artifact. Record the
-source SHA, archive checksum, OS/CPU/libc, native vs emulated environment and
-browser/read outcome for each new manual rehearsal. No fixture success marks a
-candidate accepted; release authority stays in the operator playbook.
-
-### Person contract candidate qualification
-
-`person status` reports local `installed_version` and
-`client_build: { source_sha, source_kind }` in either sign-in state. Only
-`materialized-commit` identifies a committed package; `worktree-head-unverified`
-explicitly does not. Neither the version, installed path nor client source SHA
-identifies the Authority actually serving a request. Status makes no network call.
-Use the existing operator lane's release/image evidence and correlated request
-audit or telemetry to identify that Authority independently.
-
-The candidate implements [ADR-0012](../../docs/decisions/ADR-0012-person-public-response-privacy.md).
-Current clients decode `echo-clean-person-record-search-v2` and, from
-`person ask`, `echo-clean-person-answer-v4` (schema 4); older exact-shape
-clients are incompatible. Decoding answer-v4 schema 4 does not by itself make
-a client current: a client built before ADR-0024 decodes that kind and schema
-but refuses the citation `ref` its Authority now sends.
-Select clients by committed source and tarball SHA-256, not a reused product version.
-The implementation contract is accepted; coordinated live qualification and
-the exact candidate's release decision remain required.
-
-For both native targets, build from the same committed source and feed the
-existing smoke helper the same canonical release and tarball:
-
-```sh
-node tests/fixtures/person-onboarding-smoke.mjs \
-  --release /absolute/private/candidate.clean-v1.json \
-  --artifact /absolute/private/person-client.tgz
-```
-
-This builds the host's kit and installs into disposable user state. Its receipt
-contains the release-record and tarball hashes, client source/kind, platform,
-and `serving_authority: "not-observed-offline"`. Compare both platforms' exact
-hashes. `--kit-root` verifies an already-built kit instead. The no-argument mode
-is a local smoke build; independent invocations are not evidence of one shared
-release or tarball. Native Linux execution is still owed when working on a Mac.
-
-Retire the one-off Mac-pinned stress checker as a qualification workflow; keep
-its old evidence outside Git. Use this smoke path plus the demo runbook's
-[pass/fail gate](../../demo/RUNBOOK.md#passfail-gate). Capture stdout, stderr, exit
-code, termination signal and launch errors separately. NUL argv and `E2BIG`
-fail at process launch; do not label them HTTP/input-validation failures or add
-another stdin/file question path. Successful JSON is on stdout; structured
-Authority failures are on stderr with a nonzero exit.
-
-After offline proof, the owner control must run on the owner device and bounded
-Q4/63-byte/64-byte employee repetitions on the employee device, retaining failed
-attempts as well as successes. Keep exact internal generation/head and serving
-image correlation in operator-only evidence, with the returned-response digest.
-No session copying, owner substitution or client-SHA inference qualifies the
-employee journey. Offline fixtures do not prove model reliability or release
-acceptance.
+Record the source SHA, archive checksum, OS/CPU/libc, native vs emulated
+environment and browser/read outcome for each manual rehearsal. No fixture
+success marks a candidate accepted; release authority stays in the operator
+playbook.
 
 ### Linux x64 terminal kit
 
