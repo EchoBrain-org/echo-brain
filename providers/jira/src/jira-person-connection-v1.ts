@@ -1,5 +1,5 @@
 import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
-import { createPersonProjectMappingAccessV1, personToolContainerSourceV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
+import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import { validateJiraProjectReadV1, validateJiraProjectSetV1, type JiraProjectMappingV1 } from '@echo-brain/provider-jira-client/organization-api/jira-project-mapping-v1';
 import type { JiraProjectMappingStoreV1 } from './jira-project-mapping-store-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
@@ -122,9 +122,8 @@ export function createJiraPersonConnectionV1(options: {
       return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current }, access: { tool_id: 'jira', external_scope_id: cloud, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
     },
     /** The Jira projects the asker can browse, as tool containers (research tool contract v1); a project scope reads only its mapped one. */
-    containerSource: (input: Parameters<typeof personToolContainerSourceV1>[1]) => personToolContainerSourceV1({
-      provider: JIRA_PERSON_PROVIDER_V1, scope_id: cloud, lifecycle: shared, store: options.store, access, validate: validateJiraProjectReadV1,
-      containers: mapping => [mapping.project_id],
+    containerSource: (input: Parameters<typeof access.containerSource>[1]) => access.containerSource({
+      scope_id: cloud, validate: validateJiraProjectReadV1, lifecycle: shared, store: options.store, containers: mapping => [mapping.project_id],
       reader: ({ fetch: authenticatedFetch, ...read }, mapping) => createJiraPersonLiveContainerReaderV1({ ...read, transport: createJiraCloudTransportV1(authenticatedFetch),
         ...(mapping === undefined ? {} : { project: mapping.project_id }) }),
     }, input),

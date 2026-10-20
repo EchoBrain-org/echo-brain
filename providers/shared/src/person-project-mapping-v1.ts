@@ -86,118 +86,103 @@ export function createPersonProjectMappingAccessV1<T extends ScopedProjectMappin
   function mappingInput<R>(validate: () => R): R {
     try { return validate(); } catch { return failure('invalid_request'); }
   }
-  return {
-    projectAccess,
-    mappingInput,
-    /**
-     * The project-scoped live read rule, once for every provider. Without a
-     * project: undefined (global scope). An unmapped project: null, and the
-     * caller reads nothing; it never falls back to the person's global
-     * results. A mapping for another site is refused. `current` re-checks the
-     * project grant and that the saved mapping has not changed.
-     */
-    projectScope(token: string, organizationId: string, projectId: string | undefined, scopeId: string, validate: (request: unknown) => { readonly project_id: string }) {
-      if (projectId === undefined) return undefined;
-      const project = mappingInput(() => validate({ schema_version: 1, project_id: projectId })).project_id;
-      const access = projectAccess(token, project);
-      const mapped = access.store.read(organizationId, project);
-      const mapping = mapped.mapping;
-      if (mapping === null) return null;
-      if (mapping.cloud_id !== scopeId) failure('unauthorized');
-      return { mapping: mapping as NonNullable<T['mapping']>, current: () => {
-        access.current();
-        if (access.store.read(organizationId, project).revision !== mapped.revision) failure('stale_access_state');
-      } };
-    },
-    /**
-     * The names of the ECHO projects mapped to each of the tool's containers that the asker can see (research tool
-     * contract v1), by container id, pinned for one source: `containers` names the containers one mapping on this site
-     * maps. A project the asker cannot see is left out, never named or counted; without the stores and names, nothing is.
-     * The pin reads each mapped project's grant. `current` runs at every fence, several times per provider request, so it
-     * reads the mappings once and asks for every mapped project's name at once, which names only the projects the asker
-     * can see, never a grant per project. It refuses once that differs from the pin (a grant lost or gained, a mapping or
-     * a name), so a container's released text is still what the asker may see at every fence, including the final
-     * synchronous one.
-     */
-    containerProjects(token: string, organizationId: string, containers: (mapping: NonNullable<T['mapping']>) => readonly string[]) {
-      const store = options.project_mappings, authorize = options.authorize_project, projectNames = options.project_names;
-      if (store === undefined || authorize === undefined || projectNames === undefined) {
-        return Object.freeze({ names: new Map() as ReadonlyMap<string, readonly string[]>, current: () => {} });
+  /**
+   * The project-scoped live read rule, once for every provider. Without a
+   * project: undefined (global scope). An unmapped project: null, and the
+   * caller reads nothing; it never falls back to the person's global
+   * results. A mapping for another site is refused. `current` re-checks the
+   * project grant and that the saved mapping has not changed.
+   */
+  function projectScope(token: string, organizationId: string, projectId: string | undefined, scopeId: string, validate: (request: unknown) => { readonly project_id: string }) {
+    if (projectId === undefined) return undefined;
+    const project = mappingInput(() => validate({ schema_version: 1, project_id: projectId })).project_id;
+    const access = projectAccess(token, project);
+    const mapped = access.store.read(organizationId, project);
+    const mapping = mapped.mapping;
+    if (mapping === null) return null;
+    if (mapping.cloud_id !== scopeId) failure('unauthorized');
+    return { mapping: mapping as NonNullable<T['mapping']>, current: () => {
+      access.current();
+      if (access.store.read(organizationId, project).revision !== mapped.revision) failure('stale_access_state');
+    } };
+  }
+  /**
+   * The names of the ECHO projects mapped to each of the tool's containers that the asker can see (research tool
+   * contract v1), by container id, pinned for one source: `containers` names the containers one mapping on this site
+   * maps. A project the asker cannot see is left out, never named or counted; without the stores and names, nothing is.
+   * The pin reads each mapped project's grant. `current` runs at every fence, several times per provider request, so it
+   * reads the mappings once and asks for every mapped project's name at once, which names only the projects the asker
+   * can see, never a grant per project. It refuses once that differs from the pin (a grant lost or gained, a mapping or
+   * a name), so a container's released text is still what the asker may see at every fence, including the final
+   * synchronous one.
+   */
+  function containerProjects(token: string, organizationId: string, containers: (mapping: NonNullable<T['mapping']>) => readonly string[]) {
+    const store = options.project_mappings, authorize = options.authorize_project, projectNames = options.project_names;
+    if (store === undefined || authorize === undefined || projectNames === undefined) {
+      return Object.freeze({ names: new Map() as ReadonlyMap<string, readonly string[]>, current: () => {} });
+    }
+    if (store.provider !== provider.id) failure('invalid_request');
+    /** Each ECHO project mapped to containers on this site, with them. */
+    const mapped = () => store.list(organizationId).flatMap(value => {
+      const ids = value.mapping === null ? [] : containers(value.mapping as NonNullable<T['mapping']>);
+      return ids.length === 0 ? [] : [[value.project_id, ids] as const];
+    });
+    /** By container id, the names of the projects mapped to it that `projectNames` named for `projects`. */
+    const byContainer = (projects: readonly (readonly [string, readonly string[]])[]): ReadonlyMap<string, readonly string[]> => {
+      const named = projects.length === 0 ? new Map<string, string>() : projectNames(token, projects.map(([project]) => project));
+      const result = new Map<string, string[]>();
+      for (const [project, ids] of projects) {
+        const name = named.get(project);
+        if (name === undefined) continue;
+        for (const id of ids) result.set(id, [...result.get(id) ?? [], name]);
       }
-      if (store.provider !== provider.id) failure('invalid_request');
-      /** Each ECHO project mapped to containers on this site, with them. */
-      const mapped = () => store.list(organizationId).flatMap(value => {
-        const ids = value.mapping === null ? [] : containers(value.mapping as NonNullable<T['mapping']>);
-        return ids.length === 0 ? [] : [[value.project_id, ids] as const];
-      });
-      /** By container id, the names of the projects mapped to it that `projectNames` named for `projects`. */
-      const byContainer = (projects: readonly (readonly [string, readonly string[]])[]): ReadonlyMap<string, readonly string[]> => {
-        const named = projects.length === 0 ? new Map<string, string>() : projectNames(token, projects.map(([project]) => project));
-        const result = new Map<string, string[]>();
-        for (const [project, ids] of projects) {
-          const name = named.get(project);
-          if (name === undefined) continue;
-          for (const id of ids) result.set(id, [...result.get(id) ?? [], name]);
-        }
-        return new Map([...result].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([id, list]) => [id, Object.freeze([...new Set(list)].sort())]));
-      };
-      const names = byContainer(mapped().filter(([project]) => {
-        try { authorize(token, project); return true; }
-        catch (error) {
-          if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) return false;
-          throw error;
-        }
-      }));
-      const pinned = canonicalSha256([...names]);
-      return Object.freeze({ names, current: () => { if (canonicalSha256([...byContainer(mapped())]) !== pinned) failure('stale_access_state'); } });
-    },
-  };
-}
-
-/** A tool's connection, project mappings and container reader, as `personToolContainerSourceV1` reads with them. */
-export interface PersonToolContainerConnectionV1<M extends { readonly cloud_id: string }> {
-  readonly provider: Pick<PersonProviderV1, 'id'>;
-  /** The provider site (cloud) the connection reads. */
-  readonly scope_id: string;
-  readonly lifecycle: Pick<ReturnType<typeof createPersonConnectionLifecycleV1>, 'actor' | 'tags' | 'authenticated'>;
-  readonly store: Pick<PersonConnectionStoreV1, 'current' | 'requireCurrent'>;
-  /** `createPersonProjectMappingAccessV1`'s project scope and container names. */
-  readonly access: {
-    projectScope(token: string, organizationId: string, projectId: string | undefined, scopeId: string, validate: (request: unknown) => { readonly project_id: string }): { readonly mapping: M; current(): void } | null | undefined;
-    containerProjects(token: string, organizationId: string, containers: (mapping: M) => readonly string[]): { readonly names: ReadonlyMap<string, readonly string[]>; current(): void };
-  };
-  /** The tool's project read request validator. */
-  readonly validate: (request: unknown) => { readonly project_id: string };
-  /** The containers one saved mapping on this site maps. */
-  readonly containers: (mapping: M) => readonly string[];
-  /** The tool's container reader over the asker's connection; in a project scope, pinned to the scope's saved mapping. */
-  readonly reader: (input: {
-    readonly binding: PersonConnectorReadBindingV1; readonly fetch: PersonConnectionAuthenticatedFetchV1; readonly expected_origin: string;
-    readonly signal: AbortSignal | undefined; readonly echo_projects: () => ReadonlyMap<string, readonly string[]>;
-  }, mapping: M | undefined) => Promise<PersonLiveEvidenceReaderV1<PersonToolContainerCitationV1>>;
-}
-
-/**
- * A connected tool's containers as one request's audited live source (research tool contract v1), each naming the ECHO
- * projects mapped to it that the asker can see. None without an active connection, or for an unmapped project; a project
- * scope reads only the containers its saved mapping names. Every read is fenced on the person, the connection, the scope's
- * mapping and grant, and the ECHO projects it named.
- */
-export async function personToolContainerSourceV1<M extends { readonly cloud_id: string }>(tool: PersonToolContainerConnectionV1<M>, input: {
-  readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonToolContainerCitationV1>; readonly signal?: AbortSignal;
-}): Promise<PersonLiveEvidenceSourceV1<PersonToolContainerCitationV1> | undefined> {
-  const { actor, tags, authenticated } = tool.lifecycle;
-  const { person, requirePerson } = actor(input.access_token);
-  const scope = tool.access.projectScope(input.access_token, person.organization_id, input.project_id, tool.scope_id, tool.validate);
-  if (scope === null) return undefined;
-  const stored = tool.store.current(person);
-  if (stored === undefined || !stored.active) return undefined;
-  const named = tool.access.containerProjects(input.access_token, person.organization_id, mapping => mapping.cloud_id === tool.scope_id ? tool.containers(mapping) : []);
-  const current = () => { requirePerson(); tool.store.requireCurrent(stored.binding); scope?.current(); named.current(); };
-  current();
-  const reader = await tool.reader({ binding: stored.binding, fetch: authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current),
-    expected_origin: stored.site, signal: input.signal, echo_projects: () => named.names }, scope?.mapping);
-  current();
-  return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current },
-    access: { tool_id: tool.provider.id, external_scope_id: tool.scope_id, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
+      return new Map([...result].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([id, list]) => [id, Object.freeze([...new Set(list)].sort())]));
+    };
+    const names = byContainer(mapped().filter(([project]) => {
+      try { authorize(token, project); return true; }
+      catch (error) {
+        if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'not_found')) return false;
+        throw error;
+      }
+    }));
+    const pinned = canonicalSha256([...names]);
+    return Object.freeze({ names, current: () => { if (canonicalSha256([...byContainer(mapped())]) !== pinned) failure('stale_access_state'); } });
+  }
+  /**
+   * A connected tool's containers as one request's audited live source (research tool contract v1), each naming the ECHO
+   * projects mapped to it that the asker can see. None without an active connection, or for an unmapped project; a
+   * project scope reads only the containers its saved mapping names. Every read is fenced on the person, the connection,
+   * the scope's mapping and grant, and the ECHO projects it named.
+   */
+  async function containerSource(tool: {
+    /** The provider site (cloud) the connection reads, and the tool's project read request validator. */
+    readonly scope_id: string; readonly validate: (request: unknown) => { readonly project_id: string };
+    readonly lifecycle: Pick<ReturnType<typeof createPersonConnectionLifecycleV1>, 'actor' | 'tags' | 'authenticated'>;
+    readonly store: Pick<PersonConnectionStoreV1, 'current' | 'requireCurrent'>;
+    /** The containers one saved mapping on this site maps. */
+    readonly containers: (mapping: NonNullable<T['mapping']>) => readonly string[];
+    /** The tool's container reader over the asker's connection; in a project scope, pinned to the scope's saved mapping. */
+    readonly reader: (input: {
+      readonly binding: PersonConnectorReadBindingV1; readonly fetch: PersonConnectionAuthenticatedFetchV1; readonly expected_origin: string;
+      readonly signal: AbortSignal | undefined; readonly echo_projects: () => ReadonlyMap<string, readonly string[]>;
+    }, mapping: NonNullable<T['mapping']> | undefined) => Promise<PersonLiveEvidenceReaderV1<PersonToolContainerCitationV1>>;
+  }, input: {
+    readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonToolContainerCitationV1>; readonly signal?: AbortSignal;
+  }): Promise<PersonLiveEvidenceSourceV1<PersonToolContainerCitationV1> | undefined> {
+    const { actor, tags, authenticated } = tool.lifecycle;
+    const { person, requirePerson } = actor(input.access_token);
+    const scope = projectScope(input.access_token, person.organization_id, input.project_id, tool.scope_id, tool.validate);
+    if (scope === null) return undefined;
+    const stored = tool.store.current(person);
+    if (stored === undefined || !stored.active) return undefined;
+    const named = containerProjects(input.access_token, person.organization_id, mapping => mapping.cloud_id === tool.scope_id ? tool.containers(mapping) : []);
+    const current = () => { requirePerson(); tool.store.requireCurrent(stored.binding); scope?.current(); named.current(); };
+    current();
+    const reader = await tool.reader({ binding: stored.binding, fetch: authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current),
+      expected_origin: stored.site, signal: input.signal, echo_projects: () => named.names }, scope?.mapping);
+    current();
+    return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current },
+      access: { tool_id: provider.id, external_scope_id: tool.scope_id, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
+  }
+  return { projectAccess, mappingInput, projectScope, containerProjects, containerSource };
 }

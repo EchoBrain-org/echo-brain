@@ -1,5 +1,5 @@
 import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
-import { createPersonProjectMappingAccessV1, personToolContainerSourceV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
+import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import { validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceProjectMappingsV1, validateConfluenceSpacesPageV1, type ConfluenceProjectMappingV1, type ConfluenceProjectMappingsV1, type ConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
 import { randomUUID } from 'node:crypto';
 import type { ConfluenceProjectMappingStoreV1 } from './confluence-project-mapping-store-v1.js';
@@ -169,9 +169,8 @@ export function createConfluencePersonConnectionV1(options: {
       });
     },
     /** The Confluence spaces the asker can view, as tool containers (research tool contract v1); a project scope reads only its mapped ones. */
-    containerSource: (input: Parameters<typeof personToolContainerSourceV1>[1]) => personToolContainerSourceV1({
-      provider: CONFLUENCE_PERSON_PROVIDER_V1, scope_id: cloud, lifecycle: shared, store: options.store, access, validate: validateConfluenceProjectReadV1,
-      containers: mapping => mapping.space_ids,
+    containerSource: (input: Parameters<typeof access.containerSource>[1]) => access.containerSource({
+      scope_id: cloud, validate: validateConfluenceProjectReadV1, lifecycle: shared, store: options.store, containers: mapping => mapping.space_ids,
       reader: ({ fetch: authenticatedFetch, ...read }, mapping) => createConfluencePersonLiveContainerReaderV1({ ...read, transport: createConfluenceCloudTransportV1(authenticatedFetch),
         ...(mapping === undefined ? {} : { space_ids: mapping.space_ids }) }),
     }, input),
