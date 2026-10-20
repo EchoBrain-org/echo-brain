@@ -212,8 +212,8 @@ export function createAgenticResearchV1(options: CreateAgenticAskV2Options) {
   };
 }
 /**
- * V3 core keeps V5 strict and emits V6 only when a live page source is selected.
- * `answerWithReceipt` is the same Ask, streaming its progress (ADR-0039).
+ * V3 core: V6 answers, the first that may read and cite live pages.
+ * `answerWithReceipt` is the same Ask, streaming its progress in V1 (ADR-0039).
  */
 export function createAgenticAskV3(options: CreateAgenticAskV2Options) {
   return createAgenticAskCore(options, 6) as unknown as {
@@ -351,7 +351,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       });
       let terminalAudited = false;
       // A streamed Ask's record of what it searched and named (ADR-0039); it stops sending once the request's signal aborts.
-      // The V7 answer streams progress V2, so its reads may name follow-ups; the V6 answer streams V1, which never does.
+      // The V7 answer streams progress V2 and the V8 answer V3, so their reads may name follow-ups; the V6 answer streams V1, which never does.
       const progress = input.on_progress === undefined ? undefined : createAgenticAskProgressRecorderV1({
         sink: input.on_progress as AgenticAskProgressSinkV3, version: responseVersion === 8 ? 3 : responseVersion === 7 ? 2 : 1, sources: researchSources, signal: activeSignal,
         ...(input.progress_request === undefined ? {} : { named: input.progress_request.named }) });
@@ -463,7 +463,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
         phase = "final";
         progress?.stage("checking_access");
-        // V5/V6 keep the access check after the audit write; V4 never had one.
+        // V5 to V8 keep the access check after the audit write; V4 never had one.
         const response = await releaseAgenticResultV1({
           ...auditContext(), desk, outcome: rendered.outcome, citation_count: rendered.cited.length, result: rendered.result.response, answer_sha256: rendered.answer_sha256,
           fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive,
@@ -508,8 +508,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     },
     /**
      * Ask with its progress sent to `on_progress` while it runs, and the receipt
-     * built after release (ADR-0039). Only the V6 core (progress V1) and the V7
-     * core (progress V2, ADR-0040) stream.
+     * built after release (ADR-0039). Only the V6 core (progress V1), the V7
+     * core (progress V2, ADR-0040) and the V8 core (progress V3) stream.
      */
     async answerWithReceipt(input: AgenticAskProgressInputV1 | AgenticAskProgressInputV2 | AgenticAskProgressInputV3): Promise<AgenticAskAnswerWithReceiptV1 | AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3> {
       if ((responseVersion !== 6 && responseVersion !== 7 && responseVersion !== 8) || typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");

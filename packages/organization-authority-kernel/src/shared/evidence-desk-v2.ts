@@ -38,7 +38,7 @@ export interface EvidenceSourceCapabilitiesV1 {
   readonly dates: Readonly<Partial<Record<EvidenceDateFieldV1, string>>>;
   /** It matches a window with no date field against any of an item's dates (`date_field: any`). */
   readonly any_date: boolean;
-  /** The names of the links its items may carry, such as `meeting`, `decision`, `follows`, `members` or `jira_project`. */
+  /** The names of the links its items may carry, such as `decision`, `follows`, `members` or `projects`. */
   readonly links: readonly string[];
   /** How many items the asker can see in it, for an ECHO source that counts them cheaply. */
   readonly count?: number;
@@ -46,7 +46,7 @@ export interface EvidenceSourceCapabilitiesV1 {
 
 /** A status a list of projects takes. */
 export type ProjectListStatusV1 = 'active' | 'archived';
-/** A role a list of projects or of people takes. */
+/** A role a list of projects takes. */
 export type ProjectListRoleV1 = 'lead' | 'member';
 
 /**
@@ -127,15 +127,15 @@ export interface EvidenceDeskListInputV2 extends Omit<EvidenceDeskListInputV1, '
   readonly source: EvidenceDeskSourceV2;
   readonly kinds?: readonly EvidenceDeskKindV2[];
   /**
-   * Follow-ups only (ADR-0040), applied before anything is released or read
-   * live: the owner's display name, matched as `followUpOwnerMatchesV1`
-   * matches it, and a status group (`open`: the item is open; `done`: it is
-   * done). The research loop sends them to no other source.
+   * Applied before anything is released or read live. The research loop sends
+   * owner, status and role only to a source whose capabilities take them
+   * (research tool contract v1). Follow-ups match the owner's display name as
+   * `followUpOwnerMatchesV1` matches it (ADR-0040).
    */
   readonly owner?: string;
-  /** Follow-ups take `open` or `done`; projects take `active` or `archived` (research tool contract v1). */
+  /** Follow-ups take `open` (the item is open) or `done` (it is done); projects take `active` or `archived`. */
   readonly status?: FollowUpListStatusV1 | ProjectListStatusV1;
-  /** Projects and people (research tool contract v1): the asker's role in a project, or a member's. */
+  /** Projects: the asker's role in a project. */
   readonly role?: ProjectListRoleV1;
 }
 
