@@ -779,6 +779,67 @@ test("a statement names a member it cites when its text holds the member's name,
   assert.deepEqual(namedBy("2 Confluence pages created on October 4, 2026: Release plan; Release plan v2.", rows, rows, plans), [true, 2]);
 });
 
+// Two "Weekly notes" pages recording `facts`, then "Budget"; one statement citing the first `cites` rows gives `names`.
+function duplicateNames(facts, names, cites = 3) {
+  const rows = [...facts, undefined].map((attributes, index) => ({ ...pageRow([`70000${index + 1}`, index < 2 ? "Weekly notes" : "Budget", "1"], index), attributes }));
+  const testCase = { ...caseById(OCT4_CASE), id: "synthetic-weekly-notes", parts: [{ id: "p1", type: "list", requirement: "All 3 pages.", evidence: rows.map(row => ({ page: row.citation.page_id })) }] };
+  const [named, members_named] = namedBy(`3 Confluence pages created on October 4, 2026: ${names}.`, rows.slice(0, cites), rows, testCase);
+  return { named, members_named };
+}
+
+test("members sharing a title but not their status, owner or due date are each named only with the facts code adds to tell them apart", () => {
+  const run = duplicateNames;
+  const status = [{ status: "open" }, { status: "closed" }];
+  for (const [facts, names, expected, cites] of [
+    [status, "Weekly notes (open); Weekly notes (closed); Budget", { named: true, members_named: 3 }],
+    // One title names neither member it could be, and a count cannot cover them.
+    [status, "Weekly notes; Budget", { named: false, members_named: 1 }],
+    [status, "Weekly notes; and 1 more", { named: false, members_named: 0 }, 2],
+    [status, "Weekly notes (closed); Budget", { named: false, members_named: 2 }],
+    // The member recording no owner is the one named without one.
+    [[{ owner: "Dana Lee" }, {}], "Weekly notes (owner Dana Lee); Weekly notes; Budget", { named: true, members_named: 3 }],
+    [[{ owner: "Dana Lee" }, {}], "Weekly notes (owner Dana Lee); Budget", { named: false, members_named: 2 }],
+    [[{ due_at: "2026-10-09" }, { due_at: "2026-10-12" }], "Weekly notes (due October 9, 2026); Weekly notes (due October 12, 2026); Budget", { named: true, members_named: 3 }],
+    // Facts differing only in case or spacing are the same, so code gives both members one name.
+    [[{ status: "open" }, { status: " Open" }], "Weekly notes (2 pages); Budget", { named: true, members_named: 3 }],
+  ]) assert.deepEqual(run(facts, names, cites), expected, names);
+});
+
+test("duplicate facts name only their whole value, never a competing value inside it", () => {
+  for (const [facts, fragment] of [
+    [[{ status: "open" }, { status: "not open" }], "not open"],
+    [[{ status: "open" }, { status: "open for review" }], "open for review"],
+    [[{ owner: "Lee" }, { owner: "Dana Lee" }], "owner Dana Lee"],
+    [[{ due_at: "soon" }, { due_at: "not soon" }], "due not soon"],
+    [[{ status: "open" }, { status: "not open" }], "status not open"],
+    [[{ status: "review" }, { status: "ready, review" }], "ready, review"],
+  ]) {
+    assert.deepEqual(duplicateNames(facts, `Weekly notes (${fragment}); Budget`), { named: false, members_named: 2 }, fragment);
+  }
+  assert.deepEqual(duplicateNames([{ status: "open", owner: "Lee" }, { status: "closed", owner: "Open Lee" }],
+    "Weekly notes (closed, owner Open Lee); Budget"), { named: false, members_named: 2 });
+});
+
+test("duplicate facts accept the renderer's field-specific truncation", () => {
+  for (const [field, limit, prefix] of [["status", 60, ""], ["owner", 80, "owner "], ["due_at", 40, "due "]]) {
+    const value = "🧪 ".repeat(limit);
+    const cut = `${[...value.trim()].slice(0, limit - 1).join("").trimEnd()}…`;
+    const facts = [{ [field]: value }, { [field]: "other" }];
+    assert.deepEqual(duplicateNames(facts, `Weekly notes (${prefix}${cut}); Weekly notes (${prefix}other); Budget`), { named: true, members_named: 3 }, field);
+  }
+});
+
+test("a title cut at 120 characters stays apart from a whole title equal to what stands before its ellipsis", () => {
+  const short = "Probe drift ".repeat(10).trim();
+  assert.equal([...short].length, 119);
+  const pages = [["700011", short, "1"], ["700012", `${short} and battery sag`, "1"]];
+  const rows = pages.map((page, index) => pageRow(page, index));
+  const testCase = { ...caseById(OCT4_CASE), id: "synthetic-cut-titles", parts: [{ id: "p1", type: "list", requirement: "Both pages.", evidence: pages.map(([page]) => ({ page })) }] };
+  const named = (names, cites) => namedBy(`2 Confluence pages created on October 4, 2026: ${names}.`, cites, rows, testCase)[1];
+  // Code's names; the long title whole, as a writer may give it; and code's cut name alone, which is not the short title.
+  assert.deepEqual([named(`${short}; ${short}…`, rows), named(`${short}; ${pages[1][1]}`, rows), named(`${short}…`, rows.slice(0, 1))], [2, 2, 0]);
+});
+
 test("past an answer's 25 names, cut, merged and lowercased names match, and only a statement naming every row it cites counts the rest", () => {
   // 30 pages: a title past 120 characters, which code cuts, two pages sharing a label, which code names once, and 27 others.
   const long = "Field return analysis for the mock digital thermometer: probe drift, battery sag, display rounding and fixture tolerances, with owners";

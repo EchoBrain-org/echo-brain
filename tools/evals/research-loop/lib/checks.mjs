@@ -145,8 +145,8 @@ function listIndex(research) {
 function listPart(part, items, meetings, lists, handedIds, answer) {
   const members = part.evidence.map(ref => matching(items, ref, meetings));
   const every = holds => members.every(found => found.some(holds));
-  const names = members.map((found, index) => part.evidence[index].meeting === undefined ? found.map(item => nameOf(item.title)) : []);
-  const statements = (answer?.parts ?? []).flatMap(value => value.statements).map(statement => statementOf(statement, members, names, items, lists, answer));
+  const nameable = part.evidence.map(ref => ref.meeting === undefined);
+  const statements = (answer?.parts ?? []).flatMap(value => value.statements).map(statement => statementOf(statement, members, nameable, items, lists, answer));
   const named = (_, index) => statements.some(statement => statement.named.has(index));
   // Code's statement counts the members it does not name, from ECHO's own list (ADR-0041, addition 5); each
   // statement is read alone, so members another statement names by id never count twice.
@@ -170,22 +170,21 @@ function listPart(part, items, meetings, lists, handedIds, answer) {
 
 /**
  * What one statement of an answer names (ADR-0041): the members of a list part it cites, by any of their items, whose
- * names its text holds (`namesIn`), however the statement came to cite them. The response does not say which statements
+ * names its text holds (`namer`), however the statement came to cite them. The response does not say which statements
  * code wrote, so a statement never names a member by citing it alone: a writer's sentence citing 8 rows, as one on
  * follow-ups' text may, names the 4 its text names. `code`: the statement reads as one code wrote, which alone may end
  * "and N more" (addition 5): it cites only list members' rows, and its text names every item it cites, as code's
  * statements do (a name never covers a member the statement does not cite).
  */
-function statementOf(statement, members, names, items, lists, answer) {
+function statementOf(statement, members, nameable, items, lists, answer) {
   const resolved = statement.citation_indexes.map(index => items.filter(item => isDeepStrictEqual(item.citation, answer.citations[index]?.citation)));
   const cited = new Set(resolved.flat());
-  const own = [...cited].map(item => nameOf(item.title));
-  const found = namesIn(statement.text, [...names.flat(), ...own]);
+  const says = namer(statement.text, [...members.filter((_, index) => nameable[index]).flat(), ...cited], cited);
   const rows = resolved.length > 0 && resolved.every(value => value.length > 0 && value.every(item => lists.of(item.id).length > 0));
   return {
     text: statement.text,
-    code: rows && own.every(name => found.has(name.key)),
-    named: new Set(members.flatMap((value, index) => value.some(item => cited.has(item)) && names[index].some(name => found.has(name.key)) ? [index] : [])),
+    code: rows && [...cited].every(says),
+    named: new Set(members.flatMap((value, index) => nameable[index] && value.some(item => cited.has(item)) && value.some(says) ? [index] : [])),
   };
 }
 
@@ -195,41 +194,101 @@ const NAME_CHARS = 120;
 function oneLine(value) {
   return String(value ?? "").normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim();
 }
+/** The renderer cuts by Unicode characters, keeping the ellipsis within the field's limit. */
+function cutLine(value, limit) {
+  const text = oneLine(value);
+  const characters = [...text];
+  return characters.length <= limit ? text : `${characters.slice(0, limit - 1).join("").trimEnd()}…`;
+}
 
 /**
- * An item's name as code writes it in a list statement (agenticListStatementV1, groupNames): its title on one line,
- * cut to 120 characters, compared ignoring case. A cut title matches on what stands before its ellipsis, which code's
- * cut name and the whole title both hold (`cut`). Members that share a label share a name, as code merges them.
+ * An item's name as code writes it in a list statement (agenticListStatementV1, groupNames), ignoring case: `label`,
+ * its title on one line cut to 120 characters, which members sharing it share; and the `forms` a text names it by,
+ * the label and, for a cut title, the whole title. A cut label keeps its ellipsis, so it never names a member whose
+ * whole title is what stands before it.
  */
 function nameOf(title) {
-  const characters = [...oneLine(title)];
+  const line = oneLine(title);
+  const characters = [...line];
   const cut = characters.length > NAME_CHARS;
-  const text = (cut ? characters.slice(0, NAME_CHARS - 1).join("").trimEnd() : characters.join("")).toLowerCase();
-  return { key: `${cut ? "cut" : "whole"}:${text}`, text, cut };
+  const label = (cut ? `${characters.slice(0, NAME_CHARS - 1).join("").trimEnd()}…` : line).toLowerCase();
+  return { label, forms: cut ? [label, line.toLowerCase()] : [label] };
+}
+
+/** The row facts code writes after a label to keep members sharing it apart (groupNames), as its words say them. */
+const FACTS = [
+  { field: "status", forms: value => [cutLine(value, 60), `status ${cutLine(value, 60)}`] },
+  { field: "owner", forms: value => [value === "none recorded" ? "no owner recorded" : `owner ${cutLine(value, 80)}`] },
+  { field: "due_at", forms: value => {
+    const due = cutLine(value, 40);
+    const day = /^\d{4}-\d{2}-\d{2}$/u.test(due) ? new Date(`${due}T00:00:00Z`).toLocaleDateString("en-US", { dateStyle: "long", timeZone: "UTC" }) : due;
+    return [`due ${day}`];
+  } },
+];
+function factOf(item, fact) {
+  const value = item.attributes?.[fact.field];
+  return value === undefined ? undefined : oneLine(value).toLowerCase();
+}
+/** A complete renderer detail, including its field prefix; a phrase inside another value does not count. */
+function holdsFact(words, item, fact, peers) {
+  const value = item.attributes?.[fact.field];
+  if (value === undefined) return false;
+  const formsOf = entry => entry.attributes?.[fact.field] === undefined ? [] : fact.forms(entry.attributes[fact.field]).map(form => form.toLowerCase());
+  const own = formsOf(item);
+  const forms = [...new Set([item, ...peers].flatMap(formsOf))].sort((left, right) => right.length - left.length);
+  let rest = words;
+  const found = new Set();
+  // Take longer details first: a status itself may contain a comma, so its tail is not a second value.
+  for (const form of forms) {
+    const escaped = form.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const pattern = new RegExp(`(^|[(,])\\s*(${escaped})(?=\\s*(?:[,)]|\\.?$))`, "gu");
+    rest = rest.replace(pattern, (match, _delimiter, detail) => {
+      found.add(form);
+      return `${match.slice(0, match.length - detail.length)}${"\u0000".repeat(detail.length)}`;
+    });
+  }
+  return own.some(form => found.has(form));
 }
 
 const STARTS_WORD = /^[\p{L}\p{N}]/u;
 const ENDS_WORD = /[\p{L}\p{N}]$/u;
+/** Where `phrase` stands in `text` from `from` as a phrase of its own, never inside a longer word; -1 where it does not. */
+function phraseAt(text, phrase, from = 0) {
+  const opens = STARTS_WORD.test(phrase);
+  const closes = ENDS_WORD.test(phrase);
+  for (let at = text.indexOf(phrase, from); at !== -1; at = text.indexOf(phrase, at + 1)) {
+    if (!(opens && ENDS_WORD.test(text.slice(0, at))) && !(closes && STARTS_WORD.test(text.slice(at + phrase.length)))) return at;
+  }
+  return -1;
+}
+
 /**
- * The keys of `names` (nameOf) that a statement's text holds, ignoring case: each as a phrase of its own, never inside a
- * longer word (an uncut name ends where a word ends), and longest first, each match taken out of the text, so a name
- * that is part of a longer one the text holds ("PRD" in "PRD v2") is not named by it.
+ * Whether a statement's text names an item of `items` by its name (nameOf), ignoring case: each form as a phrase of
+ * its own, longest first, each match taken out of the text, so a name that is part of a longer one the text holds
+ * ("PRD" in "PRD v2") is not named by it. Where the statement cites items sharing its label that record another status,
+ * owner or due date, code keeps them apart and writes those facts after each label: the text names the item only where
+ * the words after its name, up to the next name or ";", say its complete rendered detail for each such fact, and none
+ * where it records none. Detail delimiters and field prefixes keep a value inside another value from naming it.
  */
-function namesIn(text, names) {
+function namer(text, items, cited) {
   let rest = oneLine(text).toLowerCase();
-  const found = new Set();
-  const unique = [...new Map(names.filter(name => name.text.length > 0).map(name => [name.key, name])).values()].sort((left, right) => right.text.length - left.text.length);
-  for (const name of unique) {
-    const opens = STARTS_WORD.test(name.text);
-    const closes = !name.cut && ENDS_WORD.test(name.text);
-    for (let at = rest.indexOf(name.text); at !== -1; at = rest.indexOf(name.text, at + 1)) {
-      const end = at + name.text.length;
-      if ((opens && ENDS_WORD.test(rest.slice(0, at))) || (closes && STARTS_WORD.test(rest.slice(end)))) continue;
-      found.add(name.key);
-      rest = `${rest.slice(0, at)}${"\u0000".repeat(name.text.length)}${rest.slice(end)}`;
+  const places = [];
+  const forms = [...new Set(items.flatMap(item => nameOf(item.title).forms))].filter(form => form.length > 0).sort((left, right) => right.length - left.length);
+  for (const form of forms) {
+    for (let at = phraseAt(rest, form); at !== -1; at = phraseAt(rest, form, at + form.length)) {
+      places.push({ form, end: at + form.length });
+      rest = `${rest.slice(0, at)}${"\u0000".repeat(form.length)}${rest.slice(at + form.length)}`;
     }
   }
-  return found;
+  const after = places.map(({ form, end }) => ({ form, words: /^[^\u0000;]*/u.exec(rest.slice(end))[0] }));
+  return item => {
+    const { label, forms: own } = nameOf(item.title);
+    const peers = [...cited].filter(other => nameOf(other.title).label === label);
+    const apart = FACTS.filter(fact => new Set([item, ...peers].map(other => factOf(other, fact))).size > 1);
+    return after.some(({ form, words }) => own.includes(form) && apart.every(fact => factOf(item, fact) === undefined
+      ? !peers.some(other => holdsFact(words, other, fact, peers))
+      : holdsFact(words, item, fact, peers)));
+  };
 }
 
 /** The sweep result's verdicts in the key's terms; a null verdict (not assessed) has none. */
