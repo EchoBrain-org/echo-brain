@@ -281,7 +281,20 @@ test("the release check reads each open-ended question's latest staging trace an
   const other = releaseCheck(runs, questions.slice(0, 1), { release_sha: "fffffff" });
   assert.deepEqual(other.questions[0].problems, ["the trace ran release abc1234, not fffffff"]);
   const partial = releaseCheck(langsmithAsk({ trace: "t", question: questions[0].question, started: "2026-10-19T18:00:00.000Z", research: good, answer: null, complete: false }), questions.slice(0, 1));
-  assert.deepEqual(partial.questions[0].problems, ["the trace's capture is incomplete"]);
+  assert.deepEqual(partial.questions[0].problems, ["the trace's capture is not confirmed complete"]);
+});
+
+test("the release check requires explicit capture completion even when reach and release identity pass", () => {
+  const question = caseById("current-projects-and-leads");
+  const good = research([round(1, action("list", { source: "projects", status: "active" }, { items: [] })), finish(2)]);
+  for (const complete of [undefined, null, "true", 1]) {
+    const runs = langsmithAsk({ trace: "t", question: question.question, started: "2026-10-19T18:00:00.000Z", research: good, answer: null });
+    if (complete === undefined) delete runs[0].metadata.complete;
+    else runs[0].metadata.complete = complete;
+    const report = releaseCheck(runs, [question], { release_sha: "abc1234" });
+    assert.equal(report.passed, false, `completion metadata ${String(complete)} must not qualify the release`);
+    assert.deepEqual(report.questions[0].problems, ["the trace's capture is not confirmed complete"]);
+  }
 });
 
 test("a trace whose research run was not captured is rebuilt from its tool runs, rounds and refusals included", () => {

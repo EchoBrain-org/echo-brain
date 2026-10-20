@@ -84,7 +84,7 @@ export function releaseCheck(value, questions, { release_sha: releaseSha } = {})
     const reach = reachChecks({ reach: entry.reach }, run);
     const problems = [
       ...(releaseSha !== undefined && trace.release_sha !== releaseSha ? [`the trace ran release ${trace.release_sha ?? "unknown"}, not ${releaseSha}`] : []),
-      ...(trace.complete === false ? ["the trace's capture is incomplete"] : []),
+      ...(trace.complete === true ? [] : ["the trace's capture is not confirmed complete"]),
       ...(reach.looked_at_every_collection ? [] : [`collections not looked at: ${reach.missing.join(", ")}`]),
       ...(reach.no_repeated_refusal ? [] : ["a refused call was sent again"]),
       ...(reach.unchecked_stated === false ? ["unchecked items were not stated"] : []),
