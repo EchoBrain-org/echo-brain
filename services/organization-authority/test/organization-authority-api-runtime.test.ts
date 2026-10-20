@@ -224,10 +224,7 @@ describe("Organization Authority API runtime", () => {
     const events: string[] = [];
     const errors: unknown[] = [];
     // Meetings enter only through a personal meeting runtime, which shares the one serialized worker.
-    const personal_meetings = {
-      async recoverV4Appends() {}, async pollAndStageAdmittedMeetings() { events.push('meeting'); },
-      async observeAndFinalizePendingApprovals() {}, async appendFinalizedApprovalsToV4() {}, async reconcileReadableSearchGeneration() {},
-    };
+    const personal_meetings = { async pollAndStageAdmittedMeetings() { events.push('meeting'); } };
     let releaseModel!: () => void;
     const modelPending = new Promise<void>(resolve => { releaseModel = resolve; });
     let generationCalls = 0;

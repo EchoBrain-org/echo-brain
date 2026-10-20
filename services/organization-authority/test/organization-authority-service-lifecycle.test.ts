@@ -51,9 +51,6 @@ function processing(
     pollAndStageAdmittedMeetings: async () => {
       operations.push("stage");
     },
-    observeAndFinalizePendingApprovals: async () => {
-      operations.push("finalize");
-    },
     appendFinalizedApprovalsToV4: async () => {
       operations.push("append");
       await append();
@@ -98,7 +95,6 @@ describe("Organization Authority service lifecycle", () => {
     try {
       runtime.requestApprovalPublication();
       await vi.advanceTimersByTimeAsync(5);
-      expect(personalEvents).toContain('finalize');
       expect(personalEvents).toContain('append');
       expect(personalEvents).not.toContain('reconcile');
     } finally { await runtime.close(); }
@@ -313,7 +309,7 @@ describe("Organization Authority service lifecycle", () => {
     const canary = runtime.runUngated(async (signal) => { events.push("canary"); await work.promise; return signal.aborted; });
     runtime.requestApprovalPublication();
     await vi.advanceTimersByTimeAsync(1);
-    expect(events).toEqual(["canary", "finalize", "append", "reconcile"]);
+    expect(events).toEqual(["canary", "append", "reconcile"]);
     const closing = runtime.close();
     await vi.advanceTimersByTimeAsync(1);
     expect(events).not.toContain("api-close");
@@ -387,13 +383,12 @@ describe("Organization Authority service lifecycle", () => {
       "api-start",
       "recover",
       "stage",
-      "finalize",
       "append",
       "reconcile",
     ]);
 
     await runtime.close();
-    expect(events.slice(9)).toEqual(["api-close", "handle-clear"]);
+    expect(events.slice(8)).toEqual(["api-close", "handle-clear"]);
   });
 
   it("retries after an interrupted V4 append with recovery before another source poll, still waking search and presentation", async () => {
@@ -419,7 +414,6 @@ describe("Organization Authority service lifecycle", () => {
       "reconcile",
       "recover",
       "stage",
-      "finalize",
       "append",
       "reconcile",
       "presentation",
@@ -427,7 +421,7 @@ describe("Organization Authority service lifecycle", () => {
     expect(errors).toEqual(["append interrupted"]);
 
     await vi.advanceTimersByTimeAsync(101);
-    expect(events.slice(8)).toEqual(["recover", "stage", "finalize", "append", "reconcile", "presentation"]);
+    expect(events.slice(7)).toEqual(["recover", "stage", "append", "reconcile", "presentation"]);
     expect(errors).toEqual(["append interrupted"]);
 
     await runtime.close();
@@ -444,14 +438,14 @@ describe("Organization Authority service lifecycle", () => {
       setup,
       new AbortController().signal,
     );
-    expect(events).toEqual(["recover", "stage", "finalize", "append"]);
+    expect(events).toEqual(["recover", "stage", "append"]);
 
     events.length = 0;
     await runOrganizationAuthorityApprovalPublicationV1(
       setup,
       new AbortController().signal,
     );
-    expect(events).toEqual(["finalize", "append"]);
+    expect(events).toEqual(["append"]);
 
     events.length = 0;
     let beforeApiStart: string[] = [];
@@ -598,7 +592,7 @@ describe("Organization Authority service lifecycle", () => {
     const runtime = await startLifecycle(100, {
       processing: {
         ...processing([]),
-        pollAndStageAdmittedMeetings: async (signal) => {
+        appendFinalizedApprovalsToV4: async (signal) => {
           phaseStarted();
           await new Promise<void>((_resolve, reject) => {
             signal.addEventListener(
@@ -617,7 +611,7 @@ describe("Organization Authority service lifecycle", () => {
     expect(telemetry.filter((event) => event.event === "failed")).toEqual([
       expect.objectContaining({
         kind: "echo-clean-live-worker-phase-v1",
-        cycle_phase: "source_intake",
+        cycle_phase: "record_append",
         failure_class: "cancelled",
         retryable: false,
       }),
@@ -696,7 +690,7 @@ describe("Organization Authority service lifecycle", () => {
     });
     try {
       await vi.advanceTimersByTimeAsync(1);
-      expect(personal).toEqual(["recover", "recover", "stage", "finalize", "append"]);
+      expect(personal).toEqual(["recover", "recover", "stage", "append"]);
       expect(errors).toEqual(["notes item failed"]);
     } finally { await runtime.close(); }
   });
@@ -713,7 +707,7 @@ describe("Organization Authority service lifecycle", () => {
         controller.signal,
       ),
     ).rejects.toThrow();
-    expect(events).toEqual(["recover", "stage", "finalize", "append"]);
+    expect(events).toEqual(["recover", "stage", "append"]);
   });
 
   it("publishes a requested approval without waiting for the periodic cycle", async () => {
@@ -730,7 +724,7 @@ describe("Organization Authority service lifecycle", () => {
 
     // No 60 s tick has elapsed, yet the approval phases ran, and no source
     // poll ran with them.
-    expect(events).toEqual(["finalize", "append", "reconcile"]);
+    expect(events).toEqual(["append", "reconcile"]);
     await runtime.close();
   });
 
@@ -758,7 +752,6 @@ describe("Organization Authority service lifecycle", () => {
       expect(events).toContain("reconcile");
       expect(events).toContain("presentation");
       expect(events).not.toContain("stage");
-      expect(events.indexOf("finalize")).toBeLessThan(events.indexOf("append"));
       expect(events.indexOf("append")).toBeLessThan(events.indexOf("reconcile"));
       expect(events.indexOf("append")).toBeLessThan(events.indexOf("presentation"));
     } finally {
@@ -881,7 +874,7 @@ describe("Organization Authority service lifecycle", () => {
 
       runtime.requestApprovalPublication();
       await vi.advanceTimersByTimeAsync(1);
-      expect(events).toEqual(["finalize", "append", "reconcile"]);
+      expect(events).toEqual(["append", "reconcile"]);
       active.resolve();
       await vi.advanceTimersByTimeAsync(10);
       await runtime.drain(new AbortController().signal);
@@ -981,7 +974,7 @@ describe("Organization Authority service lifecycle", () => {
       runtime.requestApprovalPublication();
       runtime.requestApprovalPublication();
       await vi.advanceTimersByTimeAsync(1);
-      expect(events).toEqual(["finalize", "append", "reconcile"]);
+      expect(events).toEqual(["append", "reconcile"]);
       expect(gateWaits).toEqual([0]);
     } finally { await runtime.close(); }
   });
@@ -1006,7 +999,7 @@ describe("Organization Authority service lifecycle", () => {
 
     runtime.requestApprovalPublication();
     await vi.advanceTimersByTimeAsync(0);
-    expect(events).toEqual(["finalize", "append"]);
+    expect(events).toEqual(["append"]);
 
     runtime.requestApprovalPublication();
     runtime.requestApprovalPublication();
@@ -1015,9 +1008,7 @@ describe("Organization Authority service lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(events).toEqual([
-      "finalize",
       "append",
-      "finalize",
       "append",
       "reconcile",
     ]);
@@ -1045,14 +1036,13 @@ describe("Organization Authority service lifecycle", () => {
     runtime.requestApprovalPublication();
     await vi.advanceTimersByTimeAsync(1);
     // A failed wake still requests search: it derives only from the record log.
-    expect(events).toEqual(["finalize", "append", "reconcile"]);
+    expect(events).toEqual(["append", "reconcile"]);
     expect(errors.map((error) => error.message)).toEqual(["append unavailable"]);
 
     await vi.advanceTimersByTimeAsync(1_001);
-    expect(events.slice(3)).toEqual([
+    expect(events.slice(2)).toEqual([
       "recover",
       "stage",
-      "finalize",
       "append",
       "reconcile",
     ]);

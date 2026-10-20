@@ -173,7 +173,6 @@ export function preparePersonHttpRuntimeV1(factory: OrganizationAuthorityApiRunt
 }
 
 export interface RunningOrganizationAuthorityApiRuntime {
-  readonly processing?: PersonHttpRuntimeV1['processing'];
   readonly address: AddressInfo;
   /** Stops ingress immediately while lifecycle-owned work retains its handles. */
   stopAcceptingRequests?(): void;
@@ -509,7 +508,6 @@ export async function startOrganizationAuthorityApiRuntime(
     };
     return {
       address,
-      ...(personHttp?.processing === undefined ? {} : { processing: personHttp.processing }),
       stopAcceptingRequests,
       close: async () => {
         stopAcceptingRequests();
