@@ -58,17 +58,12 @@ meeting provider -> MeetingSourceAdapter -> MeetingSourceBridgeV1 ------+
                          SourceAdmissionStoreV1
                            /                    \
             document extraction/index       meeting decision workflow
-
-Reusable context capture adapter (dormant: no active registration)
-  -> SourceAdapterV1<ContextCaptureContentV1>.pull()
-  -> createContextSourceIntakeV1() -> intakeContextBatchV1()
-  -> SqliteContextCaptureStoreV1 (a SourceAdmissionStoreV1)
 ```
 
 The organization Granola staging capture route is retired. Personal connector
 checks verify live reads without retaining their payloads.
-Legacy capture contracts remain compiled but do not supply tool Ask; captured
-context feeds no processing, retrieval or Ask stage. See
+The dormant context capture contracts and intake were removed on 2026-10-19;
+tool Ask reads live. See
 [connector contracts](connector-contracts.md) for that separate contract.
 
 Person submission pushes into an edge inbox; core ingestion pulls from the
@@ -405,8 +400,8 @@ Older construction inputs translate into this same dispatch path, while older
 answer versions retain their strict citation contracts.
 
 Granola provides the person-bound MCP connection, the selected-folder meeting
-source and meeting normalization, and retains its context capture transform.
-Its organization acquisition and owner-admission code is retired;
+source and meeting normalization. Its organization acquisition and
+owner-admission code is retired;
 shared meeting custody and processing contracts remain distinct from personal
 live reads. Slack's organization app and approval DM copies likewise retain
 their own lifecycle. A Slack Person read requires a separately authorized

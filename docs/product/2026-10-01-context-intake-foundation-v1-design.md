@@ -1,6 +1,9 @@
 # Shared context ingestion and capture V1
 
-**Status: Proposed.** The user authorized bounded backend implementation and
+**Status: withdrawn 2026-10-19,** with
+[ADR-0028](../decisions/ADR-0028-broadened-layer-1-source-captures.md): the
+foundation was removed unused, and its removed tests are named below without
+links. **Former status: Proposed.** The user authorized bounded backend implementation and
 synthetic fixture proof on 2026-10-01, then narrowed this milestone to ingestion
 and capture. Production activation and acceptance of this proposal remain
 separate decisions. Its broadened Layer 1 is recorded in the proposed
@@ -211,9 +214,9 @@ Provider adapters emit existing main `SourceAdapterV1` / `SourceEnvelopeV1`
 values. Provider code keeps those inward dependencies; Authority composition
 owns mapping validation and intake, and a provider never imports Authority
 service internals. The
-[core contract tests](../../packages/organization-processing/test/core/context-capture.test.ts)
+core contract tests (`context-capture.test.ts`)
 prove closed-field, bound, anchor and structured-payload rejection. The
-[shared intake tests](../../services/organization-authority/test/context-intake-v1.test.ts)
+shared intake tests (`context-intake-v1.test.ts`)
 prove exact structured-field roundtrip for each payload kind, stable revision
 replay with later poll time, semantic-time conflicts/new revisions, malformed
 input rejection in both dispositions, and queued disposition/representation/scope

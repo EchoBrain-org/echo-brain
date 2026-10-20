@@ -47,8 +47,7 @@ persistence.
 ## Data and dependency boundary
 
 The core operates on bounded domain values. It reaches sources, decision
-processors, and source-admission storage only through ports. It owns the
-context-capture contract; the Authority owns the intake that admits captures.
+processors, and source-admission storage only through ports.
 Concrete
 provider and infrastructure code depends inward on the core; the core must not
 depend outward on them. Provider selection belongs only in the selecting

@@ -144,7 +144,12 @@
       "packages/organization-processing/src/core/approval/approval-gate.ts",
       "packages/organization-processing/src/core/delivery/envelope.ts",
       "packages/organization-processing/src/core/storage/meeting-processing-state-store.ts",
-      "packages/organization-processing/src/ports/meeting-source-bundle-v1.ts"
+      "packages/organization-processing/src/ports/meeting-source-bundle-v1.ts",
+      "packages/organization-processing/src/core/contracts/context-capture-v1.ts",
+      "packages/organization-processing/src/core/contracts/context-capture-v2.ts",
+      "packages/organization-processing/src/core/contracts/context-derivation-v1.ts",
+      "packages/organization-processing/src/core/contracts/capture-source-ref-v1.ts",
+      "packages/organization-processing/src/core/contracts/capture-container-scope-v1.ts"
     ]
   }
 }

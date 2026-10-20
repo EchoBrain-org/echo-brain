@@ -9,7 +9,7 @@ component_ids:
 created_at: 2026-10-03
 reviewed_at: 2026-10-03
 reviewed_ref: df1902c49c1ca1ee1d6f4c884fa3be8097594e23
-status: proposed
+status: withdrawn
 supersedes: []
 superseded_by: []
 updates:
@@ -18,6 +18,12 @@ updates:
 ---
 
 # ADR-0029: Project-scoped capture and exact derivation inputs
+
+## Disposition
+
+Withdrawn on 2026-10-19, before acceptance: no provider was ever wired to the
+capture and derive foundation, so it was removed unused with its tests (named
+below without links).
 
 ## Context and options
 
@@ -147,13 +153,13 @@ V2 validates its own identity, provenance and lifecycle directly. It reuses the
 explicit payload/representation validators for inherited shapes, without
 constructing a synthetic V1 envelope or disguising documents as notes.
 
-[Contract tests](../../packages/organization-processing/test/core/context-capture-v2.test.ts)
-and [SQLite integration tests](../../services/organization-authority/test/capture-foundation-v1.test.ts)
+Contract tests (`context-capture-v2.test.ts`)
+and SQLite integration tests (`capture-foundation-v1.test.ts`)
 cover evidence fidelity, closed schemas, replay after restart, skipped-body absence,
 transaction rollback, current authorization and stored integrity. The
-[connector contract tests](../../packages/organization-processing/test/core/capture-connectors-v2.test.ts)
+connector contract tests (`capture-connectors-v2.test.ts`)
 add document descriptors, heterogeneous containers/kinds, namespace isolation and
-replay-safe lineage; [reference tests](../../packages/organization-processing/test/core/capture-source-ref-v1.test.ts)
+replay-safe lineage; reference tests (`capture-source-ref-v1.test.ts`)
 cover canonical encoding and source-local identity separation. Live validation
 is deferred until provider composition exists.
 
