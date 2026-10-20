@@ -52,8 +52,9 @@ impact card shows on the approved meeting in the desktop app.
 
 - **Coordination, not execution.** The card says what an approval affects and
   who should know. ECHO never writes to Jira, Confluence or Slack.
-- **Acts as the approver; only the approver sees it** (the trigger's `acts_as:
-  approver` and `recipients: actor_only`).
+- **Acts as the approver; only the approver sees it.** The run's actor is the
+  approver (section 1): research runs with the approver's access, and only the
+  actor may list, start, retry or view the run.
 - **No copies of outside text.** Slack's API terms forbid persistent copies of
   Slack data, and ECHO keeps no Jira or Confluence excerpts (RFC-0003,
   connector integration v1). A stored run therefore keeps pointers and ECHO's
