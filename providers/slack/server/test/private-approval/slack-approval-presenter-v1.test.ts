@@ -6,7 +6,10 @@ import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1,
 const databases: Database.Database[] = [];
 const signal = () => new AbortController().signal;
 const target = { connection_id: 'con_1', external_identity_link_id: 'lnk_1', external_identity_link_contract_sha256: `sha256:${'a'.repeat(64)}`, slack_workspace_id: 'T1', slack_subject_id: 'U1', api_app_id: 'A1' };
-afterEach(() => databases.splice(0).forEach(db => db.close()));
+afterEach(() => {
+  databases.splice(0).forEach(db => db.close());
+  vi.restoreAllMocks();
+});
 
 type Outcome = 'opened' | 'retry_allowed' | 'posted' | 'uncertain' | 'done' | Error;
 function proposal(approval_id: string): ApprovalProposalViewV1 {
@@ -61,13 +64,14 @@ function rateLimitedSlack(retryAfter: string, times = 1) {
     if (body.users === 'U0A' && limited > 0) { limited -= 1; return new Response('', { status: 429, headers: { 'retry-after': retryAfter } }); }
     return new Response(JSON.stringify({ ok: true, channel: { id: `D${body.users!.slice(1)}`, is_im: true, user: body.users } }), { headers: { 'x-oauth-scopes': 'im:write' } });
   };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
   const f = fixture({
     now: () => new Date(),
     target: reviewer => ({ ...target, slack_subject_id: reviewer.principal_id === 'prn_2' ? 'U0B' : 'U0A' }),
     poster: bound => createTargetBoundSlackApprovalPosterV1({ target: bound,
       activeConnection: () => ({ connection: { connection_id: 'con_1', provider_tenant_id: 'T1', provider_app_id: 'A1' }, state_sha256: `sha256:${'c'.repeat(64)}` }) as never,
       targetCurrent: () => true, botToken: { async botToken() { return 'xoxb-test'; } } as never,
-      needsReinstall: () => false, markNeedsReinstall: () => undefined, fetchImpl }),
+      needsReinstall: () => false, markNeedsReinstall: () => undefined }),
   });
   f.stage('apr_a'); f.stage('apr_b', { reviewer: { organization_id: 'org_1', principal_id: 'prn_2', membership_id: 'mem_2' } });
   return { f, opens: () => requests.filter(request => request === 'conversations.open:U0A').length };
