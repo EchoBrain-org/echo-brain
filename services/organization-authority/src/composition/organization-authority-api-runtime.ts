@@ -146,7 +146,7 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
   readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
-  /** Present only after source admission; omitted during organization setup. */
+  /** Always bound by `openOrganizationAuthorityRuntime`; only tests that serve no Ask omit it. */
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
   /** Background-priority model port for trigger and sweep research; they use the Ask port when absent. */
   readonly answer_composition_background?: AnswerCompositionGenerationBindingV1["structured_output"];
