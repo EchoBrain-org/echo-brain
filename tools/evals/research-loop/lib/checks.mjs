@@ -206,6 +206,12 @@ const NAME_CHARS = 120;
 function oneLine(value) {
   return String(value ?? "").normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim();
 }
+/** The renderer cuts by Unicode characters, keeping the ellipsis within the field's limit. */
+function cutLine(value, limit) {
+  const text = oneLine(value);
+  const characters = [...text];
+  return characters.length <= limit ? text : `${characters.slice(0, limit - 1).join("").trimEnd()}…`;
+}
 
 /**
  * An item's name as code writes it in a list statement (agenticListStatementV1, groupNames), ignoring case: `label`,
@@ -223,13 +229,37 @@ function nameOf(title) {
 
 /** The row facts code writes after a label to keep members sharing it apart (groupNames), as its words say them. */
 const FACTS = [
-  attributes => attributes.status,
-  attributes => attributes.owner === "none recorded" ? "no owner recorded" : attributes.owner,
-  ({ due_at: due }) => /^\d{4}-\d{2}-\d{2}$/u.test(due ?? "") ? new Date(`${due}T00:00:00Z`).toLocaleDateString("en-US", { dateStyle: "long", timeZone: "UTC" }) : due,
+  { field: "status", forms: value => [cutLine(value, 60), `status ${cutLine(value, 60)}`] },
+  { field: "owner", forms: value => [value === "none recorded" ? "no owner recorded" : `owner ${cutLine(value, 80)}`] },
+  { field: "due_at", forms: value => {
+    const due = cutLine(value, 40);
+    const day = /^\d{4}-\d{2}-\d{2}$/u.test(due) ? new Date(`${due}T00:00:00Z`).toLocaleDateString("en-US", { dateStyle: "long", timeZone: "UTC" }) : due;
+    return [`due ${day}`];
+  } },
 ];
 function factOf(item, fact) {
-  const value = fact(item.attributes ?? {});
+  const value = item.attributes?.[fact.field];
   return value === undefined ? undefined : oneLine(value).toLowerCase();
+}
+/** A complete renderer detail, including its field prefix; a phrase inside another value does not count. */
+function holdsFact(words, item, fact, peers) {
+  const value = item.attributes?.[fact.field];
+  if (value === undefined) return false;
+  const formsOf = entry => entry.attributes?.[fact.field] === undefined ? [] : fact.forms(entry.attributes[fact.field]).map(form => form.toLowerCase());
+  const own = formsOf(item);
+  const forms = [...new Set([item, ...peers].flatMap(formsOf))].sort((left, right) => right.length - left.length);
+  let rest = words;
+  const found = new Set();
+  // Take longer details first: a status itself may contain a comma, so its tail is not a second value.
+  for (const form of forms) {
+    const escaped = form.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const pattern = new RegExp(`(^|[(,])\\s*(${escaped})(?=\\s*(?:[,)]|\\.?$))`, "gu");
+    rest = rest.replace(pattern, (match, _delimiter, detail) => {
+      found.add(form);
+      return `${match.slice(0, match.length - detail.length)}${"\u0000".repeat(detail.length)}`;
+    });
+  }
+  return own.some(form => found.has(form));
 }
 
 const STARTS_WORD = /^[\p{L}\p{N}]/u;
@@ -249,7 +279,8 @@ function phraseAt(text, phrase, from = 0) {
  * its own, longest first, each match taken out of the text, so a name that is part of a longer one the text holds
  * ("PRD" in "PRD v2") is not named by it. Where the statement cites items sharing its label that record another status,
  * owner or due date, code keeps them apart and writes those facts after each label: the text names the item only where
- * the words after its name, up to the next name or ";", say its value of each such fact, and none where it records none.
+ * the words after its name, up to the next name or ";", say its complete rendered detail for each such fact, and none
+ * where it records none. Detail delimiters and field prefixes keep a value inside another value from naming it.
  */
 function namer(text, items, cited) {
   let rest = oneLine(text).toLowerCase();
@@ -262,14 +293,13 @@ function namer(text, items, cited) {
     }
   }
   const after = places.map(({ form, end }) => ({ form, words: /^[^\u0000;]*/u.exec(rest.slice(end))[0] }));
-  const holds = (words, value) => value !== undefined && phraseAt(words, value) !== -1;
   return item => {
     const { label, forms: own } = nameOf(item.title);
     const peers = [...cited].filter(other => nameOf(other.title).label === label);
     const apart = FACTS.filter(fact => new Set([item, ...peers].map(other => factOf(other, fact))).size > 1);
     return after.some(({ form, words }) => own.includes(form) && apart.every(fact => factOf(item, fact) === undefined
-      ? !peers.some(other => holds(words, factOf(other, fact)))
-      : holds(words, factOf(item, fact))));
+      ? !peers.some(other => holdsFact(words, other, fact, peers))
+      : holdsFact(words, item, fact, peers)));
   };
 }
 

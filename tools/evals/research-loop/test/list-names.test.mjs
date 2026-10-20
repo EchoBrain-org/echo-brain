@@ -100,14 +100,16 @@ test("a name inside a longer member's name names only the longer member", () => 
   assert.deepEqual(part("2 Confluence pages created on October 4, 2026: Release plan; Release plan v2."), { named: true, members_named: 2 });
 });
 
+// Two "Weekly notes" pages recording `facts`, then "Budget"; one statement citing the first `cites` rows gives `names`.
+function duplicateNames(facts, names, cites = 3) {
+  const rows = [...facts, undefined].map((attributes, index) => ({ ...pageRow([`70000${index + 1}`, index < 2 ? "Weekly notes" : "Budget", "1"], index), attributes }));
+  const testCase = { ...OCT4, id: "synthetic-weekly-notes", parts: [{ id: "p1", type: "list", requirement: "All 3 pages.", evidence: rows.map(row => ({ page: row.citation.page_id })) }] };
+  const statements = [{ text: `3 Confluence pages created on October 4, 2026: ${names}.`, cites: rows.slice(0, cites) }];
+  return scored(listPart(testCase, askRun(testCase, { items: rows, lists: [listOf(rows)], writer: rows.map(row => row.id), statements })));
+}
+
 test("members sharing a title but not their status, owner or due date are each named only with the facts code adds to tell them apart", () => {
-  // Two "Weekly notes" pages recording `facts`, then "Budget"; one statement citing the first `cites` rows gives `names`.
-  const run = (facts, names, cites = 3) => {
-    const rows = [...facts, undefined].map((attributes, index) => ({ ...pageRow([`70000${index + 1}`, index < 2 ? "Weekly notes" : "Budget", "1"], index), attributes }));
-    const testCase = { ...OCT4, id: "synthetic-weekly-notes", parts: [{ id: "p1", type: "list", requirement: "All 3 pages.", evidence: rows.map(row => ({ page: row.citation.page_id })) }] };
-    const statements = [{ text: `3 Confluence pages created on October 4, 2026: ${names}.`, cites: rows.slice(0, cites) }];
-    return scored(listPart(testCase, askRun(testCase, { items: rows, lists: [listOf(rows)], writer: rows.map(row => row.id), statements })));
-  };
+  const run = duplicateNames;
   const status = [{ status: "open" }, { status: "closed" }];
   for (const [facts, names, expected, cites] of [
     [status, "Weekly notes (open); Weekly notes (closed); Budget", { named: true, members_named: 3 }],
@@ -122,6 +124,30 @@ test("members sharing a title but not their status, owner or due date are each n
     // Facts differing only in case or spacing are the same, so code gives both members one name.
     [[{ status: "open" }, { status: " Open" }], "Weekly notes (2 pages); Budget", { named: true, members_named: 3 }],
   ]) assert.deepEqual(run(facts, names, cites), expected, names);
+});
+
+test("duplicate facts name only their whole value, never a competing value inside it", () => {
+  for (const [facts, fragment] of [
+    [[{ status: "open" }, { status: "not open" }], "not open"],
+    [[{ status: "open" }, { status: "open for review" }], "open for review"],
+    [[{ owner: "Lee" }, { owner: "Dana Lee" }], "owner Dana Lee"],
+    [[{ due_at: "soon" }, { due_at: "not soon" }], "due not soon"],
+    [[{ status: "open" }, { status: "not open" }], "status not open"],
+    [[{ status: "review" }, { status: "ready, review" }], "ready, review"],
+  ]) {
+    assert.deepEqual(duplicateNames(facts, `Weekly notes (${fragment}); Budget`), { named: false, members_named: 2 }, fragment);
+  }
+  assert.deepEqual(duplicateNames([{ status: "open", owner: "Lee" }, { status: "closed", owner: "Open Lee" }],
+    "Weekly notes (closed, owner Open Lee); Budget"), { named: false, members_named: 2 });
+});
+
+test("duplicate facts accept the renderer's field-specific truncation", () => {
+  for (const [field, limit, prefix] of [["status", 60, ""], ["owner", 80, "owner "], ["due_at", 40, "due "]]) {
+    const value = "🧪 ".repeat(limit);
+    const cut = `${[...value.trim()].slice(0, limit - 1).join("").trimEnd()}…`;
+    const facts = [{ [field]: value }, { [field]: "other" }];
+    assert.deepEqual(duplicateNames(facts, `Weekly notes (${prefix}${cut}); Weekly notes (${prefix}other); Budget`), { named: true, members_named: 3 }, field);
+  }
 });
 
 test("a title cut at 120 characters stays apart from a whole title equal to what stands before its ellipsis", () => {
