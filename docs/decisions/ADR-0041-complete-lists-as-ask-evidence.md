@@ -32,6 +32,14 @@ is built, deployed or qualified. Code paths are at `reviewed_ref`, relative to
 shown in full. Line numbers are at `2fc6a05`, the first build, unless a
 passage names another commit.
 
+**Amended 2026-10-20 (temporary model guardrail).** The founder requested a
+lean rule that can be retired as models improve. The renderer no longer
+uses cited list membership or planner kinds to delete sentences. Only exact
+statement repeats with equivalent citations and privacy are suppressed;
+complete-list rendering and evidence safeguards remain. The normative rules,
+known limits and tests below reflect this amendment; the retirement history
+records earlier behavior.
+
 **Amended 2026-10-18 (restructure, founder decisions "Restructure" and the
 answers of 2026-10-18).** As built, code inferred from a sentence's or a need's
 citations whether it stated which items exist or what items say. The same
@@ -428,27 +436,23 @@ audit or public door sees it.
   is partial too, its status not found, as for a list not read to its end. "Is
   DVT on hold?" answered from the Gate reviews page's title ends partial or not
   found, never answered.
-- **A sentence that only restates a stated list is left out.** Code leaves out
-  a writer's sentence when every text item it cites is a member, or part of
-  one, of a list code states whose statement in the answer covers every
-  member, by name or counted in "and N more", and no other need asks about
-  it: no `which_say` need's list holds it, and no `content` need cites that
-  member, whatever its status: one research marked not found still asks about
-  what it cites, and the writer may answer it from that text. A
-  statement in full covers every member, and so does a `where` selection that
-  holds every member; one that leaves a member out does not say which items
-  the list holds, so no sentence restates it, whichever member it cites, and a
-  selection by id says only its members' facts. "The pages are A, B, C and
-  D", cited to four opened sections beside the eight names code wrote, is
-  left out. "The PRD requires 0.1 C", cited to the PRD's section for a content
-  need about the PRD, stays. A sentence on THERM-41's text stays beside "2 of
-  the 12 follow-ups ... are due from October 18 to October 24, 2026: THERM-43
-  ...; THERM-47 ...". Code reads what a need asks about from
-  what it cites, whatever its status: a list kind's list, and a content need's
-  items. A need that declares nothing (a content need citing no item, found,
-  open or not found, its list ids carrying no meaning, or a list kind without
-  its list, as when research stopped) could ask about any member, so then no
-  sentence is left out as a restatement.
+- **Temporary exact-repeat guardrail (amended 2026-10-20).** Keep the
+  writer's evidence-backed details regardless of planner kind or list
+  membership. A sentence naming a project's lead adds a fact even when it
+  cites the same project that the complete list names. Remove a statement
+  only when its final text, set of cited objects, and private flag exactly
+  match an earlier statement. Compare before applying response bounds so
+  repeats do not crowd out later details. Do not merge paraphrases or infer
+  sameness from shared citations. Keep coverage notices for the evidence
+  behind retained statements, including their exact repeats.
+  This is temporary compensation for model repetition, not a semantic
+  authority over the answer. The prompt asks the writer to add requested
+  details instead of repeating the code-written enumeration. Some repetition
+  is preferable to silently losing a fact. On model upgrades, run complete-list,
+  mixed list/detail, and requested-fact-retention evaluations with this small
+  guard enabled and removed; retire it when removal no longer worsens those
+  results. Citation identity, access/privacy, evidence-text support, truthful
+  list completeness, and response bounds remain correctness requirements.
 - **One citation per cited object.** The response refuses duplicate
   citations, and a listed ticket's row and its opened body cite the same
   ticket. Code gives them one citation, in first-citation order, so a list
@@ -737,9 +741,9 @@ too), "lists named in full" and its two BUG-412 cases.
   content's rules: no list is stated unless the writer uses it. The held answer
   (4 of the 8 pages, marked answered) comes back this way, as does "you have 10
   open follow-ups" on a first page of 10 (confirmed findings 9 and 11).
-- **A content question declared `which_items`** gets the list stated, and a
-  writer's sentence about its members' text is left out as a restatement, so
-  the answer can be the list alone, marked answered.
+- **A content question declared `which_items`** still gets the list stated,
+  but the writer's evidence-backed details remain beside it. The extra list
+  may be unnecessary; a planner misclassification no longer deletes those facts.
 - **A `which_say` question declared `content`** is answered with no checked
   note, however few members were read (confirmed finding 4).
 - **A which-question or one-item question declared `which_say`** gets the
@@ -756,46 +760,27 @@ too), "lists named in full" and its two BUG-412 cases.
   refused until it cites a list, so research lists the source and the answer
   is partial with a checked note that measures little ("4 of at least 25
   checked so far", research being shown 25 rows a list call); as `which_items`,
-  the whole source is stated and the sentences naming the hits are left out as
-  restatements.
+  the whole source is stated, and the writer's sentences naming the hits stay
+  beside it. The unnecessary whole-source read is still a planner limitation.
 - **A selection by id of the members that meet a condition** ("which of my
   open tasks are due this week", answered with `members` instead of a `where`
   date range) states those members' facts and the full list, never the
-  condition, and a writer's sentence saying the condition is left out as a
-  restatement. A condition on two row facts the list did not filter (an owner
+  condition. A writer's evidence-backed sentence saying the condition stays.
+  A condition on two row facts the list did not filter (an owner
   and a due date) has only this path, since `where` takes one row fact.
-- **A `where` selection that leaves a member out** covers no restatement, so
-  the writer's sentences about the list's members all stay beside its
-  statement, one that only restates the selection included ("THERM-43 and
-  THERM-47 are due this week" after "2 of the 12 follow-ups ... are due from
-  October 18 to October 24, 2026: ..."). Leaving such a sentence out needs
-  telling a restated selection from content about a selected member, the
-  meaning of the cited text.
-- **A list with both a `which_items` and a `which_say` need** keeps every
-  sentence that cites its members' text, even one that only restates the list:
-  with the note while some member is unchecked, and with none once every
-  member was checked, when a restated subset ("the pages are A, B, C and D")
-  stands unqualified beside the statement naming all eight, and the part is
-  answered.
-- **Both answered outcomes once every member was checked** (a which-question
-  declared `which_say`, and a list with both kinds of need) can change only by
-  telling a restatement from a sentence about content, which needs the
-  meaning of the cited text: the guessing Retirement 11 retires.
+- **A writer that repeats or contradicts an enumeration** may still add a
+  paraphrase, a partial enumeration, or an incorrect count beside the complete
+  list code writes. Exact-repeat removal does not interpret those claims.
+  Prompt guidance and answer-quality evaluations address this model behavior;
+  do not expand the guard into citation-based semantic deletion again.
+- **A list with both a `which_items` and a `which_say` need** keeps its
+  evidence-backed sentences, with the checked note while some member is
+  unchecked and with none once every member was checked.
 - **A sentence about one member of a `which_say` list** carries that list's
   note even when it answers a content need about that member.
-- **A content need citing one item, answered from another.** When the
-  writer answers a content need from the text of a stated list's member the
-  need does not cite (the need cites a meeting record, the sentence the Gate
-  reviews page), the sentence is left out as a restatement and the part is
-  answered without it, whatever the need's status. Telling which need a
-  sentence answers needs the meaning of its text.
-- **A content need that cites no item** declares nothing, whatever its status,
-  so while the plan has one no sentence is left out as a restatement. A need
-  research marked not found citing nothing, beside a stated list, keeps the
-  writer's answer to it from a member's text, and also keeps a sentence that
-  only restates the list ("Traceability ... was created on October 4, 2026"
-  beside the eight names). Leaving out only the second needs the meaning of
-  the cited text.
+- **Planner citations do not determine sentence redundancy.** A content need
+  citing another item or no item, or marked open or not found, does not change
+  which evidence-backed details survive. Exact repeats alone are removed.
 - **What a sentence carries from an item it does not cite is not locked.** A
   statement is private when an item it cites is. A sentence that carries a
   private row's facts but cites only team text, neither the row nor its list,
@@ -853,7 +838,11 @@ Tests required before release:
 - the October 4 run, replayed: research finishes on `L1` in two steps and the
   answer names all 8 pages, citing each page's row;
 - an answer that names 4 of the 8 pages without the list: code writes the full
-  list anyway, and the restating sentence is left out;
+  list anyway; the differently worded model sentence may remain beside it;
+- a projects-and-leads answer with both needs declared `which_items`: both
+  leads survive, whether or not either sentence also cites a person;
+- exact repeats share text, citation identity and privacy; different facts or
+  citations remain, and repeats cannot consume the statement bound;
 - a 60-member list names 25 and says "and 35 more";
 - an unfinished list refuses the finish with "keep reading the list"; a list
   that cannot be read further gives "at least N" and a partial part;
