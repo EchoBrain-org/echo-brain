@@ -222,6 +222,15 @@ function withoutLiveAskRoute(error: unknown): boolean {
   return error instanceof PersonAuthorityClientError && error.status === 404 && error.code === 'not_found' && !error.routeMatched;
 }
 
+/** Asks each live Ask route, newest first, and the next only when an older Authority has no such route; the last one answers. */
+async function newestLiveAskRoute<T>(routes: readonly (() => Promise<T>)[]): Promise<T> {
+  for (const route of routes.slice(0, -1)) {
+    try { return await route(); }
+    catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
+  }
+  return routes.at(-1)!();
+}
+
 function summary(
   stored: StoredPersonClientSessionV1,
 ): PersonClientSessionSummary {
@@ -719,17 +728,12 @@ export class PersonClient {
    */
   async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5> {
     validateAskInput(question, scope);
-    return this.withReadSession(async (authority, token) => {
-      try { return await authority.askV7(token, question, scope, signal, captureId); }
-      catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
-      try { return await authority.askV6(token, question, scope, signal, captureId); }
-      catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
-      try { return await authority.askV5(token, question, scope, signal, captureId); }
-      catch (error) {
-        if (captureId !== undefined || !withoutLiveAskRoute(error)) throw error;
-        return authority.askV4(token, question, scope, signal);
-      }
-    });
+    return this.withReadSession((authority, token) => newestLiveAskRoute<PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5>([
+      () => authority.askV7(token, question, scope, signal, captureId),
+      () => authority.askV6(token, question, scope, signal, captureId),
+      () => authority.askV5(token, question, scope, signal, captureId),
+      ...(captureId === undefined ? [() => authority.askV4(token, question, scope, signal)] : []),
+    ]));
   }
 
   /**
@@ -743,13 +747,10 @@ export class PersonClient {
    * A step is passed on only while the account that asked is the signed-in
    * one. Another account stops the Ask at once. A step that arrives while no
    * session can be read (a refresh elsewhere, or a sign-out) is withheld, and
-   * the final account check decides, as it does for every read.
-   */
-  /**
-   * The live Ask, streamed (ADR-0039). A caller that names its account
-   * (`expected`, both parts, as the desktop does) is never asked for as
-   * another: a session another sign-in installed first is refused before
-   * anything is sent, so no step of that account reaches the caller.
+   * the final account check decides, as it does for every read. A caller that
+   * names its account (`expected`, both parts, as the desktop does) is never
+   * asked for as another: a session another sign-in installed first is
+   * refused before anything is sent, so no step of that account reaches it.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {}): Promise<PersonLiveAnswerV3> {
@@ -772,15 +773,12 @@ export class PersonClient {
     };
     // `/v7` streams progress V3 (research tool contract v1); an Authority without it streams V2 on `/v6` (ADR-0040), one without
     // that streams V1 on `/v5`, and one without that answers `/v4` with no progress.
-    const answer = await (async (): Promise<PersonLiveAnswerV3> => {
-      try { return await authority.askV7WithProgress(token, question, scope, signal, forward); }
-      catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
-      try { return await authority.askV6WithProgress(token, question, scope, signal, forward); }
-      catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
-      try { return await authority.askV5WithProgress(token, question, scope, signal, forward); }
-      catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
-      return Object.freeze({ result: await authority.askV4(token, question, scope, signal) });
-    })();
+    const answer = await newestLiveAskRoute<PersonLiveAnswerV3>([
+      () => authority.askV7WithProgress(token, question, scope, signal, forward),
+      () => authority.askV6WithProgress(token, question, scope, signal, forward),
+      () => authority.askV5WithProgress(token, question, scope, signal, forward),
+      async () => Object.freeze({ result: await authority.askV4(token, question, scope, signal) }),
+    ]);
     this.assertCurrentSession(stored);
     return answer;
   }
