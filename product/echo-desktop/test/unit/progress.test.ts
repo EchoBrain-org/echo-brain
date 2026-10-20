@@ -100,19 +100,19 @@ describe('the line and its rows', () => {
   });
 
   it('name sources as a person says them, never the words searched', () => {
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'slack' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 }))
-      .toBe('Searched meetings, Slack and Jira · 22 found');
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 }))
+      .toBe('Searched meetings, documents and Jira · 22 found');
     // ECHO's follow-ups (ADR-0040) are a kind of source like meetings: never a tool, never a label.
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }, { kind: 'tickets', tool_id: 'jira' }], found: 9 }))
       .toBe('Searched meetings, follow-ups and Jira · 9 found');
     // Your projects, people and tools (research tool contract v1) are kinds of source too; a tool's containers are its name.
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'confluence' }], found: 4 }))
       .toBe('Searched projects, people, tools and Confluence · 4 found');
-    // Each word once: Jira's issues and its projects are both Jira, Slack's messages and its channels both Slack.
+    // Each word once: Jira's issues and its projects are both Jira, Confluence's pages and its spaces both Confluence.
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'containers', tool_id: 'jira' }], found: 3 }))
       .toBe('Searched meetings and Jira · 3 found');
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'slack' }, { kind: 'containers', tool_id: 'slack' }, { kind: 'projects' }], found: 0 }))
-      .toBe('Searched Slack and projects · nothing found');
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'confluence' }, { kind: 'containers', tool_id: 'confluence' }, { kind: 'projects' }], found: 0 }))
+      .toBe('Searched Confluence and projects · nothing found');
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'containers', tool_id: 'jira' }, { kind: 'pages', tool_id: 'confluence' }, { kind: 'tickets', tool_id: 'jira' }],
       found: 2 }, [{ tool_id: 'jira', name: 'Jira Cloud', status: 'linked' }])).toBe('Searched Jira Cloud and Confluence · 2 found');
     // Nothing at all, or, after an earlier search found items, nothing those had not.

@@ -77,7 +77,7 @@ export interface PersonFollowUpEvidenceV1 {
 }
 
 const FOLLOW_UP_REF = /^follow_up:itm_[A-Za-z0-9-]{4,60}$/;
-const KINDS = Object.keys({ action: true, ticket: true, page: true, slack_message: true, record: true, document: true } satisfies Record<PersonOpenItemKindV1, true>) as readonly PersonOpenItemKindV1[];
+const KINDS = Object.keys({ action: true, ticket: true, page: true, record: true, document: true } satisfies Record<PersonOpenItemKindV1, true>) as readonly PersonOpenItemKindV1[];
 const STATES = Object.keys({ unsent: true, open: true, done: true, not_relevant: true } satisfies Record<PersonOpenItemStateV1, true>) as readonly PersonOpenItemStateV1[];
 const VERDICTS = Object.keys({ landed: true, still_open: true, changed: true, unreadable: true } satisfies Record<PersonOpenItemVerdictV1, true>) as readonly PersonOpenItemVerdictV1[];
 const LIMITS = PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1;

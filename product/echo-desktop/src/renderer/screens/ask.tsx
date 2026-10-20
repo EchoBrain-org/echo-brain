@@ -18,7 +18,7 @@ import {
   litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
   submitBar, widenScope, type AskTurn, type PaneTarget, type Read, type RecordSectionKey, type SourcesState, type State,
 } from '../store.js';
-import { Check, Chevron, Close, Doc, Folder, Hash, Lock, Meeting, OnePerson, Plug, Plus, Ticks, Up } from './icons.js';
+import { Check, Chevron, Close, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Ticks, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -120,7 +120,7 @@ function sourceName(source: AnswerSource, sources: SourcesState | null): string 
 
 export const UNTITLED = 'Untitled meeting';
 
-/** A source's first citation stands for it: its kind, its label, its record or its Slack message. */
+/** A source's first citation stands for it: its kind, its label, its record or its link. */
 function firstSource(state: State, group: SourceGroup): AnswerSource {
   return answerSources(state)[group.indexes[0]!]!;
 }
@@ -196,13 +196,12 @@ function originalMeta(source: Extract<AnswerSource, { kind: 'original' }>, group
 }
 
 /**
- * A source's mark: a meeting, a Slack message or channel, a follow-up, a
- * project (yours in ECHO, a Jira project or a Confluence space), a person, a
- * tool, or a document, ticket or page.
+ * A source's mark: a meeting, a follow-up, a project (yours in ECHO, a Jira
+ * project or a Confluence space), a person, a tool, or a document, ticket or
+ * page.
  */
 function KindIcon({ source }: { source: AnswerSource }) {
   if (source.kind === 'record' || source.kind === 'transcript') return <Meeting />;
-  if (source.kind === 'slack' || (source.kind === 'container' && source.container === 'slack_channel')) return <Hash />;
   if (source.kind === 'follow_up') return <Ticks />;
   if (source.kind === 'project' || source.kind === 'container') return <Folder />;
   if (source.kind === 'person') return <OnePerson />;
@@ -215,7 +214,7 @@ function followUpRow(state: State, source: Extract<AnswerSource, { kind: 'follow
   return read !== undefined && !read.loading && 'value' in read ? read.value : null;
 }
 
-/** A Jira project's, Confluence space's or Slack channel's tool, and its key there when it has one: "Jira · THERM", "Slack". */
+/** A Jira project's or Confluence space's tool, and its key there when it has one: "Jira · THERM", "Confluence". */
 function containerMeta(source: Extract<AnswerSource, { kind: 'container' }>, provider: string): string {
   return source.key === undefined ? provider : `${provider} · ${source.key}`;
 }
@@ -585,8 +584,8 @@ export function RecordDetail({ record, headed = true, lit }: { record: ApprovedR
 
 /**
  * Live evidence beside Ask: its label, and Open in its own app, where the tool
- * checks your access. A Jira project, Confluence space or Slack channel also
- * says its tool and key, in its source row's words ("Jira · THERM").
+ * checks your access. A Jira project or Confluence space also says its tool
+ * and key, in its source row's words ("Jira · THERM").
  */
 function ExternalSource({ source, provider }: { source: ExternalAnswerSource; provider: string }) {
   return <div class="source-detail">
@@ -676,8 +675,8 @@ function ReadRecord<T>({ read, children }: { read: Read<T> | undefined; children
   return <>{children(read.value)}</>;
 }
 
-/** A container, as the pane's head names it after its tool: "Jira · Project", "Confluence · Space", "Slack · Channel". */
-const CONTAINER_WORDS: Readonly<Record<ToolContainerKind, string>> = { jira_project: 'Project', confluence_space: 'Space', slack_channel: 'Channel' };
+/** A container, as the pane's head names it after its tool: "Jira · Project", "Confluence · Space". */
+const CONTAINER_WORDS: Readonly<Record<ToolContainerKind, string>> = { jira_project: 'Project', confluence_space: 'Space' };
 
 /** What the pane's head calls an item: its kind, or a live tool's name and kind. */
 function paneHeading(source: AnswerSource, state: State): string {
@@ -690,7 +689,7 @@ function paneHeading(source: AnswerSource, state: State): string {
   if (source.kind === 'tool') return 'Tool';
   const provider = externalSourceProvider(source, state.tools?.items);
   if (source.kind === 'container') return `${provider} · ${CONTAINER_WORDS[source.container]}`;
-  return `${provider} · ${source.kind === 'slack' ? 'Message' : source.kind === 'ticket' ? 'Ticket' : 'Page'}`;
+  return `${provider} · ${source.kind === 'ticket' ? 'Ticket' : 'Page'}`;
 }
 
 /**

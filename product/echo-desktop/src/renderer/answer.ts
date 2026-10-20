@@ -3,7 +3,7 @@ import { sourceKey } from './openers.js';
 
 /**
  * One source as an answer shows it: a document, a meeting's approved record,
- * or a Slack message. An answer cites passages and record items; those of one
+ * or a live item. An answer cites passages and record items; those of one
  * document or one record are one source, numbered once.
  */
 export interface SourceGroup {
@@ -16,8 +16,8 @@ export interface SourceGroup {
  * The place a source opens, as a person reads it: a meeting (whichever of its
  * items is cited), a document or note (whichever passage), a transcript's
  * meeting, a follow-up, a project, a person, a tool, or one link: an item's in
- * its tool, or a Jira project's, Confluence space's or Slack channel's.
- * Sources of one place are one source.
+ * its tool, or a Jira project's or Confluence space's. Sources of one place are
+ * one source.
  */
 export function groupKey(source: AnswerSource): string {
   if (source.kind === 'record') return `record:${source.record.record_sha256}`;

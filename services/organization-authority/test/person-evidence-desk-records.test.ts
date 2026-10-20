@@ -385,16 +385,6 @@ describe('Person evidence desk: one source at a time', () => {
     value.revoke();
     await expect(desk.revalidate({})).rejects.toThrow('person authentication failed');
   });
-
-  it('reads no Slack: a Slack-only search or list returns nothing, with no Slack receipt', async () => {
-    const value = await fixture();
-    const desk = value.makeDesk();
-    const searched = await desk.search({ query: 'Decision', kinds: ['slack_message'], limit: 8 });
-    expect(searched.items).toEqual([]);
-    expect(searched.notice).toBeUndefined();
-    const listed = await desk.list({ source: 'slack', channel: 'hw-dvt' });
-    expect(listed).toMatchObject({ items: [], truncated: false });
-  });
 });
 
 describe('Person evidence desk over an approval-decision record with a confirmed owner', () => {

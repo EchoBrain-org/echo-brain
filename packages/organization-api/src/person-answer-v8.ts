@@ -7,9 +7,9 @@ import { assertToolId, fail } from './validation.js';
 /**
  * V8 adds workspace and tool-container citations (research tool contract
  * v1): the asker's projects, the people in their organization, their tools,
- * and the Jira projects, Confluence spaces and Slack channels of the tools they
- * connected. The V3 request shape is unchanged. A matched response on this path
- * carries `PERSON_ANSWER_ROUTE_HEADER_V5` with the value `7`.
+ * and the Jira projects and Confluence spaces of the tools they connected.
+ * The V3 request shape is unchanged. A matched response on this path carries
+ * `PERSON_ANSWER_ROUTE_HEADER_V5` with the value `7`.
  */
 export const PERSON_ANSWER_PATH_V7 = '/v7/person/ask';
 export type PersonEvidenceKindV5 = PersonEvidenceKindV4 | 'project' | 'person' | 'tool' | 'tool_container';

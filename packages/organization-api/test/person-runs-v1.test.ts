@@ -423,7 +423,7 @@ describe('runs API open-item results', () => {
     const action = openItem({ kind: 'action', relation: 'needs_updating', expected: 'Send the pilot plan to the vendor', state: 'unsent', sent_at: null, state_set_at: null,
       state_set_by: null, send_included: null, check: null, owner: { ...OWNER, match: 'name' } });
     expect(validatePersonRunsResultV1('item', { item: action }).item.kind).toBe('action');
-    const kinds = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'];
+    const kinds = ['action', 'ticket', 'page', 'record', 'document'];
     expect(validatePersonRunsResultV1('home', { send: [sendRow({ kinds, items: 40, owners: Array.from({ length: 40 }, (_, at) => `Owner ${at}`) })], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false })
       .send[0]!.kinds).toEqual(kinds);
     refused(() => validatePersonRunsResultV1('home', { send: [sendRow({ owners: Array.from({ length: 41 }, (_, at) => `Owner ${at}`) })], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false }), 'one owner too many');

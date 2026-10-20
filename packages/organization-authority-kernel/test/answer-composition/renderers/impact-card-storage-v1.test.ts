@@ -15,7 +15,7 @@ import {
 /**
  * The pointer-only impact card (runs store and impact card v1, section 4,
  * and ADR-0032): a stored card keeps ECHO's own judgments and pointers, never
- * a word read from Slack, Jira or Confluence. Every view rebuilds the outside
+ * a word read from Jira or Confluence. Every view rebuilds the outside
  * parts from fresh reads. Distinctive fictional outside text makes a leak
  * findable in the stored JSON.
  */

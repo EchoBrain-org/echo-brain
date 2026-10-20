@@ -301,11 +301,11 @@ describe("agentic Ask model protocol parity", () => {
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
     const step = parseStep({ parts: [{ question: "q", needs: ["a fact"], notes: "" }], actions: [
-      { tool: "search", input: "fixture owner" }, { tool: "open", args: "E4" }, { tool: "browse", input: "meetings" }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: 7 } },
+      { tool: "search", input: "fixture owner" }, { tool: "open", args: "E4" }, { tool: "browse", input: "meetings" }, { tool: "list", args: { source: "documents", channel: "#hw-dvt", since: 7 } },
     ] });
     expect(step.parts[0]!.needs).toEqual([{ need: "a fact", status: "open", evidence: [] }]);
     expect(step.actions).toEqual([
-      { tool: "search", args: { query: "fixture owner" } }, { tool: "open", args: { id: "E4" } }, { tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: "7" } },
+      { tool: "search", args: { query: "fixture owner" } }, { tool: "open", args: { id: "E4" } }, { tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "documents", channel: "#hw-dvt", since: "7" } },
     ]);
   });
 

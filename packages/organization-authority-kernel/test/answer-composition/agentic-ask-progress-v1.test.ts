@@ -396,7 +396,7 @@ describe("agentic Ask progress recorder", () => {
   const sources = [
     { source_id: "meeting", kinds: ["decision"] }, { source_id: "document", kinds: ["document_passage"] },
     { source_id: "jira", kinds: ["ticket"], tool_id: "jira" }, { source_id: "wiki_pages", kinds: ["page"] },
-    { source_id: "slack", kinds: ["slack_message"] },
+    { source_id: "confluence", kinds: ["page"], tool_id: "confluence" },
   ];
   const many = (count: number, label = (index: number) => `Decision ${index}`) => Array.from({ length: count }, (_, index): EvidenceDeskItemV2 => ({
     ...launch, id: `desk_${index}`, label: label(index),
@@ -444,7 +444,7 @@ describe("agentic Ask progress recorder", () => {
     const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
     recorder.research.reads(true);
     recorder.research.returned("search", undefined, [launch]);
-    recorder.research.returned("list", "slack", [launch]);
+    recorder.research.returned("list", "confluence", [launch]);
     recorder.research.returned("search", "document", [prd, before]);
     recorder.research.reads_done();
     // A batch that only opened gave research no rows: no searched row.
@@ -453,7 +453,7 @@ describe("agentic Ask progress recorder", () => {
     expect(events).toEqual([
       { type: "stage", stage: "searching" },
       // The catalog's underscore source id cannot be shown. The listed launch review counts once.
-      { type: "searched", sources: [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }, { kind: "slack" }], found: 3 },
+      { type: "searched", sources: [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }, { kind: "pages", tool_id: "confluence" }], found: 3 },
       { type: "stage", stage: "reading" },
     ]);
   });
@@ -523,7 +523,7 @@ describe("agentic Ask progress recorder", () => {
     const asV7 = (item: EvidenceDeskItemV2) => validatePersonAnswerCitationV7(citationOfAgenticEvidenceItemV1(item));
     expect(v2).toEqual([
       { type: "stage", stage: "searching" },
-      { type: "searched", sources: [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }, { kind: "slack" }, { kind: "follow_ups" }], found: 2 },
+      { type: "searched", sources: [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }, { kind: "pages", tool_id: "confluence" }, { kind: "follow_ups" }], found: 2 },
       { type: "stage", stage: "reading", pending: 2 },
       { type: "read", items: [asV7(followUp), asV7(launch)] },
     ]);

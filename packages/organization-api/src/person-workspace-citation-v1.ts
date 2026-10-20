@@ -27,13 +27,10 @@ export interface PersonToolCitationV1 {
 }
 
 /** The kinds of container a connected tool holds its items in. */
-export type PersonToolContainerKindV1 = 'jira_project' | 'confluence_space' | 'slack_channel';
-export const PERSON_TOOL_CONTAINER_KINDS_V1: readonly PersonToolContainerKindV1[] = Object.freeze(['jira_project', 'confluence_space', 'slack_channel']);
+export type PersonToolContainerKindV1 = 'jira_project' | 'confluence_space';
+export const PERSON_TOOL_CONTAINER_KINDS_V1: readonly PersonToolContainerKindV1[] = Object.freeze(['jira_project', 'confluence_space']);
 
-/**
- * A container in a connected tool: a Jira project, a Confluence space or a
- * Slack channel. Opens its permalink in the tool.
- */
+/** A container in a connected tool: a Jira project or a Confluence space. Opens its permalink in the tool. */
 export interface PersonToolContainerCitationV1 {
   readonly kind: 'tool_container';
   readonly tool_id: string;

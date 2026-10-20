@@ -38,9 +38,9 @@ export const FOLLOW_UPS_LIMITS_V1 = Object.freeze({ search_hits: 5, list_page: 1
  * The descriptor of ECHO's follow-ups. Request-bound like a connected tool's,
  * but with no tool: words a follow-up takes from a tool are that tool's live
  * releases. Its list is not metadata only, since a follow-up carries its
- * fields as text, and it needs no channel and has no default age.
+ * fields as text.
  */
-export interface FollowUpsSourceDescriptorV1 extends Omit<PersonLiveSourceDescriptorV2, 'source_id' | 'kind' | 'selector' | 'tool_id' | 'requires_channel' | 'default_since_days'> {
+export interface FollowUpsSourceDescriptorV1 extends Omit<PersonLiveSourceDescriptorV2, 'source_id' | 'kind' | 'selector' | 'tool_id'> {
   readonly source_id: typeof FOLLOW_UPS_SOURCE_ID_V1;
   readonly kind: typeof FOLLOW_UP_EVIDENCE_KIND_V1;
   readonly selector: typeof FOLLOW_UPS_SELECTOR_V1;
@@ -70,7 +70,7 @@ export const FOLLOW_UPS_SOURCE_DESCRIPTOR_V1: FollowUpsSourceDescriptorV1 = Obje
 
 const STATUS_TEXT: Readonly<Record<PersonOpenItemStateV1, string>> = Object.freeze({ unsent: 'not sent yet', open: 'open', done: 'done', not_relevant: 'not relevant' });
 const VERDICT_TEXT: Readonly<Record<PersonOpenItemVerdictV1, string>> = Object.freeze({ landed: 'landed', still_open: 'still open', changed: 'changed', unreadable: 'could not be read' });
-const KIND_TEXT: Readonly<Record<PersonOpenItemKindV1, string>> = Object.freeze({ action: 'meeting action', ticket: 'ticket', page: 'page', slack_message: 'Slack message', record: 'ECHO meeting record', document: 'ECHO document' });
+const KIND_TEXT: Readonly<Record<PersonOpenItemKindV1, string>> = Object.freeze({ action: 'meeting action', ticket: 'ticket', page: 'page', record: 'ECHO meeting record', document: 'ECHO document' });
 
 /** The desk fields of one follow-up. The source adds its desk id, visibility, release receipt and links. */
 export interface FollowUpDeskFieldsV1 {

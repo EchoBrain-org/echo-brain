@@ -111,7 +111,6 @@ function progressSource(source: AgenticAskProgressCatalogSourceV1, version: Agen
   if ((WORKSPACE_SOURCE_IDS_V1 as readonly string[]).includes(source.source_id)) return version === 3 ? Object.freeze({ kind: source.source_id as WorkspaceSourceIdV1 }) : undefined;
   const [kind] = source.kinds;
   if (source.kinds.length !== 1) return undefined;
-  if (kind === "slack_message") return Object.freeze({ kind: "slack" });
   if (kind === FOLLOW_UP_EVIDENCE_KIND_V1) return version >= 2 ? Object.freeze({ kind: "follow_ups" }) : undefined;
   if (kind === "tool_container") {
     const containerTool = [source.tool_id, source.source_id].find(value => typeof value === "string" && TOOL_ID.test(value));

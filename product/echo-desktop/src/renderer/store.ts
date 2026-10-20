@@ -3407,7 +3407,7 @@ export function answerSources(current: State = state): readonly AnswerSource[] {
   return current.ask?.shown?.answer.sources.slice(0, MAX_SOURCES) ?? [];
 }
 
-/** The answer's sources, numbered from one: each document, meeting record or Slack message it cites. */
+/** The answer's sources, numbered from one: each document, meeting record or live item it cites. */
 export function answerGroups(current: State = state): SourceGroup[] {
   return sourceGroups(answerSources(current));
 }

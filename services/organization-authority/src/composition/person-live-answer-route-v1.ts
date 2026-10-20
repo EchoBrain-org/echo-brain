@@ -67,9 +67,8 @@ export async function bindPersonLiveEvidenceDeskV1(
   // Each binding verifies its own connection, so sources bind concurrently.
   // They register in catalog order, and the first failure in that order is
   // the request's failure, exactly as when they bound one after another.
-  const settled = await Promise.allSettled(compatible.map(selected => {
-    const category = selected.descriptor.kind === 'slack_message' ? 'slack' : selected.descriptor.kind;
-    return observePersonLiveEvidenceV1('evidence_connection', category, async (): Promise<RegisteredPersonLiveEvidenceSourceV2 | undefined> => {
+  const settled = await Promise.allSettled(compatible.map(selected =>
+    observePersonLiveEvidenceV1('evidence_connection', selected.descriptor.kind, async (): Promise<RegisteredPersonLiveEvidenceSourceV2 | undefined> => {
       if (scope.kind === 'mine' || !selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return undefined; }
       const source = await selected.application.source({
         ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}),
@@ -79,8 +78,7 @@ export async function bindPersonLiveEvidenceDeskV1(
       input.signal?.throwIfAborted();
       annotateCoreRuntimeV1({ result: source === undefined ? (scope.kind === 'project' ? 'unavailable' : 'unlinked') : 'verified' });
       return source === undefined ? undefined : { descriptor: selected.descriptor, source, scope };
-    });
-  }));
+    })));
   const bound: RegisteredPersonLiveEvidenceSourceV2[] = [];
   for (const result of settled) {
     if (result.status === 'rejected') throw result.reason;

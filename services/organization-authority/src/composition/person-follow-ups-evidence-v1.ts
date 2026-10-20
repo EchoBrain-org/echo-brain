@@ -495,7 +495,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
 
     async list(input) {
       const window = windowOf(input);
-      if (input.channel !== undefined || input.kinds?.some(kind => kind !== FOLLOW_UP_EVIDENCE_KIND_V1)) invalid('follow-ups take only owner, status and their own dates');
+      if (input.kinds?.some(kind => kind !== FOLLOW_UP_EVIDENCE_KIND_V1)) invalid('follow-ups take only owner, status and their own dates');
       const size = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.list_page);
       const owner = input.owner === undefined ? undefined : input.owner.normalize('NFC').trim().replace(/^@/u, '').trim();
       if (owner !== undefined && (owner.length === 0 || owner.length > 80)) invalid('owner must be a person\'s name such as "Dana", or "me"');

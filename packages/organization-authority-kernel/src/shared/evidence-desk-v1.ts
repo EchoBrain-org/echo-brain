@@ -8,18 +8,17 @@ export class EvidenceDeskSnapshotChangedV1 extends AuthorityOperationError {
 }
 
 /** Read-only evidence desk contract bound to one authenticated Person request. */
-export type EvidenceDeskKindV1 = 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';
+export type EvidenceDeskKindV1 = 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage';
 export type EvidenceDeskVisibilityV1 = 'only_me' | 'team' | 'project' | 'projects' | 'approver_only';
 export type EvidenceDeskCitationV1 = PersonAnswerEvidenceCitationV4;
-/** Where an item came from. Meeting records and documents live in Echo; Slack is read live and never stored. */
-export type EvidenceDeskSourceV1 = 'meeting' | 'document' | 'slack';
+/** Where an item came from. Meeting records and documents live in Echo. */
+export type EvidenceDeskSourceV1 = 'meeting' | 'document';
 /** Meaning of a provider-supplied date; never inferred from a storage source. */
 export type EvidenceDeskDateKindV1 = 'created' | 'version_created' | 'occurred' | 'updated' | 'due' | 'received';
 
 /** The source of an item, from its kind. */
 export function evidenceDeskSourceV1(item: { readonly kind: EvidenceDeskKindV1; readonly ref?: string }): EvidenceDeskSourceV1 {
   if (item.ref?.startsWith('transcript:')) return 'meeting';
-  if (item.kind === 'slack_message') return 'slack';
   return item.kind === 'note' || item.kind === 'document_passage' ? 'document' : 'meeting';
 }
 export type EvidenceDeskScopeV1 = PersonAnswerScopeV3;
@@ -103,15 +102,10 @@ export interface EvidenceDeskSearchInputV1 extends EvidenceDateFilterV1 {
   readonly signal?: AbortSignal;
 }
 
-/**
- * Lists one source without keywords, newest first where the source knows dates.
- * Meeting and document items carry no text; Slack messages carry their text,
- * which is their only title. Slack requires `channel` (a name the asker can see).
- */
+/** Lists one source without keywords, newest first where the source knows dates. Meeting and document items carry no text. */
 export interface EvidenceDeskListInputV1 extends EvidenceDateFilterV1 {
   readonly source: EvidenceDeskSourceV1;
   readonly kinds?: readonly EvidenceDeskKindV1[];
-  readonly channel?: string;
   /** Inclusive YYYY-MM-DD bounds; applied where the source knows dates. */
   readonly since?: string;
   readonly until?: string;

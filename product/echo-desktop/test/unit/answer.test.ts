@@ -10,7 +10,7 @@ const original = (source: string, anchor: string, label = 'SCOUT-Hardware-Review
 const record = (digit: string): AnswerSource => ({
   kind: 'record', label: 'Approved record 1', record: { record_sha256: digest(digit), policy_id: 'organization-member-readable-person-v2' }, atom_id: digest('a'),
 });
-const slack = (ts: string): AnswerSource => ({ kind: 'slack', tool_id: 'slack', label: '#launch · Maya', permalink: `https://acme.slack.com/archives/C01ABCDEF/p${ts}` });
+const page = (id: string): AnswerSource => ({ kind: 'page', tool_id: 'confluence', label: 'Launch plan', permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}` });
 
 describe('an answer cites sources, not passages', () => {
   it('keeps external source identity in grouping and uses the actual tool label', () => {
@@ -22,21 +22,21 @@ describe('an answer cites sources, not passages', () => {
       { kind: 'page', indexes: [0, 2] }, { kind: 'page', indexes: [1] },
     ]);
   });
-  it('groups repeated ticket citations by link while keeping Slack sources distinct', () => {
+  it('groups repeated ticket citations by link while keeping another item distinct', () => {
     const ticket: AnswerSource = { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7', permalink: 'https://example.test/tickets/7' };
-    expect(sourceGroups([ticket, slack('1758873600000100'), { ...ticket, label: 'ECHO-7 updated title' }])).toEqual([
-      { kind: 'ticket', indexes: [0, 2] }, { kind: 'slack', indexes: [1] },
+    expect(sourceGroups([ticket, page('12345'), { ...ticket, label: 'ECHO-7 updated title' }])).toEqual([
+      { kind: 'ticket', indexes: [0, 2] }, { kind: 'page', indexes: [1] },
     ]);
   });
-  it('groups the passages of one document, the items of one meeting record, and keeps each Slack message apart, in first-cited order', () => {
+  it('groups the passages of one document, the items of one meeting record, and keeps each page apart, in first-cited order', () => {
     const sources = [original('a', '4'), original('b', '5', 'SCOUT-Software-Review-v0.1.md'), original('a', '6'), record('7'), record('7'),
-      slack('1758873600000100'), slack('1758873600000200'), original('b', '8', 'SCOUT-Software-Review-v0.1.md')];
+      page('12345'), page('12346'), original('b', '8', 'SCOUT-Software-Review-v0.1.md')];
     expect(sourceGroups(sources)).toEqual([
       { kind: 'original', indexes: [0, 2] },
       { kind: 'original', indexes: [1, 7] },
       { kind: 'record', indexes: [3, 4] },
-      { kind: 'slack', indexes: [5] },
-      { kind: 'slack', indexes: [6] },
+      { kind: 'page', indexes: [5] },
+      { kind: 'page', indexes: [6] },
     ]);
   });
 

@@ -186,7 +186,6 @@ function unknownScope(scope: never): never {
 const LIST_SOURCES: Readonly<Record<string, EvidenceDeskSourceV2>> = Object.freeze({
   meeting: "meeting", meetings: "meeting", record: "meeting", records: "meeting", decisions: "meeting",
   document: "document", documents: "document", doc: "document", docs: "document", file: "document", files: "document",
-  slack: "slack", messages: "slack", message: "slack",
   ticket: "ticket", tickets: "ticket",
   page: "page", pages: "page", knowledge: "page", wiki: "page",
   follow_up: FOLLOW_UPS_SOURCE_ID_V1, "follow-up": FOLLOW_UPS_SOURCE_ID_V1, "follow-ups": FOLLOW_UPS_SOURCE_ID_V1, "follow ups": FOLLOW_UPS_SOURCE_ID_V1,
@@ -276,8 +275,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     const alias = LIST_SOURCES[key];
     if (alias === undefined) return undefined;
     if (sourcesById.has(alias)) return alias;
-    const kind = alias === 'slack' ? 'slack_message' : alias;
-    const compatible = researchSources.filter(source => source.kinds.length === 1 && source.kinds[0] === kind);
+    const compatible = researchSources.filter(source => source.kinds.length === 1 && source.kinds[0] === alias);
     return compatible.length === 1 ? compatible[0]!.source_id : undefined;
   };
   const catalog: AgenticResearchCatalogV1 = Object.freeze({ entries: sourceCatalog, by_id: sourcesById, resolve: readSource });
