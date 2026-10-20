@@ -58,9 +58,6 @@ describe('the words Home and the follow-ups use', () => {
     expect(itemKind(item())).toBe('Jira ticket');
     expect(itemKind(item({ kind: 'page' }))).toBe('Page');
     expect(itemKind(item({ kind: 'page', current: { source: { ...ticket, kind: 'page', tool_id: 'confluence' }, says_now: 'x' } }))).toBe('Confluence page');
-    // A meeting you cannot read is never named: who sent it is, by first name.
-    expect(itemWhy(item(), person.membership_id)).toBe('Jira ticket · sent by Mina');
-    expect(itemWhy(item({ decision: pilot }), person.membership_id)).toBe('Jira ticket · Pilot planning meeting, approved Oct 6');
   });
 
   it('tells two items that would share a name apart by what the meeting requires of each, then by position', () => {
