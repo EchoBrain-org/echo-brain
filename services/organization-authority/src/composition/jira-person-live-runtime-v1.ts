@@ -14,9 +14,6 @@ import type { PersonIdentitySessionApplication } from '../application/person-ide
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 
-/** ADR-0026 permits person-bound live reads; runtime selection remains explicit. */
-export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = true;
-
 /** Explicit selecting configuration, absent until enabled by an operator. */
 export interface JiraPersonLiveConfigurationV1 {
   readonly enabled: true;
