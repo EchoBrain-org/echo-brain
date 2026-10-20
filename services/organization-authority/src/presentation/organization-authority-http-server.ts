@@ -506,12 +506,13 @@ function personSourcePost<Application, Request>(
   };
 }
 
-/** Desk/list reads check the bearer and install cancellation before reading any body bytes. */
+/** The client's optional clock and time zone headers an Ask may read. */
 function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | undefined {
   try { return validatePersonAskTimeContextV1(request.headers[PERSON_ASK_CLIENT_NOW_HEADER_V1], request.headers[PERSON_ASK_TIME_ZONE_HEADER_V1]); }
   catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
 }
 
+/** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
   application: Application | undefined,
   validate: (value: unknown) => Request,
