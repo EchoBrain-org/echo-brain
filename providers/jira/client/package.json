@@ -5,10 +5,6 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./organization-api/jira-person-connection-v1": {
-      "types": "./dist/organization-api/jira-person-connection-v1.d.ts",
-      "import": "./dist/organization-api/jira-person-connection-v1.js"
-    },
     "./person/jira-tool-provider": {
       "types": "./dist/person/jira-tool-provider.d.ts",
       "import": "./dist/person/jira-tool-provider.js"

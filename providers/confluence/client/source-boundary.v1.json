@@ -7,7 +7,6 @@
   "source_root": "providers/confluence/client/src",
   "package_json": "providers/confluence/client/package.json",
   "entry_points": [
-    "providers/confluence/client/src/organization-api/confluence-person-connection-v1.ts",
     "providers/confluence/client/src/organization-api/confluence-project-mapping-v1.ts",
     "providers/confluence/client/src/person/confluence-tool-provider.ts"
   ],
@@ -39,11 +38,6 @@
   ],
   "component_index_contract": {
     "canonical_components": [
-      {
-        "name": "Person Confluence connection contract",
-        "path": "providers/confluence/client/src/organization-api/confluence-person-connection-v1.ts",
-        "export": "validatePersonConfluenceConnectV1"
-      },
       {
         "name": "Person Confluence tool provider",
         "path": "providers/confluence/client/src/person/confluence-tool-provider.ts",

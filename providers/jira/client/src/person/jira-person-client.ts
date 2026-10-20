@@ -1,22 +1,11 @@
 import { PERSON_JIRA_PROJECT_READ_PATH_V1, PERSON_JIRA_PROJECT_SET_PATH_V1, validateJiraProjectReadV1, validateJiraProjectSetV1, validateJiraProjectMappingV1, type JiraProjectSetV1, type JiraProjectMappingV1 } from '../organization-api/jira-project-mapping-v1.js';
 import { PersonToolConnectionClientV1, PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, type PersonToolHostV1 } from "@echo-brain/organization-api";
-import {
-  PERSON_JIRA_CONNECT_PATH_V1,
-  PERSON_JIRA_STATUS_PATH_V1,
-  PERSON_JIRA_CANCEL_PATH_V1,
-  PERSON_JIRA_DISCONNECT_PATH_V1,
-} from "../organization-api/jira-person-connection-v1.js";
 
 const JIRA_TOOL_TIMEOUT_MS = 75_000;
 
 export class JiraPersonClientV1 extends PersonToolConnectionClientV1 {
   constructor(host: PersonToolHostV1) {
-    super(host, "Jira", {
-      connect: PERSON_JIRA_CONNECT_PATH_V1,
-      status: PERSON_JIRA_STATUS_PATH_V1,
-      cancel: PERSON_JIRA_CANCEL_PATH_V1,
-      disconnect: PERSON_JIRA_DISCONNECT_PATH_V1,
-    });
+    super(host, "Jira", "jira");
   }
 
   projectRead(project_id: string): Promise<JiraProjectMappingV1> {

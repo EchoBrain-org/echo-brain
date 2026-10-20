@@ -11,29 +11,27 @@ import {
   type PersonToolAttemptStatusV1, type PersonToolConnectV1, type PersonToolConnectionStateV1,
 } from './person-tool-connection-v1.js';
 
-interface ConnectionRoutes {
-  readonly connect: string;
-  readonly status: string;
-  readonly cancel: string;
-  readonly disconnect: string;
-}
-
-/** Uses the host session for every request, including its current-account check. */
+/**
+ * Uses the host session for every request, including its current-account check. Its routes are the four the Authority
+ * builds for every connected tool: `/v1/person/tools/<tool_id>/<verb>`.
+ */
 export class PersonToolConnectionClientV1 {
   constructor(
     protected readonly host: PersonToolHostV1,
     private readonly display_name: string,
-    private readonly routes: ConnectionRoutes,
+    private readonly tool_id: string,
   ) {}
 
   connect(): Promise<PersonToolConnectV1> {
-    return this.command(this.routes.connect, value => validatePersonToolConnectV1(value, this.display_name), PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1);
+    return this.command(this.route('connect'), value => validatePersonToolConnectV1(value, this.display_name), PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1);
   }
-  status(attempt: string): Promise<PersonToolAttemptStatusV1> { return this.attempt(this.routes.status, attempt); }
-  cancel(attempt: string): Promise<PersonToolAttemptStatusV1> { return this.attempt(this.routes.cancel, attempt); }
+  status(attempt: string): Promise<PersonToolAttemptStatusV1> { return this.attempt(this.route('status'), attempt); }
+  cancel(attempt: string): Promise<PersonToolAttemptStatusV1> { return this.attempt(this.route('cancel'), attempt); }
   disconnect(): Promise<PersonToolConnectionStateV1> {
-    return this.command(this.routes.disconnect, value => validatePersonToolStateV1(value, false, this.display_name));
+    return this.command(this.route('disconnect'), value => validatePersonToolStateV1(value, false, this.display_name));
   }
+
+  private route(verb: 'connect' | 'status' | 'cancel' | 'disconnect'): string { return `/v1/person/tools/${this.tool_id}/${verb}`; }
 
   private command<T>(path: string, validate_response: (value: unknown) => T, maximum_response_bytes = PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1): Promise<T> {
     const validate_request = (value: unknown) => validatePersonToolCommandV1(value, this.display_name);
