@@ -18,14 +18,13 @@ import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1, withoutCoreRunti
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
-  ASK_SEARCH_ONLY_STEP_PROMPT,
   ASK_STEP_PROMPT,
   AgenticAskOutputErrorV1,
   FOLLOW_UPS_ANSWER_GUIDANCE,
+  FOLLOW_UPS_STEP_GUIDANCE,
   SEARCH_ONLY_STEP_PROMPT,
   STEP_PROMPT,
   TASK_RULE_PROMPT,
-  followUpsStepGuidance,
 } from "./agentic-ask-v1-model-protocol.js";
 import { agenticTaskSlotsFitV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
@@ -147,10 +146,11 @@ function questionText(value: unknown): string | null {
 function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
   const { goal, starting } = brief;
   if (!Array.isArray(starting) || !starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report"))) return null;
-  // With no planner research only reads its starting items: a question, or a task with none, would read nothing.
+  // With no planner research only reads its starting items: a question, or a task with none, would read nothing. A
+  // question always has the list tool.
   const { planner, list } = object(brief.options) ?? {};
   if (planner !== undefined && (typeof planner !== "boolean" || (!planner && (goal.kind === "question" || starting.length === 0)))) return null;
-  if (list !== undefined && typeof list !== "boolean") return null;
+  if (list !== undefined && (typeof list !== "boolean" || (!list && goal.kind === "question"))) return null;
   if (goal.kind === "question") return questionText(goal.question) === null ? null : brief;
   const data = goal.data === undefined ? [] : goal.data;
   if (goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0 || !Array.isArray(data) || !data.every(value => typeof value === "string")) return null;
@@ -297,18 +297,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const followUps = liveCatalog.some(source => source.kinds.includes(FOLLOW_UP_EVIDENCE_KIND_V1));
   const guided = (base: string, live: string, followUp: string) => [base, ...(toolSources.length === 0 ? [] : [live]), ...(followUps ? [followUp] : [])].join("\n\n");
   const answerPrompt = guided(ANSWER_PROMPT, liveGuidance(true), FOLLOW_UPS_ANSWER_GUIDANCE);
+  /** A research step's system prompt, and the scratchpad bytes that fit beside it. */
+  const stepPrompt = (prompt: string) => Object.freeze({ prompt, prompt_budget: agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, OUTPUT_TOKENS.step) });
   /**
-   * The research step's prompts and the scratchpad bytes beside each: Ask's question has its own step prompt, with list
-   * evidence (ADR-0041); every task-form goal keeps the step prompt before it and adds the one shared task rule; and a
-   * search-only brief (no list) has its own step prompts.
+   * The research step's prompts: Ask's question has its own, with list evidence (ADR-0041); every task-form goal keeps the
+   * step prompt before it and adds the one shared task rule, and a search-only task brief (no list) has its own.
    */
-  const researchPrompts = (list: boolean) => {
-    const step = guided(list ? ASK_STEP_PROMPT : ASK_SEARCH_ONLY_STEP_PROMPT, liveGuidance(list), followUpsStepGuidance(list));
-    const task = `${guided(list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT, liveGuidance(list), followUpsStepGuidance(list))}\n\n${TASK_RULE_PROMPT}`;
-    const budget = (prompt: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, OUTPUT_TOKENS.step);
-    return Object.freeze({ step, step_budget: budget(step), task, task_budget: budget(task) });
-  };
-  const prompts = Object.freeze({ list: researchPrompts(true), search_only: researchPrompts(false) });
+  const taskPrompt = (list: boolean) => stepPrompt(`${guided(list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT, liveGuidance(list), FOLLOW_UPS_STEP_GUIDANCE)}\n\n${TASK_RULE_PROMPT}`);
+  const prompts = Object.freeze({ ask: stepPrompt(guided(ASK_STEP_PROMPT, liveGuidance(true), FOLLOW_UPS_STEP_GUIDANCE)), task: taskPrompt(true), search_only_task: taskPrompt(false) });
   /** What a renderer's user prompt may fill beside its system prompt. */
   const promptBudget = (system: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, OUTPUT_TOKENS.answer);
   /**
@@ -377,10 +373,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       };
 
       // ---- research: the loop owns its state; the runner reads its progress and its bundle ----
-      const stepPrompts = brief.options.list === false ? prompts.search_only : prompts.list;
+      const researchStep = !researchOnly ? prompts.ask : brief.options.list === false ? prompts.search_only_task : prompts.task;
       const loop = createAgenticResearchLoopV1({
         desk, brief: { ...brief, options: { ...brief.options, small_scope_preload: options.small_scope_shortcut === true && brief.options.small_scope_preload } },
-        prompt: researchOnly ? stepPrompts.task : stepPrompts.step, prompt_budget: researchOnly ? stepPrompts.task_budget : stepPrompts.step_budget, step_span: "ask_planner",
+        ...researchStep, step_span: "ask_planner",
         context: context(requestDay), scope, catalog,
         now, remaining, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),
         observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),

@@ -5,7 +5,7 @@ import {
 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV3, createAgenticAskV4 } from '../../src/answer-composition/agentic-ask-v1.js';
-import { ANSWER_PROMPT, ASK_STEP_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, followUpsStepGuidance } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { ANSWER_PROMPT, ASK_STEP_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, FOLLOW_UPS_STEP_GUIDANCE } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1 } from '../../src/answer-composition/agentic-evidence-bundle-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { evidenceDeskSourceV2, type EvidenceDeskItemV2, type EvidenceDeskPortV2, type EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
@@ -68,7 +68,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
       { sentences: [{ text: 'You own the open fan curve follow-up.', evidence: ['E1'] }], not_found: [] },
     ]);
     await createAgenticAskV4({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: followUpsOnly.model, audit: { append: () => undefined }, generation, asker }).answer({ question });
-    expect(followUpsOnly.steps()[0]!.system_prompt).toBe(`${ASK_STEP_PROMPT}\n\n${followUpsStepGuidance(true)}`);
+    expect(followUpsOnly.steps()[0]!.system_prompt).toBe(`${ASK_STEP_PROMPT}\n\n${FOLLOW_UPS_STEP_GUIDANCE}`);
     expect(followUpsOnly.writer()!.system_prompt).toBe(`${ANSWER_PROMPT}\n\n${FOLLOW_UPS_ANSWER_GUIDANCE}`);
     expect(listSources(followUpsOnly.steps()[0]!)).toEqual(['meetings', 'documents', 'follow_ups']);
     expect((userOf(followUpsOnly.steps()[0]!).source_catalog as { source: string }[]).at(-1)).toEqual({ source: 'follow_ups', kind: 'follow_up', description: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.description, metadata_only_list: false, capabilities: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.capabilities });
@@ -77,17 +77,16 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     await createAgenticAskV4({ desk: deskWith([JIRA, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: withTools.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
     const toolsPrompt = withTools.steps()[0]!.system_prompt;
     expect(toolsPrompt.startsWith(`${ASK_STEP_PROMPT}\n\nLive sources report current tool context`)).toBe(true);
-    expect(toolsPrompt.endsWith(`\n\n${followUpsStepGuidance(true)}`)).toBe(true);
+    expect(toolsPrompt.endsWith(`\n\n${FOLLOW_UPS_STEP_GUIDANCE}`)).toBe(true);
     expect(listSources(withTools.steps()[0]!)).toEqual(['meetings', 'documents', 'tickets', 'follow_ups']);
 
     // A V6 answer never binds follow-ups, so its prompts are exactly what they were before follow-ups existed.
     const v6 = scripted([step('open', [{ tool: 'finish', args: {} }])]);
     await createAgenticAskV3({ desk: deskWith([JIRA, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: v6.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
     const v6Prompt = v6.steps()[0]!.system_prompt;
-    expect(v6Prompt).toBe(toolsPrompt.slice(0, -`\n\n${followUpsStepGuidance(true)}`.length));
+    expect(v6Prompt).toBe(toolsPrompt.slice(0, -`\n\n${FOLLOW_UPS_STEP_GUIDANCE}`.length));
     expect(v6Prompt).not.toContain('follow_ups');
     expect(listSources(v6.steps()[0]!)).toEqual(['meetings', 'documents', 'tickets']);
-    expect(followUpsStepGuidance(false)).not.toMatch(/\blist\b/u);
   });
 
   it('lists follow-ups by owner and status at the desk, and the writer and answer see each as a follow-up', async () => {

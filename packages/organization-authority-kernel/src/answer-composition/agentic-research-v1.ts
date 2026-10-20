@@ -44,8 +44,7 @@ export type AgenticResearchAdmissionV1 = "post_revalidation_no_time";
 /**
  * What an Ask need asks (ADR-0041), declared by research: `which_items`, which items exist in a source or in a set
  * picked by list facts (a list answers it); `which_say`, which members of such a set say something (it cites the list
- * it checks); `content`, anything else (text read in full answers it). A task goal's needs, and those of an Ask brief
- * without the list tool, have no kind.
+ * it checks); `content`, anything else (text read in full answers it). A task goal's needs have no kind.
  */
 export const AGENTIC_RESEARCH_NEED_KINDS_V1 = Object.freeze(["which_items", "which_say", "content"] as const);
 export type AgenticResearchNeedKindV1 = (typeof AGENTIC_RESEARCH_NEED_KINDS_V1)[number];

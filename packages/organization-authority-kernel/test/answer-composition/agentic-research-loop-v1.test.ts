@@ -801,7 +801,7 @@ describe("research core: what a task trigger's renderer was shown and cited", ()
 });
 
 describe("research loop: need kinds (ADR-0041)", () => {
-  const question = (text: string, list = true): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false, ...(list ? {} : { list: false }) } });
+  const question = (text: string): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false } });
   const kinded = (text: string, kind: string | undefined, status: string, evidence: readonly string[] = []) => ({ ...need(text, status, evidence), ...(kind === undefined ? {} : { kind }) });
   /** A proposed need that names the plan's id for it. */
   const withId = (id: string, value: ReturnType<typeof need>) => ({ id, ...value });
@@ -829,18 +829,18 @@ describe("research loop: need kinds (ADR-0041)", () => {
     ], { search: async () => result([launch]) });
     expect((await bare.research.research({ trigger: "ask", brief: question("When is launch?") })).plan[0]!.needs).toEqual([{ need: "When is launch?", kind: "content", status: "found", evidence: ["E1"] }]);
     expect(bare.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "When is launch?", kind: "content", status: "open", evidence: [] }] }]);
-    // A task goal, and Ask without the list tool, declare nothing: their schema, plan view and bundle have no kind.
-    for (const [trigger, brief_] of [["approved_record", brief("Find the launch date.", [])], ["ask", question("When is launch?", false)]] as const) {
-      const plain = harness([
-        step([part("When is launch?", [kinded("launch date", "which_items", "open")])], [{ tool: "search", args: { query: "launch" } }]),
-        step([part("When is launch?", [withId("N1", kinded("launch date", "which_say", "found", ["E1"]))])], [{ tool: "finish", args: {} }]),
-        ...(trigger === "ask" ? [writer] : []),
-      ], { search: async () => result([launch]) });
-      const result_ = await plain.research.research({ trigger, brief: brief_ });
-      expect(needSchema(plain, 0).required).toEqual(["need", "status", "evidence"]);
-      expect(needSchema(plain, 0).properties).not.toHaveProperty("kind");
-      expect(plain.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "open", evidence: [] }] }]);
-      expect(result_.plan[0]!.needs).toEqual([{ need: "launch date", status: "found", evidence: ["E1"] }]);
-    }
+    // A task goal declares nothing: its schema, plan view and bundle have no kind.
+    const plain = harness([
+      step([part("When is launch?", [kinded("launch date", "which_items", "open")])], [{ tool: "search", args: { query: "launch" } }]),
+      step([part("When is launch?", [withId("N1", kinded("launch date", "which_say", "found", ["E1"]))])], [{ tool: "finish", args: {} }]),
+    ], { search: async () => result([launch]) });
+    const result_ = await plain.research.research({ trigger: "approved_record", brief: brief("Find the launch date.", []) });
+    expect(needSchema(plain, 0).required).toEqual(["need", "status", "evidence"]);
+    expect(needSchema(plain, 0).properties).not.toHaveProperty("kind");
+    expect(plain.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "open", evidence: [] }] }]);
+    expect(result_.plan[0]!.needs).toEqual([{ need: "launch date", status: "found", evidence: ["E1"] }]);
+    // Ask always has the list tool: a question without it is refused before any read.
+    await expect(plain.research.research({ trigger: "ask", brief: { ...question("When is launch?"), options: { small_scope_preload: false, list: false } } })).rejects.toThrow("question is invalid");
+    expect(plain.generate).toHaveBeenCalledTimes(2);
   });
 });
