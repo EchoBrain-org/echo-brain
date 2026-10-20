@@ -1,26 +1,17 @@
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonUpdateSubmitV3, validatePersonUploadAudienceV3, type ProjectIdV1 } from '@echo-brain/organization-api';
+import { validatePersonUpdateSubmitV3, type ProjectIdV1 } from '@echo-brain/organization-api';
 import { canonicalSourceContentV1, sourceItemIdV1, type SourceEnvelopeV1, type SourceAdmissionScopeV1 } from '@echo-brain/organization-processing/core';
 import { PERSON_SOURCE_IDENTITY_V1 } from '../../../application/person-document-source-v1.js';
+import { personNoteContextIdV1, storedProjectIdsV1, storedUploadAudienceV3, storedUploadCustodyRefV1 } from './person-upload-custody-v1.js';
 
 type CustodyRow = { organization_id:string; principal_id:string; membership_id:string; membership_type:string; audience_kind:'only_me'|'team'|'project'|'projects'; audience_project_id:string|null; audience_project_ids_json?:string|null; submitted_association_project_ids_json?:string|null; received_at:string };
 type DocumentRow = CustodyRow & { document_id:string; filename:string; original_sha256:string; original_size:number; detected_media_type:string };
 type TextRow = CustodyRow & { context_id:string; title:string; text:string; payload_sha256:string; request_id:string; request_version?:number };
 function equal(a:unknown,b:unknown):boolean{return canonicalSourceContentV1(a)===canonicalSourceContentV1(b);}
 
-function canonicalIds(json: string | null | undefined): readonly ProjectIdV1[] {
-  if (typeof json !== 'string') throw new Error('Person projects custody is absent');
-  let value: unknown;
-  try { value = JSON.parse(json); } catch { throw new Error('Person projects custody is invalid'); }
-  if (!Array.isArray(value) || canonicalJson(value) !== json) throw new Error('Person projects custody is invalid');
-  const audience = validatePersonUploadAudienceV3({ kind: 'projects', project_ids: value });
-  if (audience.kind !== 'projects') throw new Error('Person projects custody is invalid');
-  return audience.project_ids;
-}
-
 function audienceIds(row: CustodyRow): readonly ProjectIdV1[] {
-  if (row.audience_kind === 'projects') return canonicalIds(row.audience_project_ids_json);
+  if (row.audience_kind === 'projects') return storedProjectIdsV1(row.audience_project_ids_json);
   if (row.audience_kind === 'project' && row.audience_project_id !== null) {
     const ids = [row.audience_project_id as ProjectIdV1];
     if (typeof row.audience_project_ids_json === 'string' && canonicalJson(ids) !== row.audience_project_ids_json) throw new Error('Person project audience custody is invalid');
@@ -39,10 +30,8 @@ function assertAudienceLinks(database: Database.Database, table: 'text'|'documen
 }
 
 function custodyRef(database: Database.Database, table: 'text'|'document', id: string, row: CustodyRow): string {
-  const ids = assertAudienceLinks(database, table, id, row.organization_id, row);
-  if (row.audience_kind === 'projects') return `projects:${canonicalSha256(ids)}`;
-  if (row.audience_kind === 'project') return `project:${row.audience_project_id}`;
-  return row.audience_kind === 'team' ? `organization:${row.organization_id}` : `membership:${row.membership_id}`;
+  assertAudienceLinks(database, table, id, row.organization_id, row);
+  return storedUploadCustodyRefV1(row);
 }
 
 /** Rebind adapter output to accepted originals and current private eligibility inside the store transaction. */
@@ -64,15 +53,8 @@ export function assertPersonSourceAdmissionV1(database:Database.Database,source:
     if(!text || text.request_version !== version)throw new Error('Person text source is not in accepted custody');
     row=text;table='text';external=text.context_id;revision=text.payload_sha256;
     if (version === 3) {
-      const audience = text.audience_kind === 'projects'
-        ? validatePersonUploadAudienceV3({ kind: 'projects', project_ids: canonicalIds(text.audience_project_ids_json) })
-        : text.audience_kind === 'project' && text.audience_project_id !== null ? { kind: 'project' as const, project_id: text.audience_project_id as ProjectIdV1 }
-        : text.audience_kind === 'only_me' || text.audience_kind === 'team' ? { kind: text.audience_kind } : undefined;
-      if (!audience) throw new Error('Person text audience is invalid');
-      const associations = (() => { const raw = text.submitted_association_project_ids_json; if (typeof raw !== 'string') throw new Error('Person associations are absent'); const parsed = JSON.parse(raw); if (!Array.isArray(parsed) || canonicalJson(parsed) !== raw) throw new Error('Person associations are invalid'); return parsed; })();
-      const request = validatePersonUpdateSubmitV3({ schema_version:3, kind:'echo-person-update-submit-v3', request_id:text.request_id, title:text.title, text:text.text, association_project_ids:associations, audience });
-      const context=`ctx_${canonicalSha256({schema_version:3,kind:'echo-person-update-source-v3',organization_id:text.organization_id,membership_id:text.membership_id,request_id:text.request_id}).slice(7)}`;
-      if (canonicalSha256(request)!==text.payload_sha256 || context!==text.context_id) throw new Error('Person text V3 custody integrity failed');
+      const request = validatePersonUpdateSubmitV3({ schema_version:3, kind:'echo-person-update-submit-v3', request_id:text.request_id, title:text.title, text:text.text, association_project_ids:storedProjectIdsV1(text.submitted_association_project_ids_json), audience:storedUploadAudienceV3(text) });
+      if (canonicalSha256(request)!==text.payload_sha256 || personNoteContextIdV1(text,text.request_id,3)!==text.context_id) throw new Error('Person text V3 custody integrity failed');
     }
     expected={schema_version:1,kind:'person-text',original_api_version:version,context_id:text.context_id,title:text.title,text:text.text};
     artifact={artifact_id:text.context_id,media_type:'text/plain',sha256:sha256Digest(text.text).slice(7),byte_length:Buffer.byteLength(text.text)};

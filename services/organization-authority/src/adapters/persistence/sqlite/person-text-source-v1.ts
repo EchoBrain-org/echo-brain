@@ -1,9 +1,10 @@
 import type Database from 'better-sqlite3';
-import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUploadAudienceV3, type ProjectIdV1 } from '@echo-brain/organization-api';
+import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
+import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3 } from '@echo-brain/organization-api';
 import { sourceContentSha256V1, sourceItemIdV1 } from '@echo-brain/organization-processing/core';
 import type { PersonTextSourceInboxV1, PersonTextSourceContentV1, PersonTextSourceFailureObservationV1 } from '../../../application/ports/person-text-source-v1.js';
 import { PERSON_SOURCE_IDENTITY_V1 } from '../../../application/person-document-source-v1.js';
+import { personNoteContextIdV1, storedProjectIdsV1, storedUploadAudienceV2, storedUploadAudienceV3, storedUploadCustodyRefV1 } from './person-upload-custody-v1.js';
 
 type TextRow = {
   api_version: 2 | 3; organization_id: string; principal_id: string; membership_id: string;
@@ -13,27 +14,6 @@ type TextRow = {
   audience_project_ids_json: string | null; received_at: string;
 };
 
-function canonicalIds(json: string | null, label: string): readonly ProjectIdV1[] {
-  if (json === null) throw new Error(`${label} is absent`);
-  try {
-    const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed) || canonicalJson(parsed) !== json) throw new Error();
-    return Object.freeze(parsed.map((value) => {
-      if (typeof value !== 'string') throw new Error();
-      return value as ProjectIdV1;
-    }));
-  } catch { throw new Error(`${label} is invalid`); }
-}
-
-function audienceV3(row: TextRow) {
-  if (row.audience_kind === 'projects') {
-    return validatePersonUploadAudienceV3({ kind: 'projects', project_ids: canonicalIds(row.audience_project_ids_json, 'Audience project IDs') });
-  }
-  if (row.audience_kind === 'project' && row.audience_project_id !== null) return { kind: 'project' as const, project_id: row.audience_project_id as ProjectIdV1 };
-  if (row.audience_kind === 'only_me' || row.audience_kind === 'team') return { kind: row.audience_kind } as const;
-  throw new Error('V3 audience is invalid');
-}
-
 /** One retained note (V2 or V3) as custody stores it. */
 export type PersonTextCustodyRowV1 = TextRow;
 
@@ -42,24 +22,14 @@ export type PersonTextCustodyRowV1 = TextRow;
  * hash and context id. Throws when retained text no longer binds its request.
  */
 export function assertPersonTextCustodyV1(row: PersonTextCustodyRowV1): void {
-  const legacyAudience = row.audience_kind === 'project' ? { kind: 'project' as const, project_id: row.audience_project_id } : { kind: row.audience_kind };
   const request = row.api_version === 2
-    ? validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: row.request_id, title: row.title, text: row.text, audience: legacyAudience, project_id: row.project_id })
-    : validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: row.request_id, title: row.title, text: row.text, association_project_ids: canonicalIds(row.submitted_association_project_ids_json, 'Association project IDs'), audience: audienceV3(row) });
-  const coordinates = { organization_id: row.organization_id, membership_id: row.membership_id, request_id: row.request_id };
-  const id = `ctx_${canonicalSha256({ schema_version: row.api_version, kind: `echo-person-update-source-v${row.api_version}`, ...coordinates }).slice(7)}`;
-  if (id !== row.context_id || canonicalSha256(request) !== row.payload_sha256) throw new Error('Person text source integrity failed');
+    ? validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: row.request_id, title: row.title, text: row.text, audience: storedUploadAudienceV2(row), project_id: row.project_id })
+    : validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: row.request_id, title: row.title, text: row.text, association_project_ids: storedProjectIdsV1(row.submitted_association_project_ids_json), audience: storedUploadAudienceV3(row) });
+  if (personNoteContextIdV1(row, row.request_id, row.api_version) !== row.context_id || canonicalSha256(request) !== row.payload_sha256) throw new Error('Person text source integrity failed');
 }
 
 function policy(row: TextRow): { custody_ref: string; access_policy_ref: string } {
-  const custody_ref = row.audience_kind === 'projects'
-    ? `projects:${canonicalSha256(canonicalIds(row.audience_project_ids_json, 'Audience project IDs'))}`
-    : row.audience_kind === 'project'
-      ? `project:${row.audience_project_id}`
-      : row.audience_kind === 'team'
-        ? `organization:${row.organization_id}`
-        : `membership:${row.membership_id}`;
-  return { custody_ref, access_policy_ref: `person-text-audience:${row.context_id}` };
+  return { custody_ref: storedUploadCustodyRefV1(row), access_policy_ref: `person-text-audience:${row.context_id}` };
 }
 
 /** Pull accepted editor notes into the same Person source; their read indexes already exist. */
