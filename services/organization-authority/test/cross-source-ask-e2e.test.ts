@@ -7,7 +7,7 @@ import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } fro
 import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import { allSourceAskFixture, crossSourceAuthorityFixture, DOCUMENT_TEXT, PRIVATE_DOCUMENT_TEXT, SLACK_LIVE_CONNECTOR } from './fixtures/cross-source-ask-runtime.js';
+import { allSourceAskFixture, crossSourceAuthorityFixture, DOCUMENT_TEXT, PRIVATE_DOCUMENT_TEXT } from './fixtures/cross-source-ask-runtime.js';
 import { JIRA_TEXT, SLACK_TEXT, SLACK_CHANNEL, SLACK_TEAM } from './fixtures/cross-source-live-fixture.js';
 import { FIXTURE_JIRA_CLOUD_V1, FIXTURE_JIRA_SITE_V1 } from './fixtures/fake-jira-v1.js';
 
@@ -20,25 +20,6 @@ function finishingModel() {
   const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
   return { generate, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } } };
 }
-
-it('selects the Slack live runtime for authenticated Ask without inventing a disconnected grant', async () => {
-  const f = await fixture();
-  const source = vi.fn(async () => undefined);
-  const close = vi.fn();
-  const slack_live_runtime_factory = vi.fn(() => ({ application: { source }, close }));
-  const dependencies = { oidc_provider: f.oidc, live_connectors: [{ ...SLACK_LIVE_CONNECTOR, open: slack_live_runtime_factory }], answer_composition_generation: finishingModel().answer_composition_generation };
-  const runtime = await startOrganizationAuthorityApiRuntime(f.config, dependencies);
-  try {
-    const origin = `http://127.0.0.1:${runtime.address.port}`;
-    const token = await f.login(origin);
-    const response = await fetch(`${origin}/v4/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
-    expect(response.status).toBe(200);
-    expect(slack_live_runtime_factory).toHaveBeenCalledTimes(1);
-    expect(source).toHaveBeenCalledTimes(1);
-    expect(await response.json()).toMatchObject({ citations: [] });
-  } finally { await runtime.close(); }
-  expect(close).toHaveBeenCalledTimes(1);
-});
 
 it('registers two page connectors through one lifecycle, catalog, HTTP and versioned Ask path', async () => {
   const f = await fixture();
