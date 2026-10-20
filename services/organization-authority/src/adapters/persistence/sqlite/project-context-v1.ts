@@ -1,6 +1,7 @@
 import { assertPersonDocumentCapacityV1 } from './document-quota-v1.js';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { appendAuditRowV1 } from './audit-row-v1.js';
 import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
@@ -242,8 +243,7 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
       authorization_sha256: canonicalSha256({ actor: JSON.parse(withoutCheckedAt(actor)), project_state_sha256: current.project_state_sha256 }),
       response_sha256: canonicalSha256(response), released_count, checked_at: actor.checked_at,
     };
-    this.database.prepare('INSERT INTO authority_project_read_audit_v1 (row_sha256, body_json, recorded_at) VALUES (?, ?, ?)')
-      .run(canonicalSha256(audit), canonicalJson(audit), actor.checked_at);
+    appendAuditRowV1(this.database, 'authority_project_read_audit_v1', audit, actor.checked_at);
     return immutable(response);
   }
   private capture(actor: PersonAccessAuthorization, scope: ProjectAuthorizationScopeV1): ProjectAuthorizationSnapshotV1 {

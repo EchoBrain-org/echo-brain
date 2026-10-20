@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import { appendAuditRowV1 } from './audit-row-v1.js';
 import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { assertPersonDocumentOriginalV1, PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentIdV1, type PersonDocumentSavedV1, type PersonDocumentSavedV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1, type PersonDocumentAssociationReceiptV1, type PersonDocumentUploadMetadataV1, type PersonDocumentUploadMetadataV2, type PersonDocumentReceiptV1, type PersonDocumentReceiptV2, type PersonDocumentMetadataV1, type PersonDocumentMetadataV2, type PersonDocumentMediaTypeV1, type PersonDocumentExtractionStateV1, type PersonDocumentTextChunkV1, type PersonDocumentTextV1, type PersonDocumentSearchV1, type PersonDocumentSearchV2, type PersonDocumentSearchResultV1, type PersonDocumentSearchResultV2, type PersonDocumentStatusV2, type ProjectIdV1, type PersonUploadAudienceV3 } from '@echo-brain/organization-api';
@@ -129,7 +130,7 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
     if (Buffer.byteLength(canonicalJson(auditResponse)) > (operation === 'text' ? 24 * 1024 : 32 * 1024)) fail('invalid_output');
     this.current(actor, permission, reauthenticate); if (this.authorizationRevision(actor.organization_id) !== authorizationRevision) fail('stale_access_state');
     const audit = {schema_version:1,kind:'echo-document-read-audit-v1',audit_id:randomUUID(),organization_id:actor.organization_id,principal_id:actor.principal_id,membership_id:actor.membership_id,session_family_id:actor.session_family_id,operation,authorization_sha256:canonicalSha256({person:JSON.parse(actorIdentity(actor)),permission:permission.digest}),response_sha256:canonicalSha256(auditResponse),released_count:value.documents?.length ?? 1,checked_at:actor.checked_at};
-    this.database.prepare(`INSERT INTO authority_person_document_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)`).run(canonicalSha256(audit),canonicalJson(audit),actor.checked_at);
+    appendAuditRowV1(this.database,'authority_person_document_read_audit_v1',audit,actor.checked_at);
     return response;
   }
   upload(actor: PersonAccessAuthorization, input: PersonDocumentUploadMetadataV1, bytes: Uint8Array, reauthenticate: () => PersonAccessAuthorization): PersonDocumentUploadResultV1 {

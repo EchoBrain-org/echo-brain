@@ -13,6 +13,7 @@ import {
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type Database from "better-sqlite3";
+import { appendAuditRowV1 } from "./audit-row-v1.js";
 import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import type {
   PersonItemPositionV1,
@@ -362,8 +363,6 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
       organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id,
       session_family_id: actor.session_family_id, ...entry, checked_at: actor.checked_at,
     };
-    const receipt = canonicalSha256(body);
-    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(receipt, canonicalJson(body), actor.checked_at);
-    return receipt;
+    return appendAuditRowV1(this.database, "authority_person_upload_read_audit_v1", body, actor.checked_at);
   }
 }

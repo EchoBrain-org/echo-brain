@@ -20,6 +20,7 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-authority-kernel/shared/released-source-context-v1";
 import type Database from "better-sqlite3";
+import { appendAuditRowV1 } from "./audit-row-v1.js";
 import { canonicalSourceContentV1, sourceContentSha256V1 } from "@echo-brain/organization-processing/core";
 import { assertCanonicalMeetingDocument, type MeetingDocument } from "@echo-brain/organization-processing/core";
 import type { PersonMeetingTranscriptCitationV1, PersonOpenRefV1 } from "@echo-brain/organization-api";
@@ -760,7 +761,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private auditTranscriptRead(actor: PersonAccessAuthorization, response: ApprovedMeetingTranscriptReadV1): void {
     const body = { schema_version: 1, kind: "echo-person-approved-meeting-transcript-read-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope: response.scope, approval_id: response.citation.approval_id, source_id: response.citation.source_id, revision_id: response.citation.revision_id, source_sha256: response.citation.source_sha256, page_sha256: canonicalSha256(response.text), response_sha256: canonicalSha256({ schema_version: 1, kind: "echo-person-meeting-transcript-v1", ...response }), checked_at: actor.checked_at };
-    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(canonicalSha256(body), canonicalJson(body), actor.checked_at);
+    appendAuditRowV1(this.database, "authority_person_upload_read_audit_v1", body, actor.checked_at);
   }
 
   /**
@@ -986,8 +987,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     this.releases.add(release);
     this.revalidate({ access_token: accessToken, release });
     const audit = { schema_version: 1, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, authorization_revision: release.authorization_revision, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text, ref, dates }) => ({ citation, kind, visibility, label, received_at, version, ...(dates === undefined ? {} : { dates }), ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ...(ref === undefined ? {} : { ref }) }))), released_count: items.length, ...(unchecked === undefined ? {} : { unchecked }), checked_at: actor.checked_at };
-    const receipt = canonicalSha256(audit);
-    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(receipt, canonicalJson(audit), actor.checked_at);
+    const receipt = appendAuditRowV1(this.database, "authority_person_upload_read_audit_v1", audit, actor.checked_at);
     const result: OriginalContextDeskReleaseV1 = Object.freeze({ release, receipt, items: Object.freeze([...items]), truncated, ...(unchecked === undefined ? {} : { unchecked }) });
     this.deskReleases.add(result);
     return result;
@@ -1148,7 +1148,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private auditProofRead(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1): void {
     const body = { schema_version: 1, kind: "echo-person-original-context-proof-read-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, source_id: atom.source_id, revision_id: atom.revision_id, source_sha256: atom.source_sha256, representation_sha256: atom.representation_sha256, anchor_sha256: atom.anchor_sha256, checked_at: actor.checked_at };
-    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(canonicalSha256(body), canonicalJson(body), actor.checked_at);
+    appendAuditRowV1(this.database, "authority_person_upload_read_audit_v1", body, actor.checked_at);
   }
 
   private textBySource(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string): SourceRow | undefined {
