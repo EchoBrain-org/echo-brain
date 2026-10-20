@@ -2,8 +2,8 @@
 // v1): an Authority whose fingerprints follow what it holds, as the real one's
 // do, so a change made "elsewhere" moves exactly the areas it touches.
 import { vi } from 'vitest';
-import type { OpenItemsView, OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
-import { ACCOUNT, changesFor, digest, fail, flush, Held, keysetPage, ok, rpcFor, type Handler } from './harness.js';
+import type { OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
+import { ACCOUNT, changesFor, digest, EMPTY_SUMMARY, fail, flush, Held, keysetPage, ok, rpcFor, type Handler } from './harness.js';
 
 export const ME: { membership_id: string; name: string; active: boolean } = { membership_id: ACCOUNT.membership_id, name: ACCOUNT.display_name, active: true };
 export const MINA = { membership_id: 'mem_00000000-0000-4000-8000-000000000011', name: 'Mina Patel', active: true };
@@ -45,8 +45,6 @@ export function stated(item: OpenItemView, state: OpenItemView['state'], by: Per
 export function owned(item: OpenItemView, owner: Person, by: Person, n: number): OpenItemView {
   return { ...item, owner: { ...owner, match: 'reassigned' }, owner_set_at: at(n), owner_set_by: by };
 }
-
-const summary: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 
 /**
  * What the Authority holds now. `items`: every follow-up the caller may read;
@@ -92,7 +90,7 @@ export const fixture: Record<string, Handler> = {
       const rows = authority.items.filter(item => (request.scope === 'involved' ? involved(item) : mine(item)) && (!request.states || request.states.includes(item.state))
         && changed(item));
       const from = Number(request.cursor ?? 0);
-      return ok({ items: rows.slice(from, from + 50), next_cursor: from + 50 < rows.length ? String(from + 50) : null, stages: [], summary });
+      return ok({ items: rows.slice(from, from + 50), next_cursor: from + 50 < rows.length ? String(from + 50) : null, stages: [], summary: EMPTY_SUMMARY });
     }
     if (request.operation === 'item') {
       const found = authority.items.find(item => item.item_id === request.item_id);
@@ -103,7 +101,7 @@ export const fixture: Record<string, Handler> = {
       return ok({ send: [], items, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
     }
     if (request.operation === 'list') return ok({ runs: [] });
-    if (request.operation === 'items') return ok({ items: [], next_cursor: null, stages: [], summary });
+    if (request.operation === 'items') return ok({ items: [], next_cursor: null, stages: [], summary: EMPTY_SUMMARY });
     throw new Error(`Unexpected runs operation: ${request.operation}`);
   },
 };

@@ -4,7 +4,7 @@
 // as plain functions, hooks that do so and the tree those calls show.
 import type { VNode } from 'preact';
 import { afterEach, beforeEach, vi } from 'vitest';
-import type { AnswerSource, AskStep, Expect, ProjectSummary } from '../../src/shared/protocol.js';
+import type { AnswerSource, AskStep, Expect, OpenItemsView, ProjectSummary } from '../../src/shared/protocol.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
 export const fail = (code: string, extra: Record<string, unknown> = {}) => ({ ok: false, failure: { code, retryable: false, ...extra } });
@@ -14,6 +14,9 @@ export const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) 
 export const ACCOUNT = { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } as const;
 
 export const PROJECT_PAGE = 10;
+
+/** A follow-ups read's counts, with nothing counted. */
+export const EMPTY_SUMMARY: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 
 /** A project, newest first by day: `project(1, 30)` was made on the 30th, `project(2, 29)` the day before. */
 export function project(n: number, day: number, extra: Partial<ProjectSummary> = {}): ProjectSummary {
