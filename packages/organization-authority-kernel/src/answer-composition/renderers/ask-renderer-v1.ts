@@ -49,6 +49,7 @@ import {
 } from "../agentic-list-evidence-v1.js";
 import { AGENTIC_ASK_MIN_ANSWER_MS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
+import { observeCoreModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
 
 /**
  * Ask's renderer: one writer call reads the question against released
@@ -241,6 +242,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** The reply with each by-id selection kept to its list's members; one that names none of them is no use of the list. */
       const withMembers = (answer: Answer): Answer => Object.freeze({ ...answer, lists: Object.freeze(answer.lists.flatMap(use => {
         const kept = use.members?.filter(id => listById.get(use.id)?.members.includes(id) === true);
+        if (kept !== undefined && kept.length < use.members!.length) observeCoreModelCorrectionV1("writer_unknown_id_dropped", use.members!.length - kept.length);
         return kept === undefined ? [use] : kept.length === 0 ? [] : [Object.freeze({ id: use.id, members: Object.freeze(kept) })];
       })) });
       // A sentence resting on rows or list ids takes the writer's one repair when a repair can still run; the repaired
@@ -269,6 +271,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       }, answerSchema, parse);
       // A reply sent back only for a sentence resting on rows is still the writer's answer; code leaves that sentence out.
       const answer = written === null ? null : written.value ?? last.answer;
+      if (written?.value === null) observeCoreModelCorrectionV1("writer_fallback");
       const writerEvidence: readonly string[] = written === null ? [] : writerShown;
 
       // ---- layout (code, not model): one part, read as one paragraph ------
@@ -311,6 +314,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const selectionNotFound: string[] = [];
       /** The lists the answer uses: those the writer saw, in the order of its first use, then every stated list it did not use. */
       const usedLists = [...new Set([...uses.map(use => use.id).filter(id => writerById.has(id)), ...stated])].map(id => views.get(id)!);
+      const unseen = uses.filter(use => !writerById.has(use.id)).length;
+      if (unseen > 0) observeCoreModelCorrectionV1("writer_unknown_id_dropped", unseen);
       const naming: Naming[] = usedLists.flatMap(list => {
         const id = list.id, all = rows.get(id)!, noun = nounOf(list);
         const byId = uses.find(use => use.id === id && use.members !== undefined);
@@ -366,7 +371,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const rowsOf = (id: string) => shownRows.has(id) ? [id] : writerById.get(parseAgenticListIdV1(id) ?? "L0")?.members.map(member => member.id).filter(short => privateItem(byShort.get(short)!.item)) ?? [];
       const writerSentences = sentences.flatMap(sentence => {
         const read = sentence.evidence.filter(short => textGiven.has(short));
-        if (read.length === 0) return [];
+        if (read.length === 0) { observeCoreModelCorrectionV1("writer_uncited_sentence_dropped"); return []; }
+        // An id that is no text, row or list the writer saw cites nothing.
+        const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
+        if (unknown > 0) observeCoreModelCorrectionV1("writer_unknown_id_dropped", unknown);
         const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
         return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read }];
       });
@@ -381,6 +389,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // Shared sources or planner kinds never establish that two sentences say the same thing.
         const statementKey = JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
         if (statementKeys.has(statementKey)) {
+          observeCoreModelCorrectionV1("writer_repeat_dropped");
           keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
           continue;
         }

@@ -138,6 +138,14 @@ function extractWith(output: string, value: MeetingDocument = meeting) {
   return instance.extract(value, extractionContext(instance));
 }
 
+/** The corrections of model output extraction counted on its grounding span, whether or not the meeting failed. */
+async function correctionsWith(output: string, value: MeetingDocument = meeting) {
+  const events: CoreRuntimeObservationV1[] = [];
+  const instance = processor(new FakeLlmClient(output));
+  await observeCoreRuntimeV1('extraction', () => instance.extract(value, extractionContext(instance)), { observer: (event) => { events.push(event); } }).catch(() => undefined);
+  return events.find((event) => event.phase === 'model_grounding' && event.event !== 'started')?.model_corrections ?? {};
+}
+
 function testProcessingVersion(config: AdapterConfig): string {
   return config.settings['provider'] === 'fixture-remote'
     ? processingVersion(config, 'fixture-remote', null)
@@ -274,10 +282,11 @@ describe('llm decision processor extraction', () => {
   });
 
   it('drops unknown cited IDs and sets aside an item with no known unit', async () => {
-    const result = await extractWith(modelOutput([
+    const output = modelOutput([
       modelSignal({ text: 'Adopt vendor Y', evidence_units: ['T999', ' '] }),
       modelSignal({ evidence_units: [' [N1] ', 'T999', 'N1'] }),
-    ]));
+    ]);
+    const result = await extractWith(output);
 
     expect(result.signals).toHaveLength(1);
     expect(result.signals[0]).toMatchObject({
@@ -285,35 +294,44 @@ describe('llm decision processor extraction', () => {
       evidence: [{ block_id: 'notes-1', quote: 'The team agreed to use vendor X for hosting' }],
     });
     expect(result.signals[0]!.evidence).toHaveLength(1);
+    // The set-aside item's unknown IDs are its reason, not a correction of a kept item.
+    expect(await correctionsWith(output)).toEqual({ extraction_item_set_aside: 1, extraction_unit_id_respelled: 1, extraction_unknown_unit_dropped: 1 });
   });
 
   it('keeps the first of items with the same kind, normalized text and units', async () => {
-    const result = await extractWith(modelOutput([
+    const output = modelOutput([
       modelSignal({ evidence_units: ['N1', 'T1'] }),
       modelSignal({ text: '  use VENDOR x \n for hosting ', evidence_units: ['T1', 'N1'] }),
       modelSignal({ evidence_units: ['N1'] }),
       modelSignal({ kind: 'action', evidence_units: ['N1', 'T1'] }),
-    ]));
+    ]);
+    const result = await extractWith(output);
 
     expect(result.signals.map((signal) => [signal.kind, signal.text, signal.evidence.length])).toEqual([
       ['decision', 'Use vendor X for hosting', 2],
       ['decision', 'Use vendor X for hosting', 1],
       ['action', 'Use vendor X for hosting', 2],
     ]);
+    expect(await correctionsWith(output)).toEqual({ extraction_repeat_dropped: 1 });
     // Distinct units with identical quotes would repeat the signal id.
     const echoed: MeetingDocument = { ...meeting, content: [{ id: 'transcript-1', kind: 'transcript', text: 'Ada: Yes.\nBo: Yes.' }] };
-    const repeated = await extractWith(modelOutput([modelSignal({ evidence_units: ['T1'] }), modelSignal({ evidence_units: ['T2'] })]), echoed);
+    const twins = modelOutput([modelSignal({ evidence_units: ['T1'] }), modelSignal({ evidence_units: ['T2'] })]);
+    const repeated = await extractWith(twins, echoed);
     expect(repeated.signals).toHaveLength(1);
+    expect(await correctionsWith(twins, echoed)).toEqual({ extraction_repeat_dropped: 1 });
   });
 
   it('links a rationale citing a dropped duplicate decision to the kept one', async () => {
-    const result = await extractWith(modelOutput([
+    const output = modelOutput([
       modelSignal({ evidence_units: ['N1'] }),
       modelSignal({ text: 'use vendor X for hosting', evidence_units: ['N1'] }),
       modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper and faster', evidence_units: ['S1'], supports_decision_indexes: [1] }),
-    ]));
+    ]);
+    const result = await extractWith(output);
     expect(result.signals.map((signal) => signal.kind)).toEqual(['decision', 'rationale']);
     expect(result.signals[1]).toMatchObject({ supports_signal_ids: [result.signals[0]!.id] });
+    // The link follows the kept twin: nothing is dropped from the rationale.
+    expect(await correctionsWith(output)).toEqual({ extraction_repeat_dropped: 1 });
   });
 
   // Units: N1–N10, then one long Ada turn split into T1.1 (sentences 1–8) and T1.2 (9–14).
@@ -380,37 +398,46 @@ describe('llm decision processor extraction', () => {
     // Item 3 now repeats item 2 and is dropped; the rationale linked to it follows item 2.
     expect(result.signals[3]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[2]!.id] });
     expect(() => assertCanonicalDecisionSet(result, wide, instance.identity)).not.toThrow();
+    expect(await correctionsWith(output, wide)).toEqual({ extraction_repeat_dropped: 1 });
   });
 
   it('reads cited IDs in any case and a split turn\'s parent ID as its parts', async () => {
-    const result = await extractWith(modelOutput([
+    const output = modelOutput([
       modelSignal({ evidence_units: ['n1', 't1', 'T9'] }),
       modelSignal({ text: 'Ship the launch', evidence_units: ['N1', 'N2', 'N3', 'N4', 'N5', 'T1'] }),
-    ]), manyUnits);
+    ]);
+    const result = await extractWith(output, manyUnits);
     expect(result.signals.map(citedQuotes)).toEqual([
       ['Point 1', 'Sentence 1', 'Sentence 9'],
       ['Point 1', 'Point 2', 'Point 3', 'Point 4', 'Point 5', 'Sentence 1', 'Sentence 9'],
     ]);
+    // "t1" is both: another spelling, and the parent of T1.1 and T1.2.
+    expect(await correctionsWith(output, manyUnits)).toEqual({ extraction_unit_id_respelled: 2, extraction_parent_unit_cited: 2, extraction_unknown_unit_dropped: 1 });
   });
 
   it('downgrades a decided decision that cites only questions', async () => {
-    const result = await extractWith(modelOutput([
+    const output = modelOutput([
       modelSignal({ status: 'decided', evidence_units: ['T1'] }),
       modelSignal({ status: 'decided', evidence_units: ['T1', 'N1'] }),
-    ]));
+    ]);
+    const result = await extractWith(output);
     expect(result.signals).toMatchObject([{ status: 'proposed' }, { status: 'decided' }]);
+    expect(await correctionsWith(output)).toEqual({ extraction_decided_downgraded: 1 });
   });
 
   it('clears an unusable or pre-meeting due date and keeps the action', async () => {
     const dueDates = ['2026-07-24T00:00:00-07:00', '2026-07-24', '2026-07-17', 'not-a-date', '2026-02-30', 7,
       '2026-07-16', '2026-07-16T23:45:00-07:00', '2026-07-17T02:00:00Z'];
-    const result = await extractWith(modelOutput(dueDates.map((due_at) => modelSignal({
+    const output = modelOutput(dueDates.map((due_at) => modelSignal({
       kind: 'action', text: `Send the contract (${String(due_at)})`, due_at, evidence_units: ['N2'],
-    }))));
+    })));
+    const result = await extractWith(output);
 
     expect(result.signals.map((signal) => signal.kind === 'action' ? signal.due_at : undefined)).toEqual([
       '2026-07-24T07:00:00.000Z', '2026-07-24T19:00:00.000Z', '2026-07-17T19:00:00.000Z', null, null, null, null, null, null,
     ]);
+    // Six are cleared; the two kept date-only due dates were turned into the meeting's local noon by code.
+    expect(await correctionsWith(output)).toEqual({ extraction_due_cleared: 6, extraction_due_coerced: 2 });
   });
 
   it.each([
@@ -429,7 +456,7 @@ describe('llm decision processor extraction', () => {
   it('keeps a proposed owner only when a cited unit names them or they commit as its speaker', async () => {
     const action = (text: string, owner: unknown, units: readonly string[]) =>
       modelSignal({ kind: 'action', text, owner, evidence_units: units });
-    const result = await extractWith(modelOutput([
+    const output = modelOutput([
       action('Send the contract', '  Zhen ', ['N2']),
       action('Send the signed copy', 'Zhen', ['T2']),
       action('Confirm the hosting choice', 'Ada', ['T1']),
@@ -439,27 +466,33 @@ describe('llm decision processor extraction', () => {
       action('Send the deck', 'x'.repeat(121), ['N2']),
       action('Send the notes', null, ['N2']),
       modelSignal({ owner: 'Zhen', evidence_units: ['N2'] }),
-    ]));
+    ]);
+    const result = await extractWith(output);
 
     expect(result.signals.map((signal) => signal.kind === 'action' ? signal.owner : 'no-owner-field')).toEqual([
       'Zhen', 'Zhen', null, null, null, null, null, null, 'no-owner-field',
     ]);
     expect(result.signals[8]).not.toHaveProperty('owner');
+    // Only the three owners grounding cleared: a malformed proposal is no owner to ground.
+    expect(await correctionsWith(output)).toEqual({ extraction_owner_cleared: 3 });
   });
 
   it('links rationales only to surviving decisions and sets aside one with none left', async () => {
-    const instance = processor(new FakeLlmClient(modelOutput([
+    const output = modelOutput([
       modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper and faster', evidence_units: ['S1'], supports_decision_indexes: [2, 2, 1, 3, 99, -1, 0.5] }),
       modelSignal({ text: 'Adopt vendor Y', evidence_units: ['T999'] }),
       modelSignal({ evidence_units: ['N1'] }),
       modelSignal({ kind: 'rationale', text: 'Vendor Y was cheaper', evidence_units: ['S1'], supports_decision_indexes: [1] }),
       modelSignal({ kind: 'rationale', text: 'Vendor X was faster', evidence_units: ['S1'], supports_decision_indexes: 'all' }),
-    ])));
+    ]);
+    const instance = processor(new FakeLlmClient(output));
     const result = await instance.extract(meeting, extractionContext(instance));
 
     expect(result.signals.map((signal) => signal.text)).toEqual(['Vendor X was cheaper and faster', 'Use vendor X for hosting']);
     expect(result.signals[0]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[1]!.id] });
     expect(() => assertCanonicalDecisionSet(result, meeting, instance.identity)).not.toThrow();
+    // The kept rationale's six links other than its one to item 2 are dropped; three items are set aside.
+    expect(await correctionsWith(output)).toEqual({ extraction_item_set_aside: 3, extraction_rationale_link_dropped: 6 });
   });
 
   it('fails the meeting with the first set-aside reason when no item survives', async () => {
@@ -477,6 +510,7 @@ describe('llm decision processor extraction', () => {
     expect(classifyExtractionFailureStageV1(failure, modelFailure)).toBe('evidence_id');
     expect(metadata).toEqual(expect.arrayContaining([expect.objectContaining({
       phase: 'model_grounding', grounding_stage: 'evidence_id', result: 'grounding_failure', event: 'failed',
+      model_corrections: { extraction_item_set_aside: 2 },
     })]));
     await expect(extractWith(modelOutput([modelSignal({ kind: 'bogus' }), modelSignal({ evidence_units: ['T999'] })])))
       .rejects.toMatchObject({ message: `${SCHEMA}kind` });
@@ -535,12 +569,16 @@ describe('llm decision processor extraction', () => {
     Object.assign(noisy.signals[2]!, { status: 'proposed', owner: 'Zhen', due_at: 'not-used' });
     const [clean, noisyResult] = await Promise.all([extractWith(validModelOutput), extractWith(JSON.stringify(noisy))]);
     expect(noisyResult).toEqual(clean);
+    // Only the action's date-only due date is corrected; a value no kind uses is not a correction.
+    expect(await correctionsWith(JSON.stringify(noisy))).toEqual({ extraction_due_coerced: 1 });
 
-    const confidences = await extractWith(modelOutput([
+    const invalid = modelOutput([
       modelSignal({ confidence: 95 }),
       modelSignal({ kind: 'action', confidence: 'high' }),
-    ]));
+    ]);
+    const confidences = await extractWith(invalid);
     expect(confidences.signals).toMatchObject([{ confidence: null }, { confidence: null }]);
+    expect(await correctionsWith(invalid)).toEqual({ extraction_confidence_cleared: 2 });
   });
 
   it('applies identical extraction semantics for independently supplied clients', async () => {

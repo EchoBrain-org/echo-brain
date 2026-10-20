@@ -7,6 +7,7 @@ import { createAgenticListEvidenceV1, type AgenticListEvidenceV1 } from "../../.
 import { AGENTIC_MODEL_OUTPUT_TOKENS_V1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { createAskRendererV1 } from "../../../src/answer-composition/renderers/ask-renderer-v1.js";
 import type { EvidenceDeskItemV2 } from "../../../src/shared/evidence-desk-v2.js";
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
 import { ids } from "../fixtures/agentic-lists.js";
 import { EMPTY_BUNDLE, LIST_READ_AT, listed, record, scriptedGate } from "../fixtures/agentic-scenarios.js";
 
@@ -24,6 +25,14 @@ function alone(input: { readonly bundle: AgenticEvidenceBundleV1; readonly repli
     on_context: selected => { trace.push(`context:${selected.join(",")}`); },
   });
   return { render, trace, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, any> };
+}
+
+type Rendering = Awaited<ReturnType<ReturnType<typeof alone>["render"]>>;
+/** A render in its output span, and the corrections of model output that span counted (an empty object for none). */
+async function observed(render: () => Promise<Rendering>): Promise<{ readonly rendered: Rendering; readonly corrections: Readonly<Record<string, number>> }> {
+  const events: CoreRuntimeObservationV1[] = [];
+  const rendered = await observeCoreRuntimeV1("research_output", render, { observer: event => { events.push(event); } });
+  return { rendered, corrections: events.find(event => event.phase === "research_output" && event.event !== "started")!.model_corrections ?? {} };
 }
 
 /** Items in short-id order, the plan citing `cited`. */
@@ -93,7 +102,7 @@ describe("Ask renderer", () => {
         { text: "The pilot belongs to Casey.", evidence: ["E1"] },
       ], not_found: [] }],
     });
-    const rendered = await run.render("Who owns the pilot and when is it due?");
+    const { rendered, corrections } = await observed(() => run.render("Who owns the pilot and when is it due?"));
     expect(rendered.result.response.parts[0]!.statements).toEqual([
       { text: "Casey owns the pilot.", citation_indexes: [0, 1], private: true },
       { text: "Casey owns the pilot.", citation_indexes: [0], private: false },
@@ -102,6 +111,8 @@ describe("Ask renderer", () => {
       { text: "The pilot belongs to Casey.", citation_indexes: [0], private: false },
     ]);
     expect(rendered.result.response.citations.map(value => value.citation)).toEqual([first.citation, second.citation]);
+    // The one exact repeat, and the second sentence's repeated E1.
+    expect(corrections).toEqual({ writer_repeat_dropped: 1, model_repeat_dropped: 1 });
   });
 
   it("cites only the evidence the writer was given, in first-citation order", async () => {
@@ -111,11 +122,13 @@ describe("Ask renderer", () => {
       bundle: bundle([{ item: first, full: true, touched: 1 }, { item: second, full: true, touched: 2 }, { item: listed("unread"), full: false, touched: 3 }], ["E1"]),
       replies: [{ sentences: [{ text: "Mara owns the October launch.", evidence: ["E2", "E1", "E9"] }, { text: "An unread item says so.", evidence: ["E3"] }], not_found: [] }], version: 6,
     });
-    const rendered = await run.render("What was decided?");
+    const { rendered, corrections } = await observed(() => run.render("What was decided?"));
     expect(run.trace).toEqual(["context:E1,E2", "revalidate", "generate"]);
     expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: "Mara owns the October launch.", citation_indexes: [0, 1], private: false }]);
     expect(rendered.result.response.citations.map(value => value.citation)).toEqual([second.citation, first.citation]);
     expect(rendered).toMatchObject({ cited: ["E2", "E1"], outcome: "answered", fallbacks: 0, result: { writer_evidence: ["E1", "E2"] } });
+    // E9, which the writer was never shown, and the sentence that cites no text it read.
+    expect(corrections).toEqual({ writer_unknown_id_dropped: 1, writer_uncited_sentence_dropped: 1 });
   });
 
   // The Ask golden replays this fallback as V4; here it is the V5 response.
@@ -126,12 +139,13 @@ describe("Ask renderer", () => {
       bundle: bundle([{ item: read, full: true, touched: 1 }, { item: previewed, full: false, touched: 3 }, { item: listed("listed"), full: false, touched: 2 }], ["E1"]),
       replies: [{ wrong: true }, { still: "wrong" }], version: 5,
     });
-    const rendered = await run.render("What was decided?");
+    const { rendered, corrections } = await observed(() => run.render("What was decided?"));
     // The writer reads the previewed passage too, but a failed writer's records stay limited to what research read.
     expect(rendered.result.writer_evidence).toEqual(["E1", "E2"]);
     expect(rendered.result.response).toMatchObject({ schema_version: 5, kind: "echo-clean-person-answer-v5", outcome: "partial", parts: [{ status: "records_only", records: [{ text: read.text, citation_indexes: [0] }] }], citations: [{ citation: read.citation }] });
     expect(rendered).toMatchObject({ cited: ["E1"], outcome: "partial", fallbacks: 1 });
     expect(run.trace).toEqual(["context:E1,E2", "revalidate", "generate", "revalidate", "generate"]);
+    expect(corrections).toEqual({ model_repair_rejected: 1, writer_fallback: 1 });
   });
 
   it("makes no model call without readable evidence and still ends with an honest result", async () => {
@@ -309,6 +323,14 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.result.response.parts[0]!.gap).toBeUndefined();
     expect(rendered.result.response.notice).toBe("Some source coverage was incomplete, so relevant context may be missing.");
     expect(rendered.outcome).toBe("answered");
+  });
+  it("counts a list the writer was not shown, and a member not in the list it names, as ids dropped", async () => {
+    const run = alone({ bundle: eightAnd1([C(["E9"])]), version: 6, replies: [{ lists: [{ id: "L2" }, { id: "L1", members: ["E1", "E10"] }], sentences: [REVIEW], not_found: [] }] });
+    const { rendered, corrections } = await observed(() => run.render("Which tickets?"));
+    // L2 names nothing; L1's use keeps only E1, its member.
+    expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([expect.stringContaining(facts(1)), REVIEW.text]);
+    expect(rendered.result.response.citations).toHaveLength(2);
+    expect(corrections).toEqual({ writer_unknown_id_dropped: 2 });
   });
   type Rendered = Awaited<ReturnType<ReturnType<typeof alone>["render"]>>;
   interface Row {

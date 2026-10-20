@@ -67,6 +67,9 @@ describe('Ask research tool contract v1', () => {
     expect(first).not.toHaveProperty('error');
     const counts = events.find(event => event.root && event.counts?.refused_read_count !== undefined)?.counts;
     expect(counts).toMatchObject({ refused_read_count: 1, repeated_refusal_count: 1, sources_looked_at: 1, most_reads_in_a_step: 2 });
+    // The one correction of model output: the refused read answered from memory, counted by name on the research loop's span.
+    expect(events.filter(event => event.event !== 'started' && event.model_corrections !== undefined).map(event => [event.phase, event.model_corrections]))
+      .toEqual([['research_loop', { research_repeat_refusal: 1 }]]);
   });
 
   it('reads a window with no date field on any of an item\'s dates where its source declares that, and shows which matched', async () => {

@@ -86,6 +86,13 @@ function alone(input: { readonly findings?: SweepTriggerInputV1["findings"]; rea
   return { render, trace, inputs, gate, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, unknown> };
 }
 
+/** A render in its output span, and the corrections of model output that span counted (an empty object for none). */
+async function observed<T>(render: () => Promise<T>): Promise<{ readonly rendered: T; readonly corrections: Readonly<Record<string, number>> }> {
+  const events: CoreRuntimeObservationV1[] = [];
+  const rendered = await observeCoreRuntimeV1("research_output", render, { observer: event => { events.push(event); } });
+  return { rendered, corrections: events.find(event => event.phase === "research_output" && event.event !== "started")!.model_corrections ?? {} };
+}
+
 /** One finding about one item. */
 const finding = (citation: unknown) => ({ finding: "The firmware formats one decimal; the decision asks for two.", expected: "two decimals from DVT", citations: [citation] });
 /** The renderer over `findings`, with `reply` (a list of verdicts, or any other value as is) as the model's answer to every call. */
@@ -314,16 +321,18 @@ describe("sweep renderer", () => {
 
   it("falls back without a model: no verdict for what it could read, the unreadable still reported, one fallback", async () => {
     const run = alone({ replies: [{ wrong: true }, { still: "wrong" }] });
-    const rendered = await run.render();
+    const { rendered, corrections } = await observed(() => run.render());
+    expect(corrections).toEqual({ model_repair_rejected: 1, sweep_fallback: 1 });
     expect(run.trace.filter(event => event === "generate")).toHaveLength(2);
     expect(rendered.result).toEqual({ findings: [notAssessed(0), notAssessed(1), UNREADABLE], status: "not_assessed", citations: [] });
     expect(rendered).toMatchObject({ cited: [], outcome: "partial", fallbacks: 1 });
     expect(validatePersonSweepResultV1(rendered.result, FINDINGS.length)).toEqual(rendered.result);
     // A provider that refuses is not asked again; the result is the same.
     const refused = alone({ replies: [Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class: "adapter_http", http_status: 401 } })] });
-    const fallback = await refused.render();
+    const { rendered: fallback, corrections: refusal } = await observed(() => refused.render());
     expect(refused.inputs).toHaveLength(1);
     expect(fallback).toMatchObject({ fallbacks: 1, result: rendered.result });
+    expect(refusal).toEqual({ sweep_fallback: 1 });
   });
 
   it("makes no model call when the time left cannot cover one, and still reports each finding", async () => {
@@ -365,7 +374,8 @@ describe("sweep renderer", () => {
   ] as const)("withholds %s with no repair, and keeps its verdict", async (_label, text) => {
     const screened = firstVerdict({ line: text });
     const run = alone({ replies: [screened] });
-    const rendered = await run.render();
+    const { rendered, corrections } = await observed(() => run.render());
+    expect(corrections).toEqual({ sweep_line_withheld: 1 });
     expect(run.inputs).toHaveLength(1);
     expect(rendered.result).toMatchObject({ status: "assessed", findings: [
       { finding_index: 0, verdict: "landed", line: "ECHO withheld this line.", citation_indexes: [0] },
@@ -374,6 +384,16 @@ describe("sweep renderer", () => {
     ] });
     expect(rendered).toMatchObject({ fallbacks: 0, outcome: "partial" });
     expect(JSON.stringify(rendered.result)).not.toContain(text);
+  });
+
+  it.each([
+    ["a reply that needs nothing", REPLY, {}],
+    ["a verdict in another spelling", firstVerdict({ verdict: "Landed" }), { model_enum_respelled: 1 }],
+    ["cites respelled or repeated", firstVerdict({ cites: ["e1", "E1"] }), { model_id_respelled: 1, model_repeat_dropped: 1 }],
+    ["an evidence id written into a line", firstVerdict({ line: "THERM-46 now formats two decimals (E1)." }), { model_inline_ids_stripped: 1 }],
+    ["a line past its cap", firstVerdict({ line: `THERM-46 now formats two decimals ${"and more ".repeat(40)}` }), { model_text_truncated: 1 }],
+  ])("counts %s, and nothing else", async (_name, reply, expected) => {
+    expect((await observed(() => alone({ replies: [reply] }).render())).corrections).toEqual(expected);
   });
 
   it("keeps a line that quotes the item it cites, and withholds one whose claim no cited item makes", async () => {

@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { CoreRuntimeDiagnosticObservationV1, CoreRuntimeObservationScopeV1, CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import {
+  CORE_RUNTIME_MODEL_CORRECTIONS_V1,
+  type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeModelCorrectionV1, type CoreRuntimeObservationScopeV1, type CoreRuntimeObservationV1,
+} from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createPersonDiagnosticTraceV1, type PersonDiagnosticTraceCollectorV1 } from '../person-diagnostic-trace-v1.js';
 
 type ExportFailureKind = 'http' | 'timeout' | 'cancelled' | 'network' | 'serialization' | 'projection' | 'shutdown' | 'unknown';
@@ -48,6 +51,8 @@ interface Capture {
   collector: PersonDiagnosticTraceCollectorV1;
   spans: Map<string, Span>;
   dropped_spans: number;
+  /** Corrections of model output the run's spans made, summed by name as each span ends. */
+  corrections: Partial<Record<CoreRuntimeModelCorrectionV1, number>>;
 }
 type Recorded = CoreRuntimeDiagnosticObservationV1 & { observed_at: string; sequence: number };
 // Millisecond timestamps plus the capture sequence give stable sibling ordering
@@ -88,6 +93,7 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
   // Index lag is a wait for the search index, not the outage its `unavailable` code would say.
   const lagged = events.some(event => event.kind === 'lifecycle' && event.stage === 'application' && event.event === 'failed' && event.error_kind === 'index_lag');
   const result = lagged ? 'index_lag' : end.result;
+  const corrected = CORE_RUNTIME_MODEL_CORRECTIONS_V1.filter(name => capture.corrections[name] !== undefined);
   const root: LangSmithRunV1 = {
     id: rootId, name: `ECHO ${capture.start.trigger ?? 'research'}`, run_type: 'chain', trace_id: rootId,
     dotted_order: order(capture.start.observed_at, rootId), session_name: projectName,
@@ -98,6 +104,8 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
       // `counts` CPU, memory and file-system figures are process-wide deltas: concurrent work shares them.
       result, research_stop_reason: end.research_stop_reason ?? null, counts: end.counts, resource_scope: 'process',
       ...(capture.dropped_spans === 0 ? {} : { dropped_spans: capture.dropped_spans }),
+      // Code's corrections of model output across every span of the run, by name (RB-OPERATIONS-001).
+      ...(corrected.length === 0 ? {} : { model_corrections: Object.fromEntries(corrected.map(name => [name, capture.corrections[name]])) }),
       ...(end.parent_operation_id === undefined ? {} : { parent_operation_id: end.parent_operation_id }),
     } }, events: [],
     ...(end.event === 'failed' ? { error: result ?? 'failed' } : {}),
@@ -279,17 +287,21 @@ export function createLangSmithObserverV1(options: {
   const scope: CoreRuntimeObservationScopeV1 = {
     observer(event) {
       if (closed) return;
+      const capture = active.get(event.operation_id);
+      if (capture !== undefined && event.event !== 'started') {
+        for (const [name, count] of Object.entries(event.model_corrections ?? {}) as [CoreRuntimeModelCorrectionV1, number][]) {
+          capture.corrections[name] = (capture.corrections[name] ?? 0) + count;
+        }
+      }
       if (event.phase !== 'research_run') {
-        const capture = SPAN_PHASES.has(event.phase) ? active.get(event.operation_id) : undefined;
-        if (capture !== undefined) recordSpan(capture, event);
+        if (capture !== undefined && SPAN_PHASES.has(event.phase)) recordSpan(capture, event);
         return;
       }
-      const capture = active.get(event.operation_id);
       if (event.event === 'started') {
         if (options.expires_at !== undefined && now() >= options.expires_at) return;
         if (capture !== undefined) return;
         if (active.size >= (options.max_active ?? 4)) { counts.dropped++; return; }
-        active.set(event.operation_id, { start: event, collector: createPersonDiagnosticTraceV1(now), spans: new Map(), dropped_spans: 0 });
+        active.set(event.operation_id, { start: event, collector: createPersonDiagnosticTraceV1(now), spans: new Map(), dropped_spans: 0, corrections: {} });
       } else if (capture?.start.span_id === event.span_id) finish(capture, event);
     },
     diagnostic_exporter(operationId) {

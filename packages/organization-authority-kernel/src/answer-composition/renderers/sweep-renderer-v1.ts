@@ -7,7 +7,8 @@ import {
   type PersonSweepResultV1,
   type PersonSweepVerdictV1,
 } from "@echo-brain/organization-api";
-import { AgenticAskOutputErrorV1, cleanId, cleanLine, stripEvidenceIds } from "../agentic-ask-v1-model-protocol.js";
+import { AgenticAskOutputErrorV1, cleanId, cleanLine, cleanModelLine, stripEvidenceIds } from "../agentic-ask-v1-model-protocol.js";
+import { observeCoreModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1 } from "../agentic-evidence-bundle-v1.js";
 import { object, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
@@ -124,16 +125,24 @@ function parseVerdicts(value: unknown, asked: readonly Asked[], shown: ReadonlyS
     if (drafts.has(ask.index)) throw new AgenticAskOutputErrorV1(`give one entry for each finding; finding ${ask.index} has more than one`);
     const verdict = JUDGMENTS.find(judgment => judgment === cleanLine(entry.verdict, 32).toLowerCase().replace(/[\s-]+/gu, "_"));
     if (verdict === undefined) throw new AgenticAskOutputErrorV1("each verdict must be \"landed\", \"still_open\" or \"changed\"");
-    const line = stripEvidenceIds(cleanLine(entry.line, LIMITS.line_chars));
+    if (verdict !== entry.verdict) observeCoreModelCorrectionV1("model_enum_respelled");
+    const line = stripEvidenceIds(cleanModelLine(entry.line, LIMITS.line_chars));
     if (line.length === 0) throw new AgenticAskOutputErrorV1("each finding needs a line on what the current item shows");
     if (!Array.isArray(entry.cites)) throw new AgenticAskOutputErrorV1("each entry needs \"cites\", a list of item ids");
-    const cites = [...new Set(entry.cites.map(cleanId))];
+    const given: readonly unknown[] = entry.cites;
+    const read = given.map(cleanId);
+    const cites = [...new Set(read)];
+    if (cites.length < read.length) observeCoreModelCorrectionV1("model_repeat_dropped", read.length - cites.length);
     if (cites.length === 0) throw new AgenticAskOutputErrorV1("each verdict must cite the items it was judged from");
     if (cites.some(id => id === null || !shown.has(id))) throw new AgenticAskOutputErrorV1("cite only ids of the items given");
     // A change that landed, or went another way, shows in the finding's own items: never in its decision or another item alone.
     if (verdict !== "still_open" && !cites.some(id => id !== null && ask.about.includes(id))) {
       throw new AgenticAskOutputErrorV1(`finding ${ask.index} is "${verdict}" but cites none of the items it is about (${ask.about.join(", ")}); cite the one that shows it, or answer "still_open"`);
     }
+    // Each cited id once, as the model first wrote it: another spelling of it is counted.
+    const respelled = cites.filter(id => given[read.indexOf(id)] !== id).length;
+    if (respelled > 0) observeCoreModelCorrectionV1("model_id_respelled", respelled);
+    if (cites.length > LIMITS.finding_citations) observeCoreModelCorrectionV1("model_items_capped", cites.length - LIMITS.finding_citations);
     drafts.set(ask.index, { verdict, line, cites: (cites as string[]).slice(0, LIMITS.finding_citations) });
   }
   const missing = asked.map(value => value.index).filter(index => !drafts.has(index));
@@ -229,6 +238,7 @@ export const SWEEP_RENDERER_V1: AgenticRendererV1<SweepTriggerInputV1, PersonSwe
     const written = asked.length === 0 ? null : await callRendererModelV1(input, RENDER_CALL, SWEEP_PROMPT, { findings: asked, items: items.map(view) }, SWEEP_SCHEMA,
       value => parseVerdicts(value, asked, new Set(byShort.keys())));
     const drafts = written?.value ?? null;
+    if (written?.value === null) observeCoreModelCorrectionV1("sweep_fallback");
 
     // ---- layout (code, not model) ---------------------------------------
     const used: Entry[] = [];
@@ -244,8 +254,10 @@ export const SWEEP_RENDERER_V1: AgenticRendererV1<SweepTriggerInputV1, PersonSwe
       // A line is never stored, so one that fails a screen costs no repair: it is withheld and its verdict kept (R39). It may quote the items it cites.
       const cited = draft.cites.map(id => byShort.get(id)!);
       const sources = cited.flatMap(entry => [entry.item.label, ...(entry.item.text === undefined ? [] : [entry.item.text])]);
+      const withheld = screenImpactLineV1(draft.line, sources) !== null;
+      if (withheld) observeCoreModelCorrectionV1("sweep_line_withheld");
       return {
-        finding_index: index, verdict: draft.verdict, line: screenImpactLineV1(draft.line, sources) === null ? draft.line : WITHHELD_LINE,
+        finding_index: index, verdict: draft.verdict, line: withheld ? WITHHELD_LINE : draft.line,
         citation_indexes: cited.map(cite),
       };
     });

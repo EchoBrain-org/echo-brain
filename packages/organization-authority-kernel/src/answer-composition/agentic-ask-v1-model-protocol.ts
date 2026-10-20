@@ -1,4 +1,5 @@
 import { validatePersonQueryText } from "@echo-brain/organization-api";
+import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { calendarDateV1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
 import { AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1, type AgenticListSelectionV1 } from "./agentic-list-evidence-v1.js";
 import { AGENTIC_RESEARCH_NEED_KINDS_V1, type AgenticResearchNeedKindV1 } from "./agentic-research-v1.js";
@@ -12,7 +13,8 @@ import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.
  * Values a provider failed to hold to the schema (whitespace, over-long text,
  * id spelling, a string where args belong) are normalized, not rejected. An
  * unusable shape or missing required argument names the problem so the repair
- * prompt can correct it before a tool runs.
+ * prompt can correct it before a tool runs. Each normalization is counted by
+ * name (observeCoreModelCorrectionV1), never with the text it changed.
  */
 export const AGENTIC_ASK_MAX_PARTS_V1 = 5;
 export const AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1 = 4;
@@ -182,10 +184,22 @@ function truncate(value: string, maximumChars: number): string {
   return chars.length <= maximumChars ? value : `${chars.slice(0, maximumChars - 1).join("").trimEnd()}…`;
 }
 
+/** Single-line, NFC, trimmed. Non-strings become "". */
+function oneLine(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim();
+}
+
 /** Single-line, NFC, trimmed, bounded. Non-strings become "". */
 export function cleanLine(value: unknown, maximumChars: number): string {
-  if (typeof value !== "string") return "";
-  return truncate(value.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim(), maximumChars);
+  return truncate(oneLine(value), maximumChars);
+}
+
+/** cleanLine for a field a model wrote: a cut to its cap is counted. */
+export function cleanModelLine(value: unknown, maximumChars: number): string {
+  const line = oneLine(value);
+  if ([...line].length > maximumChars) observeCoreModelCorrectionV1("model_text_truncated");
+  return truncate(line, maximumChars);
 }
 
 /** A response part's question: V4 bounds part questions to 1 KiB of single-line text. */
@@ -201,6 +215,12 @@ export function cleanId(value: unknown): string | null {
   const match = /^\s*\[?\s*[Ee]?\s*(\d{1,4})\s*\]?\s*$/u.exec(String(value));
   return match === null ? null : `E${Number(match[1])}`;
 }
+/** cleanId for an id a model wrote: another spelling of the id it names is counted. */
+export function cleanModelId(value: unknown): string | null {
+  const id = cleanId(value);
+  if (id !== null && id !== value) observeCoreModelCorrectionV1("model_id_respelled");
+  return id;
+}
 /** Raw entries read from one evidence array before the cap. */
 const EVIDENCE_IDS_READ = 64;
 /**
@@ -214,21 +234,38 @@ const EVIDENCE_IDS_READ = 64;
 function cleanIds(value: unknown, lists = false, listsFirst = lists): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
-  for (const raw of lists ? value.slice(0, EVIDENCE_IDS_READ) : value) {
+  const read = lists ? value.slice(0, EVIDENCE_IDS_READ) : value;
+  if (read.length < value.length) observeCoreModelCorrectionV1("model_items_capped", value.length - read.length);
+  for (const [index, raw] of read.entries()) {
     const id = (lists ? parseAgenticListIdV1(raw) : null) ?? cleanId(raw);
-    if (id !== null && !result.includes(id)) result.push(id);
-    if (!lists && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) break;
+    if (id === null) observeCoreModelCorrectionV1("model_entry_dropped");
+    else if (result.includes(id)) observeCoreModelCorrectionV1("model_repeat_dropped");
+    else {
+      result.push(id);
+      if (id !== raw) observeCoreModelCorrectionV1("model_id_respelled");
+    }
+    if (!lists && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) {
+      if (index + 1 < read.length) observeCoreModelCorrectionV1("model_items_capped", read.length - index - 1);
+      break;
+    }
   }
   if (listsFirst && result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return Object.freeze(result);
   const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, listsFirst ? AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 : undefined);
   let items = AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 - (listsFirst ? listIds.length : 0);
-  return Object.freeze(result.filter(id => listIds.includes(id) || (parseAgenticListIdV1(id) === null && items-- > 0)));
+  const kept = result.filter(id => listIds.includes(id) || (parseAgenticListIdV1(id) === null && items-- > 0));
+  if (kept.length < result.length) observeCoreModelCorrectionV1("model_items_capped", result.length - kept.length);
+  return Object.freeze(kept);
+}
+/** Counted when a model wrote a closed value in another spelling, as an alias, or not at all. */
+function respelled<T>(value: unknown, known: T): T {
+  if (value !== known) observeCoreModelCorrectionV1("model_enum_respelled");
+  return known;
 }
 function needStatus(value: unknown): NeedStatus {
   const normalized = typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/gu, "_") : "";
-  if (normalized === "found" || normalized === "answered") return "found";
-  if (normalized === "not_found" || normalized === "notfound" || normalized === "missing") return "not_found";
-  return "open";
+  if (normalized === "found" || normalized === "answered") return respelled(value, "found");
+  if (normalized === "not_found" || normalized === "notfound" || normalized === "missing") return respelled(value, "not_found");
+  return respelled(value, "open");
 }
 /** A need's declared kind (ADR-0041): "which_items" or "which_say" in any common spelling; anything else, or nothing, is content. */
 function needKind(value: unknown): AgenticResearchNeedKindV1 {
@@ -237,10 +274,13 @@ function needKind(value: unknown): AgenticResearchNeedKindV1 {
 }
 function tool(value: unknown): StepTool | null {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (normalized === "browse") return "list";
-  return normalized === "search" || normalized === "open" || normalized === "list" || normalized === "finish" ? normalized : null;
+  if (normalized === "browse") return respelled(value, "list");
+  return normalized === "search" || normalized === "open" || normalized === "list" || normalized === "finish" ? respelled(value, normalized) : null;
 }
-/** Args are an object of short strings. A bare string, or the A2 `input` field, is read as the tool's main argument. */
+/**
+ * Args are an object of short strings. A bare string, or the A2 `input` field, is read as the tool's main argument. An
+ * argument with no text, or one the tool does not take, is dropped.
+ */
 function args(name: StepTool, entry: Record<string, unknown>, ask = false): StepArgs {
   const result: Record<string, string> = {};
   const names: readonly (keyof StepArgs)[] = actionArgs(ask)[name];
@@ -249,14 +289,21 @@ function args(name: StepTool, entry: Record<string, unknown>, ask = false): Step
   if (raw !== null) {
     for (const key of names) {
       const value = raw[key];
-      const text = typeof value === "number" ? String(value) : cleanLine(value, ARG_CHARS);
+      if (value === undefined) continue;
+      const text = typeof value === "number" ? String(value) : cleanModelLine(value, ARG_CHARS);
       if (text.length > 0) result[key] = text;
+      else observeCoreModelCorrectionV1("model_entry_dropped");
     }
+    const unread = Object.keys(raw).filter(key => !(names as readonly string[]).includes(key)).length;
+    if (unread > 0) observeCoreModelCorrectionV1("model_entry_dropped", unread);
   }
   const bare = typeof entry.args === "string" ? entry.args : typeof entry.input === "string" ? entry.input : undefined;
   if (bare !== undefined) {
-    const text = cleanLine(bare, ARG_CHARS);
-    if (text.length > 0 && primary !== undefined && result[primary] === undefined) result[primary] = text;
+    const text = cleanModelLine(bare, ARG_CHARS);
+    if (text.length > 0 && primary !== undefined && result[primary] === undefined) {
+      result[primary] = text;
+      observeCoreModelCorrectionV1("model_bare_string");
+    }
   }
   if (primary !== undefined && result[primary] === undefined) throw new AgenticAskOutputErrorV1(`${name} requires args.${primary} as a non-empty string`);
   return Object.freeze(result);
@@ -277,16 +324,25 @@ function needId(value: unknown): string | undefined {
 function needs(value: unknown, lists: boolean): readonly StepNeed[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: StepNeed[] = [];
-  for (const raw of value) {
+  for (const [index, raw] of value.entries()) {
     const entry = object(raw);
-    const need = entry === null ? cleanLine(raw, NEED_CHARS) : cleanLine(entry.need, NEED_CHARS);
+    const need = entry === null ? cleanModelLine(raw, NEED_CHARS) : cleanModelLine(entry.need, NEED_CHARS);
     const id = entry === null ? undefined : needId(entry.id);
-    if (need.length === 0 || result.some(existing => existing.need.toLowerCase() === need.toLowerCase() || (id !== undefined && existing.id === id))) continue;
+    if (need.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
+    if (result.some(existing => existing.need.toLowerCase() === need.toLowerCase() || (id !== undefined && existing.id === id))) { observeCoreModelCorrectionV1("model_repeat_dropped"); continue; }
+    if (entry === null) observeCoreModelCorrectionV1("model_bare_string");
+    else if (id === undefined && entry.id !== undefined) observeCoreModelCorrectionV1("model_entry_dropped");
+    else if (id !== undefined && id !== entry.id) observeCoreModelCorrectionV1("model_id_respelled");
+    const kind = lists ? needKind(entry?.kind) : undefined;
+    if (kind !== undefined && entry !== null) respelled(entry.kind, kind);
     result.push(Object.freeze({
-      ...(id === undefined ? {} : { id }), need, ...(lists ? { kind: needKind(entry?.kind) } : {}),
+      ...(id === undefined ? {} : { id }), need, ...(kind === undefined ? {} : { kind }),
       status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists),
     }));
-    if (result.length === AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) break;
+    if (result.length === AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) {
+      if (index + 1 < value.length) observeCoreModelCorrectionV1("model_items_capped", value.length - index - 1);
+      break;
+    }
   }
   return Object.freeze(result);
 }
@@ -301,21 +357,26 @@ export function parseStep(value: unknown, options: { readonly lists?: boolean } 
   if (!Array.isArray(body.parts)) throw new AgenticAskOutputErrorV1(`"parts" must be an array (got ${keysOf(body)})`);
   if (!Array.isArray(body.actions)) throw new AgenticAskOutputErrorV1(`"actions" must be an array (got ${keysOf(body)})`);
   const parts: StepPart[] = [];
+  if (body.parts.length > AGENTIC_ASK_MAX_PARTS_V1) observeCoreModelCorrectionV1("model_items_capped", body.parts.length - AGENTIC_ASK_MAX_PARTS_V1);
   for (const raw of body.parts.slice(0, AGENTIC_ASK_MAX_PARTS_V1)) {
     const entry = object(raw);
     if (entry === null) throw new AgenticAskOutputErrorV1("each item in \"parts\" must be an object with question, needs, notes");
-    const question = cleanLine(entry.question, QUESTION_CHARS);
+    const question = cleanModelLine(entry.question, QUESTION_CHARS);
     if (question.length === 0) throw new AgenticAskOutputErrorV1("each part needs a non-empty \"question\"");
-    parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true), notes: cleanLine(entry.notes, NOTES_CHARS) }));
+    parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true), notes: cleanModelLine(entry.notes, NOTES_CHARS) }));
   }
   const actions: StepAction[] = [];
-  for (const raw of body.actions) {
+  const most = options.lists === true ? AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 : AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
+  for (const [index, raw] of body.actions.entries()) {
     const entry = object(raw);
     if (entry === null) throw new AgenticAskOutputErrorV1("each item in \"actions\" must be an object with tool and args");
     const name = tool(entry.tool);
     if (name === null) throw new AgenticAskOutputErrorV1(`unknown tool ${JSON.stringify(String(entry.tool).slice(0, 32))}; use search, open, list, or finish`);
     actions.push(Object.freeze({ tool: name, args: args(name, entry, options.lists === true) }));
-    if (actions.length === (options.lists === true ? AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 : AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1)) break;
+    if (actions.length === most) {
+      if (index + 1 < body.actions.length) observeCoreModelCorrectionV1("model_items_capped", body.actions.length - index - 1);
+      break;
+    }
   }
   return Object.freeze({ parts: Object.freeze(parts), actions: Object.freeze(actions) });
 }
@@ -332,10 +393,14 @@ const EVIDENCE_REFERENCE = evidenceReference(String.raw`e\d{1,4}`);
 /** With lists (Ask, ADR-0041), "(L1)" and "(E4, L1)" are references too. */
 const LIST_EVIDENCE_REFERENCE = evidenceReference(String.raw`[el]\d{1,4}`);
 
-/** Evidence ids belong in "evidence", not in prose; drop "(E4)", "[E4, E7]", "(evidence: E5)" and similar from sentence text. */
+/**
+ * Evidence ids belong in "evidence", not in prose; drop "(E4)", "[E4, E7]", "(evidence: E5)" and similar from sentence text.
+ * Every caller strips model text, so each text a reference was dropped from is counted.
+ */
 export function stripEvidenceIds(text: string, lists = false): string {
-  return text
-    .replace(lists ? LIST_EVIDENCE_REFERENCE : EVIDENCE_REFERENCE, "")
+  const stripped = text.replace(lists ? LIST_EVIDENCE_REFERENCE : EVIDENCE_REFERENCE, "");
+  if (stripped !== text) observeCoreModelCorrectionV1("model_inline_ids_stripped");
+  return stripped
     .replace(/\s+([.,;:!?])/gu, "$1")
     .replace(/\s{2,}/gu, " ")
     .trim();
@@ -353,13 +418,14 @@ function calendarDay(value: string): string | undefined {
 function selectionOf(where: Record<string, unknown> | null): AgenticListSelectionV1 | null {
   const field = typeof where?.field === "string" ? where.field.trim().toLowerCase() : "";
   if (where === null || !(AGENTIC_LIST_SELECTION_FIELDS_V1 as readonly string[]).includes(field)) return null;
+  respelled(where.field, field);
   if (field === "owner" || field === "status") {
-    const value = cleanLine(where.value, SELECTION_CHARS);
+    const value = cleanModelLine(where.value, SELECTION_CHARS);
     return value.length === 0 ? null : Object.freeze({ field, value });
   }
   const bounds: { since?: string; until?: string } = {};
   for (const bound of ["since", "until"] as const) {
-    const text = cleanLine(where[bound], 10);
+    const text = cleanModelLine(where[bound], 10);
     if (text.length === 0) continue;
     const day = calendarDay(text);
     if (day === undefined) return null;
@@ -373,15 +439,33 @@ function selectionOf(where: Record<string, unknown> | null): AgenticListSelectio
 /**
  * A list the answer uses: "L1", {"id": "L1"}, {"id": "L1", "where": {"field": "owner", "value": "Dana Lee"}},
  * {"id": "L1", "where": {"field": "due", "since": "2026-10-18", "until": "2026-10-24"}} or {"id": "L1", "members":
- * ["E5"]}; members, each once, take the place of a selection. Null for anything else.
+ * ["E5"]}; members, each once, take the place of a selection. Null for anything else. A where code cannot read uses
+ * the list in full.
  */
 function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
   const entry = object(raw);
-  const id = parseAgenticListIdV1(entry === null ? raw : entry.id);
+  const given = entry === null ? raw : entry.id;
+  const id = parseAgenticListIdV1(given);
   if (id === null) return null;
-  const members = [...new Set((Array.isArray(entry?.members) ? entry.members : []).slice(0, EVIDENCE_IDS_READ).map(cleanId).filter((value): value is string => value !== null))].slice(0, AGENTIC_LIST_NAMED_MAX_V1);
-  if (members.length > 0) return Object.freeze({ id, members: Object.freeze(members) });
-  const where = selectionOf(entry === null ? null : object(entry.where));
+  if (entry === null) observeCoreModelCorrectionV1("model_bare_string");
+  else if (id !== given) observeCoreModelCorrectionV1("model_id_respelled");
+  const named = Array.isArray(entry?.members) ? entry.members : [];
+  const members: string[] = [];
+  if (named.length > EVIDENCE_IDS_READ) observeCoreModelCorrectionV1("model_items_capped", named.length - EVIDENCE_IDS_READ);
+  for (const member of named.slice(0, EVIDENCE_IDS_READ)) {
+    const short = cleanId(member);
+    if (short === null) observeCoreModelCorrectionV1("model_entry_dropped");
+    else if (members.includes(short)) observeCoreModelCorrectionV1("model_repeat_dropped");
+    else {
+      members.push(short);
+      if (short !== member) observeCoreModelCorrectionV1("model_id_respelled");
+    }
+  }
+  if (members.length > AGENTIC_LIST_NAMED_MAX_V1) observeCoreModelCorrectionV1("model_items_capped", members.length - AGENTIC_LIST_NAMED_MAX_V1);
+  if (members.length > 0) return Object.freeze({ id, members: Object.freeze(members.slice(0, AGENTIC_LIST_NAMED_MAX_V1)) });
+  const asked = entry === null ? null : object(entry.where);
+  const where = selectionOf(asked);
+  if (asked !== null && where === null) observeCoreModelCorrectionV1("model_entry_dropped");
   return Object.freeze(where === null ? { id } : { id, where });
 }
 
@@ -395,27 +479,41 @@ export function parseAnswer(value: unknown): Answer {
   if (body === null) throw new AgenticAskOutputErrorV1("the reply was not a JSON object");
   if (!Array.isArray(body.sentences)) throw new AgenticAskOutputErrorV1(`"sentences" must be an array (got ${keysOf(body)})`);
   const sentences: AnswerSentence[] = [];
-  for (const raw of body.sentences) {
+  for (const [index, raw] of body.sentences.entries()) {
     const entry = object(raw);
-    if (entry === null) continue;
-    const text = stripEvidenceIds(cleanLine(entry.text, SENTENCE_CHARS), true);
+    const text = entry === null ? "" : stripEvidenceIds(cleanModelLine(entry.text, SENTENCE_CHARS), true);
     // A sentence's list ids support nothing (W1), so they take no item's slot: its first 12 item ids are kept, rows included.
-    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry.evidence, true, false) }));
-    if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) break;
+    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry!.evidence, true, false) }));
+    else observeCoreModelCorrectionV1("model_entry_dropped");
+    if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) {
+      if (index + 1 < body.sentences.length) observeCoreModelCorrectionV1("model_items_capped", body.sentences.length - index - 1);
+      break;
+    }
   }
   const notFound: string[] = [];
-  for (const raw of Array.isArray(body.not_found) ? body.not_found : []) {
-    const text = cleanLine(raw, NOT_FOUND_CHARS);
-    if (text.length > 0 && !notFound.includes(text)) notFound.push(text);
-    if (notFound.length === AGENTIC_ASK_MAX_PARTS_V1) break;
+  const missing: readonly unknown[] = Array.isArray(body.not_found) ? body.not_found : [];
+  for (const [index, raw] of missing.entries()) {
+    const text = cleanModelLine(raw, NOT_FOUND_CHARS);
+    if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
+    else if (notFound.includes(text)) observeCoreModelCorrectionV1("model_repeat_dropped");
+    else notFound.push(text);
+    if (notFound.length === AGENTIC_ASK_MAX_PARTS_V1) {
+      if (index + 1 < missing.length) observeCoreModelCorrectionV1("model_items_capped", missing.length - index - 1);
+      break;
+    }
   }
   const uses: AgenticAnswerListUseV1[] = [];
-  for (const raw of Array.isArray(body.lists) ? body.lists : []) {
+  const asked: readonly unknown[] = Array.isArray(body.lists) ? body.lists : [];
+  for (const [index, raw] of asked.entries()) {
     const use = listUseOf(raw);
-    if (use === null || uses.some(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined))) continue;
-    if (!uses.some(existing => existing.id === use.id) && new Set(uses.map(existing => existing.id)).size === AGENTIC_LIST_WRITER_LISTS_MAX_V1) continue;
+    if (use === null) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
+    if (uses.some(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined))) { observeCoreModelCorrectionV1("model_repeat_dropped"); continue; }
+    if (!uses.some(existing => existing.id === use.id) && new Set(uses.map(existing => existing.id)).size === AGENTIC_LIST_WRITER_LISTS_MAX_V1) { observeCoreModelCorrectionV1("model_items_capped"); continue; }
     uses.push(use);
-    if (uses.length === 2 * AGENTIC_LIST_WRITER_LISTS_MAX_V1) break;
+    if (uses.length === 2 * AGENTIC_LIST_WRITER_LISTS_MAX_V1) {
+      if (index + 1 < asked.length) observeCoreModelCorrectionV1("model_items_capped", asked.length - index - 1);
+      break;
+    }
   }
   return Object.freeze({ sentences: Object.freeze(sentences), not_found: Object.freeze(notFound), lists: Object.freeze(uses) });
 }

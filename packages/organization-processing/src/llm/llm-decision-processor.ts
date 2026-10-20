@@ -1,4 +1,4 @@
-import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, coreRuntimeDiagnosticErrorKindV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, coreRuntimeDiagnosticErrorKindV1, observeCoreModelCorrectionV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { createHash } from 'node:crypto';
 import {
   AdapterError,
@@ -494,19 +494,41 @@ function checkedSignal(
   if (!Array.isArray(cited) || !cited.every((id): id is string => typeof id === 'string')) {
     return 'evidence_shape';
   }
-  const units = withinEvidenceBudget([...new Set(cited.flatMap((id) => targets.get(citedUnitId(id)) ?? []))]);
+  const citations = cited.map((id) => { const unit = citedUnitId(id); return { id, unit, parts: targets.get(unit) }; });
+  const units = withinEvidenceBudget([...new Set(citations.flatMap(({ parts }) => parts ?? []))]);
   if (units.length === 0) return 'evidence_id';
+  // How code read a kept item's citations: another spelling, a split unit's parent, an ID that names no unit.
+  for (const { id, unit, parts } of citations) {
+    if (parts === undefined) observeCoreModelCorrectionV1('extraction_unknown_unit_dropped');
+    else {
+      if (unit !== id) observeCoreModelCorrectionV1('extraction_unit_id_respelled');
+      if (!parts.some((part) => part.id === unit)) observeCoreModelCorrectionV1('extraction_parent_unit_cited');
+    }
+  }
   const supports = record['supports_decision_indexes'];
+  // A choice cited only from questions was not made in the meeting.
+  const downgraded = status === 'decided' && units.every((unit) => unit.question);
+  if (downgraded) observeCoreModelCorrectionV1('extraction_decided_downgraded');
+  // A malformed owner proposal is dropped, never an extraction failure: the approver confirms owners.
+  const proposed = kind === 'action' ? canonicalProposedOwnerV1(record['owner']) : null;
+  const owner = groundedOwner(proposed, units);
+  if (proposed !== null && owner === null) observeCoreModelCorrectionV1('extraction_owner_cleared');
+  const due = record['due_at'];
+  const dueAt = kind === 'action' ? checkedDueAt(due, meeting, header) : null;
+  if (kind === 'action' && due !== null) {
+    if (dueAt === null) observeCoreModelCorrectionV1('extraction_due_cleared');
+    else if (typeof due === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(due)) observeCoreModelCorrectionV1('extraction_due_coerced');
+  }
+  const confidence = normalizedConfidence(record['confidence']);
+  if (record['confidence'] !== null && confidence === null) observeCoreModelCorrectionV1('extraction_confidence_cleared');
   return {
     index,
     kind,
     text: text.trim(),
-    // A choice cited only from questions was not made in the meeting.
-    status: status === 'decided' && units.every((unit) => unit.question) ? 'proposed' : status,
-    // A malformed owner proposal is dropped, never an extraction failure: the approver confirms owners.
-    owner: kind === 'action' ? groundedOwner(canonicalProposedOwnerV1(record['owner']), units) : null,
-    dueAt: kind === 'action' ? checkedDueAt(record['due_at'], meeting, header) : null,
-    confidence: normalizedConfidence(record['confidence']),
+    status: downgraded ? 'proposed' : status,
+    owner,
+    dueAt,
+    confidence,
     units,
     supports: kind === 'rationale' && Array.isArray(supports) ? supports : [],
   };
@@ -634,6 +656,7 @@ function groundedSignals(
     // A rationale that links to a dropped decision links to its kept twin.
     const twin = keptBy.get(key) ?? keptBy.get(untrimmedId);
     if (twin !== undefined) {
+      observeCoreModelCorrectionV1('extraction_repeat_dropped');
       if (signal.kind === 'decision') decisions.set(signal.index, twin);
       continue;
     }
@@ -655,6 +678,8 @@ function groundedSignals(
       : undefined;
     observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'grounding', event: 'skipped', data: { signal_index: index, reason, cited_units: Array.isArray(cited) ? cited : [] } });
   }
+  // Their reasons and citations reach only the private sink above; operational metadata counts them.
+  if (setAside.length > 0) observeCoreModelCorrectionV1('extraction_item_set_aside', setAside.length);
   const first = setAside[0];
   if (kept.length === 0 && first !== undefined) {
     if (isGroundingStage(first.reason)) extractionGroundingFailure(first.reason, { signal_index: first.index });
@@ -668,7 +693,10 @@ function groundedSignals(
   return kept
     .filter((entry) => {
       const id = ids.get(entry)!;
-      if (seen.has(id)) return false;
+      if (seen.has(id)) {
+        observeCoreModelCorrectionV1('extraction_repeat_dropped');
+        return false;
+      }
       seen.add(id);
       return true;
     })
@@ -681,8 +709,12 @@ function groundedSignals(
           return { ...base, kind: 'decision', status: signal.status };
         case 'action':
           return { ...base, kind: 'action', owner: signal.owner, due_at: signal.dueAt };
-        case 'rationale':
-          return { ...base, kind: 'rationale', supports_signal_ids: [...new Set(supports.map((decision) => ids.get(decision)!))] };
+        case 'rationale': {
+          const links = [...new Set(supports.map((decision) => ids.get(decision)!))];
+          // Each of the model's links that is a repeat, or names no kept decision, is dropped.
+          if (links.length < signal.supports.length) observeCoreModelCorrectionV1('extraction_rationale_link_dropped', signal.supports.length - links.length);
+          return { ...base, kind: 'rationale', supports_signal_ids: links };
+        }
       }
     });
 }
