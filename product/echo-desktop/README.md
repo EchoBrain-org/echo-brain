@@ -21,13 +21,19 @@ Every name, and every source of an answer, opens beside Ask, which keeps
 working: a meeting's decision, action or rationale opens its meeting with that
 item lit; a note, document or imported meeting its cited passages; a
 transcript its meeting; a follow-up its title, owner, status and latest check
-(ADR-0040); a Jira ticket, Confluence page or Slack message its
-"Open in …". Once the answer has come, **Open** goes to the item's own page
-(leaving Ask, so it is hidden while Ask works): the reader, where a meeting
-opens scrolled to the items the pane lit, lit too, or a follow-up's item page.
-A follow-up's source row says only who owns it and its status ("Mara ·
-Open"). Ask reads follow-ups only from an Authority that serves `/v6`; an older
-one answers on `/v5` without them.
+(ADR-0040); one of your projects its name; a person in your organization their
+name only; one of your tools its name only (the answer says how you are
+connected, as ECHO read it for that Ask); a Jira ticket, Confluence page or
+Slack message, and a
+Jira project, Confluence space or Slack channel, its "Open in …". Once the
+answer has come, **Open** goes to the item's own page (leaving Ask, so it is
+hidden while Ask works): the reader, where a meeting opens scrolled to the
+items the pane lit, lit too, a follow-up's item page, the project, or Tools. A
+person has no page to open. A follow-up's source row says only who owns it and
+its status ("Mara · Open"), and a Jira project's, Confluence space's or Slack
+channel's says its tool and key ("Jira · THERM"). An older Authority answers
+on its newest route, without what that route cannot cite
+([Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)).
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 

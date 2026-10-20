@@ -934,3 +934,8 @@ evidence rules are unchanged. Search-only Ask briefs receive the same argument
 clarifications without an available list action. Background task prompts and
 schemas keep their prior bytes, and runtime date-age/filter-alias compatibility
 is unchanged. No tools, access scope, research budgets, or stop rules change.
+
+## Later decisions
+
+[ADR-0042](ADR-0042-research-tool-contract.md#one-outcome-per-filter) (2026-10-19)
+adds, for Ask, refused filters, `unchecked` counts and any-date windows.

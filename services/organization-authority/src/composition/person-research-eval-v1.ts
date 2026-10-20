@@ -3,12 +3,14 @@ import { validatePersonImpactCardV1, validatePersonSweepResultV1, type PersonRes
 import {
   AGENTIC_RESEARCH_BUDGETS_V1,
   AgenticAskDeadlineErrorV1,
+  createAgenticAskV5,
   createAgenticResearchV1,
   type AgenticResearchResultV1,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { PersonAskScopeV2 } from '../application/ports/person-original-context-retrieval-v1.js';
 import { askerOf, scopeOf } from './person-answer-v3-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
@@ -82,7 +84,10 @@ function failure(error: unknown): NonNullable<PersonResearchEvalReadResponseV1['
  */
 export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOptionsV1): PersonResearchEvalHttpApplicationV1 {
   const now = options.now ?? (() => Date.now());
-  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
+  // A question runs as `/v7` serves it: the V8 Ask, whose desk binds follow-ups, the workspace and tool containers
+  // (research tool contract v1). A task reads what task research reads.
+  const questionSources = (options.live_sources ?? []).filter(source => source.minimum_response_version <= WORKSPACE_MINIMUM_RESPONSE_VERSION_V1);
+  const taskSources = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
   const runs = new Map<string, Run>();
   const purge = () => {
     const current = now();
@@ -133,16 +138,19 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
           const scope = requested ?? recordScope(options.records, input.access_token, brief.starting[0]?.citation);
           // A task's brief can depend on its scope: an approved record in no project is searched, never listed.
           const scoped = { ...definition.brief(event, scope), budget: brief.budget };
-          const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, signal }, context);
+          const question = brief.goal.kind === 'question';
+          const desk = await bindPersonLiveEvidenceDeskV1(options, question ? questionSources : taskSources,
+            { access_token: input.access_token, scope, signal, ...(question ? { response_version: WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } : {}) }, context);
           run.revalidate = readSignal => desk.revalidate({ ...(readSignal === undefined ? {} : { signal: readSignal }) });
           const asker = askerOf(options, authorization);
           // Runs exactly as served: the brief asks for the small-scope preload where the deployment allows it.
-          const loop = createAgenticResearchV1({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+          const loopOptions = { desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
             ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
-          });
+          };
+          const loop = createAgenticResearchV1(loopOptions);
           if (brief.goal.kind === 'question') {
-            // A question is Ask's: its writer answers it.
-            const output = await loop.answerWithResearch({ question: brief.goal.question, budget: brief.budget, signal });
+            // A question is Ask's: its V8 writer answers it, as `/v7` does.
+            const output = await createAgenticAskV5(loopOptions).answerWithResearch({ question: brief.goal.question, budget: brief.budget, signal });
             run.research = output.research;
             run.ask = Object.freeze({ writer_evidence: output.writer_evidence, response: output.response });
           } else if (definition.renderer !== undefined) {

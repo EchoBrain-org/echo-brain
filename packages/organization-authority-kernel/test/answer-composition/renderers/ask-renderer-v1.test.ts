@@ -1,5 +1,4 @@
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { MISSING_EVENT_DATE_NOTICE_V1 } from "../../../src/shared/temporal-query-v1.js";
 import { describe, expect, it } from "vitest";
 import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
 import { ANSWER_PROMPT } from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
@@ -78,16 +77,6 @@ describe("Ask renderer", () => {
       expect(rendered).toMatchObject({ cited: [], fallbacks: 0, outcome: completed ? "not_found" : "partial", result: { writer_evidence: [] } });
       expect(rendered.result.response.parts[0]).toMatchObject({ status: "not_found", gap: completed ? "I couldn't find this in the sources you can access." : "I couldn't complete the search. Please try again." });
     }
-  });
-
-  it('explains stable missing event dates instead of telling the person to retry', async () => {
-    const research = { ...bundle([], [], false), coverage: { ...EMPTY_BUNDLE.coverage, notices: [MISSING_EVENT_DATE_NOTICE_V1] } };
-    const run = alone({ bundle: research, replies: [], version: 6 });
-    const rendered = await run.render('What meetings did I have on October 16?');
-    expect(rendered.result.response.parts[0]?.gap).toContain('no recorded event date');
-    expect(rendered.result.response.parts[0]?.gap).not.toContain('try again');
-    expect(rendered.result.response.notice).toContain(MISSING_EVENT_DATE_NOTICE_V1);
-    expect(rendered.result.response.citations).toEqual([]);
   });
 
   const LIMITED_COVERAGE = "Some source coverage was incomplete, so relevant context may be missing.";

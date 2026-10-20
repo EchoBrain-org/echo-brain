@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { datasetProblems, loadDataset, substitutePerson } from "./lib/dataset.mjs";
+import { DATASET_ROOT, datasetProblems, loadDataset, substitutePerson } from "./lib/dataset.mjs";
 import { CaseNotStartableError, discoverMeetings, exportBindings } from "./lib/bindings.mjs";
 import { pollDeadlineMs, rejectedAtIngress, savedResult, startRequest } from "./lib/requests.mjs";
 import { codeChecks } from "./lib/checks.mjs";
@@ -14,6 +14,7 @@ import { aggregate, markdownReport, withholdJudgeMetrics } from "./lib/report.mj
 import { calibrationSheet, calibrationStatus, scoreCalibration } from "./lib/calibration.mjs";
 import { privateDirectory, readJson, savedRunFiles, writePrivateJson, writePrivateText } from "./lib/private-files.mjs";
 import { runTrace } from "./lib/trace.mjs";
+import { releaseCheck, releaseCheckLines } from "./lib/release-check.mjs";
 
 const USAGE = `Research loop evaluation (docs/product/2026-10-06-research-loop-eval-v1.md)
 
@@ -21,8 +22,10 @@ const USAGE = `Research loop evaluation (docs/product/2026-10-06-research-loop-e
   bindings --export <dir> --project-id <prj_…> --test-person <name> --out <dir>
                                              Bind Jira/Confluence ids from the export and the approved
                                              THERM meetings found on staging (needs a signed-in CLI session).
-  run --run --model <loop-model-id> --split development|holdout --state S0|S1 --out <dir> [--trials 3] [--only id,…] [--background-diagnostic]
+  run --run --model <loop-model-id> --split development|holdout --state S0|S1 --out <dir> [--trials 3] [--only id,…] [--family open_ended] [--background-diagnostic]
                                              Run cases against the staging research endpoint, one at a time.
+  release-check --out <dir> [--runs langsmith-runs.json] [--release-sha <sha>]
+                                             Check the staging release's open-ended Asks from their saved LangSmith runs.
   trace --run --question <question> --project-id <prj_…> --out <dir>
                                              Capture one ordinary live Ask's exact model/tool payloads privately.
   trace --run --trigger-run-id <run_…> --out <dir>
@@ -62,11 +65,34 @@ function sourceIdentity() {
   try { return execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(); } catch { return null; }
 }
 
-function selectCases(dataset, split, state, only) {
+function selectCases(dataset, split, state, only, family) {
   const ids = only === undefined ? undefined : new Set(only.split(","));
-  const cases = dataset.cases.filter(entry => entry.split === split && entry.state === state && (ids === undefined || ids.has(entry.id)));
+  const cases = dataset.cases.filter(entry => entry.split === split && entry.state === state && (ids === undefined || ids.has(entry.id)) && (family === undefined || entry.family === family));
   if (ids !== undefined && cases.length !== ids.size) throw new Error("--only names a case that is not in this split and state");
+  if (family !== undefined && cases.length === 0) throw new Error("--family names no case in this split and state");
   return cases;
+}
+
+/**
+ * The staging release check (deploy/release/README.md): the open-ended Asks the release asks after its canary, each
+ * its development case's question and reach keys (`release-check.json`), checked from the LangSmith runs the operator
+ * saved privately under --out. Every question needs its latest trace to meet them; a failing check exits non-zero.
+ */
+function runReleaseCheck(args) {
+  const out = privateDirectory(args.out);
+  const config = readJson(join(DATASET_ROOT, "release-check.json"));
+  const cases = loadDataset().cases;
+  const questions = config.cases.map(id => {
+    const entry = cases.find(value => value.id === id && value.split === "development");
+    if (entry === undefined || entry.reach === undefined) throw new Error(`release-check.json names ${id}, which is not an open-ended development case`);
+    return { id, question: entry.question, reach: entry.reach };
+  });
+  const runsFile = args.runs ?? "langsmith-runs.json";
+  if (runsFile.includes("/") || runsFile.includes("\\")) throw new Error("--runs names a file inside --out");
+  const result = releaseCheck(readJson(join(out, runsFile)), questions, args["release-sha"] === undefined ? {} : { release_sha: args["release-sha"] });
+  writePrivateJson(out, "release-check.json", result);
+  for (const line of releaseCheckLines(result)) process.stdout.write(`${line}\n`);
+  if (!result.passed) throw new Error(`release check failed; see ${join(out, "release-check.json")}`);
 }
 
 async function bindings(args) {
@@ -117,7 +143,7 @@ async function run(args, { client: given, poll_ms: pollMs = 2_000 } = {}) {
   const out = privateDirectory(args.out);
   const bound = readJson(join(out, "bindings.json"));
   const dataset = loadDataset();
-  const cases = selectCases(dataset, args.split, args.state, args.only).map(entry => substitutePerson(entry, bound.test_person));
+  const cases = selectCases(dataset, args.split, args.state, args.only, args.family).map(entry => substitutePerson(entry, bound.test_person));
   const trials = Number(args.trials ?? 3);
   if (!Number.isSafeInteger(trials) || trials < 1 || trials > 5) throw new Error("--trials must be 1 to 5");
   const client = given ?? await personClient();
@@ -221,6 +247,7 @@ export async function main(argv, dependencies = {}) {
   }
   else if (command === "grade") await grade(args);
   else if (command === "report") report(args);
+  else if (command === "release-check") runReleaseCheck(args);
   else if (command === "calibrate") calibrate(args);
   else process.stdout.write(`${USAGE}\n`);
 }

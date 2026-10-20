@@ -23,12 +23,13 @@ describe('Ask tool argument contracts', () => {
         expect(args[field].description).toContain('Inclusive');
       }
       expect(args.source.enum).toEqual(['meetings', 'handbook']);
-      expect(args.date_field.enum).toEqual(['occurred', 'created', 'updated', 'due', 'received']);
+      // Research tool contract v1: every date field a source may declare; its capabilities say which it takes.
+      expect(args.date_field.enum).toEqual(['occurred', 'created', 'updated', 'due', 'received', 'approved', 'sent', 'reassigned', 'checked']);
     }
     expect(schema.properties.parts.items.properties.question.minLength).toBe(1);
     expect(argsFor(schema, 'search').date_field.description).toContain('requires source');
     if (list) {
-      expect(argsFor(schema, 'list').status.enum).toEqual(['open', 'done']);
+      expect(argsFor(schema, 'list').status.enum).toEqual(['open', 'done', 'active', 'archived']);
       expect(argsFor(schema, 'list').kind).not.toHaveProperty('enum');
     } else {
       expect(schema.properties.actions.items.anyOf.map((v: Schema) => v.properties.tool.enum[0]))
@@ -56,7 +57,7 @@ describe('Ask tool argument contracts', () => {
     expect((await ask.answer({ question: 'Who owns the archive cleanup?' })).outcome).toBe('not_found');
     expect(calls[0]!.system_prompt).toBe(ASK_STEP_PROMPT);
     expect(argsFor(calls[0]!.schema, 'search').since.format).toBe('date');
-    expect(argsFor(calls[0]!.schema, 'list').status.enum).toEqual(['open', 'done']);
+    expect(argsFor(calls[0]!.schema, 'list').status.enum).toEqual(['open', 'done', 'active', 'archived']);
   });
 
   it('explains adaptive recovery while retaining context reads and available-tool boundaries', () => {

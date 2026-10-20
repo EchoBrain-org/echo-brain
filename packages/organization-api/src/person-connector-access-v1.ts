@@ -1,4 +1,4 @@
-import { asEnumerableRecord, assertExactKeys, assertPatternString, fail } from './validation.js';
+import { asEnumerableRecord, assertExactKeys, assertPatternString, assertToolId, fail } from './validation.js';
 
 export type PersonConnectorIdentityStatusV1 = 'unlinked' | 'linked' | 'revoked' | 'unavailable';
 export type PersonConnectorReadStatusV1 = 'not_connected' | 'connected' | 'reauthorization_required' | 'revoked' | 'unavailable';
@@ -18,7 +18,7 @@ export interface PersonConnectorAccessV1 {
 export function validatePersonConnectorAccessV1(value: unknown): PersonConnectorAccessV1 {
   const r = asEnumerableRecord(value, 'Person connector access');
   assertExactKeys(r, ['tool_id', 'identity_status', 'external_scope_id', 'external_subject_id', 'read_status', 'read_capabilities'], 'Person connector access');
-  assertPatternString(r.tool_id, 'tool_id', 64, /^[a-z][a-z0-9-]*$/);
+  assertToolId(r.tool_id);
   if (typeof r.identity_status !== 'string' || !['unlinked', 'linked', 'revoked', 'unavailable'].includes(r.identity_status)) fail('Connector identity status is invalid');
   if (typeof r.read_status !== 'string' || !['not_connected', 'connected', 'reauthorization_required', 'revoked', 'unavailable'].includes(r.read_status)) fail('Connector read status is invalid');
   for (const field of ['external_scope_id', 'external_subject_id'] as const) {

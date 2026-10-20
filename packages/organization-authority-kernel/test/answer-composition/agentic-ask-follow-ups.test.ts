@@ -71,7 +71,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     expect(followUpsOnly.steps()[0]!.system_prompt).toBe(`${ASK_STEP_PROMPT}\n\n${followUpsStepGuidance(true)}`);
     expect(followUpsOnly.writer()!.system_prompt).toBe(`${ANSWER_PROMPT}\n\n${FOLLOW_UPS_ANSWER_GUIDANCE}`);
     expect(listSources(followUpsOnly.steps()[0]!)).toEqual(['meetings', 'documents', 'follow_ups']);
-    expect((userOf(followUpsOnly.steps()[0]!).source_catalog as { source: string }[]).at(-1)).toEqual({ source: 'follow_ups', kind: 'follow_up', description: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.description, metadata_only_list: false });
+    expect((userOf(followUpsOnly.steps()[0]!).source_catalog as { source: string }[]).at(-1)).toEqual({ source: 'follow_ups', kind: 'follow_up', description: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.description, metadata_only_list: false, capabilities: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.capabilities });
 
     const withTools = scripted([step('open', [{ tool: 'finish', args: {} }])]);
     await createAgenticAskV4({ desk: deskWith([JIRA, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: withTools.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
@@ -105,13 +105,14 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     // Owner and status never default follow-ups to a meeting kind, and kind is a meeting filter only.
     expect(input).not.toHaveProperty('kinds');
     const listed = userOf(run.steps()[1]!);
-    expect(listed.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: '@Mara', status: 'In progress', kind: 'action' }, list: 'L1', items: ['E1', 'E2'], more: false, note: 'kind applies to meetings only; ignored' }]);
+    // Each filter's outcome comes back with the result (research tool contract v1): kind is ignored, owner and status applied.
+    expect(listed.last_results).toEqual([{ tool: 'list', args: { source: 'follow_ups', owner: '@Mara', status: 'In progress', kind: 'action' }, list: 'L1', items: ['E1', 'E2'], more: false, filters: { kind: 'ignored', owner: 'applied', status: 'applied' }, note: 'follow_ups takes no kind; ignored' }]);
     expect(listed.seen).toEqual([
-      { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, text: fanCurve.text, full: true },
+      { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, dates: { checked: '2026-10-15T09:30:00.000Z' }, text: fanCurve.text, full: true },
       { id: 'E2', source: 'follow_ups', kind: 'follow_up', title: 'THERM-46 Alarm thresholds', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open' }, text: thresholds.text, full: true },
     ]);
     expect((JSON.parse(run.writer()!.user_prompt) as { evidence: unknown[] }).evidence).toEqual([
-      { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, text: fanCurve.text },
+      { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, dates: { checked: '2026-10-15T09:30:00.000Z' }, text: fanCurve.text },
       { id: 'E2', source: 'follow_ups', kind: 'follow_up', title: 'THERM-46 Alarm thresholds', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open' }, text: thresholds.text },
     ]);
     expect(validatePersonAnswerResponseV7(answer).citations).toEqual([fanCurve, thresholds].map(item => ({ citation: item.citation, kind: 'follow_up', label: item.label, visibility: 'team', ref: item.ref })));
@@ -123,15 +124,16 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
       await create({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: run.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
       return userOf(run.steps()[1]!).last_results[0]!.note;
     };
-    expect(await noteFor(createAgenticAskV4)).toBe('status applies to meeting actions and follow-ups only; ignored; owner applies to meeting actions and follow-ups only; ignored; nothing more to list');
-    expect(await noteFor(createAgenticAskV3)).toBe('status applies to meeting actions only; ignored; owner applies to meeting actions only; ignored; nothing more to list');
+    // A source says itself which filters it takes (research tool contract v1), whatever else the catalog holds.
+    expect(await noteFor(createAgenticAskV4)).toBe('documents takes no status; ignored; documents takes no owner; ignored; nothing more to list');
+    expect(await noteFor(createAgenticAskV3)).toBe('documents takes no status; ignored; documents takes no owner; ignored; nothing more to list');
   });
 
-  it('refuses dated follow-up reads and statuses outside open and done before the desk', async () => {
+  it("reads follow-ups by their own dates, and refuses a due date and statuses outside open and done before the desk", async () => {
     const desk = deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]);
     const run = scripted([
       step('open', [
-        { tool: 'list', args: { source: 'follow_ups', since: '7d' } },
+        { tool: 'list', args: { source: 'follow_ups', since: '2026-10-09' } },
         { tool: 'search', args: { source: 'follow_ups', query: 'fan curve', until: '2026-10-16' } },
         { tool: 'search', args: { source: 'follow_ups', query: 'fan curve', date_field: 'due' } },
         { tool: 'list', args: { source: 'follow_ups', status: 'unsent' } },
@@ -139,10 +141,16 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
       step('open', [{ tool: 'finish', args: {} }]),
     ]);
     await createAgenticAskV4({ desk, model: run.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
-    const dated = 'follow_ups have no dates; omit since, until and date_field';
-    expect(userOf(run.steps()[1]!).last_results.map(value => value.error)).toEqual([dated, dated, dated, 'status must be "open" or "done"']);
-    expect(desk.list).not.toHaveBeenCalled();
-    expect(desk.search).not.toHaveBeenCalled();
+    // A window with no date field reads any of a follow-up's own dates (research tool contract v1).
+    expect(desk.list).toHaveBeenCalledTimes(1);
+    expect(desk.list.mock.calls[0]![0]).toMatchObject({ source: 'follow_ups', since: '2026-10-09', date_field: 'any' });
+    expect(desk.search).toHaveBeenCalledTimes(1);
+    expect(desk.search.mock.calls[0]![0]).toMatchObject({ source: 'follow_ups', until: '2026-10-16', date_field: 'any' });
+    // A due date belongs to the item a follow-up is on, and open and done are its only statuses: both refused, never sent.
+    const results = userOf(run.steps()[1]!).last_results;
+    expect(results[2]).toMatchObject({ filters: { date_field: 'refused' }, note: 'refused: follow_ups: date_field must be created, sent, reassigned, checked' });
+    expect(results[3]).toMatchObject({ filters: { status: 'refused' }, note: 'refused: follow_ups: status must be open or done' });
+    expect(results.map(value => value.error)).toEqual([undefined, undefined, undefined, undefined]);
   });
 
   it('resolves loose follow-up source names to the follow-ups source', async () => {
@@ -185,6 +193,8 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     expect(evidenceDeskSourceV2(fanCurve)).toBe('follow_ups');
     expect(describeAgenticEvidenceItemV1({ short: 'E3', source: 'follow_ups', item: fanCurve })).toEqual({
       id: 'E3', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' },
+      // A follow-up's own dates (research tool contract v1): its last check here.
+      dates: { checked: '2026-10-15T09:30:00.000Z' },
     });
     expect(citationOfAgenticEvidenceItemV1(fanCurve)).toEqual({ citation: fanCurve.citation, kind: 'follow_up', label: 'THERM-48 Fan curve v2', visibility: 'team', ref: `follow_up:${fanCurve.citation.kind === 'follow_up' ? fanCurve.citation.item_id : ''}` });
   });

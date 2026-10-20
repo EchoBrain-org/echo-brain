@@ -8,6 +8,12 @@ import type { TicketOwnerAccountsV1 } from './ticket-owner-accounts-v1.js';
 
 /** Current ECHO-project grant; each provider resolves its own external mapping. */
 export type PersonContextProjectAuthorizationV1 = (access_token: string, project_id: string) => Readonly<{ role: 'lead' | 'member'; authorization_sha256: Sha256Digest }>;
+/**
+ * The current names of those of `project_ids` the asker can see, as `PersonContextProjectAuthorizationV1` grants them
+ * (research tool contract v1). Any other id is left out. Read locally with no provider call: a tool container names the
+ * ECHO projects mapped to it with these.
+ */
+export type PersonContextProjectNamesV1 = (access_token: string, project_ids: readonly string[]) => ReadonlyMap<string, string>;
 export interface PersonContextLiveApplicationV1<C extends PersonLiveEvidenceCitationV1> {
   source(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<C>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<C> | undefined>;
 }
@@ -26,8 +32,10 @@ export type PersonContextLiveRuntimeFactoryV1<C extends PersonLiveEvidenceCitati
 export interface PersonLiveConnectorDefinitionV1 {
   readonly descriptor: PersonLiveSourceDescriptorV2;
   readonly scopes: readonly ('global' | 'project')[];
-  readonly minimum_response_version: 5 | 6;
-  open(authentication: Parameters<PersonContextLiveRuntimeFactoryV1<PersonLiveEvidenceCitationV1>>[0], authorize_project: PersonContextProjectAuthorizationV1): OpenedPersonLiveConnectorV1;
+  /** 8: a tool container, which only the V8 answer can cite (research tool contract v1). */
+  readonly minimum_response_version: 5 | 6 | 8;
+  /** A connector whose containers name their mapped ECHO projects reads `project_names`; any other ignores it. */
+  open(authentication: Parameters<PersonContextLiveRuntimeFactoryV1<PersonLiveEvidenceCitationV1>>[0], authorize_project: PersonContextProjectAuthorizationV1, project_names?: PersonContextProjectNamesV1): OpenedPersonLiveConnectorV1;
 }
 export interface OpenedPersonLiveConnectorV1 extends Omit<OpenedPersonContextLiveRuntimeV1<PersonLiveEvidenceCitationV1>, 'connection_http'> {
   readonly connection_http?: ProviderHttpApplicationV1;

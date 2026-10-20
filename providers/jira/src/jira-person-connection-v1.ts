@@ -1,5 +1,5 @@
 import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
-import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
+import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import { validateJiraProjectReadV1, validateJiraProjectSetV1, type JiraProjectMappingV1 } from '@echo-brain/provider-jira-client/organization-api/jira-project-mapping-v1';
 import type { JiraProjectMappingStoreV1 } from './jira-project-mapping-store-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
@@ -8,6 +8,7 @@ import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organizatio
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { JiraConnectionStoreV1, type JiraStoredConnectionV1 } from './jira-connection-store-v1.js';
 import { createJiraCloudTransportV1, type JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
+import { createJiraPersonLiveContainerReaderV1 } from './jira-person-live-container-reader-v1.js';
 import { createJiraPersonLiveEvidenceReaderV1 } from './jira-person-live-evidence-reader-v1.js';
 import type { JiraNangoV1 } from './jira-nango-v1.js';
 import { jiraProjectMatches, parseJiraProject, readJiraAssigneeAccountsV1, verifyJiraConnectionV1 } from './jira-payload-v1.js';
@@ -32,6 +33,8 @@ export function createJiraPersonConnectionV1(options: {
   readonly project_mappings?: JiraProjectMappingStoreV1;
   /** Current exact ECHO project grant, supplied only by Authority composition. */
   readonly authorize_project?: PersonProjectAuthorizationV1;
+  /** Current names of the ECHO projects the asker can see; a Jira project's container item names those mapped to it. */
+  readonly project_names?: PersonProjectNamesV1;
   /** Existing ECHO session resolver, including current exact membership and session checks. */
   readonly authenticate: (access_token: string) => JiraPersonAuthorizationV1;
 }) {
@@ -40,7 +43,8 @@ export function createJiraPersonConnectionV1(options: {
     verify: (authenticated, input) => verifyJiraConnectionV1(createJiraCloudTransportV1(authenticated), input),
   });
   const { actor, tags, authenticated } = shared;
-  const { projectAccess, mappingInput, projectScope } = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
+  const access = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
+  const { projectAccess, mappingInput, projectScope } = access;
   async function captureConnection(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<JiraCurrentCaptureConnectionV1> {
     const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
     const stored = options.store.current(person);
@@ -117,6 +121,12 @@ export function createJiraPersonConnectionV1(options: {
       current();
       return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current }, access: { tool_id: 'jira', external_scope_id: cloud, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
     },
+    /** The Jira projects the asker can browse, as tool containers (research tool contract v1); a project scope reads only its mapped one. */
+    containerSource: (input: Parameters<typeof access.containerSource>[1]) => access.containerSource({
+      scope_id: cloud, validate: validateJiraProjectReadV1, lifecycle: shared, store: options.store, containers: mapping => [mapping.project_id],
+      reader: ({ fetch: authenticatedFetch, ...read }, mapping) => createJiraPersonLiveContainerReaderV1({ ...read, transport: createJiraCloudTransportV1(authenticatedFetch),
+        ...(mapping === undefined ? {} : { project: mapping.project_id }) }),
+    }, input),
   });
 }
 export type JiraPersonConnectionV1 = ReturnType<typeof createJiraPersonConnectionV1>;

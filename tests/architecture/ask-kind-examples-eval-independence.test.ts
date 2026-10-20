@@ -29,13 +29,17 @@ function phrases(text: string): ReadonlySet<string> {
   return new Set(words.slice(3).map((_, index) => words.slice(index, index + 4).join(' ')));
 }
 
-/** What teaches the kinds: rule 3's quoted examples, and the example step's questions, needs and notes. */
+/**
+ * What teaches the kinds: the kind rule's quoted examples, and every example step's questions, needs and notes (the
+ * research tool contract's look-around example as well as the one with a need of each kind).
+ */
 const lines = ASK_STEP_PROMPT.split('\n');
-const rule3 = lines.find((line) => line.startsWith('3. Give each need a kind.'))!;
-const example = JSON.parse(lines.at(-1)!) as { readonly parts: readonly { readonly question: string; readonly notes: string; readonly needs: readonly { readonly need: string }[] }[] };
+const rule3 = lines.find((line) => /^\d+\. Give each need a kind\./u.test(line))!;
+type ExampleStep = { readonly parts: readonly { readonly question: string; readonly notes: string; readonly needs: readonly { readonly need: string }[] }[] };
+const steps = lines.filter((line) => line.startsWith('{"parts":[{"question":"') && !line.includes('<one part of the question>')).map((line) => JSON.parse(line) as ExampleStep);
 const examples = [
   ...[...rule3.matchAll(/\(([^()]*)\)/gu)].flatMap((group) => [...group[1]!.matchAll(/"([^"]*)"/gu)].map((quoted) => quoted[1]!)),
-  ...example.parts.flatMap((part) => [part.question, part.notes, ...part.needs.map((need) => need.need)]),
+  ...steps.flatMap((example) => example.parts.flatMap((part) => [part.question, part.notes, ...part.needs.map((need) => need.need)])),
 ];
 
 describe('Ask need-kind examples and the research-loop evaluation (ADR-0041)', () => {

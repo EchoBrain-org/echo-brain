@@ -33,6 +33,10 @@ import { asEnumerableRecord as object, assertExactKeys, fail } from './validatio
  * - A named item, in a read event or a receipt row, is a V7 citation, so it
  *   may be a follow-up (`{ kind: 'follow_up', item_id }`, with the ref that
  *   opens its item page). The answer event carries the V7 answer.
+ *
+ * The V8 answer on `POST /v7/person/ask` streams as Ask progress V3
+ * (`person-ask-progress-v3.ts`), which adds the workspace and tool containers;
+ * V2 never carries one.
  */
 export const PERSON_ASK_PROGRESS_HEADER_VALUE_V2 = '2';
 
@@ -90,6 +94,7 @@ export interface PersonAskProgressResultLineV2 {
 
 const V2 = askProgressCodec({
   plain_sources: ['meetings', 'documents', 'slack', 'follow_ups'],
+  tool_sources: ['tickets', 'pages'],
   item: validatePersonAnswerCitationV7,
   answer: validatePersonAnswerResponseV7,
   bounds: {

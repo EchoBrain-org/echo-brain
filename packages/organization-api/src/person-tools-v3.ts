@@ -1,4 +1,4 @@
-import { asRecord, assertExactKeys, assertId, assertPatternString, fail } from './validation.js';
+import { asRecord, assertExactKeys, assertId, assertPatternString, assertToolId, fail } from './validation.js';
 
 export const ORGANIZATION_API_PERSON_TOOLS_PATH_V3 = '/v3/person/tools';
 export interface OrganizationPersonToolV3 {
@@ -29,7 +29,7 @@ export function validateOrganizationPersonToolsV3(value: unknown): OrganizationP
   for (const value of r.tools as unknown[]) {
     const tool = asRecord(value, 'Person tool');
     assertExactKeys(tool, ['tool_id', 'display_name', 'availability', 'personal_status', 'external_scope_id', 'external_subject_id'], 'Person tool');
-    assertPatternString(tool.tool_id, 'tool_id', 64, /^[a-z][a-z0-9-]*$/);
+    assertToolId(tool.tool_id);
     assertPatternString(tool.display_name, 'display_name', 128, /^[^\u0000-\u001f\u007f]+$/);
     if (seen.has(String(tool.tool_id))) fail('Person tool identity is duplicated');
     seen.add(String(tool.tool_id));

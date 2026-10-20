@@ -62,20 +62,17 @@ import { openStagingSyntheticPersonalProviderV1 } from "./staging/staging-synthe
 import { runStagingSyntheticPersonalCanaryV1 } from "./staging/staging-synthetic-personal-canary-v1.js";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import {
+  jiraPersonLiveConnectorsV1,
   openJiraPersonLiveRuntimeV1,
   type JiraPersonLiveConfigurationV1,
   type JiraPersonLiveRuntimeSeamsV1,
 } from "./jira-person-live-runtime-v1.js";
 import {
+  confluencePersonLiveConnectorsV1,
   openConfluencePersonLiveRuntimeV1,
   type ConfluencePersonLiveConfigurationV1,
   type ConfluencePersonLiveRuntimeSeamsV1,
 } from "./confluence-person-live-runtime-v1.js";
-import type { PersonLiveConnectorDefinitionV1 } from "../application/ports/person-context-live-runtime-v1.js";
-import {
-  JIRA_LIVE_CONNECTOR_V1,
-  CONFLUENCE_LIVE_CONNECTOR_V1,
-} from "./person-live-connector-registry-v1.js";
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-processing/ports/decision-processor-bundle-v1";
 
@@ -423,40 +420,33 @@ export async function openOrganizationAuthorityService(
     },
     live_connectors: [
       ...(dependencies.api?.live_connectors ?? []),
+      // Each tool's items and, for the V8 answer, its containers, over one runtime (research tool contract v1).
       ...(jira_person_live === undefined
         ? []
-        : [
-            {
-              ...JIRA_LIVE_CONNECTOR_V1,
-              open: ((sessions, authorize_project) =>
-                openJiraPersonLiveRuntimeV1({
-                  authorize_project,
-                  state_directory: sharedConfig.state_directory,
-                  sessions,
-                  configuration: jira_person_live,
-                  ...(dependencies.jira_person_live_seams === undefined
-                    ? {}
-                    : { seams: dependencies.jira_person_live_seams }),
-                })) satisfies PersonLiveConnectorDefinitionV1["open"],
-            },
-          ]),
+        : jiraPersonLiveConnectorsV1((sessions, authorize_project, project_names) =>
+            openJiraPersonLiveRuntimeV1({
+              authorize_project,
+              ...(project_names === undefined ? {} : { project_names }),
+              state_directory: sharedConfig.state_directory,
+              sessions,
+              configuration: jira_person_live,
+              ...(dependencies.jira_person_live_seams === undefined
+                ? {}
+                : { seams: dependencies.jira_person_live_seams }),
+            }))),
       ...(confluence_person_live === undefined
         ? []
-        : [
-            {
-              ...CONFLUENCE_LIVE_CONNECTOR_V1,
-              open: ((sessions, authorize_project) =>
-                openConfluencePersonLiveRuntimeV1({
-                  authorize_project,
-                  state_directory: sharedConfig.state_directory,
-                  sessions,
-                  configuration: confluence_person_live,
-                  ...(dependencies.confluence_person_live_seams === undefined
-                    ? {}
-                    : { seams: dependencies.confluence_person_live_seams }),
-                })) satisfies PersonLiveConnectorDefinitionV1["open"],
-            },
-          ]),
+        : confluencePersonLiveConnectorsV1((sessions, authorize_project, project_names) =>
+            openConfluencePersonLiveRuntimeV1({
+              authorize_project,
+              ...(project_names === undefined ? {} : { project_names }),
+              state_directory: sharedConfig.state_directory,
+              sessions,
+              configuration: confluence_person_live,
+              ...(dependencies.confluence_person_live_seams === undefined
+                ? {}
+                : { seams: dependencies.confluence_person_live_seams }),
+            }))),
     ],
     record_approver: composeRecordApproverProjectorsV1([
       ...AUTHORITY_RECORD_APPROVER_PROJECTORS_V1,

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createPersonResearchEvalV1, PERSON_RESEARCH_EVAL_REREAD_MS_V1, PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 } from '../src/composition/person-research-eval-v1.js';
 import type { CreatePersonResearchEvalOptionsV1 } from '../src/composition/person-research-eval-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
+import { JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 
 // One deliberately broken definition beside the real ones: a question brief that also names starting evidence.
 vi.mock('@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1', async importOriginal => {
@@ -19,7 +20,7 @@ vi.mock('@echo-brain/organization-authority-kernel/answer-composition/agentic-tr
 const record = { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' as const };
 const PROJECT = 'prj_00000000-0000-4000-8000-000000000001' as const;
 const OTHER_PROJECT = 'prj_00000000-0000-4000-8000-000000000002' as const;
-const member = (name: string) => ({ principal_id: `principal-${name}`, membership_id: `member-${name}`, session_family_id: `family-${name}` });
+const member = (name: string) => ({ organization_id: 'organization-1', principal_id: `principal-${name}`, membership_id: `member-${name}`, session_family_id: `family-${name}` });
 const ask = (question: string) => ({ schema_version: 1 as const, trigger: 'ask', budget: 'live' as const, input: { question } });
 const approved = (extra: { readonly budget?: 'live' | 'background'; readonly project_id?: `prj_${string}`; readonly mine?: true } = {}) => ({ schema_version: 1 as const, trigger: 'approved_record', input: { record }, ...extra });
 /** The record route's open of `record`: one readable decision. */
@@ -30,7 +31,8 @@ const openedRecord = () => ({
 });
 
 /** No records, no originals: research finishes as unusable and the writer is skipped, which is enough to exercise the registry. */
-function harness(options: { readonly generate?: (input: StructuredGenerationInput) => Promise<unknown>; readonly openRecord?: () => unknown; readonly recordProjects?: () => readonly string[]; readonly small_scope_shortcut?: true } = {}) {
+function harness(options: { readonly generate?: (input: StructuredGenerationInput) => Promise<unknown>; readonly openRecord?: () => unknown; readonly recordProjects?: () => readonly string[]; readonly small_scope_shortcut?: true;
+  readonly extra?: Partial<CreatePersonResearchEvalOptionsV1> } = {}) {
   let clock = 1_000_000;
   let revoked = false;
   const deskSearch = vi.fn(() => ({ items: [], truncated: false, receipt: canonicalSha256('inventory') }));
@@ -60,9 +62,11 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
     },
     model: { generate },
     generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 },
-    audit: { forRequest: () => ({ append: (entry: unknown) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('release') }) },
+    audit: { forRequest: () => ({ append: (entry: unknown) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('release') }),
+      forWorkspaceRequest: () => ({ record: () => canonicalSha256('workspace release') }) },
     now: () => clock,
     ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+    ...options.extra,
   } as unknown as CreatePersonResearchEvalOptionsV1;
   const application = createPersonResearchEvalV1(dependencies);
   const read = async (token: string, run_id: string) => validatePersonResearchEvalReadResponseV1(await application.read({ access_token: token, request: { schema_version: 1, run_id } }));
@@ -80,7 +84,7 @@ describe('staging research evaluation runs', () => {
     const receipt = await h.application.start({ access_token: 'token-a', request: ask('Why is DVT on hold?') });
     expect(receipt).toMatchObject({ kind: 'echo-person-research-eval-run-v1', status: 'running' });
     const result = await h.settled('token-a', receipt.run_id);
-    expect(result).toMatchObject({ status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'ask', stop: { reason: 'unusable_step' } }, ask: { writer_evidence: [], response: { schema_version: 6 } } });
+    expect(result).toMatchObject({ status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'ask', stop: { reason: 'unusable_step' } }, ask: { writer_evidence: [], response: { schema_version: 8 } } });
     expect(result).not.toHaveProperty('rendered');
     expect((await h.read('token-a', receipt.run_id)).status).toBe('completed');
     h.advance(PERSON_RESEARCH_EVAL_REREAD_MS_V1 + 1);
@@ -88,6 +92,33 @@ describe('staging research evaluation runs', () => {
     // The only durable trace is the loop's content-free audit.
     expect(h.audits).toHaveLength(1);
     expect(JSON.stringify(h.audits)).not.toContain('DVT');
+  });
+
+  it('asks a question as /v7 does, on the workspace and tool containers, while a task reads only what task research reads (research tool contract v1)', async () => {
+    const catalogs: string[][] = [];
+    const empty = { items: [], truncated: false, receipt_digests: [] };
+    const containers = vi.fn(async () => ({ tool_id: 'jira', search: vi.fn(async () => empty), open: vi.fn(async () => empty), list: vi.fn(async () => empty), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) }));
+    const h = harness({
+      generate: async (input: StructuredGenerationInput) => {
+        const prompt = JSON.parse(input.user_prompt) as { readonly source_catalog?: readonly { readonly source: string }[] };
+        if (prompt.source_catalog !== undefined) catalogs.push(prompt.source_catalog.map(entry => entry.source));
+        return { parts: [{ question: 'Q', needs: [{ need: 'fact', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
+      },
+      openRecord: openedRecord, recordProjects: () => [PROJECT],
+      extra: {
+        live_sources: [{ ...JIRA_PROJECTS_LIVE_CONNECTOR_V1, application: { source: containers } }],
+        workspace: { projects: {} as never, grants: () => [], people: { people: () => new Map() } as never, tools: async () => [] },
+      },
+    });
+    const question = await h.application.start({ access_token: 'token-a', request: ask('What are the current projects?') });
+    expect(await h.settled('token-a', question.run_id)).toMatchObject({ status: 'completed', ask: { response: { schema_version: 8 } } });
+    expect(catalogs[0]).toEqual(expect.arrayContaining(['projects', 'people', 'tools', 'jira_projects']));
+    expect(containers).toHaveBeenCalledOnce();
+    catalogs.length = 0;
+    const task = await h.application.start({ access_token: 'token-a', request: approved() });
+    await h.settled('token-a', task.run_id);
+    for (const source of ['projects', 'people', 'tools', 'jira_projects']) expect(catalogs.flat()).not.toContain(source);
+    expect(containers).toHaveBeenCalledOnce();
   });
 
   it('records a deadline as a timed_out failure and frees the person for another run', async () => {

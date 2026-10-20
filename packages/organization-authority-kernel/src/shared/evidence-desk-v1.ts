@@ -16,16 +16,6 @@ export type EvidenceDeskSourceV1 = 'meeting' | 'document' | 'slack';
 /** Meaning of a provider-supplied date; never inferred from a storage source. */
 export type EvidenceDeskDateKindV1 = 'created' | 'version_created' | 'occurred' | 'updated' | 'due' | 'received';
 
-/**
- * A live source that server composition bound to this one request.  A legacy
- * Slack reader has no provider tool identifier, so that coordinate is
- * deliberately optional rather than invented by the core.
- */
-export interface EvidenceDeskLiveSourceV1 {
-  readonly source: 'slack';
-  readonly tool_id?: string;
-}
-
 /** The source of an item, from its kind. */
 export function evidenceDeskSourceV1(item: { readonly kind: EvidenceDeskKindV1; readonly ref?: string }): EvidenceDeskSourceV1 {
   if (item.ref?.startsWith('transcript:')) return 'meeting';
@@ -34,10 +24,26 @@ export function evidenceDeskSourceV1(item: { readonly kind: EvidenceDeskKindV1; 
 }
 export type EvidenceDeskScopeV1 = PersonAnswerScopeV3;
 
+/**
+ * An item's row facts, each one line of text (research tool contract v1 adds the meeting-, project- and tool-level ones).
+ * Lists of names are joined with ", ", and end ", and more" when the source holds more than it released.
+ */
 export interface EvidenceDeskAttributesV1 {
   readonly owner?: string;
   readonly due_at?: string;
   readonly status?: string;
+  /** A meeting's participants, as the meeting recorded them (display names). */
+  readonly participants?: string;
+  /** Who gave a meeting record its final approval (a current directory display name). */
+  readonly approved_by?: string;
+  /** The asker's role in a project, or a member's role: lead or member. */
+  readonly role?: string;
+  /** A project's leads (display names). */
+  readonly leads?: string;
+  /** A tool container's key in its tool, such as a Jira project key or a Confluence space key. */
+  readonly key?: string;
+  /** The tool a tool item or container belongs to, as the person's tools list names it (Jira, Confluence, Slack). */
+  readonly tool?: string;
 }
 
 export interface EvidenceDeskItemV1 {
@@ -150,11 +156,6 @@ export interface EvidenceDeskRevalidateInputV1 {
  */
 export interface EvidenceDeskPortV1 {
   readonly scope: EvidenceDeskScopeV1;
-  /**
-   * Actual request-bound live sources.  Omission and an empty list both mean
-   * no live source is available; callers must not infer one from scope.
-   */
-  readonly live_sources?: readonly EvidenceDeskLiveSourceV1[];
   search(input: EvidenceDeskSearchInputV1): Promise<EvidenceDeskResultV1>;
   open(input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV1>;
   list(input: EvidenceDeskListInputV1): Promise<EvidenceDeskResultV1>;

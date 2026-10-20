@@ -1,4 +1,4 @@
-import type { Failure } from '../shared/protocol.js';
+import type { Failure, ToolStatus } from '../shared/protocol.js';
 
 // The renderer's own words for every failure code. No server or client text
 // is ever shown.
@@ -42,6 +42,14 @@ export function message(failure: Failure): string {
   if (failure.mutation_outcome === 'unknown') return 'This may not have been sent.';
   return Object.hasOwn(MESSAGES, failure.code) ? MESSAGES[failure.code]! : 'Something went wrong. Try again.';
 }
+
+/** Where you stand with a tool, in the renderer's words: on its row in Tools, and beside Ask for a tool an answer cites. */
+export const TOOL_STATES: Readonly<Record<ToolStatus, string>> = {
+  linked: 'Connected',
+  unlinked: 'Not connected',
+  revoked: 'Connection stopped. Reconnect to keep using it.',
+  unavailable: 'Not turned on for your organization.',
+};
 
 /**
  * A tool step that did not finish, in the renderer's words. Every tool reports

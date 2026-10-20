@@ -3,7 +3,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { PERSON_EVIDENCE_OPEN_PATH_V1, PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonAnswerResponseV5, validatePersonEvidenceDeskResponseV1 } from '@echo-brain/organization-api';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
-import type { PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
+import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
+import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
+import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
+import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { allSourceAskFixture, crossSourceAuthorityFixture, DOCUMENT_TEXT, PRIVATE_DOCUMENT_TEXT, SLACK_LIVE_CONNECTOR } from './fixtures/cross-source-ask-runtime.js';
 import { JIRA_TEXT, SLACK_TEXT, SLACK_CHANNEL, SLACK_TEAM } from './fixtures/cross-source-live-fixture.js';
 import { FIXTURE_JIRA_CLOUD_V1, FIXTURE_JIRA_SITE_V1 } from './fixtures/fake-jira-v1.js';
@@ -76,6 +79,63 @@ it('registers two page connectors through one lifecycle, catalog, HTTP and versi
     for (const call of calls) expect(call.source).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ access_token: token }));
   } finally { await runtime.close(); }
   for (const call of calls) expect(call.close).toHaveBeenCalledTimes(1);
+});
+
+it('binds a tool\'s containers for the V8 Ask alone, naming only the asker\'s projects (research tool contract v1)', async () => {
+  const f = await fixture();
+  const empty = Object.freeze({ items: Object.freeze([]), truncated: false, receipt_digests: Object.freeze([]) });
+  const reader = (): PersonLiveEvidenceSourceV1 => ({ tool_id: 'jira', search: vi.fn(async () => empty), open: vi.fn(async () => empty), list: vi.fn(async () => empty),
+    revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) });
+  const names: (PersonContextProjectNamesV1 | undefined)[] = [];
+  const live_connectors: PersonLiveConnectorDefinitionV1[] = [
+    { ...JIRA_LIVE_CONNECTOR_V1, open: (_authentication, _authorize, project_names) => {
+      names.push(project_names);
+      return { application: { source: async () => reader() }, close: vi.fn() };
+    } },
+    { ...JIRA_PROJECTS_LIVE_CONNECTOR_V1, open: (_authentication, _authorize, project_names) => {
+      names.push(project_names);
+      return { application: { source: async () => reader() }, close: vi.fn() };
+    } },
+  ];
+  // Research lists the asker's projects, then stops; each step's catalog and scratchpad are kept.
+  const prompts: { readonly source_catalog?: readonly { readonly source: string }[]; readonly step?: number }[] = [];
+  const generate = vi.fn(async (input: StructuredGenerationInput) => {
+    const prompt = JSON.parse(input.user_prompt) as { readonly source_catalog?: readonly { readonly source: string }[]; readonly step?: number };
+    prompts.push(prompt);
+    const listing = prompt.step === 1 && prompt.source_catalog?.some(entry => entry.source === 'projects') === true;
+    return { parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: listing ? 'open' : 'not_found', evidence: [] }], notes: '' }],
+      actions: listing ? [{ tool: 'list', args: { source: 'projects' } }] : [{ tool: 'finish', args: {} }] };
+  });
+  const model = { answer_composition_generation: { ...finishingModel().answer_composition_generation, structured_output: { generate } } };
+  const runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors, answer_composition_generation: model.answer_composition_generation });
+  try {
+    const origin = `http://127.0.0.1:${runtime.address.port}`;
+    const token = await f.login(origin);
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+    const created = await fetch(`${origin}/v1/person/projects`, { method: 'POST', headers,
+      body: JSON.stringify({ schema_version: 1, kind: 'echo-project-create-v1', request_id: '00000000-0000-4000-8000-000000000a01', name: 'Atlas' }) });
+    expect(created.status).toBe(201);
+    const { project_id } = await created.json() as { readonly project_id: string };
+    // Both registrations were opened with the same names: the asker's own projects, and nothing for any other id.
+    expect(names).toHaveLength(2);
+    expect(names[0]).toBe(names[1]);
+    expect(names[0]!(token, [project_id, 'prj_00000000-0000-4000-8000-0000000000ff'])).toEqual(new Map([[project_id, 'Atlas']]));
+
+    const ask = (version: number) => fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
+    const v6 = await ask(6);
+    expect(v6.status).toBe(200);
+    const v6Catalog = prompts[0]!.source_catalog!.map(entry => entry.source);
+    expect(v6Catalog).toContain(JIRA_LIVE_CONNECTOR_V1.descriptor.selector);
+    for (const source of [JIRA_PROJECTS_LIVE_CONNECTOR_V1.descriptor.selector, 'projects', 'people', 'tools']) expect(v6Catalog).not.toContain(source);
+
+    prompts.length = 0;
+    const v7 = await ask(7);
+    expect(v7.status).toBe(200);
+    expect(await v7.json()).toMatchObject({ schema_version: 8 });
+    expect(prompts[0]!.source_catalog!.map(entry => entry.source)).toEqual(expect.arrayContaining([JIRA_LIVE_CONNECTOR_V1.descriptor.selector, 'jira_projects', 'projects', 'people', 'tools']));
+    // Research listed the asker's project: its row names its members, and its Jira project is the jira_projects source's.
+    expect(JSON.stringify(prompts[1])).toContain('Atlas');
+  } finally { await runtime.close(); }
 });
 
 describe('one runtime without live connectors', () => {

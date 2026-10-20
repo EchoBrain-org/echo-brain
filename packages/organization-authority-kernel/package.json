@@ -141,6 +141,14 @@
       "types": "./dist/shared/evidence-desk-v2.d.ts",
       "import": "./dist/shared/evidence-desk-v2.js"
     },
+    "./shared/workspace-evidence-v1": {
+      "types": "./dist/shared/workspace-evidence-v1.d.ts",
+      "import": "./dist/shared/workspace-evidence-v1.js"
+    },
+    "./shared/source-capabilities-v1": {
+      "types": "./dist/shared/source-capabilities-v1.d.ts",
+      "import": "./dist/shared/source-capabilities-v1.js"
+    },
     "./shared/follow-up-evidence-v1": {
       "types": "./dist/shared/follow-up-evidence-v1.d.ts",
       "import": "./dist/shared/follow-up-evidence-v1.js"

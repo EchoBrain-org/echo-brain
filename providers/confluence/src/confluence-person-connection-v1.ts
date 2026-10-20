@@ -1,5 +1,5 @@
 import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
-import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
+import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import { validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceProjectMappingsV1, validateConfluenceSpacesPageV1, type ConfluenceProjectMappingV1, type ConfluenceProjectMappingsV1, type ConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
 import { randomUUID } from 'node:crypto';
 import type { ConfluenceProjectMappingStoreV1 } from './confluence-project-mapping-store-v1.js';
@@ -10,6 +10,7 @@ import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organizatio
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { ConfluenceConnectionStoreV1 } from './confluence-connection-store-v1.js';
 import { createConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
+import { createConfluencePersonLiveContainerReaderV1 } from './confluence-person-live-container-reader-v1.js';
 import { createConfluencePersonLiveEvidenceReaderV1 } from './confluence-person-live-evidence-reader-v1.js';
 import type { ConfluenceNangoV1 } from './confluence-nango-v1.js';
 import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
@@ -24,6 +25,8 @@ export function createConfluencePersonConnectionV1(options: {
   readonly project_mappings?: ConfluenceProjectMappingStoreV1;
   /** Current exact ECHO project grant, supplied only by Authority composition. */
   readonly authorize_project?: PersonProjectAuthorizationV1;
+  /** Current names of the ECHO projects the asker can see; a space's container item names those mapped to it. */
+  readonly project_names?: PersonProjectNamesV1;
   /** Existing ECHO session resolver, including current exact membership and session checks. */
   readonly authenticate: (access_token: string) => ConfluencePersonAuthorizationV1;
 }) {
@@ -34,7 +37,8 @@ export function createConfluencePersonConnectionV1(options: {
   const { actor, tags, authenticated } = shared;
   /** Request-local picker cursors, fenced to both person tenure and live grant. */
   const space_cursors = new Map<string, Readonly<{ person_sha256: Sha256Digest; grant_sha256: Sha256Digest; provider_cursor?: string }>>();
-  const { projectAccess, mappingInput, projectScope } = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
+  const access = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
+  const { projectAccess, mappingInput, projectScope } = access;
   function parseProviderCursor(raw: unknown): string | undefined {
     if (raw === undefined || raw === null) return undefined;
     const value = confluenceString(raw, 4096);
@@ -164,6 +168,12 @@ export function createConfluencePersonConnectionV1(options: {
         },
       });
     },
+    /** The Confluence spaces the asker can view, as tool containers (research tool contract v1); a project scope reads only its mapped ones. */
+    containerSource: (input: Parameters<typeof access.containerSource>[1]) => access.containerSource({
+      scope_id: cloud, validate: validateConfluenceProjectReadV1, lifecycle: shared, store: options.store, containers: mapping => mapping.space_ids,
+      reader: ({ fetch: authenticatedFetch, ...read }, mapping) => createConfluencePersonLiveContainerReaderV1({ ...read, transport: createConfluenceCloudTransportV1(authenticatedFetch),
+        ...(mapping === undefined ? {} : { space_ids: mapping.space_ids }) }),
+    }, input),
   });
 }
 export type ConfluencePersonConnectionV1 = ReturnType<typeof createConfluencePersonConnectionV1>;

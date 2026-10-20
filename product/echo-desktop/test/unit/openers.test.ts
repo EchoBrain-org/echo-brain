@@ -33,6 +33,29 @@ describe('one opener for each kind of item', () => {
     expect(groupKey(followUp)).not.toBe(groupKey({ ...followUp, item_id: 'itm_launch-2' } as AnswerSource));
   });
 
+  it('opens your project in ECHO, a person nowhere, a tool on Tools, and a Jira project, Confluence space or Slack channel in its tool (research tool contract v1)', () => {
+    const PROJECT = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
+    const project: AnswerSource = { kind: 'project', label: 'Thermal recovery', project_id: PROJECT };
+    const person: AnswerSource = { kind: 'person', label: 'Mara Lind', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e' };
+    const tool: AnswerSource = { kind: 'tool', label: 'Jira', tool_id: 'jira' };
+    const container: AnswerSource = { kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: 'https://example.atlassian.net/browse/THERM', container: 'jira_project', key: 'THERM' };
+    expect(openerOf(project)).toEqual({ pane: 'project', page: { kind: 'project', project_id: PROJECT } });
+    expect(openerOf(person)).toEqual({ pane: 'person', page: null });
+    expect(openerOf(tool)).toEqual({ pane: 'tool', page: { kind: 'tools' } });
+    expect(openerOf(container)).toEqual({ pane: 'external', page: null });
+    // Each is one item and one source by what it names, whatever its label or key says.
+    for (const source of [project, person, tool, container]) {
+      expect(sourceKey({ ...source, label: 'Renamed' } as AnswerSource)).toBe(sourceKey(source));
+      expect(groupKey({ ...source, label: 'Renamed' } as AnswerSource)).toBe(groupKey(source));
+    }
+    expect(sourceKey({ ...container, key: 'TH' } as AnswerSource)).toBe(sourceKey(container));
+    // A tool, its Jira project and one of its issues are three items; so are two projects.
+    expect(new Set([tool, container, ticket('THERM-48')].map(sourceKey)).size).toBe(3);
+    expect(new Set([tool, container, ticket('THERM-48')].map(groupKey)).size).toBe(3);
+    expect(sourceKey(project)).not.toBe(sourceKey({ ...project, project_id: 'prj_00000000-0000-4000-8000-000000000000' } as AnswerSource));
+    expect(groupKey(container)).not.toBe(groupKey({ ...container, permalink: 'https://example.atlassian.net/browse/OTHER' } as AnswerSource));
+  });
+
   it('tells items apart by what they cite, not by their label', () => {
     expect(sourceKey(decision('1', 'One'))).toBe(sourceKey(decision('1', 'Another')));
     expect(sourceKey(decision('1'))).not.toBe(sourceKey(decision('2')));

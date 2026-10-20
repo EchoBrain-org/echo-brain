@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerSource, AskReceipt } from '../../src/shared/protocol.js';
 import {
-  ANNOUNCE_MS, announceAfter, announcement, duration, headline, liveRows, listWords, namedPlaces, placeLabel, receiptUnnamed, receiptWords, searchedWords, startProgress,
+  ANNOUNCE_MS, announceAfter, announcement, duration, headline, liveRows, listWords, namedPlaces, placeLabel, receiptWords, searchedWords, startProgress,
   withStep, type AskProgress,
 } from '../../src/renderer/progress.js';
 
@@ -37,6 +37,10 @@ describe('the line and its rows', () => {
     expect(headline(withStep(withStep(reading, { type: 'searched', sources: [{ kind: 'documents' }], found: 1 }), { type: 'stage', stage: 'reading' }))).toBe('Reading');
     expect(placeLabel(passage('6', 'launch_plan_v2.md'))).toBe('launch plan');
     expect(placeLabel(decision('1'))).toBe('Tuesday sync');
+    // Your project, and a Jira project, are places of their own, named by their labels (research tool contract v1).
+    const project: AnswerSource = { kind: 'project', label: 'Thermal recovery', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' };
+    const jira: AnswerSource = { kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: 'https://example.atlassian.net/browse/THERM', container: 'jira_project', key: 'THERM' };
+    expect(headline(steps({ type: 'stage', stage: 'reading', pending: 2 }, { type: 'read', items: [project, jira] }))).toBe('Reading Thermal recovery and 1 more');
   });
 
   it('merge neighbours of a type as the receipt does, and keep every item read', () => {
@@ -101,6 +105,16 @@ describe('the line and its rows', () => {
     // ECHO's follow-ups (ADR-0040) are a kind of source like meetings: never a tool, never a label.
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }, { kind: 'tickets', tool_id: 'jira' }], found: 9 }))
       .toBe('Searched meetings, follow-ups and Jira · 9 found');
+    // Your projects, people and tools (research tool contract v1) are kinds of source too; a tool's containers are its name.
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'confluence' }], found: 4 }))
+      .toBe('Searched projects, people, tools and Confluence · 4 found');
+    // Each word once: Jira's issues and its projects are both Jira, Slack's messages and its channels both Slack.
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'containers', tool_id: 'jira' }], found: 3 }))
+      .toBe('Searched meetings and Jira · 3 found');
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'slack' }, { kind: 'containers', tool_id: 'slack' }, { kind: 'projects' }], found: 0 }))
+      .toBe('Searched Slack and projects · nothing found');
+    expect(searchedWords({ type: 'searched', sources: [{ kind: 'containers', tool_id: 'jira' }, { kind: 'pages', tool_id: 'confluence' }, { kind: 'tickets', tool_id: 'jira' }],
+      found: 2 }, [{ tool_id: 'jira', name: 'Jira Cloud', status: 'linked' }])).toBe('Searched Jira Cloud and Confluence · 2 found');
     // Nothing at all, or, after an earlier search found items, nothing those had not.
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 })).toBe('Searched Knowledge Base · nothing found');
     expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 }, null, true)).toBe('Searched Knowledge Base · nothing new');
@@ -131,26 +145,14 @@ describe('the receipt', () => {
   const receipt: AskReceipt = { looked_through: 14, elapsed_ms: 48_400, rows: [
     { type: 'searched', sources: [{ kind: 'meetings' }], found: 9 }, { type: 'read', items: [decision('1'), ticket('THERM-48')] },
   ] };
-  it('says how many items it looked through and how long the person waited, and how many it does not name', () => {
+  it('says how many items it looked through and how long the person waited', () => {
     // The wait is the page's own, as its timer counted it, not the Authority's shorter research time.
     expect(receiptWords(receipt, 52_900)).toBe('Looked through 14 items · 52s');
     expect(receiptWords({ ...receipt, looked_through: 1 }, 72_400)).toBe('Looked through 1 item · 1m 12s');
-    expect(receiptUnnamed(receipt)).toBe(12);
     // As the live timer shows it: whole seconds gone.
     expect(duration(72_000)).toBe('1m 12s');
     expect(duration(33_900)).toBe('33s');
     expect(duration(400)).toBe('0s');
-  });
-
-  it('accounts for every item it looked through: the names\' counts, and those it does not name', () => {
-    const read = [decision('1'), decision('2'), decision('3'), decision('4'), passage('6'), passage('7'), passage('8'), ticket('THERM-48'), ticket('THERM-46')];
-    const shown: AskReceipt = { looked_through: 9, elapsed_ms: 31_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 9 }, { type: 'read', items: read }] };
-    expect(receiptWords(shown, 31_000)).toBe('Looked through 9 items · 31s');
-    expect(namedPlaces(read)).toEqual([place(...read.slice(0, 4)), place(...read.slice(4, 7)), place(ticket('THERM-48')), place(ticket('THERM-46'))]);
-    expect(receiptUnnamed(shown)).toBe(0);
-    // Past its bound of names, the rest are counted, not named.
-    const bounded = { ...shown, looked_through: 14 };
-    expect(namedPlaces(read).reduce((total, named) => total + named.items.length, 0) + receiptUnnamed(bounded)).toBe(14);
   });
 });
 

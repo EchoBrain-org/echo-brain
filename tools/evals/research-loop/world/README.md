@@ -14,7 +14,7 @@ paraphrases, never copies of export pages.
 
 | File | What it is |
 | --- | --- |
-| `additions.json` | The S0 additions: the ECHO project mapping, the restricted project, Jira due dates and assignments (`jira_updates`), one Confluence paragraph (`confluence_updates`) and six meetings (`meetings`). Each meeting has notes, a transcript (one array entry per `Name: text` line) and the records the approved version must contain (`expected_records`). |
+| `additions.json` | The S0 additions: the ECHO project mapping, the restricted project, Jira due dates and assignments (`jira_updates`), one Confluence paragraph (`confluence_updates`) and six meetings (`meetings`). Each meeting has notes, a transcript (one array entry per `Name: text` line) and the records the approved version must contain (`expected_records`). `workspace` holds what the open-ended cases add: accounts, projects with members, roles and tool mappings, tools and follow-ups (see "Workspace" below). |
 | `s1.json` | S1, the partial fixes the Sweep cases run against. `apply` moves S0 to S1 and `revert` restores S0. Description edits are exact find-and-replace pairs on the Jira description text, and `status` names the target workflow status. |
 | `../cases/development.json` | Cases that tuning sessions may open. |
 | `../cases/holdout.json` | Held-out cases. Tuning sessions do not open this file. That is a working rule, not access control. No other file quotes a held-out question, names a held-out case or gives its key: a test that needs them reads them from this file, and `npm run test:architecture` fails on a file that quotes one. |
@@ -74,12 +74,51 @@ Any edit to the THERM project, the THERM space or these meetings outside these
 steps invalidates the keys. Jira `updated` timestamps and change history cannot
 be reverted, but ECHO cannot read either of them.
 
+## Workspace (open-ended cases)
+
+The open-ended family (research tool contract v1) asks about the test person's
+workspace: their projects and leads, their open follow-ups and owners, the
+meetings those come from, and their tools. `additions.json` `workspace` is that
+workspace; seed it after step 3 above, in this order.
+
+1. **Accounts.** Invite the synthetic staging accounts `Mara Lindqvist` and
+   `Rafael Moreno` with exactly those display names. No account in the
+   organization may carry a leak marker (`Corvane`, `Priya Natarajan`,
+   `Wen Hao`) as its display name, including the one that approves M6: the
+   people source shows every account to the test person.
+2. **Projects.** Give THERM its members and roles. Create
+   `Kestrel Pilot Launch` (Mara a lead, the test person and Rafael members, no
+   Jira or Confluence mapping) and `THERM EVT Archive` (the test person its only
+   lead), then archive `THERM EVT Archive`. The test person must belong to no
+   other project; record any other in the seed log, because the current-projects
+   keys name exactly these.
+3. **Follow-ups.** After approving M2, M3 and M4 (step 3 above), open each
+   meeting's follow-ups and send them as `follow_ups` lists: each follow-up
+   follows the ticket it names, with the owner it names (pick the owner where
+   ECHO proposes none). Day 0 is the day you send. Leave F6 unsent. On day 1,
+   reassign F3 to Mara Lindqvist and mark F5 done. Record both days in the seed
+   log. If a meeting's impact card does not list a follow-up's ticket, record
+   that too: the keys naming that follow-up then cannot hold.
+4. **Tools.** The test person's Jira and Confluence stay connected. Slack is
+   not keyed; record whether it is connected.
+
+The meetings are submitted as synthetic meetings, which record no
+participants: a key that asks who was in a meeting accepts "not recorded",
+and charges only people named as participants who are neither recorded nor
+speakers in the meeting's transcript.
+
 ## Reading the keys
 
 - References name items by citation: `{ "ticket" }`, `{ "page", "section" }`
   (an exact h2 or h3 heading), `{ "meeting", "item" }` and the
   cross-project distractors `{ "jira_project": "ECHO" }` and
-  `{ "page": "589865" }`.
+  `{ "page": "589865" }`. The open-ended cases add the workspace:
+  `{ "project" }` and `{ "person" }` by exact name, `{ "tool" }` by tool id,
+  `{ "container", "id" }` for a Jira project or Confluence space by its
+  provider id (THERM's are `10003` and `1015812`), and `{ "follow_up" }` for a
+  `workspace.follow_ups` entry, matched by the ticket it follows.
+- An open-ended case is graded by code on its `reach` and cost, never on
+  wording (`../README.md`, "Open-ended family").
 - A part's `evidence` lists every item in this world that supports it. Any
   other item that research reads counts as noise.
 - Approved-record cases add `affected`: the items the impact card should

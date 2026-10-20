@@ -8,7 +8,7 @@ import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answ
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { EvidenceDeskRevalidateInputV1, EvidenceDeskVisibilityV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
-import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2, EvidenceDeskUncheckedV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import {
   FOLLOW_UP_EVIDENCE_KIND_V1,
   FOLLOW_UPS_LIMITS_V1,
@@ -18,12 +18,20 @@ import {
   followUpOwnerMatchesV1,
   type FollowUpsSourceDescriptorV1,
 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
-import type { EvidenceDateFilterV1 } from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
+import {
+  EVIDENCE_ANY_DATE_V1,
+  matchesEvidenceDateV1,
+  validateEvidenceDateFilterV1,
+  type EvidenceDateFilterV1,
+  type EvidenceDatesV1,
+} from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
 import type { ImpactItemRowV1, ImpactItemStateV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { PersonFollowUpReleaseAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
-import { PERSON_QUERY_FUNCTION_WORDS_V1 } from '../adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
+import { evidenceDateFieldsOfV1 } from '../adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
+import { createUncheckedTallyV1 } from '../application/evidence-unchecked-v1.js';
 import {
   assessOpenItemsV1,
+  errorCodeV1,
   observeEventV1,
   openItemCurrentV1,
   openItemDecisionPartsV1,
@@ -39,7 +47,10 @@ import {
   type OpenItemViewerV1,
 } from './person-open-items-v1.js';
 import { openItemAccessV1 } from './open-items-policy-v1.js';
-import type { PersonReadableDecisionsV1, PersonReadableDecisionV1 } from './person-record-search-route.js';
+import {
+  createEvidenceCursorsV1, evidenceInvalidV1 as invalid, evidenceNotFoundV1 as notFound, evidencePageSizeV1, evidenceTermsV1, evidenceWordsV1, newestFirstV1,
+} from './person-local-source-helpers-v1.js';
+import type { PersonReadableDecisionsV1, PersonReadableDecisionV1, PersonRecordAnchorV1 } from './person-record-search-route.js';
 
 /**
  * ECHO's shared follow-ups (the open items of ADR-0033) as one Ask source
@@ -52,14 +63,22 @@ import type { PersonReadableDecisionsV1, PersonReadableDecisionV1 } from './pers
  * call returns. Every release is audited without content before it leaves,
  * and rechecked before each model call (only what is new) and in full before
  * the answer (ADR-0038).
+ *
+ * Research tool contract v1: a follow-up carries ECHO's own dates (created,
+ * sent, reassigned, checked), which a search or list may filter on, and links
+ * to its decision's approved-record items and to the tool item it follows.
+ * Both are released by the request's desk, which owns them: the decision's
+ * through its record open, only where this release carries the decision; the
+ * tool item only when this request read it live. They come back in the
+ * result's `linked`, never as its rows.
  */
 
-/** Where follow-ups, the facts the policy weighs, each decision's first line, and the decisions the asker reads now are read. */
+/** Where follow-ups, the facts the policy weighs, each decision's first line and anchor, and the decisions the asker reads now are read. */
 export interface PersonFollowUpsSourcesV1 {
   readonly runs: OpenItemSourcesV1['runs'];
   readonly items: Pick<SqliteImpactItemsV1, 'read' | 'forRecords' | 'inOrganization'>;
   readonly people: OpenItemSourcesV1['people'];
-  readonly records: OpenItemDecisionsReaderV1<PersonReadableDecisionV1> & Pick<PersonReadableDecisionsV1, 'projectRecords'>;
+  readonly records: OpenItemDecisionsReaderV1<PersonReadableDecisionV1> & Pick<PersonReadableDecisionsV1, 'projectRecords'> & Pick<PersonRecordAnchorV1, 'recordAnchor'>;
   /** Where a failed live read or an unreadable stored card is reported, without content; one line of JSON on standard error by default. */
   readonly on_live_failure?: OpenItemSourcesV1['on_live_failure'];
 }
@@ -110,6 +129,8 @@ type View = { readonly context: Context; readonly decisionPart: ReturnType<typeo
 type Entry = { readonly entry: Assessed; readonly read?: LiveRead | undefined };
 /** A live read and the receipts of the tool releases it made, which the Ask's terminal audit binds. */
 type LiveRead = { readonly read: OpenItemLiveReadV1; readonly receipts: readonly Sha256Digest[] };
+/** A decision's approved-record items as the request's desk released them, and that release's receipts. */
+type DecisionRead = { readonly items: readonly EvidenceDeskItemV2[]; readonly receipts: readonly Sha256Digest[] };
 
 const STATES: readonly ImpactItemStateV1[] = ['unsent', 'open', 'done', 'not_relevant'];
 /** Search ranks current work first among equal matches. */
@@ -134,29 +155,50 @@ const KEY_PAST_READS = 'This request has read as many follow-up items as it can,
 /** Private visibilities first: an answer statement citing any of them is private. */
 const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_only', 'project', 'projects', 'team'];
 
-const invalid = (message: string): never => { throw new AuthorityOperationError('invalid_request', message); };
 const stale = (): never => { throw new AuthorityOperationError('stale_access_state', 'A follow-up is no longer available to this person'); };
-const notFound = (): never => { throw new AuthorityOperationError('not_found', 'Evidence item is not available in this request'); };
 
-/** A follow-up has no date of its own, so a date bound is refused rather than ignored. A time zone alone bounds nothing. */
-function refuseDates(input: EvidenceDateFilterV1): void {
-  if (input.since !== undefined || input.until !== undefined || input.date_field !== undefined) invalid('follow-ups have no dates; leave out since, until and date_field');
-}
-function pageSize(limit: number | undefined, maximum: number): number {
-  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)) invalid('Evidence limit is invalid');
-  return Math.min(limit ?? maximum, maximum);
-}
+/**
+ * The dates a follow-up read takes: ECHO's own, as follow-ups' capabilities declare them (research tool contract v1). A due
+ * date is its tool item's and shows only once that item is read, so a list cannot filter on it.
+ */
+const DATE_FIELDS = evidenceDateFieldsOfV1(FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.capabilities!);
+/** Access refusals: a decision the asker cannot open now is left unlinked, as a live read they cannot make is (open items). */
+const REFUSED: readonly string[] = ['unauthorized', 'not_found', 'stale_access_state'];
 
+/** A follow-up's own dates, as its desk item carries them: created always, the rest once they happened. */
+function rowDates(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'check'>): EvidenceDatesV1 {
+  return { created: row.created_at, ...(row.sent_at === null ? {} : { sent: row.sent_at }), ...(row.owner_set_at === null ? {} : { reassigned: row.owner_set_at }), ...(row.check === null ? {} : { checked: row.check.at }) };
+}
+/**
+ * A read's window, or none. A date field follow-ups do not record is refused, never ignored (ADR-0041); a window with no
+ * field is any of their dates. A time zone, or a field, without since or until bounds nothing.
+ */
+function windowOf(input: EvidenceDateFilterV1): EvidenceDateFilterV1 | undefined {
+  validateEvidenceDateFilterV1(input, DATE_FIELDS);
+  if (input.since === undefined && input.until === undefined) return undefined;
+  // One shape however it was asked, so a list cursor's selection names the window, not its spelling.
+  return Object.freeze({ ...(input.since === undefined ? {} : { since: input.since }), ...(input.until === undefined ? {} : { until: input.until }),
+    date_field: input.date_field ?? EVIDENCE_ANY_DATE_V1, ...(input.time_zone === undefined ? {} : { time_zone: input.time_zone }) });
+}
+function inWindow(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'check'>, window: EvidenceDateFilterV1 | undefined): boolean {
+  return window === undefined || matchesEvidenceDateV1(rowDates(row), window, 'created');
+}
+/** The rows a window could not test because they do not record its date, and the dates they do record (research tool contract v1). */
+function uncheckedOf(rows: readonly Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'check'>[], window: EvidenceDateFilterV1 | undefined): EvidenceDeskUncheckedV1 | undefined {
+  if (window === undefined) return undefined;
+  // `windowOf` always names the window's field.
+  const tally = createUncheckedTallyV1();
+  for (const row of rows) tally.tests(rowDates(row), window.date_field ?? EVIDENCE_ANY_DATE_V1);
+  return tally.unchecked();
+}
 /** A ticket key a query names, upper case, from a word that is one once punctuation around it is trimmed. */
 function keyOf(word: string): string | undefined {
   const key = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase();
   return TICKET_KEY.test(key) ? key : undefined;
 }
 /**
- * A search's words, as the desk matches stored passages: whole Unicode terms,
- * lower case, without function words unless written as an acronym. A ticket
- * key stays one key, matched against a ticket item's own key and against the
- * same key-shaped word where ECHO's text holds it.
+ * A search's terms (`evidenceTermsV1`) and ticket keys. A ticket key stays one key, matched against a ticket item's own
+ * key and against the same key-shaped word where ECHO's text holds it.
  */
 function queryOf(query: string): { readonly terms: readonly string[]; readonly keys: readonly string[] } {
   const keys = new Set<string>();
@@ -164,10 +206,7 @@ function queryOf(query: string): { readonly terms: readonly string[]; readonly k
   for (const word of query.normalize('NFC').trim().split(/\s+/u)) {
     const key = keyOf(word);
     if (key !== undefined) { keys.add(key); continue; }
-    for (const run of word.match(/[\p{L}\p{N}]+/gu) ?? []) {
-      const term = run.toLowerCase();
-      if (!PERSON_QUERY_FUNCTION_WORDS_V1.has(term) || /^[A-Z]{2,}$/u.test(run)) terms.add(term);
-    }
+    for (const term of evidenceTermsV1(word)) terms.add(term);
   }
   return { terms: [...terms], keys: [...keys] };
 }
@@ -178,9 +217,6 @@ function keysOf(values: readonly (string | null | undefined)[]): ReadonlySet<str
 /** A name as one compares it with another: NFC, lower case, runs of space as one. */
 function spelled(name: string): string {
   return name.normalize('NFC').trim().toLowerCase().replace(/\s+/gu, ' ');
-}
-function wordsOf(values: readonly (string | null | undefined)[]): ReadonlySet<string> {
-  return new Set(values.flatMap(value => (value ?? '').normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []));
 }
 /** A ticket item's key, from the browse link its stored pointer keeps. Never a page's or a message's pointer, which can hold a title. */
 function ticketKeyOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefined {
@@ -194,10 +230,7 @@ function ticketKeyOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefined 
 function narrowest(...values: readonly (EvidenceDeskVisibilityV1 | undefined)[]): EvidenceDeskVisibilityV1 {
   return NARROWEST.find(value => values.includes(value)) ?? 'only_me';
 }
-/** Newest first, as a list of a source that knows dates; then by id. */
-function newestFirst(left: Pick<ImpactItemRowV1, 'created_at' | 'item_id'>, right: Pick<ImpactItemRowV1, 'created_at' | 'item_id'>): number {
-  return left.created_at < right.created_at ? 1 : left.created_at > right.created_at ? -1 : left.item_id < right.item_id ? -1 : left.item_id > right.item_id ? 1 : 0;
-}
+const newestFirst = newestFirstV1<Pick<ImpactItemRowV1, 'created_at' | 'item_id'>>(row => row.item_id);
 
 export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollowUpsEvidenceSourceV1Options): PersonFollowUpsEvidenceSourceV1 {
   const { sources, viewer, scope } = options;
@@ -209,8 +242,9 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
   const issued = new Map<string, string>();
   /** One live read per tool item (`item_key`) in the request, at most `live_reads` of them. */
   const reads = new Map<Sha256Digest, Promise<LiveRead>>();
-  const cursors = new Map<string, { readonly selection: string; readonly after: Assessed['row'] }>();
-  let cursorSequence = 0;
+  /** One open of each decision a release links to, by its record, in the request. */
+  const decisionReads = new Map<Sha256Digest, Promise<DecisionRead>>();
+  const cursors = createEvidenceCursorsV1<Assessed['row']>();
   let running = 0;
   const waiting: (() => void)[] = [];
 
@@ -297,10 +331,43 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
   };
 
   /**
+   * A decision's approved-record items, opened once in the request through the request's desk, which owns and audits them
+   * as any record open: its record's first atom and the atoms beside it. None when the decision cannot be opened now (its
+   * index behind the record log, an outage, or access lost meanwhile); a cancelled request throws. As a live read, a read a
+   * cancelled call left unfinished is tried again, and a failure is tried again by a later release.
+   */
+  const decisionRead = async (record: Sha256Digest, signal?: AbortSignal): Promise<DecisionRead | undefined> => {
+    for (let attempt = 0; ; attempt += 1) {
+      let read = decisionReads.get(record);
+      if (read === undefined) {
+        read = (async () => {
+          const citation = sources.records.recordAnchor({ access_token: viewer.token, record_sha256: record });
+          const result = await options.desk.openCitation!({ citation, ...(signal === undefined ? {} : { signal }) });
+          // Only the decision's own atoms are its items.
+          const items = result.items.filter(item => item.citation.kind === 'approved_record' && item.citation.record_sha256 === record);
+          return Object.freeze({ items: Object.freeze(items), receipts: Object.freeze([...result.receipt_digests]) });
+        })();
+        decisionReads.set(record, read);
+      }
+      try { return await read; }
+      catch (error) {
+        if (decisionReads.get(record) === read) decisionReads.delete(record);
+        if (signal?.aborted === true) throw error;
+        if (attempt > 0) {
+          const code = errorCodeV1(error);
+          if (!REFUSED.includes(code)) observeEventV1(sources.on_live_failure, Object.freeze({ kind: 'open_items_live_read' as const, reason: 'open' as const, code }));
+          return undefined;
+        }
+      }
+    }
+  };
+
+  /**
    * One follow-up as the asker may see it now. Its tool's words (title, due
    * date) only when the policy says they opened the item in this request;
    * its decision only when the policy shows them the decision. A part the
-   * evidence contract refuses is left out (they see less, never more).
+   * evidence contract refuses is left out (they see less, never more). The
+   * tool item it follows is linked exactly when the asker opened it here.
    */
   const shape = ({ context, decisionPart }: View, { entry, read }: Entry) => {
     const { row, facts } = entry;
@@ -318,6 +385,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const decided = decision?.first_line === null || decision?.first_line === undefined ? '' : impactCardLineV1(decision.first_line, LIMITS.first_line_chars);
       return validatePersonFollowUpEvidenceV1({
         item_id: row.item_id, kind: openItemKindV1(row.pointer), title, owner: openItemNameV1(context.people, row.owner_membership_id), status: row.state,
+        // ECHO's own dates, which the runs API shows whoever sees the row.
+        created_at: row.created_at, ...(row.sent_at === null ? {} : { sent_at: row.sent_at }), ...(row.owner_set_at === null ? {} : { reassigned_at: row.owner_set_at }),
         ...(withLive && liveTitle !== '' && due !== '' ? { due_at: due } : {}),
         ...(row.check === null ? {} : { check: { verdict: row.check.verdict, checked_at: row.check.at } }),
         ...(withDecision && decision !== undefined ? { decision: {
@@ -333,27 +402,45 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const words = withLive && liveTitle !== '' && live !== undefined;
       // The decision's audience when the asker reads it, else only them; a title from the asker's own tool read is no wider than that read.
       const visibility = narrowest(withDecision && value.decision !== undefined ? readable?.visibility : 'only_me', words ? live.visibility : undefined);
-      return { evidence: value, visibility, decision: value.decision !== undefined, receipts: read?.receipts ?? [] };
+      return { evidence: value, visibility, decision: value.decision !== undefined, record: row.record_sha256, receipts: read?.receipts ?? [],
+        ...(opened !== undefined && access.see_outside ? { follows: opened } : {}) };
     }
     throw new AuthorityOperationError('invalid_output', 'Follow-up evidence is invalid');
   };
 
-  /** Audits one call's follow-ups before they leave, then remembers each for `open` and the checks. */
-  const release = (operation: 'search' | 'list' | 'open', view: View, entries: readonly Entry[], truncated: boolean,
-    { next_cursor, notice, page_full }: { readonly next_cursor?: string | undefined; readonly notice?: string | undefined; readonly page_full?: boolean } = {}): EvidenceDeskResultV2 => {
+  /**
+   * Audits one call's follow-ups before they leave, then remembers each for `open` and the checks. With `links`, each one
+   * links to its decision's items where it carries its decision, and to the tool item it follows where this request read
+   * it; those items, which the request's desk released and audited, come back once each in `linked`.
+   */
+  const release = async (operation: 'search' | 'list' | 'open', view: View, entries: readonly Entry[], truncated: boolean,
+    { next_cursor, notice, page_full, untested, links, signal }: {
+      readonly next_cursor?: string | undefined; readonly notice?: string | undefined; readonly page_full?: boolean;
+      readonly untested?: EvidenceDeskUncheckedV1 | undefined; readonly links: boolean; readonly signal?: AbortSignal | undefined;
+    }): Promise<EvidenceDeskResultV2> => {
     const shaped = entries.flatMap(entry => { const value = shape(view, entry); return value === undefined ? [] : [value]; });
+    const decided = links ? [...new Set(shaped.flatMap(value => (value.decision ? [value.record] : [])))] : [];
+    const decisions = new Map(await Promise.all(decided.map(async record => [record, await decisionRead(record, signal)] as const)));
+    signal?.throwIfAborted();
     const receipt = options.audit.record({ operation, items: shaped.map(({ evidence, visibility }) => ({ item_id: evidence.item_id, released_fields_sha256: canonicalSha256({ evidence, visibility }) })) });
-    const items = shaped.map(({ evidence, visibility, decision }): EvidenceDeskItemV2 => {
+    const linked = new Map<string, EvidenceDeskItemV2>();
+    const items = shaped.map(({ evidence, visibility, decision, record, follows }): EvidenceDeskItemV2 => {
       const id = `follow_up_${evidence.item_id}`;
       issued.set(id, evidence.item_id);
       const previous = released.get(evidence.item_id);
       released.set(evidence.item_id, { decision: decision || previous?.decision === true });
       unchecked.add(evidence.item_id);
-      return Object.freeze({ id, ...followUpDeskFieldsV1(evidence), visibility, receipt_sha256: receipt });
+      const decisionItems = decision ? decisions.get(record)?.items ?? [] : [];
+      const followed = links ? follows : undefined;
+      for (const item of [...decisionItems, ...(followed === undefined ? [] : [followed])]) linked.set(item.id, item);
+      const named = { ...(decisionItems.length === 0 ? {} : { decision: Object.freeze(decisionItems.map(item => item.id)) }), ...(followed === undefined ? {} : { follows: Object.freeze([followed.id]) }) };
+      return Object.freeze({ id, ...followUpDeskFieldsV1(evidence), visibility, receipt_sha256: receipt, ...(Object.keys(named).length === 0 ? {} : { links: Object.freeze(named) }) });
     });
     return Object.freeze({
       items: Object.freeze(items), truncated,
-      receipt_digests: Object.freeze([...new Set([receipt, ...shaped.flatMap(value => value.receipts)])]),
+      receipt_digests: Object.freeze([...new Set([receipt, ...shaped.flatMap(value => value.receipts), ...[...decisions.values()].flatMap(read => read?.receipts ?? [])])]),
+      ...(linked.size === 0 ? {} : { linked: Object.freeze([...linked.values()]) }),
+      ...(untested === undefined ? {} : { unchecked: untested }),
       ...(next_cursor === undefined ? {} : { next_cursor }),
       ...(notice === undefined ? {} : { notice }),
       ...(page_full === undefined ? {} : { page_full }),
@@ -366,8 +453,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     descriptor: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1,
 
     async search(input) {
-      refuseDates(input);
-      const limit = pageSize(input.limit, FOLLOW_UPS_LIMITS_V1.search_hits);
+      const window = windowOf(input);
+      const limit = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.search_hits);
       if (typeof input.query !== 'string') invalid('query is required');
       const live = input.live !== false;
       const { terms, keys } = queryOf(input.query);
@@ -375,10 +462,12 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const { context, decisionPart } = view;
       // Only ECHO-held text the policy shows the asker: the decision's title and first line where the decision is shown, the
       // expected phrase, the owner's name, each with its key-shaped words as written; and a ticket's own key. Never a word read from a tool.
+      // A window applies first, to ECHO's own dates, before anything is ranked or read live.
       const candidates = context.assessed.flatMap(entry => {
+        if (!inWindow(entry.row, window)) return [];
         const decision = decisionPart(entry);
         const held = [decision?.title, decision?.first_line, entry.row.expected, openItemNameV1(context.people, entry.row.owner_membership_id)];
-        const words = wordsOf(held);
+        const words = evidenceWordsV1(held);
         const written = keysOf(held);
         // A key-shaped word ECHO holds as written ("EVT-2") is one of its words; the key's parts alone are not.
         const matched = terms.filter(term => words.has(term)).length + keys.filter(key => written.has(key)).length;
@@ -410,43 +499,39 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       input.signal?.throwIfAborted();
       // Each key may need one more read than the request had made before its lookup.
       const notice = keys.length === 0 ? undefined : !live ? KEY_ACROSS_SOURCES : readBefore + keys.length > FOLLOW_UPS_LIMITS_V1.live_reads ? KEY_PAST_READS : undefined;
-      return release('search', view, hits.slice(0, limit), wordsCut || hits.length > limit, { notice });
+      // What the window could not test is counted over every follow-up the asker sees, as a meeting search's is, whatever its words
+      // match. A search across sources links nothing: the desk keeps only some of its hits, so nothing is opened for them.
+      return release('search', view, hits.slice(0, limit), wordsCut || hits.length > limit,
+        { notice, untested: uncheckedOf(context.assessed.map(({ row }) => row), window), links: live, signal: input.signal });
     },
 
     async list(input) {
-      refuseDates(input);
-      if (input.channel !== undefined || input.kinds?.some(kind => kind !== FOLLOW_UP_EVIDENCE_KIND_V1)) invalid('follow-ups take only owner and status');
-      const size = pageSize(input.limit, FOLLOW_UPS_LIMITS_V1.list_page);
+      const window = windowOf(input);
+      if (input.channel !== undefined || input.kinds?.some(kind => kind !== FOLLOW_UP_EVIDENCE_KIND_V1)) invalid('follow-ups take only owner, status and their own dates');
+      const size = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.list_page);
       const owner = input.owner === undefined ? undefined : input.owner.normalize('NFC').trim().replace(/^@/u, '').trim();
       if (owner !== undefined && (owner.length === 0 || owner.length > 80)) invalid('owner must be a person\'s name such as "Dana", or "me"');
       if (input.status !== undefined && input.status !== 'open' && input.status !== 'done') invalid('status must be "open" or "done"');
-      const selection = JSON.stringify({ owner: owner?.toLowerCase() ?? null, status: input.status ?? null });
-      let after: Assessed['row'] | undefined;
-      if (input.cursor !== undefined) {
-        const saved = cursors.get(input.cursor);
-        if (saved === undefined || saved.selection !== selection) invalid('Evidence list cursor is invalid');
-        after = saved!.after;
-      }
+      const selection = JSON.stringify({ owner: owner?.toLowerCase() ?? null, status: input.status ?? null, window: window ?? null });
+      const after = input.cursor === undefined ? undefined : cursors.after(input.cursor, selection);
       const view = visible(input.signal);
       const { context } = view;
       // "me", or the asker's own name, which research passes for "I" and "my" (asked_by): their own follow-ups, by membership,
       // never another member whose name holds theirs.
       const asker = owner !== undefined && (ASKER.has(owner.toLowerCase()) || spelled(owner) === spelled(askerName()));
       // Filters apply before anything is released or read live.
-      const matching = context.assessed.filter(({ row }) => (input.status === undefined || followUpInStatusV1(row.state, input.status)) &&
-        (owner === undefined || (asker ? row.owner_membership_id === viewer.membership : followUpOwnerMatchesV1(openItemNameV1(context.people, row.owner_membership_id), owner))))
-        .sort((left, right) => newestFirst(left.row, right.row));
-      const following = after === undefined ? matching : matching.filter(({ row }) => newestFirst(after!, row) < 0);
+      const status = input.status;
+      const selected = context.assessed.filter(({ row }) => (status === undefined || followUpInStatusV1(row.state, status)) &&
+        (owner === undefined || (asker ? row.owner_membership_id === viewer.membership : followUpOwnerMatchesV1(openItemNameV1(context.people, row.owner_membership_id), owner))));
+      const matching = selected.filter(({ row }) => inWindow(row, window)).sort((left, right) => newestFirst(left.row, right.row));
+      const following = after === undefined ? matching : matching.filter(({ row }) => newestFirst(after, row) < 0);
       const page = following.slice(0, size);
       const entries = await withReads(page, input.signal);
       input.signal?.throwIfAborted();
-      let next_cursor: string | undefined;
-      if (following.length > page.length) {
-        next_cursor = `follow_ups_${++cursorSequence}`;
-        cursors.set(next_cursor, Object.freeze({ selection, after: page.at(-1)!.row }));
-      }
-      // This source holds every matching follow-up, so a list's end is always confirmed (ADR-0041).
-      return release('list', view, entries, false, { next_cursor, page_full: false });
+      const next_cursor = following.length > page.length ? cursors.next('follow_ups', selection, page.at(-1)!.row) : undefined;
+      // This source holds every matching follow-up, so a list's end is always confirmed (ADR-0041). What its window could not test
+      // is of the whole selection, so every page says the same.
+      return release('list', view, entries, false, { next_cursor, page_full: false, untested: uncheckedOf(selected.map(({ row }) => row), window), links: true, signal: input.signal });
     },
 
     async open(input) {
@@ -460,7 +545,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       if (entry === undefined || !entry.access.see_row) return notFound();
       const entries = await withReads([entry], input.signal);
       input.signal?.throwIfAborted();
-      return release('open', { context, decisionPart: openItemDecisionPartsV1(sources, context) }, entries, false);
+      return release('open', { context, decisionPart: openItemDecisionPartsV1(sources, context) }, entries, false, { links: true, signal: input.signal });
     },
 
     revalidate(input) {

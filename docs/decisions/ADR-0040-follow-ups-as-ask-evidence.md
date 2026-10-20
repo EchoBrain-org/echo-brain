@@ -233,3 +233,6 @@ and panel in `product/echo-desktop/test/unit/ask-follow-up.test.ts`.
 follow-ups list evidence like any other list: code names the follow-ups it
 lists by title, with owner and due date. What a follow-up releases, and to
 whom, does not change.
+
+[ADR-0042](ADR-0042-research-tool-contract.md#sources) (2026-10-19) gives
+follow-ups their own dates and links, and its V8 answer on `/v7` cites them too.

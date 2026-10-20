@@ -52,8 +52,11 @@ describe('binding live sources for one request', () => {
         .then(result => { elapsed = Date.now() - start; return result; }));
       expect(elapsed).toBe(80);
       expect(sourceIds(desk)).toEqual(['ticket', 'page']);
-      expect(forLiveRequest).toHaveBeenCalledTimes(2);
+      // One release witness for the request, shared by its sources, so their witnesses never share a sequence number.
+      expect(forLiveRequest).toHaveBeenCalledTimes(1);
       expect(ticket.source).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'token-fixture' }));
+      const auditOf = (calls: readonly unknown[][]) => (calls[0]![0] as { readonly audit: unknown }).audit;
+      expect(auditOf(ticket.source.mock.calls)).toBe(auditOf(page.source.mock.calls));
     } finally { vi.useRealTimers(); }
   });
 

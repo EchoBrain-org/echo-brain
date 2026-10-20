@@ -103,7 +103,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(STEP_PROMPT.split("\n").length - SEARCH_ONLY_STEP_PROMPT.split("\n").length).toBe(8);
   });
 
-  it("gives Ask its own rules 3 and 4, and keeps the task prompt byte for byte (ADR-0041)", () => {
+  it("gives Ask its own kind and list rules (5 and 6 since the research tool contract), and keeps the task prompt byte for byte (ADR-0041)", () => {
     const rule = (prompt: string, number: number) => prompt.split("\n").find(line => line.startsWith(`${number}. `))!;
     const line = (prompt: string, start: string) => prompt.split("\n").find(value => value.startsWith(start))!;
     // Background task prompts stay byte-for-byte unchanged. Ask also explains its client-local date projection.
@@ -113,8 +113,9 @@ describe("agentic Ask model protocol parity", () => {
     for (const prompt of [ASK_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain('already converted to the request time_zone');
     // Research declares each need's kind, with an example of each; a list's id supports only the list kinds. Its examples name
     // nothing the research-loop evaluation asks about (tests/architecture/ask-kind-examples-eval-independence.test.ts).
-    const [rule3, rule4] = [rule(ASK_STEP_PROMPT, 3), rule(ASK_STEP_PROMPT, 4)];
-    expect(rule3).toMatch(/^3\. Give each need a kind\. "which_items": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel/u);
+    // Research tool contract v1: rules 1 to 4 are how to look (understand, look around, choose paths, dig).
+    const [rule3, rule4] = [rule(ASK_STEP_PROMPT, 5), rule(ASK_STEP_PROMPT, 6)];
+    expect(rule3).toMatch(/^5\. Give each need a kind\. "which_items": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel/u);
     for (const text of [
       "picked by a date, owner, status, kind or channel (\"tickets updated since Monday\", \"my open follow-ups\", \"my open tasks due this week\")",
       "\"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\")",
@@ -240,7 +241,7 @@ describe("agentic Ask model protocol parity", () => {
   it("names each selection field, and either bound, in the answer schema (ADR-0041)", () => {
     const listUse = ((answerSchema.properties as Schema).lists as Schema).items as Schema;
     expect((listUse.properties as Schema).where).toEqual({ type: "object", additionalProperties: false, required: ["field"], properties: {
-      field: { type: "string", enum: ["owner", "status", "due", "created", "updated", "received", "occurred"] }, value: { type: "string", maxLength: 120 }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
+      field: { type: "string", enum: ["owner", "status", "due", "created", "updated", "received", "occurred", "approved", "sent", "reassigned", "checked"] }, value: { type: "string", maxLength: 120 }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
     } });
   });
 

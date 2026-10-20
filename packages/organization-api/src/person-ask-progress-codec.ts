@@ -1,5 +1,5 @@
 import { canonicalJson, canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { asEnumerableRecord as object, assertExactKeys, assertPatternString, fail, validateOrganizationApiError } from './validation.js';
+import { asEnumerableRecord as object, assertExactKeys, assertToolId, fail, validateOrganizationApiError } from './validation.js';
 
 /**
  * The Ask progress stream's validators and framing, shared by every version
@@ -10,6 +10,8 @@ import { asEnumerableRecord as object, assertExactKeys, assertPatternString, fai
 export interface AskProgressDialect {
   /** Source kinds a searched row names without a tool id. */
   readonly plain_sources: readonly string[];
+  /** Source kinds a searched row names with the tool id of the connected tool it read. */
+  readonly tool_sources: readonly string[];
   /** One named item: exactly the projection the version's answer citations use. */
   readonly item: (value: unknown) => { readonly citation: unknown };
   /** The released answer the terminal answer event carries. */
@@ -48,7 +50,6 @@ export interface AskProgressCodec {
 }
 
 const STAGES: readonly string[] = ['searching', 'reading', 'checking_access', 'writing'];
-const TOOL_SOURCES: readonly string[] = ['tickets', 'pages'];
 const ERROR_STATUSES: readonly number[] = [400, 401, 404, 409, 429, 500, 502, 503];
 
 export function askProgressCodec(dialect: AskProgressDialect): AskProgressCodec {
@@ -64,9 +65,9 @@ export function askProgressCodec(dialect: AskProgressDialect): AskProgressCodec 
       assertExactKeys(input, ['kind'], 'Ask progress source');
       return Object.freeze({ kind: input.kind as string });
     }
-    if (!TOOL_SOURCES.includes(input.kind as string)) fail('Ask progress source kind is invalid');
+    if (!dialect.tool_sources.includes(input.kind as string)) fail('Ask progress source kind is invalid');
     assertExactKeys(input, ['kind', 'tool_id'], 'Ask progress source');
-    assertPatternString(input.tool_id, 'Ask progress source tool_id', 64, /^[a-z][a-z0-9-]*$/);
+    assertToolId(input.tool_id, 'Ask progress source tool_id');
     return Object.freeze({ kind: input.kind as string, tool_id: input.tool_id });
   }
 

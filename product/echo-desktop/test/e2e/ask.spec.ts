@@ -531,6 +531,81 @@ test('an answer that cites a follow-up opens it beside the running Ask, with its
   expect(run.calls().filter(call => call.path === '/v6/person/ask')).toHaveLength(1);
 });
 
+test('an answer that cites your project, a person, a tool and a Jira project opens each by its kind (research tool contract v1)', async () => {
+  run = await launch('ask-progress-workspace');
+  const { page, app } = run;
+  const APOLLO = 'prj_11111111-1111-4111-8111-111111111111';
+  const permalink = 'https://example.atlassian.net/browse/APOLLO';
+  const opened = await captureOpenExternal(app);
+  await askFromHome(page, 'Who leads Apollo, and where is its Jira project?');
+  // The newest route this Authority has, streamed in progress V3: never /v6 or /v5.
+  await expect.poll(() => run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.progress)).toEqual(['3']);
+  expect(run.calls().filter(call => call.path === '/v6/person/ask' || call.path === '/v5/person/ask')).toEqual([]);
+  // Your projects, people and tools, and Jira's projects, are kinds of source it searched; each item it read is named by its label.
+  await expect(page.getByTestId('ask-stage')).toHaveText('Reading Apollo and 3 more', { timeout: 10_000 });
+  await openLine(page);
+  await expect(progressSteps(page)).toHaveText(['Searched projects, people, tools and Jira · 4 found', 'Reading Apollo, Mina Patel, Jira, Apollo delivery']);
+
+  // A Jira project opens beside Ask, which keeps working: its tool and key, and Open in Jira, never a page of ECHO's.
+  const names = page.getByTestId('ask-steps').getByTestId('ask-step-name');
+  await names.nth(3).click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane).toContainText('Jira · Project');
+  await expect(pane.locator('h2')).toHaveText('Apollo delivery');
+  await expect(pane.getByTestId('pane-container-meta')).toHaveText('Jira · APOLLO');
+  await expect(pane.getByTestId('source-open')).toHaveCount(0);
+  await pane.getByTestId('open-container-source').click();
+  await expect.poll(opened).toEqual([permalink]);
+  // A person is their name alone, with nowhere to go.
+  await names.nth(1).click();
+  await expect(pane).toContainText('Person');
+  await expect(pane.getByTestId('pane-person')).toHaveText('Mina Patel');
+  await expect(pane.getByTestId('source-open')).toHaveCount(0);
+  await expect(page.getByTestId('asking')).toBeVisible();
+
+  // The answer: each source row names its item, a Jira project with its tool and key; a tool's Open is Tools, in place of Ask.
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  await expect(page.getByTestId('asking')).toHaveCount(0);
+  await expect(page.getByTestId('source-row')).toHaveText([/^1\s*Apollo$/, /^2\s*Mina Patel$/, /^3\s*Jira$/, /^4\s*Apollo delivery\s*Jira · APOLLO$/]);
+  await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 4 items · \d+s$/);
+  await page.getByTestId('source-row').nth(2).click();
+  await expect(pane).toContainText('Tool');
+  await expect(pane.getByTestId('pane-tool')).toContainText('Jira');
+  await pane.getByTestId('source-open').click();
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+  await expect(page.getByTestId('tools')).toBeVisible();
+
+  // Asked again, from Tools: a project's Open is the project, from its sidebar row, as the sidebar opens it.
+  await page.getByTestId('ask-field').fill('Who leads Apollo?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  await page.getByTestId('source-row').nth(0).click();
+  await expect(pane).toContainText('Project');
+  await expect(pane.getByTestId('pane-project')).toHaveText('Apollo');
+  await pane.getByTestId('source-open').click();
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+  await expect(page.getByTestId('scope-chip')).toHaveText('Apollo');
+  await expect.poll(() => run.calls().filter(call => call.path === '/v1/person/list').map(call => call.body?.project_id)).toContain(APOLLO);
+  expect(run.calls().filter(call => call.path === '/v7/person/ask')).toHaveLength(2);
+});
+
+test('an Ask that only listed rows says it looked through every row, and its receipt opens onto its searches alone (ADR-0043)', async () => {
+  run = await launch('ask-progress-listed');
+  const { page } = run;
+  await askFromHome(page, 'Which Jira tickets are open?');
+  await expect.poll(() => run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.progress)).toEqual(['3']);
+  // Jira's 30 rows came as a page of 25, then the other 5: one search, as a person reads it.
+  await openLine(page);
+  await expect(progressSteps(page)).toHaveText(['Searched Jira · 30 found']);
+
+  // Nothing was read in full, and the receipt still counts all 30 rows it looked through, with no line about names.
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 30 items · \d+s$/);
+  await expect(page.getByTestId('receipt-rows').getByTestId('ask-step')).toHaveText(['Searched Jira · 30 found']);
+});
+
 test('an opened line\'s new row follows a person at the bottom of Ask, and never pulls one who scrolled up back down', async () => {
   run = await launch('ask-progress');
   const { page } = run;

@@ -10,16 +10,19 @@ import {
   validatePersonAskProgressStepEventV2,
   validatePersonAskReceiptV1,
   validatePersonAskReceiptV2,
+  validatePersonAskReceiptV3,
   type PersonAskProgressStepEventV1,
   type PersonAskProgressStepEventV2,
+  type PersonAskProgressStepEventV3,
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
-import { AGENTIC_ASK_DEADLINE_MS_V1, createAgenticAskV3, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { AGENTIC_ASK_DEADLINE_MS_V1, createAgenticAskV3, createAgenticAskV4, createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { createAgenticAskProgressRecorderV1, createAgenticAskProgressRequestV1 } from "../../src/answer-composition/agentic-ask-progress-recorder-v1.js";
 import { citationOfAgenticEvidenceItemV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
+import { JIRA, pager, tickets } from "./fixtures/agentic-lists.js";
 import { deferred } from "./fixtures/deferred.js";
 
 /**
@@ -66,12 +69,16 @@ const replies = (prompt: { readonly evidence?: readonly { readonly id: string }[
 /**
  * One global Ask over meetings, documents and live tickets. Step 1 searches
  * every source; step 2 opens the PRD (which brings neighbours) and searches
- * tickets again; step 3 finishes; then the writer.
+ * tickets again; step 3 finishes; then the writer. `inventory` is what the
+ * small-scope preload's search returns; `version` 8 runs the V8 Ask, which
+ * streams progress V3.
  */
 function fixture(options: {
   readonly revalidate?: (mode: string, index: number) => void;
   readonly generate?: (input: StructuredGenerationInput, index: number) => Promise<unknown> | undefined;
   readonly small_scope?: boolean;
+  readonly inventory?: EvidenceDeskResultV2;
+  readonly version?: 6 | 8;
 } = {}) {
   const log: Log = [];
   let checks = 0; let calls = 0;
@@ -80,7 +87,7 @@ function fixture(options: {
     live_sources: [{ source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" }],
     search: vi.fn(async input => {
       log.push(`search:${input.source ?? "all"}`);
-      if (input.inventory_mode === "items") return result([launch]);
+      if (input.inventory_mode === "items") return options.inventory ?? result([launch]);
       // The ticket search releases a known item again, says it was cut short, and carries a receipt for more than it shows.
       if (input.source === "jira") return result([launch, ticket("2")], { truncated: true, receipt_digests: [canonicalSha256("unseen release"), ticket("2").receipt_sha256] });
       return result([launch, prd, ticket("1")]);
@@ -109,10 +116,11 @@ function fixture(options: {
     return replies(JSON.parse(input.user_prompt) as { evidence?: { id: string }[] }, index);
   });
   const audit: AgenticAskAuditEntryV1[] = [];
-  const ask = createAgenticAskV3({ desk, model: { generate }, generation, audit: { append: entry => { audit.push(entry); } },
-    ...(options.small_scope === true ? { small_scope_shortcut: true } : {}) });
-  const events: PersonAskProgressStepEventV1[] = [];
-  const sink = vi.fn((event: PersonAskProgressStepEventV1) => { events.push(event); log.push(`event:${event.type}`); });
+  const core = { desk, model: { generate }, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); } },
+    ...(options.small_scope === true ? { small_scope_shortcut: true } : {}) };
+  const ask = options.version === 8 ? createAgenticAskV5(core) : createAgenticAskV3(core);
+  const events: PersonAskProgressStepEventV3[] = [];
+  const sink = vi.fn((event: PersonAskProgressStepEventV3) => { events.push(event); log.push(`event:${event.type}`); });
   return { desk, generate, prompts, audit, ask, events, sink, log };
 }
 
@@ -121,7 +129,7 @@ const named = (item: EvidenceDeskItemV2) => validatePersonAnswerCitationV6(citat
 const every = [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }];
 
 /** Nothing the model wrote, nothing the plan holds, no body, scratchpad id, desk id or receipt. */
-function expectNoDisclosure(events: readonly PersonAskProgressStepEventV1[]) {
+function expectNoDisclosure(events: readonly PersonAskProgressStepEventV3[]) {
   for (const event of events) expect(validatePersonAskProgressStepEventV1(event)).toEqual(event);
   const wire = JSON.stringify(events);
   for (const canary of Object.values(CANARY)) expect(wire).not.toContain(canary);
@@ -281,6 +289,31 @@ describe("agentic Ask progress (ADR-0039)", () => {
     expect(receipt).toMatchObject({ looked_through: 1, rows: [{ type: "searched", sources: every, found: 1 }, { type: "read", items: [named(launch)] }] });
   });
 
+  it("adds no searched row and finds nothing for a preload research is never shown, and still says an empty one found nothing", async () => {
+    // Everything the person can see did not fit the preload, so research starts blind and its own search finds all three.
+    const cut = fixture({ small_scope: true, inventory: result([launch, prd, ticket("1")], { truncated: true }) });
+    const { receipt } = await cut.ask.answerWithReceipt({ question: "When is launch?", on_progress: cut.sink });
+    const searched = [{ type: "searched", sources: every, found: 3 }, { type: "searched", sources: [{ kind: "tickets", tool_id: "jira" }], found: 1 }];
+    expect(cut.events.filter(event => event.type === "searched")).toEqual(searched);
+    expect(receipt.rows.filter(row => row.type === "searched")).toEqual(searched);
+    // The person can see nothing: the preload is shown in full, and it found nothing.
+    const empty = fixture({ small_scope: true, inventory: result([]) });
+    await empty.ask.answerWithReceipt({ question: "When is launch?", on_progress: empty.sink });
+    expect(empty.events.filter(event => event.type === "searched")).toEqual([{ type: "searched", sources: every, found: 0 }, ...searched]);
+  });
+
+  it("counts as found only the preload items research is shown", async () => {
+    // The preload fits, but opening the ticket returns none of its text, so research is shown the launch review alone.
+    const f = fixture({ small_scope: true, inventory: result([launch, ticket("1")]), generate: (input, index) => {
+      if (index === 0) return Promise.resolve({ parts: part("found", ["E1"]), actions: [{ tool: "finish", args: {} }] });
+      if (index === 1) return Promise.resolve({ sentences: [{ text: "Launch is Tuesday.", evidence: [(JSON.parse(input.user_prompt) as { evidence: { id: string }[] }).evidence[0]!.id] }], not_found: [] });
+      return undefined;
+    } });
+    const { receipt } = await f.ask.answerWithReceipt({ question: "When is launch?", on_progress: f.sink });
+    expect(f.events.filter(event => event.type === "searched")).toEqual([{ type: "searched", sources: every, found: 1 }]);
+    expect(receipt).toMatchObject({ looked_through: 1, rows: [{ type: "searched", sources: every, found: 1 }, { type: "read", items: [named(launch)] }] });
+  });
+
   it("names nothing an earlier attempt of the request named, audits each attempt's own names, and times the receipt from the request's start", async () => {
     let clock = 1_000;
     const request = createAgenticAskProgressRequestV1(() => clock);
@@ -297,6 +330,67 @@ describe("agentic Ask progress (ADR-0039)", () => {
     expect(second.audit).toEqual([expect.objectContaining({ outcome: "answered", named_citation_digests: [] })]);
     // The receipt is this attempt's own: what it read, none of the first attempt's names, and the request's time.
     expect(receipt).toEqual({ looked_through: 2, elapsed_ms: 5_000, rows: [{ type: "searched", sources: every, found: 4 }] });
+  });
+});
+
+describe("the receipt counts what research looked through (ADR-0043)", () => {
+  const question = "Which Jira tickets are open?";
+  const need = (status: "open" | "found", first = false) => [{ question, needs: [{ ...(first ? {} : { id: "N1" }), need: "open Jira tickets", kind: "which_items", status, evidence: status === "found" ? ["L1"] : [] }], notes: "" }];
+  const LIST = { tool: "list", args: { source: "tickets" } } as const;
+  const jira = [{ kind: "tickets", tool_id: "jira" }];
+  /**
+   * An Ask that only lists rows: one fetch returns Jira's 30 metadata-only rows, research is given 25 and then the other
+   * 5, and it finishes on the list, which the writer states. It opens and reads nothing in full.
+   */
+  function listOnly(core: typeof createAgenticAskV4 | typeof createAgenticAskV5) {
+    const replies = [
+      { parts: need("open", true), actions: [LIST] }, { parts: need("open"), actions: [LIST] }, { parts: need("found"), actions: [{ tool: "finish", args: {} }] },
+      { lists: [{ id: "L1" }], sentences: [], not_found: [] },
+    ];
+    const list = pager(tickets(1, 30), 50, {}, { page_full: false });
+    const desk: EvidenceDeskPortV2 = {
+      scope: { kind: "global" }, ticket_available: true, live_sources: [JIRA], list, revalidate: vi.fn(async () => checked),
+      search: vi.fn(async () => { throw new Error("unexpected search"); }), open: vi.fn(async () => { throw new Error("unexpected open"); }),
+    };
+    const generate = vi.fn(async () => replies.shift());
+    const ask = core({ desk, model: { generate }, generation, audit: { append: () => undefined } });
+    const events: PersonAskProgressStepEventV3[] = [];
+    return { ask, list, generate, events, sink: (event: PersonAskProgressStepEventV3) => { events.push(event); } };
+  }
+
+  it("counts every row of an Ask that only listed rows, and finds each page research was given, never the rows fetched behind it", async () => {
+    const run = listOnly(createAgenticAskV5);
+    const { response, receipt } = await run.ask.answerWithReceipt({ question, on_progress: run.sink });
+    expect(response.outcome).toBe("answered");
+    expect(run.generate).toHaveBeenCalledTimes(4);
+    // One fetch returned all 30; the second page came from it.
+    expect(run.list).toHaveBeenCalledTimes(1);
+    expect(run.events.filter(event => event.type === "searched")).toEqual([{ type: "searched", sources: jira, found: 25 }, { type: "searched", sources: jira, found: 5 }]);
+    expect(run.events.filter(event => event.type === "read")).toEqual([]);
+    expect(validatePersonAskReceiptV3(receipt)).toEqual(receipt);
+    expect(receipt).toMatchObject({ looked_through: 30, rows: [{ type: "searched", sources: jira, found: 30 }] });
+  });
+
+  it("keeps progress V2's count of items read in full for the same Ask", async () => {
+    const run = listOnly(createAgenticAskV4);
+    const { receipt } = await run.ask.answerWithReceipt({ question, on_progress: run.sink });
+    expect(validatePersonAskReceiptV2(receipt)).toEqual(receipt);
+    expect(receipt).toMatchObject({ looked_through: 0, rows: [{ type: "searched", sources: jira, found: 30 }] });
+  });
+
+  it("counts in progress V3 the rows and previews research was shown, never the neighbours an open brought along", async () => {
+    const v3 = fixture({ version: 8 });
+    const { receipt } = await v3.ask.answerWithReceipt({ question: "When is launch?", on_progress: v3.sink });
+    expect(validatePersonAskReceiptV3(receipt)).toEqual(receipt);
+    // Read in full: the launch review and the PRD research opened. Shown as rows only: both metadata-only tickets. Not
+    // counted: the passages around the PRD that its open brought along. Named, as in V1: only what was read in full.
+    expect(receipt).toMatchObject({ looked_through: 4, rows: [
+      { type: "searched", sources: every, found: 3 }, { type: "read", items: [named(launch)] },
+      { type: "searched", sources: [{ kind: "tickets", tool_id: "jira" }], found: 1 }, { type: "read", items: [named(prd)] },
+    ] });
+    expectNoDisclosure(v3.events);
+    const v1 = fixture();
+    expect((await v1.ask.answerWithReceipt({ question: "When is launch?", on_progress: v1.sink })).receipt.looked_through).toBe(2);
   });
 });
 
@@ -353,30 +447,42 @@ describe("agentic Ask progress recorder", () => {
     recorder.research.reads(true);
     recorder.research.returned("search", undefined, [launch]);
     recorder.research.returned("list", "slack", [launch]);
-    recorder.research.returned("open", "document", [prd]);
     recorder.research.returned("search", "document", [prd, before]);
     recorder.research.reads_done();
-    // An open-only batch is no searched row.
+    // A batch that only opened gave research no rows: no searched row.
     recorder.research.reads(false);
-    recorder.research.returned("open", "document", [after]);
     recorder.research.reads_done();
     expect(events).toEqual([
       { type: "stage", stage: "searching" },
-      // The catalog's underscore source id cannot be shown. The listed launch review counts once; the PRD an open returned first, and its neighbour, count as the search returns them.
+      // The catalog's underscore source id cannot be shown. The listed launch review counts once.
       { type: "searched", sources: [{ kind: "meetings" }, { kind: "documents" }, { kind: "tickets", tool_id: "jira" }, { kind: "slack" }], found: 3 },
       { type: "stage", stage: "reading" },
     ]);
   });
 
-  it("counts as found only what a search or list returned first: an open's neighbours count once a search returns them", () => {
+  it("counts as found only what no earlier search or list gave research", () => {
     const events: PersonAskProgressStepEventV1[] = [];
     const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
     const step = (reads: () => void) => { recorder.research.reads(true); reads(); recorder.research.reads_done(); };
     step(() => recorder.research.returned("search", "document", [prd]));
-    // Opening the PRD brings its neighbours; that step searched nothing new.
-    step(() => { recorder.research.returned("open", "document", [before, prd, after]); recorder.research.returned("search", "meeting", [launch]); });
-    step(() => recorder.research.returned("search", "document", [before, after, prd, passage(4, "More.", "Launch PRD")]));
+    step(() => recorder.research.returned("search", "meeting", [launch, prd]));
+    step(() => recorder.research.returned("list", "document", [before, after, prd, passage(4, "More.", "Launch PRD")]));
     expect(events.filter(event => event.type === "searched").map(event => event.type === "searched" ? event.found : null)).toEqual([1, 1, 3]);
+  });
+
+  it("counts in V3 each item a research call was shown, as a row or in full, once, while V1 counts what it read in full", () => {
+    const run = (version: 1 | 3) => {
+      const recorder = createAgenticAskProgressRecorderV1({ sink: () => undefined, version, sources, signal: new AbortController().signal });
+      recorder.research.given([launch], [launch, ticket("1"), ticket("2")]);
+      // The next call shows both rows again and reads the PRD in full.
+      recorder.research.given([prd], [launch, prd, ticket("1"), ticket("2")]);
+      return recorder.receipt(10);
+    };
+    const v3 = run(3);
+    expect(validatePersonAskReceiptV3(v3)).toEqual(v3);
+    expect(v3.looked_through).toBe(4);
+    expect(v3.rows.flatMap(row => row.type === "read" ? row.items.map(item => item.label) : [])).toEqual(["Launch review", "Launch PRD"]);
+    expect(run(1).looked_through).toBe(2);
   });
 
   it("sends nothing after the run's signal aborts or the run settles, and drops an item its projection refuses", () => {
