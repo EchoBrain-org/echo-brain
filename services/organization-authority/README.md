@@ -164,12 +164,8 @@ removed. Approval tests use the existing synthetic release canary and
 human approval, with separate evidence. The diagnostic profile alone does not
 enable Ask. See the
 [scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal).
-
-The V3 profile removes the organization Granola policy and inert Slack channel.
-Older V1/V2 profiles and their bindings are refused. A selected older profile
-requires a fresh rehearsal under the operator playbook; this code does not
-migrate retained state or deploy itself. New V3 connection bindings remain
-stable across ordinary restarts with the same profile.
+Connection bindings remain stable across ordinary restarts with the same
+profile.
 
 The EC2 Compose overlay additionally selects `ECHO_STAGING_JIRA_ASK_V1=true`
 when the fixed connector profile is present. The CLI validates that profile and

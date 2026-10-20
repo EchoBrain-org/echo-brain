@@ -12,18 +12,12 @@ Staging alone does not finish that workflow or make a client available to
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current Authority V14, control-plane V4, record-log V4,
-retrieval facts V3, retrieval content/lexical V2, and six-role V2 root lineage.
+[current baselines](../../services/organization-authority/README.md#state-and-baselines).
 For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
-mutation. V14 is fresh-state only: the founder confirmed that existing
-development data is disposable and there are no live users, so the earlier
-pre-V10 staging conversions and offline copiers were removed (git history keeps
-them). The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
-as described in the [PC-01 handoff](../../docs/product/2026-09-21-project-context-pc01-persistence.md).
-An incompatible baseline requires a new, explicitly designed migration or an
-authorized reset. For an authorized reset with no live users, first install the
+mutation. An incompatible baseline requires a new, explicitly designed
+migration or an authorized reset. For an authorized reset with no live users, first install the
 target release's reviewed host tooling through the
 [automated current-host lane](#automated-current-host-staging-lane) while the
 old rehearsal is in place, then run `onboard-clean-v1.sh
@@ -38,13 +32,6 @@ and [ADR-0018](../../docs/decisions/ADR-0018-project-settings-v1.md) describe
 the checkout before this cleanup; the exact SQL and loaders remain available at
 commit `83c8eb63aed78ba760678294ecf7fef863743e06`. They are no longer shipped
 in the current packages or image.
-
-Before installing this tooling over an older host wrapper, confirm that no
-staged candidate has a migration operation under
-`clean-data/release/state-v5-to-v6/` or `state-v8-to-v9/`. The current wrapper
-does not read those journals. An outstanding migration must be reconciled
-using its matching historical tooling before replacement; preserve its state
-and evidence. Source cleanup does not perform that host transition.
 
 ## Coordinated server and client release
 
