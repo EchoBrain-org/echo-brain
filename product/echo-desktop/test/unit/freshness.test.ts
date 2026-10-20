@@ -2,11 +2,11 @@
 // change check runs (R2), what each moved area reads again (R3), what coming
 // back reads again on each page (R4), the hidden window (R6), the cover (R7),
 // an older Authority (R8) and desktop.log (R9).
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList } from '../../src/renderer/store.js';
 import type { Account, ProjectSummary } from '../../src/shared/protocol.js';
 import { MINA, authority, followUp, id, nextCheck, sent, stated, changesRpc, CLOCK, fixture } from './changes-fixture.js';
-import { ACCOUNT, cover, flush, fail, hide, ok, project, show, startStore, stubWindow, uncover, unhide, wake } from './harness.js';
+import { ACCOUNT, cover, fail, flush, hide, ok, project, show, startStore, storeLifecycle, uncover, unhide, wake } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -27,11 +27,8 @@ const meetings = (operation: string) => calls('tools.meetings').filter(([, param
 const lists = (status: 'active' | 'archived') => calls('projects.list').filter(([, params]) => (params.status ?? 'active') === status).length;
 const noticeTexts = () => calls('notice.show').map(([, params]) => params.text);
 
+storeLifecycle(CLOCK);
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  vi.setSystemTime(CLOCK);
-  stubWindow();
   authority.reset();
   authority.active = [apollo];
   account = ACCOUNT;
@@ -52,8 +49,6 @@ beforeEach(() => {
     },
   }));
 });
-
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 
 describe('when a check runs (R2)', () => {

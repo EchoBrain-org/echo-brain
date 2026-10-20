@@ -4,10 +4,10 @@
 // is read for it. Once the answer came, Open goes to the project, or to
 // Tools; a person has nowhere to go; a Jira project, Confluence space or Slack
 // channel says its tool and key on its source row, and opens in its tool.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, ConnectedTool, Expect } from '../../src/shared/protocol.js';
 import { Folder, Hash, Plug } from '../../src/renderer/screens/icons.js';
-import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, stubWindow, text } from './harness.js';
+import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -34,10 +34,8 @@ const answering = (sources: readonly AnswerSource[], receipt?: AskReceipt): Answ
 let held: Held;
 let projectReads: (() => unknown)[];
 let tools: ConnectedTool[];
+storeLifecycle(new Date('2026-10-19T11:00:00.000Z'));
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers({ now: new Date('2026-10-19T11:00:00.000Z') });
-  stubWindow();
   held = new Held();
   projectReads = [];
   tools = [];
@@ -48,7 +46,6 @@ beforeEach(() => {
     'source.openExternal': () => ok(null),
   }, () => ({ active: [apollo], archived: [] })));
 });
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const called = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params as Record<string, unknown>);
 

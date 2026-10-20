@@ -3,7 +3,7 @@
 // one reply back while later ones land; and, for tests that call components
 // as plain functions, hooks that do so and the tree those calls show.
 import type { VNode } from 'preact';
-import { vi } from 'vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
 import type { AnswerSource, AskStep, Expect, ProjectSummary } from '../../src/shared/protocol.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
@@ -143,6 +143,19 @@ export async function asking(rpc: { mock: { calls: unknown[][] } }, held: Held, 
 
 export function stubWindow(): void {
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() });
+}
+
+/**
+ * The hooks a store test file starts with: before each test a fresh store module, fake timers (from `now`, when given) and no
+ * storage; after it, real timers and globals again. A file's own setup follows in its own beforeEach.
+ */
+export function storeLifecycle(now?: Date): void {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers(now === undefined ? undefined : { now });
+    stubWindow();
+  });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 }
 
 export const names = (rows: readonly { name: string }[]) => rows.map(row => row.name);

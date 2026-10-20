@@ -1,7 +1,7 @@
-import type { VNode } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { State } from '../../src/renderer/store.js';
 import type { UpdateState } from '../../src/shared/protocol.js';
+import { elements, text } from './harness.js';
 
 const { loadProjects, loadArchivedProjects, installUpdate } = vi.hoisted(() => ({ loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
@@ -15,13 +15,6 @@ vi.mock('../../src/renderer/store.js', async original => ({
 }));
 
 beforeEach(() => { vi.clearAllMocks(); });
-
-function descendants(value: unknown): VNode<Record<string, unknown>>[] {
-  if (Array.isArray(value)) return value.flatMap(descendants);
-  if (!value || typeof value !== 'object' || !('props' in value)) return [];
-  const node = value as VNode<Record<string, unknown>>;
-  return [node, ...descendants(node.props.children)];
-}
 
 async function projectFailure(archived: boolean): Promise<State> {
   const { getState } = await import('../../src/renderer/store.js');
@@ -37,11 +30,11 @@ describe('project list failures', () => {
   it.each([false, true])('keeps a retry available for an empty failed project list, archived: %s', async archived => {
     const state = await projectFailure(archived);
     const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
-    const tree = descendants(Sidebar({ state }));
+    const tree = elements(Sidebar({ state }));
     const failure = tree.find(node => node.props['data-testid'] === (archived ? 'archived-projects-error' : 'sidebar-projects-error'));
     expect(failure).toBeDefined();
     expect(failure?.props.children).toContain('ECHO is unavailable right now. Try again.');
-    const retry = descendants(failure).find(node => node.type === 'button');
+    const retry = elements(failure).find(node => node.type === 'button');
     expect(retry?.props.children).toBe('Try again');
     (retry?.props.onClick as () => void)();
     expect(archived ? loadArchivedProjects : loadProjects).toHaveBeenCalledExactlyOnceWith();
@@ -67,7 +60,7 @@ describe('your follow-ups (F9)', () => {
 
   it('are in the sidebar under Mine, current on their own page, Home then not', async () => {
     const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
-    const rows = (state: State) => descendants(Sidebar({ state })).filter(node => typeof node.props['data-testid'] === 'string' && node.props['data-testid'].startsWith('sidebar-'));
+    const rows = (state: State) => elements(Sidebar({ state })).filter(node => typeof node.props['data-testid'] === 'string' && node.props['data-testid'].startsWith('sidebar-'));
     const shown = rows(await signedIn({ page: 'follow-ups' }));
     const order = shown.map(node => node.props['data-testid']);
     expect(order.indexOf('sidebar-follow-ups')).toBe(order.indexOf('sidebar-mine') + 1);
@@ -81,20 +74,12 @@ describe('your follow-ups (F9)', () => {
 const RELEASE = 'clean-v1-release-b';
 const HELD = { code: 'update_held', retryable: true };
 
-/** The words a node shows, its children's included. */
-function text(value: unknown): string {
-  if (typeof value === 'string' || typeof value === 'number') return String(value);
-  if (Array.isArray(value)) return value.map(text).join('');
-  if (!value || typeof value !== 'object' || !('props' in value)) return '';
-  return text((value as VNode<Record<string, unknown>>).props.children);
-}
-
 /** The update row over the store's first state, with this row and anything else set. */
 async function updateRow(update: UpdateState, extra: Partial<State> = {}) {
   const { getState } = await import('../../src/renderer/store.js');
   const { UpdateRow } = await import('../../src/renderer/screens/sidebar.js');
   const shown = UpdateRow({ state: { ...getState(), update, ...extra } });
-  const tree = descendants(shown);
+  const tree = elements(shown);
   return {
     shown, tree,
     row: tree.find(node => node.props['data-testid'] === 'sidebar-update'),
@@ -133,7 +118,7 @@ describe('the update row', () => {
     expect(text(row)).toBe(words);
     expect(tree.some(node => node.props.onClick !== undefined)).toBe(false);
     // Installing shows the busy dots.
-    expect(descendants(row).some(node => node.props.class === 'asking')).toBe(update.state === 'installing');
+    expect(elements(row).some(node => node.props.class === 'asking')).toBe(update.state === 'installing');
   });
 
   it.each([

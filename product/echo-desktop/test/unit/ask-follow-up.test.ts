@@ -2,9 +2,9 @@
 // it opens in Ask's side panel with its title, owner, status and latest check
 // while Ask keeps running; once the answer came, Open goes to its item page;
 // and its source row says "owner · status", with no kind label.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, Expect, OpenItemView } from '../../src/shared/protocol.js';
-import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, stubWindow, text } from './harness.js';
+import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -31,10 +31,8 @@ const answer: Answer = {
 
 let held: Held;
 let reads: (() => unknown)[];
+storeLifecycle(new Date('2026-10-16T11:00:00.000Z'));
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers({ now: new Date('2026-10-16T11:00:00.000Z') });
-  stubWindow();
   held = new Held();
   reads = [];
   rpc.mockReset();
@@ -42,7 +40,6 @@ beforeEach(() => {
     runs: params => (params.request as { operation: string }).operation === 'item' ? (reads.shift() ?? (() => ok(row())))() : fail('unavailable', { retryable: true }),
   }, () => ({ active: [project(1, 30, { name: 'Apollo' })], archived: [] })));
 });
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const itemReads = () => rpc.mock.calls.filter(([name, params]) => name === 'runs' && (params as { request: { operation: string } }).request.operation === 'item')
   .map(([, params]) => params as Record<string, unknown>);

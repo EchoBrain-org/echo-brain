@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from '../../src/shared/protocol.js';
-import { cover, flush, Held, keysetPage, moved, names, numbered, ok, ordered, project, rpcFor, show, startStore, stubWindow, uncover } from './harness.js';
+import { cover, flush, Held, keysetPage, moved, names, numbered, ok, ordered, project, rpcFor, show, startStore, storeLifecycle, uncover } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -15,10 +15,8 @@ let held: Held;
 /** Calls to `projects.list` for the active list, in order. */
 const activeLists = () => rpc.mock.calls.filter(([method, params]) => method === 'projects.list' && (params as { status?: string }).status !== 'archived');
 
+storeLifecycle();
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  stubWindow();
   membership = 'member';
   active = [apollo];
   archived = [];
@@ -35,8 +33,6 @@ beforeEach(() => {
     'projects.jiraSet': params => { jira = params.jira_project as string; return ok({ revision: 'jira-2', mapping: { project_key: jira } }); },
   }, () => ({ active, archived })));
 });
-
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('project tool-read replies', () => {
   it('ignores the earlier opening of the same project, for tools and both mappings', async () => {

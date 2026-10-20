@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -13,10 +13,8 @@ let catalog: string[];
 let confluenceRead: () => unknown;
 const confluenceSets = () => rpc.mock.calls.filter(([method]) => method === 'projects.confluenceSet').map(([, params]) => (params as { space_ids: string[] | null }).space_ids);
 
+storeLifecycle();
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  stubWindow();
   held = new Held();
   jira = null;
   spaces = [];
@@ -32,8 +30,6 @@ beforeEach(() => {
     'projects.confluenceSet': params => { spaces = (params.space_ids as string[] | null) ?? []; return ok({ project_id: apollo.project_id, revision, mapping: spaces.length > 0 ? { space_ids: spaces } : null }); },
   }, () => ({ active: [apollo], archived: [] })));
 });
-
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 async function openTools() {
   const store = await startStore();

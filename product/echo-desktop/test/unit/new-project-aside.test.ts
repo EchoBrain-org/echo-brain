@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from '../../src/shared/protocol.js';
-import { fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -16,10 +16,8 @@ const told = () => rpc.mock.calls.filter(([method]) => method === 'app.setUnreso
 const adds = () => rpc.mock.calls.filter(([method]) => method === 'projects.change').map(([, params]) => (params as { change: { membership_id: string } }).change.membership_id);
 const uploads = () => rpc.mock.calls.filter(([method]) => method === 'documents.upload');
 
+storeLifecycle();
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  stubWindow();
   signedIn = true;
   active = [other];
   held = new Held();
@@ -37,8 +35,6 @@ beforeEach(() => {
     'documents.abandon': () => ok(null),
   }, () => ({ active, archived: [] })));
 });
-
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 async function startWithPeople() {
   const store = await startStore();

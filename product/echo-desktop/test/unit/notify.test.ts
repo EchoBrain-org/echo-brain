@@ -3,11 +3,11 @@
 // last handed it on), and being added to a project, come as one system
 // notification per change check. Your own changes, checks, meetings, reviews,
 // removals and role changes only update the screen.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import type { Account, OpenItemView } from '../../src/shared/protocol.js';
 import { ME, MINA, RAFAEL, at, authority, followUp, id, nextCheck, owned, sent, stated, changesRpc, CLOCK, fixture } from './changes-fixture.js';
-import { ACCOUNT, cover, flush, fail, hide, ok, project, show, startStore, stubWindow, wake } from './harness.js';
+import { ACCOUNT, cover, fail, flush, hide, ok, project, show, startStore, storeLifecycle, wake } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -24,11 +24,8 @@ const texts = () => notices().map(notice => notice.text);
 const followed = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'items' && params.request.read === 'rows'
   && params.request.states?.join() === 'open');
 
+storeLifecycle(CLOCK);
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  vi.setSystemTime(CLOCK);
-  stubWindow();
   authority.reset();
   account = ACCOUNT;
   holdChanges = false;
@@ -42,8 +39,6 @@ beforeEach(() => {
     },
   }));
 });
-
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 /** Signed in with `items` already there: the first check learns them. */
 async function signedIn(items: OpenItemView[] = []) {
