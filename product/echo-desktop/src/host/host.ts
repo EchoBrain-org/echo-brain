@@ -15,7 +15,7 @@ import {
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { askArgv, askProgressLines, askRecordArgv, askSourceArgv, askStreams } from './ask.js';
+import { askArgv, askProgressLines, askRecordArgv, askSourceArgv } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, refreshStops } from './session.js';
 import {
@@ -598,8 +598,8 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, question, scope, cancel_id } = params as Params<'ask.run'>;
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      // A live Ask's steps reach the page as they are printed; Mine never streams (ask.ts).
-      const progress = askStreams(scope) && abortSignal !== undefined
+      // An Ask's steps reach the page as they are printed (ask.ts).
+      const progress = abortSignal !== undefined
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
