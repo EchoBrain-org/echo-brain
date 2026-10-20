@@ -259,13 +259,10 @@ live-read audit. The Authority mounts these routes whenever an answer model is b
 appears only when the matching Jira or Confluence live runtime is selected.
 [ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted
 and [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md) is
-proposed; the CLI requires explicit Jira or Confluence configuration. On staging,
-`ECHO_STAGING_JIRA_ASK_V1` and `ECHO_STAGING_CONFLUENCE_ASK_V1` take the fixed
-connector profile's Atlassian site (Jira also takes its integration; Confluence
-uses the `confluence` integration). Each Person reads under their own grant, with
-no initial-owner or fixed-project restriction and without tool capture; the
-rehearsal's owner and fixed-project limits apply only to its diagnostic reads.
-Jira (tickets, and Jira projects for V8) and Confluence (pages, and spaces
+proposed; the CLI requires explicit Jira or Confluence configuration. The
+[service guide](../../services/organization-authority/README.md#staging-connector-rehearsal)
+owns the staging selection: each Person reads under their own grant, without
+tool capture. Jira (tickets, and Jira projects for V8) and Confluence (pages, and spaces
 for V8) are the live readers. No live Slack reader
 is composed, the V3 desk reads no Slack, and read status is not exposed to
 clients.
