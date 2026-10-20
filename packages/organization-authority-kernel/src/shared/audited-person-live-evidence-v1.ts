@@ -271,14 +271,11 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     async list(input) {
       const maximum = limit(input.limit);
       if (input.container !== undefined && (typeof input.container !== 'string' || input.container.trim().length === 0 || Buffer.byteLength(input.container, 'utf8') > 256 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.container))) invalid('Live evidence container is invalid');
-      try { if (input.since !== undefined) day(input.since); if (input.until !== undefined) day(input.until); }
-      catch { invalid('Live evidence dates must be real YYYY-MM-DD dates'); }
-      if (input.since !== undefined && input.until !== undefined && input.since > input.until) invalid('Live evidence date range is reversed');
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const selection = canonicalSha256({ container: input.container ?? null, since: input.since ?? null, until: input.until ?? null, date_field: input.date_field ?? null, time_zone: input.time_zone ?? null });
       const cursor = input.cursor === undefined ? undefined : cursors.get(input.cursor);
       if (input.cursor !== undefined && (cursor === undefined || cursor.selection !== selection)) invalid('Live evidence cursor is not available for this list');
-      const request: PersonLiveEvidenceListInputV1 = { ...evidenceDateFilterV1(input), limit: maximum, ...(input.container === undefined ? {} : { container: input.container }), ...(input.since === undefined ? {} : { since: input.since }), ...(input.until === undefined ? {} : { until: input.until }), ...(cursor === undefined ? {} : { cursor: cursor.provider }), ...(input.signal === undefined ? {} : { signal: input.signal }) };
+      const request: PersonLiveEvidenceListInputV1 = { ...evidenceDateFilterV1(input), limit: maximum, ...(input.container === undefined ? {} : { container: input.container }), ...(cursor === undefined ? {} : { cursor: cursor.provider }), ...(input.signal === undefined ? {} : { signal: input.signal }) };
       current(input.signal);
       const page = await safeCall(() => reader.list(request), input.signal);
       return release('list', page, maximum, selection, input.signal);
