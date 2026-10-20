@@ -109,11 +109,6 @@ export interface EvidenceDeskItemV2 extends Omit<EvidenceDeskItemV1, 'citation' 
    * so research can open it. A link to something the asker cannot read is left out, never shown as hidden.
    */
   readonly links?: Readonly<Record<string, readonly string[]>>;
-  /**
-   * The item's own URL in a connected tool, for an item whose citation carries no permalink (a tool container's is its
-   * citation's). Never set for an ECHO item: an answer cites ECHO items, and the client opens them.
-   */
-  readonly url?: string;
 }
 
 export interface EvidenceDeskResultV2 extends Omit<EvidenceDeskResultV1, 'items'> {
