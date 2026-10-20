@@ -1,4 +1,4 @@
-import { annotateCoreRuntimeV1, observeCoreRuntimeV1, withoutCoreRuntimeContentV1, type CoreRuntimeCountsV1, type CoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeCountsV1, type CoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 
 type UpstreamService = NonNullable<CoreRuntimeDetailV1['upstream_service']>;
 type UpstreamOperation = NonNullable<CoreRuntimeDetailV1['upstream_operation']>;
@@ -68,10 +68,10 @@ export function providerHttpResponseDiagnosticsV1(response: Pick<Response, 'stat
 
 /** Each upstream exchange gets a child span, so overlapping provider calls retain their own status and quota hints. */
 export function observeProviderHttpRequestV1<T extends Response>(input: { readonly upstream_service: UpstreamService; readonly upstream_operation: UpstreamOperation }, operation: () => Promise<T>): Promise<T> {
-  return withoutCoreRuntimeContentV1(() => observeCoreRuntimeV1('http_request', async () => {
+  return observeCoreRuntimeV1('http_request', async () => {
     annotateCoreRuntimeV1(input);
     const response = await operation();
     annotateCoreRuntimeV1(providerHttpResponseDiagnosticsV1(response));
     return response;
-  }));
+  });
 }

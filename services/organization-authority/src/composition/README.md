@@ -60,9 +60,8 @@ import a provider implementation.
 - The `person-*` modules wire Person routes and upload processing, the
   `readable-search-*` modules own search generations, the `*-journey-*`
   modules record Ask journeys, `staging/` holds the staging synthetic meeting
-  source selection and personal provider, the release canary with its private
-  socket control and client, and (in `staging/observability/`) the staging
-  journey content telemetry format, and `synthetic-demo-*` is the no-write
+  source selection and personal provider and the release canary with its
+  private socket control and client, and `synthetic-demo-*` is the no-write
   demo extraction evaluator.
 - `observability/` holds the journey metrics and telemetry transport and the
   optional staging LangSmith trace exporter (`langsmith-observer-v1.ts`,

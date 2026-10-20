@@ -340,8 +340,8 @@ bounded server memory, except while an operator has enabled
 then the staging server also exports each research run, including this traced
 Ask or run, to the chosen LangSmith project, with its exact prompts, model
 outputs, tool arguments and results and released source text. That export is
-separate from this capture. CloudWatch and Journey Explorer retain separate,
-content-free operational metadata.
+separate from this capture. CloudWatch retains separate, content-free
+operational metadata.
 
 If execution or polling is interrupted, use the saved capture id to resume
 **reading only**, including when the ordinary Ask response was lost:

@@ -712,8 +712,9 @@ five environment fields bound to the accepted release. It reads the snapshot by
 name, in any order and with at most one final newline. Every required field
 must appear exactly once. Besides those, it accepts only the `true`/`false`
 agentic Ask flags written by `update-clean-v1.sh`, plus the empty connector
-rehearsal line, the `true`/`false` content-telemetry flag and the fixed
-`/echo-clean/meetings` directory written by prepare. The remaining snapshot
+rehearsal line, the retired `true`/`false` content-telemetry flag that older
+prepares wrote and the fixed `/echo-clean/meetings` directory written by
+prepare. The remaining snapshot
 fields are checked for the relationships and input formats enforced by
 `onboard-clean-v1.sh`; they cannot be independently bound to the release record
 because that record intentionally does not contain organization contact or host

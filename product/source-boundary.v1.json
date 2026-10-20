@@ -48,9 +48,6 @@
       "services/organization-authority/src/composition/staging/staging-synthetic-personal-provider-v1.ts",
       "services/organization-authority/src/composition/observability/langsmith-runtime-v1.ts",
       "services/organization-authority/src/composition/observability/langsmith-observer-v1.ts"
-    ],
-    "source_assemblies": [
-      "deploy/organization-authority/journey-explorer-assembly.v1.json"
     ]
   },
   "child_process_owner": null

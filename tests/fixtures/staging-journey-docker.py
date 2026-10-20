@@ -87,7 +87,5 @@ if args[0] == 'inspect' or args[:2] == ['image', 'inspect']:
     if 'org.echobrain.authority.build-number' in fmt: finish('1')
     if fmt == '{{json .Config.Env}}':
         values = ['ECHO_SOURCE_SHA=' + image['source'], 'ECHO_BUILD_NUMBER=1', 'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true']
-        if not image_lookup:
-            values += [name + '=' + value for name, value in engine['environment'].items() if name == 'ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1']
         finish(json.dumps(values))
 raise SystemExit('unexpected simulated container operation: ' + repr(args))

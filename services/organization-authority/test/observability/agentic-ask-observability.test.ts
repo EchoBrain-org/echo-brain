@@ -28,7 +28,7 @@ type Line = Record<string, any>;
 /**
  * One agentic Ask through the real staging transport: the V3 route, the
  * evidence desk, stored documents and the OpenRouter adapter with a scripted
- * provider. Everything the Explorer and dashboards read comes from `lines`.
+ * provider. Everything the dashboards and alarms read comes from `lines`.
  */
 function fixture() {
   const database = projectContextDatabase(); databases.push(database);
@@ -56,7 +56,7 @@ function fixture() {
   const transport = createJourneyTelemetryTransportV1("staging", identity, {
     write: (line) => { lines.push(JSON.parse(line) as Line); },
     scheduler: { set_interval: (fn) => { heartbeat = fn; return 1; }, clear_interval: () => {} },
-  }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });
+  }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 });
   transport.start();
   // A scripted research agent behind the real adapter: list documents, open the first, finish, answer.
   const model = createOpenRouterStructuredGenerationAdapter({
@@ -127,7 +127,6 @@ describe("agentic Ask observability through the canonical runtime channel", () =
     // Selected payload capture has its own private sink; operational rows carry no source or model content.
     expect(JSON.stringify(f.lines)).not.toContain("The launch window is October.");
     expect(JSON.stringify(f.lines)).not.toContain("fixture-credential-never-record");
-    expect(f.lines.some(line => line.content_kind === "model_request")).toBe(false);
     expect(f.health().delivery).toMatchObject({ rejected_events: 0, writes_failed: 0 });
     f.transport.close();
   });

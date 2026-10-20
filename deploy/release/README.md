@@ -354,8 +354,8 @@ sudo ./update-clean-v1.sh stage --release /absolute/private/candidate-release.js
 
 Apart from its release identity and the release-bound `agentic_ask_v1` and
 `small_scope_shortcut` switches,
-the candidate's saved environment carries forward every accepted setting, including the staging
-`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1` value that onboarding sets. It never
+the candidate's saved environment carries forward every accepted setting, including the retired
+`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1` line that older rehearsals wrote and nothing reads. It never
 modifies the accepted snapshot. Do not change telemetry or any other setting by
 editing `.env.clean-v1` after promotion: that creates environment drift and
 blocks the next release.

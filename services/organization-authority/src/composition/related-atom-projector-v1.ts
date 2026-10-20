@@ -1,4 +1,4 @@
-import { annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 /**
  * Disposable Layer 2 projection core for material cross-record relationships.
  * It receives only approved retrieval-atom summaries from one exact visibility
@@ -289,7 +289,6 @@ async function projectObserved(input: ProjectRelatedAtomsInputV1): Promise<reado
   const proposals = observeCoreRuntimeSyncV1("model_schema", () => parseResponse(response));
   for (const proposed of proposals) {
     const pair = supportedCrossRecordPair(proposed, byId);
-    if (pair === undefined) captureCoreRuntimeContentV1("validation_error", { boundary: "related_pair_grounding", rejected: proposed });
     if (pair !== undefined) {
       unique.set(pairKey(pair), pair);
     }

@@ -53,9 +53,6 @@
     "crypto",
     "path"
   ],
-  "runtime_assets": [
-    "providers/slack/server/assets/telemetry-vocabulary.v1.json"
-  ],
   "layer_rules": [
     {
       "name": "provider-slack-server-implementation",

@@ -1,4 +1,3 @@
-import { sourceAssemblyOwners } from './source-assemblies.mjs';
 import { textFile } from './repository-files.mjs';
 import { providerModuleGraph } from './provider-module-graph.mjs';
 
@@ -15,7 +14,7 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
     errors.push('provider architecture requires versioned ownership and bootstrap declarations');
     return null;
   }
-  const accepted = new Set(['ownership_version', 'provider_roots', 'shared_provider_roots', 'bootstrap_entrypoints', 'source_assemblies']);
+  const accepted = new Set(['ownership_version', 'provider_roots', 'shared_provider_roots', 'bootstrap_entrypoints']);
   for (const key of Object.keys(architecture)) if (!accepted.has(key)) {
     errors.push(`provider architecture field is unsupported or retired: ${key}`);
   }
@@ -32,12 +31,17 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
   const registry = JSON.parse(textFile(tree, 'tools/workspace-source-boundaries.v1.json'));
   const manifests = registry.manifests.map(path => JSON.parse(textFile(tree, path)));
   const graph = providerModuleGraph(tree, resolveRelative, errors);
-  const assemblies = sourceAssemblyOwners(tree, architecture.source_assemblies, providerRoots, manifests, errors, graph.resolve);
+  // The Swift app is retired and nothing builds Swift, so any Swift source
+  // under product/ or providers/ is unbuilt and unchecked.
+  for (const path of tree.keys()) {
+    if ((path.startsWith('product/') || path.startsWith('providers/')) && path.endsWith('.swift')) {
+      errors.push(`Swift source is retired and has no builder: ${path}`);
+    }
+  }
   const workspace = path => manifests.find(manifest => within(path, manifest.source_root) || manifest.runtime_assets?.includes(path) || path === manifest.package_json);
   const provider = path => allProviderRoots.find(root => within(path, root));
   const production = [...tree.keys()].filter(path => {
     if (!MODULE.test(path)) return false;
-    if (assemblies.has(path)) return true;
     // A test-named folder inside shipped source is still production source.
     if (workspace(path)) return true;
     if (TEST.test(path)) return false;
@@ -52,7 +56,7 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
   }
   const owner = path => {
     const manifest = workspace(path);
-    if (!manifest) return assemblies.get(path) ?? null;
+    if (!manifest) return null;
     if (bootstrap.has(path)) return { kind: 'bootstrap', manifest };
     const root = provider(path);
     if (root) return { kind: sharedProviderRoots.includes(root) ? 'shared-provider' : 'provider', provider: root, manifest };
@@ -108,8 +112,6 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
     workspace_edges: [...workspaceEdges.values()].reduce((count, targets) => count + targets.size, 0),
     workspace_cycles: cycles,
     bootstrap_entrypoints: [...bootstrap].sort(),
-    source_assemblies: architecture.source_assemblies,
-    assembly_inputs: assemblies.size,
     exceptions: 0,
   };
 }

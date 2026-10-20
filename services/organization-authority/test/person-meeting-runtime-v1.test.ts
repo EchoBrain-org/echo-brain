@@ -17,7 +17,7 @@ vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (impo
   } };
 });
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, captureCoreRuntimeContentV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
@@ -703,15 +703,6 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect([f.extracted(), f.pulls()]).toEqual([2, 2]);
     release(); await runtime.processing.settle?.();
     expect(f.extracted()).toBe(3);
-  });
-  it('captures a lane pass\'s model content under the observation scope it was given', async () => {
-    const f = await fixture(), content: string[] = [];
-    const runtime = f.create(undefined, { observation: { observer: () => undefined, content_observer: event => { content.push(event.content_kind); } } });
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
-    f.duringExtract(() => { f.duringExtract(undefined); captureCoreRuntimeContentV1('model_response', { body: 'model output' }); });
-    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
-    await runtime.processing.settle?.();
-    expect([f.extracted(), content]).toEqual([1, ['model_response']]);
   });
   it('starts no lane once shutdown has asked it to stop', async () => {
     const f = await fixture(), runtime = f.create();

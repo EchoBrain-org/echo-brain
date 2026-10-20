@@ -93,10 +93,8 @@ The single architecture gate traverses whole modules, including type imports
 and inline import types, side effects, namespaces, unused barrel exports and
 literal dynamic imports. Runtime assets follow the same ownership direction.
 The native Swift app is retired, and the gate rejects any Swift source under
-`product/` or `providers/`. The Explorer's assembly binds the exact bundled modules, provider-owned
-historical vocabulary assets, and exact external/builtin import allowlists.
-Both its builder and the gate reject computed imports and loader acquisition.
-Checks inspect source instead of stale emitted code. Architecture mutation tests cover each mechanism with
+`product/` or `providers/`. Checks inspect source instead of stale emitted code.
+Architecture mutation tests cover each mechanism with
 positive controls, and an isolated build removes all provider/application
 workspaces before compiling the neutral packages.
 

@@ -429,7 +429,7 @@ decision.
 ### Observability
 
 - Staging records an agentic Ask as the Ask journey, so the
-  Explorer, dashboard and Ask alarms see it: retrieval is the research desk
+  dashboard and Ask alarms see it: retrieval is the research desk
   time, planner the research step calls, then context, answer, final fence,
   audit and the V4 outcome.
 - Each step, answer call and desk call is a linked core-runtime span; desk

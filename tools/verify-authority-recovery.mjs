@@ -41,8 +41,9 @@ const RELEASE_BOUND_ENVIRONMENT_FIELDS = Object.freeze([
   "ECHO_CLEAN_RUNTIME_PROFILE_VERSION",
 ]);
 // The only settings that update-clean-v1.sh (agentic Ask flags) and staging
-// prepare write beside the identity fields, with their allowed values. Any
-// other name, or a selected connector rehearsal, is refused.
+// prepare write beside the identity fields, with their allowed values, plus the
+// retired content telemetry switch that older prepares wrote and updates carry
+// forward. Any other name, or a selected connector rehearsal, is refused.
 const OPTIONAL_ENVIRONMENT_VALUES = Object.freeze({
   ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: [""],
   ECHO_AGENTIC_ASK_V1: ["true", "false"],
