@@ -81,8 +81,7 @@ type OriginalScanRow = Pick<SourceRow, "source_id" | "revision_id" | "source_sha
 type DocumentScanRow = Pick<DocumentRow, "source_id" | "revision_id" | "source_sha256" | "representation_sha256" | "document_id" | "title" | "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor" | "received_at" | "visibility">;
 type OriginalScanIdentity = Omit<OriginalScanRow, "title" | "text">;
 type DocumentScanIdentity = Omit<DocumentScanRow, "title" | "text">;
-const ORIGINAL_TEXT_CUSTODY_V1 = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
-  UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
+const ORIGINAL_TEXT_CUSTODY_V1 = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2)`;
 
 type SourceRow = {
   readonly dates?: EvidenceDatesV1;

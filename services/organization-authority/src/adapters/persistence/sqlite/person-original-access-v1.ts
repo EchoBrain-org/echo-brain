@@ -53,9 +53,8 @@ export function personUnknownScopeV1(scope: never): never {
 }
 
 /**
- * Every retained note version (V1 carrier, V2 and V3) with its custody
- * columns. A V1 row is only checked as parseable time at insert, so every
- * received_at is normalized to canonical milliseconds here.
+ * Every retained note version (V2 and V3) with its custody columns. The table
+ * checks received_at only as parseable time at insert, so it is normalized to
+ * canonical milliseconds here.
  */
-export const PERSON_ORIGINAL_NOTE_CUSTODY_V1 = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,submitted_association_project_ids_json,audience_project_ids_json,strftime('%Y-%m-%dT%H:%M:%fZ',received_at) AS received_at FROM authority_person_updates_v2
-  UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,request_id,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,NULL AS project_id,NULL AS submitted_association_project_ids_json,NULL AS audience_project_ids_json,strftime('%Y-%m-%dT%H:%M:%fZ',received_at) AS received_at FROM authority_person_updates_v1)`;
+export const PERSON_ORIGINAL_NOTE_CUSTODY_V1 = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,submitted_association_project_ids_json,audience_project_ids_json,strftime('%Y-%m-%dT%H:%M:%fZ',received_at) AS received_at FROM authority_person_updates_v2)`;

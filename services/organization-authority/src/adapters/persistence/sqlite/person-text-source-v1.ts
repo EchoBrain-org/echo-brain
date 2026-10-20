@@ -1,12 +1,12 @@
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonUpdateSubmitV1, validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUploadAudienceV3, type ProjectIdV1 } from '@echo-brain/organization-api';
+import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUploadAudienceV3, type ProjectIdV1 } from '@echo-brain/organization-api';
 import { sourceContentSha256V1, sourceItemIdV1 } from '@echo-brain/organization-processing/core';
 import type { PersonTextSourceInboxV1, PersonTextSourceContentV1, PersonTextSourceFailureObservationV1 } from '../../../application/ports/person-text-source-v1.js';
 import { PERSON_SOURCE_IDENTITY_V1 } from '../../../application/person-document-source-v1.js';
 
 type TextRow = {
-  api_version: 1 | 2 | 3; organization_id: string; principal_id: string; membership_id: string;
+  api_version: 2 | 3; organization_id: string; principal_id: string; membership_id: string;
   request_id: string; context_id: string; title: string; text: string; payload_sha256: string;
   audience_kind: 'only_me' | 'team' | 'project' | 'projects'; audience_project_id: string | null;
   project_id: string | null; submitted_association_project_ids_json: string | null;
@@ -34,7 +34,7 @@ function audienceV3(row: TextRow) {
   throw new Error('V3 audience is invalid');
 }
 
-/** One retained note (V1, V2 or V3) as custody stores it. */
+/** One retained note (V2 or V3) as custody stores it. */
 export type PersonTextCustodyRowV1 = TextRow;
 
 /**
@@ -43,13 +43,11 @@ export type PersonTextCustodyRowV1 = TextRow;
  */
 export function assertPersonTextCustodyV1(row: PersonTextCustodyRowV1): void {
   const legacyAudience = row.audience_kind === 'project' ? { kind: 'project' as const, project_id: row.audience_project_id } : { kind: row.audience_kind };
-  const request = row.api_version === 1
-    ? validatePersonUpdateSubmitV1({ schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: row.request_id, title: row.title, text: row.text, visibility: row.audience_kind })
-    : row.api_version === 2
-      ? validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: row.request_id, title: row.title, text: row.text, audience: legacyAudience, project_id: row.project_id })
-      : validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: row.request_id, title: row.title, text: row.text, association_project_ids: canonicalIds(row.submitted_association_project_ids_json, 'Association project IDs'), audience: audienceV3(row) });
+  const request = row.api_version === 2
+    ? validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: row.request_id, title: row.title, text: row.text, audience: legacyAudience, project_id: row.project_id })
+    : validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: row.request_id, title: row.title, text: row.text, association_project_ids: canonicalIds(row.submitted_association_project_ids_json, 'Association project IDs'), audience: audienceV3(row) });
   const coordinates = { organization_id: row.organization_id, membership_id: row.membership_id, request_id: row.request_id };
-  const id = `ctx_${canonicalSha256(row.api_version === 1 ? coordinates : { schema_version: row.api_version, kind: `echo-person-update-source-v${row.api_version}`, ...coordinates }).slice(7)}`;
+  const id = `ctx_${canonicalSha256({ schema_version: row.api_version, kind: `echo-person-update-source-v${row.api_version}`, ...coordinates }).slice(7)}`;
   if (id !== row.context_id || canonicalSha256(request) !== row.payload_sha256) throw new Error('Person text source integrity failed');
 }
 
@@ -73,10 +71,7 @@ export class SqlitePersonTextSourceInboxV1 implements PersonTextSourceInboxV1 {
       const failures: PersonTextSourceFailureObservationV1[] = [];
       const v2 = `SELECT request_version AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,submitted_association_project_ids_json,audience_project_ids_json,received_at FROM authority_person_updates_v2`;
       for (let inspected = 0; inspected < 16; inspected += 1) {
-        const row = this.database.prepare(`SELECT * FROM (
-          SELECT 1 AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,NULL AS project_id,NULL AS submitted_association_project_ids_json,NULL AS audience_project_ids_json,received_at FROM authority_person_updates_v1
-          UNION ALL ${v2}
-        ) u WHERE NOT EXISTS (SELECT 1 FROM authority_sources_v1 s WHERE s.organization_id=u.organization_id AND s.adapter_id=? AND s.instance_id=? AND s.external_id=u.context_id)
+        const row = this.database.prepare(`SELECT * FROM (${v2}) u WHERE NOT EXISTS (SELECT 1 FROM authority_sources_v1 s WHERE s.organization_id=u.organization_id AND s.adapter_id=? AND s.instance_id=? AND s.external_id=u.context_id)
           AND NOT EXISTS (SELECT 1 FROM authority_person_text_source_failures_v1 f WHERE f.organization_id=u.organization_id AND f.api_version=u.api_version AND f.context_id=u.context_id)
           AND (u.audience_kind!='only_me' OR EXISTS(SELECT 1 FROM authority_memberships m WHERE m.organization_id=u.organization_id AND m.principal_id=u.principal_id AND m.membership_id=u.membership_id AND m.status='active'))
           ORDER BY received_at,context_id LIMIT 1`).get(PERSON_SOURCE_IDENTITY_V1.adapter_id, PERSON_SOURCE_IDENTITY_V1.instance_id) as TextRow | undefined;

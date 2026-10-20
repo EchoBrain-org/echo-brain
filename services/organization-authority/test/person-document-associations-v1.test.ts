@@ -11,7 +11,7 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { createPersonDocumentUploadStagingV1 } from '../src/adapters/files/document-upload-staging-v1.js';
-import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertLegacyTextV1, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
 const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
@@ -180,14 +180,12 @@ describe('document project associations', () => {
     expect(() => repository.associate(authorization(OWNER), associate(saved.document_id), () => authorization(OWNER))).toThrow('receipt write failed');
     expect(db.prepare('SELECT count(*) n FROM authority_person_document_associations_v1').get()).toEqual({ n: 0 });
   });
-  it('shares request identities with document uploads and project commands in both directions and with retained legacy uploads', () => {
+  it('shares request identities with document uploads and project commands in both directions', () => {
     const { app, db, upload } = setup(); const saved = upload();
     const projects = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(db, () => PROJECT_CONTEXT_NOW) });
     const create = (request_id: string) => projects.createProject('owner', { schema_version: 1, kind: 'echo-project-create-v1', request_id, name: 'Shared namespace' });
-    const text = (request_id: string) => insertLegacyTextV1(db, OWNER, { request_id, title: 'Legacy', text: 'text', visibility: 'team' });
     expect(() => app.associate('owner', { ...associate(saved.document_id), request_id: saved.request_id })).toThrow(expect.objectContaining({ code: 'conflict' }));
     const projectRequest = randomUUID(); create(projectRequest); expect(() => app.associate('owner', { ...associate(saved.document_id), request_id: projectRequest })).toThrow(expect.objectContaining({ code: 'conflict' }));
-    const textRequest = randomUUID(); text(textRequest); expect(() => app.associate('owner', { ...associate(saved.document_id), request_id: textRequest })).toThrow(expect.objectContaining({ code: 'conflict' }));
     const request = associate(saved.document_id); app.associate('owner', request);
     expect(() => create(request.request_id)).toThrow(expect.objectContaining({ code: 'conflict' }));
     expect(() => upload('owner', { request_id: request.request_id })).toThrow(expect.objectContaining({ code: 'conflict' }));
