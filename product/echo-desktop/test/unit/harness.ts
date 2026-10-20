@@ -98,7 +98,7 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
       case 'app.setUnresolved': return ok(null);
       case 'account.tools': return ok({ tools: [] });
       case 'projects.list': return ok(keysetPage(params.status === 'archived' ? lists().archived : lists().active, params.cursor));
-      case 'projects.members': case 'people.directory': case 'projects.directory': return ok({ items: [], next_cursor: null });
+      case 'projects.members': case 'people.directory': return ok({ items: [], next_cursor: null });
       case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
       case 'search.run': return ok({ items: [] });

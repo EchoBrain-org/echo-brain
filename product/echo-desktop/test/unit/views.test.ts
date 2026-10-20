@@ -613,15 +613,11 @@ describe('documents, members and project changes', () => {
     expect(() => savedOriginalView({ ok: true, result: { document_id: `doc_${'f'.repeat(64)}`, output_path: '/x' } }, DOCUMENT)).toThrow(ViewError);
   });
 
-  it('members and the directory are only for the project asked for, and a project read only that project', () => {
+  it('members are only for the project asked for, and a project read only that project', () => {
     const members = { schema_version: 1, kind: 'echo-project-members-v1', project_id: PROJECT, next_cursor: null,
       items: [{ membership_id: 'mem_1', display_name: 'Ari', role: 'lead' }] };
     expect(membersView(members, PROJECT).items).toEqual([{ membership_id: 'mem_1', display_name: 'Ari', role: 'lead' }]);
     expect(() => membersView(members, 'prj_other')).toThrow(ViewError);
-    expect(() => membersView(members, PROJECT, true)).toThrow(ViewError);
-    const directory = { schema_version: 1, kind: 'echo-project-directory-v1', project_id: PROJECT, next_cursor: null,
-      items: [{ membership_id: 'mem_2', display_name: 'Raj' }] };
-    expect(membersView(directory, PROJECT, true).items).toEqual([{ membership_id: 'mem_2', display_name: 'Raj' }]);
     const summary = { schema_version: 2, kind: 'echo-project-summary-v2', project_id: PROJECT, name: 'Apollo', created_at: 'x', role: 'member', status: 'active' };
     expect(projectView(summary, PROJECT).role).toBe('member');
     expect(() => projectView(summary, 'prj_other')).toThrow(ViewError);
@@ -635,7 +631,6 @@ describe('documents, members and project changes', () => {
     expect(directoryView({ ...people, items: [], next_cursor: null })).toEqual({ items: [], next_cursor: null });
     const project = { schema_version: 1, kind: 'echo-project-directory-v1', project_id: PROJECT, next_cursor: null, items: [] };
     expect(() => directoryView(project)).toThrow(ViewError);
-    expect(() => membersView(people, PROJECT, true)).toThrow(ViewError);
     expect(() => directoryView({ ...people, schema_version: 2 })).toThrow(ViewError);
     expect(() => directoryView({ ...people, items: [{ membership_id: 'mem_2' }] })).toThrow(ViewError);
   });

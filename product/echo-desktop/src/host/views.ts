@@ -247,12 +247,11 @@ function member(raw: unknown, directory: boolean): Member {
   };
 }
 
-/** One page of a project's members, or of the people its directory found, only for that project. */
-export function membersView(raw: unknown, projectId: string, directory = false): MemberPage {
+/** One page of a project's members, only for that project. */
+export function membersView(raw: unknown, projectId: string): MemberPage {
   const value = object(raw);
-  const kind = directory ? 'echo-project-directory-v1' : 'echo-project-members-v1';
-  if (value.kind !== kind || value.project_id !== projectId) throw new ViewError();
-  return { items: list(value.items).map(item => member(item, directory)), next_cursor: optionalText(value.next_cursor) ?? null };
+  if (value.kind !== 'echo-project-members-v1' || value.project_id !== projectId) throw new ViewError();
+  return { items: list(value.items).map(item => member(item, false)), next_cursor: optionalText(value.next_cursor) ?? null };
 }
 
 /** One page of the people in your organization, as `person directory` finds them: a name and a membership id each. */

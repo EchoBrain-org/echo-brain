@@ -182,11 +182,9 @@ export interface ToolManageSheet {
 }
 
 /**
- * Finding people by name. People finds them in the project's directory and
- * adds one at once, with an Undo; making a lead or removing someone is asked
- * first. New project finds them in the organization's directory and lists
- * the ones picked, or, on an Authority without it, uses People's way once
- * its project exists.
+ * Finding people by name, in the organization's directory. People adds one
+ * at once, with an Undo; making a lead or removing someone is asked first.
+ * New project lists the ones picked.
  */
 export interface Finding {
   /** The name typed to find someone. */
@@ -248,7 +246,7 @@ export interface ProjectPick {
  * comes back only for one whose outcome needs you, and closes by itself once
  * nothing does.
  */
-export interface NewProjectSheet extends Finding {
+export interface NewProjectSheet extends Pick<Finding, 'query' | 'directory'> {
   kind: 'new-project';
   seq: number;
   /** Stepped aside after Create: the work goes on, and the toast says where it is. */
@@ -264,15 +262,8 @@ export interface NewProjectSheet extends Finding {
   createdId: string | null;
   opening: boolean;
   openFailure?: Failure;
-  /** The project opened behind the sheet, once nothing more could start. */
-  opened: boolean;
   /** The people to add, in the order picked. You lead the project, so you are never one of them. */
   picks: ProjectPick[];
-  /**
-   * This Authority has no organization directory (an older one): people are
-   * added after Create, from the project's own directory, as People does.
-   */
-  peopleLater: boolean;
   files: ProjectFile[];
   /** The person or file whose Skip… is being asked. */
   skip: number | null;
@@ -2399,25 +2390,19 @@ function forgetLeftProject(projectId: string): void {
 
 // ---- people ----------------------------------------------------------------------
 
-/**
- * A sheet that finds people in a project's directory: People, or New project
- * once its project exists when the Authority has no organization directory.
- */
-export type FindingSheet = PeopleSheet | (NewProjectSheet & { project: ProjectSummary });
-
-export function findingSheet(current: State = state): FindingSheet | null {
-  const sheet = current.sheet;
-  return sheet?.kind === 'people' || (sheet?.kind === 'new-project' && sheet.project && sheet.peopleLater) ? sheet as FindingSheet : null;
+/** People, when it is up. */
+export function findingSheet(current: State = state): PeopleSheet | null {
+  return current.sheet?.kind === 'people' ? current.sheet : null;
 }
 
-function peopleSheet(mine?: number): FindingSheet | null {
+function peopleSheet(mine?: number): PeopleSheet | null {
   const sheet = findingSheet();
   return sheet && (mine === undefined || sheet.seq === mine) ? sheet : null;
 }
 
 function setPeople(patch: Partial<Finding> & Partial<Pick<PeopleSheet, 'project' | 'failure'>>, mine?: number): void {
   const sheet = peopleSheet(mine);
-  if (sheet) set({ sheet: { ...sheet, ...patch } as Sheet });
+  if (sheet) set({ sheet: { ...sheet, ...patch } });
 }
 
 /** A lead can change who is in the project, while no other change is unsettled. */
@@ -2472,20 +2457,19 @@ export function setPeopleQuery(query: string): void {
 }
 
 /**
- * The current people picker's directory, searched by name or paged with More.
- * New project uses the organization's directory; a project's People sheet
- * (including New project's fallback) uses its directory and requires a lead.
- * Replies for a search or sheet that has moved on are discarded.
+ * The organization's directory, searched by name or paged with More, for New
+ * project, or for People when you lead its project. Replies for a search or
+ * sheet that has moved on are discarded.
  */
 export async function findPeople(more = false): Promise<void> {
   clearTimeout(peopleTimer);
   const account = expect();
   const sheet = newProjectSheet() ?? peopleSheet();
   if (!account || !sheet) return;
-  const wholeOrganization = sheet.kind === 'new-project' && !sheet.peopleLater;
-  if (!wholeOrganization && sheet.project?.role !== 'lead') return;
+  const newProject = sheet.kind === 'new-project';
+  if (!newProject && sheet.project.role !== 'lead') return;
   const patch = (value: Partial<Finding>) => {
-    if (wholeOrganization) setNewProject(value, sheet.seq);
+    if (newProject) setNewProject(value, sheet.seq);
     else setPeople(value, sheet.seq);
   };
   const query = askText(sheet.query);
@@ -2495,20 +2479,13 @@ export async function findPeople(more = false): Promise<void> {
   if (more && !cursor) return;
   const mine = ++seq;
   const shown = more ? sheet.directory?.items ?? [] : [];
-  // A new project-directory search ends the last add's Undo.
+  // A new search in People ends the last add's Undo.
   patch({ directory: { seq: mine, query, items: shown, next: sheet.directory?.next ?? null, loading: true },
-    ...(!wholeOrganization && !more ? { added: null } : {}) });
-  const params = { expect: account, ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) };
-  const result = wholeOrganization ? await rpc('people.directory', params)
-    : await rpc('projects.directory', { ...params, project_id: sheet.project!.project_id });
-  const current = wholeOrganization ? newProjectSheet(sheet.seq) : peopleSheet(sheet.seq);
+    ...(!newProject && !more ? { added: null } : {}) });
+  const result = await rpc('people.directory', { expect: account, ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) });
+  const current = newProject ? newProjectSheet(sheet.seq) : peopleSheet(sheet.seq);
   if (!current || current.directory?.seq !== mine) return;
   if (!result.ok) {
-    if (wholeOrganization && NO_DIRECTORY.includes(result.failure.code)) {
-      // Once the project exists its people were picked or are added in People; the sheet's way of working stays.
-      setNewProject(current.project ? { directory: null } : { peopleLater: true, query: '', directory: null }, sheet.seq);
-      return;
-    }
     patch({ directory: { seq: mine, query, items: shown, next: null, loading: false, failure: result.failure } });
     accountLost(result.failure);
     return;
@@ -2588,8 +2565,6 @@ const UNADDED_PEOPLE = 'Some people may not have been added.';
 const UNFINISHED = 'Some people and files may not have been added.';
 /** The toasts that warn, shown with the warning mark. */
 export const WARNINGS: ReadonlySet<string> = new Set([UNSAVED_FILES, UNADDED_PEOPLE, UNFINISHED]);
-/** How an Authority without the organization directory answers it: the route is not there. */
-const NO_DIRECTORY = ['not_found', 'unsupported'];
 
 /** New project's people and files, numbered in one sequence. */
 let rowIds = 0;
@@ -2632,8 +2607,7 @@ export function openNewProject(): void {
     toast: null,
     sheet: {
       kind: 'new-project', seq: ++seq, hidden: false, name: '', create: { requestId: crypto.randomUUID(), name: '', status: 'editing' }, confirmClose: false,
-      project: null, createdId: null, opening: false, opened: false, picks: [], peopleLater: false, files: [], skip: null,
-      query: '', directory: null, menu: null, confirm: null, added: null,
+      project: null, createdId: null, opening: false, picks: [], files: [], skip: null, query: '', directory: null,
     },
   });
   void findPeople();
@@ -2681,9 +2655,7 @@ export async function createProject(): Promise<void> {
 
 /**
  * The project Create made, read: it joins your projects and opens, the sheet
- * steps aside, and the people and files picked go into it. Without the
- * organization's directory the sheet stays: a lead now finds people in the
- * project's own.
+ * steps aside, and the people and files picked go into it.
  */
 async function openCreated(): Promise<void> {
   const account = expect();
@@ -2703,14 +2675,8 @@ async function openCreated(): Promise<void> {
     set({ projects: { ...state.projects, items: [project, ...state.projects.items] } });
     listChanged();
   }
-  setNewProject({ opening: false, project, notice: undefined }, mine);
-  if (newProjectSheet(mine)?.peopleLater && project.role === 'lead') {
-    void loadRoster(project.project_id);
-    void findPeople();
-  } else {
-    setNewProject({ hidden: true, opened: true }, mine);
-    void openProject(project);
-  }
+  setNewProject({ opening: false, project, notice: undefined, hidden: true }, mine);
+  void openProject(project);
   pumpNewProject();
 }
 
@@ -2718,8 +2684,7 @@ async function openCreated(): Promise<void> {
  * Once the project exists, New project works down its list one request at a
  * time: each person, then each file. One whose outcome is unknown holds back
  * the rest until it is settled. When nothing more can start, the sheet comes
- * back for what needs you, or closes. Without the organization's directory
- * the sheet stays for finding people, and the project opens behind it, once.
+ * back for what needs you, or closes.
  */
 function pumpNewProject(): void {
   const sheet = newProjectSheet();
@@ -2730,17 +2695,12 @@ function pumpNewProject(): void {
   if (person) { void addPick(sheet.seq, person.id, false); return; }
   const file = held || sheet.files.some(entry => entry.status === 'unknown') ? undefined : sheet.files.find(entry => entry.status === 'waiting');
   if (file) { void saveFile(sheet.seq, file.id, false); return; }
-  if (!sheet.opened) {
-    setNewProject({ opened: true }, sheet.seq);
-    void openProject(sheet.project);
-    return;
-  }
-  if (!sheet.peopleLater || sheet.hidden) settleNewProject(sheet);
+  settleNewProject(sheet);
 }
 
 /** Once its project is open, New project can step aside while it works, and come back. */
 export function newProjectSteppable(sheet: NewProjectSheet): boolean {
-  return sheet.project !== null && sheet.opened && !sheet.peopleLater;
+  return sheet.project !== null;
 }
 
 /**
@@ -2849,8 +2809,7 @@ function releaseCopy(requestId: string, account: Expect | null = expect()): void
 
 /** Typing a name finds the organization's people once it pauses. */
 export function setPickQuery(query: string): void {
-  const sheet = newProjectSheet();
-  if (!sheet || sheet.peopleLater) return;
+  if (!newProjectSheet()) return;
   setNewProject({ query });
   clearTimeout(peopleTimer);
   peopleTimer = setTimeout(() => void findPeople(), SEARCH_PAUSE_MS);
@@ -2859,7 +2818,7 @@ export function setPickQuery(query: string): void {
 /** The people found who can be picked: not you, who lead it, and not picked already. */
 export function pickable(current: State = state): readonly Member[] {
   const sheet = current.sheet;
-  if (sheet?.kind !== 'new-project' || sheet.peopleLater || !sheet.directory) return [];
+  if (sheet?.kind !== 'new-project' || !sheet.directory) return [];
   const me = current.status?.account?.membership_id;
   const picked = new Set(sheet.picks.map(pick => pick.person.membership_id));
   return sheet.directory.items.filter(person => person.membership_id !== me && !picked.has(person.membership_id));

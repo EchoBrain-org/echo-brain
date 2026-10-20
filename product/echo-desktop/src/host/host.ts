@@ -93,7 +93,7 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
-  'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000, 'projects.directory': 45_000,
+  'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
   'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
@@ -483,21 +483,12 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['projects', 'members', option('project-id', project_id), ...page(cursor)],
         stdout => membersView(lastJson(stdout), project_id));
     }
-    case 'projects.directory': {
-      const { expect, project_id, query, cursor } = params as Params<'projects.directory'>;
-      if (!pageable(project_id, cursor)) return code('invalid_request');
-      // No name: the first people the directory has.
-      const name = typeof query === 'string' ? askText(query) : '';
-      return forAccount(method, expect, [
-        'projects', 'directory', option('project-id', project_id), ...(name === '' ? [] : [option('query', name)]), ...page(cursor),
-      ], stdout => membersView(lastJson(stdout), project_id, true));
-    }
     case 'people.directory': {
       const { expect, query, cursor } = params as Params<'people.directory'>;
       if ((query !== undefined && typeof query !== 'string') || (cursor !== undefined && (typeof cursor !== 'string' || !CURSOR.test(cursor)))) {
         return code('invalid_request');
       }
-      // No name: the first people, by name. Ten at a time, as the project directory.
+      // No name: the first people, by name. Ten at a time, as a project's members.
       const name = query === undefined ? '' : askText(query);
       return forAccount(method, expect, ['directory', ...(name === '' ? [] : [option('query', name)]), ...page(cursor)],
         stdout => directoryView(lastJson(stdout)));

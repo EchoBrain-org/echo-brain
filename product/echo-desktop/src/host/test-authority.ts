@@ -1588,15 +1588,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const all = (members[projectId] ?? []).map(entry => ({ membership_id: entry.membership_id, display_name: nameOf(entry.membership_id), role: entry.role }));
       return json({ schema_version: 1, kind: 'echo-project-members-v1', project_id: projectId, ...paged(all, body?.cursor) });
     }
-    if (method === 'POST' && path === '/v1/person/projects/directory') {
-      const projectId = String(body?.project_id);
-      if (roleOf(projectId, session.membership_id) !== 'lead') return failure('not_found', 404);
-      const all = desktop.people.filter(person => body?.query === undefined || found(body.query, { title: person.display_name }));
-      return json({ schema_version: 1, kind: 'echo-project-directory-v1', project_id: projectId, ...paged(all, body?.cursor) });
-    }
-    // Everyone in your organization, for any member and with no project (ADR-0016). An
-    // Authority from before it has no such route: not_found, as any unknown path.
-    if (method === 'POST' && path === '/v1/person/directory' && mode !== 'no-person-directory') {
+    // Everyone in your organization, for any member and with no project (ADR-0016).
+    if (method === 'POST' && path === '/v1/person/directory') {
       const api = await contract();
       let request: ReturnType<Contract['validateOrganizationDirectorySearchV1']>;
       try {
