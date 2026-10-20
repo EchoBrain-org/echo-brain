@@ -81,10 +81,9 @@ A tool container's citation commits to no text
 ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)), so the
 boundary checks that digest for every other citation, and the audit commits a
 container's released value instead.
-A Slack reader, when adapted, uses the existing typed message citation; ticket
-tools use
+Ticket tools use
 [`PersonTicketCitationV1`](../../packages/organization-api/src/person-ticket-citation-v1.ts),
-whose coordinates include the tool, tenant and ticket identity. Neither changes
+whose coordinates include the tool, tenant and ticket identity. It does not change
 the citation union of `PersonAnswerResponseV4`; ticket citations reach Ask only
 through `PersonAnswerResponseV5`.
 
@@ -186,8 +185,6 @@ readers to the dates their sources declare.
   locally with no provider call; each connection pins and fences them
   (`containerProjects` in `providers/shared/src/person-project-mapping-v1.ts`).
 
-Slack registers no containers: no Slack reader is composed.
-
 ## Meeting exports
 
 Meeting ingestion continues to use
@@ -263,9 +260,8 @@ proposed; the CLI requires explicit Jira or Confluence configuration. The
 [service guide](../../services/organization-authority/README.md#staging-connector-rehearsal)
 owns the staging selection: each Person reads under their own grant, without
 tool capture. Jira (tickets, and Jira projects for V8) and Confluence (pages, and spaces
-for V8) are the live readers. No live Slack reader
-is composed, the V3 desk reads no Slack, and read status is not exposed to
-clients.
+for V8) are the live readers. Ask reads no Slack, and read status is not
+exposed to clients.
 
 The dispatcher must preserve [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)
 scope rules: `mine` excludes live external reads. Provider selection and

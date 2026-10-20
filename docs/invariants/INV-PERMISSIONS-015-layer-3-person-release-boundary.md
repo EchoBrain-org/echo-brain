@@ -226,8 +226,7 @@ mine, one the reader approved) is waiting to be indexed.
 ADR-0024's mine scope on `POST /v3/person/ask` is a caller-selected narrowing
 of the same global readable set: the evidence desk pushes it into every store
 query, mine with a project is a 400, and mine without the composed approver
-projectors is a 503 rather than global. Mine reads no Slack and no shared
-transcript. The answer audit and the per-store release audits are unchanged.
+projectors is a 503 rather than global. Mine reads no shared transcript. The answer audit and the per-store release audits are unchanged.
 
 ## Verification and change procedure
 

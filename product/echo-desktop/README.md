@@ -25,9 +25,8 @@ item lit; a note, document or imported meeting its cited passages; a
 transcript its meeting; a follow-up its title, owner, status and latest check
 (ADR-0040); one of your projects its name; a person in your organization their
 name only; one of your tools its name only (the answer says how you are
-connected, as ECHO read it for that Ask); a Jira ticket, Confluence page or
-Slack message, and a
-Jira project, Confluence space or Slack channel, its "Open in …". Once the
+connected, as ECHO read it for that Ask); a Jira ticket or Confluence page,
+and a Jira project or Confluence space, its "Open in …". Once the
 answer has come, **Open** goes to the item's own page (leaving Ask, so it is
 hidden while Ask works): the reader, where a meeting opens scrolled to the
 items the pane lit, lit too, a follow-up's item page, the project, or Tools. A
@@ -208,8 +207,8 @@ follow-ups are not closed ("4 follow-ups"). Home also
 re-checks your own open items by itself: when the Authority says they are
 due, Home asks for a sweep and starts it after any waiting impact check. A
 sweep makes no Home row and changes no item's status; it only records each
-item's latest verdict. A meeting's actions and items on a Slack message are
-never re-checked. Projects and archived projects live in the sidebar.
+item's latest verdict. A meeting's actions are never re-checked. Projects and
+archived projects live in the sidebar.
 
 A project's **Tools** (in its title bar, the line above its feed, or the
 project menu) is one sheet for every tool a project can read: a Jira project

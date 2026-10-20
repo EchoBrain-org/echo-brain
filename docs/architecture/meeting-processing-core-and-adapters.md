@@ -372,7 +372,7 @@ Sharing follows capabilities, so a provider reuses only the layers it needs:
 | Personal Nango connection lifecycle, binding store, connection HTTP/client contracts | Granola, Jira and Confluence | OAuth scopes, resource/account verification and API permissions |
 | Project mapping store and current project-grant fence | Jira and Confluence | Mapping shape, project/space discovery and visibility checks |
 | Native Atlassian Document Format text normalization | Jira and Confluence | Requested representation, unsupported-content policy and evidence section identity |
-| Registered live-source dispatch and Ask catalog | Jira, Confluence and explicitly bound Slack reads | Reader implementation and declared scope/capabilities |
+| Registered live-source dispatch and Ask catalog | Jira and Confluence | Reader implementation and declared scope/capabilities |
 
 The shared server mechanisms live in
 [`providers/shared`](../../providers/shared/src/); common Person connection
@@ -409,8 +409,8 @@ source and meeting normalization, and retains its context capture transform.
 Its organization acquisition and owner-admission code is retired;
 shared meeting custody and processing contracts remain distinct from personal
 live reads. Slack's organization app and approval DM copies likewise retain
-their own lifecycle. A Slack Person read requires a separately authorized
-binding; an organization approval installation alone grants no such access. This refactor
+their own lifecycle. Ask reads no Slack, and an organization approval
+installation grants no read access. This refactor
 does not migrate Slack approval onboarding onto the shared personal Nango
 lifecycle.
 

@@ -43,7 +43,7 @@ The server reads its mapped Jira project live using the asker's own connected
 account. It combines those tickets with the ECHO content already visible in the
 project, with ticket citations. No Jira ticket content is retained. An unmapped
 project or an asker without a connection gets no Jira evidence, with no fallback
-to a wider search. Mine excludes Jira, and project scope excludes live Slack.
+to a wider search. Mine excludes Jira.
 
 The mapping is provider configuration in the existing Jira sidecar; it requires
 no Authority schema reset. A saved stable Jira project ID bounds searches and exact
