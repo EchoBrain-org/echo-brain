@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
-import { cover, show, uncover } from './harness.js';
+import { cover, render, show, text, uncover } from './harness.js';
 import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -453,6 +453,9 @@ describe('Home decisions and impact checks', () => {
     const store = await start();
     expect(store.homeRows()).toMatchObject([{ kind: 'checking', review: { status: 'publishing' } }]);
     expect(store.needsCount()).toBe(0);
+    const { ReviewLine } = await import('../../src/renderer/screens/home.js');
+    const row = store.homeRows()[0] as Parameters<typeof ReviewLine>[0]['row'];
+    expect(text(render(ReviewLine({ row })))).toBe('Approved · publishing to ECHO');
     review = { ...review, status: 'approved' };
     run = impactRun('pending');
     await vi.advanceTimersByTimeAsync(5_000);

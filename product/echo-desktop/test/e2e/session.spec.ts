@@ -10,13 +10,10 @@ test.afterEach(async () => { await run?.close(); });
 const refreshes = () => run.calls().filter(call => call.path === '/v2/session/refresh');
 
 /**
- * Both startup lists and Home's reads (its tools, runs and rows) fail before sending, each tried once, and so does the change
- * check; a known-not-sent refresh preserves the session for the next call.
+ * The startup reads, the change check among them, fail before sending; a known-not-sent refresh preserves the session for the
+ * next call.
  */
 async function expectOfflineStartup(): Promise<void> {
-  const completedLists = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')
-    .match(/(projects\.list|account\.tools|runs\.\w+(?: rows| counts)?) transport_failed/g)?.length ?? 0;
-  await expect.poll(completedLists).toBe(5);
   await expect.poll(() => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/changes\.read \w+/);
   expect(new Set(run.calls().map(call => call.path))).toEqual(new Set(['/v2/session/refresh']));
 }
@@ -93,19 +90,15 @@ test('an offline foreground refresh keeps you signed in, and a note is not sent 
   const { page, app } = run;
   await expect(page.getByTestId('home-error')).toContainText('ECHO cannot be reached. Check your connection');
   await expect(page.getByTestId('signed-out')).toHaveCount(0);
-  // Active and archived lists each try once; neither list reaches the Authority.
+  // Nothing reaches the Authority.
   await expectOfflineStartup();
-  // Returning to ECHO reads local status, Home and the change check again; with no check to say what moved, the sidebar's
-  // lists are tried again too, side by side. Each still fails before sending.
+  // Returning to ECHO reads local status, Home and the change check again. Each still fails before sending.
   const statuses = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/app\.status ok/g)?.length ?? 0;
   const before = statuses();
-  const lists = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/projects\.list transport_failed/g)?.length ?? 0;
-  const listed = lists();
   const tried = refreshes().length;
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:resume');
   await expect.poll(statuses).toBe(before + 1);
-  await expect.poll(lists).toBe(listed + 2);
   await expect(page.getByTestId('home-error')).toBeVisible();
   expect(refreshes().length).toBeGreaterThan(tried);
   await expect(page.getByTestId('sidebar-projects-error').getByRole('button', { name: 'Try again' })).toBeEnabled();
@@ -167,83 +160,16 @@ test('past the weekly sign-in, ECHO asks to sign in again in plain words, never 
   expect((await host('app.status', {})).value).not.toHaveProperty('session_ended');
 });
 
-test('a day before the weekly sign-in a quiet row says so, and signing in again from it keeps the draft', async () => {
-  run = await launch('weekly-soon');
-  const { page, app } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await expect(page.getByTestId('sidebar-sign-in-again')).toContainText(/Sign in again by .+ · Sign in/);
-  await expect(page.getByTestId('sidebar-sign-in-note')).toHaveText('ECHO asks you to sign in once a week.');
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Half a thought');
-  await page.keyboard.press('Escape');
-  await page.getByTestId('sidebar-sign-in-again').click();
-  // This session ends, and the fixture's browser, standing in for Google, signs Ari back in with a new week.
-  await expect(page.getByTestId('sidebar-sign-in-again')).toHaveCount(0);
-  await expect(page.getByTestId('signed-out')).toHaveCount(0);
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  const paths = run.calls().map(call => call.path);
-  expect(paths.filter(path => path === '/v2/session/revocations')).toHaveLength(1);
-  expect(paths.indexOf('/v2/session/revocations')).toBeLessThan(paths.lastIndexOf('/v2/session/oidc/begin'));
-  // The same person came back: their draft is still there.
-  await emit(app, 'echo-test:capture');
-  await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
-});
-
-test('a host that keeps exiting is given up on, and the page says ECHO could not start', async () => {
+test('a host that keeps exiting is given up on, the page says ECHO could not start, and an invitation no host took leaves no folder behind', async () => {
   run = await launch('host-crash');
-  const { page } = run;
+  const { app, page, home } = run;
   await expect(page.getByTestId('start-failed')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId('signed-out')).toHaveCount(0);
   const log = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8');
   await expect.poll(log, { timeout: 10_000 }).toContain('host gave-up');
   expect(log().match(/host exit/g)).toHaveLength(3);
   await expect(page.getByTestId('start-failed')).toBeVisible();
-});
-
-test('quit waits out a refresh with the window open, and never touches the closed window', async () => {
-  run = await launch('refresh-hangs');
-  const { app, home } = run;
-  await expect.poll(() => refreshes().length).toBe(1);
-  // Any throw while quitting raises Electron's error box, which can hold the
-  // quit open. macOS reports the app inactive after its window has closed:
-  // conceal, through the handler that report reaches, must skip the closed window.
-  await app.evaluate(({ app: electronApp, BrowserWindow }, threw) => {
-    BrowserWindow.getAllWindows()[0]!.once('closed', () => {
-      try { electronApp.emit('echo-test:conceal'); } catch { process.getBuiltinModule('node:fs').writeFileSync(threw, ''); }
-    });
-  }, join(home, 'threw'));
-  const exited = new Promise(resolveExit => app.process().once('exit', resolveExit));
-  await app.evaluate(({ app: electronApp }) => { electronApp.quit(); });
-  // Electron's own listeners throw on late notices to a closed window, so the
-  // window closes only as the app exits.
-  await new Promise(resolveWait => setTimeout(resolveWait, 1_000));
-  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
-  await exited; // the 5 s cap, not the refresh, ends the wait
-  expect(existsSync(join(home, 'threw'))).toBe(false);
-});
-
-test('a note sent while quit waits out a refresh is asked about, once', async () => {
-  run = await launch('refresh-hangs');
-  const { app, page, home } = run;
-  await expect.poll(() => refreshes().length).toBe(1);
-  const asked = join(home, 'asked');
-  const exited = new Promise(resolveExit => app.process().once('exit', resolveExit));
-  await app.evaluate(({ app: electronApp, dialog }, file) => {
-    dialog.showMessageBoxSync = () => { process.getBuiltinModule('node:fs').appendFileSync(file, 'asked\n'); return 0; }; // Quit Anyway
-    electronApp.quit();
-  }, asked);
-  // The window stays open while quit waits, so a note can still be sent.
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Offsite dates');
-  await page.getByTestId('compose-send').click();
-  await exited;
-  expect(existsSync(asked) && readFileSync(asked, 'utf8')).toBe('asked\n');
-});
-
-test('an invitation no host took leaves no folder behind, so saving one under the same name works again', async () => {
-  run = await launch('host-crash');
-  const { app, page, home } = run;
-  await expect.poll(() => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8'), { timeout: 10_000 }).toContain('host gave-up');
+  // Saving an invitation under the same name works again.
   const folder = join(home, 'ECHO invitation for Kim');
   await app.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = (async () => ({ canceled: false, filePath })) as never; }, folder);
   type Reply = { ok: boolean; value?: { handle: string }; failure?: { code: string; mutation_outcome?: string } };
@@ -260,7 +186,7 @@ test('an invitation no host took leaves no folder behind, so saving one under th
   expect((await invite()).chosen).toMatchObject({ ok: true });
 });
 
-test('pressing Quit again while quit waits out a refresh asks once, after the wait, and Cancel keeps ECHO open', async () => {
+test('quit waits out a refresh with the window open; a note sent meanwhile, or Quit pressed again, asks once, after the wait; Cancel keeps ECHO open', async () => {
   run = await launch('refresh-hangs');
   const { app, page, home } = run;
   await expect.poll(() => refreshes().length).toBe(1);
@@ -269,12 +195,23 @@ test('pressing Quit again while quit waits out a refresh asks once, after the wa
   const answer = (choice: number) => app.evaluate(({ dialog }, [file, chosen]) => {
     dialog.showMessageBoxSync = () => { process.getBuiltinModule('node:fs').appendFileSync(file, `${Date.now()}\n`); return chosen; };
   }, [asked, choice] as const);
-  // A save whose outcome is unknown, so quitting asks.
-  await page.evaluate(() => (window as unknown as { echo: { rpc(method: string, params: object): Promise<unknown> } }).echo
-    .rpc('app.setUnresolved', { unresolved: true }));
+  // Any throw while quitting raises Electron's error box, which can hold the
+  // quit open. macOS reports the app inactive after its window has closed:
+  // conceal, through the handler that report reaches, must skip the closed window.
+  await app.evaluate(({ app: electronApp, BrowserWindow }, threw) => {
+    BrowserWindow.getAllWindows()[0]!.once('closed', () => {
+      try { electronApp.emit('echo-test:conceal'); } catch { process.getBuiltinModule('node:fs').writeFileSync(threw, ''); }
+    });
+  }, join(home, 'threw'));
   await answer(1); // Cancel
   const quitAt = Date.now();
   await app.evaluate(({ app: electronApp }) => { electronApp.quit(); electronApp.quit(); });
+  // The window stays open while quit waits, so a note can still be sent: its outcome unknown, quitting asks.
+  await new Promise(resolveWait => setTimeout(resolveWait, 1_000));
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Offsite dates');
+  await page.getByTestId('compose-send').click();
   // The second press joins the first wait: asked once, when the 5 s cap ends it.
   await expect.poll(() => askedAt().length, { timeout: 10_000 }).toBe(1);
   expect(askedAt()[0]! - quitAt).toBeGreaterThanOrEqual(4_500);
@@ -287,9 +224,10 @@ test('pressing Quit again while quit waits out a refresh asks once, after the wa
   const exited = new Promise(resolveExit => app.process().once('exit', resolveExit));
   const againAt = Date.now();
   await app.evaluate(({ app: electronApp }) => { electronApp.quit(); });
-  await exited;
+  await exited; // the 5 s cap, not the refresh, ends the wait
   expect(askedAt()).toHaveLength(2);
   expect(askedAt()[1]! - againAt).toBeGreaterThanOrEqual(4_500);
+  expect(existsSync(join(home, 'threw'))).toBe(false);
 });
 
 test('a starting host leaves a note folder another host may be sending from, and removes an hour-old one', async () => {

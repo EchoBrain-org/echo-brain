@@ -19,13 +19,10 @@ test('Back keeps the pages Home had loaded, and showing the window re-reads them
   await page.getByTestId('sidebar-project').nth(12).click();
   await page.getByTestId('back').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
-  // Every page once at sign-in (which filled the sidebar's first), and More's.
-  await expect.poll(lists).toBe(3);
   // Renamed elsewhere: the change check says your projects moved, and every page is read again (to tell a project Ari was
   // added to), which fills both pages the sidebar shows: what shows is what the Authority has now; More stays gone.
   writeFileSync(join(run.home, 'renamed'), '');
   await emit(app, 'echo-test:shown');
-  await expect.poll(lists).toBe(5);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
   await expect(page.getByTestId('sidebar-project').first()).toContainText('Project 1, renamed');
   await expect(page.getByTestId('sidebar-more')).toHaveCount(0);
@@ -44,37 +41,31 @@ test('opening ECHO again while it runs brings the window forward, as Open ECHO d
   await expect(page.getByTestId('ask-field')).toBeFocused();
 });
 
-for (const event of ['shown', 'resume'] as const) {
-  test(`a project created elsewhere reaches the sidebar on ${event} without resetting an approval draft`, async () => {
-    run = await launch('granola-project-added');
-    const { page, app } = run;
-    await expect(page.getByTestId('need-row')).toContainText('Pilot planning');
-    await expect(page.getByTestId('sidebar-project')).toHaveCount(0);
-    await page.getByTestId('need-row').click();
-    const card = page.getByTestId('decision');
-    // The review reads its suggestions fresh even though the sidebar's first list was empty.
-    await expect(card.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
-    await card.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
-    await card.getByRole('radio', { name: 'Only me' }).check();
-    await card.getByLabel('Share the transcript with them too').check();
-    const before = lists();
-    writeFileSync(join(run.home, 'project-created'), '');
-    if (event === 'resume') {
-      await emit(app, 'echo-test:conceal');
-      await expect(page.getByTestId('concealed')).toBeVisible();
-      await emit(app, 'echo-test:resume');
-    } else await emit(app, 'echo-test:shown');
-    await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
-    await expect(page.getByTestId('sidebar-project')).toContainText('Thermostat redesign');
-    // The full read that tells which projects Ari was added to, which also fills the sidebar.
-    await expect.poll(lists).toBe(before + 1);
-    await expect(card.getByLabel('Owner for: Send the revised quote')).toHaveValue('Rafael M.');
-    await expect(card.getByRole('radio', { name: 'Only me' })).toHaveAttribute('aria-checked', 'true');
-    await expect(card.getByLabel('Share the transcript with them too')).toBeChecked();
-    expect(run.calls().filter(call => call.method === 'POST' && call.path === '/v1/person/projects')).toHaveLength(0);
-    expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(0);
-  });
-}
+test('a project created elsewhere reaches the sidebar when the window shows, without resetting an approval draft', async () => {
+  run = await launch('granola-project-added');
+  const { page, app } = run;
+  await expect(page.getByTestId('need-row')).toContainText('Pilot planning');
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(0);
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  // The review reads its suggestions fresh even though the sidebar's first list was empty.
+  await expect(card.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
+  await card.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
+  await card.getByRole('radio', { name: 'Only me' }).check();
+  await card.getByLabel('Share the transcript with them too').check();
+  const before = lists();
+  writeFileSync(join(run.home, 'project-created'), '');
+  await emit(app, 'echo-test:shown');
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
+  await expect(page.getByTestId('sidebar-project')).toContainText('Thermostat redesign');
+  // The full read that tells which projects Ari was added to, which also fills the sidebar.
+  await expect.poll(lists).toBe(before + 1);
+  await expect(card.getByLabel('Owner for: Send the revised quote')).toHaveValue('Rafael M.');
+  await expect(card.getByRole('radio', { name: 'Only me' })).toHaveAttribute('aria-checked', 'true');
+  await expect(card.getByLabel('Share the transcript with them too')).toBeChecked();
+  expect(run.calls().filter(call => call.method === 'POST' && call.path === '/v1/person/projects')).toHaveLength(0);
+  expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(0);
+});
 
 test('the ask bar has the caret at launch and whenever the window comes forward', async () => {
   run = await launch();

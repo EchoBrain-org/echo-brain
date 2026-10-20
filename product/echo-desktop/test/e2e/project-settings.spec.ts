@@ -378,34 +378,24 @@ test('a lead keeps a saved Confluence mapping and can stop reading it when the p
   expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set').at(-1)?.body).toMatchObject({ project_id: APOLLO, space_ids: null });
 });
 
-for (const mode of ['confluence-project-conflict', 'confluence-project-reply-lost']) {
-  test(`${mode}: keeps Tools up and reloads the saved mapping after an unconfirmed change without resubmitting`, async () => {
+// A change the Authority refused as stale, and one whose reply was lost: each tool's setting goes through the same adapter.
+for (const [mode, tool, said, reloaded] of [
+  ['confluence-project-conflict', 'confluence', 'This setting changed.', 'Not set'],
+  ['jira-project-reply-lost', 'jira', 'The change could not be confirmed.', 'Reads ECHO'],
+] as const) {
+  test(`${mode}: keeps Tools up and reloads the saved setting after an unconfirmed change without resubmitting`, async () => {
     run = await launch(mode);
     const { page } = run;
     await openApolloSetting(page, 'tools-item');
-    await page.getByLabel(/ECHO product/).check();
+    if (tool === 'jira') await page.getByTestId('project-jira-input').fill('ECHO');
+    else await page.getByLabel(/ECHO product/).check();
     await page.getByTestId('project-tools-save').click();
-    await expect(page.getByTestId('project-confluence-error')).toContainText(mode === 'confluence-project-conflict' ? 'This setting changed.' : 'The change could not be confirmed.');
+    await expect(page.getByTestId(`project-${tool}-error`)).toContainText(said);
     await expect(page.getByTestId('project-tools-sheet')).toBeVisible();
     await expect(page.getByTestId('project-tools-save')).toBeDisabled();
     await page.getByRole('button', { name: 'Reload setting' }).click();
-    await expect(page.getByTestId('project-confluence-current')).toHaveText(mode === 'confluence-project-reply-lost' ? 'Reads 1 space' : 'Not set');
-    expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/project/set')).toHaveLength(1);
-  });
-}
-
-for (const mode of ['jira-project-conflict', 'jira-project-reply-lost']) {
-  test(`${mode}: keeps Tools up and reloads the current setting after a failed save without silently resubmitting`, async () => {
-    run = await launch(mode);
-    const { page } = run;
-    await openApolloSetting(page, 'tools-item');
-    await page.getByTestId('project-jira-input').fill('ECHO');
-    await page.getByTestId('project-tools-save').click();
-    await expect(page.getByTestId('project-jira-error')).toBeVisible();
-    await expect(page.getByTestId('project-tools-save')).toBeDisabled();
-    await page.getByRole('button', { name: 'Reload setting' }).click();
-    await expect(page.getByTestId('project-jira-current')).toHaveText(mode === 'jira-project-reply-lost' ? 'Reads ECHO' : 'Not set');
-    expect(run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set')).toHaveLength(1);
+    await expect(page.getByTestId(`project-${tool}-current`)).toHaveText(reloaded);
+    expect(run.calls().filter(call => call.path === `/v1/person/tools/${tool}/project/set`)).toHaveLength(1);
   });
 }
 
