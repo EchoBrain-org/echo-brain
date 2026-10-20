@@ -1,9 +1,7 @@
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import { PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1 } from "../../../presentation/private-slack-approval-interaction-http-port-v1.js";
-import {
-  BoundedJsonFetchErrorV1,
-  boundedJsonFetchV1,
-} from "../../../shared/bounded-json-fetch-v1.js";
+import { BoundedJsonResponseErrorV1 } from "@echo-brain/provider-runtime/bounded-json-response-v1";
+import { boundedJsonFetchV1 } from "../../../shared/bounded-json-fetch-v1.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 } from "../../application/slack-integration-contracts.js";
 
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
@@ -190,7 +188,7 @@ export class SlackWebAppManifestProviderV1 implements SlackAppManifestProviderV1
         maxBytes: MAXIMUM_RESPONSE_BYTES,
       });
     } catch (error) {
-      if (error instanceof BoundedJsonFetchErrorV1) {
+      if (error instanceof BoundedJsonResponseErrorV1) {
         throw new SlackAppManifestProviderErrorV1(
           "unavailable",
           "Slack manifest request is unavailable",
