@@ -414,9 +414,10 @@ questions naming none (research tool contract v1). After the canary's two
 reads, ask the release's open-ended questions with the same candidate binary,
 word for word: they are the development cases that
 [`tools/evals/research-loop/release-check.json`](../../tools/evals/research-loop/release-check.json)
-names. `--live` asks on the newest Ask route (`/v7`), the one that reads the
-connected tools, follow-ups and the workspace; without it the CLI asks on `/v3`,
-which reads none of them.
+names. They must run on the newest Ask route (`/v7`), the one that reads the
+connected tools, follow-ups and the workspace. A client from 2026-10-19 on
+asks every question there; `--live` keeps an older one off `/v3`, which reads
+none of them, and changes nothing on a newer one.
 
 ```sh
 "$HOME/.local/bin/echo-brain" person ask --live --question 'What happened yesterday?'

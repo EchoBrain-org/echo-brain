@@ -161,17 +161,19 @@ evidence still requires current access when opened.
 
 This version shipped as `POST /v2/person/ask` (request schema 2, response
 schema 3), beside the approved-record-only `/v1/person/ask`. Both were retired
-by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md). The default CLI Ask,
-and the desktop's Mine Ask, use `POST /v3/person/ask` with V4 answers, and the
-scope rules here still apply to every route. The CLI accepts
-`person ask --question <text> [--project <project-id> | --mine] [--tickets | --live [--progress [--expected-membership-id <id> --expected-authority <origin>]]]`;
-`--project` and `--mine` are exclusive, as are `--tickets` and `--live`. The
-client does not silently downgrade a project or mine request to global Ask.
+by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md). Every Ask, the
+CLI's and the desktop's in every scope, Mine included, asks on the newest Ask
+route, and the scope rules here still apply to every route. The CLI accepts
+`person ask --question <text> [--project <project-id> | --mine] [--tickets | --progress [--expected-membership-id <id> --expected-authority <origin>]]`;
+`--project` and `--mine` are exclusive, as are `--tickets` and `--progress`.
+`--live`, which once chose the newest route, is still accepted, changes
+nothing, and is refused beside `--tickets`. The client does not silently
+downgrade a project or mine request to global Ask.
 
-`--live` asks on the newest Ask route; the
+The
 [Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)
-owns its routes, refs, fallback to an older Authority and `--progress` stream.
-Live Ask may cite ECHO's shared follow-ups
+owns the routes, refs, fallback to an older Authority and `--progress` stream.
+Ask may cite ECHO's shared follow-ups
 ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)), the asker's
 workspace ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)), and
 Jira tickets and Confluence pages read under the asker's own connections.
@@ -180,7 +182,7 @@ lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
 [Confluence spaces](project-settings-v1.md#confluence-space-mapping), and its
 workspace is that project, its roster and the containers its lead mapped. Mine
 and unmapped projects exclude live tools, and Mine excludes follow-ups and the
-workspace. The desktop uses `--live` for every question outside Mine.
+workspace. The desktop shows every question's progress, Mine's too.
 Permission failures never fall back. `--tickets` keeps the ticket-capable
 `/v4` route for compatibility, and on `/v7` the receipt counts every item
 research looked through

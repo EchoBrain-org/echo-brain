@@ -324,3 +324,9 @@ adds `POST /v7/person/ask` with progress V3, under every rule above.
 (2026-10-19, proposed) counts rows in progress V3's `looked_through`, keeps V1
 and V2 counting items read in full, and has every version's `found` count only
 what reads gave research.
+
+On 2026-10-19 the founder approved moving the desktop's Mine Ask and plain
+`person ask` to the newest route, so every Ask streams under every rule above:
+`--progress` needs no `--live`, `--live` changes nothing, and `--tickets`
+still never streams
+([Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)).

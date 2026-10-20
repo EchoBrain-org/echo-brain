@@ -9,7 +9,7 @@ connected accounts, with citations that open directly in Jira or Confluence.
 Project Ask includes them only through the project's saved Jira project and
 Confluence spaces. Mine excludes them.
 
-While a global or project Ask works (ADR-0039), one line says what it is
+While an Ask works, in any scope, Mine included (ADR-0039), one line says what it is
 doing (Searching, Reading, Checking access, Writing) beside its timer and
 Cancel. Under it, at most three rows say what it searched ("Searched meetings,
 follow-ups and Jira · 22 found", source kinds, never the words searched) and what it read
