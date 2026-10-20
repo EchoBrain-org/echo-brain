@@ -1,13 +1,12 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { type PersonSourceReadScopeV1 } from './person-answer-v3.js';
-import { validateProjectIdV1 } from './project-context-v1.js';
+import { validatePersonSourceReadScopeV1, type PersonSourceReadScopeV1 } from './person-answer-v3.js';
 import {
   asEnumerableRecord as object,
   assertDigest,
+  assertEvidenceText as text,
   assertExactKeys,
   fail,
   MAX_ORGANIZATION_API_BODY_BYTES,
-  utf8ByteLength,
 } from './validation.js';
 
 /** An explicit, approval-gated read. It is intentionally outside Ask retrieval. */
@@ -40,26 +39,6 @@ export interface PersonMeetingTranscriptV1 {
   readonly next_offset: number | null;
 }
 
-function text(value: unknown, label: string, maximum: number): asserts value is string {
-  if (typeof value !== 'string' || value.length === 0 || value !== value.normalize('NFC') ||
-      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || utf8ByteLength(value) > maximum) {
-    fail(`${label} is invalid`);
-  }
-}
-
-function scope(value: unknown): PersonSourceReadScopeV1 {
-  const input = object(value, 'Meeting transcript scope');
-  if (input.kind === 'global') {
-    assertExactKeys(input, ['kind'], 'Meeting transcript scope');
-    return Object.freeze({ kind: 'global' });
-  }
-  if (input.kind === 'project') {
-    assertExactKeys(input, ['kind', 'project_id'], 'Meeting transcript scope');
-    return Object.freeze({ kind: 'project', project_id: validateProjectIdV1(input.project_id, 'Meeting transcript scope project_id') });
-  }
-  fail('Meeting transcript scope is invalid');
-}
-
 function citation(value: unknown): PersonMeetingTranscriptCitationV1 {
   const input = object(value, 'Meeting transcript citation');
   assertExactKeys(input, ['kind', 'approval_id', 'source_id', 'revision_id', 'source_sha256'], 'Meeting transcript citation');
@@ -79,7 +58,7 @@ export function validatePersonMeetingTranscriptReadRequestV1(value: unknown): Pe
   const input = object(value, 'Meeting transcript read request');
   assertExactKeys(input, ['schema_version', 'scope', 'citation', ...(Object.hasOwn(input, 'offset') ? ['offset'] : [])], 'Meeting transcript read request');
   if (input.schema_version !== 1) fail('Meeting transcript read request schema_version is unsupported');
-  const result = Object.freeze({ schema_version: 1 as const, scope: scope(input.scope), citation: citation(input.citation), ...(Object.hasOwn(input, 'offset') ? { offset: offset(input.offset, 'Meeting transcript offset') } : {}) });
+  const result = Object.freeze({ schema_version: 1 as const, scope: validatePersonSourceReadScopeV1(input.scope, 'Meeting transcript scope'), citation: citation(input.citation), ...(Object.hasOwn(input, 'offset') ? { offset: offset(input.offset, 'Meeting transcript offset') } : {}) });
   if (canonicalJsonBytes(result).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail('Meeting transcript read request exceeds JSON byte bound');
   return result;
 }
@@ -88,7 +67,7 @@ export function validatePersonMeetingTranscriptV1(value: unknown): PersonMeeting
   const input = object(value, 'Meeting transcript response');
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'citation', 'text', 'next_offset'], 'Meeting transcript response');
   if (input.schema_version !== 1 || input.kind !== 'echo-person-meeting-transcript-v1') fail('Meeting transcript response is invalid');
-  const result = Object.freeze({ schema_version: 1 as const, kind: 'echo-person-meeting-transcript-v1' as const, scope: scope(input.scope), citation: citation(input.citation), text: input.text as string, next_offset: input.next_offset === null ? null : offset(input.next_offset, 'Meeting transcript next_offset') });
+  const result = Object.freeze({ schema_version: 1 as const, kind: 'echo-person-meeting-transcript-v1' as const, scope: validatePersonSourceReadScopeV1(input.scope, 'Meeting transcript scope'), citation: citation(input.citation), text: input.text as string, next_offset: input.next_offset === null ? null : offset(input.next_offset, 'Meeting transcript next_offset') });
   text(result.text, 'Meeting transcript text', PERSON_MEETING_TRANSCRIPT_MAX_TEXT_BYTES_V1);
   if (result.next_offset !== null && result.next_offset <= 0) fail('Meeting transcript next_offset is invalid');
   if (canonicalJsonBytes(result).byteLength > PERSON_MEETING_TRANSCRIPT_MAX_TEXT_BYTES_V1 + 2048) fail('Meeting transcript response exceeds JSON byte bound');
