@@ -36,9 +36,9 @@ describe('view models copy only what the renderer may see', () => {
     expect(JSON.stringify(answer)).not.toContain('private-tenant');
     expect(() => answerView({ ok: true, result: source('invalid tool id') }, { kind: 'global' })).toThrow(ViewError);
   });
-  it('displays ticket citations only in V5 and retains only the direct ticket link', () => {
+  it('displays ticket citations only from V6 and retains only the direct ticket link', () => {
     const permalink = 'https://example.atlassian.net/browse/ECHO-7';
-    const reply = (link: unknown, version = 5) => ({ ok: true, result: { schema_version: version, kind: `echo-clean-person-answer-v${version}`,
+    const reply = (link: unknown, version = 6) => ({ ok: true, result: { schema_version: version, kind: `echo-clean-person-answer-v${version}`,
       scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
         kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10007', permalink: link, text_sha256: sha('a'),
@@ -786,9 +786,9 @@ describe('Ask progress lines and the receipt (ADR-0039)', () => {
       { type: 'read', items: [{ kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') }] },
     ] });
     expect(answerView({ ok: true, result: v6([named]) }, { kind: 'global' }).receipt).toBeUndefined();
-    const v5 = { ...v6([]), schema_version: 5, kind: 'echo-clean-person-answer-v5', outcome: 'not_found',
+    const v4 = { ...v6([]), schema_version: 4, kind: 'echo-clean-person-answer-v4', outcome: 'not_found',
       parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Nothing.' }] };
-    expect(() => answerView({ ok: true, result: v5, receipt }, { kind: 'global' })).toThrow(ViewError);
+    expect(() => answerView({ ok: true, result: v4, receipt }, { kind: 'global' })).toThrow(ViewError);
     // Fewer looked through than it names, neighbours not merged, an item named twice.
     for (const bad of [{ ...receipt, looked_through: 0 }, { ...receipt, rows: [receipt.rows[1], receipt.rows[1]] },
       { ...receipt, rows: [{ type: 'read', items: [named, named] }] }]) {

@@ -1752,7 +1752,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // have `/v7` (research tool contract v1); every other mode's predates both, so its client asks `/v5`.
     const v6 = mode === 'ask-progress-follow-up' && path === '/v6/person/ask';
     const v7 = (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed') && path === '/v7/person/ask';
-    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask' || v6 || v7)) {
+    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v5/person/ask' || v6 || v7)) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);
@@ -1765,9 +1765,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // One project, only what you added, or all you may read.
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : request.mine ? { kind: 'mine' } : { kind: 'global' };
       const question = request.question;
-      const tickets = path === '/v4/person/ask';
       const live = path === '/v5/person/ask';
-      const answer = { ...desktop.answer, ...(live ? { schema_version: 6, kind: 'echo-clean-person-answer-v6' } : tickets ? { schema_version: 5, kind: 'echo-clean-person-answer-v5' } : {}) };
+      const answer = { ...desktop.answer, ...(live ? { schema_version: 6, kind: 'echo-clean-person-answer-v6' } : {}) };
       // Ask progress: a client that asks for it gets the Ask's steps as they happen, then its answer and receipt.
       const api = await contract();
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
@@ -1788,7 +1787,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return progressStream(api, question, scope, init?.signal ?? undefined);
       }
       if (mode === 'ask-ticket') {
-        const included = (tickets || live) && (scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null));
+        const included = live && (scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null));
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
           citations: included ? [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
             kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10007',

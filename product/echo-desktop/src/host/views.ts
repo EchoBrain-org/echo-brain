@@ -389,10 +389,9 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const workspace = value.schema_version === 8 && value.kind === 'echo-clean-person-answer-v8';
   // V7 (`/v6`, ADR-0040) is V6 that may also cite follow-ups.
   const followUps = workspace || (value.schema_version === 7 && value.kind === 'echo-clean-person-answer-v7');
-  const tickets = value.schema_version === 5 && value.kind === 'echo-clean-person-answer-v5';
   const pages = followUps || (value.schema_version === 6 && value.kind === 'echo-clean-person-answer-v6');
-  if (!tickets && !pages && (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4')) throw new ViewError();
-  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`, tickets || pages, pages, followUps, workspace));
+  if (!pages && (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4')) throw new ViewError();
+  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`, pages, followUps, workspace));
   const direct = value.direct === undefined ? undefined : v4Statement(value.direct, sources.length);
   const parts = list(value.parts).map(part => v4Part(part, sources.length));
   if (parts.length === 0) throw new ViewError();
@@ -420,7 +419,7 @@ const NAMED = 'Item';
 function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {
   return row.type === 'searched'
     ? { type: 'searched', sources: row.sources.map(source => 'tool_id' in source ? { kind: source.kind, tool_id: source.tool_id } : { kind: source.kind }), found: row.found }
-    : { type: 'read', items: row.items.map(item => v4Source(item, NAMED, true, true, true, true)) };
+    : { type: 'read', items: row.items.map(item => v4Source(item, NAMED, true, true, true)) };
 }
 
 /**
@@ -508,7 +507,7 @@ function workspaceSource(raw: unknown): AnswerSource {
   }
 }
 
-function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = false, followUps = false, workspace = false): AnswerSource {
+function v4Source(raw: unknown, fallback: string, pages: boolean, followUps = false, workspace = false): AnswerSource {
   const item = object(raw);
   const citation = object(item.citation);
   const label = text(item.label);
@@ -536,7 +535,7 @@ function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = fals
   // Live evidence has no ref: it opens in its own app.
   if (ref !== undefined) throw new ViewError();
   const kind = citation.kind === 'slack_message' ? 'slack'
-    : tickets && item.kind === 'ticket' && citation.kind === 'ticket' ? 'ticket'
+    : pages && item.kind === 'ticket' && citation.kind === 'ticket' ? 'ticket'
     : pages && item.kind === 'page' && citation.kind === 'page' ? 'page' : null;
   if (kind !== null) {
     const permalink = externalSourcePermalink(kind, citation.permalink);
@@ -559,7 +558,7 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
     item_id: item.item_id, run_id: item.run_id, kind: item.kind,
     ...(item.decision === undefined ? {} : { decision: item.decision }),
     ...(current === undefined ? {} : { current: {
-      source: v4Source(current.citation, 'Item', true, true), says_now: current.says_now,
+      source: v4Source(current.citation, 'Item', true), says_now: current.says_now,
       ...(current.assignee === undefined ? {} : { assignee: current.assignee }),
       ...(current.status === undefined ? {} : { status: current.status }),
       ...(current.due_at === undefined ? {} : { due_at: current.due_at }),
