@@ -87,7 +87,7 @@ function oct4({ team = false, more = false, ...desk }: { readonly team?: boolean
 /** Jira over `rows`, `size` a page; with `body`, opening a ticket returns its body under the row's own id. */
 function jira(rows: readonly EvidenceDeskItemV2[], { size = 50, more = {}, last = {}, body, ...desk }: { readonly size?: number; readonly more?: object; readonly last?: object; readonly body?: (n: number) => string } & Partial<EvidenceDeskPortV2> = {}): Partial<EvidenceDeskPortV2> {
   return {
-    live_sources: [JIRA], ticket_available: true, list: pager(rows, size, more, last),
+    live_sources: [JIRA], list: pager(rows, size, more, last),
     ...(body === undefined ? {} : { open: vi.fn(async (input: { readonly item: string }) => { const n = Number(/THERM-(\d+)/u.exec(input.item)![1]); return result([ticketBody(n, body(n))]) as EvidenceDeskResultV2; }) }), ...desk,
   };
 }
@@ -804,7 +804,7 @@ describe("the finish check for a question goal (ADR-0041)", () => {
     // content: one cited item read in full; its list ids, and rows of an unfinished list, carry no meaning (F3).
     [undefined, ["E9"], []], [C, ["E9"], []], [C, ["E5", "E9"], []], [C, ["L2", "E9"], []], [C, ["E4"], []], [C, ["L1"], [unread]], [C, ["E1", "E2"], [unread]], [C, [], [unread]],
   ] as const)("found %s citing %j: %j", (kind, evidence, expected, given: readonly AskResearchListV1[] = lists) => {
-    expect(askQuestionCompletionProblemsV1(settled(kind, "found", evidence), [], given, full, true, agenticListMembershipV1(given, items).in)).toEqual(expected);
+    expect(askQuestionCompletionProblemsV1(settled(kind, "found", evidence), [], given, full, agenticListMembershipV1(given, items).in)).toEqual(expected);
   });
 
   it.each([
@@ -812,17 +812,16 @@ describe("the finish check for a question goal (ADR-0041)", () => {
     [WS, [], LISTED, [unlisted()]], [WS, ["E1", "E2"], LISTED, [unlisted("L1")]], [WS, ["L1"], LISTED, []], [WS, ["L2"], [], [absent]],
     [WI, [], LISTED, []], [WI, ["E1"], LISTED, []], [C, [], LISTED, []], [undefined, [], [], [absent]],
   ] as const)("not_found %s citing %j after %j: %j", (kind, evidence, observations, expected) => {
-    expect(askQuestionCompletionProblemsV1(settled(kind, "not_found", evidence), observations, lists, full, true, agenticListMembershipV1(lists, items).in)).toEqual(expected);
+    expect(askQuestionCompletionProblemsV1(settled(kind, "not_found", evidence), observations, lists, full, agenticListMembershipV1(lists, items).in)).toEqual(expected);
   });
 
-  it("keeps the hint without the list tool, the not_found and open rules, and a task goal's rule for every need, whatever kind it names", () => {
-    const check = (parts: Parameters<typeof askQuestionCompletionProblemsV1>[0], observations: Parameters<typeof askQuestionCompletionProblemsV1>[1], list = true) =>
-      askQuestionCompletionProblemsV1(parts, observations, lists, full, list, agenticListMembershipV1(lists, items).in);
+  it("keeps the not_found and open rules, and a task goal's rule for every need, whatever kind it names", () => {
+    const check = (parts: Parameters<typeof askQuestionCompletionProblemsV1>[0], observations: Parameters<typeof askQuestionCompletionProblemsV1>[1]) =>
+      askQuestionCompletionProblemsV1(parts, observations, lists, full, agenticListMembershipV1(lists, items).in);
     for (const word of ["which_items", "which_say", "kind"]) expect(unread).not.toContain(word);
-    expect(check(settled(C, "found", ["L1"]), [], false)).toEqual([`${label} is found but cites no item whose full text you have read`]);
     const need = (status: "open" | "not_found", kind?: "which_items") => [{ needs: [{ need: "x", ...(kind === undefined ? {} : { kind }), status, evidence: [], observations_before: 0 }] }];
-    expect([check(need("not_found"), LISTED), check(need("not_found"), [], false), check(need("open"), []), check(need("open", "which_items"), []), check([], [])])
-      .toEqual([[], ['part 1 need "x" is not_found after fewer than two completed searches'], ['part 1 need "x" is still open'], ['part 1 need "x" is still open'], ["no parts were written"]]);
+    expect([check(need("not_found"), LISTED), check(need("not_found"), []), check(need("open"), []), check(need("open", "which_items"), []), check([], [])])
+      .toEqual([[], [`part 1 need "x" ${ABSENT}`], ['part 1 need "x" is still open'], ['part 1 need "x" is still open'], ["no parts were written"]]);
     const searches = [{ operation: "search" as const, fingerprint: "a", complete: true }, { operation: "search" as const, fingerprint: "b", complete: true }];
     const unreadTask = `${label} is found but cites no item whose full text you have read`;
     expect([

@@ -9,10 +9,9 @@ import { derivedAtomIdentity } from '@echo-brain/organization-record/application
 import { storableImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
-import { liveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { startOrganizationAuthorityApiRuntime } from '../../src/composition/organization-authority-api-runtime.js';
 import { openJiraPersonLiveRuntimeV1 } from '../../src/composition/jira-person-live-runtime-v1.js';
-import { LEGACY_TICKET_CONNECTOR_V1 } from '../../src/composition/person-live-connector-registry-v1.js';
+import { JIRA_LIVE_CONNECTOR_V1 } from '../../src/composition/person-live-connector-registry-v1.js';
 import { createPersonDocumentApplicationV1 } from '../../src/application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../../src/adapters/persistence/sqlite/document-v1.js';
 import { SqliteImpactItemsV1 } from '../../src/adapters/persistence/sqlite/impact-items-v1.js';
@@ -32,7 +31,7 @@ import { FIXTURE_JIRA_CLOUD_V1 } from './fake-jira-v1.js';
 
 // No production root registers a Slack live connector; these fixtures exercise the slack_message live kind.
 export const SLACK_LIVE_CONNECTOR = Object.freeze({
-  descriptor: liveSourceDescriptorV2({ source: 'slack' }),
+  descriptor: Object.freeze({ source_id: 'slack', kind: 'slack_message' as const, selector: 'slack', description: 'Live discussion messages.', metadata_only_list: false, requires_channel: true, default_since_days: 14 }),
   scopes: Object.freeze(['global'] as const), minimum_response_version: 5 as const,
 });
 export const AUTHORITY = 'https://authority.example.test';
@@ -118,7 +117,7 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
   const runtime = await startOrganizationAuthorityApiRuntime(f.config, {
     oidc_provider: f.oidc,
     live_connectors: [
-      { ...LEGACY_TICKET_CONNECTOR_V1, open: sessions => openJiraPersonLiveRuntimeV1({ state_directory: f.initialized.state_directory, sessions,
+      { ...JIRA_LIVE_CONNECTOR_V1, open: sessions => openJiraPersonLiveRuntimeV1({ state_directory: f.initialized.state_directory, sessions,
         configuration: { enabled: true, cloud_id: FIXTURE_JIRA_CLOUD_V1, integration_id: 'jira', nango_authorization: () => 'synthetic-only-nango-authorization' }, seams: { nango: live.jira.nango, fetch: live.jiraFetch } }) },
       { ...SLACK_LIVE_CONNECTOR, open: live.slackFactory },
     ],

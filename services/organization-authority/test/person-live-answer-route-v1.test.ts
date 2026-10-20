@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { liveSourceDescriptorV2, type EvidenceDeskPortV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import type { EvidenceDeskPortV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { PersonLiveConnectorSourceV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from '../src/composition/person-live-answer-route-v1.js';
@@ -8,7 +8,7 @@ import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1
 const context: PersonLiveRequestContextV1 = Object.freeze({ authority_id: 'authority-fixture', organization_id: 'org-fixture', state_lineage_id: 'lineage-fixture',
   principal_id: 'person-fixture', membership_id: 'membership-fixture', session_family_id: 'session-fixture', request_id: 'ask_fixture' });
 const empty = { items: [], truncated: false, receipt_digests: [] };
-const sourceIds = (desk: EvidenceDeskPortV2) => (desk.live_sources ?? []).map(source => liveSourceDescriptorV2(source).source_id);
+const sourceIds = (desk: EvidenceDeskPortV2) => (desk.live_sources ?? []).map(source => source.source_id);
 
 function reader(tool_id: string): PersonLiveEvidenceSourceV1 {
   return { tool_id, search: vi.fn(async () => empty), open: vi.fn(async () => empty), list: vi.fn(async () => empty), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) };
@@ -22,7 +22,7 @@ function connector(kind: 'ticket' | 'page', delay: number, outcome: 'bound' | 'u
     const timer = setTimeout(() => outcome instanceof Error ? reject(outcome) : resolve(outcome === 'bound' ? bound : undefined), delay);
     signal?.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
   }));
-  const value = { descriptor: liveSourceDescriptorV2({ source: kind, tool_id }), scopes: ['global', 'project'], minimum_response_version: 5,
+  const value = { descriptor: { source_id: kind, kind, selector: `${kind}s`, description: `Live ${kind}s.`, metadata_only_list: true, tool_id }, scopes: ['global', 'project'], minimum_response_version: 5,
     application: { source } } as unknown as PersonLiveConnectorSourceV1;
   return { value, source, bound };
 }

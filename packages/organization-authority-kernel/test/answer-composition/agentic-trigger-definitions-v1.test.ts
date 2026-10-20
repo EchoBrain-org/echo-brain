@@ -29,13 +29,10 @@ describe("trigger definitions", () => {
   it("defines Ask, the approved record (which replaced Check) and Sweep; audit records name every one but Ask", () => {
     expect(AGENTIC_TRIGGER_DEFINITIONS_V1.map(value => value.name)).toEqual(["ask", "approved_record", "sweep"]);
     expect(AGENTIC_TRIGGER_NAMES_V1).toEqual(["approved_record", "sweep"]);
-    for (const value of AGENTIC_TRIGGER_DEFINITIONS_V1) {
-      expect(value.name).toMatch(/^[a-z_]{1,64}$/u);
-      expect(value.recipients).toBe("actor_only");
-    }
-    expect(definition("ask")).toMatchObject({ acts_as: "requester", scope: "requested" });
-    expect(definition("sweep")).toMatchObject({ acts_as: "requester", scope: "requested" });
-    expect(definition("approved_record")).toMatchObject({ acts_as: "approver", scope: "record_project" });
+    for (const value of AGENTIC_TRIGGER_DEFINITIONS_V1) expect(value.name).toMatch(/^[a-z_]{1,64}$/u);
+    expect(definition("ask")).toMatchObject({ scope: "requested" });
+    expect(definition("sweep")).toMatchObject({ scope: "requested" });
+    expect(definition("approved_record")).toMatchObject({ scope: "record_project" });
     // The approved record renders an impact card and Sweep its verdicts; Ask's writer is composed by the runner.
     expect(definition("approved_record").renderer).toBe(IMPACT_CARD_RENDERER_V1);
     expect(definition("sweep").renderer).toBe(SWEEP_RENDERER_V1);

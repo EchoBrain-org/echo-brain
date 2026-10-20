@@ -18,8 +18,8 @@ const fixtureGeneration = { generation_adapter_id: 'fixture', planner_model: 'fi
 describe('Agentic Ask V3 live pages', () => {
   it('discovers metadata then opens a request-owned page section and emits only V6', async () => {
     const desk: EvidenceDeskPortV2 = {
-      scope: { kind: 'global' }, ticket_available: false,
-      live_sources: [{ source: 'page', selector: 'pages', description: 'Live knowledge pages.', metadata_only_list: true, tool_id: 'knowledge' }],
+      scope: { kind: 'global' },
+      live_sources: [{ source_id: 'page', kind: 'page', selector: 'pages', description: 'Live knowledge pages.', metadata_only_list: true, tool_id: 'knowledge' }],
       search: vi.fn(async () => pageResult(inventory)),
       list: vi.fn(async () => pageResult(inventory)),
       open: vi.fn(async input => { expect(input.item).toBe(inventory.id); return pageResult(opened); }),
@@ -47,8 +47,8 @@ describe('Agentic Ask V3 live pages', () => {
     const secondText = 'The later section says EVT begins Tuesday.';
     const second: EvidenceDeskItemV2 = Object.freeze({ id: 'body-2', kind: 'page', label: 'Long launch plan', text: secondText, visibility: 'team', receipt_sha256: canonicalSha256('body-2'), citation: continuationCitation('s2', secondText) });
     const desk: EvidenceDeskPortV2 = {
-      scope: { kind: 'global' }, ticket_available: false,
-      live_sources: [{ source: 'page', selector: 'pages', description: 'Live knowledge pages.', metadata_only_list: true, tool_id: 'knowledge' }],
+      scope: { kind: 'global' },
+      live_sources: [{ source_id: 'page', kind: 'page', selector: 'pages', description: 'Live knowledge pages.', metadata_only_list: true, tool_id: 'knowledge' }],
       search: vi.fn(async () => pageResult(start)),
       list: vi.fn(async () => pageResult(start)),
       open: vi.fn(async input => input.item === start.id

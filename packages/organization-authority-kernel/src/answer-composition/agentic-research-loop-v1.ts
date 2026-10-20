@@ -537,8 +537,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const sourceCatalog: readonly AgenticResearchCatalogEntryV1[] = listAvailable ? Object.freeze(askedCatalog)
     : Object.freeze(askedCatalog.map(({ metadata_only_list: _metadata, requires_channel: _channel, default_since_days: _since, ...entry }) => Object.freeze(entry)));
   const budget = brief.budget;
-  /** Ask with the list tool declares each need's kind (ADR-0041); a task goal and a search-only brief have no kind. */
-  const needKinds = ask && listAvailable;
   const wallNow = options.wall_now ?? Date.now;
   /** Research steps: the audit records them as `step` calls, in the span the runner names. */
   const stepCall: AgenticModelCallV1 = Object.freeze({ role: "step", span: options.step_span });
@@ -1070,7 +1068,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const newPart = (part: StepPart): PartState => ({
       question: part.question, notes: part.notes,
       // A part without needs still needs its own answer.
-      needs: part.needs.length > 0 ? part.needs.map(need => newNeed(need.need, need.status, need.evidence, need.kind)) : [newNeed(part.question, "open", [], needKinds ? "content" : undefined)],
+      needs: part.needs.length > 0 ? part.needs.map(need => newNeed(need.need, need.status, need.evidence, need.kind)) : [newNeed(part.question, "open", [], ask ? "content" : undefined)],
     });
     if (parts.length === 0) return next;
     if (next.length === 0) return parts.map(newPart);
@@ -1161,7 +1159,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** A question goal's finish check, by each need's declared kind; membership only words a refusal (ADR-0041). */
   const questionCompletionProblems = (parts: readonly { readonly needs: readonly NeedState[] }[]) => {
     const checked = listsForCheck();
-    return askQuestionCompletionProblemsV1(parts, researchObservations, checked, citable, listAvailable, listMembership(checked).in);
+    return askQuestionCompletionProblemsV1(parts, researchObservations, checked, citable, listMembership(checked).in);
   };
 
   // ---- scratchpad ------------------------------------------------------
@@ -1398,7 +1396,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const user = { ...head, opened: pad.opened, seen: pad.seen, ...tailWith(new Set(pad.entries)) };
       const openIds = [...entries.values()].map(entry => entry.short);
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
-      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, needKinds, ask);
+      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, ask);
       let step: Step;
       // The need holds after the access check too: a check retried after a transient failure can spend the margin, and a
       // step call sent below it would likely time out with no time to repair. No time here is the gate's budget stop. The one
@@ -1409,7 +1407,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       report?.before_check(pad.read.filter(entry => entry.direct === true).map(entry => entry.item));
       try {
         step = await gate.withRepair(stepCall, researchPrompt, user, stepSchema, timeout, value => {
-          const parsed = parseStep(value, { lists: ask, kinds: needKinds });
+          const parsed = parseStep(value, { lists: ask });
           if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
           for (const action of parsed.actions) {
             if (action.tool === 'list' && !listAvailable) throw new AgenticAskOutputErrorV1(LIST_UNAVAILABLE);

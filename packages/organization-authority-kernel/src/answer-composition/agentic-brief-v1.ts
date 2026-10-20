@@ -37,8 +37,9 @@ export interface AgenticBriefV1 {
      */
     readonly planner?: boolean;
     /**
-     * False: research has no list tool, only search and open, and is never told of list-only source options. An approved
-     * record in no project reads everything its approver can read: it searches the record's own terms, never whole inventories.
+     * False: research has no list tool, only search and open, and is never told of list-only source options. Only a task can
+     * run without it: an approved record in no project reads everything its approver can read, so it searches the record's
+     * own terms, never whole inventories.
      */
     readonly list?: boolean;
   };

@@ -21,7 +21,7 @@ async function run(options: { truncated?: boolean; notice?: string; idle?: boole
   let searches = 0;
   const result = () => ({ items: searches++ === 0 ? [options.evidence ?? item] : [], truncated: options.truncated ?? false, receipt_digests: [], ...(options.notice === undefined ? {} : { notice: options.notice }) });
   const desk: EvidenceDeskPortV2 = {
-    scope: { kind: 'global' }, live_sources: [{ source: 'page', tool_id: 'confluence' }],
+    scope: { kind: 'global' }, live_sources: [{ source_id: 'page', kind: 'page', selector: 'pages', description: 'Live knowledge pages: discover pages, then open selected pages and continuation handles for their current text.', metadata_only_list: true, tool_id: 'confluence' }],
     search: async () => result(), list: async () => ({ ...result(), next_cursor: 'unread-page' }),
     open: async () => { throw new AuthorityOperationError('not_found', 'private refusal details'); }, revalidate: async () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
   };

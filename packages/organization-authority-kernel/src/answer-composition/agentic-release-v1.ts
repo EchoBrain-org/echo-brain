@@ -15,7 +15,7 @@ import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 /** Content-free terminal witness. Route adapters bind identity and storage details. */
 export interface AgenticAskAuditEntryV1 {
   readonly kind: "echo-agentic-ask-audit-v1";
-  /** A research-only trigger definition's name; an Ask audit omits it. */
+  /** A task trigger definition's name; an Ask audit omits it. */
   readonly trigger?: string;
   /** Present only when the request ran beyond the live budget (research evaluation). */
   readonly budget?: "background";
@@ -56,7 +56,7 @@ export interface AgenticAuditContextV1 {
   readonly generation_adapter_id: string;
   /** The request's model gate; read when the record is written, after the final check. */
   readonly gate_stats: () => AgenticModelGateStatsV1;
-  /** Research-only triggers name themselves; Ask writes no trigger. */
+  /** Task triggers name themselves; Ask writes no trigger. */
   readonly trigger?: string;
   /** The request ran beyond the live budget. */
   readonly background: boolean;
@@ -77,7 +77,7 @@ export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 
   readonly result: R;
   /** The fingerprint of the result's answer, from its renderer. */
   readonly answer_sha256: Sha256Digest;
-  /** A second access check after the audit write (V5/V6 Ask and every task brief; V4 Ask has none). */
+  /** A second access check after the audit write (V5 to V8 Ask and every task brief; V4 Ask has none). */
   readonly fence_after_audit: boolean;
   /** The request's active signal (caller cancel, deadline or terminal stop). */
   readonly signal: AbortSignal;

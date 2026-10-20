@@ -96,7 +96,7 @@ export interface AskRenderedV1 {
 }
 
 export interface CreateAskRendererV1Options {
-  /** 4 (V1 core), 5 (V2), 6 (V3 and the research core) or 7 (V4: follow-ups, ADR-0040). */
+  /** 4 (V1 core), 5 (V2), 6 (V3 and the research core), 7 (V4: follow-ups, ADR-0040) or 8 (V5: the workspace and tool containers). */
   readonly response_version: 4 | 5 | 6 | 7 | 8;
   /** The writer's system prompt, with the live-source guidance when live sources are available. */
   readonly answer_prompt: string;

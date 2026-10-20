@@ -5,7 +5,7 @@ import type { AgenticEvidenceBundleV1 } from "../../../src/answer-composition/ag
 import { createAgenticModelGateV1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1, type AgenticResearchBudgetV1 } from "../../../src/answer-composition/agentic-research-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort, StructuredGenerationUsageV1 } from "../../../src/answer-composition/structured-generation-v1.js";
-import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../../src/shared/evidence-desk-v1.js";
+import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1 } from "../../../src/shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../../src/shared/evidence-desk-v2.js";
 
 /**
@@ -47,7 +47,7 @@ function page(id: string, body: string | undefined): EvidenceDeskItemV2 {
     receipt_sha256: canonicalSha256({ page: id, body: body ?? null }),
   });
 }
-export const result = <T extends EvidenceDeskItemV1 | EvidenceDeskItemV2>(items: readonly T[], extra: Partial<EvidenceDeskResultV1> = {}) =>
+export const result = <T extends EvidenceDeskItemV1 | EvidenceDeskItemV2>(items: readonly T[], extra: Partial<Omit<EvidenceDeskResultV2, "items">> = {}) =>
   ({ items, truncated: false, receipt_digests: [canonicalSha256({ desk: items.map(item => item.id) })], ...extra });
 
 export type Scenario = {
@@ -220,7 +220,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       const listedPage = page("1441793", undefined);
       const openPage = page("1441793", "DVT review: HOLD until TC-D-03 and BUG-412 are resolved.");
       const desk: EvidenceDeskPortV2 = {
-        scope: { kind: "global" }, ticket_available: true,
+        scope: { kind: "global" },
         live_sources: [
           { source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" },
           { source_id: "confluence", kind: "page", selector: "pages", description: "Live knowledge pages.", metadata_only_list: true, tool_id: "confluence" },

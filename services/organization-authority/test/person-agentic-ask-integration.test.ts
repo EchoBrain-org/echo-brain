@@ -13,7 +13,7 @@ import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV
 import type { PersonPageCitationV1, PersonTicketCitationV1 } from "@echo-brain/organization-api";
 import type { PersonLiveEvidenceItemV1, PersonLiveEvidenceSourceV1 } from "@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1";
 import { PersonRecordSearchIndexLagV1 } from "../src/composition/person-record-search-route.js";
-import { LEGACY_PAGE_CONNECTOR_V1, LEGACY_TICKET_CONNECTOR_V1 } from "../src/composition/person-live-connector-registry-v1.js";
+import { CONFLUENCE_LIVE_CONNECTOR_V1, JIRA_LIVE_CONNECTOR_V1 } from "../src/composition/person-live-connector-registry-v1.js";
 import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
 
 const databases: Database.Database[] = [];
@@ -281,14 +281,14 @@ describe("Agentic Ask V5 combined request-local sources", () => {
     const pageText = "The launch plan says the EVT gate begins Tuesday after the meeting approval.";
     const ticket: PersonLiveEvidenceItemV1<PersonTicketCitationV1> = Object.freeze({
       id: "ticket-private", kind: "ticket", label: "ECHO-7 EVT", text: ticketText, visibility: "only_me", receipt_sha256: canonicalSha256("ticket-receipt"),
-      citation: { kind: "ticket" as const, tool_id: "work", external_scope_id: "workspace", ticket_id: "ECHO-7", permalink: "https://work.example.test/ECHO-7", text_sha256: canonicalSha256(ticketText) },
+      citation: { kind: "ticket" as const, tool_id: "jira", external_scope_id: "workspace", ticket_id: "ECHO-7", permalink: "https://work.example.test/ECHO-7", text_sha256: canonicalSha256(ticketText) },
     });
     const page: PersonLiveEvidenceItemV1<PersonPageCitationV1> = Object.freeze({
       id: "page-private", kind: "page", label: "Launch plan", text: pageText, visibility: "team", receipt_sha256: canonicalSha256("page-receipt"),
-      citation: { kind: "page" as const, tool_id: "knowledge", external_scope_id: "site-one", page_id: "launch-plan", section_id: "s1", version: "4", permalink: "https://knowledge.example.test/wiki/pages/viewpage.action?pageId=1", text_sha256: canonicalSha256(pageText) },
+      citation: { kind: "page" as const, tool_id: "confluence", external_scope_id: "site-one", page_id: "launch-plan", section_id: "s1", version: "4", permalink: "https://knowledge.example.test/wiki/pages/viewpage.action?pageId=1", text_sha256: canonicalSha256(pageText) },
     });
-    const ticketSource = live("work", ticket);
-    const pageSource = live("knowledge", page);
+    const ticketSource = live("jira", ticket);
+    const pageSource = live("confluence", page);
     const model: StructuredGenerationPort = { async generate(input) {
       const prompt = JSON.parse(input.user_prompt) as Prompt;
       if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
@@ -300,7 +300,7 @@ describe("Agentic Ask V5 combined request-local sources", () => {
         ? { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "open", evidence: [] }] }], actions: [{ tool: "search", args: { query: "EVT Tuesday" } }] }
         : { parts: [{ question: prompt.question!, notes: "", needs: [{ need: "EVT timing", status: "found", evidence: [...listed] }] }], actions: [{ tool: "finish", args: {} }] };
     } };
-    const route = liveRoute(f, model, [{ ...LEGACY_TICKET_CONNECTOR_V1, application: { source: async () => ticketSource } }, { ...LEGACY_PAGE_CONNECTOR_V1, application: { source: async () => pageSource } }]);
+    const route = liveRoute(f, model, [{ ...JIRA_LIVE_CONNECTOR_V1, application: { source: async () => ticketSource } }, { ...CONFLUENCE_LIVE_CONNECTOR_V1, application: { source: async () => pageSource } }]);
     const answer = await route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } });
     expect(answer).toMatchObject({ schema_version: 6, outcome: "answered" });
     expect(answer.citations.map(value => value.kind).sort()).toEqual(["document_passage", "page", "ticket"]);
@@ -311,7 +311,7 @@ describe("Agentic Ask V5 combined request-local sources", () => {
   it("does not silently omit a denied page source or broaden to another page scope", async () => {
     const f = fixture();
     const denied = vi.fn(async () => { throw new AuthorityOperationError("unauthorized", "provider denied"); });
-    const route = liveRoute(f, { generate: async () => { throw new Error("model must not run"); } }, [{ ...LEGACY_PAGE_CONNECTOR_V1, application: { source: denied } }]);
+    const route = liveRoute(f, { generate: async () => { throw new Error("model must not run"); } }, [{ ...CONFLUENCE_LIVE_CONNECTOR_V1, application: { source: denied } }]);
     await expect(route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } })).rejects.toMatchObject({ code: "unauthorized" });
     expect(denied).toHaveBeenCalledTimes(1);
   });

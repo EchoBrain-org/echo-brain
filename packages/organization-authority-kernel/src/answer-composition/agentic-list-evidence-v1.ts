@@ -61,10 +61,10 @@ export interface AgenticListFilterV1 {
   /** open or done (meeting actions, follow-ups); active or archived (projects). */
   readonly status?: "open" | "done" | "active" | "archived";
   readonly owner?: string;
-  /** lead or member (projects, people), research tool contract v1. */
+  /** lead or member (projects), research tool contract v1. */
   readonly role?: "lead" | "member";
   readonly channel?: string;
-  /** Inclusive YYYY-MM-DD bounds; a catalog default (Slack's 14 days) appears here unrequested. */
+  /** Inclusive YYYY-MM-DD bounds; a catalog default (a source's default_since_days) appears here unrequested. */
   readonly since?: string;
   readonly until?: string;
   readonly date_field?: EvidenceDateSelectionV1;

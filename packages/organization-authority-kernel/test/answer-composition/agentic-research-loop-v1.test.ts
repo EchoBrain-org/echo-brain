@@ -52,7 +52,7 @@ describe("research loop: finishing with nothing found", () => {
         { tool: "search", args: { source: "tickets", query: "canary" } },
       ]),
       affects("not_found"),
-    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list });
+    ], { live_sources: [JIRA], openCitation: async () => result([approved]), list });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     // The first finish is accepted: no repair, and no further ticket page is read.
     expect(h.generate).toHaveBeenCalledTimes(2);
@@ -72,7 +72,7 @@ describe("research loop: finishing with nothing found", () => {
       affects("not_found"),
       reads("open", [{ tool: "search", args: { source: "tickets", query: "canary" } }]),
       affects("not_found"),
-    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list: async input => ticketPage(pageOf(input), 5) });
+    ], { live_sources: [JIRA], openCitation: async () => result([approved]), list: async input => ticketPage(pageOf(input), 5) });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining('listed inventory still has unread pages; repeat list with {"source":"tickets"}, or search tickets for the fact')]);
     expect(h.prompt(2).validation_error).toContain("or search tickets for the fact");
@@ -88,7 +88,7 @@ describe("research loop: finishing with nothing found", () => {
         { tool: "search", args: { source: "meetings", query: "staged meeting approval" } }, { tool: "search", args: { source: "meetings", query: "canary" } },
       ]),
       affects("not_found"), affects("not_found"),
-    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list: async input => ticketPage(pageOf(input), 5), search });
+    ], { live_sources: [JIRA], openCitation: async () => result([approved]), list: async input => ticketPage(pageOf(input), 5), search });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     // A search that returned a notice shows nothing about the source, so its unread pages still block absence.
     expect(view.rounds[1]!.rejected).toEqual([
@@ -122,7 +122,7 @@ describe("research loop: list", () => {
     const h = harness([
       reads("open", [{ tool: "list", args: { source: "tickets", since: "2026-10-13" } }]),
       reads("open", [{ tool: "list", args: { source: "tickets", since: "2026-10-13" } }]),
-    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list });
+    ], { live_sources: [JIRA], openCitation: async () => result([approved]), list });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(h.prompt(1).last_results).toEqual([expect.objectContaining({ tool: "list", items: [], more: true, note: "this page was empty (for example because of a date filter); more pages remain" })]);
     expect(view.rounds[1]!.actions[0]!.result).toMatchObject({ items: [], more: false, note: "nothing more to list" });
@@ -145,7 +145,7 @@ describe("research loop: list", () => {
     const action = record("action", "Mara will publish the dashboard.", { kind: "action", attributes: { owner: "Mara Quinn" } });
     const list = vi.fn(async (input: EvidenceDeskListInputV2) => input.source === "jira" ? result([], { notice: "Tickets are temporarily unavailable." }) : result([action], { truncated: true }));
     const again = reads("open", [{ tool: "list", args: { source: "tickets" } }, { tool: "list", args: { source: "meetings" } }]);
-    const h = harness([again, again, again], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list });
+    const h = harness([again, again, again], { live_sources: [JIRA], openCitation: async () => result([approved]), list });
     await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(list).toHaveBeenCalledTimes(2);
     expect(h.prompt(2).last_results).toEqual([
@@ -163,7 +163,7 @@ describe("research loop: search", () => {
       .mockResolvedValueOnce(result([record("local", "THERM-50 waits on the firmware build.")], { notice: "Live tickets could not be searched just now." }))
       .mockResolvedValueOnce(result([ticket("THERM-50", "THERM-50: firmware build is green.")], { notice: "Live pages could not be searched just now." }));
     const again = reads("open", [{ tool: "search", args: { query: "THERM-50 status" } }]);
-    const h = harness([again, again, again, step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E3"])])], [{ tool: "finish", args: {} }])], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), search });
+    const h = harness([again, again, again, step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E3"])])], [{ tool: "finish", args: {} }])], { live_sources: [JIRA], openCitation: async () => result([approved]), search });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(view.stop).toEqual({ reason: "finished", completed: true });
     // The repeat read the desk again; its own notice buys no third read.
@@ -180,7 +180,7 @@ describe("research loop: open", () => {
     const therm = ticket("THERM-48", "THERM-48: firmware formats one decimal.");
     const open = vi.fn(async () => result([therm]));
     const reopen = reads("open", [{ tool: "open", args: { id: "E1" } }]);
-    const h = harness([reopen, reopen, affects("found")], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([therm]), open });
+    const h = harness([reopen, reopen, affects("found")], { live_sources: [JIRA], openCitation: async () => result([therm]), open });
     const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], {}, "report") });
     expect(open).not.toHaveBeenCalled();
     expect(h.prompt(0).opened).toEqual([expect.objectContaining({ id: "E1", text: therm.text })]);
@@ -200,7 +200,7 @@ describe("research loop: open", () => {
       reads("open", [{ tool: "open", args: { id: "E2" } }]),
       reads("open", [{ tool: "open", args: { id: "E2" } }]),
       step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
-    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), search: async () => result([listedRow]), open });
+    ], { live_sources: [JIRA], openCitation: async () => result([approved]), search: async () => result([listedRow]), open });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(open).toHaveBeenCalledTimes(1);
     expect(h.prompt(2).last_results).toEqual([{ tool: "open", args: { id: "E2" }, opened: ["E2"] }]);
@@ -271,7 +271,7 @@ describe("research loop: open after a limited open", () => {
       reads("open", [{ tool: "open", args: { id: "E2" } }]),
       reads("open", [{ tool: "open", args: { id: "E2" } }]),
       step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
-    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), search: async () => result([ticket("THERM-46")]), open });
+    ], { live_sources: [JIRA], openCitation: async () => result([approved]), search: async () => result([ticket("THERM-46")]), open });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     // The truncated open is read again; once a clean open has returned it, a repeat is answered from the scratchpad.
     expect(open).toHaveBeenCalledTimes(2);
@@ -297,7 +297,7 @@ describe("research loop: progress", () => {
       reads("open", [{ tool: "open", args: { id: "E23" } }]), // only a related reference: still idle
       listTickets,                                           // 20 more rows: research stops
       listTickets,
-    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list, open });
+    ], { live_sources: [JIRA], openCitation: async () => result([approved]), list, open });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(open).toHaveBeenCalledTimes(2);
     expect(view.rounds[3]!.actions[0]!.result).toMatchObject({ opened: [], items: ["E43"], note: "no readable text" });
@@ -314,7 +314,7 @@ describe("research loop: progress", () => {
       reads("open", [{ tool: "search", args: { source: "tickets", query: "canary" } }]),         // 3 new metadata-only hits: idle
       reads("open", [{ tool: "search", args: { source: "tickets", query: "staged meeting" } }]), // nothing: still idle
       affects("not_found"),
-    ], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), search });
+    ], { live_sources: [JIRA], openCitation: async () => result([approved]), search });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(search).toHaveBeenCalledTimes(2);
     expect(h.generate).toHaveBeenCalledTimes(3);
@@ -341,7 +341,7 @@ describe("research loop: starting evidence", () => {
   it("opens starting items together and registers them in brief order, whatever order they arrive in", async () => {
     const pending = new Map(items.map(item => [(item.citation as { readonly ticket_id: string }).ticket_id, deferred<EvidenceDeskResultV2>()]));
     const openCitation = vi.fn((input: EvidenceDeskOpenCitationInputV2) => pending.get(keyOf(input))!.promise);
-    const h = harness([found("E1", "E2", "E3")], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const h = harness([found("E1", "E2", "E3")], { live_sources: [JIRA], openCitation });
     const run = h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report") });
     await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(3));
     for (const item of [...items].reverse()) pending.get((item.citation as { readonly ticket_id: string }).ticket_id)!.resolve(result([item]));
@@ -354,7 +354,7 @@ describe("research loop: starting evidence", () => {
     const many = Array.from({ length: 6 }, (_, index) => ticket(`THERM-${60 + index}`, `THERM-${60 + index}: body.`));
     const pending = many.map(() => deferred<EvidenceDeskResultV2>());
     const openCitation = vi.fn((input: EvidenceDeskOpenCitationInputV2) => pending[Number(keyOf(input)) - 60]!.promise);
-    const h = harness([found("E1")], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const h = harness([found("E1")], { live_sources: [JIRA], openCitation });
     const run = h.research.research({ trigger: "sweep", brief: brief(many.map((_, index) => agenticStartingSlotV1(index + 1)).join(" "), many.map(item => item.citation), {}, "report") });
     await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(4));
     pending[2]!.resolve(result([many[2]!]));
@@ -372,7 +372,7 @@ describe("research loop: starting evidence", () => {
       const anchor = items.find(item => (item.citation as { readonly ticket_id: string }).ticket_id === keyOf(input))!;
       return result([anchor, ...[1, 2, 3].map(index => context(anchor.label.slice(0, 8), index))]);
     });
-    const h = harness([found("E1", "E4")], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const h = harness([found("E1", "E4")], { live_sources: [JIRA], openCitation });
     const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, items.slice(0, 2).map(item => item.citation), {}, "report") });
     // An anchor and the two 10 KB passages that fit its 24 KB, for each item; the third passage of each is left out.
     expect(h.prompt(0).task).toBe("Recheck E1 and E4.");
@@ -393,7 +393,7 @@ describe("research loop: starting evidence", () => {
       if (keyOf(input) === "46") throw new AuthorityOperationError("unavailable", "Source is down");
       return new Promise<EvidenceDeskResultV2>(() => undefined);
     });
-    const h = harness([], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const h = harness([], { live_sources: [JIRA], openCitation });
     await expect(h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report") }))
       .rejects.toMatchObject({ code: "unavailable" });
     expect(openCitation).toHaveBeenCalledTimes(3);
@@ -408,7 +408,7 @@ describe("research loop: starting evidence", () => {
       if (keyOf(input) === "47") return new Promise<EvidenceDeskResultV2>(() => undefined);
       return result([items.find(item => (item.citation as { readonly ticket_id: string }).ticket_id === keyOf(input))!]);
     });
-    const h = harness([], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const h = harness([], { live_sources: [JIRA], openCitation });
     const run = h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), { planner: false }, "report"), signal: stop.signal });
     await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(3));
     stop.abort();
@@ -422,7 +422,7 @@ describe("research loop: starting evidence", () => {
       if (keyOf(input) === "48") { await new Promise(resolve => setTimeout(resolve, 5)); throw new AuthorityOperationError("not_found", "Evidence item is not available"); }
       throw new AuthorityOperationError("unavailable", "Source is down");
     });
-    const h = harness([], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const h = harness([], { live_sources: [JIRA], openCitation });
     // The first item fails after the second, and its brief asked to fail on it.
     await expect(h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)} affect.`, items.slice(0, 2).map(item => item.citation)) }))
       .rejects.toMatchObject({ code: "not_found" });
@@ -439,7 +439,7 @@ describe("research loop: no planner (sweeps)", () => {
   };
 
   it("reads the starting evidence and stops as finished, with no planner call; what it read in full counts as read", async () => {
-    const h = harness([], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const h = harness([], { live_sources: [JIRA], openCitation });
     const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, [therm.citation, gone.citation], { planner: false }, "report") });
     expect(h.generate).not.toHaveBeenCalled();
     expect(view.stop).toEqual({ reason: "finished", completed: true });
@@ -455,7 +455,7 @@ describe("research loop: no planner (sweeps)", () => {
       { finding: "Firmware shows one decimal", expected: "two decimals", citations: [therm.citation] },
       { finding: "Test case expects one decimal", expected: "two decimals", citations: [gone.citation] },
     ] });
-    const h = harness([{ findings: [{ index: 0, verdict: "landed", line: "THERM-48 now formats two decimals.", cites: ["E1"] }] }], { live_sources: [JIRA], ticket_available: true, openCitation });
+    const h = harness([{ findings: [{ index: 0, verdict: "landed", line: "THERM-48 now formats two decimals.", cites: ["E1"] }] }], { live_sources: [JIRA], openCitation });
     const output = await h.research.renderWithResearch({ trigger: sweep.name, brief: sweep.brief(event, { kind: "global" }), renderer: sweep.renderer!, trigger_input: event });
     // One model call, and it is the judge's.
     expect(h.inputs.map(input => input.system_prompt.slice(0, 22))).toEqual(["You recheck open items"]);
@@ -482,7 +482,7 @@ describe("research loop: no planner (sweeps)", () => {
     const h = harness([
       { findings: [{ index: 0, verdict: "landed", line: "The decision asks for two decimals.", cites: ["E2"] }] },
       { findings: [{ index: 0, verdict: "landed", line: "THERM-48 now formats two decimals.", cites: ["E1", "E2"] }] },
-    ], { live_sources: [JIRA], ticket_available: true,
+    ], { live_sources: [JIRA],
       openCitation: async input => result([(input.citation as { readonly kind: string }).kind === "approved_record" ? decision : therm]) });
     const output = await h.research.renderWithResearch({ trigger: sweep.name, brief: sweep.brief(event, { kind: "global" }), renderer: sweep.renderer!, trigger_input: event });
     // No planner call: both calls are the judge's, the second its one repair.
@@ -514,7 +514,7 @@ describe("research loop: search only (a record in no project)", () => {
       reads("open", [{ tool: "list", args: { source: "tickets" } }]),
       reads("open", [{ tool: "search", args: { query: "staged meeting approval" } }, { tool: "search", args: { query: "canary" } }]),
       affects("not_found"),
-    ], { scope: { kind: "global" }, live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]), list });
+    ], { scope: { kind: "global" }, live_sources: [JIRA], openCitation: async () => result([approved]), list });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation], { list: false }) });
     expect(h.inputs[0]!.system_prompt).toBe(`${SEARCH_ONLY_STEP_PROMPT}\n\nLive sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only search discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.\n\n${TASK_RULE_PROMPT}`);
     expect(tools(0, h)).toEqual(["search", "open", "finish"]);
@@ -543,7 +543,7 @@ describe("research loop: search only (a record in no project)", () => {
   });
 
   it("keeps the full prompt and the list tool when the brief allows list", async () => {
-    const h = harness([affects("not_found"), affects("not_found")], { live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]) });
+    const h = harness([affects("not_found"), affects("not_found")], { live_sources: [JIRA], openCitation: async () => result([approved]) });
     await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(h.inputs[0]!.system_prompt.startsWith(`${STEP_PROMPT}\n\n`)).toBe(true);
     expect(tools(0, h)).toEqual(["search", "open", "list", "finish"]);
@@ -557,7 +557,7 @@ describe("research loop: search only (a record in no project)", () => {
       reads("open", [{ tool: "search", args: { query: "staged meeting approval" } }, { tool: "search", args: { query: "canary" } }]),
       affects("not_found"),
       { decided: [{ id: "E1", text: "Staging verifies approval of a staged meeting." }], affected: [] },
-    ], { scope: { kind: "global" }, live_sources: [JIRA], ticket_available: true, openCitation: async () => result([approved]) });
+    ], { scope: { kind: "global" }, live_sources: [JIRA], openCitation: async () => result([approved]) });
     const output = await h.research.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, { kind: "global" }), renderer: definition.renderer!, trigger_input: event });
     expect(tools(0, h)).toEqual(["search", "open", "finish"]);
     expect(h.prompt(0).task).not.toContain("in this project");
@@ -785,7 +785,7 @@ describe("research core: what a task trigger's renderer was shown and cited", ()
       { decided: [{ id: "E1", text: "Show two decimals on the display." }], affected: [{ id: "E2", says_now: "The firmware formats one decimal.", relation: "conflicts", date_at_risk: "", milestone: "" }] },
     ] : [{ findings: [{ index: 0, verdict: "still_open", line: "THERM-46 still formats one decimal.", cites: ["E1"] }] }];
     const h = harness(replies, {
-      live_sources: [JIRA], ticket_available: true, search: async () => result([therm]),
+      live_sources: [JIRA], search: async () => result([therm]),
       openCitation: async input => result([(input.citation as { readonly kind: string }).kind === "ticket" ? therm : decision]),
     });
     const event = trigger === "approved_record" ? definition.parseEvent({ record: decision.citation })
@@ -801,7 +801,7 @@ describe("research core: what a task trigger's renderer was shown and cited", ()
 });
 
 describe("research loop: need kinds (ADR-0041)", () => {
-  const question = (text: string, list = true): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false, ...(list ? {} : { list: false }) } });
+  const question = (text: string): AgenticBriefV1 => ({ goal: { kind: "question", question: text }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: false } });
   const kinded = (text: string, kind: string | undefined, status: string, evidence: readonly string[] = []) => ({ ...need(text, status, evidence), ...(kind === undefined ? {} : { kind }) });
   /** A proposed need that names the plan's id for it. */
   const withId = (id: string, value: ReturnType<typeof need>) => ({ id, ...value });
@@ -829,18 +829,18 @@ describe("research loop: need kinds (ADR-0041)", () => {
     ], { search: async () => result([launch]) });
     expect((await bare.research.research({ trigger: "ask", brief: question("When is launch?") })).plan[0]!.needs).toEqual([{ need: "When is launch?", kind: "content", status: "found", evidence: ["E1"] }]);
     expect(bare.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "When is launch?", kind: "content", status: "open", evidence: [] }] }]);
-    // A task goal, and Ask without the list tool, declare nothing: their schema, plan view and bundle have no kind.
-    for (const [trigger, brief_] of [["approved_record", brief("Find the launch date.", [])], ["ask", question("When is launch?", false)]] as const) {
-      const plain = harness([
-        step([part("When is launch?", [kinded("launch date", "which_items", "open")])], [{ tool: "search", args: { query: "launch" } }]),
-        step([part("When is launch?", [withId("N1", kinded("launch date", "which_say", "found", ["E1"]))])], [{ tool: "finish", args: {} }]),
-        ...(trigger === "ask" ? [writer] : []),
-      ], { search: async () => result([launch]) });
-      const result_ = await plain.research.research({ trigger, brief: brief_ });
-      expect(needSchema(plain, 0).required).toEqual(["need", "status", "evidence"]);
-      expect(needSchema(plain, 0).properties).not.toHaveProperty("kind");
-      expect(plain.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "open", evidence: [] }] }]);
-      expect(result_.plan[0]!.needs).toEqual([{ need: "launch date", status: "found", evidence: ["E1"] }]);
-    }
+    // A task goal declares nothing: its schema, plan view and bundle have no kind.
+    const plain = harness([
+      step([part("When is launch?", [kinded("launch date", "which_items", "open")])], [{ tool: "search", args: { query: "launch" } }]),
+      step([part("When is launch?", [withId("N1", kinded("launch date", "which_say", "found", ["E1"]))])], [{ tool: "finish", args: {} }]),
+    ], { search: async () => result([launch]) });
+    const result_ = await plain.research.research({ trigger: "approved_record", brief: brief("Find the launch date.", []) });
+    expect(needSchema(plain, 0).required).toEqual(["need", "status", "evidence"]);
+    expect(needSchema(plain, 0).properties).not.toHaveProperty("kind");
+    expect(plain.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "launch date", status: "open", evidence: [] }] }]);
+    expect(result_.plan[0]!.needs).toEqual([{ need: "launch date", status: "found", evidence: ["E1"] }]);
+    // Ask always has the list tool: a question without it is refused before any read.
+    await expect(plain.research.research({ trigger: "ask", brief: { ...question("When is launch?"), options: { small_scope_preload: false, list: false } } })).rejects.toThrow("question is invalid");
+    expect(plain.generate).toHaveBeenCalledTimes(2);
   });
 });

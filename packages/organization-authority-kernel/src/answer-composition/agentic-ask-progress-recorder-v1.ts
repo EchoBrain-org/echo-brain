@@ -24,7 +24,7 @@ import {
   type PersonAskReceiptV3,
 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
-import type { AgenticAskProgressRequestV1, AgenticAskProgressSinkV1, AgenticAskProgressSinkV2, AgenticAskProgressSinkV3 } from "./agentic-ask-progress-v1.js";
+import type { AgenticAskProgressRequestV1, AgenticAskProgressSinkV3 } from "./agentic-ask-progress-v1.js";
 import { FOLLOW_UP_EVIDENCE_KIND_V1 } from "../shared/follow-up-evidence-v1.js";
 import { WORKSPACE_SOURCE_IDS_V1, type WorkspaceSourceIdV1 } from "../shared/workspace-evidence-v1.js";
 import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8 } from "./agentic-evidence-bundle-v1.js";
@@ -167,13 +167,9 @@ interface AgenticAskProgressRecorderOptionsV1 {
  * progress version the run streams, V1 when omitted; its sink receives only
  * events valid in that version.
  */
-export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRecorderOptionsV1 & { readonly sink: AgenticAskProgressSinkV1; readonly version?: 1 }): AgenticAskProgressRecorderV1;
-export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRecorderOptionsV1 & { readonly sink: AgenticAskProgressSinkV2; readonly version: 1 | 2 }): AgenticAskProgressRecorderV1;
-export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRecorderOptionsV1 & { readonly sink: AgenticAskProgressSinkV3; readonly version: AgenticAskProgressVersionV1 }): AgenticAskProgressRecorderV1;
-export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRecorderOptionsV1 & { readonly sink: AgenticAskProgressSinkV1 | AgenticAskProgressSinkV2 | AgenticAskProgressSinkV3; readonly version?: AgenticAskProgressVersionV1 }): AgenticAskProgressRecorderV1 {
-  const { signal } = options;
+export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRecorderOptionsV1 & { readonly sink: AgenticAskProgressSinkV3; readonly version?: AgenticAskProgressVersionV1 }): AgenticAskProgressRecorderV1 {
+  const { signal, sink } = options;
   // A V1 run validates every event as V1 before it is sent, so a V1 sink only ever receives V1 events.
-  const sink = options.sink as AgenticAskProgressSinkV3;
   const version = options.version ?? 1;
   const validate = VERSIONS[version];
   const sourcesMax = version === 3 ? PERSON_ASK_PROGRESS_SOURCES_MAX_V3 : PERSON_ASK_PROGRESS_SOURCES_MAX_V1;
