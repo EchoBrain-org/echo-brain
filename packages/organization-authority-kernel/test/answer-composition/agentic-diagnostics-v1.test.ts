@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '../../src/answer-composition/agentic-trigger-definitions-v1.js';
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from '../../src/answer-composition/agentic-research-v1.js';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
+import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { checked, listed, need, part, record, replay, researchHarness, result, SCENARIOS, step } from './fixtures/agentic-scenarios.js';
 
 type Lifecycle = Extract<CoreRuntimeDiagnosticObservationV1, { readonly kind: 'lifecycle' }>;
@@ -115,26 +115,24 @@ describe('shared research diagnostics lifecycle', () => {
     expect(lifecycle(events)).toContainEqual(expect.objectContaining({ stage: 'research', event: 'succeeded', data: expect.objectContaining({ research: expect.objectContaining({ stop: { reason: 'budget', completed: false, admission: 'post_revalidation_no_time' } }) }) }));
   });
 
-  it('keeps a successful audit distinct from failed release and suppresses legacy error content', async () => {
+  it('keeps a successful audit distinct from failed release and keeps error text out of diagnostics', async () => {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const metadata: CoreRuntimeObservationV1[] = [];
-    const content = vi.fn();
     let checks = 0;
     const failure = new AuthorityOperationError('stale_access_state', 'private membership details');
     const h = researchHarness([finish('not_found', []), { sentences: [], not_found: ['current state'] }], {
-      revalidate: async () => { if (++checks === 4) { captureCoreRuntimeContentV1('validation_error', failure); throw failure; } return checked; },
+      revalidate: async () => { if (++checks === 4) throw failure; return checked; },
     });
-    // The service owns the outer content-free root; attach legacy capture outside the shared kernel boundary.
+    // The service owns the outer research_run root.
     await expect(withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('research_run', async () => {
       await expect(h.research.answerWithResearch({ question: 'What is the current state?' })).rejects.toBe(failure);
-    }, { observer: event => { metadata.push(event); }, content_observer: content }))).resolves.toBeUndefined();
+    }, { observer: event => { metadata.push(event); } }))).resolves.toBeUndefined();
     const stages = lifecycle(events);
     expect(stages).toContainEqual(expect.objectContaining({ stage: 'audit', event: 'succeeded' }));
     expect(stages.filter(event => event.stage === 'release').map(event => event.event)).toEqual(['started', 'failed']);
     expect(stages.at(-1)).toMatchObject({ stage: 'run', event: 'failed', error_kind: 'stale_access_state' });
     expect(h.audit).toHaveLength(1);
     expect(metadata).toContainEqual(expect.objectContaining({ phase: 'research_release', event: 'failed' }));
-    expect(content).not.toHaveBeenCalled();
     expect(JSON.stringify(events)).not.toContain('private membership details');
   });
 

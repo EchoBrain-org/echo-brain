@@ -98,16 +98,9 @@ export interface CoreRuntimeObservationV1 extends CoreRuntimeDetailV1 {
   readonly elapsed_ms: number;
 }
 export type CoreRuntimeObserverV1 = (event: CoreRuntimeObservationV1) => void | Promise<void>;
-export interface CoreRuntimeContentV1 {
-  readonly operation_id: string;
-  readonly span_id: string;
-  readonly content_kind: "meeting_input" | "model_request" | "model_response" | "validation_error";
-  readonly content: unknown;
-}
 export interface CoreRuntimeObservationScopeV1 {
   readonly vocabulary?: TelemetryVocabularyV1;
   readonly observer?: CoreRuntimeObserverV1;
-  readonly content_observer?: (event: CoreRuntimeContentV1) => void | Promise<void>;
   /** Explicit private payload selection. It is never forwarded to the metadata observer. */
   readonly diagnostic_observer?: CoreRuntimeDiagnosticObserverV1;
   /** Runtime-selected diagnostic destination, independent of a person's one-use capture.
@@ -165,10 +158,6 @@ export function annotateCoreRuntimeV1(input: { counts?: CoreRuntimeCountsV1; res
     if (input.linked_journey_ids !== undefined) Object.assign(detail, { linked_journey_ids: [...new Set([...detail.linked_journey_ids, ...input.linked_journey_ids])] });
   });
 }
-export function captureCoreRuntimeContentV1(content_kind: CoreRuntimeContentV1["content_kind"], content: unknown): void {
-  const current = context.getStore();
-  if (current?.content_observer && current.detail) safe(() => current.content_observer!({ operation_id: current.detail!.operation_id, span_id: current.detail!.span_id, content_kind, content }));
-}
 /** Attach a selected sink without creating another span or changing sync/async return behavior. */
 export function withCoreRuntimeDiagnosticsV1<T>(observer: CoreRuntimeDiagnosticObserverV1 | undefined, operation: () => T): T {
   const { diagnostic_observer: _previous, ...parent } = context.getStore() ?? {};
@@ -192,13 +181,6 @@ export function observeCoreRuntimeDiagnosticV1(event: CoreRuntimeDiagnosticEvent
       ...(current.diagnostic_tool === undefined ? {} : { tool_context: current.diagnostic_tool }) }));
   }
 }
-/** Keep operational timings while excluding pending-custody payloads from content telemetry. */
-export function withoutCoreRuntimeContentV1<T>(operation: () => T): T {
-  const current = context.getStore();
-  if (current === undefined) return operation();
-  const { content_observer: _contentObserver, ...contentFree } = current;
-  return context.run(contentFree, operation);
-}
 function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1): { current: Context; finish: (event: "succeeded" | "failed", error?: unknown) => void } | null {
   const parent = context.getStore();
   const observer = scope?.observer ?? parent?.observer;
@@ -220,8 +202,7 @@ function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1)
     const current: Context = { ...(observer === undefined ? {} : { observer }), vocabulary,
       ...(diagnosticObserver === undefined ? {} : { diagnostic_observer: diagnosticObserver }),
       ...(diagnosticExporter === undefined ? {} : { diagnostic_exporter: diagnosticExporter }),
-      ...(parent?.diagnostic_tool === undefined ? {} : { diagnostic_tool: parent.diagnostic_tool }),
-      ...(scope?.content_observer ?? parent?.content_observer ? { content_observer: scope?.content_observer ?? parent?.content_observer } : {}), detail };
+      ...(parent?.diagnostic_tool === undefined ? {} : { diagnostic_tool: parent.diagnostic_tool }), detail };
     const emit = (event: CoreRuntimeObservationV1["event"]) => { if (observer !== undefined) safe(() => observer({ ...normalizeCoreRuntimeDetailV1(detail, vocabulary), stage: phase, event, observed_at: new Date().toISOString(), elapsed_ms: event === "started" ? 0 : Math.max(0, Math.floor(performance.now() - started)) })); };
     if (phase === "model_call") { activeModels += 1; Object.assign(detail.counts, { active_models: activeModels }); }
     emit("started");
@@ -233,10 +214,7 @@ function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1)
         Object.assign(detail.counts, { rss_bytes: memory.rss, heap_used_bytes: memory.heapUsed,
           cpu_user_us: Math.max(0, end.userCPUTime - usage.userCPUTime), cpu_system_us: Math.max(0, end.systemCPUTime - usage.systemCPUTime),
           fs_read_count: Math.max(0, end.fsRead - usage.fsRead), fs_write_count: Math.max(0, end.fsWrite - usage.fsWrite) });
-        if (error !== undefined) {
-          captureCoreRuntimeContentV1("validation_error", error instanceof Error ? { name: error.name, message: error.message } : { message: "non-Error failure" });
-          Object.assign(detail, { result: failureResult(error, detail) });
-        }
+        if (error !== undefined) Object.assign(detail, { result: failureResult(error, detail) });
         emit(event);
       });
     } };

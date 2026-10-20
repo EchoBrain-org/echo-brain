@@ -1,4 +1,4 @@
-import { annotateCoreRuntimeV1, observeCoreRuntimeV1, withoutCoreRuntimeContentV1, type CoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 
 function failureResult(error: unknown): CoreRuntimeDetailV1['result'] {
   const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
@@ -9,9 +9,9 @@ function failureResult(error: unknown): CoreRuntimeDetailV1['result'] {
   return 'unavailable';
 }
 
-/** Source categories and counts only: provider failures must not enter content capture. */
+/** Source categories and counts only; provider failures keep only a finite result. */
 export function observePersonLiveEvidenceV1<T>(phase: 'evidence_connection' | 'evidence_search' | 'evidence_list' | 'evidence_open' | 'evidence_revalidate', source: NonNullable<CoreRuntimeDetailV1['evidence_source']>, operation: () => Promise<T>): Promise<T> {
-  return withoutCoreRuntimeContentV1(() => observeCoreRuntimeV1(phase, async () => {
+  return observeCoreRuntimeV1(phase, async () => {
     annotateCoreRuntimeV1({ evidence_source: source });
     try { return await operation(); }
     catch (error) {
@@ -19,5 +19,5 @@ export function observePersonLiveEvidenceV1<T>(phase: 'evidence_connection' | 'e
       catch { /* Observation cannot replace the provider's error. */ }
       throw error;
     }
-  }));
+  });
 }

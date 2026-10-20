@@ -92,20 +92,18 @@ describe('thin live ticket dispatcher', () => {
   it('distinguishes an empty live lookup from a denied lookup without capturing query or provider content', async () => {
     const f = fixture();
     const events: CoreRuntimeObservationV1[] = [];
-    const content = vi.fn();
     const desk = deskWith(f.base, f.ticket);
     await observeCoreRuntimeV1('ask_request', async () => {
       await desk.search({ query: 'private-query' });
       vi.mocked(f.ticket.search).mockRejectedValueOnce(new AuthorityOperationError('unauthorized', 'private-provider-error'));
       await expect(desk.search({ query: 'private-query' })).rejects.toMatchObject({ code: 'unauthorized' });
-    }, { observer: event => { events.push(event); }, content_observer: content });
+    }, { observer: event => { events.push(event); } });
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ phase: 'evidence_search', event: 'succeeded', evidence_source: 'ticket', result: 'empty', counts: expect.objectContaining({ included_count: 0 }) }),
       expect.objectContaining({ phase: 'evidence_search', event: 'failed', evidence_source: 'ticket', result: 'authorization' }),
     ]));
     expect(new Set(events.map(event => event.operation_id)).size).toBe(1);
     expect(JSON.stringify(events)).not.toContain('private-query');
-    expect(content).not.toHaveBeenCalled();
   });
 
   it('interleaves a common query across local Granola evidence, Jira and Slack without crowding out a source', async () => {
@@ -331,11 +329,10 @@ describe('registered live source dispatch', () => {
     vi.mocked(f.page.revalidate).mockRejectedValueOnce(failure);
     const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [registration(f.page, 'knowledge-one')]);
     const events: CoreRuntimeObservationV1[] = [];
-    const content = vi.fn();
     const input = { signal: new AbortController().signal };
     await observeCoreRuntimeV1('ask_request', async () => {
       await expect(desk.revalidate(input)).rejects.toBe(failure);
-    }, { observer: event => { events.push(event); }, content_observer: content });
+    }, { observer: event => { events.push(event); } });
     expect(events.filter(event => !event.root && event.event === 'failed')).toMatchObject([
       { phase: 'evidence_revalidate', evidence_source: 'page', result: 'unavailable' },
     ]);
@@ -344,7 +341,6 @@ describe('registered live source dispatch', () => {
     expect(f.base.revalidate).toHaveBeenCalledTimes(1);
     expect(f.page.assertCurrent).not.toHaveBeenCalled();
     expect(JSON.stringify(events)).not.toContain('private-provider-revalidation-error');
-    expect(content).not.toHaveBeenCalled();
   });
   it.each(['search', 'list'] as const)('runs %s concurrently across local, ticket and two page providers without changing ownership', async method => {
     const f = mixedFixture();

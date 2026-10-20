@@ -228,87 +228,15 @@ describe("staging journey telemetry transport v1", () => {
     expect(lines).toHaveLength(4);
   });
 
-});
-
-describe("staging journey content telemetry switch", () => {
-  const identity = { release_sha: "a".repeat(40), build_number: 42 };
-  const record = {
-    journey_id: "123e4567-e89b-42d3-a456-426614174000",
-    sequence: 1,
-    observed_at: "2026-09-02T17:00:00.000Z",
-    release_sha: identity.release_sha,
-    build_number: 42,
-    stage: "ask_answer" as const,
-    content_kind: "answer_output" as const,
-    content: { value: { status: "answered" } },
-  };
-
-  it("is off by default and writes nothing", () => {
-    const { transport, lines } = openTransport({}, {}, identity);
-    expect(transport.content_enabled).toBe(false);
-    transport.content_observer(record);
-    expect(lines).toEqual([]);
-  });
-
-  it("writes canonical bounded content records only for the exact identity when enabled", () => {
-    const { transport, lines } = openTransport({}, { content_enabled: true }, identity);
-    expect(transport.content_enabled).toBe(true);
-    transport.content_observer(record);
-    transport.content_observer({ ...record, build_number: 43 });
-    transport.content_observer({ ...record, journey_id: "nope" });
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0] ?? "")).toMatchObject({
-      schema_version: 2,
-      kind: "echo-authority-journey-content-v1",
-      environment: "staging",
-      workflow: "ask",
-      journey_id: record.journey_id,
-      sequence: 1,
-      release_sha: identity.release_sha,
-      build_number: 42,
-      stage: "ask_answer",
-      content_kind: "answer_output",
-      truncated: false,
-      content: JSON.stringify({ value: { status: "answered" } }),
-    });
-    transport.close();
-    transport.content_observer(record);
-    expect(lines).toHaveLength(1);
-  });
-
-  it("reads the staging content switch from the immutable image environment", () => {
-    const write = () => undefined;
-    const base = {
+  it("reads the staging deploy identity from the immutable image environment", () => {
+    const transport = createJourneyTelemetryTransportFromEnvironmentV1("staging", {
       ECHO_STAGING_JOURNEY_TELEMETRY_V1: "true",
-      ECHO_SOURCE_SHA: identity.release_sha,
+      ECHO_SOURCE_SHA: RELEASE_SHA,
       ECHO_BUILD_NUMBER: "42",
-    };
-    const create = (environment: Record<string, string>) => createJourneyTelemetryTransportFromEnvironmentV1("staging", environment, { write });
-    const transport = create(base);
-    expect(transport.enabled).toBe(true);
-    expect(transport.identity).toEqual(identity);
-    expect(transport.content_enabled).toBe(false);
-    expect(
-      create({ ...base, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "true" })
-        .content_enabled,
-    ).toBe(true);
-    expect(
-      create({ ...base, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "TRUE" })
-        .content_enabled,
-    ).toBe(false);
-    // Content telemetry never exists without the content-free transport.
-    expect(
-      create(
-        {
-          ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "true",
-          ECHO_SOURCE_SHA: identity.release_sha,
-          ECHO_BUILD_NUMBER: "42",
-        },
-      ).content_enabled,
-    ).toBe(false);
+    }, { write: () => undefined });
+    expect(transport).toMatchObject({ enabled: true, environment: "staging", identity: { release_sha: RELEASE_SHA, build_number: 42 } });
   });
 });
-
 
 describe("bounded rejection accounting", () => {
   it("rejects malformed metric/observer inputs and still delivers the next valid event before start without liveness", () => {
@@ -357,28 +285,21 @@ describe("bounded rejection accounting", () => {
     });
   });
 
-  it.each([false, true])("attributes active rejection origins without logging inputs (content enabled: %s)", (content_enabled) => {
-    const { transport, lines, heartbeat } = openTransport({}, { content_enabled });
+  it("attributes active rejection origins without logging inputs", () => {
+    const { transport, lines, heartbeat } = openTransport();
     const malformed = { environment: "staging", release_sha: RELEASE_SHA, build_number: 42, journey_id: "private-invalid-input" };
     expect(() => transport.observer(malformed as never)).not.toThrow();
-    expect(() => transport.content_observer(malformed as never)).not.toThrow();
-    expect(() => transport.content_observer({
-      ...malformed, journey_id: JOURNEY_ID, sequence: 1, observed_at: STARTED_AT,
-      stage: "ask_answer", content_kind: "answer_output",
-      content: new Proxy({}, { ownKeys() { throw new Error("private-format-error"); } }),
-    })).not.toThrow();
     expect(lines).toEqual([]);
     transport.start();
     heartbeat();
     transport.close();
     const expected = {
       journey_observer: { invalid_journey_event: 1 },
-      content_capture: { invalid_content_record: content_enabled ? 1 : 0, content_format_error: content_enabled ? 1 : 0 },
       meeting_approval_observer: { observation_callback_failure: 0 },
     };
     for (const event of lines.map((line) => JSON.parse(line)).filter((event) => event.kind === JOURNEY_TELEMETRY_LIVENESS_KIND_V1)) {
       expect(event.rejection_counts).toEqual(expected);
-      expect(event.delivery).toMatchObject({ rejected_events: content_enabled ? 3 : 1, writes_failed: 0, writes_pending: 0, writes_dropped: 0 });
+      expect(event.delivery).toMatchObject({ rejected_events: 1, writes_failed: 0, writes_pending: 0, writes_dropped: 0 });
       expect(Object.values(event.rejection_counts).flatMap((counts) => Object.values(counts as Record<string, number>)).reduce((a, b) => a + b, 0)).toBe(event.delivery.rejected_events);
     }
     expect(lines).toHaveLength(4); // Existing liveness + EMF only, no per-rejection writes.
@@ -408,7 +329,6 @@ describe("bounded rejection accounting", () => {
     expect(JSON.parse(lines[0]!).delivery).toMatchObject({ writes_failed: 4, writes_pending: 0, writes_dropped: 0, rejected_events: 0 });
     expect(JSON.parse(lines[0]!).rejection_counts).toEqual({
       journey_observer: { invalid_journey_event: 0 },
-      content_capture: { invalid_content_record: 0, content_format_error: 0 },
       meeting_approval_observer: { observation_callback_failure: 0 },
     });
   });

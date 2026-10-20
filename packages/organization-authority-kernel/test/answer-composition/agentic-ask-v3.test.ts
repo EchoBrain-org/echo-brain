@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV3 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
+import { observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { deferred } from './fixtures/deferred.js';
 
 const checked = { checked_at: '2026-10-05T00:00:00.000Z' };
@@ -132,10 +132,10 @@ it('concurrently reads same-kind registered sources and admits exact passages wi
     { parts: comparisonParts(['E1', 'E2']), actions: [{ tool: 'finish', args: {} }] },
     { sentences: [{ text: 'Both plans establish the EVT date.', evidence: ['E1', 'E2'] }], not_found: [] },
   ];
-  const prompts: StructuredGenerationInput[] = []; const capture = vi.fn();
+  const prompts: StructuredGenerationInput[] = [];
   const ask = createAgenticAskV3({ desk, audit: { append: () => undefined }, generation: fixtureGeneration,
-    model: { generate: async input => { prompts.push(input); captureCoreRuntimeContentV1('model_request', input.user_prompt); return replies.shift()!; } } });
-  const pending = observeCoreRuntimeV1('ask_request', () => ask.answer({ question: 'Compare the plans.' }), { observer: () => undefined, content_observer: capture });
+    model: { generate: async input => { prompts.push(input); return replies.shift()!; } } });
+  const pending = observeCoreRuntimeV1('ask_request', () => ask.answer({ question: 'Compare the plans.' }), { observer: () => undefined });
   await vi.waitFor(() => expect(desk.search).toHaveBeenCalledTimes(2), { interval: 1 });
   expect(vi.mocked(desk.search).mock.calls.map(([input]) => input.source)).toEqual(['knowledge-a', 'knowledge-b']);
   second.resolve(pageResult(secondItem)); first.resolve(pageResult(firstItem));
@@ -148,7 +148,6 @@ it('concurrently reads same-kind registered sources and admits exact passages wi
   ]);
   expect(research.last_results.every((result: { results: unknown[] }) => result.results.every(id => typeof id === 'string'))).toBe(true);
   expect(desk.open).not.toHaveBeenCalled();
-  expect(capture).not.toHaveBeenCalled();
 });
 
 it('serializes equivalent registered-source cursors while another source lists concurrently on one request day', async () => {
