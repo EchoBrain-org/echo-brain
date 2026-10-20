@@ -1877,7 +1877,8 @@ interface MappingAdapter<Tool extends MappingTool> {
   read(account: Expect, project_id: string): Promise<Result<MappingValue<Tool>>>;
   write(account: Expect, project_id: string, setting: MappingSetting<Tool>, remove: boolean, request_id: string): Promise<Result<MappingValue<Tool>>>;
   accepted(setting: MappingSetting<Tool>, value: MappingValue<Tool>): MappingSetting<Tool>;
-  valid(setting: MappingSetting<Tool>): boolean;
+  /** What Save would do to a setting that was read: see ToolChange. */
+  change(setting: MappingSetting<Tool>, value: MappingValue<Tool>): ToolChange;
 }
 
 const jiraMapping: MappingAdapter<'jira'> = {
@@ -1887,7 +1888,13 @@ const jiraMapping: MappingAdapter<'jira'> = {
   write: (expect, project_id, setting, remove, request_id) => rpc('projects.jiraSet', { expect, project_id, request_id,
     expected_revision: setting.value!.revision, jira_project: remove ? null : setting.key.trim() }),
   accepted: (setting, value) => ({ seq: setting.seq, status: 'ready', key: value.mapping?.project_key ?? '', value }),
-  valid: setting => /^[A-Z][A-Z0-9_]{0,63}$/.test(setting.key.trim()) && setting.key.trim() !== setting.value?.mapping?.project_key,
+  change: (setting, value) => {
+    const key = setting.key.trim();
+    const current = value.mapping?.project_key ?? null;
+    if (key === '') return current ? 'remove' : null;
+    if (key === current) return null;
+    return /^[A-Z][A-Z0-9_]{0,63}$/.test(key) ? 'set' : 'invalid';
+  },
 };
 const confluenceMapping: MappingAdapter<'confluence'> = {
   reads: value => value.mapping ? value.mapping.space_ids.length : null,
@@ -1896,8 +1903,14 @@ const confluenceMapping: MappingAdapter<'confluence'> = {
   write: (expect, project_id, setting, remove, request_id) => rpc('projects.confluenceSet', { expect, project_id, request_id,
     expected_revision: setting.value!.revision, space_ids: remove ? null : setting.selected }),
   accepted: (setting, value) => ({ ...setting, status: 'ready', value, selected: value.mapping?.space_ids ?? [] }),
-  valid: setting => setting.pickerFailure === undefined && setting.selected.length > 0,
+  change: (setting, value) => {
+    const current = value.mapping?.space_ids ?? [];
+    if (current.length === setting.selected.length && current.every(id => setting.selected.includes(id))) return null;
+    if (setting.selected.length === 0) return current.length > 0 ? 'remove' : null;
+    return setting.pickerFailure === undefined ? 'set' : 'invalid';
+  },
 };
+const MAPPINGS: { readonly [Tool in MappingTool]: MappingAdapter<Tool> } = { jira: jiraMapping, confluence: confluenceMapping };
 
 /** Every reply belongs to this account and this opening of the project sheet. */
 function mappingAt<Tool extends MappingTool>(tool: Tool, account: Expect, opening: number) {
@@ -2028,22 +2041,15 @@ export function projectToolFailureWords(settings: ProjectSettingsState, tool: Ma
 
 /** What Save would do to a tool's setting: nothing, set it, remove it, or nothing yet, as what is typed is not valid. */
 export type ToolChange = 'set' | 'remove' | 'invalid' | null;
-export function projectToolChange(settings: ProjectSettingsState, tool: MappingTool): ToolChange {
-  if (tool === 'jira') {
-    const setting = settings.jira;
-    if (setting?.status !== 'ready' || !setting.value) return null;
-    const key = setting.key.trim();
-    const current = setting.value.mapping?.project_key ?? null;
-    if (key === '') return current ? 'remove' : null;
-    if (key === current) return null;
-    return jiraMapping.valid(setting) ? 'set' : 'invalid';
-  }
-  const setting = settings.confluence;
-  if (setting?.status !== 'ready' || !setting.value) return null;
-  const current = setting.value.mapping?.space_ids ?? [];
-  if (current.length === setting.selected.length && current.every(id => setting.selected.includes(id))) return null;
-  if (setting.selected.length === 0) return current.length > 0 ? 'remove' : null;
-  return confluenceMapping.valid(setting) ? 'set' : 'invalid';
+export function projectToolChange<Tool extends MappingTool>(settings: ProjectSettingsState, tool: Tool): ToolChange {
+  const setting = settings[tool] as MappingSetting<Tool> | undefined;
+  return setting?.status === 'ready' && setting.value ? MAPPINGS[tool].change(setting, setting.value as MappingValue<Tool>) : null;
+}
+
+/** What a project reads from a tool, as the Authority last said; undefined until it was read. */
+export function projectToolReads<Tool extends MappingTool>(settings: ProjectSettingsState, tool: Tool): ProjectReads[Tool] | undefined {
+  const value = settings[tool]?.value as MappingValue<Tool> | undefined;
+  return value ? MAPPINGS[tool].reads(value) : undefined;
 }
 
 /** Save is offered to a lead with something changed, nothing invalid, and no connection still waiting on the browser. */
@@ -2087,8 +2093,7 @@ export async function saveProjectTools(): Promise<void> {
   let saved = true;
   const done: typeof changes = [];
   for (const [tool, change] of changes) {
-    const ok = tool === 'jira' ? await writeProjectMapping(jiraMapping, account, change === 'remove')
-      : await writeProjectMapping(confluenceMapping, account, change === 'remove');
+    const ok = await writeProjectMapping(MAPPINGS[tool], account, change === 'remove');
     saved &&= ok;
     if (ok) done.push([tool, change]);
     if (!toolsAt(account, opening)) return;
@@ -2134,16 +2139,9 @@ export function reloadProjectTool(tool: MappingTool): void {
   const settings = state.projectSettings;
   const account = expect();
   if (!settings?.tools || !account || settings.tools.saving) return;
-  const { project_id } = settings.project;
-  if (tool === 'jira') {
-    const initial = jiraMapping.initial(++seq);
-    setMapping(settings, 'jira', initial);
-    void readProjectMapping(jiraMapping, account, project_id, initial.seq);
-  } else {
-    const initial = confluenceMapping.initial(++seq);
-    setMapping(settings, 'confluence', initial);
-    void readProjectMapping(confluenceMapping, account, project_id, initial.seq);
-  }
+  const initial = MAPPINGS[tool].initial(++seq);
+  setMapping(settings, tool, initial);
+  void readProjectMapping(MAPPINGS[tool], account, settings.project.project_id, initial.seq);
 }
 
 /** Connect, in a row of Tools: the row waits on the browser, then lets you pick. Nothing else on the sheet is lost. */
