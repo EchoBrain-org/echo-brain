@@ -1,6 +1,5 @@
 import { ConfluenceProjectMappingStoreV1 } from '@echo-brain/provider-confluence/confluence-project-mapping-store-v1';
-import type { PersonPageProjectAuthorizationV1 } from '../application/ports/person-page-live-runtime-v1.js';
-import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import type { PersonContextProjectAuthorizationV1, PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { CONFLUENCE_LIVE_CONNECTOR_V1, CONFLUENCE_SPACES_LIVE_CONNECTOR_V1, personToolLiveConnectorsV1 } from './person-live-connector-registry-v1.js';
 import { createConfluencePersonConnectionHttpApplicationV1 } from '@echo-brain/provider-confluence/confluence-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
@@ -41,7 +40,7 @@ export function openConfluencePersonLiveRuntimeV1(options: {
   readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   readonly configuration: ConfluencePersonLiveConfigurationV1;
   readonly seams?: ConfluencePersonLiveRuntimeSeamsV1;
-  readonly authorize_project?: PersonPageProjectAuthorizationV1;
+  readonly authorize_project?: PersonContextProjectAuthorizationV1;
   /** Lets a Confluence space's container item name the ECHO projects mapped to it (research tool contract v1). */
   readonly project_names?: PersonContextProjectNamesV1;
 }): OpenedConfluencePersonLiveRuntimeV1 {
