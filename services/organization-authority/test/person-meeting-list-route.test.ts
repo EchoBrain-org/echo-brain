@@ -158,7 +158,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     const mine = ids(walk(route, "emp_a", MINE));
     await w.approve({ name: "r8", approval_id: "apr_r8", projects: [], final_approver: OWNER, issued_at: T(8) });
     // A search during the lag is unavailable, but no longer drops the handle the list reads.
-    expect(failure(() => route.searchBatch({ access_token: "emp_a", queries: ["Decision"] })).code).toBe("unavailable");
+    expect(failure(() => route.searchBatch({ access_token: "emp_a", query: "Decision" })).code).toBe("unavailable");
     expect(ids(walk(route, "emp_a", GLOBAL))).toEqual(before);
     // A superseded rebuild or a restart drops it: the list warms the published generation again.
     clearReadableSearchActiveGenerationV1();

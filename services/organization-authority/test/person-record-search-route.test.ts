@@ -343,16 +343,16 @@ describe("Person Layer 2 route", () => {
       let checkedMilliseconds = Date.parse(reader.checked_at);
       const sessions = { authenticateAccess: () => ({ ...reader, checked_at: new Date(checkedMilliseconds += 1000).toISOString() }) };
       const route = createRoute(value, { sessions, record, capture_projects: createRecordProjectAuthorizationV1(repository) });
-      const search = () => route.searchBatch({ access_token: "reader", queries: ["launch"], project_id: projectId });
+      const search = () => route.searchBatch({ access_token: "reader", query: "launch", project_id: projectId });
       expect(search().response.items.map(item => item.text)).toEqual([text]);
       projects.archiveProject("lead", { schema_version: 1, kind: "echo-project-archive-v1", request_id: randomUUID(), project_id: projectId, archived: true });
       const archived = search();
       expect(archived.response.items.map(item => item.text)).toEqual([text]);
-      expect(route.searchBatch({ access_token: "reader", queries: ["launch"] }).response.items.map(item => item.text)).toEqual([text]);
+      expect(route.searchBatch({ access_token: "reader", query: "launch" }).response.items.map(item => item.text)).toEqual([text]);
       projects.leaveProject("reader", { schema_version: 1, kind: "echo-project-leave-v1", request_id: randomUUID(), project_id: projectId });
       expect(search).toThrow("person authentication failed");
       expect(() => route.revalidateBatchRelease({ access_token: "reader", release: archived.release })).toThrow("person authentication failed");
-      expect(route.searchBatch({ access_token: "reader", queries: ["launch"] }).response.items).toEqual([]);
+      expect(route.searchBatch({ access_token: "reader", query: "launch" }).response.items).toEqual([]);
     } finally { record.close(); value.record.close(); value.authority.close(); }
   });
   it("uses trusted project grants for union visibility, association scope, and the final release fence", () => {
@@ -372,16 +372,16 @@ describe("Person Layer 2 route", () => {
     ].sort();
     const capture_projects = () => ({ project_ids: grants, grants_sha256: canonicalSha256(grants) });
     const route = createRoute(value, { record, capture_projects });
-    expect(route.searchBatch({ access_token: "reader", queries: ["launch"], project_id: alphaId }).response.items.map(item => item.text)).toEqual(["alpha launch"]);
-    expect(() => route.searchBatch({ access_token: "reader", queries: ["launch"], project_id: betaId })).toThrow("authentication failed");
+    expect(route.searchBatch({ access_token: "reader", query: "launch", project_id: alphaId }).response.items.map(item => item.text)).toEqual(["alpha launch"]);
+    expect(() => route.searchBatch({ access_token: "reader", query: "launch", project_id: betaId })).toThrow("authentication failed");
     const revokeAfterSearch = createRoute(value, { record, capture_projects, search_generation: (input) => { const result = searchReadableSearchGenerationV1(input); grants = []; return result; } });
-    expect(() => revokeAfterSearch.searchBatch({ access_token: "reader", queries: ["launch"], project_id: alphaId })).toThrow("person authentication failed");
+    expect(() => revokeAfterSearch.searchBatch({ access_token: "reader", query: "launch", project_id: alphaId })).toThrow("person authentication failed");
     grants = [alphaId];
     grants = [];
-    expect(route.searchBatch({ access_token: "reader", queries: ["launch"] }).response.items).toEqual([]);
+    expect(route.searchBatch({ access_token: "reader", query: "launch" }).response.items).toEqual([]);
     record.close(); value.record.close(); value.authority.close();
   });
-  it.each(["owner", "employee", "other-owner"] as const)("preserves independent lexical facts through the merged four-query batch for %s", async (actor) => {
+  it.each(["owner", "employee", "other-owner"] as const)("finds independent lexical facts across the four frozen queries for %s", async (actor) => {
     const value = setup(false);
     const record = recordLog();
     const atoms = independentRecordCoverageFixture.records.flatMap((source, index) =>
@@ -408,46 +408,45 @@ describe("Person Layer 2 route", () => {
       const route = createRoute(value, { record, search_generation: search, sessions: { authenticateAccess: () => ({ ...reader,
         checked_at: new Date(Date.parse(reader.checked_at) + authenticationCount++).toISOString(),
       }) } });
-      const request = { access_token: "fixture-reader", queries: independentRecordCoverageFixture.queries,
-        limit: 10 } as const;
-      const lexical = route.searchBatch(request);
+      const reads = independentRecordCoverageFixture.queries.map(query => route.searchBatch({ access_token: "fixture-reader", query, limit: 10 }));
+      const released = reads.flatMap(read => read.response.items);
       const revenue = sha256Digest("Revenue signal calibration");
       const perQuery = search.mock.results.map(result => result.value.items as readonly ReadableSearchResultItemV1[]);
       const required = atoms.filter(atom => atom.record_sha256 === revenue &&
         (atom.text.includes("at least 8") || atom.text.includes("confirmed list")));
       expect(required).toHaveLength(2);
       expect(perQuery.map(items => items.length)).toEqual([10, 10, 10, 10]);
-      expect(new Set(lexical.response.items.map(item => item.atom_id))).toEqual(
-        new Set(perQuery.flat().map(item => item.atom_id)),
-      );
+      expect(reads.map(read => read.response.items.map(item => item.atom_id))).toEqual(perQuery.map(items => items.map(item => item.atom_id)));
       if (actor === "owner") {
         // Real lexical ranks (one-based, zero means absent), not captured live
-        // scores: neither per-query limits nor merge/dedup lose these facts.
+        // scores: per-query limits do not lose these facts.
         expect(perQuery.map(items => items.findIndex(item => item.atom_id === required[0]!.atom_id) + 1))
           .toEqual([0, 0, 9, 0]);
         expect(perQuery.map(items => items.findIndex(item => item.atom_id === required[1]!.atom_id) + 1))
           .toEqual([10, 7, 4, 9]);
       }
       for (const fact of required) {
-        expect(lexical.response.items.map(item => item.atom_id)).toContain(fact.atom_id);
+        expect(released.map(item => item.atom_id)).toContain(fact.atom_id);
       }
-      expect(lexical.release.active_pointer.generation_id).toBe(active_generation.generation_id);
-      expect(lexical.release.active_pointer.record_head).toEqual({ position: 4, record_sha256: atoms.at(-1)!.record_sha256 });
+      for (const read of reads) {
+        expect(read.release.active_pointer.generation_id).toBe(active_generation.generation_id);
+        expect(read.release.active_pointer.record_head).toEqual({ position: 4, record_sha256: atoms.at(-1)!.record_sha256 });
+      }
 
-      // One batch read above, running every query.
-      expect(search.mock.calls.map(([call]) => call.query)).toEqual([...request.queries]);
+      // One read per query above.
+      expect(search.mock.calls.map(([call]) => call.query)).toEqual([...independentRecordCoverageFixture.queries]);
       for (const [call] of search.mock.calls) {
         expect(call.reader).toEqual({ principal_id: reader.principal_id, membership_id: reader.membership_id });
         expect(call.active_generation).toEqual(active_generation);
       }
       const privateAtoms = atoms.filter(atom => atom.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
       if (actor === "owner") {
-        expect(lexical.response.items.some(item => item.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)).toBe(true);
+        expect(released.some(item => item.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)).toBe(true);
       } else {
         // Owner role alone also cannot grant the exact reviewer's private scope.
-        const observed = [...perQuery.flat(), ...lexical.response.items];
+        const observed = [...perQuery.flat(), ...released];
         expect(observed.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
-        for (const atom of privateAtoms) expect(lexical.response.items.map(item => item.text)).not.toContain(atom.text);
+        for (const atom of privateAtoms) expect(released.map(item => item.text)).not.toContain(atom.text);
       }
     } finally {
       record.close();
@@ -495,8 +494,8 @@ describe("Person Layer 2 route", () => {
       const route = createRoute(value, { record, search_generation: search, sessions: { authenticateAccess: () => ({ ...authorization(),
         checked_at: new Date(Date.parse("2026-09-09T00:00:00.000Z") + authenticationCount++).toISOString(),
       }) } });
-      const batch = route.searchBatch({ access_token: "fixture-reader", queries: rolloutCoverageFixture.queries,
-        limit: 10 });
+      const read = () => rolloutCoverageFixture.queries.map(query => route.searchBatch({ access_token: "fixture-reader", query, limit: 10 }).response);
+      const responses = read();
       if (!mixed) {
         // Real lexical ranks: the adoption decision is found at ranks 10 and 9;
         // the three deadline actions are absent from every top ten.
@@ -507,12 +506,11 @@ describe("Person Layer 2 route", () => {
             .toBe(true);
         }
       }
-      const selected = batch.response.items.map(item => item.text).join("\n");
-      expect(selected).not.toContain(privateText);
-      expect(batch.response.items.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
-      expect(batch.response.items.every(item => atoms.some(atom => atom.atom_id === item.atom_id && atom.text === item.text && atom.record_sha256 === item.record_sha256))).toBe(true);
-      expect(route.searchBatch({ access_token: "fixture-reader", queries: rolloutCoverageFixture.queries,
-        limit: 10 }).response).toEqual(batch.response);
+      const items = responses.flatMap(response => response.items);
+      expect(items.map(item => item.text).join("\n")).not.toContain(privateText);
+      expect(items.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
+      expect(items.every(item => atoms.some(atom => atom.atom_id === item.atom_id && atom.text === item.text && atom.record_sha256 === item.record_sha256))).toBe(true);
+      expect(read()).toEqual(responses);
       const factual = route.search({ access_token: "fixture-reader", query: "revised data-processing addendum Leah September 5" });
       expect(factual.items[0]!.text).toContain("by September 5");
       // This sentence exists only outside the approved generation.
@@ -667,7 +665,7 @@ describe("Person Layer 2 route", () => {
       const requestStarted = performance.now();
       const benchmark = route.searchBatch({
         access_token: "owner-bearer",
-        queries: ["benchmark0", "benchmark1", "benchmark2", "benchmark3"],
+        query: "benchmark0 benchmark1 benchmark2 benchmark3",
       });
       const requestMilliseconds = performance.now() - requestStarted;
       const eventLoopDelayMilliseconds = await eventLoopProbe;
@@ -685,7 +683,7 @@ describe("Person Layer 2 route", () => {
         postings: 15_974,
         buildMilliseconds,
         prewarmMilliseconds,
-        fourQueryRequestMilliseconds: requestMilliseconds,
+        requestMilliseconds,
         eventLoopDelayMilliseconds,
       });
       expect(Object.keys(owner).sort()).toEqual(["items", "kind", "schema_version"]);
@@ -791,12 +789,7 @@ describe("Person Layer 2 route", () => {
       text: `evidence ${name}`,
       policy_id: "organization-member-readable-person-v2",
     });
-    const answers = {
-      original: [item("original"), item("shared")],
-      focused: [item("focused"), item("shared")],
-      third: [item("third")],
-    } as const;
-    const search = vi.fn((input: { readonly query: string }) => fakeResult(answers[input.query as keyof typeof answers]));
+    const search = vi.fn((_input: { readonly query: string }) => fakeResult([item("original"), item("shared")]));
     let authenticateCount = 0;
     try {
       const route = createRoute(value, {
@@ -810,11 +803,11 @@ describe("Person Layer 2 route", () => {
       });
       const batch = route.searchBatch({
         access_token: "bearer-only",
-        queries: ["original", "focused", "third"],
+        query: "original",
       });
 
       expect(authenticateCount).toBe(2);
-      expect(search).toHaveBeenCalledTimes(3);
+      expect(search).toHaveBeenCalledTimes(1);
       for (const call of search.mock.calls) {
         expect(call[0]).toMatchObject({
           reader: {
@@ -829,8 +822,6 @@ describe("Person Layer 2 route", () => {
       }
       expect(batch.response.items.map((result) => result.atom_id)).toEqual([
         digest("atom-original"),
-        digest("atom-focused"),
-        digest("atom-third"),
         digest("atom-shared"),
       ]);
       expect(batch.release).toMatchObject({
@@ -874,7 +865,7 @@ describe("Person Layer 2 route", () => {
       expect(() =>
         route.searchBatch({
           access_token: "bearer-only",
-          queries: ["expansion"],
+          query: "expansion",
         }),
       ).toThrow("exact-head readable-search generation is not available");
       expect(auditCount(value.authority)).toBe(0);
@@ -885,22 +876,20 @@ describe("Person Layer 2 route", () => {
   });
 
   it.each([
-    ["zero queries", []],
-    ["five queries", ["one", "two", "three", "four", "five"]],
-    ["duplicate queries", ["one", "one"]],
-    ["invalid query", [" leading space"]],
+    ["an empty query", ""],
+    ["invalid query", " leading space"],
     [
       "query with 33 unique terms",
-      [Array.from({ length: 33 }, (_, index) => `term${index}`).join(" ")],
+      Array.from({ length: 33 }, (_, index) => `term${index}`).join(" "),
     ],
-  ])("rejects %s before retrieval or audit", (_name, queries) => {
+  ])("rejects %s before retrieval or audit", (_name, query) => {
     const value = setup();
     const search = vi.fn();
     const authenticateAccess = vi.fn(() => authorization());
     try {
       const route = createRoute(value, { sessions: { authenticateAccess }, search_generation: search });
       expect(() =>
-        route.searchBatch({ access_token: "bearer-only", queries }),
+        route.searchBatch({ access_token: "bearer-only", query }),
       ).toThrow("request is invalid");
       expect(authenticateAccess).not.toHaveBeenCalled();
       expect(search).not.toHaveBeenCalled();
@@ -918,7 +907,7 @@ describe("Person Layer 2 route", () => {
       const route = createRoute(value, { sessions: { authenticateAccess: () => currentAuthorization }, search_generation: () => fakeResult([]) });
       const { release } = route.searchBatch({
         access_token: "bearer-only",
-        queries: ["original"],
+        query: "original",
       });
       expect(
         route.revalidateBatchRelease({
@@ -1062,14 +1051,14 @@ describe("Person Layer 2 route: mine narrows to the caller's own approvals (ADR-
       const route = w.route();
       const records = (result: { readonly response: { readonly items: readonly { readonly record_sha256: Sha256Digest }[] } }) =>
         [...new Set(result.response.items.map((item) => item.record_sha256))].sort();
-      const global = route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true });
+      const global = route.searchBatch({ access_token: "emp_a", query: "Decision", desk: true });
       expect(records(global)).toEqual([w.digest("r1"), w.digest("r3"), w.digest("r4"), w.digest("r7a"), w.digest("r7b")].sort());
-      const mine = route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true, mine: true });
+      const mine = route.searchBatch({ access_token: "emp_a", query: "Decision", desk: true, mine: true });
       expect(records(mine)).toEqual([w.digest("r4")]);
       expect(mine.release.mine).toBe(true);
       expect(global.release).not.toHaveProperty("mine");
-      expect(records(route.searchBatch({ access_token: "owner", queries: ["Decision"], mine: true }))).toEqual([w.digest("r2"), w.digest("r3")].sort());
-      expect(route.searchBatch({ access_token: "emp_c", queries: ["Decision"], mine: true }).response.items).toEqual([]);
+      expect(records(route.searchBatch({ access_token: "owner", query: "Decision", mine: true }))).toEqual([w.digest("r2"), w.digest("r3")].sort());
+      expect(route.searchBatch({ access_token: "emp_c", query: "Decision", mine: true }).response.items).toEqual([]);
       const listed = route.listDeskBatch({ access_token: "emp_a", mine: true });
       expect(records(listed)).toEqual([w.digest("r4")]);
       expect(listed.release.mine).toBe(true);
@@ -1090,13 +1079,13 @@ describe("Person Layer 2 route: mine narrows to the caller's own approvals (ADR-
       expect(records(route.openDeskBatch({ access_token: "emp_a", release: mine.release, anchor: own }))).toEqual([w.digest("r4")]);
 
       const invalid = expect.objectContaining({ code: "invalid_request" });
-      expect(() => route.searchBatch({ access_token: "emp_a", queries: ["Decision"], mine: true, project_id: SHARED })).toThrow(invalid);
-      expect(() => route.searchBatch({ access_token: "emp_a", queries: ["Decision"], mine: false as unknown as true })).toThrow(invalid);
+      expect(() => route.searchBatch({ access_token: "emp_a", query: "Decision", mine: true, project_id: SHARED })).toThrow(invalid);
+      expect(() => route.searchBatch({ access_token: "emp_a", query: "Decision", mine: false as unknown as true })).toThrow(invalid);
       expect(() => route.listDeskBatch({ access_token: "emp_a", mine: true, project_id: SHARED })).toThrow(invalid);
       expect(() => route.initializeDesk({ access_token: "emp_a", mine: true, project_id: SHARED })).toThrow(invalid);
       expect(() => route.openDeskCitation({ ...cite(own), mine: true, project_id: SHARED })).toThrow(invalid);
       // Without the approver projectors mine is unavailable, never global.
-      expect(() => w.route({ record_approver: undefined }).searchBatch({ access_token: "emp_a", queries: ["Decision"], mine: true })).toThrow(expect.objectContaining({ code: "unavailable" }));
+      expect(() => w.route({ record_approver: undefined }).searchBatch({ access_token: "emp_a", query: "Decision", mine: true })).toThrow(expect.objectContaining({ code: "unavailable" }));
     } finally { w.close(); }
   });
 });
@@ -1391,9 +1380,9 @@ describe("Person Layer 2 route: Ask's list rows name each meeting record by its 
       const other = route.listDeskBatch({ access_token: "emp_c" });
       expect(other.desk_items!.some((item) => item.record_sha256 === w.digest("r9"))).toBe(false);
       expect(JSON.stringify(other)).not.toContain("THERM DVT sync");
-      expect(JSON.stringify(route.searchBatch({ access_token: "emp_c", queries: ["DVT"], desk: true }))).not.toContain("THERM DVT sync");
+      expect(JSON.stringify(route.searchBatch({ access_token: "emp_c", query: "DVT", desk: true }))).not.toContain("THERM DVT sync");
       // A search releases the same line with the hit.
-      const searched = route.searchBatch({ access_token: "emp_a", queries: ["fixture position"], desk: true }).desk_items!;
+      const searched = route.searchBatch({ access_token: "emp_a", query: "fixture position", desk: true }).desk_items!;
       expect(searched.filter((item) => item.record_sha256 === w.digest("r9")).map((item) => item.list_label)).toEqual([r9.find((item) => item.item_kind === "decision")!.list_label]);
     } finally { w.close(); }
   });
@@ -1427,7 +1416,7 @@ describe("Person Layer 2 route: approved records carry their dates and their mee
       // Names only: no identity, id or membership of a participant or the approver.
       for (const hidden of ["ari-identity", "unnamed", "prn_", "mem_"]) expect(JSON.stringify(r9)).not.toContain(hidden);
       // A search and an open release the same facts with the atom.
-      const searched = route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true }).desk_items!.find((item) => item.record_sha256 === w.digest("r9"))!;
+      const searched = route.searchBatch({ access_token: "emp_a", query: "Decision", desk: true }).desk_items!.find((item) => item.record_sha256 === w.digest("r9"))!;
       expect(searched).toMatchObject({ dates: r9[0]!.dates, attributes: r9[0]!.attributes });
       const opened = route.openDeskCitation({ access_token: "emp_a", atom_id: searched.atom_id, record_sha256: searched.record_sha256, policy_id: searched.policy_id });
       expect(opened.desk_items!.map((item) => item.attributes?.approved_by)).toEqual(["Olive Owner", "Olive Owner"]);
@@ -1439,7 +1428,7 @@ describe("Person Layer 2 route: approved records carry their dates and their mee
       expect(w.route({ memberships: undefined }).listDeskBatch({ access_token: "emp_a" }).desk_items!.find((item) => item.record_sha256 === w.digest("r9"))!.attributes)
         .toEqual({ status: "decided", participants: "Ari Employee, Maya Chen" });
       // A reader who cannot read r9 gets neither its people nor its approver.
-      const other = JSON.stringify([route.listDeskBatch({ access_token: "emp_c" }), route.searchBatch({ access_token: "emp_c", queries: ["Decision", "Action"], desk: true })]);
+      const other = JSON.stringify([route.listDeskBatch({ access_token: "emp_c" }), route.searchBatch({ access_token: "emp_c", query: "Decision Action", desk: true })]);
       for (const hidden of ["Maya Chen", "Ari Employee", "Olive Owner", "2026-10-05T23:30:00.000Z"]) expect(other).not.toContain(hidden);
     } finally { w.close(); }
   });
@@ -1479,10 +1468,10 @@ describe("Person Layer 2 route: approved records carry their dates and their mee
       expect(route.listDeskBatch({ access_token: "emp_a", ...day("2026-09-07"), date_field: "approved", limit: 2 })).toMatchObject({
         truncated: false, desk_items: [expect.objectContaining({ record_sha256: w.digest("r7b") }), expect.objectContaining({ record_sha256: w.digest("r7a") })] });
       // A search selects the same atoms, and says the same of its selection whatever its words match.
-      const searched = route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true, ...day("2026-10-16") });
+      const searched = route.searchBatch({ access_token: "emp_a", query: "Decision", desk: true, ...day("2026-10-16") });
       expect(searched).toMatchObject({ response: { items: [] }, unchecked: { count: 3, dates: ["approved"] } });
       expect(searched).not.toHaveProperty("notice");
-      expect(route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true, ...day("2026-09-07"), date_field: "approved" }).response.items.map((item) => item.record_sha256).sort())
+      expect(route.searchBatch({ access_token: "emp_a", query: "Decision", desk: true, ...day("2026-09-07"), date_field: "approved" }).response.items.map((item) => item.record_sha256).sort())
         .toEqual([w.digest("r7a"), w.digest("r7b")].sort());
       // The count is the release's: audited with it.
       const listed = route.listDeskBatch({ access_token: "emp_a", ...day("2026-10-16") });

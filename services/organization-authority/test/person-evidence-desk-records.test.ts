@@ -230,15 +230,15 @@ describe('Person evidence desk over the real approved-record route', () => {
 
   it.each([false, true])('restarts pinned search and list after an append (index published: %s)', async published => {
     const value = await fixture();
-    const release = value.route.searchBatch({ access_token: 'token', queries: ['Decision'] }).release;
+    const release = value.route.searchBatch({ access_token: 'token', query: 'Decision' }).release;
     const appended = await new OrganizationRecordAppenderV4(value.record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, approval_id: 'approval-2' }));
     if (published) publish(value.authority, value.state_directory, value.recordAtom, { position: 2, record_sha256: appended.record_sha256 });
     const input = { access_token: 'token', expected_pointer: release.active_pointer };
-    for (const read of [() => value.route.searchBatch({ ...input, queries: ['Decision'] }), () => value.route.listDeskBatch(input)]) {
+    for (const read of [() => value.route.searchBatch({ ...input, query: 'Decision' }), () => value.route.listDeskBatch(input)]) {
       expect(read).toThrow(expect.objectContaining({ name: 'PersonRecordSearchSnapshotChangedV1' }));
     }
     value.revoke();
-    expect(() => value.route.searchBatch({ ...input, queries: ['Decision'] })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    expect(() => value.route.searchBatch({ ...input, query: 'Decision' })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
   });
 
   it('classifies a verified advance observed at the search final fence as retryable', async () => {
@@ -248,16 +248,16 @@ describe('Person evidence desk over the real approved-record route', () => {
     // The first head read sees the pre-append snapshot; the final fence sees the real new log.
     const read = vi.spyOn(recordHeadReader, 'readReadableSearchRecordHeadV1').mockReturnValueOnce(before);
     try {
-      expect(() => value.route.searchBatch({ access_token: 'token', queries: ['Decision'] })).toThrow(expect.objectContaining({ name: 'PersonRecordSearchSnapshotChangedV1' }));
+      expect(() => value.route.searchBatch({ access_token: 'token', query: 'Decision' })).toThrow(expect.objectContaining({ name: 'PersonRecordSearchSnapshotChangedV1' }));
     } finally { read.mockRestore(); }
   });
 
   it('does not retry a pinned generation whose identity changed without a verified append', async () => {
     const value = await fixture();
-    const release = value.route.searchBatch({ access_token: 'token', queries: ['Decision'] }).release;
+    const release = value.route.searchBatch({ access_token: 'token', query: 'Decision' }).release;
     value.authority.prepare('UPDATE authority_readable_search_active_generation SET manifest_sha256=? WHERE singleton=1').run(digest('unknown-manifest'));
     const input = { access_token: 'token', expected_pointer: release.active_pointer };
-    for (const read of [() => value.route.searchBatch({ ...input, queries: ['Decision'] }), () => value.route.listDeskBatch(input)]) {
+    for (const read of [() => value.route.searchBatch({ ...input, query: 'Decision' }), () => value.route.listDeskBatch(input)]) {
       expect(read).toThrow(expect.objectContaining({ name: 'AuthorityOperationError', code: 'unavailable' }));
     }
   });
@@ -298,7 +298,7 @@ describe('Person evidence desk over the real approved-record route', () => {
 
   it('does not turn a valid release witness into authority for a forged atom anchor', async () => {
     const value = await fixture();
-    const batch = value.route.searchBatch({ access_token: 'token', queries: ['Decision'], desk: true });
+    const batch = value.route.searchBatch({ access_token: 'token', query: 'Decision', desk: true });
     const anchor = batch.desk_items![0]!;
     expect(() => value.route.openDeskBatch({
       access_token: 'token',
@@ -534,7 +534,7 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
     expect(recordsOf((await desk.list({ source: 'meeting' })).items)).toEqual([w.digest('r4')]);
     const own = searched.items.find((item) => item.citation.kind === 'approved_record')!.citation as PersonAnswerCitationV3;
     expect(recordsOf((await desk.openCitation({ citation: own })).items)).toEqual([w.digest('r4')]);
-    const other = route.searchBatch({ access_token: 'emp_a', queries: ['Decision'], desk: true }).desk_items!.find((item) => item.record_sha256 === w.digest('r1'))!;
+    const other = route.searchBatch({ access_token: 'emp_a', query: 'Decision', desk: true }).desk_items!.find((item) => item.record_sha256 === w.digest('r1'))!;
     await expect(desk.openCitation({ citation: { kind: 'approved_record', atom_id: other.atom_id, record_sha256: other.record_sha256, policy_id: other.policy_id } as PersonAnswerCitationV3 })).rejects.toMatchObject({ code: 'not_found' });
     await desk.revalidate({});
     expect(new Set(calls.map((call) => call.method))).toEqual(new Set(['initializeDesk', 'searchBatch', 'listDeskBatch', 'openDeskCitation']));
