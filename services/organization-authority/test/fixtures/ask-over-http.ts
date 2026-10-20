@@ -1,6 +1,6 @@
 import { once } from 'node:events';
-import { vi } from 'vitest';
-import { PERSON_ASK_PROGRESS_HEADER_V1 } from '@echo-brain/organization-api';
+import { expect, vi } from 'vitest';
+import { PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_V1 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { SqlitePersonAgenticAskAuditV1 } from '../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
@@ -87,14 +87,42 @@ export async function serveAsk(routes: Omit<Parameters<typeof createOrganization
   return `http://127.0.0.1:${address.port}`;
 }
 
-/** A client's Ask of `question` on `path`, asking for `progress` unless told otherwise; `progress: null` sends no progress header. */
-export function askClient(defaults: { readonly path: string; readonly progress: string; readonly question: string }) {
-  return (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: FixturePerson | 'stranger'; readonly mine?: true } = {}) => fetch(`${base}${input.path ?? defaults.path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? 'mina'}`,
+/**
+ * A client's Ask of `question` on `path` as `token` (Mina unless told otherwise), asking for `progress` unless told
+ * otherwise; `progress: null` sends no progress header, and `body` replaces the request.
+ */
+export function askClient(defaults: { readonly path: string; readonly progress: string; readonly question: string; readonly token?: string; readonly mine?: true }) {
+  return (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: string; readonly mine?: true; readonly body?: unknown; readonly signal?: AbortSignal } = {}) => fetch(`${base}${input.path ?? defaults.path}`, {
+    method: 'POST', ...(input.signal === undefined ? {} : { signal: input.signal }),
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? defaults.token ?? 'mina'}`,
       ...(input.progress === null ? {} : { [PERSON_ASK_PROGRESS_HEADER_V1]: input.progress ?? defaults.progress }) },
-    body: JSON.stringify({ schema_version: 3, question: defaults.question, ...(input.mine === true ? { mine: true } : {}) }),
+    body: JSON.stringify(input.body ?? { schema_version: 3, question: defaults.question, ...((input.mine ?? defaults.mine) === true ? { mine: true } : {}) }),
   });
+}
+
+/**
+ * What every streamed Ask route answers in JSON: a progress value other than its own gets the answer `validate`
+ * accepts, and a failure before the stream starts is the ordinary JSON error with the route header, so a client never
+ * falls back on it.
+ */
+export async function expectJsonAskFallbacks(ask: ReturnType<typeof askClient>, base: string,
+  route: { readonly header: string; readonly others: readonly string[]; readonly validate: (value: unknown) => unknown; readonly reset?: () => void }): Promise<void> {
+  for (const progress of route.others) {
+    route.reset?.();
+    const response = await ask(base, { progress });
+    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    route.validate(await response.json());
+  }
+  const unauthenticated = await ask(base, { token: 'stranger' });
+  expect([unauthenticated.status, unauthenticated.headers.get('content-type'), unauthenticated.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)])
+    .toEqual([401, 'application/json; charset=utf-8', route.header]);
+}
+
+/** A streamed Ask route the Authority did not compose answers unavailable, still route-matched. */
+export async function expectAskRouteUnavailable(ask: ReturnType<typeof askClient>, base: string, header: string): Promise<void> {
+  const response = await ask(base);
+  expect([response.status, response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)]).toEqual([503, header]);
+  await expect(response.json()).resolves.toEqual({ error: { code: 'unavailable', message: 'request failed' } });
 }
 
 /** Every event of a whole progress stream. */

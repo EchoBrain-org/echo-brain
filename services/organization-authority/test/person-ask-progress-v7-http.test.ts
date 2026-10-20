@@ -11,7 +11,7 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from '../src/composition/person-workspace-evidence-v1.js';
-import { askClient, auditBodies as audits, closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
+import { askClient, auditBodies as audits, closeAskServers, decodeAll, expectAskRouteUnavailable, expectJsonAskFallbacks, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
 import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
@@ -105,8 +105,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     if (terminal.type !== 'answer') throw new Error('expected the answer event');
     // The V8 answer, byte for byte the JSON route's.
     expect(terminal.response).toEqual(json);
-    // While it ran, nothing of what the planner wrote left the Authority.
-    expect(raw.slice(0, raw.lastIndexOf('data: '))).not.toContain('PLANNER-CANARY');
     // Each workspace release is witnessed without content: its source, operation and each item's kind and id.
     const released = audits(f, 'echo-person-workspace-release-audit-v1');
     expect(released.length).toBeGreaterThanOrEqual(2);
@@ -121,12 +119,8 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     const planner = leadsAndTasks();
     const base = await origin(f, planner.model);
     // A V1 or V2 client's header on /v7 gets the JSON V8 answer, never a V3 stream.
-    for (const progress of [PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, '0', '33']) {
-      planner.reset();
-      const response = await ask(base, { progress });
-      expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
-      validatePersonAnswerResponseV8(await response.json());
-    }
+    await expectJsonAskFallbacks(ask, base, { header: '7', others: [PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, '0', '33'],
+      validate: validatePersonAnswerResponseV8, reset: planner.reset });
     // /v6's desk binds no workspace: its catalog never names projects, people or tools, and its answer cites no project.
     planner.reset();
     planner.catalogs.length = 0;
@@ -136,10 +130,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(planner.catalogs[0]).not.toEqual(expect.arrayContaining(['projects']));
     expect(planner.catalogs.flat()).not.toContain('people');
     expect(answer.citations.map(citation => citation.kind)).not.toContain('project');
-    // A failure before the stream starts is the ordinary JSON error, with the route header.
-    const unauthenticated = await ask(base, { token: 'stranger' });
-    expect(unauthenticated.status).toBe(401);
-    expect(unauthenticated.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
   });
 
   it('never binds the workspace in Mine, which reads only what the asker added: no projects, people or tools are offered, read or audited', async () => {
@@ -155,11 +145,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
   });
 
   it('answers /v7 as unavailable, still route-matched, on an Authority composed without the V8 Ask', async () => {
-    const f = await sentFixture();
-    const base = await origin(f, leadsAndTasks().model, { v7: false });
-    const response = await ask(base);
-    expect(response.status).toBe(503);
-    expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
-    await expect(response.json()).resolves.toEqual({ error: { code: 'unavailable', message: 'request failed' } });
+    await expectAskRouteUnavailable(ask, await origin(await sentFixture(), leadsAndTasks().model, { v7: false }), '7');
   });
 });

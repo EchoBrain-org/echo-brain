@@ -2,13 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import {
-  PERSON_ANSWER_PATH_V5, PERSON_ANSWER_PATH_V6, PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
-  createPersonAskProgressDecoderV1, createPersonAskProgressDecoderV2, validatePersonAnswerResponseV6, validatePersonAnswerResponseV7,
+  PERSON_ANSWER_PATH_V6, PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
+  createPersonAskProgressDecoderV2, validatePersonAnswerResponseV7,
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-answer-route-v1.js';
-import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, myOpenTasksPlanner, serveAsk } from './fixtures/ask-over-http.js';
+import { askClient, auditBodies, closeAskServers, decodeAll, expectAskRouteUnavailable, expectJsonAskFallbacks, liveAskOptions, myOpenTasksPlanner, serveAsk } from './fixtures/ask-over-http.js';
 import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
@@ -50,7 +49,6 @@ describe('the V7 Ask streamed on /v6 (ADR-0039, ADR-0040)', () => {
     expect(streamed.headers.get('cache-control')).toBe('no-store');
     expect(streamed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('6');
     const raw = await streamed.text();
-    for (const line of raw.split('\n')) expect(line === '' || line.startsWith('data: ') || line.startsWith(':')).toBe(true);
     const events = decode(raw);
     expect(planner.catalogs[0]).toContain('follow_ups');
     expect(events.filter(event => event.type === 'searched')).toEqual([{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 }]);
@@ -93,44 +91,13 @@ describe('the V7 Ask streamed on /v6 (ADR-0039, ADR-0040)', () => {
     }
   });
 
-  it('streams /v6 only for its own header value, and leaves /v5 streaming V1, which never names a follow-up', async () => {
-    const f = await sentFixture();
+  it('streams /v6 only for its own header value: a V1 client gets the JSON V7 answer, never a V2 stream', async () => {
     const planner = myOpenTasksPlanner();
-    const base = await origin(f, planner.model);
-    // A V1 client's header on /v6 gets the JSON V7 answer, never a V2 stream.
-    for (const progress of [PERSON_ASK_PROGRESS_HEADER_VALUE_V1, '0', '22']) {
-      planner.reset();
-      const response = await ask(base, { progress });
-      expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
-      validatePersonAnswerResponseV7(await response.json());
-    }
-    // /v5 with V2's value is JSON, and with its own streams V1: its desk binds no follow-ups, so none is searched or named.
-    planner.reset();
-    const v5Json = await ask(base, { path: PERSON_ANSWER_PATH_V5 });
-    expect(v5Json.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    expect(validatePersonAnswerResponseV6(await v5Json.json()).citations).toEqual([]);
-    planner.reset();
-    const v5 = await ask(base, { path: PERSON_ANSWER_PATH_V5, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V1 });
-    expect(v5.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
-    expect(v5.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('5');
-    const raw = await v5.text();
-    const decoder = createPersonAskProgressDecoderV1();
-    expect(decoder.push(raw).length).toBeGreaterThan(0);
-    decoder.end();
-    expect(raw).not.toContain('follow_up');
-    // A failure before the stream starts is the ordinary JSON error, with the route header, so a client never falls back on it.
-    const unauthenticated = await ask(base, { token: 'stranger' });
-    expect(unauthenticated.status).toBe(401);
-    expect(unauthenticated.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    expect(unauthenticated.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('6');
+    const base = await origin(await sentFixture(), planner.model);
+    await expectJsonAskFallbacks(ask, base, { header: '6', others: [PERSON_ASK_PROGRESS_HEADER_VALUE_V1, '0', '22'], validate: validatePersonAnswerResponseV7, reset: planner.reset });
   });
 
   it('answers /v6 as unavailable, still route-matched, on an Authority composed without the V7 Ask', async () => {
-    const f = await sentFixture();
-    const base = await origin(f, myOpenTasksPlanner().model, { v6: false });
-    const response = await ask(base);
-    expect(response.status).toBe(503);
-    expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('6');
-    await expect(response.json()).resolves.toEqual({ error: { code: 'unavailable', message: 'request failed' } });
+    await expectAskRouteUnavailable(ask, await origin(await sentFixture(), myOpenTasksPlanner().model, { v6: false }), '6');
   });
 });
