@@ -86,76 +86,11 @@ representative acceptance is not proof that every enrolled seat updated.
    publication/replacement receipt's `hashes.feed.json`, not a guessed value
    from the mutable endpoint. Ensure the existing hosting and signer are ready.
 
-Current Ask follows [ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md):
-`/v1/person/ask` and `/v2/person/ask` are retired and return 404; matching clients
-use `/v3/person/ask`. There is no implemented legacy bridge or dedicated
-"update required" response to rely on. A transition plan must reflect that
-contract. Do not treat this guide as implementing such a bridge.
-
-A release that ships [ADR-0024](../../docs/decisions/ADR-0024-person-list-open-and-mine-scope.md)
-(Person list, open by ref and the mine scope) has no compatible transition:
-
-- Every non-Slack Ask citation gains `ref`, while the answer stays
-  `echo-clean-person-answer-v4` schema 4. Clients built before ADR-0024
-  validate citations with exact keys, so from `stage` onward every cited Ask
-  answer fails closed on them. Stage it only inside an announced update window
-  with the affected seats named.
-- Updated desktops read project pages and Mine through `POST /v1/person/list`
-  and `POST /v1/person/open`, which an older server does not serve, so the
-  server goes first.
-- Publish the signed feed right after promotion. Desktops embed their own
-  Person client and, once enrolled, update themselves from that feed. A desktop
-  without an updater-capable build is reinstalled by hand once; a Linux seat
-  reinstalls the same-named `0.1.0` deb with `apt install --reinstall`
-  ([desktop install](../../product/echo-desktop/README.md#install-and-verify-on-linux)).
-  Record the tray's build SHA or the installed-path smoke result as desktop
-  evidence, not the version string.
-- Select the minimum client by committed source SHA, not by answer kind or
-  schema, which did not change.
-- Add a `person list` (global and `--mine`) and a `person open --ref` of a
-  listed row to the candidate-client checks, beside record search and cited
-  Ask.
-- There is no joint rollback after promotion or feed publication; recovery is
-  a reviewed forward fix or compatible recovery release (see ADR-0024).
-
-A release that ships the research fixes of 2026-10-16
-([ADR-0037](../../docs/decisions/ADR-0037-openrouter-routing-for-research-calls.md),
-[ADR-0038](../../docs/decisions/ADR-0038-incremental-access-check-before-model-calls.md)
-and open items rulings R77–R82) needs its Person client first, the reverse of
-ADR-0024. Two checks in `packages/organization-api` were widened, and a client
-built before them rejects what the new Authority sends:
-
-- An impact card that fell back to `not_assessed` now carries the record's
-  decided lines. An older client fails it as "Impact card status is
-  inconsistent": `person runs` `view` fails, and a research-loop evaluation
-  from an older checkout records that run as an error, graded as failed.
-- A diagnostic capture's lifecycle event now names a failure from the model
-  adapter (timeout, transport, HTTP and the like) `adapter_*`, and an index
-  lag `index_lag`. An older client rejects the whole capture read that holds
-  one, and once the 60-second reread window lapses the trace is lost.
-- So, before `stage`, install the exact candidate Person client (the offline
-  installation the lane uses for candidate-client checks) on every seat that
-  reads run views or diagnostics, and run `eval:research-loop`, its `trace`
-  and other `tools/evals` from a checkout at the candidate's source. The new
-  client is safe against the older Authority: it accepts the older cards and
-  error kinds, and a `pending` start. Other command-line seats fail those two
-  reads until they update from the published feed; name them in the
-  compatibility plan. Desktops of any build are unaffected: they never request
-  a card `view` or diagnostics, and already accept a `pending` start.
-- Prefer a forward fix to a rollback. An Authority older than this change,
-  including the prior release restored by the staged-candidate rollback,
-  cannot read a stored `not_assessed` card that has decided lines: its `view`
-  answers `unavailable`, and that decision's open items lose its first line
-  until a build with this change runs again.
-
-The temporal Ask addition in the same candidate uses optional client-time
-headers without changing the Ask body or response schema. Older Authorities
-ignore them; it does not reverse the client-first order below. During staging,
-verify a client-local "yesterday" question and a keyword-plus-date query against
-known, permitted evidence, inspecting the actual model-selected bounds and
-source results. Include a source timestamp near UTC midnight and an older item
-whose update or deadline falls in the requested interval. A scripted planner
-unit test is not evidence that the live model interpreted the question.
+Current Ask routes follow [ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md)
+and [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources).
+A retired route returns 404; there is no legacy bridge or dedicated "update
+required" response to rely on. A transition plan must reflect that contract.
+Do not treat this guide as implementing such a bridge.
 
 ### Qualify and review the exact release once
 
