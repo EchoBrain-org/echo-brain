@@ -380,8 +380,8 @@ node tools/client-update-feed.mjs seal \
 ```
 
 The authorization must bind the release and Person-client artifact hashes and
-record the existing Slack approval, record/Ask checks and final release
-decision. Signing the manifest additionally authorizes its exact artifacts
+record the canary approval (its `slack_approved` field, from either approval
+surface), record/Ask checks and final release decision. Signing the manifest additionally authorizes its exact artifacts
 and channel selection. One final human review may also approve the prepared
 manifest digest and, for a replacement, the expected predecessor digest, while
 the existing authorization and exact digest approval records retain their
@@ -438,17 +438,12 @@ Recover to a retained release through the reviewed installer and recheck its
 build and authenticated reads. A network or metadata error alone does not
 trigger rollback or alter the session.
 
-Acceptance: publish B; a supported seat on A reports B during a normal Person
-command while its wrapper and command build identity remain A. Then an explicit
-`echo-brain update` installs B without file copying or a new login, and the seat
-reads Stout's MRD/PRD. A must already implement check-only automatic behavior
-to prove that policy; an older client's existing behavior is separate rollout
-evidence. Offline tests cover checks without artifact downloads or activation,
-cached notices, explicit installation, platform selection, signature/freshness
-failures, bounded downloads, concurrent starts, installation races and session
-preservation. Offline proof does not establish that this live acceptance test
-has occurred.
-
-Desktop acceptance is the separate
+Live acceptance is the
+[client activation check](../../deploy/client-updates/README.md#verify-mac-and-linux-client-activation)
+on native macOS arm64 and Linux x64 seats and the
 [desktop update check](../../deploy/client-updates/README.md#verify-the-desktop-update)
-on native macOS arm64 and Ubuntu x64 seats.
+on native macOS arm64 and Ubuntu x64 seats. Offline tests cover checks without
+artifact downloads or activation, cached notices, explicit installation,
+platform selection, signature/freshness failures, bounded downloads, concurrent
+starts, installation races and session preservation; they do not show that the
+live checks have occurred.

@@ -69,19 +69,11 @@ is needed.
 
 ## Existing CloudFront operation
 
-The original `staging-feed-v1.template.json` and CloudFront receipt format remain
-supported for inspecting the existing `echo-client-update-staging-v1` operation.
-That stack reached `ROLLBACK_COMPLETE` because AWS required account verification
-before creating CloudFront resources. Its retained bucket was confirmed private
-and empty. Preserve that stack, bucket, and receipt unchanged: do not delete or
-reuse them, reset the receipt, or retry an uncertain execution.
-
-The new S3-only plan has its own stack identity and independently scoped receipt.
-It supersedes the failed hosting path after the prior rollback is confirmed and
-requires review of its own exact change set. Approval for the old CloudFront
-change set does not approve the new resources. This is not a recovery operation
-on the failed stack. Existing CloudFront receipts stay bound to their original
-template and resource inventory.
+The original `staging-feed-v1.template.json` operation
+(`echo-client-update-staging-v1`) rolled back before creating CloudFront
+resources; the tool can still inspect its receipt. Preserve that stack, bucket,
+and receipt unchanged: do not delete or reuse them, reset the receipt, or retry
+an uncertain execution. Its approval does not cover the S3-only stack.
 
 ## Sign and publish the first release
 
@@ -299,9 +291,7 @@ PUT, or use an unconditional upload to force progress.
 An existing ZIP-delivered Mac client needs one trusted CLI kit installation
 before enrollment. Its command is
 `~/Library/Application Support/ECHO/cli/bin/echo-brain`. Configure that exact
-command only after the hosted feed has been verified. The retired Swift app and
-its paired command at `~/Library/Application Support/ECHO/bin/echo-brain`
-remain outside this CLI update channel.
+command only after the hosted feed has been verified.
 
 ```sh
 "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" update configure \
@@ -430,15 +420,13 @@ A seat with no updater-capable build cannot run these steps. Its one manual
 reinstall from [Enroll a desktop](#enroll-a-desktop) is its first enrollment,
 and step 4 after that reinstall counts as that seat's evidence.
 
-Retain the latest publication/replacement receipt with `state: "succeeded"` and
-`metadata_fresh: true`, both CLI activation/read proofs and both desktop
-proofs, each saying whether the seat reached B through the in-app update or its
-first enrollment, with the coordinated release handoff. Until they pass, report
-"client published; verification incomplete." A failed in-app update on an
-updater-capable seat keeps that result after a manual reinstall. State the
-seats tested and those outstanding rather than claiming fleet-wide completion.
-Publishing reaches only enrolled installations: a desktop installed before
-ADR-0035, or one whose updater is off, such as a `.tar.gz` outside `/opt/ECHO`,
-stays on its release until it is reinstalled by hand. Local packaging/updater
+Record for each desktop proof whether the seat reached B through the in-app
+update or its first enrollment, in the
+[coordinated release](../release/README.md#coordinated-server-and-client-release)
+handoff; until every proof passes, the release is "client published". A failed
+in-app update on an updater-capable seat keeps that result after a manual
+reinstall. Publishing reaches only enrolled installations: a desktop installed
+before ADR-0035, or one whose updater is off, such as a `.tar.gz` outside
+`/opt/ECHO`, stays on its release until it is reinstalled by hand. Local packaging/updater
 tests and an already-current client do not prove a live A-to-B update or
 fleet-wide rollout of the new update policy.

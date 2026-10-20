@@ -27,14 +27,13 @@ release check before command dispatch. Its public publisher trust and local
 release checkpoint are separate from Person authorization state. macOS arm64
 and Linux x64 CLI-kit activation reuse their platform installers. The desktop
 app runs the same updater with its own installation adapter (see
-[Desktop updates](#desktop-updates)). The standalone Mac CLI root is
-separate from the retired Swift app's paired CLI. This adds no background
-runtime or automatic Person-request replay.
+[Desktop updates](#desktop-updates)). This adds no background runtime or
+automatic Person-request replay.
 
 ## Desktop app
 
 The Electron app in `product/echo-desktop` is the graphical interface, packaged
-for macOS arm64 and Linux x64; it replaced the retired Swift app. Its person
+for macOS arm64 and Linux x64. Its person
 host, an Electron utility process, loads this client's `composition.js` and
 runs the same commands in process, as the terminal CLI would. The host is the
 only process that reads the session or holds a token. It sends the app window
