@@ -1,9 +1,9 @@
 # Claude research-loop feasibility trial
 
-The latest follow-up is the [limit-removal comparison](#limit-removal-comparison).
-It confirms that numerical caps can truncate a complete inventory and stop a
-successful research path, while also exposing a separate missed-read problem.
-The original feasibility trial below is retained as historical evidence.
+The latest follow-up is the [local staging comparison](#local-staging-comparison).
+The earlier [limit-removal comparison](#limit-removal-comparison) confirms that
+numerical caps can truncate a complete inventory and stop a successful research
+path. Both earlier synthetic trials below are retained as historical evidence.
 
 The SDK can research ECHO-shaped evidence and hand a usable bundle to the
 existing Ask and sweep renderers. This is a promising synthetic prototype,
@@ -197,3 +197,72 @@ gaps and citation associations were also inspected.
 
 This remains an isolated synthetic prototype. Nothing in this follow-up is
 staged or released, and it does not qualify the SDK for live user data.
+
+## Local staging comparison
+
+The SDK successfully ran on this Mac against authenticated records and projects
+from the existing staging Authority. It used four public Person read methods,
+not the synthetic fixture and not the staging server's current research loop.
+No server engine, deployment, runtime profile or client feed was changed.
+
+This is a limited live smoke comparison. The public client does not expose the
+Authority's full Jira/Confluence research desk or its follow-up source. Those
+sources cannot be qualified by pointing the original prototype at a URL. The
+new reader explicitly reports that limitation, uses its own comparison answer
+format, and does not fabricate Authority receipts or claim to be a desktop Ask.
+
+| Query | Local SDK observation | Assessment |
+| --- | --- | --- |
+| Active ECHO projects and leads | Answered from the project list and both member lists in 7.6 seconds. | Correct project identities and leads; a final-code repeat also checks this path. |
+| October 16 date-handoff decision | Answered from approved meeting content in 9.0 seconds, distinguishing the imported unapproved record. | Correct decision and citation; agrees with the current server's answer. |
+| Yesterday, ECHO meeting records only | Partial in 12.9 seconds. | Some canaries lack an explicit event date. The model disclosed that its day assignment was inferred from title/added date; this is not verified event-date coverage. |
+| Open actions in approved meeting records | Read all 17 approved meeting records; partial in 56.0 seconds. | Retrieved actual task details and owners, but the public records did not establish current completion state. Its canary count said eleven and then thirteen in the same statement: a visible quality defect. |
+| Nonexistent meeting | Not found in 4.5 seconds after a complete metadata list. | Correct abstention. |
+| Yesterday across meetings, Jira and Confluence | Partial in 10.4 seconds. | Correctly disclosed that live Jira and Confluence were unavailable to this adapter; not an end-to-end success. |
+
+Two current-server Asks provide a reference. The project query returned partial
+in 62.7 seconds and described external Jira/Confluence project efforts instead
+of the authoritative ECHO project list. The date-handoff question answered
+correctly in 22.9 seconds. These are not controlled engine or latency comparisons:
+the public-client tools, model transport, source coverage and answer writer
+differ, and there is only one baseline sample per question. In particular, the
+SDK project result benefits from an explicit project/member tool interface.
+
+### Access and transport checks
+
+The local model transport checks current Person access and repeats every
+previously exposed logical read before forwarding a model request to the fixed
+Anthropic HTTPS endpoint. Changed content, revoked access, an account switch or
+an unverifiable read stops the run; final output gets the same check. Only
+previously released S ids can be cited. The SDK receives no Person credentials.
+
+A real synthetic SDK probe made two model requests and both traversed this
+check. A second probe revoked synthetic access after a tool call: the initial
+request was forwarded and the next was stopped before forwarding. Unit tests
+also cover repeated requests, token counting, cancellation during a check,
+unknown routes and permanent refusal after account/content changes. The final
+code additionally latches a pre-dispatch account-switch failure; the first six
+live cases predate that hardening and observed no account change. A final-code
+project run checks normal live operation after it.
+
+The checks intentionally reread data rather than claiming that local status
+proves current permission. That costs work: the open-actions trial made 420
+authenticated reads, including revalidation. This is unsuitable as the final
+server design and is one reason its latency is not a production forecast.
+Actual SDK compaction, service authentication, concurrent users and integration
+with ECHO's audit/progress/trigger lifecycle remain unqualified.
+
+### Evidence and next gate
+
+Full live outputs and citations are retained only in a private local directory,
+with mode 0600 files, outside the checkout. The committed
+[content-free summary](staging-trial-summary.json) records result hashes, counts,
+timing, model and manual assessment. [Validation](staging-validation.json) records
+the focused tests and full repository check. The [runner documentation](README.md#local-staging-comparison)
+describes the exact scope and reproduction path.
+
+The next integration needs the server's real source catalog and evidence desk,
+including Jira/Confluence and follow-ups, a per-request permission check tied to
+that desk, supported service authentication, and the shared progress/audit and
+trigger lifecycle. The local smoke results justify that work, but do not yet
+satisfy the release gate for making the SDK the staging agentic engine.

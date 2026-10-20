@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 /** Use the existing CLI's authentication internally. Never read or copy its credentials. */
-export async function runClaude({ prompt, system, schema, servers = {}, tools = [], signal, timeoutMs = 65_000, unbounded = false, hooks = {}, onEvent = () => {} }) {
+export async function runClaude({ prompt, system, schema, servers = {}, tools = [], signal, timeoutMs = 65_000, unbounded = false, hooks = {}, onEvent = () => {}, modelFence }) {
   const cwd = await mkdtemp(join(tmpdir(), 'echo-synthetic-research-'));
   const abort = new AbortController();
   const propagate = () => abort.abort(signal.reason);
@@ -20,7 +20,7 @@ export async function runClaude({ prompt, system, schema, servers = {}, tools = 
       mcpServers: servers, strictMcpConfig: true, settingSources: [], plugins: [], persistSession: false,
       permissionMode: 'dontAsk',
       abortController: abort, ...(unbounded ? {} : { maxTurns: 12, maxBudgetUsd: 2 }), outputFormat: { type: 'json_schema', schema }, hooks,
-      env: { ...env, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+      env: { ...env, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', ...(modelFence?.environment() ?? {}) },
       pathToClaudeCodeExecutable: process.env.ECHO_TRIAL_CLAUDE_BINARY ?? execFileSync('which', ['claude'], { encoding: 'utf8' }).trim(),
     } });
     for await (const message of session) {

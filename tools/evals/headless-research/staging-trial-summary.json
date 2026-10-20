@@ -1,0 +1,370 @@
+{
+  "kind": "echo-local-staging-sdk-summary-v1",
+  "prototype_parent_commit": "2ecffd5651c5a8c4f9ed37db70409361311cc199",
+  "source": "https://authority-staging.echobrain.org",
+  "server_engine_changed": false,
+  "source_coverage": [
+    "ECHO records",
+    "ECHO projects",
+    "ECHO project members"
+  ],
+  "unavailable_sources": [
+    "Jira live research",
+    "Confluence live research",
+    "server follow-up research source"
+  ],
+  "live_cases": 6,
+  "final_code_repeats": 1,
+  "baseline_queries": 2,
+  "raw_content_committed": false,
+  "runs": [
+    {
+      "case": "baseline-date_handoff",
+      "engine": "existing_staging",
+      "raw_file": "baseline-date_handoff.json",
+      "raw_sha256": "b7eaed80751f50ac2f735b57eccd4845f66e13d190f322bbc373eda86014f3c4",
+      "outcome": "answered",
+      "elapsed_ms": 22904.026125000004,
+      "error": null,
+      "statements": 3,
+      "citations": 3,
+      "metrics": null,
+      "reader": null,
+      "model_fence": null,
+      "manual_assessment": "Answered correctly from approved meeting content."
+    },
+    {
+      "case": "baseline-projects",
+      "engine": "existing_staging",
+      "raw_file": "baseline-projects.json",
+      "raw_sha256": "bc4a7fdce50449567d586c002d78e4385c292746e2f8bdd1ed6512e66e832fc7",
+      "outcome": "partial",
+      "elapsed_ms": 62715.878708000004,
+      "error": null,
+      "statements": 4,
+      "citations": 7,
+      "metrics": null,
+      "reader": null,
+      "model_fence": null,
+      "manual_assessment": "Partial. Current server did not identify the authoritative ECHO project list."
+    },
+    {
+      "case": "cross_source",
+      "engine": "local_sdk_public_person_reads",
+      "raw_file": "cross_source.json",
+      "raw_sha256": "5791cc00f40486c55ac48e6874e9cef03026ebd1445f2f2959b58bbdecdc62af",
+      "outcome": "partial",
+      "elapsed_ms": 10371.147958000001,
+      "error": null,
+      "statements": 3,
+      "citations": 2,
+      "metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 5,
+        "model_calls": 3,
+        "input_tokens": 19427,
+        "output_tokens": 833,
+        "total_tokens": 20260,
+        "model_ms": 7764,
+        "elapsed_ms": 9879.760833000008,
+        "estimated_cost_usd": 0.0399358,
+        "permission_denials": []
+      },
+      "reader": {
+        "checks": 11,
+        "reads": 30,
+        "witnesses": 3,
+        "evidence_items": 23,
+        "stopped": false
+      },
+      "model_fence": {
+        "requests": 3,
+        "forwarded": 3,
+        "denied": 0,
+        "stopped": false
+      },
+      "manual_assessment": "Partial as required by missing Jira/Confluence tool coverage; not a full research success."
+    },
+    {
+      "case": "date_handoff",
+      "engine": "local_sdk_public_person_reads",
+      "raw_file": "date_handoff.json",
+      "raw_sha256": "ea2aca8898f08697cd8d14f9740fd08719877dc62273c8ae47b51b7626d6af75",
+      "outcome": "answered",
+      "elapsed_ms": 8992.849875,
+      "error": null,
+      "statements": 4,
+      "citations": 2,
+      "metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 5,
+        "model_calls": 3,
+        "input_tokens": 19124,
+        "output_tokens": 526,
+        "total_tokens": 19650,
+        "model_ms": 6499,
+        "elapsed_ms": 8575.984,
+        "estimated_cost_usd": 0.0358566,
+        "permission_denials": []
+      },
+      "reader": {
+        "checks": 11,
+        "reads": 30,
+        "witnesses": 3,
+        "evidence_items": 23,
+        "stopped": false
+      },
+      "model_fence": {
+        "requests": 3,
+        "forwarded": 3,
+        "denied": 0,
+        "stopped": false
+      },
+      "manual_assessment": "Correct approved decision; agrees with existing server baseline."
+    },
+    {
+      "case": "missing",
+      "engine": "local_sdk_public_person_reads",
+      "raw_file": "missing.json",
+      "raw_sha256": "8102de29f4e1e705391916ac81e9def4a698e9d2374f39b26a89db38867100f8",
+      "outcome": "not_found",
+      "elapsed_ms": 4462.511207999996,
+      "error": null,
+      "statements": 0,
+      "citations": 0,
+      "metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 3,
+        "model_calls": 2,
+        "input_tokens": 10192,
+        "output_tokens": 210,
+        "total_tokens": 10402,
+        "model_ms": 3411,
+        "elapsed_ms": 4165.309042000008,
+        "estimated_cost_usd": 0.027338,
+        "permission_denials": []
+      },
+      "reader": {
+        "checks": 6,
+        "reads": 10,
+        "witnesses": 1,
+        "evidence_items": 23,
+        "stopped": false
+      },
+      "model_fence": {
+        "requests": 2,
+        "forwarded": 2,
+        "denied": 0,
+        "stopped": false
+      },
+      "manual_assessment": "Correct not_found after complete record metadata list."
+    },
+    {
+      "case": "open_actions",
+      "engine": "local_sdk_public_person_reads",
+      "raw_file": "open_actions.json",
+      "raw_sha256": "d18ee296f0039b1e410ea8948d01bc97f4e9f53aaefd38a8ab7e91eb734d61c2",
+      "outcome": "partial",
+      "elapsed_ms": 56039.01270800001,
+      "error": null,
+      "statements": 13,
+      "citations": 22,
+      "metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 20,
+        "model_calls": 3,
+        "input_tokens": 29943,
+        "output_tokens": 2881,
+        "total_tokens": 32824,
+        "model_ms": 19181,
+        "elapsed_ms": 53889.83774999999,
+        "estimated_cost_usd": 0.10255,
+        "permission_denials": []
+      },
+      "reader": {
+        "checks": 41,
+        "reads": 420,
+        "witnesses": 18,
+        "evidence_items": 23,
+        "stopped": false
+      },
+      "model_fence": {
+        "requests": 3,
+        "forwarded": 3,
+        "denied": 0,
+        "stopped": false
+      },
+      "manual_assessment": "Partial. Current completion state unavailable; one inconsistent canary count in the final prose."
+    },
+    {
+      "case": "projects-final",
+      "engine": "local_sdk_public_person_reads",
+      "raw_file": "projects-final.json",
+      "raw_sha256": "c7a9df12ac61365ce0d468b1a2e89bc2c1c30fc94d622c5e25121ef35c83e3a8",
+      "outcome": "answered",
+      "elapsed_ms": 7653.046917,
+      "error": null,
+      "statements": 3,
+      "citations": 4,
+      "metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 5,
+        "model_calls": 3,
+        "input_tokens": 8570,
+        "output_tokens": 416,
+        "total_tokens": 8986,
+        "model_ms": 5202,
+        "elapsed_ms": 7225.5467499999995,
+        "estimated_cost_usd": 0.0121654,
+        "permission_denials": []
+      },
+      "reader": {
+        "checks": 11,
+        "reads": 30,
+        "witnesses": 3,
+        "evidence_items": 4,
+        "stopped": false
+      },
+      "model_fence": {
+        "requests": 3,
+        "forwarded": 3,
+        "denied": 0,
+        "stopped": false
+      },
+      "manual_assessment": "Final-code repeat: correct active ECHO project identities and leads."
+    },
+    {
+      "case": "projects",
+      "engine": "local_sdk_public_person_reads",
+      "raw_file": "projects.json",
+      "raw_sha256": "d70d2cb427551d6986b140c27c9dc34f08162a66db9696c8bb74a67a4f4d5e8f",
+      "outcome": "answered",
+      "elapsed_ms": 7604.5215,
+      "error": null,
+      "statements": 3,
+      "citations": 4,
+      "metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 5,
+        "model_calls": 3,
+        "input_tokens": 8567,
+        "output_tokens": 431,
+        "total_tokens": 8998,
+        "model_ms": 4970,
+        "elapsed_ms": 7057.967291,
+        "estimated_cost_usd": 0.01852,
+        "permission_denials": []
+      },
+      "reader": {
+        "checks": 11,
+        "reads": 30,
+        "witnesses": 3,
+        "evidence_items": 4,
+        "stopped": false
+      },
+      "model_fence": {
+        "requests": 3,
+        "forwarded": 3,
+        "denied": 0,
+        "stopped": false
+      },
+      "manual_assessment": "Correct active ECHO project identities and leads, checked against returned member records."
+    },
+    {
+      "case": "yesterday_internal",
+      "engine": "local_sdk_public_person_reads",
+      "raw_file": "yesterday_internal.json",
+      "raw_sha256": "e65016e98b2fd4115fd1df6f39548fe3bbfea0d400c907eab1632942d90ed796",
+      "outcome": "partial",
+      "elapsed_ms": 12926.9175,
+      "error": null,
+      "statements": 6,
+      "citations": 5,
+      "metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 5,
+        "model_calls": 3,
+        "input_tokens": 19499,
+        "output_tokens": 1122,
+        "total_tokens": 20621,
+        "model_ms": 10519,
+        "elapsed_ms": 12389.594792,
+        "estimated_cost_usd": 0.0429695,
+        "permission_denials": []
+      },
+      "reader": {
+        "checks": 11,
+        "reads": 30,
+        "witnesses": 3,
+        "evidence_items": 23,
+        "stopped": false
+      },
+      "model_fence": {
+        "requests": 3,
+        "forwarded": 3,
+        "denied": 0,
+        "stopped": false
+      },
+      "manual_assessment": "Partial. Event dates absent on some records; added dates are not proof of occurrence dates."
+    }
+  ],
+  "synthetic_fence_probes": {
+    "staging-fence-probe.json": {
+      "ok": true,
+      "metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 3,
+        "model_calls": 2,
+        "input_tokens": 2316,
+        "output_tokens": 93,
+        "total_tokens": 2409,
+        "model_ms": 2406,
+        "elapsed_ms": 3185.443292,
+        "estimated_cost_usd": 0.0058335999999999995,
+        "permission_denials": []
+      },
+      "checks": 2,
+      "fence": {
+        "requests": 2,
+        "forwarded": 2,
+        "denied": 0,
+        "stopped": false
+      }
+    },
+    "staging-fence-revocation.json": {
+      "ok": true,
+      "revoked": true,
+      "fence": {
+        "requests": 2,
+        "forwarded": 1,
+        "denied": 1,
+        "stopped": true
+      }
+    }
+  },
+  "caveats": [
+    "Not a controlled engine/latency comparison: tools, transport and writer differ.",
+    "Current server baseline model identity was not captured.",
+    "All live requests were normal Messages calls; actual SDK compaction is not qualified.",
+    "First six live cases predate account-switch latch hardening and observed no account change. Final-code project repeat verifies normal operation.",
+    "Private outputs remain outside the repository. No release decision is established."
+  ],
+  "sdk_version": "0.3.305",
+  "cli_version": "2.1.302"
+}

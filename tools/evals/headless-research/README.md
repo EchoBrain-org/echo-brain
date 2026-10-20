@@ -2,8 +2,10 @@
 
 An isolated feasibility trial of Claude Agent SDK in the research-loop position.
 No production module imports this directory. Authority, staging, triggers, client
-feeds and output renderers are unchanged. All records are invented synthetic
-fixtures; this runner has no live endpoint argument.
+feeds and output renderers are unchanged. The original and limit-comparison
+runners use invented fixtures and have no live endpoint argument. A separate
+[local staging comparison](#local-staging-comparison) uses the existing Person
+client's authenticated reads; it cannot select a server engine.
 
 ## Run
 
@@ -73,8 +75,8 @@ does not pass even when it includes all expected names.
 
 ## Boundaries before a live integration
 
-The prototype is deliberately **synthetic-only**. It is not yet a drop-in
-production adapter:
+The original research bridge is deliberately **synthetic-only**. The separate
+public-client staging comparison below is not a drop-in production adapter:
 
 1. ECHO checks access before every outbound model call. The SDK's documented
    tool/batch/compaction hooks do not by themselves prove equivalent coverage of
@@ -155,3 +157,54 @@ metadata row does not promote it to full-text writer evidence. Four affected
 pre-fix executions remain recorded but excluded; the open-items comparisons
 were rerun after that correction. Normalize a set of result directories with
 `node tools/evals/headless-research/summarize-limits.mjs <directory> ...`.
+
+## Local staging comparison
+
+`staging-trial.mjs` runs Claude locally with four model-free Person read tools:
+list projects, read project members, list ECHO records, and open a listed record.
+The existing `PersonClient` handles its saved session internally. No ECHO token
+is given to Claude, and no credential is printed or copied. The account must
+already be signed in to `https://authority-staging.echobrain.org`; other origins
+are refused. There is no deployed engine switch, provider configuration change,
+meeting submission or feed update.
+
+```sh
+node tools/evals/headless-research/staging-trial.mjs \
+  'What are my active ECHO projects, and who leads each one?' \
+  "$HOME/.local/share/echo-sdk-staging-trials/projects-new.json"
+```
+
+Use a private output directory and a new filename. Results contain user-visible
+record content and are written with mode 0600; do not commit them. Events printed
+to the terminal contain only counts, timing, tool names and model names. The
+saved response is a comparison answer with S-id references, not a production
+desktop payload or an Authority research/audit receipt.
+
+The server's public client does not expose the full internal research desk:
+live Jira/Confluence search and list, and the follow-up research source, are
+unavailable here. A good result on records/projects does not qualify those
+sources. The prompts name these limitations and require a partial answer when
+the question needs them. List/open tools follow all server cursors and preserve
+source availability flags. Existing server limits still apply.
+
+Before any model request leaves the local transport, `staging-reader.mjs`
+authenticates again and repeats every previously released logical read, checking
+its content hash. Revocation, an account change, a changed snapshot or an
+unverifiable read stops the run. Final answers get the same recheck and may cite
+only released ids. This conservative approach is deliberately expensive; it is
+not a production revalidation design.
+
+`model-fence.mjs` routes the SDK through a random loopback-only path to one fixed
+HTTPS upstream (`api.anthropic.com`). It checks every Messages or token-counting
+request, including repeats, before forwarding any body bytes. Other routes are
+refused; headers and bodies are neither logged nor persisted by the transport.
+Claude's existing sign-in remains inside its client/transport. The synthetic
+network probe verifies normal SDK requests traverse the gate; a second probe
+revokes access after a tool read and verifies the next request is not forwarded.
+This is not evidence that a server deployment's retries, compaction, concurrency,
+audit lifecycle or provider authentication have all been qualified.
+
+The routing follows Anthropic's [gateway connection documentation](https://code.claude.com/docs/en/llm-gateway-connect)
+and [gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol).
+Only this local experiment uses the developer's existing client sign-in. A
+deployed Agent SDK engine needs its own supported service authentication.
