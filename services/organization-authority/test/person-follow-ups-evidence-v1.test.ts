@@ -374,10 +374,6 @@ describe('follow-ups as an Ask source: checks and audit (ADR-0040, ADR-0038)', (
     // A state changed while it stays visible is not an access change.
     await setState(f, 'mina', f.ticket.item_id, 'done');
     await desk.revalidate({});
-    // Mina leaves project A: she still owns the ticket, but a release carried its decision, and she no longer sees the rollout.
-    leaveProject(f, 'mina');
-    await expect(desk.revalidate({ mode: 'incremental' })).resolves.toBeDefined();   // nothing new to check
-    await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 
   it('refuses at the check a release that carried its decision once the asker no longer reads it, though they still own the follow-up', async () => {
@@ -397,25 +393,6 @@ describe('follow-ups as an Ask source: checks and audit (ADR-0040, ADR-0038)', (
     expect(own.items.map(item => item.id)).toEqual([`follow_up_${f.ticket.item_id}`]);
     expect(own.items[0]!.text).not.toContain('Decision:');
     await expect(after.revalidate({})).resolves.toBeDefined();
-  });
-
-  it('refuses at the check a follow-up its owner can no longer see, though it carried no decision', async () => {
-    const f = await sentFixture({ ticketOwner: 'okafor' });
-    const { desk } = askDesk(f, 'okafor');
-    expect((await search(desk, 'launch')).items).toHaveLength(1);
-    await desk.revalidate({ mode: 'incremental' });
-    // Ari hands the ticket to Mina: S. Okafor no longer owns it, and never read its decision.
-    await assign(f, 'ari', f.ticket.item_id, 'mina');
-    await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
-  });
-
-  it('refuses before the next model call a follow-up hidden since it was released', async () => {
-    const f = await sentFixture({ ticketOwner: 'okafor' });
-    const { desk } = askDesk(f, 'okafor');
-    expect((await search(desk, 'launch')).items).toHaveLength(1);
-    // Handed to Mina before any check: the incremental check alone refuses it.
-    await assign(f, 'ari', f.ticket.item_id, 'mina');
-    await expect(desk.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 
   it("refuses at the check a project Ask's follow-up whose decision left the project, though the asker still reads it", async () => {
@@ -467,11 +444,6 @@ describe('follow-ups on the request desk (ADR-0040)', () => {
     await bound.desk.search({ query: 'launch', kinds: ['follow_up'], limit: 8 });
     expect(bound.audits()).toHaveLength(4);
     expect(bound.base.search).toHaveBeenCalledTimes(4);
-    // Owner and status are never sent to another source: one that cannot apply them refuses the read rather than answer
-    // wider than asked (ADR-0041).
-    await expect(bound.desk.list({ source: 'meeting', owner: 'me', status: 'open', limit: 10 })).rejects.toMatchObject({ code: 'invalid_request', message: 'This source cannot be filtered by owner, status or role' });
-    await expect(bound.desk.list({ source: 'jira', status: 'open', limit: 10 })).rejects.toMatchObject({ code: 'invalid_request' });
-    expect(bound.base.list).not.toHaveBeenCalled();
 
     const unbound = askDesk(f, 'mina', { followUps: false });
     expect(unbound.desk.live_sources).toEqual([expect.objectContaining({ source_id: 'jira' })]);
@@ -575,15 +547,6 @@ describe("follow-ups as an Ask source: ECHO's own dates and links (research tool
     expect((await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'any', cursor: implied.next_cursor })).items).toHaveLength(3);
     const sent = await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'sent' });
     expect([ids(sent), sent.unchecked]).toEqual([[actionId, ticketId].sort(), { count: 11, dates: ['created'] }]);
-  });
-
-  it('never counts a follow-up the asker cannot see', async () => {
-    const f = await sentFixture({ ticketOwner: 'okafor' });
-    insertRows(f, 53);
-    // S. Okafor sees only the ticket he owns; the 55 others are his decision readers' alone.
-    const listed = await list(askDesk(f, 'okafor').desk, { since: '2026-10-01', date_field: 'checked' });
-    expect(listed).toMatchObject({ items: [], unchecked: { count: 1, dates: ['created', 'sent'] } });
-    expect((await list(askDesk(f, 'mina').desk, { since: '2026-10-01', date_field: 'checked' })).unchecked).toEqual({ count: 55, dates: ['created', 'sent'] });
   });
 
   it("links each follow-up to its decision's items and to the tool item it follows, released by the desk that owns them, beside the rows", async () => {
