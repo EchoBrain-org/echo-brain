@@ -98,8 +98,6 @@ const V3 = askProgressCodec({
 
 export function validatePersonAskProgressStepEventV3(value: unknown): PersonAskProgressStepEventV3 { return V3.step(value) as PersonAskProgressStepEventV3; }
 export function validatePersonAskReceiptV3(value: unknown): PersonAskReceiptV3 { return V3.receipt(value) as PersonAskReceiptV3; }
-/** Any one `/v7` stream event, terminal events included. */
-export function validatePersonAskProgressEventV3(value: unknown): PersonAskProgressEventV3 { return V3.event(value) as PersonAskProgressEventV3; }
 export function formatPersonAskProgressEventV3(event: PersonAskProgressEventV3): string { return V3.format(event); }
 export interface PersonAskProgressDecoderV3 { push(text: string): readonly PersonAskProgressEventV3[]; end(): void }
 /** V1's decoder, for V3 events: it fails closed exactly as V1's does. */

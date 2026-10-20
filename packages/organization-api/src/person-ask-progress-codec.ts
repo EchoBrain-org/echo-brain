@@ -43,7 +43,6 @@ type Event = Step | Terminal;
 export interface AskProgressCodec {
   step(value: unknown): Step;
   receipt(value: unknown): Receipt;
-  event(value: unknown): Event;
   format(event: unknown): string;
   decoder(): { push(text: string): readonly Event[]; end(): void };
   line(value: unknown): { readonly ok: true; readonly progress: Step };
@@ -193,7 +192,6 @@ export function askProgressCodec(dialect: AskProgressDialect): AskProgressCodec 
   return Object.freeze({
     step,
     receipt,
-    event,
     // `JSON.stringify` escapes newlines, so the frame is one data line.
     format: (value: unknown) => `data: ${JSON.stringify(event(value))}\n\n`,
     decoder,

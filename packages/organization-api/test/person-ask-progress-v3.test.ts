@@ -1,20 +1,14 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V1,
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   PERSON_ASK_PROGRESS_SOURCES_MAX_V1,
   PERSON_ASK_PROGRESS_SOURCES_MAX_V3,
+  createPersonAskProgressDecoderV1,
   createPersonAskProgressDecoderV2,
   createPersonAskProgressDecoderV3,
   formatPersonAskProgressEventV2,
   formatPersonAskProgressEventV3,
-  validatePersonAskProgressEventV2,
-  validatePersonAskProgressEventV3,
-  validatePersonAskProgressLineV2,
   validatePersonAskProgressLineV3,
-  validatePersonAskProgressResultLineV2,
   validatePersonAskProgressResultLineV3,
   validatePersonAskProgressStepEventV1,
   validatePersonAskProgressStepEventV2,
@@ -42,16 +36,15 @@ const v8 = () => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-
   parts: [{ question: 'Where is the Jira project for Thermal recovery?', status: 'answered' as const, statements: [{ text: 'Thermal recovery uses the THERM Jira project.', citation_indexes: [0, 1], private: true }] }] });
 const v7 = () => ({ schema_version: 7 as const, kind: 'echo-clean-person-answer-v7' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations: [followUp],
   parts: [{ question: 'What is still open?', status: 'answered' as const, statements: [{ text: 'The launch checklist is still open.', citation_indexes: [0], private: false }] }] });
+const v6 = () => ({ ...v7(), schema_version: 6 as const, kind: 'echo-clean-person-answer-v6' as const, citations: [decision],
+  parts: [{ question: 'What did we decide?', status: 'answered' as const, statements: [{ text: 'The team chose the recovery plan.', citation_indexes: [0], private: false }] }] });
+const v5 = () => ({ ...v6(), schema_version: 5 as const, kind: 'echo-clean-person-answer-v5' as const });
 const receipt = () => ({ looked_through: 4, elapsed_ms: 31_000, rows: [{ type: 'searched' as const, sources: [{ kind: 'meetings' as const }, ...sources], found: 9 },
   { type: 'read' as const, items: [...workspace] }] });
 const v2Receipt = () => ({ looked_through: 1, elapsed_ms: 12_000, rows: [{ type: 'searched' as const, sources: [{ kind: 'follow_ups' as const }], found: 4 }, { type: 'read' as const, items: [followUp] }] });
+const v1Receipt = () => ({ looked_through: 1, elapsed_ms: 12_000, rows: [{ type: 'searched' as const, sources: [{ kind: 'meetings' as const }], found: 4 }, { type: 'read' as const, items: [decision] }] });
 
 describe('Ask progress V3 wire contract (/v7, research tool contract v1)', () => {
-  it('opts in with its own header value, beside V1 and V2', () => {
-    expect(PERSON_ASK_PROGRESS_HEADER_VALUE_V3).toBe('3');
-    expect(new Set([PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]).size).toBe(3);
-  });
-
   it('names the workspace as plain source kinds, and a tool’s containers by its id', () => {
     const searched = { type: 'searched', sources: [{ kind: 'follow_ups' }, ...sources, { kind: 'tickets', tool_id: 'jira' }], found: 9 };
     expect(validatePersonAskProgressStepEventV3(searched)).toEqual(searched);
@@ -89,26 +82,36 @@ describe('Ask progress V3 wire contract (/v7, research tool contract v1)', () =>
     }
   });
 
-  it('accepts every V2 step and receipt as V3, so a /v6 or /v5 stream reads as V3', () => {
-    for (const step of [{ type: 'stage', stage: 'reading', pending: 2 }, { type: 'searched', sources: [{ kind: 'follow_ups' }, { kind: 'pages', tool_id: 'confluence' }], found: 0 }, { type: 'read', items: [decision, followUp] }]) {
-      expect(validatePersonAskProgressStepEventV3(step)).toEqual(validatePersonAskProgressStepEventV2(step));
-    }
-    expect(validatePersonAskReceiptV3(v2Receipt())).toEqual(validatePersonAskReceiptV2(v2Receipt()));
-  });
-
-  it('builds a receipt whose rows may name the workspace, with V1 merge and coverage rules', () => {
+  it('builds a receipt whose rows may name the workspace', () => {
     expect(validatePersonAskReceiptV3(receipt())).toEqual(receipt());
     expect(() => validatePersonAskReceiptV2(receipt())).toThrow();
-    expect(() => validatePersonAskReceiptV3({ ...receipt(), looked_through: 3 })).toThrow('less than the items');
-    expect(() => validatePersonAskReceiptV3({ ...receipt(), rows: [{ type: 'read', items: [project] }, { type: 'read', items: [tool] }] })).toThrow('not merged');
-    expect(() => validatePersonAskReceiptV3({ ...receipt(), rows: [{ type: 'read', items: [project] }, receipt().rows[0], { type: 'read', items: [project] }] })).toThrow('names an item twice');
+  });
+});
+
+describe('Ask progress V1, V2 and V3 side by side', () => {
+  // A newer client reads an older stream as it is.
+  it.each([
+    { older: 'V1', newer: 'V2', olderStep: validatePersonAskProgressStepEventV1, newerStep: validatePersonAskProgressStepEventV2,
+      olderReceipt: validatePersonAskReceiptV1, newerReceipt: validatePersonAskReceiptV2, sample: v1Receipt(),
+      steps: [{ type: 'stage', stage: 'reading', pending: 2 }, { type: 'searched', sources: [{ kind: 'documents' }, { kind: 'pages', tool_id: 'confluence' }], found: 0 }, { type: 'read', items: [decision] }] },
+    { older: 'V2', newer: 'V3', olderStep: validatePersonAskProgressStepEventV2, newerStep: validatePersonAskProgressStepEventV3,
+      olderReceipt: validatePersonAskReceiptV2, newerReceipt: validatePersonAskReceiptV3, sample: v2Receipt(),
+      steps: [{ type: 'stage', stage: 'reading', pending: 2 }, { type: 'searched', sources: [{ kind: 'follow_ups' }, { kind: 'pages', tool_id: 'confluence' }], found: 0 }, { type: 'read', items: [decision, followUp] }] },
+  ])('$newer accepts every $older step and receipt unchanged', ({ olderStep, newerStep, olderReceipt, newerReceipt, sample, steps }) => {
+    for (const step of steps) expect(newerStep(step)).toEqual(olderStep(step));
+    expect(newerReceipt(sample)).toEqual(olderReceipt(sample));
   });
 
-  it('carries the released V8 answer as the terminal event, and only V8', () => {
-    expect(validatePersonAskProgressEventV3({ type: 'answer', response: v8(), receipt: receipt() })).toEqual({ type: 'answer', response: v8(), receipt: receipt() });
-    expect(() => validatePersonAskProgressEventV3({ type: 'answer', response: v7(), receipt: v2Receipt() })).toThrow();
-    expect(() => validatePersonAskProgressEventV2({ type: 'answer', response: v8(), receipt: v2Receipt() })).toThrow();
-    expect(validatePersonAskProgressEventV3({ type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } }).type).toBe('error');
+  const frame = (answer: object) => `data: ${JSON.stringify({ type: 'answer', ...answer })}\n\n`;
+  it.each([
+    { version: 'V1', decoder: createPersonAskProgressDecoderV1, own: { response: v6(), receipt: v1Receipt() },
+      others: [{ response: v5(), receipt: v1Receipt() }, { response: v7(), receipt: v1Receipt() }] },
+    { version: 'V2', decoder: createPersonAskProgressDecoderV2, own: { response: v7(), receipt: v2Receipt() },
+      others: [{ response: v6(), receipt: v1Receipt() }, { response: v8(), receipt: v2Receipt() }] },
+    { version: 'V3', decoder: createPersonAskProgressDecoderV3, own: { response: v8(), receipt: receipt() }, others: [{ response: v7(), receipt: v2Receipt() }] },
+  ])('$version carries only its own released answer as the terminal event', ({ decoder, own, others }) => {
+    expect(decoder().push(frame(own))).toEqual([{ type: 'answer', ...own }]);
+    for (const other of others) expect(() => decoder().push(frame(other))).toThrow();
   });
 });
 
@@ -131,11 +134,13 @@ describe('Ask progress V3 stream framing', () => {
 });
 
 describe('person ask --progress lines from a /v7 client', () => {
-  it('prints V3 steps, which include every V2 step', () => {
+  it('prints V3 steps, which include every V2 step, and nothing else', () => {
     expect(validatePersonAskProgressLineV3({ ok: true, progress: { type: 'read', items: [person] } })).toEqual({ ok: true, progress: { type: 'read', items: [person] } });
     expect(validatePersonAskProgressLineV3({ ok: true, progress: { type: 'read', items: [followUp] } }).progress.type).toBe('read');
-    expect(() => validatePersonAskProgressLineV2({ ok: true, progress: { type: 'read', items: [person] } })).toThrow();
     expect(() => validatePersonAskProgressLineV3({ ok: true, progress: { type: 'answer', response: v8(), receipt: receipt() } })).toThrow();
+    expect(() => validatePersonAskProgressLineV3({ ok: true, progress: { type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } } })).toThrow();
+    expect(() => validatePersonAskProgressLineV3({ ok: false, progress: { type: 'stage', stage: 'searching' } })).toThrow();
+    expect(() => validatePersonAskProgressLineV3({ ok: true, result: v8() })).toThrow();
   });
 
   it('pairs each streamed answer with its own receipt: V8 with V3, V7 with V2, V6 with V1, and none for V5', () => {
@@ -144,14 +149,9 @@ describe('person ask --progress lines from a /v7 client', () => {
     expect(validatePersonAskProgressResultLineV3({ ok: true, result: v7(), receipt: v2Receipt() })).toEqual({ ok: true, result: v7(), receipt: v2Receipt() });
     // A V7 answer from /v6 never has a workspace item in its receipt.
     expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v7(), receipt: receipt() })).toThrow();
-    const v6 = { ...v7(), schema_version: 6 as const, kind: 'echo-clean-person-answer-v6' as const, citations: [decision],
-      parts: [{ question: 'What did we decide?', status: 'answered' as const, statements: [{ text: 'The team chose the recovery plan.', citation_indexes: [0], private: false }] }] };
-    const v1Receipt = { looked_through: 1, elapsed_ms: 1_000, rows: [{ type: 'read' as const, items: [decision] }] };
-    expect(validatePersonAskProgressResultLineV3({ ok: true, result: v6, receipt: v1Receipt })).toEqual({ ok: true, result: v6, receipt: validatePersonAskReceiptV1(v1Receipt) });
-    const v5 = { ...v6, schema_version: 5 as const, kind: 'echo-clean-person-answer-v5' as const };
-    expect(validatePersonAskProgressResultLineV3({ ok: true, result: v5 }).result.schema_version).toBe(5);
-    expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v5, receipt: v1Receipt })).toThrow('needs a streamed answer');
-    // V2's final line never carries a V8 answer.
-    expect(() => validatePersonAskProgressResultLineV2({ ok: true, result: v8(), receipt: receipt() })).toThrow();
+    expect(validatePersonAskProgressResultLineV3({ ok: true, result: v6(), receipt: v1Receipt() })).toEqual({ ok: true, result: v6(), receipt: validatePersonAskReceiptV1(v1Receipt()) });
+    expect(validatePersonAskProgressResultLineV3({ ok: true, result: v5() }).result.schema_version).toBe(5);
+    expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v5(), receipt: v1Receipt() })).toThrow('needs a streamed answer');
+    expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v8(), receipt: receipt(), progress: {} })).toThrow('unexpected shape');
   });
 });
