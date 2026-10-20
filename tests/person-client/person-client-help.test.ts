@@ -37,7 +37,9 @@ describe("Person client help", () => {
     [["records", "--help"], "[--limit <1-100>] [--query <text>]"],
     [["status", "--help"], "echo-brain person status"],
     [["logout", "--help"], "echo-brain person logout"],
-    [["ask", "--help"], "echo-brain person ask --question <text> [--project <project-id> | --mine]"],
+    [["ask", "--help"], "echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --progress"],
+    // Every Ask asks the newest route; the flag that once chose it is kept so scripts keep working.
+    [["ask", "--help"], "--live, which once chose this route, is still accepted and changes nothing"],
     // A follow-up's ref is not one person open reads: its item page is the runs item read.
     [["ask", "--help"], `except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}'`],
     [["open", "--help"], "usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]"],
