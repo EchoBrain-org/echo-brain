@@ -5,10 +5,10 @@ import type {
 } from '@echo-brain/organization-api';
 import { validatePersonDiagnosticCaptureIdV1 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
-import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonDiagnosticsHttpApplicationV1 } from '../presentation/person-diagnostics-http-application.js';
 import { createPersonDiagnosticTraceV1, type PersonDiagnosticTraceCollectorV1 } from './person-diagnostic-trace-v1.js';
+import { checkRetainedResultReleaseV1, retainedResultFailureV1, type RetainedResultFailureCodeV1, type RetainedResultFailureV1 } from './person-retained-result-v1.js';
 
 export const PERSON_DIAGNOSTICS_RESULT_TTL_MS_V1 = 15 * 60_000;
 export const PERSON_DIAGNOSTICS_REREAD_MS_V1 = 60_000;
@@ -57,7 +57,7 @@ interface Capture {
   erased: boolean;
 }
 
-const FAILURE_MESSAGES = Object.freeze({
+const FAILURE_MESSAGES: Readonly<Record<RetainedResultFailureCodeV1, string>> = Object.freeze({
   conflict: 'The captured operation conflicted with another operation',
   invalid_request: 'The captured operation request was invalid',
   invalid_output: 'The captured operation received invalid output',
@@ -70,10 +70,8 @@ const FAILURE_MESSAGES = Object.freeze({
   timed_out: 'The captured operation reached its deadline',
 });
 
-function failure(error: unknown): CaptureError {
-  const code = error instanceof AgenticAskDeadlineErrorV1 ? 'timed_out'
-    : error instanceof AuthorityOperationError && Object.hasOwn(FAILURE_MESSAGES, error.code) ? error.code as keyof typeof FAILURE_MESSAGES : 'unavailable';
-  return Object.freeze({ code, message: FAILURE_MESSAGES[code] });
+function failure(error: unknown): RetainedResultFailureV1 {
+  return retainedResultFailureV1(FAILURE_MESSAGES, error);
 }
 
 function positive(value: number, label: string): number {
@@ -200,29 +198,13 @@ export function createPersonDiagnosticsV1(options: CreatePersonDiagnosticsOption
         capture.expires_at = Math.min(capture.expires_at, timestamp() + reread);
         return Object.freeze({ ...base(), status: 'failed' as const, error: capture.error ?? failure(undefined) });
       }
-      try { await capture.fence(input.signal); }
-      catch (error) {
-        // Cancelling a read does not invalidate its source-access snapshot.
-        // A concrete denial still wins if cancellation happens at the same time.
-        const denied = error instanceof AuthorityOperationError && ['unauthorized', 'stale_access_state', 'not_found'].includes(error.code);
-        if (!denied && input.signal?.aborted && (error === input.signal.reason || (error instanceof Error && error.name === 'AbortError'))) throw error;
-        remove(id, capture);
-        const failed = failure(error);
-        return Object.freeze({ ...base(), status: 'failed' as const, error: failed.code === 'unavailable' ? failure(new AuthorityOperationError('stale_access_state', 'Access cannot be checked')) : failed });
-      }
       // Reads arriving after expiry, shutdown, or concurrent invalidation cannot revive content.
-      if (!active(id, capture)) {
-        if (captures.get(id) === capture) remove(id, capture);
-        throw new AuthorityOperationError('not_found', 'Diagnostic capture is unavailable');
-      }
-      input.signal?.throwIfAborted();
-      // The fence may have awaited remote sources using the execution's own
-      // session. The reading session must still be valid at the release edge.
-      try {
-        if (ownerOf(options.sessions.authenticateAccess({ access_token: input.access_token })) !== capture.owner) {
-          throw new AuthorityOperationError('unauthorized', 'Diagnostic capture is not permitted');
-        }
-      } catch (error) { remove(id, capture); throw error; }
+      const refused = await checkRetainedResultReleaseV1({
+        fence: capture.fence, signal: input.signal, held: () => active(id, capture), drop: () => remove(id, capture),
+        reader: () => ownerOf(options.sessions.authenticateAccess({ access_token: input.access_token })), owner: capture.owner,
+        failure, gone: 'Diagnostic capture is unavailable', refused: 'Diagnostic capture is not permitted',
+      });
+      if (refused !== undefined) return Object.freeze({ ...base(), status: 'failed' as const, error: refused });
       const trace = capture.collector.snapshot();
       // A cancelled or rejected read has released nothing and does not start
       // the shorter lost-response reread window.

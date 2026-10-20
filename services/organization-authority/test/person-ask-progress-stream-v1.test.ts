@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1, PERSON_ASK_PROGRESS_HEARTBEAT_V1 } from '@echo-brain/organization-api';
+import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1, PERSON_ASK_PROGRESS_HEARTBEAT_V1, formatPersonAskProgressEventV1 } from '@echo-brain/organization-api';
 import { startPersonAskProgressStreamV1 } from '../src/presentation/person-ask-progress-stream-v1.js';
 
 /** A response that records what the stream wrote. */
@@ -24,7 +24,7 @@ describe('Ask progress stream', () => {
   it('sends its headers at once and a heartbeat comment only after a quiet interval', () => {
     vi.useFakeTimers();
     const r = response();
-    const stream = startPersonAskProgressStreamV1(r.response);
+    const stream = startPersonAskProgressStreamV1(r.response, formatPersonAskProgressEventV1);
     expect(r.headers).toEqual({ status: 200, values: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
     expect(r.flushed()).toBe(true);
     vi.advanceTimersByTime(PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 - 1);
@@ -43,7 +43,7 @@ describe('Ask progress stream', () => {
   it('writes exactly one terminal event last, clears the heartbeat first, and drops what the contract refuses', () => {
     vi.useFakeTimers();
     const r = response();
-    const stream = startPersonAskProgressStreamV1(r.response);
+    const stream = startPersonAskProgressStreamV1(r.response, formatPersonAskProgressEventV1);
     // Not a contract event: never written.
     stream.step({ type: 'stage', stage: 'thinking' } as never);
     stream.step({ type: 'searched', sources: [{ kind: 'meetings' }], found: 2, query: 'launch' } as never);
@@ -57,14 +57,14 @@ describe('Ask progress stream', () => {
 
   it('replaces a terminal event the contract refuses with an internal error, never a partial answer', () => {
     const r = response();
-    startPersonAskProgressStreamV1(r.response).end({ type: 'answer', response: { schema_version: 6 } as never, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } });
+    startPersonAskProgressStreamV1(r.response, formatPersonAskProgressEventV1).end({ type: 'answer', response: { schema_version: 6 } as never, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } });
     expect(r.writes).toEqual(['data: {"type":"error","status":500,"error":{"code":"internal","message":"request failed"}}\n\n']);
   });
 
   it('writes nothing once the client has gone, and closes without a terminal event', () => {
     vi.useFakeTimers();
     const r = response();
-    const stream = startPersonAskProgressStreamV1(r.response);
+    const stream = startPersonAskProgressStreamV1(r.response, formatPersonAskProgressEventV1);
     r.value.destroyed = true;
     stream.step({ type: 'stage', stage: 'searching' });
     vi.advanceTimersByTime(PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1);

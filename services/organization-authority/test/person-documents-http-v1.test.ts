@@ -187,7 +187,7 @@ describe('document binary HTTP boundary and real service integration',()=>{
   const h=await fixture({decorate:app=>({...app,read(...args){return {...app.read(...args),private_extra:'must not release'} as never;}})});const receipt=await upload(h.origin,Buffer.from('output guard'));await failure(await fetch(`${h.origin}/v1/person/documents/${receipt.document_id}`,{headers:{authorization:`Bearer ${token}`}}),502,'invalid_output');
  });
  it('reserves the entire document family from provider ingress and requires paired staging composition',()=>{
-  for(const key of ['private_approval_interaction_ingress','person_external_identity_link','person_tools'])for(const path of ['/v1/person/documents','/v1/person/documents/search','/v1/person/documents/arbitrary/original'])expect(()=>createOrganizationAuthorityHttpServer({...options(),[key]:{routes:[{route_id:'collision',method:'POST',path}],accept:async()=>({status:200,body:{}})}})).toThrow('collides with Authority route');
+  for(const path of ['/v1/person/documents','/v1/person/documents/search','/v1/person/documents/arbitrary/original']){const application={routes:[{route_id:'collision',method:'POST' as const,path}],accept:async()=>({status:200 as const,body:{}})};for(const ingress of [{person_tool_connections:[application]},{person_external_identity_link:application},{person_tools:application}])expect(()=>createOrganizationAuthorityHttpServer({...options(),...ingress})).toThrow('collides with Authority route');}
   expect(()=>createOrganizationAuthorityHttpServer({...options(),person_documents:{} as never})).toThrow('composed together');
  });
  it('preserves the legacy 16KiB JSON request cap while admitting larger binary documents',async()=>{

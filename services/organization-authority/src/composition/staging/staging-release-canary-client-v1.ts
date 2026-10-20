@@ -1,12 +1,13 @@
 import { request } from "node:http";
-import { STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1, type StagingSyntheticCanaryResultV1 } from "./staging-release-canary-control-v1.js";
+import { STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1 } from "./staging-release-canary-control-v1.js";
+import type { StagingSyntheticCanaryOutcomeV1 } from "../organization-authority-runtime.js";
+import { CLEAN_V1_RELEASE_ID } from "../clean-v1-release-id.js";
 
-const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 const APPROVAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_RECEIPT_BYTES = 1_024;
 const REQUEST_TIMEOUT_MS = 120_000;
 /** Exactly the outcomes the Authority's staging canary runner produces. */
-const OUTCOMES = ["staged", "not_actionable", "not_staged"] as const satisfies readonly StagingSyntheticCanaryResultV1["kind"][];
+const OUTCOMES = ["staged", "not_actionable", "not_staged"] as const satisfies readonly StagingSyntheticCanaryOutcomeV1["kind"][];
 type ApprovalOutcome = (typeof OUTCOMES)[number];
 
 export type StagingSyntheticPrivateDmCanaryReceiptV1 =
@@ -98,7 +99,7 @@ export async function requestStagingSyntheticPrivateDmCanaryV1(
     socket_path?: string;
   }>,
 ): Promise<StagingSyntheticPrivateDmCanaryReceiptV1> {
-  if (!RELEASE_ID.test(input.release_id))
+  if (!CLEAN_V1_RELEASE_ID.test(input.release_id))
     throw new Error("staging synthetic canary release id is invalid");
   const socketPath =
     input.socket_path ?? STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1;

@@ -246,9 +246,10 @@ describe('frozen project/V2 HTTP transport', () => {
   });
 
   it('reserves project and V2 route families against every provider ingress', () => {
-    for (const key of ['private_approval_interaction_ingress', 'person_external_identity_link', 'person_tools']) {
-      for (const path of ['/v1/person/projects', fixture('projects-read-context').http.path, '/v2/person/updates', '/v2/person/updates/search', '/v1/person/directory', '/v1/person/directory/next']) {
-        expect(() => createOrganizationAuthorityHttpServer({ ...options(), [key]: { routes: [{ route_id: 'collision', method: 'POST', path }], accept: async () => ({ status: 200, body: {} }) } })).toThrow('collides with Authority route');
+    for (const path of ['/v1/person/projects', fixture('projects-read-context').http.path, '/v2/person/updates', '/v2/person/updates/search', '/v1/person/directory', '/v1/person/directory/next']) {
+      const application = { routes: [{ route_id: 'collision', method: 'POST' as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
+      for (const ingress of [{ person_tool_connections: [application] }, { person_external_identity_link: application }, { person_tools: application }]) {
+        expect(() => createOrganizationAuthorityHttpServer({ ...options(), ...ingress })).toThrow('collides with Authority route');
       }
     }
   });

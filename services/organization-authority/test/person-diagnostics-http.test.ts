@@ -12,7 +12,7 @@ import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import type { PersonDiagnosticsHttpApplicationV1 } from '../src/presentation/person-diagnostics-http-application.js';
-import type { PersonAnswerV5HttpApplication } from '../src/presentation/person-answer-v5-http-application.js';
+import type { PersonAnswerV5HttpApplication } from '../src/presentation/person-live-answer-http-application.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../src/presentation/person-trigger-runs-http-application.js';
 
 const capture_id = 'cap_00000000-0000-4000-8000-000000000001';

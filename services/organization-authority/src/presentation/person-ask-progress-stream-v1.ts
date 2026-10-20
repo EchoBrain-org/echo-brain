@@ -3,18 +3,9 @@ import {
   PERSON_ASK_PROGRESS_CONTENT_TYPE_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
-  formatPersonAskProgressEventV1,
-  formatPersonAskProgressEventV2,
-  formatPersonAskProgressEventV3,
   type PersonAskProgressEventV1,
   type PersonAskProgressEventV2,
   type PersonAskProgressEventV3,
-  type PersonAskProgressStepEventV1,
-  type PersonAskProgressStepEventV2,
-  type PersonAskProgressStepEventV3,
-  type PersonAskProgressTerminalEventV1,
-  type PersonAskProgressTerminalEventV2,
-  type PersonAskProgressTerminalEventV3,
 } from '@echo-brain/organization-api';
 
 /**
@@ -23,46 +14,22 @@ import {
  * terminal event last. Headers go out at once, so a proxy sees the stream
  * start before research does. Nothing is written once the client has gone.
  */
-export interface PersonAskProgressStreamV1 {
+export interface PersonAskProgressStreamV1<Event> {
   /** A step event; one the contract refuses is dropped, never written. */
-  step(event: PersonAskProgressStepEventV1): void;
+  step(event: Event): void;
   /** The answer or an error, then the end of the response. Nothing follows it. */
-  end(event: PersonAskProgressTerminalEventV1): void;
+  end(event: Event): void;
   /** Ends the response with no terminal event: the client disconnected, so nothing more is written. */
   close(): void;
 }
 
-/** The `/v6` stream (Ask progress V2, ADR-0040): the same response, whose events may name follow-ups. */
-export interface PersonAskProgressStreamV2 {
-  step(event: PersonAskProgressStepEventV2): void;
-  end(event: PersonAskProgressTerminalEventV2): void;
-  close(): void;
-}
-
-/** The `/v7` stream (Ask progress V3, research tool contract v1): the same response, whose events may name workspace items and tool containers. */
-export interface PersonAskProgressStreamV3 {
-  step(event: PersonAskProgressStepEventV3): void;
-  end(event: PersonAskProgressTerminalEventV3): void;
-  close(): void;
-}
-
-/** Status and headers set before this call (the route header) are kept. */
-export function startPersonAskProgressStreamV1(response: ServerResponse, options: { readonly heartbeat_ms?: number } = {}): PersonAskProgressStreamV1 {
-  return start<PersonAskProgressEventV1>(response, formatPersonAskProgressEventV1, options);
-}
-
-/** `/v6`'s stream: V1's framing, heartbeat and terminal rules, with each event validated as V2. */
-export function startPersonAskProgressStreamV2(response: ServerResponse, options: { readonly heartbeat_ms?: number } = {}): PersonAskProgressStreamV2 {
-  return start<PersonAskProgressEventV2>(response, formatPersonAskProgressEventV2, options);
-}
-
-/** `/v7`'s stream: V1's framing, heartbeat and terminal rules, with each event validated as V3. */
-export function startPersonAskProgressStreamV3(response: ServerResponse, options: { readonly heartbeat_ms?: number } = {}): PersonAskProgressStreamV3 {
-  return start<PersonAskProgressEventV3>(response, formatPersonAskProgressEventV3, options);
-}
-
-function start<Event extends PersonAskProgressEventV1 | PersonAskProgressEventV2 | PersonAskProgressEventV3>(response: ServerResponse, format: (event: Event) => string,
-  options: { readonly heartbeat_ms?: number }): { step(event: Event): void; end(event: Event): void; close(): void } {
+/**
+ * Starts one stream with V1's framing, heartbeat and terminal rules; `format` validates each event in its version:
+ * Ask progress V1 for `/v5`, V2 for `/v6` (events may name follow-ups, ADR-0040), V3 for `/v7` (workspace items and
+ * tool containers, research tool contract v1). Status and headers set before this call (the route header) are kept.
+ */
+export function startPersonAskProgressStreamV1<Event extends PersonAskProgressEventV1 | PersonAskProgressEventV2 | PersonAskProgressEventV3>(
+  response: ServerResponse, format: (event: Event) => string, options: { readonly heartbeat_ms?: number } = {}): PersonAskProgressStreamV1<Event> {
   const heartbeatMs = options.heartbeat_ms ?? PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1;
   response.writeHead(200, { 'content-type': `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}; charset=utf-8`, 'cache-control': 'no-store' });
   response.flushHeaders();

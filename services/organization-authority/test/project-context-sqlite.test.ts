@@ -23,7 +23,6 @@ import {
   RETURNED_MEMBER,
   addMembership,
   authorization,
-  insertLegacyTextV1,
   projectContextDatabase,
   revokeMembership,
 } from "./fixtures/project-context-sqlite.js";
@@ -554,20 +553,12 @@ describe("SQLite project context V1", () => {
     ))).toThrow(expect.objectContaining({ code: "conflict" }));
   });
 
-  it("shares the 100-item retained-corpus limit across V1 and V2, while exact retry wins before capacity", () => {
-    const first = open();
-    for (let index = 0; index < 99; index += 1) insertLegacyTextV1(first.database, OWNER, {
-      request_id: requestId(1000 + index), title: `V1 ${index}`, text: "shared capacity",
-    });
-    const v2Receipt = submit(first.repository, null, { kind: "only_me" }, 1100);
-    expect(submit(first.repository, null, { kind: "only_me" }, 1100)).toEqual(v2Receipt);
-    expect(() => submit(first.repository, null, { kind: "only_me" }, 1101)).toThrow(expect.objectContaining({ code: "rate_limited" }));
-
-    const second = open();
-    for (let index = 0; index < 100; index += 1) insertLegacyTextV1(second.database, OWNER, {
-      request_id: requestId(1200 + index), title: `V1 ${index}`, text: "shared capacity",
-    });
-    expect(() => submit(second.repository, null, { kind: "only_me" }, 1300)).toThrow(expect.objectContaining({ code: "rate_limited" }));
+  it("holds the 100-item retained-corpus limit, while exact retry wins before capacity", () => {
+    const { repository } = open();
+    for (let index = 0; index < 99; index += 1) submit(repository, null, { kind: "only_me" }, 1000 + index);
+    const receipt = submit(repository, null, { kind: "only_me" }, 1100);
+    expect(submit(repository, null, { kind: "only_me" }, 1100)).toEqual(receipt);
+    expect(() => submit(repository, null, { kind: "only_me" }, 1101)).toThrow(expect.objectContaining({ code: "rate_limited" }));
   });
 
   it("round-trips the largest valid original byte-for-byte through generic and project reads", () => {

@@ -1,7 +1,8 @@
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceCitationV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { WorkspaceSourceDescriptorV1, WorkspaceSourceIdV1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
-import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
+import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
+import { appendAuditRowV1 } from "./audit-row-v1.js";
 import type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
 import { PERSON_ASK_PROGRESS_NAMED_MAX_V1, validatePersonWorkspaceCitationV1 } from "@echo-brain/organization-api";
@@ -141,11 +142,7 @@ export class SqlitePersonAgenticAskAuditV1 {
 
   /** Commits one immutable row and returns its receipt, the digest of its body. */
   private insert(body: object, prompt_sha256: Sha256Digest, answer_sha256: Sha256Digest, recorded_at: string): Sha256Digest {
-    const receipt = canonicalSha256(body);
-    this.database.prepare(`INSERT INTO authority_person_read_decision_audit_v2
-      (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
-      VALUES (?, ?, 'answer_composition', ?, ?, ?)`).run(receipt, canonicalJson(body), prompt_sha256, answer_sha256, recorded_at);
-    return receipt;
+    return appendAuditRowV1(this.database, "authority_person_read_decision_audit_v2", body, recorded_at, { context_kind: "answer_composition", prompt_sha256, answer_sha256 });
   }
 
   /** Validates the trusted request context and copies exactly its fields. */

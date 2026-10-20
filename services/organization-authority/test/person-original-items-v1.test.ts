@@ -14,7 +14,7 @@ import type { PersonItemPositionV1, PersonStoreDocumentRowV1, PersonStoreNoteRow
 import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import {
   MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, RETURNED_MEMBER,
-  addMembership, authorization, insertLegacyTextV1, projectContextDatabase, revokeMembership,
+  addMembership, authorization, projectContextDatabase, revokeMembership,
 } from "./fixtures/project-context-sqlite.js";
 import { failure } from "./authority-failure.js";
 
@@ -83,13 +83,6 @@ function fixture() {
       : projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id, title: `Note ${requestIds.length}`, text, association_project_ids: associations, audience });
     authors.set(receipt.context_id, ACTORS[token]!);
     return receipt.context_id as `ctx_${string}`;
-  };
-  const legacy = (actor: Actor, visibility: "only_me" | "team"): `ctx_${string}` => {
-    const request_id = randomUUID();
-    requestIds.push(request_id);
-    const id = insertLegacyTextV1(database, actor, { request_id, title: "Legacy note", text: "legacy text", visibility });
-    authors.set(id, actor);
-    return id as `ctx_${string}`;
   };
   /** Documents that finish extraction must be uploaded before any left extracting: claims take the oldest pending. */
   const document = (token: string, audience: NoteAudience, associations: readonly string[] = [], options: {
@@ -161,15 +154,12 @@ function fixture() {
     throw new Error("search did not end");
   };
 
-  return { database, projects, documents, items, retrieval, session, time, requestIds, authors, note, legacy, document, walk, ids, searchAll, audits, sessions };
+  return { database, projects, documents, items, retrieval, session, time, requestIds, authors, note, document, walk, ids, searchAll, audits, sessions };
 }
 
 describe("person original items store", () => {
   it("lists every note version and document state the reader may read, and nothing private to another member", () => {
     const f = fixture();
-    const ownerV1Private = f.legacy(OWNER, "only_me");
-    const ownerV1Team = f.legacy(OWNER, "team");
-    const memberV1Private = f.legacy(MEMBER, "only_me");
     const ownerV2Private = f.note("owner", { kind: "only_me" }, [], 2);
     const ownerV2Team = f.note("owner", { kind: "team" }, [PROJECT_ALPHA], 2);
     const ownerV2Alpha = f.note("owner", { kind: "project", project_id: PROJECT_ALPHA }, [], 2);
@@ -184,7 +174,7 @@ describe("person original items store", () => {
 
     const owner = f.walk("owner", GLOBAL).rows;
     expect(new Set(owner.map((row) => row.id))).toEqual(new Set([
-      ownerV1Private, ownerV1Team, ownerV2Private, ownerV2Team, ownerV2Alpha, ownerV3Projects, ownerV3Beta,
+      ownerV2Private, ownerV2Team, ownerV2Alpha, ownerV3Projects, ownerV3Beta,
       ownerReady, ownerUnavailable, ownerExtracting, ownerBetaDocument,
     ]));
     expect(owner.filter((row): row is PersonStoreDocumentRowV1 => row.kind === "document").map((row) => row.extraction_state).sort())
@@ -194,24 +184,21 @@ describe("person original items store", () => {
 
     const member = f.walk("member", GLOBAL).rows;
     expect(new Set(member.map((row) => row.id))).toEqual(new Set([
-      ownerV1Team, ownerV2Team, ownerV2Alpha, ownerV3Projects, ownerReady, ownerExtracting, memberV1Private, memberPrivate, memberReady,
+      ownerV2Team, ownerV2Alpha, ownerV3Projects, ownerReady, ownerExtracting, memberPrivate, memberReady,
     ]));
     // Associations are filtered to the reader's own grants.
     expect(member.find((row) => row.id === ownerV3Projects)?.association_project_ids).toEqual([PROJECT_ALPHA]);
     expect(member.find((row) => row.id === memberPrivate)?.association_project_ids).toEqual([PROJECT_ALPHA]);
     expect(owner.map((row) => row.id)).not.toContain(memberPrivate);
     expect(owner.map((row) => row.id)).not.toContain(memberReady);
-    expect(owner.map((row) => row.id)).not.toContain(memberV1Private);
   });
 
   it("lists mine as exactly the caller's own readable items, always a subset of global, and bound to the caller's tenure", () => {
     const f = fixture();
-    f.legacy(OWNER, "team");
     f.note("owner", { kind: "team" });
     f.note("owner", { kind: "only_me" });
     f.note("member", { kind: "team" }, [PROJECT_ALPHA]);
     f.note("member", { kind: "project", project_id: PROJECT_ALPHA });
-    f.legacy(MEMBER, "only_me");
     f.document("owner", { kind: "team" }, [], { state: "ready" });
     f.document("member", { kind: "only_me" });
     const check = (token: string, actor: Actor) => {
@@ -285,7 +272,6 @@ describe("person original items store", () => {
     f.note("owner", { kind: "team" }, [], 2);
     f.note("member", { kind: "only_me" }, [PROJECT_ALPHA]);
     f.note("member", { kind: "team" }, [PROJECT_ALPHA], 2);
-    f.legacy(OWNER, "team");
     f.document("owner", { kind: "team" }, [PROJECT_ALPHA], { state: "ready" });
     f.document("owner", { kind: "project", project_id: PROJECT_BETA }, [PROJECT_ALPHA], { state: "ready" });
     f.document("member", { kind: "only_me" }, [PROJECT_ALPHA]);
@@ -349,7 +335,6 @@ describe("person original items store", () => {
 
   it("opens every listed ref with the identical row, and pages document chunks to completion", () => {
     const f = fixture();
-    f.legacy(OWNER, "team");
     f.note("owner", { kind: "team" }, [PROJECT_ALPHA]);
     const chunks = Array.from({ length: 11 }, (_, index) => `chunk ${index} ${"x".repeat(200)}`);
     const long = f.document("owner", { kind: "team" }, [], { state: "ready", chunks });
@@ -380,8 +365,8 @@ describe("person original items store", () => {
 
   it("gives guessed, unreadable, left, quarantined and past-the-end refs one identical not_found", () => {
     const f = fixture();
-    const quarantined = f.legacy(MEMBER, "team");
-    f.database.prepare("INSERT INTO authority_person_text_source_failures_v1(organization_id,api_version,context_id,disposition,recorded_at) VALUES (?,1,?,'invalid_retained_text',?)").run(OWNER.organization_id, quarantined, PROJECT_CONTEXT_NOW);
+    const quarantined = f.note("member", { kind: "team" }, [], 2);
+    f.database.prepare("INSERT INTO authority_person_text_source_failures_v1(organization_id,api_version,context_id,disposition,recorded_at) VALUES (?,2,?,'invalid_retained_text',?)").run(OWNER.organization_id, quarantined, PROJECT_CONTEXT_NOW);
     const ownerPrivateNote = f.note("owner", { kind: "only_me" });
     const readable = f.document("owner", { kind: "team" }, [], { state: "ready" });
     const ownerPrivateDocument = f.document("owner", { kind: "only_me" });
@@ -405,17 +390,17 @@ describe("person original items store", () => {
 
   it("hides a quarantined note and fails closed on a retained note that no longer binds its request", () => {
     const f = fixture();
-    const quarantined = f.legacy(OWNER, "team");
-    const kept = f.legacy(OWNER, "team");
-    f.database.prepare("INSERT INTO authority_person_text_source_failures_v1(organization_id,api_version,context_id,disposition,recorded_at) VALUES (?,1,?,'invalid_retained_text',?)").run(OWNER.organization_id, quarantined, PROJECT_CONTEXT_NOW);
+    const quarantined = f.note("owner", { kind: "team" }, [], 2);
+    const kept = f.note("owner", { kind: "team" }, [], 2);
+    f.database.prepare("INSERT INTO authority_person_text_source_failures_v1(organization_id,api_version,context_id,disposition,recorded_at) VALUES (?,2,?,'invalid_retained_text',?)").run(OWNER.organization_id, quarantined, PROJECT_CONTEXT_NOW);
     expect(f.ids("owner", GLOBAL)).toEqual([kept]);
     expect(f.ids("owner", MINE)).toEqual([kept]);
 
     const request_id = randomUUID();
-    const context_id = `ctx_${canonicalSha256({ organization_id: OWNER.organization_id, membership_id: OWNER.membership_id, request_id }).slice(7)}`;
-    f.database.prepare(`INSERT INTO authority_person_updates_v1
-      (organization_id,principal_id,membership_id,membership_type,request_id,context_id,payload_sha256,title,text,visibility,received_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, request_id, context_id, canonicalSha256("not the request"), "Tampered", "tampered text", "team", PROJECT_CONTEXT_NOW);
+    const context_id = `ctx_${canonicalSha256({ schema_version: 2, kind: "echo-person-update-source-v2", organization_id: OWNER.organization_id, membership_id: OWNER.membership_id, request_id }).slice(7)}`;
+    f.database.prepare(`INSERT INTO authority_person_updates_v2
+      (organization_id,principal_id,membership_id,membership_type,request_id,request_version,context_id,payload_sha256,title,text,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at)
+      VALUES (?,?,?,?,?,2,?,?,?,?,'team',NULL,'[]','[]',NULL,?)`).run(OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, request_id, context_id, canonicalSha256("not the request"), "Tampered", "tampered text", PROJECT_CONTEXT_NOW);
     expect(failure(() => f.items.collect({ access_token: "member", scope: GLOBAL, limit: 26, notes: { after: null } })).code).toBe("unavailable");
     expect(failure(() => f.items.open({ access_token: "member", ref: { kind: "note", id: context_id as `ctx_${string}` } })).code).toBe("unavailable");
     // Documents alone still list.
@@ -504,7 +489,6 @@ describe("person original items store", () => {
 
   it("never releases a request_id, a membership id or a principal id", () => {
     const f = fixture();
-    f.legacy(MEMBER, "only_me");
     f.note("owner", { kind: "team" }, [PROJECT_ALPHA]);
     f.note("member", { kind: "only_me" }, [PROJECT_ALPHA], 2);
     f.document("owner", { kind: "team" }, [], { state: "ready" });
@@ -520,7 +504,7 @@ describe("person original items store", () => {
       }
     }
     const serialized = JSON.stringify(outputs);
-    expect(f.requestIds.length).toBe(5);
+    expect(f.requestIds.length).toBe(4);
     for (const value of [...f.requestIds, OWNER.principal_id, MEMBER.principal_id, "mem_", "prn_", "request_id"]) expect(serialized).not.toContain(value);
   });
 });

@@ -38,11 +38,9 @@ same path with a new answer version. The options are to accept that path as
 built, or to turn it off. Turning it off is not a one-line change:
 `deploy/organization-authority/compose.clean-v1.ec2.yaml` sets
 `ECHO_STAGING_CONFLUENCE_ASK_V1` whenever the connector rehearsal profile is
-present, and the service CLI refuses to start when that switch is set while
-`CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1` is false. Setting the constant to
-false alone would therefore stop the staging Authority from starting; turning
-the path off means removing the staging switch together with the constant and
-the `--confluence-*` selection flags.
+present, and that switch or the `--confluence-*` selection flags select the
+path; there is no separate code gate. Turning the path off means removing the
+staging switch together with the `--confluence-*` selection flags.
 
 ## Decision and consequences
 

@@ -129,12 +129,10 @@ describe("person list and open HTTP transport", () => {
   });
 
   it("reserves both paths from provider ingress", () => {
-    for (const key of ["private_approval_interaction_ingress", "person_external_identity_link", "person_tools"] as const) {
-      for (const path of [PERSON_LIST_PATH_V1, PERSON_OPEN_PATH_V1]) {
-        expect(() => createOrganizationAuthorityHttpServer({
-          ...options(undefined),
-          [key]: { routes: [{ route_id: "collision", method: "POST", path }], accept: async () => ({ status: 200, body: {} }) },
-        })).toThrow("collides with Authority route");
+    for (const path of [PERSON_LIST_PATH_V1, PERSON_OPEN_PATH_V1]) {
+      const application = { routes: [{ route_id: "collision", method: "POST" as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
+      for (const ingress of [{ person_tool_connections: [application] }, { person_external_identity_link: application }, { person_tools: application }]) {
+        expect(() => createOrganizationAuthorityHttpServer({ ...options(undefined), ...ingress })).toThrow("collides with Authority route");
       }
     }
   });

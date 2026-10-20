@@ -6,6 +6,7 @@ import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sq
 import { SqlitePersonTextSourceInboxV1 } from "../src/adapters/persistence/sqlite/person-text-source-v1.js";
 import { SqliteSourceAdmissionStoreV1 } from "../src/adapters/persistence/sqlite/source-admission-v1.js";
 import { assertPersonSourceAdmissionV1 } from "../src/adapters/persistence/sqlite/person-source-admission-v1.js";
+import { seedOwner } from "./fixtures/authority-admission-seed.js";
 
 const databases: Database.Database[] = [];
 const NOW = "2026-09-23T00:00:00.000Z";
@@ -20,9 +21,7 @@ afterEach(() => { for (const database of databases.splice(0)) database.close(); 
 
 function fixture() {
   const database = new Database(":memory:"); databases.push(database); database.pragma("foreign_keys=ON"); applyAuthorityBaseline(database);
-  database.prepare("INSERT INTO authority_metadata VALUES (1, ?, ?, 'Fixture', '{}', ?, ?)").run(AUTHORITY, ORG, NOW, NOW);
-  database.prepare("INSERT INTO authority_principals VALUES (?, ?, 'PM', ?)").run(PRINCIPAL, ORG, NOW);
-  database.prepare("INSERT INTO authority_memberships(membership_id,organization_id,principal_id,membership_type,status,provisioned_at) VALUES (?, ?, ?, 'owner', 'active', ?)").run(MEMBER, ORG, PRINCIPAL, NOW);
+  seedOwner(database, NOW, { authority_id: AUTHORITY, organization_id: ORG, principal_id: PRINCIPAL, membership_id: MEMBER, organization_name: 'Fixture', name: 'PM' });
   database.prepare("INSERT INTO authority_project_authorization_state_v1 VALUES (?, 0, ?)").run(ORG, NOW);
   for (const project of [PROJECT, PROJECT_TWO]) {
     database.prepare("INSERT INTO authority_projects_v1 (project_id, organization_id, name, created_at, creator_principal_id, creator_membership_id, creator_membership_type) VALUES (?, ?, ?, ?, ?, ?, 'owner')").run(project, ORG, project, NOW, PRINCIPAL, MEMBER);

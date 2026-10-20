@@ -344,29 +344,6 @@ describe('personal meeting intake uses the shared processing path', () => {
     for (const token of ['owner', 'other']) expect(originals.deskSearch({ access_token: token, scope: { kind: 'mine' }, query: 'cohort' }).items).toHaveLength(1);
   });
 
-  it("gives the change check each person's reviews exactly as reviews lists them, by id and status only (ADR-0036)", async () => {
-    const f = await fixture(), runtime = f.create();
-    const other = { ...f.person, principal_id: 'prn_00000000-0000-4000-8000-000000000011', membership_id: 'mem_00000000-0000-4000-8000-000000000012' };
-    const statuses = async (person: typeof f.person) => (await runtime.reviewStatuses())(person);
-    const listed = async (token: string) => (await f.call(runtime, { operation: 'reviews' }, token)).reviews.map(review => ({ approval_id: review.approval_id, status: review.status }));
-    expect(await statuses(f.person)).toEqual([]);
-    for (const token of ['owner', 'other']) await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true }, token);
-    await f.processUntilIdle(runtime);
-    expect(await statuses(f.person)).toEqual(await listed('owner'));
-    expect(await statuses(other)).toEqual(await listed('other'));
-    expect(await statuses(f.person)).toHaveLength(1);
-    expect((await statuses(f.person))[0]).toEqual({ approval_id: expect.stringMatching(/^apr_/), status: 'pending' });
-    // A decision moves its status; the other person's review is untouched.
-    const { review, snapshot_sha256 } = await f.call(runtime, { operation: 'review_open', approval_id: (await listed('owner'))[0]!.approval_id });
-    await f.call(runtime, { operation: 'review', approval_id: review.approval_id, snapshot_sha256, command_id: 'reject-once', action: 'reject', project_ids: [], share_transcript: false, owners: [] });
-    expect(await statuses(f.person)).toEqual([{ approval_id: review.approval_id, status: 'rejected' }]);
-    expect(await statuses(other)).toEqual(await listed('other'));
-    expect((await statuses(other))[0]?.status).toBe('pending');
-    // A person whose membership is gone has no reviews, as reviews answers them none.
-    f.db.prepare("UPDATE authority_memberships SET status='revoked',revoked_at=?,revocation_reason='fixture' WHERE membership_id=?").run(new Date().toISOString(), other.membership_id);
-    expect(await statuses(other)).toEqual([]);
-  });
-
   it('browses without retention; imports once across clients/restart and approves without Slack', async () => {
     const f = await fixture(), runtime = f.create();
     await f.call(runtime, { operation: 'open', meeting_id: id });
@@ -939,37 +916,6 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(f.extracted()).toBe(1);
     expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
-  });
-  it('refuses a project reader\'s earlier desk release once they leave the project', async () => {
-    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
-    await f.processUntilIdle(runtime);
-    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
-    const release = originals.deskSearch({ access_token: 'reader-a', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] });
-    expect(release.items).toHaveLength(1);
-    expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release })).not.toThrow();
-    f.leave(project, 'reader-a');
-    expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release })).toThrow();
-  });
-  it('rechecks only the session, identity and authorization pins of a desk release whose items the desk already checked', async () => {
-    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
-    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
-    await f.processUntilIdle(runtime);
-    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
-    const release = originals.deskSearch({ access_token: 'reader-a', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] });
-    expect(release.items).toHaveLength(1);
-    const reads = originals as unknown as { assertReleasedAtomReadable(): void; currentDeskItem(): unknown };
-    const atomReads = vi.spyOn(reads, 'assertReleasedAtomReadable');
-    const itemReads = vi.spyOn(reads, 'currentDeskItem');
-    expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release, items_checked: true })).not.toThrow();
-    expect(atomReads).not.toHaveBeenCalled(); expect(itemReads).not.toHaveBeenCalled();
-    originals.revalidateDeskRelease({ access_token: 'reader-a', release });
-    expect(atomReads).toHaveBeenCalledTimes(1); expect(itemReads).toHaveBeenCalledTimes(1);
-    // Another person's session never inherits the release.
-    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release, items_checked: true })).toThrow();
-    // Leaving the project moves the authorization pin, so even the narrow check refuses.
-    f.leave(project, 'reader-a');
-    expect(() => originals.revalidateDeskRelease({ access_token: 'reader-a', release, items_checked: true })).toThrow();
   });
   it('opens a valid transcript-only imported meeting with no releasable body', async () => {
     const f = await fixture({ transcriptOnly: true }), runtime = f.create();

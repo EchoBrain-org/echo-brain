@@ -10,17 +10,16 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import { SqliteTriggerRunsV1, triggerRunStateAtV1, type ApprovalActorV1, type TriggerRunRowV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
-import type { SqlitePersonAgenticAskAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import { matchImpactOwnersV1, type ImpactOwnerCandidateV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
 import {
-  PersonRecordSearchIndexLagV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordIndexReadinessV1, type PersonRecordProjectsV1,
+  PersonRecordSearchIndexLagV1, personRecordRunScopeV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordIndexReadinessV1, type PersonRecordProjectsV1,
 } from './person-record-search-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1, withoutCoreRuntimeContentV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonDiagnosticCaptureHandleV1 } from './person-diagnostics-v1.js';
-import { openItemViewerV1 } from './person-open-items-v1.js';
+import { openItemViewerV1, taskLiveSourcesV1 } from './person-open-items-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
 import { sweepOpenItemsV1 } from './person-sweep-runs-v1.js';
@@ -48,7 +47,6 @@ export interface CreatePersonTriggerRunsV1Options {
   readonly owners?: TicketOwnerAccountsV1;
   /** Kept injectable for focused service tests and shared with the live evaluator. */
   readonly bindDesk: typeof bindPersonLiveEvidenceDeskV1;
-  readonly audit: SqlitePersonAgenticAskAuditV1;
   readonly bind_options: BoundOptions;
   readonly live_sources?: BoundOptions['live_sources'];
   readonly research: (input: { readonly desk: Desk; readonly context: PersonLiveRequestContextV1 }) => RunResearch;
@@ -68,10 +66,6 @@ const newestFirst = (left: TriggerRunRowV1, right: TriggerRunRowV1) =>
   (left.created_at < right.created_at ? 1 : left.created_at > right.created_at ? -1 : 0) || (left.run_id < right.run_id ? 1 : left.run_id > right.run_id ? -1 : 0);
 const actorOf = (value: PersonAccessAuthorization): ApprovalActorV1 => ({ organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id });
 const sameActor = (left: ApprovalActorV1, right: ApprovalActorV1) => left.organization_id === right.organization_id && left.principal_id === right.principal_id && left.membership_id === right.membership_id;
-const scopeFor = (records: PersonRecordProjectsV1, token: string, record_sha256: Sha256Digest) => {
-  const projects = records.recordProjects({ access_token: token, record_sha256 });
-  return projects.length === 1 ? Object.freeze({ kind: 'project' as const, project_id: projects[0]! }) : Object.freeze({ kind: 'global' as const });
-};
 /** Only an impact run has a card; a sweep stores its counts alone. */
 function impactRecord(row: TriggerRunRowV1): Sha256Digest {
   if (row.trigger !== 'approved_record' || row.record_sha256 === null) throw new AuthorityOperationError('not_found', 'run is not available');
@@ -140,7 +134,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   const now = options.now ?? (() => new Date());
   const controllers = new Set<AbortController>();
   let closing = false;
-  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
+  const compatible = taskLiveSourcesV1(options.live_sources);
   const context = (authorization: PersonAccessAuthorization): PersonLiveRequestContextV1 => ({
     authority_id: options.bind_options.authority_id, organization_id: authorization.organization_id, state_lineage_id: options.bind_options.state_lineage_id,
     principal_id: authorization.principal_id, membership_id: authorization.membership_id, session_family_id: authorization.session_family_id, request_id: `trigger_run_${randomUUID()}`,
@@ -152,7 +146,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     // The meeting's own actions, read as the approver before any model call (`recordAnchor` has already refused a record they
     // cannot read, which fails the run as no_access).
     const actions = options.records.recordActions({ access_token: token, record_sha256 });
-    const scope = scopeFor(options.records, token, record_sha256);
+    const scope = personRecordRunScopeV1(options.records, token, record_sha256);
     const run = await research(scope);
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
     const event = definition.parseEvent({ record: anchor });
@@ -267,7 +261,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       return withoutCoreRuntimeContentV1(() => observeCoreRuntimeV1('research_output_view', async () => {
         const card = readStoredImpactCardV1(resultJson);
         annotateCoreRuntimeV1({ trigger: row.trigger, run_id: coreRuntimeIdentityV1('research-run', row.run_id), event_id: coreRuntimeIdentityV1('research-event', row.event_ref), output_id: coreRuntimeIdentityV1('research-output', canonicalSha256(JSON.parse(resultJson))) });
-        const scope = scopeFor(options.records, input.access_token, record_sha256); const requestContext = context(authorization);
+        const scope = personRecordRunScopeV1(options.records, input.access_token, record_sha256); const requestContext = context(authorization);
         const desk = await options.bindDesk(options.bind_options, compatible, { access_token: input.access_token, scope, ...(input.signal === undefined ? {} : { signal: input.signal }) }, requestContext);
         const fresh = await Promise.all(card.citations.map(async citation => {
           try { const opened = await desk.openCitation!({ citation, ...(input.signal === undefined ? {} : { signal: input.signal }) }); const item = opened.items[0]; return item === undefined ? null : { citation: { citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility }, text: item.text, label: item.label, ...(item.attributes === undefined ? {} : { attributes: item.attributes }) } as FreshImpactItemV1; } catch { return null; }

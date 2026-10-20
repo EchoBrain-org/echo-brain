@@ -1,5 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { PROJECT_PAGE_MAX_ITEMS, validateOrganizationAuthorityOrigin, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { validateOrganizationAuthorityOrigin, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonDocumentApplicationV1 } from '../application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../adapters/persistence/sqlite/document-v1.js';
@@ -21,6 +21,7 @@ import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-
 import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import { createRecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
+import { everyProjectPageV1 } from './person-local-source-helpers-v1.js';
 import { createPersonToolsHttpApplicationV3, createPersonToolsHttpApplicationV4 } from '../presentation/person-tools-http-application.js';
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { once } from "node:events";
@@ -145,15 +146,12 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
   readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
-  /** Present only after source admission; omitted during organization setup. */
+  /** Always bound by `openOrganizationAuthorityRuntime`; only tests that serve no Ask omit it. */
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
   /** Background-priority model port for trigger and sweep research; they use the Ask port when absent. */
   readonly answer_composition_background?: AnswerCompositionGenerationBindingV1["structured_output"];
   /** Bound by the active rebuild runtime so serving accepts the same model profile. */
   readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
-  /** Present only when the signed private-approval surface is active. */
-  readonly private_approval_interaction_ingress?:
-    ProviderHttpApplicationV1;
 }
 
 /** Recover personal writes before search startup, then attach the API's authenticated sessions. */
@@ -175,7 +173,6 @@ export function preparePersonHttpRuntimeV1(factory: OrganizationAuthorityApiRunt
 }
 
 export interface RunningOrganizationAuthorityApiRuntime {
-  readonly processing?: PersonHttpRuntimeV1['processing'];
   readonly address: AddressInfo;
   /** Stops ingress immediately while lifecycle-owned work retains its handles. */
   stopAcceptingRequests?(): void;
@@ -283,11 +280,8 @@ export async function startOrganizationAuthorityApiRuntime(
         const snapshot = transaction.captureAuthorization(person, { operation: 'project_list_v2' });
         const names = new Map<string, string>();
         for (const status of ['active', 'archived'] as const) {
-          for (let cursor: string | undefined; ;) {
-            const page = transaction.listProjectsV2(snapshot, { status, limit: PROJECT_PAGE_MAX_ITEMS, ...(cursor === undefined ? {} : { cursor }) });
-            for (const project of page.items) if (wanted.has(project.project_id)) names.set(project.project_id, project.name);
-            if (page.next_cursor === null) break;
-            cursor = page.next_cursor;
+          for (const project of everyProjectPageV1(paging => transaction.listProjectsV2(snapshot, { status, ...paging }))) {
+            if (wanted.has(project.project_id)) names.set(project.project_id, project.name);
           }
         }
         return names;
@@ -413,7 +407,7 @@ export async function startOrganizationAuthorityApiRuntime(
       const owners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
       return Object.freeze({
         ...createPersonTriggerRunsV1({
-          runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, audit: answerOptions.audit, bind_options: answerOptions, live_sources: liveSources,
+          runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources,
           research: ({ desk, context }) => createAgenticResearchV1({ desk, model: dependencies.answer_composition_background ?? answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context),
             ...(answerOptions.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }),
           items, people, ...(owners === undefined ? {} : { owners }),
@@ -499,12 +493,6 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(externalIdentity === undefined
         ? {}
         : { person_external_identity_link: externalIdentity.application }),
-      ...(dependencies.private_approval_interaction_ingress === undefined
-        ? {}
-        : {
-            private_approval_interaction_ingress:
-              dependencies.private_approval_interaction_ingress,
-          }),
     });
     server.listen(config.port, config.host);
     await once(server, "listening");
@@ -520,7 +508,6 @@ export async function startOrganizationAuthorityApiRuntime(
     };
     return {
       address,
-      ...(personHttp?.processing === undefined ? {} : { processing: personHttp.processing }),
       stopAcceptingRequests,
       close: async () => {
         stopAcceptingRequests();

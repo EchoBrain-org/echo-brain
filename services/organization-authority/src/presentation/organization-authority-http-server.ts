@@ -1,6 +1,9 @@
 import { PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1 } from "@echo-brain/organization-api";
-import { PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, type PersonAskProgressErrorStatusV1 } from "@echo-brain/organization-api";
-import { startPersonAskProgressStreamV1, startPersonAskProgressStreamV2, startPersonAskProgressStreamV3 } from "./person-ask-progress-stream-v1.js";
+import {
+  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  formatPersonAskProgressEventV1, formatPersonAskProgressEventV2, formatPersonAskProgressEventV3, type PersonAskProgressErrorStatusV1,
+} from "@echo-brain/organization-api";
+import { startPersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
   PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
@@ -91,10 +94,9 @@ import {
 } from "@echo-brain/organization-api";
 import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
-import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-application.js";
-import type { PersonAnswerV5HttpApplication } from "./person-answer-v5-http-application.js";
-import type { PersonAnswerV6HttpApplication } from "./person-answer-v6-http-application.js";
-import type { PersonAnswerV7HttpApplication } from "./person-answer-v7-http-application.js";
+import type {
+  PersonAnswerHttpInputV1, PersonAnswerV4HttpApplication, PersonAnswerV5HttpApplication, PersonAnswerV6HttpApplication, PersonAnswerV7HttpApplication,
+} from "./person-live-answer-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
 import type { PersonDiagnosticsHttpApplicationV1 } from './person-diagnostics-http-application.js';
@@ -196,7 +198,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
   readonly person_diagnostics?: PersonDiagnosticsHttpApplicationV1;
-  /** Provider-owned account connection routes, selected by the composition root. */
+  /** Provider-owned routes (account connections and the Slack approval click), selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
   readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
@@ -210,16 +212,13 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly project_context?: ProjectContextApplicationV1;
   readonly person_documents?: PersonDocumentApplicationV1;
   readonly document_upload_staging?: PersonDocumentUploadStagingV1;
-  /** Optional until an active private-approval surface is fully composed. */
-  readonly private_approval_interaction_ingress?:
-    ProviderHttpApplicationV1;
 }
 
 function providerIngressRoutes(
   options: OrganizationAuthorityHttpServerOptions,
 ): ReadonlyMap<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }> {
   const mounted = new Map<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }>();
-  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link, options.person_tools, options.person_tools_v4, ...(options.person_tool_connections ?? [])]) {
+  for (const application of [options.person_external_identity_link, options.person_tools, options.person_tools_v4, ...(options.person_tool_connections ?? [])]) {
     if (application === undefined) continue;
     const routeIds = new Set<string>();
     for (const route of application.routes) {
@@ -507,12 +506,13 @@ function personSourcePost<Application, Request>(
   };
 }
 
-/** Desk/list reads check the bearer and install cancellation before reading any body bytes. */
+/** The client's optional clock and time zone headers an Ask may read. */
 function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | undefined {
   try { return validatePersonAskTimeContextV1(request.headers[PERSON_ASK_CLIENT_NOW_HEADER_V1], request.headers[PERSON_ASK_TIME_ZONE_HEADER_V1]); }
   catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
 }
 
+/** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
   application: Application | undefined,
   validate: (value: unknown) => Request,
@@ -544,7 +544,7 @@ const streamedFailureStatus = new WeakMap<ServerResponse, number>();
  * today's JSON. A disconnect still cancels the Ask, and nothing more is written.
  */
 function personAskV5Post(application: PersonAnswerV5HttpApplication | undefined): PersonPostHandler {
-  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, startPersonAskProgressStreamV1);
+  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, response => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV1));
 }
 
 /**
@@ -553,7 +553,7 @@ function personAskV5Post(application: PersonAnswerV5HttpApplication | undefined)
  * included, gets the JSON V7 answer: a V1 client never meets a follow-up.
  */
 function personAskV6Post(application: PersonAnswerV6HttpApplication | undefined): PersonPostHandler {
-  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, startPersonAskProgressStreamV2);
+  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, response => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV2));
 }
 
 /**
@@ -562,13 +562,12 @@ function personAskV6Post(application: PersonAnswerV6HttpApplication | undefined)
  * value gets the JSON V8 answer: a V1 or V2 client never meets a workspace item.
  */
 function personAskV7Post(application: PersonAnswerV7HttpApplication | undefined): PersonPostHandler {
-  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, startPersonAskProgressStreamV3);
+  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, response => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV3));
 }
 
-type StreamingAskInput = Parameters<PersonAnswerV5HttpApplication['ask']>[0];
 interface StreamingAskApplication<Step, Answered> {
-  ask(input: StreamingAskInput): Promise<unknown>;
-  askWithProgress?(input: StreamingAskInput & { readonly on_start: () => void; readonly on_progress: (event: Step) => void }): Promise<Answered>;
+  ask(input: PersonAnswerHttpInputV1): Promise<unknown>;
+  askWithProgress?(input: PersonAnswerHttpInputV1 & { readonly on_start: () => void; readonly on_progress: (event: Step) => void }): Promise<Answered>;
 }
 interface StreamingAskStream<Step, Answered> {
   step(event: Step): void;
@@ -838,6 +837,7 @@ export function createOrganizationAuthorityHttpServer(
     options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
+    [PERSON_ANSWER_PATH_V3, personCancellablePost(options.person_answer_v3, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
     [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
     [PERSON_ANSWER_PATH_V5, personAskV5Post(options.person_answer_v5)],
     [PERSON_ANSWER_PATH_V6, personAskV6Post(options.person_answer_v6)],
@@ -1227,29 +1227,6 @@ export function createOrganizationAuthorityHttpServer(
         const disconnect = disconnectSignal(request, response);
         try {
           json(response, 200, await options.person_changes.read({ access_token, signal: disconnect.signal }));
-        } finally {
-          disconnect.dispose();
-        }
-        return;
-      }
-      if (
-        method === "POST" &&
-        url.pathname === PERSON_ANSWER_PATH_V3 &&
-        url.search === ""
-      ) {
-        if (options.person_answer_v3 === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        const requestBody = await personBody(request, validatePersonAnswerRequestV3);
-        const disconnect = disconnectSignal(request, response);
-        try {
-          json(response, 200, await options.person_answer_v3.ask({
-            time_context: askTimeContext(request),
-            access_token: accessToken(request.headers.authorization),
-            request: requestBody,
-            signal: disconnect.signal,
-          }));
         } finally {
           disconnect.dispose();
         }

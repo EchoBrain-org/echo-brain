@@ -1,6 +1,5 @@
 import { JiraProjectMappingStoreV1 } from '@echo-brain/provider-jira/jira-project-mapping-store-v1';
-import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
-import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import type { PersonContextProjectAuthorizationV1, PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1, personToolLiveConnectorsV1 } from './person-live-connector-registry-v1.js';
 import { createJiraPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-jira/jira-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
@@ -13,9 +12,6 @@ import { join } from 'node:path';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
-
-/** ADR-0026 permits person-bound live reads; runtime selection remains explicit. */
-export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = true;
 
 /** Explicit selecting configuration, absent until enabled by an operator. */
 export interface JiraPersonLiveConfigurationV1 {
@@ -44,7 +40,7 @@ export function openJiraPersonLiveRuntimeV1(options: {
   readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   readonly configuration: JiraPersonLiveConfigurationV1;
   readonly seams?: JiraPersonLiveRuntimeSeamsV1;
-  readonly authorize_project?: PersonTicketProjectAuthorizationV1;
+  readonly authorize_project?: PersonContextProjectAuthorizationV1;
   /** Lets a Jira project's container item name the ECHO projects mapped to it (research tool contract v1). */
   readonly project_names?: PersonContextProjectNamesV1;
 }): OpenedJiraPersonLiveRuntimeV1 {

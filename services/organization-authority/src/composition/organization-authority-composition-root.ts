@@ -161,7 +161,7 @@ function composeSlackV1(
         seams.manifest_provider ?? new SlackWebAppManifestProviderV1(),
     },
   });
-  return { bot_token_source, connection_health, provider, external_identity };
+  return { bot_token_source, connection_health, external_identity };
 }
 
 /**

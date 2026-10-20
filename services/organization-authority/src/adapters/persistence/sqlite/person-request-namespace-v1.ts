@@ -5,7 +5,6 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 /** Each operation owns its replay codec, but the account's request namespace is shared. */
 export function assertPersonRequestNamespaceV1(database: Database.Database, actor: AuthorityPersonMembershipBinding, requestId: string, family: 'document' | 'document_association' | 'project'): void {
   const otherTables = [
-    'authority_person_updates_v1',
     ...(family !== 'project' ? ['authority_project_command_receipts_v1'] : []),
     ...(family !== 'document' ? ['authority_person_document_receipts_v1'] : []),
     ...(family !== 'document_association' ? ['authority_person_document_association_receipts_v1'] : []),
