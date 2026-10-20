@@ -2,6 +2,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReaderV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
+import { boundUtf8V1 } from '@echo-brain/provider-runtime/person-provider-v1';
 import { createPersonToolContainerReaderV1, personToolContainerRowsV1, type PersonToolContainerV1 } from '@echo-brain/provider-runtime/person-tool-container-reader-v1';
 import { JIRA_PROJECT_QUERY_MAX_BYTES_V1, type JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { parseJiraProject, verifyJiraConnectionV1 } from './jira-payload-v1.js';
@@ -10,21 +11,6 @@ import { copyJiraBindingV1, JIRA_ID, jiraArray, jiraFailure, jiraRecord, jiraStr
 /** Projects one project search reads when a search looks for candidates. */
 const CANDIDATES_PAGE = 50;
 
-/**
- * The keyword Jira's project search is sent, cut at a whole character to what the transport admits. A prefix matches
- * every key or name the whole keyword matches, so Jira's candidates still hold every such project, and the reader
- * matches the whole query itself.
- */
-function keyword(probe: string): string {
-  let query = '';
-  let bytes = 0;
-  for (const point of probe) {
-    bytes += Buffer.byteLength(point, 'utf8');
-    if (bytes > JIRA_PROJECT_QUERY_MAX_BYTES_V1) break;
-    query += point;
-  }
-  return query;
-}
 
 /**
  * The Jira projects the asker can browse, as a tool container source (research tool contract v1). Jira's project search
@@ -63,19 +49,14 @@ export async function createJiraPersonLiveContainerReaderV1(options: {
     if (typeof page.isLast !== 'boolean') jiraFailure('invalid_output');
     const rows = jiraArray(page.values, maximum);
     const { containers, left_out } = personToolContainerRowsV1(rows, project);
-    if (new Set(containers.map(value => value.id)).size !== containers.length || (!page.isLast && rows.length === 0)) jiraFailure('invalid_output');
+    if (!page.isLast && rows.length === 0) jiraFailure('invalid_output');
     return { containers, left_out, rows: rows.length, last: page.isLast };
   }
 
   return createPersonToolContainerReaderV1({
     provider: {
-      binding, tool: 'Jira', container: 'jira_project', noun: 'Jira project', failure: jiraFailure,
-      async verify(signal) {
-        fence();
-        origin = await verification(signal);
-        fence();
-        return origin;
-      },
+      binding, tool: 'Jira', container: 'jira_project', noun: 'Jira project', failure: jiraFailure, fence,
+      verify: async signal => (origin = await verification(signal)),
       permalink: (site, value) => `${site}/browse/${value.key}`,
       async page({ cursor, limit, signal }) {
         // The continuation is this reader's own offset, kept inside the request. It counts Jira's rows, those left out
@@ -86,13 +67,13 @@ export async function createJiraPersonLiveContainerReaderV1(options: {
         return { containers, left_out, ...(last ? {} : { next: String(startAt + rows) }) };
       },
       async candidates({ probe, signal }) {
-        const { containers, left_out, last } = await search({ ...(probe === undefined ? {} : { query: keyword(probe) }), maxResults: String(CANDIDATES_PAGE) }, CANDIDATES_PAGE, signal);
+        // A keyword cut to what the transport admits matches every key or name the whole one does; the reader matches the whole query.
+        const { containers, left_out, last } = await search({ ...(probe === undefined ? {} : { query: boundUtf8V1(probe, JIRA_PROJECT_QUERY_MAX_BYTES_V1) }), maxResults: String(CANDIDATES_PAGE) }, CANDIDATES_PAGE, signal);
         return { containers, left_out, more: !last };
       },
       async exact(id, signal) {
         const value = project(await transport.request({ path: `${pathPrefix}/project/${id}`, signal }));
         signal?.throwIfAborted();
-        if (value.id !== id) jiraFailure('invalid_output');
         return value;
       },
     },

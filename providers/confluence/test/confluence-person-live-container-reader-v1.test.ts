@@ -20,13 +20,9 @@ const container = (id: string, key: string): PersonToolContainerCitationV1 => ({
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const LEFT_OUT = 'Some Confluence spaces could not be shown, so these results leave them out.';
 
-function fixture(options: { readonly pinned?: readonly string[] } = {}) {
+function fixture() {
   const state = {
     spaces: [{ id: '42', key: 'ECHO', name: 'Echo Product' }, { id: '43', key: 'ENG', name: 'Engineering' }, { id: '44', key: 'OPS', name: 'Operations' }] as Space[],
-    /** Spaces the asker cannot view: the list leaves them out and an exact read answers 404, as Confluence documents. */
-    hidden: new Set<string>(),
-    /** Confluence refuses the credentials on an exact read (401). */
-    rejected: false,
     echo: new Map<string, readonly string[]>([['43', ['Launchscope']]]),
     spacesResponse: undefined as unknown,
   };
@@ -39,7 +35,7 @@ function fixture(options: { readonly pinned?: readonly string[] } = {}) {
     if (path === '/rest/api/user/current') return response({ accountId: binding.external_subject_id, type: 'known', accountType: 'atlassian' });
     if (path === '/api/v2/spaces') {
       if (state.spacesResponse !== undefined) return response(state.spacesResponse);
-      const visible = state.spaces.filter(space => !state.hidden.has(space.id));
+      const visible = state.spaces;
       const start = Number(url.searchParams.get('cursor')?.slice('opaque-'.length) ?? '0');
       const limit = Number(url.searchParams.get('limit'));
       const next = start + limit < visible.length ? `/wiki/api/v2/spaces?cursor=opaque-${start + limit}&limit=${limit}` : undefined;
@@ -47,9 +43,8 @@ function fixture(options: { readonly pinned?: readonly string[] } = {}) {
     }
     const exact = /^\/api\/v2\/spaces\/(\d+)$/.exec(path);
     if (exact !== null) {
-      if (state.rejected) return response({ private: 'never escapes' }, 401);
       const space = state.spaces.find(value => value.id === exact[1]);
-      return space === undefined ? response({}, 404) : state.hidden.has(space.id) ? response({ private: 'never escapes' }, 404) : response(wire(space));
+      return space === undefined ? response({}, 404) : response(wire(space));
     }
     throw new Error(`Unexpected synthetic endpoint: ${path}`);
   });
@@ -57,7 +52,7 @@ function fixture(options: { readonly pinned?: readonly string[] } = {}) {
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1<PersonToolContainerCitationV1>) => { releases.push(release); return canonicalSha256(release); }) };
   async function make() {
     const reader = await createConfluencePersonLiveContainerReaderV1({ binding, transport: createConfluenceCloudTransportV1({ binding, fetch }), expected_origin: ORIGIN,
-      echo_projects: () => state.echo, ...(options.pinned === undefined ? {} : { space_ids: options.pinned }) });
+      echo_projects: () => state.echo });
     return createAuditedPersonLiveEvidenceSourceV1({ actor: binding, read_grant_sha256: binding.read_grant_sha256, reader, audit, authorization: { assertCurrent: () => {} },
       access: { tool_id: 'confluence', external_scope_id: CLOUD, external_subject_id: binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
   }
@@ -100,67 +95,7 @@ describe('Confluence spaces as a tool container source (research tool contract v
     expect(f.spaceLists().slice(-4).map(query => query.limit)).toEqual(['250', '250', '250', '250']);
   });
 
-  it('in a project scope reads only the spaces the ECHO project maps that the asker can view', async () => {
-    const f = fixture({ pinned: ['42', '43'] }); f.state.hidden.add('42');
-    const source = await f.make();
-    const listed = await source.list({});
-    expect(listed.items.map(item => item.label)).toEqual(['Engineering']);
-    expect(listed).toMatchObject({ truncated: false, page_full: false });
-    expect((await source.search({ query: 'ops' })).items).toEqual([]);
-    expect(f.spaceLists()).toEqual([]);
-  });
-
-  it('pages a project scope\'s spaces by the limit asked for, counting only spaces the asker can view', async () => {
-    const f = fixture({ pinned: ['42', '43', '44', '45'] }); f.state.hidden.add('43');
-    f.state.spaces.push({ id: '45', key: 'QA', name: 'Quality' });
-    const source = await f.make();
-    const first = await source.list({ limit: 2 });
-    expect(first.items.map(item => item.label)).toEqual(['Echo Product', 'Operations']);
-    expect(first).toMatchObject({ truncated: true, next_cursor: expect.any(String) });
-    const second = await source.list({ limit: 2, cursor: first.next_cursor });
-    expect(second.items.map(item => item.label)).toEqual(['Quality']);
-    expect(second).toMatchObject({ truncated: false, page_full: false });
-    expect(second).not.toHaveProperty('next_cursor');
-  });
-
-  it('fails a read when Confluence refuses the credentials, never ending a project scope\'s list as empty and complete', async () => {
-    const f = fixture({ pinned: ['42', '43'] }); const source = await f.make();
-    f.state.rejected = true;
-    await expect(source.list({})).rejects.toMatchObject({ code: 'unauthorized' });
-    await expect(source.search({ query: 'eng' })).rejects.toMatchObject({ code: 'unauthorized' });
-    expect(f.releases).toEqual([]);
-  });
-
-  it('in a project scope leaves out a mapped space it cannot show, and says so', async () => {
-    const f = fixture({ pinned: ['42', '43'] }); f.state.spaces[1] = { id: '43', key: 'ENG', name: 'Engineering Two' };
-    const source = await f.make();
-    const listed = await source.list({});
-    expect(listed.items.map(item => item.label)).toEqual(['Echo Product']);
-    expect(listed).toMatchObject({ truncated: false, page_full: false, notice: LEFT_OUT });
-  });
-
-  it('refuses a date window or a container selector before any provider read', async () => {
-    const f = fixture(); const source = await f.make(); f.fetch.mockClear();
-    for (const dates of [{ since: '2026-10-01' }, { until: '2026-10-01' }, { date_field: 'updated' as const }]) {
-      await expect(source.list(dates)).rejects.toMatchObject({ code: 'invalid_request' });
-      await expect(source.search({ query: 'eng', ...dates })).rejects.toMatchObject({ code: 'invalid_request' });
-    }
-    await expect(source.list({ container: '42' })).rejects.toMatchObject({ code: 'invalid_request' });
-    expect(f.fetch).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['renamed', 'stale_access_state', (f: ReturnType<typeof fixture>) => { f.state.spaces[1] = { id: '43', key: 'ENG', name: 'Platform Engineering' }; }],
-    ['no longer viewable', 'not_found', (f: ReturnType<typeof fixture>) => { f.state.hidden.add('42'); }],
-    ['refused its credentials', 'unauthorized', (f: ReturnType<typeof fixture>) => { f.state.rejected = true; }],
-    ['no longer mapped to a visible ECHO project', 'stale_access_state', (f: ReturnType<typeof fixture>) => { f.state.echo.clear(); }],
-  ])('revalidates every released space: one %s stops reuse', async (_change, code, change) => {
-    const f = fixture(); const source = await f.make();
-    await source.list({});
-    await expect(source.revalidate({})).resolves.toBeUndefined();
-    change(f);
-    await expect(source.revalidate({})).rejects.toMatchObject({ code });
-  });
+  // What every tool's containers share (project scopes, refused dates, checks) is the shared reader's, tested there and through Jira.
 
   it('refuses malformed space pages before anything is released', async () => {
     for (const malformed of [{ results: [wire({ id: '42', key: 'ECHO', name: 'Echo' }), wire({ id: '42', key: 'ECHO', name: 'Echo' })] }, { results: 'not a list' }, {}]) {

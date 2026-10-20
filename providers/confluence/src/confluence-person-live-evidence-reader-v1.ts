@@ -4,6 +4,7 @@ import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
+import { inBatchesOfFourV1 as parallel } from '@echo-brain/provider-runtime/person-provider-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
 import { normalizeConfluencePageDocumentV1 } from './confluence-page-text-v1.js';
@@ -135,11 +136,6 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     if (page.id !== id) confluenceFailure('invalid_output');
     inScope(page);
     return page;
-  }
-  async function parallel<T, R>(values: readonly T[], fn: (value: T) => Promise<R>): Promise<R[]> {
-    const result: R[] = [];
-    for (let offset = 0; offset < values.length; offset += 4) result.push(...await Promise.all(values.slice(offset, offset + 4).map(fn)));
-    return result;
   }
   function remember(item: Item): PersonLiveEvidenceValueV1<PersonPageCitationV1> {
     if (handles.size >= MAX_HANDLES) confluenceFailure('unavailable');
