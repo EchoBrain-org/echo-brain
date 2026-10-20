@@ -114,11 +114,10 @@ npm run client-update:sign -- init --directory /absolute/private/new-staging-sig
 ```
 
 Keep `private-key.pkcs8.der` in that private directory. `signer.json` contains
-only the public key and its fingerprint. Write the bootstrap configuration
-with exactly these keys: `schema_version: 1`,
-`kind: "echo-client-update-config-v1"`, the intended `channel`, the deployed S3
-`feed_url`, `public_key_spki` copied from `signer.json`, the sequence floor
-`minimum_sequence`, `automatic: true` and `installation: "cli-kit"`. For
+only the public key and its fingerprint. Write the
+[bootstrap configuration](../../docs/features/client-updates-v1.md#trusted-bootstrap)
+with the deployed S3 `feed_url`, `public_key_spki` copied from `signer.json`,
+`automatic: true` and `installation: "cli-kit"`. For
 [desktop release packaging](../release/README.md#desktop-release-packages),
 keep a copy that differs only in `installation: "electron"`. No client, kit,
 desktop package, feed, repository or publication receipt receives the private
@@ -385,22 +384,12 @@ On each platform:
    Match its source SHA to the canonical release, and retain the verified
    installer/update artifact evidence.
    The displayed product version alone may be identical between releases.
-   The managed wrapper normally points directly into a versioned release;
-   that is supported. A custom seat launcher that runs a versioned release
-   directly stays on that release after the shared installation updates.
-   Through such a launcher, clients with the running-release check return
-   `running_release_mismatch` (exit 1) from `update`, `--check`, `--status`
-   and `--if-due`, naming the running and managed releases, and print the
-   mismatch on stderr before Person commands when automatic checks are
-   enabled. To recover, keep the launcher's own sign-in and session
-   environment and make it run the managed command with the same arguments;
-   do not edit other seats' launchers or remove retained releases. A launcher
-   pinned to an older client still reports the managed installation as its
-   own (for example `current` with exit 0), and its `update` installs into the
-   managed command while the launcher stays pinned. Publishing a new release
-   cannot change that executable. Verify the executable that actually serves
-   this seat's commands: its `person status` `client_build.source_sha` must
-   match the canonical release.
+   A custom seat launcher pinned to a versioned release stays on it after the
+   shared installation updates
+   ([running-release mismatch](../../docs/features/client-updates-v1.md#platform-and-installation-boundary));
+   do not edit other seats' launchers or remove retained releases. Verify the
+   executable that actually serves this seat's commands: its `person status`
+   `client_build.source_sha` must match the canonical release.
 4. Complete an authenticated record/document read and a positive cited Ask
    against a known readable fixture with that account. Include a Linux member
    path when members are affected; do not substitute the owner's private canary
