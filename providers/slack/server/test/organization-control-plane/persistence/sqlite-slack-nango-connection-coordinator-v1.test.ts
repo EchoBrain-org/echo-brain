@@ -236,7 +236,7 @@ describe("Nango Slack connection activation v1", () => {
     const result = await activate(state, { credential: pending, nango: nangoInstall(), verifier });
 
     expect(result.kind).toBe("created");
-    expect(verifier.verifyConnection).toHaveBeenCalledWith(BOT_TOKEN, undefined);
+    expect(verifier.verifyConnection).toHaveBeenCalledWith(BOT_TOKEN);
     expect(result.connection).toMatchObject({
       connection_id: "con_nango_1",
       provider_tenant_id: "T01",

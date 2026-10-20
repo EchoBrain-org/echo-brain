@@ -63,7 +63,6 @@ export interface ActivateNangoSlackConnectionInputV1 {
   readonly nango: NangoSlackConnectionV1;
   readonly now: () => string;
   readonly new_connection_id: () => string;
-  readonly signal?: AbortSignal;
 }
 
 export type ActivatedNangoSlackConnectionV1 = {
@@ -91,7 +90,7 @@ async function verifyInstall(
   if (!grantsRequested(nango.granted_scopes)) {
     throw new SlackConnectionRefusedErrorV1("permissions_missing");
   }
-  const verified = await input.verifier.verifyConnection(nango.bot_token, input.signal);
+  const verified = await input.verifier.verifyConnection(nango.bot_token);
   if (verified.app_id !== nango.app_id) throw new SlackConnectionRefusedErrorV1("app_mismatch");
   if (verified.team_id !== nango.team_id || verified.bot_user_id !== nango.bot_user_id) {
     throw new SlackConnectionRefusedErrorV1("identity_mismatch");

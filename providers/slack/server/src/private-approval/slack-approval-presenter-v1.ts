@@ -36,7 +36,6 @@ export function createTargetBoundSlackApprovalPosterV1(input: {
   readonly botToken: SlackBotTokenSourceV1;
   readonly needsReinstall: (connection: StoredSlackConnectionV1) => boolean;
   readonly markNeedsReinstall: (connection: StoredSlackConnectionV1) => void;
-  readonly fetchImpl?: typeof fetch;
 }): SlackApprovalPosterV1 {
   const requireBoundConnection = (): StoredSlackConnectionV1 => {
     const connection = input.activeConnection();
@@ -54,7 +53,6 @@ export function createTargetBoundSlackApprovalPosterV1(input: {
     }
     return token;
   }, {
-    ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
     needs_reinstall: () => {
       const connection = input.activeConnection();
       return connection !== undefined && matchesTarget(connection, input.target) && input.needsReinstall(connection);
