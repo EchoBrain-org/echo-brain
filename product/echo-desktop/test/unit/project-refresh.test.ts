@@ -69,25 +69,6 @@ describe('project tool-read replies', () => {
     second[2]!(ok({ revision: 'r', mapping: null }));
   });
 
-  it('keeps saved settings when the initial project reads finish after Save', async () => {
-    const store = await startStore();
-    const tools = held.hold('account.tools');
-    const jiraReply = held.hold('projects.jiraRead');
-    const confluence = held.hold('projects.confluenceRead');
-    await store.openProject(apollo);
-    store.openProjectTools(apollo);
-    await flush();
-    store.setProjectJira('SAVED');
-    await store.saveProjectTools();
-    expect(store.getState().projectSettings).toBeNull();
-    expect(store.getState().projectReads).toMatchObject({ jira: 'SAVED', confluence: 2 });
-    tools(ok({ tools: [] }));
-    jiraReply(ok({ mapping: { project_key: 'OLD' } }));
-    confluence(ok({ mapping: { space_ids: ['old'] } }));
-    await flush();
-    expect(store.getState().projectReads).toMatchObject({ available: true, jira: 'SAVED', confluence: 2 });
-  });
-
   it('forgets project reads when the account changes and drops the old replies', async () => {
     const store = await startStore();
     const jiraReply = held.hold('projects.jiraRead');
@@ -150,6 +131,16 @@ describe('project tool-read replies', () => {
 describe('project lists on foreground refresh', () => {
   /** Made after every numbered project. */
   const created = (name: string) => project(900, 30, { name, project_id: `prj_${name.toLowerCase().padEnd(8, '0')}-1111-4111-8111-111111111111`, created_at: '2026-10-01T00:00:00.000Z' });
+  /** Three projects, and the window come forward with them moved: the refresh's list read is held. */
+  async function refreshing() {
+    active = numbered(3);
+    const store = await startStore();
+    const stale = held.hold('projects.list');
+    moved.projects += 1;
+    const done = show(store);
+    await flush();
+    return { store, stale, done };
+  }
 
   it.each(['shown', 'resume'] as const)('with one page shown, a new project leads it and the displaced row waits behind More (%s)', async event => {
     active = numbered(13);
@@ -199,49 +190,25 @@ describe('project lists on foreground refresh', () => {
     expect(store.getState().projects.next).toBeNull();
   });
 
-  it('with two pages shown, rows archived elsewhere on the second page are dropped and the pages close up', async () => {
-    active = numbered(22);
-    const store = await startStore();
-    await store.loadProjects(true);
-    const gone = active.slice(10, 19);
-    archived = gone.map(row => ({ ...row, status: 'archived' }));
-    active = active.filter(row => !gone.includes(row));
-    await show(store);
-    expect(names(store.getState().projects.items)).toEqual(names(ordered(active)));
-    expect(store.getState().projects.next).toBeNull();
-    expect(store.getState().archivedProjects.items).toHaveLength(9);
-  });
-
-  it('shows an older project you were added to, at its place inside the pages shown', async () => {
-    active = numbered(22);
-    const store = await startStore();
-    await store.loadProjects(true);
-    const joined = { ...project(500, 16, { name: 'Joined' }), created_at: '2026-09-16T12:00:00.000Z' };
-    active = [...active, joined];
-    await show(store);
-    const shown = names(store.getState().projects.items);
-    expect(shown).toHaveLength(20);
+  it.each([
+    ['with two pages shown, rows archived elsewhere on the second page are dropped and the pages close up', 22,
+      (rows: ProjectSummary[]) => { archived = rows.slice(10, 19).map(row => ({ ...row, status: 'archived' as const })); return [...rows.slice(0, 10), ...rows.slice(19)]; }],
     // Made at noon on the 16th: after Project 14 (the 17th), before Project 15 (midnight on the 16th).
-    expect(shown.indexOf('Joined')).toBe(shown.indexOf('Project 14') + 1);
-  });
-
-  it('shows a row renamed elsewhere by its new name', async () => {
-    active = numbered(13);
+    ['shows an older project you were added to, at its place inside the pages shown', 22,
+      (rows: ProjectSummary[]) => [...rows, { ...project(500, 16, { name: 'Joined' }), created_at: '2026-09-16T12:00:00.000Z' }]],
+    ['shows a row renamed elsewhere by its new name', 13, (rows: ProjectSummary[]) => rows.map(row => row.name === 'Project 12' ? { ...row, name: 'Project 12, renamed' } : row)],
+    ['with everything shown, a new project joins the whole list', 13, (rows: ProjectSummary[]) => [created('New'), ...rows]],
+  ])('%s', async (_, count, change) => {
+    active = numbered(count);
     const store = await startStore();
     await store.loadProjects(true);
-    active = active.map(row => row.name === 'Project 12' ? { ...row, name: 'Project 12, renamed' } : row);
+    active = change(active);
     await show(store);
-    expect(names(store.getState().projects.items)).toContain('Project 12, renamed');
-  });
-
-  it('with everything shown, a new project joins the whole list', async () => {
-    active = numbered(13);
-    const store = await startStore();
-    await store.loadProjects(true);
-    active = [created('New'), ...active];
-    await show(store);
-    expect(names(store.getState().projects.items)).toEqual(['New', ...names(numbered(13))]);
-    expect(store.getState().projects.next).toBeNull();
+    // What shows is what the Authority has, in its order, as far as the two pages shown reach; More goes on from there.
+    const shown = Math.min(20, active.length);
+    expect(names(store.getState().projects.items)).toEqual(names(ordered(active)).slice(0, shown));
+    expect(store.getState().projects.next === null).toBe(active.length <= 20);
+    expect(names(store.getState().archivedProjects.items)).toEqual(names(ordered(archived)));
   });
 
   it('breaks equal creation times by project ID, as the Authority does', async () => {
@@ -254,12 +221,7 @@ describe('project lists on foreground refresh', () => {
   });
 
   it('a project made while the refresh was on its way stays in the sidebar', async () => {
-    active = numbered(3);
-    const store = await startStore();
-    const stale = held.hold('projects.list');
-    moved.projects += 1;
-    const refreshing = show(store);
-    await flush();
+    const { store, stale, done } = await refreshing();
     const fresh = created('Fresh');
     rpc.mockImplementation(rpcFor(held, {
       'projects.create': () => ok({ project_id: fresh.project_id }),
@@ -272,18 +234,13 @@ describe('project lists on foreground refresh', () => {
     expect(names(store.getState().projects.items)).toContain('Fresh');
     active = [fresh, ...active];
     stale(ok(keysetPage(numbered(3), undefined)));
-    await refreshing;
+    await done;
     await flush();
     expect(names(store.getState().projects.items)).toEqual(['Fresh', ...names(numbered(3))]);
   });
 
   it('a project left while the refresh was on its way stays gone', async () => {
-    active = numbered(3);
-    const store = await startStore();
-    const stale = held.hold('projects.list');
-    moved.projects += 1;
-    const refreshing = show(store);
-    await flush();
+    const { store, stale, done } = await refreshing();
     rpc.mockImplementation(rpcFor(held, { 'projects.leave': () => ok({}) }, () => ({ active, archived })));
     store.toggleProjectSettings(active[0]!, 'sidebar');
     store.askProjectSetting('leave');
@@ -293,7 +250,7 @@ describe('project lists on foreground refresh', () => {
     const snapshot = keysetPage(active, undefined);
     active = active.slice(1);
     stale(ok(snapshot));
-    await refreshing;
+    await done;
     await flush();
     expect(names(store.getState().projects.items)).toEqual(['Project 2', 'Project 3']);
   });
@@ -327,18 +284,13 @@ describe('project lists on foreground refresh', () => {
   });
 
   it('drops the reply for an account that changed meanwhile', async () => {
-    active = numbered(3);
-    const store = await startStore();
-    const stale = held.hold('projects.list');
-    moved.projects += 1;
-    const refreshing = show(store);
-    await flush();
+    const { store, stale, done } = await refreshing();
     membership = 'someone-else';
     active = [];
     await store.refreshStatus();
     await flush();
     stale(ok(keysetPage(numbered(3), undefined)));
-    await refreshing;
+    await done;
     await flush();
     expect(store.getState().projects).toMatchObject({ items: [], loading: false });
   });

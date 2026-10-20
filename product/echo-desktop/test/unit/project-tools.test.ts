@@ -121,3 +121,26 @@ describe('your connections on Tools', () => {
     expect(store.getState().projectSettings?.tools?.failure).toBeUndefined();
   });
 });
+
+describe('Tools and the project page\'s first reads', () => {
+  it('keeps saved settings when the initial project reads finish after Save', async () => {
+    jira = 'CURRENT';
+    spaces = ['1', '2'];
+    const store = await startStore();
+    const tools = held.hold('account.tools');
+    const jiraReply = held.hold('projects.jiraRead');
+    const confluence = held.hold('projects.confluenceRead');
+    await store.openProject(apollo);
+    store.openProjectTools(apollo);
+    await flush();
+    store.setProjectJira('SAVED');
+    await store.saveProjectTools();
+    expect(store.getState().projectSettings).toBeNull();
+    expect(store.getState().projectReads).toMatchObject({ jira: 'SAVED', confluence: 2 });
+    tools(ok({ tools: [] }));
+    jiraReply(ok({ mapping: { project_key: 'OLD' } }));
+    confluence(ok({ mapping: { space_ids: ['old'] } }));
+    await flush();
+    expect(store.getState().projectReads).toMatchObject({ available: true, jira: 'SAVED', confluence: 2 });
+  });
+});
