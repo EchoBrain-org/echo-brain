@@ -9,7 +9,6 @@ import { buildExternalHumanIdentityLinkContractV2, validateExternalHumanIdentity
 import { type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { readActiveSlackConnectionV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import type Database from "better-sqlite3";
-import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
 import { sameTool, SlackPersonIdentityLinkWorkflowV1, type SlackPersonIdentityLinkAuthenticationPort, type SlackPersonIdentityLinkRepositoryPort } from "./slack-person-identity-link-workflow-v1.js";
 
 const CHALLENGE_LIFETIME_MS = 15 * 60 * 1000;
@@ -48,7 +47,6 @@ export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
   }) => "employee" | "owner";
   readonly slack: SlackIdentityProviderV1;
   readonly slack_token_access: SlackBotTokenAccessV1;
-  readonly authorization_fence: ReadableSearchAuthorizationFence;
   /** Synchronously clears short-lived browser proof after a durable revoke. */
   readonly invalidate_browser_attempts?: (membershipId: string) => void;
   readonly now?: () => string;
@@ -838,7 +836,6 @@ export function createSqliteSlackPersonIdentityLinkWorkflowV1(
     authentication: input.authentication,
     repository,
     slack: input.slack,
-    authorization_fence: input.authorization_fence,
     invalidate_browser_attempts: input.invalidate_browser_attempts,
     now: input.now,
   });
