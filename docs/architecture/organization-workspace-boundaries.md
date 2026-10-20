@@ -148,7 +148,9 @@ The server uses separate databases with explicit responsibilities:
   - When selected, the gated Jira runtime and the staging connector rehearsal
     keep provider-owned Jira connection state in
     `jira-person-connections.sqlite`; the staging restore wrapper retains the
-    rehearsal copy.
+    rehearsal copy. As with every person provider's file, the Authority
+    creates it private (0600) and will not start with one other users can
+    read.
   - `extraction-attempts.sqlite` is the paid-extraction ledger and durable
     spend history. Keep it with backups and never delete it to clear a
     [held extraction](../../deploy/organization-authority/README.md#inspect-and-retry-a-held-extraction).
