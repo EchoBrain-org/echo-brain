@@ -6,11 +6,10 @@ meeting actions are follow-ups); its Rulings and API changes sections name what
 changed (`items` takes `states` in place of `open_only`).
 
 Status: designed with the founder on 2026-10-08 and approved by the founder the
-same day; rulings 18–23 were added while planning. Implementation plan
-executed; see the plan's
-[As built](../superpowers/plans/2026-10-08-open-items-and-home.md#as-built)
-section. Every section but Rulings describes what was built, including the
-rulings made during execution that change behavior. Updated 2026-10-16 for
+same day; rulings 18–23 were added while planning. Shipped in two parts: Part
+1 in #300 (a7f8df7) with its follow-up #301 (00a9c1f), and Part 2 in #303
+(264757c). Every section but Rulings describes what was built, including the
+rulings made while building that change behavior. Updated 2026-10-16 for
 the research ROI fixes the founder approved that day (R77–R82): sweeps skip
 the planner, take only items in tools the caller has connected, never let
 `unreadable` replace a judged verdict, ground `landed` and `changed` in the
@@ -23,8 +22,6 @@ Builds on
 the [research trigger contract v1](2026-10-06-research-trigger-contract-v1.md).
 Design canvas, row 9:
 https://claude.ai/code/artifact/ffa8478f-578d-40d0-bc7a-578a66f4adb0.
-Implementation plan:
-[open items and Home](../superpowers/plans/2026-10-08-open-items-and-home.md).
 
 ## Goal
 
@@ -712,8 +709,8 @@ with a stop between them:
 
 As delivered: Part 1 merged on its own as PR #300 after the founder's
 walkthrough, with the follow-up PR #301 (Home reads shared items without
-Granola; a Send replay answers the counts frozen at Send). Part 2 follows in a
-separate pull request. The plan's As built section records the split.
+Granola; a Send replay answers the counts frozen at Send). Part 2 followed in a
+separate pull request, PR #303.
 
 ## Acceptance
 
@@ -853,11 +850,9 @@ separate pull request. The plan's As built section records the split.
 
 ## Rulings
 
-Rulings made while executing the plan are listed in the plan's
-[As built](../superpowers/plans/2026-10-08-open-items-and-home.md#as-built)
-section, not here; those that change behavior are folded into the sections
-above. The exceptions are those of 2026-10-09 (R63–R76) and of 2026-10-16
-(R77–R82), which are listed at the end of this section too.
+Numbered rulings (1 to 23) were made while designing. R-numbered rulings (R1
+to R82) were made while building and since, and code cites them by number.
+Those that change behavior are folded into the sections above.
 
 Made with the founder on 2026-10-08:
 
@@ -927,6 +922,218 @@ Made while planning, after reading the code and folding in the canvas's row 9
     "due Oct 30 → next week": live details, then what the decision requires.
 23. Approve rows show the proposal's first decision line, action count and
     meeting date, which the meetings API adds to its review rows.
+
+Made while executing the implementation plan (R1–R62). The plan was retired
+once both parts shipped; a task (Task 1 to Task 14, 9b, 12c, 12d) is one of
+its steps, and "the spec" is this design. Each line gives the ruling, then
+the reason. The plan's ledger numbered two rulings each as R25 and R26 (one
+at the Part 1 stop, one at the Part 2 start); both are listed.
+
+- R1: Move `PersonMeetingReviewV2`'s three fields from Task 4 to Task 8 — Task
+  8 changes the service and fixture that produce them, so Tasks 4–7 keep
+  building.
+- R2: Every task leaves the build, root `tsc` and desktop typecheck green;
+  Task 4 adds a temporary route `default` and raw desktop result types,
+  replaced in Tasks 7 and 9 — the widened unions would otherwise break the
+  tree.
+- R3: Move the `sweep` operation, `home.sweep_due` and `trigger: 'sweep'` from
+  Task 10 to Task 11 — the service implements them there. Reversed by R25
+  (Part 2).
+- R4: The runs scope CHECK tests `scope_kind IS NOT NULL` first — the plan's
+  `IS` form rejected every approved-record row.
+- R5: The items CHECK becomes `relation IS NOT NULL OR expected IS NULL` — a
+  conflict without a usable phrase must still be stored.
+- R6: Task 7 exports the stored-card reader as `readStoredImpactCardV1` — the
+  open-items service needs the first decided line.
+- R7: Task 5's `renderWith(reply)` returns `{ card, calls }` — the two tests
+  used the helper differently.
+- R8: Task 11 sorts sweep candidates by `checked_at` in the service —
+  `forRecords` orders by `created_at`.
+- R9: Task 6 declares a local structural people type — Task 2's DAO was not on
+  its base; the DAO satisfies it.
+- R10: The check-newer trigger covers all four check columns and needs a
+  strictly newer `checked_at` — spec section 2 replaces a check only by a
+  newer one, and the plan's trigger let the verdict change without a newer
+  time.
+- R11: `leadsAny` counts active projects only — archived projects are
+  read-only and the approval-audience trigger requires active ones.
+- R12: The runs CHECK test asserts the CHECK's own message — it passed only
+  because an earlier trigger fired.
+- R13: The policy gains `sent_to_owner` — an owner who cannot read the
+  decision sees only items sent to them (spec section 4).
+- R14: `action_count` has no upper bound — briefs hold more than 40 actions,
+  and a clamp would misreport.
+- R15: Re-pin the impact-card quality baseline's three fingerprints — the
+  mandated prompt and schema change moved them; the Ask goldens are untouched.
+- R16: The policy gains `state` — the rules for unsent and closed items stay
+  in the one policy.
+- R17: Run Task 9 (desktop) in parallel with Task 7 (server) in separate
+  worktrees — they share no files, and Task 9 builds against the merged API
+  types and the fixture.
+- R18: The policy refuses `assign` on unsent items, and `see_row` is checked
+  before "Send it first" — only someone who could act learns that the item is
+  unsent.
+- R19: Unsent items of an approver who left before Send stay unsent; leads see
+  them but cannot send or reassign — parked as a known gap, since letting
+  leads send is new scope.
+- R20: Task 9b adds `summary_only`, `reach`, replay-first Send,
+  `see_decision`, Send gating through the policy and a same-owner assign that
+  writes nothing — rate limits and honest outage copy matter on real data.
+- R21: Task 9's fix round also hides sent runs locally, pins the can't-open
+  row in e2e and names item buttons — same class as the review's Important
+  finding.
+- R22: A stale Send answers `conflict`, shown as "These items changed
+  meanwhile. Open them again from Home." — the desktop reads
+  `stale_access_state` as a lost account.
+- R23: Task 9b takes the Task 9 re-review's store fixes (staleness check
+  first, record a send on any page, no Details while sending, distinct names)
+  — they are small fixes in code 9b touches.
+- R24: Bring main into the Part 1 branch with one `--no-ff` merge after Task
+  9b — a merge keeps the reviewed commits intact.
+- R25 (Part 1 stop): Codex finishes the Part 1 stop (merge main as R24 says,
+  validate once, refresh screenshots, prepare the fixture walkthrough) without
+  starting Part 2 or pushing — the founder's request.
+- R26 (Part 1 stop): Keep all three Home recovery cases from main's `f108cf4`,
+  adapted to the new Home, and add two failed-Home resume cases — main's
+  recovery fix must survive the rewritten Home, and no test is removed.
+- R27: Accept the Part 1 reviewer's limits: no sweep, deferred minors stay
+  deferred, live staging is not proven by fixtures — the limits stay visible
+  at the founder's review.
+- R28: Ship the accepted Part 1 as a standalone PR (#300) on the validated
+  head — Part 2 stays parked; no reset, merge or release is implied.
+- R29: Fix PR #300's two inline review reports in a follow-up, PR #301; Home
+  reads shared open items and runs without Granola, and only meeting reviews
+  depend on it — PR #300 merged while the fixes were being reproduced. That
+  rule answers one report; R30 answers the other.
+- R30: V13 stores an immutable `send_included` per item, and a Send replay
+  returns its original counts — counting current state went wrong after later
+  state changes; this supersedes the Task 2 replay rule.
+- R25 (Part 2): Part 2 runs in waves: Task 10 with the runs API additions,
+  then Tasks 11, 12 and 13 in separate worktrees — the desktop builds against
+  a settled API, as Tasks 7 and 9 did.
+- R26 (Part 2): Fold Part 1's deferred minors into the Part 2 tasks (a
+  record-level policy function, `reach` code tests, `send_included` for
+  `sent_to_owner`, a stage's `mine`, distinct names, plan text) — they touch
+  the same code.
+- R31: Task 10 computes a stage's `mine` for real, while `sweep` and
+  `sweep_due` stay placeholders — a placeholder `mine` would be wrong data,
+  and it is one comparison.
+- R32: `home.sweep_due` also requires no sweep created in the last hour — a
+  failing or unassessed sweep would otherwise be asked for on every Home load,
+  reading Jira and Confluence each time.
+- R33: A sweep finding names the decision only when the caller may see it — an
+  owner sent an item without reading its decision must not get the decision in
+  their run.
+- R34: A sweep claim answers `busy` while the caller has a pending or running
+  impact run — "impact runs start before sweeps" must not depend on the
+  client.
+- R35: The Impact line partitions sent items: open less landed and unreadable,
+  handled (done, not relevant, landed), couldn't read — the canvas 9.6 example
+  reads 1, 1 and 1.
+- R36: Did it land? groups by last check (Landed; Still open with changed and
+  unchecked items; Couldn't read), and Mark N done closes the ticked landed
+  items the viewer may set — the spec lists only three sections. Its card form
+  is superseded by R68.
+- R37: Names that still collide after `expected` add the decision title when
+  readable, else a position; "Remove <person>" names its item — it closes a
+  Part 1 minor.
+- R38: The sweep's work lives in a new composition file called from `launch`,
+  with one observation and error structure — the runs file is already long.
+- R39: Sweep line screens apply per line after the one repair; a line that
+  still fails becomes "ECHO withheld this line." and keeps its verdict —
+  refusing the whole reply let one line void every verdict, every hour.
+- R40: Never judge a finding blind: send it only when all its own items fit,
+  else null; a judged verdict cites at least one item; one status per state —
+  a stored blind verdict could hide a landed ticket for a day.
+- R41: Start Tasks 12 and 13 from `bc2e9a3` while Task 10's fix round runs —
+  the fix changes only renderer internals and the validator; the desktop never
+  sees them, and the evaluation reads the result only by `finding_index`.
+- R42: Match a finding's own items by identity (item key, and section for a
+  page) — matching the whole citation failed for every edited item, and edited
+  items are what a sweep checks.
+- R43: Failed sweep runs score zero, like failed card runs — a sweep the
+  endpoint cannot start is a real failure the report must show.
+- R44: Fold all five Task 13 minors into one fix round, including the leak
+  scan of result-less runs — a hidden leak undercounts runs with leaks, and
+  misaligned verdict keys would misgrade silently.
+- R45: A finding owns its first citation and every further outside-tool
+  citation; ECHO records cited later are context; it is unreadable only when
+  an own item is — eval findings cite several tickets, and an unreadable
+  decision must not be stored as the item's check.
+- R46: Start Task 11 from `41ceec0` alongside Task 10's third fix round — that
+  round changes renderer internals only, not the result contract Task 11 uses.
+- R47: The controller pauses after Tasks 10–13 are merged and checked, leaving
+  Task 14 and the final review to the founder — the founder's instruction at
+  the time; superseded by R52.
+- R48: The same implementer fixes the round-3 re-review's three minors — they
+  are new small findings from a clean re-review, not a stuck loop.
+- R49: Accept Task 12's open choices (relative times, the Check card's layout,
+  where Check now shows, impact runs first, one sweep request per Home load),
+  but R37 also covers the Send card's checkboxes — names must differ there
+  too.
+- R50: "One sweep start per Home load" limits new sweep requests only; an
+  existing pending sweep starts like a pending impact run, after them, with
+  backoff — a released sweep must resume, and nothing may poll every 5 s for
+  work it will not start.
+- R51: Did it land?'s reads of closed items and the feed row's "open" count
+  move to Task 12c — both need API and service changes that neither parallel
+  branch could make.
+- R52: Finish order: merge Tasks 11 and 12, Task 12c, Task 14's docs, a final
+  whole-branch review with one fix round, then `npm run check` and the full
+  desktop e2e on the exact candidate, one push and a draft PR against main —
+  the review's fixes must be inside the validated candidate.
+- R53: Write Task 14's docs in a separate worktree while Tasks 11 and 12
+  finish, and re-check the in-flight parts after they merge — the docs depend
+  only on settled rulings and briefs.
+- R54: `sent_to_owner` is true when the item was sent and Send included it, or
+  it is `open` or `done` since — an item reopened after Send would otherwise
+  wait on an owner who cannot see it.
+- R55: Runs `list` answers at most the 20 newest sweeps and fills the rest of
+  its 100 with the newest impact runs — sweeps, up to hourly plus Check now,
+  must not push failed impact runs and their Try again rows off the list.
+- R56: The kernel's sweep trigger accepts Slack message citations, so Slack
+  items are swept and count toward `sweep_due` like tickets and pages — the
+  live desk already opens them, and leaving them out meant they were never
+  checked. Superseded by R62.
+- R57: `readStoredImpactCardV1` moves to its own small composition module that
+  both services import, and the `sweep_due` API comment states R32's hourly
+  limit — no import cycle, and no 700-line file.
+- R58: `home.sweep_due` ignores a pending sweep created more than an hour ago
+  (stale items, no sweep created in the last hour, none running); asking again
+  returns that same pending run — a stuck sweep is resumed by the server's
+  rule instead of blocking automatic sweeps for good, without depending on the
+  desktop's list.
+- R59: Accept Task 12's narrower R37: a decision's title is added only when
+  alike items come from different decisions, else a position — a title cannot
+  tell apart items of one decision, and R37's aim is distinct names.
+- R60: Runs `list` and the stages of `items` report a `running` run whose
+  lease has lapsed as `pending` (the stored state is unchanged) — otherwise a
+  run whose worker died shows "Checking…" forever and Home polls every 5 s;
+  the gap dates from Part 1 and was found by the Task 12 re-review.
+- R61: A sweep asks again who sees each item synchronously right before
+  `finish`, with no await between, not inside its transaction — the record
+  check behind it opens a project-context transaction, which never nests, so
+  nesting would break every production sweep; nothing in the Authority process
+  can run in between, and a membership another process revokes in that instant
+  is not seen.
+- R62: Supersede R56 in Task 12c: the kernel's sweep trigger refuses Slack
+  message citations again, and the service leaves Slack-message items out of
+  sweeps and `sweep_due`, saying why in a comment and in the spec's "Not in
+  this round" — no desk in this repository can open a Slack citation (it
+  carries no `tool_id`, and no live Slack connector is registered), so a swept
+  Slack item is only ever recorded `unreadable`, at the cost of a background
+  research run; Slack items stay "not checked yet" until a Slack reader
+  exists.
+
+Unnumbered rulings:
+
+- Implementers run on Opus from Task 2 on (Task 1 finished on Sonnet), and
+  reviewers on Opus for substantial diffs — the founder asked for more
+  capability.
+- Keep Task 1's `Co-Authored-By: Claude Sonnet 5.5` trailer — it names the
+  model that wrote the commit, and amending rewrites history.
+- Tasks 3, 4, 5, 6 and 8 run as one parallel wave, each in its own worktree,
+  merged after Task 2's review — the founder opted in.
 
 Made on 2026-10-09. R63–R70 are the founder's review of Part 2's screens; they
 replace the canvas's Check row, Check card, footer and Did it land? (9.4)
