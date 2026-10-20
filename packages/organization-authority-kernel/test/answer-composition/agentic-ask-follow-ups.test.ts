@@ -8,8 +8,9 @@ import { createAgenticAskV3, createAgenticAskV4 } from '../../src/answer-composi
 import { ANSWER_PROMPT, ASK_STEP_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, FOLLOW_UPS_STEP_GUIDANCE } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1 } from '../../src/answer-composition/agentic-evidence-bundle-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
-import { evidenceDeskSourceV2, type EvidenceDeskItemV2, type EvidenceDeskPortV2, type EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
+import { evidenceDeskSourceV2, type EvidenceDeskItemV2, type EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from '../../src/shared/follow-up-evidence-v1.js';
+import { result } from './fixtures/agentic-scenarios.js';
 
 /**
  * Follow-ups in the research loop and the Ask writer (ADR-0040): the prompt
@@ -30,14 +31,13 @@ function followUp(n: number, value: Omit<PersonFollowUpEvidenceV1, 'item_id' | '
 }
 const fanCurve = followUp(1, { title: 'THERM-48 Fan curve v2', owner: 'Mara Lind', status: 'open', due_at: '2026-10-20', check: { verdict: 'still_open', checked_at: '2026-10-15T09:30:00.000Z' }, decision, expected: 'Reflect the v2 fan curve' });
 const thresholds = followUp(2, { title: 'THERM-46 Alarm thresholds', owner: 'Mara Lind', status: 'open', decision });
-const result = (...items: EvidenceDeskItemV2[]): EvidenceDeskResultV2 => ({ items, truncated: false, receipt_digests: items.map(item => item.receipt_sha256) });
 
 function deskWith(live: NonNullable<EvidenceDeskPortV2['live_sources']>, items: readonly EvidenceDeskItemV2[] = [fanCurve, thresholds]) {
   return {
     scope: { kind: 'global' as const }, live_sources: live,
-    search: vi.fn(async (_input: Parameters<EvidenceDeskPortV2['search']>[0]) => result(...items)),
-    list: vi.fn(async (input: Parameters<EvidenceDeskPortV2['list']>[0]) => input.source === 'follow_ups' ? result(...items) : result()),
-    open: vi.fn(async () => result(items[0]!)),
+    search: vi.fn(async (_input: Parameters<EvidenceDeskPortV2['search']>[0]) => result(items)),
+    list: vi.fn(async (input: Parameters<EvidenceDeskPortV2['list']>[0]) => input.source === 'follow_ups' ? result(items) : result([])),
+    open: vi.fn(async () => result([items[0]!])),
     revalidate: vi.fn(async () => checked),
   } satisfies EvidenceDeskPortV2;
 }
@@ -87,6 +87,12 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     expect(v6Prompt).toBe(toolsPrompt.slice(0, -`\n\n${FOLLOW_UPS_STEP_GUIDANCE}`.length));
     expect(v6Prompt).not.toContain('follow_ups');
     expect(listSources(v6.steps()[0]!)).toEqual(['meetings', 'documents', 'tickets']);
+
+    // Mine reads only what the asker added, so a V7 answer there binds no follow-ups either.
+    const mine = scripted([step('open', [{ tool: 'finish', args: {} }])]);
+    await createAgenticAskV4({ desk: { ...deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), scope: { kind: 'mine' } }, model: mine.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
+    expect(mine.steps()[0]!.system_prompt).toBe(ASK_STEP_PROMPT);
+    expect(listSources(mine.steps()[0]!)).toEqual(['meetings', 'documents']);
   });
 
   it('lists follow-ups by owner and status at the desk, and the writer and answer see each as a follow-up', async () => {

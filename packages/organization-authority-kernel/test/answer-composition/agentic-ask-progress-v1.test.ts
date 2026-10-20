@@ -21,6 +21,7 @@ import type { StructuredGenerationInput } from "../../src/answer-composition/str
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { JIRA, pager, tickets } from "./fixtures/agentic-lists.js";
+import { result } from "./fixtures/agentic-scenarios.js";
 import { deferred } from "./fixtures/deferred.js";
 
 /**
@@ -52,7 +53,6 @@ const before = passage(1, "Earlier context.", CANARY.neighbour);
 const after = passage(3, "Later context.", CANARY.neighbour);
 const ticketCitation = (id: string) => ({ kind: "ticket" as const, tool_id: "jira", external_scope_id: "11111111-1111-4111-8111-111111111111", ticket_id: id, permalink: `https://fixture.atlassian.net/browse/ECHO-${id}`, text_sha256: sha256Digest("") });
 const ticket = (id: string): EvidenceDeskItemV2 => Object.freeze({ id: `desk_ticket_${id}`, kind: "ticket", citation: ticketCitation(id), label: `ECHO-${id}: metadata only`, visibility: "only_me", receipt_sha256: canonicalSha256(`ticket ${id}`) });
-const result = (items: readonly EvidenceDeskItemV2[], extra: Partial<EvidenceDeskResultV2> = {}): EvidenceDeskResultV2 => ({ items, truncated: false, receipt_digests: items.map(item => item.receipt_sha256), ...extra });
 
 type Log = string[];
 /** The question's plan: notes and needs carry canaries the stream must never send. */
