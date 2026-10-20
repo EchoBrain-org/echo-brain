@@ -13,6 +13,7 @@ import { createLangSmithRuntimeV1 } from './observability/langsmith-runtime-v1.j
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { readStagingConnectorRehearsalSelection } from './staging-connector-rehearsal-selection.js';
 import { openStagingConnectorRehearsalService } from './staging-connector-rehearsal-runtime.js';
+import { CLEAN_V1_RELEASE_ID } from './clean-v1-release-id.js';
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
@@ -25,7 +26,6 @@ const USAGE =
 const STAGING_CANARY_USAGE =
   "usage: echo-organization-authority-serve staging-private-dm-canary " +
   "--release-id <canonical-clean-v1-release-id>";
-const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 
 interface OrganizationAuthorityServiceCliIo {
   readonly stdout: (value: string) => void;
@@ -119,7 +119,7 @@ function stagingCanaryReleaseId(argv: readonly string[]): string {
     argv.length !== 2 ||
     argv[0] !== "--release-id" ||
     argv[1] === undefined ||
-    !RELEASE_ID.test(argv[1])
+    !CLEAN_V1_RELEASE_ID.test(argv[1])
   ) {
     throw new Error(STAGING_CANARY_USAGE);
   }

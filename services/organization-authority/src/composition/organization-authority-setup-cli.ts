@@ -63,6 +63,8 @@ import {
 } from "./organization-authority-person-administration-cli.js";
 import { initializePersonSessionCredentials } from "./person-onboarding-service.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
+import { CLEAN_V1_RELEASE_ID } from "./clean-v1-release-id.js";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { queueStagingSyntheticMeetingsV1 } from "./staging/staging-synthetic-personal-canary-v1.js";
@@ -74,10 +76,7 @@ const INVITATION_FILENAME = "founder-person-invitation.json";
 const LLM_CREDENTIAL_FILENAME = "llm-credential";
 const PROCESSOR_INSTANCE_ID = "founder-llm-v1";
 const DEFAULT_ARTIFACT_REVISION = "clean-founder-v1";
-const STAGING_SYNTHETIC_CANARY_ORIGIN =
-  "https://authority-staging.echobrain.org";
-const STAGING_SYNTHETIC_CANARY_HOST = "authority-staging.echobrain.org";
-const CLEAN_V1_RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
+const STAGING_AUTHORITY_HOST = new URL(STAGING_AUTHORITY_ORIGIN_V1).hostname;
 
 const USAGE = `usage:
   echo-organization-authority-setup bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> [--artifact-revision <revision>]
@@ -873,7 +872,7 @@ function nextOrganizationAuthoritySetupStep(input: {
   if (!input.slack_connected) return "connect_slack_in_app";
   if (!input.full.founder_slack_link_active) return "complete_founder_slack_link";
   if (!input.full.llm_credential_valid) return "install_provider_credentials";
-  if (input.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN && !input.full.source_admission_present) return "run_finalize";
+  if (input.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && !input.full.source_admission_present) return "run_finalize";
   return "ready_to_start";
 }
 
@@ -1088,7 +1087,7 @@ function readStagingSyntheticSource(
   manifest: OrganizationAuthoritySetupManifestV3,
   authority: Database.Database,
 ): StagingSyntheticSourceState | undefined {
-  if (manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN) return undefined;
+  if (manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) return undefined;
   const sources = authority
     .prepare(
       `SELECT admission.semantic_input_sha256, progress.cursor
@@ -1159,7 +1158,7 @@ function stagingSyntheticSourceEvidence(
   const approvedMeetings = new Set(approvedProposals.map((proposal) => proposal.meeting_id));
   const releaseId = process.env.ECHO_CLEAN_RELEASE_ID;
   const currentCanaryRevision =
-    process.env.ECHO_CLEAN_AUTHORITY_HOST === STAGING_SYNTHETIC_CANARY_HOST && releaseId !== undefined && CLEAN_V1_RELEASE_ID.test(releaseId)
+    process.env.ECHO_CLEAN_AUTHORITY_HOST === STAGING_AUTHORITY_HOST && releaseId !== undefined && CLEAN_V1_RELEASE_ID.test(releaseId)
       ? stagingSyntheticCanaryMeetingV1(releaseId).provenance.canonical_revision
       : undefined;
   return Object.freeze({
@@ -1445,7 +1444,7 @@ async function resume(
   });
   if (
     setupStep === "ready_to_start" &&
-    (manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN ||
+    (manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 ||
       readSetupCanaryEvidence(manifest, dependencies).complete)
   ) {
     status(input, io, dependencies);
@@ -1512,7 +1511,7 @@ async function finalize(
           authority_url: manifest.authority_url,
           meetings_directory: input.staging_synthetic_meetings_directory,
         });
-  const staging = manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN;
+  const staging = manifest.authority_url === STAGING_AUTHORITY_ORIGIN_V1;
   if (staging) {
     // Staging admits no organization source: the owner's synthetic personal
     // source carries the release canary and, when selected, the fixture meetings.
@@ -1605,7 +1604,7 @@ function status(
   // Outside staging no organization source exists to rehearse, so setup
   // completes source-free; only staging proves its synthetic canary or fixtures.
   const canaryNotRequired = nextStep === "ready_to_start" &&
-    setup.manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN;
+    setup.manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1;
   const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete || canaryNotRequired
     ? "complete"
     : nextStep;

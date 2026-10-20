@@ -1,5 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { PROJECT_PAGE_MAX_ITEMS, validateOrganizationAuthorityOrigin, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { validateOrganizationAuthorityOrigin, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonDocumentApplicationV1 } from '../application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../adapters/persistence/sqlite/document-v1.js';
@@ -21,6 +21,7 @@ import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-
 import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import { createRecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
+import { everyProjectPageV1 } from './person-local-source-helpers-v1.js';
 import { createPersonToolsHttpApplicationV3, createPersonToolsHttpApplicationV4 } from '../presentation/person-tools-http-application.js';
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { once } from "node:events";
@@ -280,11 +281,8 @@ export async function startOrganizationAuthorityApiRuntime(
         const snapshot = transaction.captureAuthorization(person, { operation: 'project_list_v2' });
         const names = new Map<string, string>();
         for (const status of ['active', 'archived'] as const) {
-          for (let cursor: string | undefined; ;) {
-            const page = transaction.listProjectsV2(snapshot, { status, limit: PROJECT_PAGE_MAX_ITEMS, ...(cursor === undefined ? {} : { cursor }) });
-            for (const project of page.items) if (wanted.has(project.project_id)) names.set(project.project_id, project.name);
-            if (page.next_cursor === null) break;
-            cursor = page.next_cursor;
+          for (const project of everyProjectPageV1(paging => transaction.listProjectsV2(snapshot, { status, ...paging }))) {
+            if (wanted.has(project.project_id)) names.set(project.project_id, project.name);
           }
         }
         return names;

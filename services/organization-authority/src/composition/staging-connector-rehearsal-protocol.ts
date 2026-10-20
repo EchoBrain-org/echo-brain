@@ -1,8 +1,9 @@
+import { CLEAN_V1_RELEASE_ID } from './clean-v1-release-id.js';
+
 /** Closed staging-only Jira read protocol. V2 remains immutable historical bytes. */
 export const STAGING_CONNECTOR_REHEARSAL_PATH_V1 = '/v1/staging/connector-rehearsal';
 export const STAGING_CONNECTOR_REHEARSAL_POLICY_V3 = 'initial-owner-jira-pointer-v3';
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
-const RELEASE = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 export interface StagingConnectorRehearsalProfileV3 {
   readonly schema_version: 3;
   readonly kind: 'echo-staging-connector-rehearsal-profile-v3';
@@ -68,7 +69,7 @@ function stringMatches(value: unknown, pattern: RegExp): void {
 
 function binding(value: Record<string, unknown>): void {
   if (value.schema_version !== 3) invalid();
-  stringMatches(value.release_id, RELEASE);
+  stringMatches(value.release_id, CLEAN_V1_RELEASE_ID);
   stringMatches(value.profile_sha256, DIGEST);
 }
 

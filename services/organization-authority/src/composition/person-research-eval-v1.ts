@@ -13,7 +13,7 @@ import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-
 import type { PersonAskScopeV2 } from '../application/ports/person-original-context-retrieval-v1.js';
 import { askerOf, scopeOf } from './person-answer-v3-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
-import type { PersonRecordProjectsV1 } from './person-record-search-route.js';
+import { personRecordRunScopeV1, type PersonRecordProjectsV1 } from './person-record-search-route.js';
 import type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 import { checkRetainedResultReleaseV1, retainedResultFailureV1, type RetainedResultFailureCodeV1, type RetainedResultFailureV1 } from './person-retained-result-v1.js';
@@ -63,8 +63,7 @@ const FAILURE_MESSAGES: Readonly<Record<RetainedResultFailureCodeV1, string>> = 
 function recordScope(records: PersonRecordProjectsV1, access_token: string, citation: unknown): PersonAskScopeV2 {
   const record = citation as { readonly kind?: unknown; readonly record_sha256?: unknown } | undefined;
   if (record?.kind !== 'approved_record' || typeof record.record_sha256 !== 'string') throw new AuthorityOperationError('invalid_request', 'Research evaluation record is invalid');
-  const projects = records.recordProjects({ access_token, record_sha256: record.record_sha256 as `sha256:${string}` });
-  return projects.length === 1 ? Object.freeze({ kind: 'project' as const, project_id: projects[0]! }) : Object.freeze({ kind: 'global' as const });
+  return personRecordRunScopeV1(records, access_token, record.record_sha256 as `sha256:${string}`);
 }
 
 function failure(error: unknown): RetainedResultFailureV1 {

@@ -11,6 +11,7 @@ import { FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import { randomUUID } from 'node:crypto';
 import type { PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import { samePersonV1 } from '../application/person-release-authorization-v1.js';
 import type { PersonAnswerV4HttpApplication } from '../presentation/person-answer-v4-http-application.js';
 import type { PersonAnswerV5HttpApplication } from '../presentation/person-answer-v5-http-application.js';
 import type { PersonAnswerV6HttpApplication } from '../presentation/person-answer-v6-http-application.js';
@@ -104,10 +105,9 @@ function followUpsFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
   const { scope } = input;
   if (sources === undefined || (input.response_version ?? 0) < FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine') return undefined;
   const authenticate = () => options.sessions.authenticateAccess({ access_token: input.access_token });
-  const viewer = openItemViewerV1(input.access_token, authenticate());
-  if (viewer.organization !== context.organization_id || viewer.principal !== context.principal_id || viewer.membership !== context.membership_id) {
-    throw new AuthorityOperationError('stale_access_state', 'Follow-ups belong to another person');
-  }
+  const asker = authenticate();
+  if (!samePersonV1(asker, context)) throw new AuthorityOperationError('stale_access_state', 'Follow-ups belong to another person');
+  const viewer = openItemViewerV1(input.access_token, asker);
   const audit = options.audit.forFollowUpRequest(context);
   return (desk: Parameters<typeof createPersonFollowUpsEvidenceSourceV1>[0]['desk']) => createPersonFollowUpsEvidenceSourceV1({ sources, viewer, authenticate, scope, desk, audit });
 }
@@ -122,9 +122,7 @@ function workspaceFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
   if (sources === undefined || (input.response_version ?? 0) < WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine') return undefined;
   const authenticate = () => options.sessions.authenticateAccess({ access_token: input.access_token });
   const asker = authenticate();
-  if (asker.organization_id !== context.organization_id || asker.principal_id !== context.principal_id || asker.membership_id !== context.membership_id) {
-    throw new AuthorityOperationError('stale_access_state', 'The workspace belongs to another person');
-  }
+  if (!samePersonV1(asker, context)) throw new AuthorityOperationError('stale_access_state', 'The workspace belongs to another person');
   return createPersonWorkspaceEvidenceSourcesV1({ sources, access_token: input.access_token, authenticate, scope, audit: options.audit.forWorkspaceRequest(context) });
 }
 

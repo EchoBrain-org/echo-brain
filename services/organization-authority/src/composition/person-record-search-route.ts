@@ -282,6 +282,12 @@ export interface PersonRecordProjectsV1 {
   recordProjects(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): readonly ProjectIdV1[];
 }
 
+/** Where an approved record's run reads: the record's project when the person reads it in exactly one, else everything they read. */
+export function personRecordRunScopeV1(records: PersonRecordProjectsV1, access_token: string, record_sha256: Sha256Digest) {
+  const projects = records.recordProjects({ access_token, record_sha256 });
+  return projects.length === 1 ? Object.freeze({ kind: 'project' as const, project_id: projects[0]! }) : Object.freeze({ kind: 'global' as const });
+}
+
 /** Where an approved record's research run starts (runs store v1, section 3). */
 export interface PersonRecordAnchorV1 {
   /**

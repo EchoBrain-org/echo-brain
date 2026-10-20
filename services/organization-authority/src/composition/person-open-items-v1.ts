@@ -381,28 +381,38 @@ export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' 
 }
 
 /**
+ * Every row a paged read shows this viewer, with no bound before the policy: `read` returns the page after the previous
+ * page's last row, and each page goes through the same policy pass, so a change to a row the viewer cannot see never moves
+ * another into or out of view. A short page is the last.
+ */
+export function visibleOpenItemPagesV1<D extends DecisionProjects = PersonReadableDecisionV1>(
+  sources: { readonly records: OpenItemDecisionsReaderV1<D>; readonly people: OpenItemSourcesV1['people'] },
+  viewer: Viewer, page: number, read: (after: ImpactItemRowV1 | undefined) => readonly ImpactItemRowV1[]): OpenItemsContextV1<D> {
+  const decisions = new Map<Sha256Digest, D>();
+  const people = new Map<string, Person>();
+  const assessed: AssessedOpenItemV1[] = [];
+  for (let after: ImpactItemRowV1 | undefined; ;) {
+    const rows = read(after);
+    const context = assessOpenItemsV1(sources, viewer, rows);
+    for (const [record, decision] of context.decisions) decisions.set(record, decision);
+    for (const [membership, person] of context.people) people.set(membership, person);
+    assessed.push(...context.assessed.filter(entry => entry.access.see_row));
+    after = rows.at(-1);
+    if (rows.length < page || after === undefined) return { decisions, people, assessed };
+  }
+}
+
+/**
  * Every row a personal `items` scope shows this viewer, with no bound before the policy (ADR-0036): `mine` is what they sent or
  * own, and `involved` adds what they last handed on (`owner_set_by`). The rows are read a page at a time by (created_at,
- * item_id), each page through the same policy pass, so a change to a row the viewer cannot see never moves another into or out
- * of view. `items` lists and counts these, and the change check fingerprints `involved` from them.
+ * item_id). `items` lists and counts these, and the change check fingerprints `involved` from them.
  */
 export function visiblePersonalOpenItemsV1<D extends DecisionProjects = PersonReadableDecisionV1>(
   sources: { readonly items: Pick<SqliteImpactItemsV1, 'involving'>; readonly records: OpenItemDecisionsReaderV1<D>; readonly people: OpenItemSourcesV1['people'] },
   viewer: Viewer, scope: 'mine' | 'involved', page: number = PERSONAL_PAGE): OpenItemsContextV1<D> {
   if (!Number.isSafeInteger(page) || page < 1) throw new TypeError('A personal scope page must be a positive whole number');
-  const decisions = new Map<Sha256Digest, D>();
-  const people = new Map<string, Person>();
-  const assessed: AssessedOpenItemV1[] = [];
-  for (let after: { readonly created_at: string; readonly item_id: string } | undefined; ;) {
-    const rows = sources.items.involving(viewer.organization, viewer.membership, { states: STATES, limit: page, ...(scope === 'involved' ? { handed_on: true } : {}), ...(after === undefined ? {} : { after }) });
-    const context = assessOpenItemsV1(sources, viewer, rows);
-    for (const [record, decision] of context.decisions) decisions.set(record, decision);
-    for (const [membership, person] of context.people) people.set(membership, person);
-    assessed.push(...context.assessed.filter(entry => entry.access.see_row));
-    const last = rows.at(-1);
-    if (rows.length < page || last === undefined) return { decisions, people, assessed };
-    after = { created_at: last.created_at, item_id: last.item_id };
-  }
+  return visibleOpenItemPagesV1(sources, viewer, page, after => sources.items.involving(viewer.organization, viewer.membership, { states: STATES, limit: page,
+    ...(scope === 'involved' ? { handed_on: true } : {}), ...(after === undefined ? {} : { after: { created_at: after.created_at, item_id: after.item_id } }) }));
 }
 
 /** An item in an outside tool, which a desk reads through that tool's live source: `kind:tool_id`, else undefined. */
