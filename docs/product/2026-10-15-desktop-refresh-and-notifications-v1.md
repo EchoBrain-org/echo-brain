@@ -2,7 +2,10 @@
 
 Date: 2026-10-15. Status: shipped in #326 (3442c51), Tier 1 and Tier 2; its
 tests sit beside the code they cover. Decision record:
-[ADR-0036](../decisions/ADR-0036-person-change-check.md). Replaces F8 of
+[ADR-0036](../decisions/ADR-0036-person-change-check.md). The
+[desktop README](../../product/echo-desktop/README.md) describes the refresh
+and notifications as built; the rulings R1–R10 and N1–N6 below stay because
+code cites them. Replaces F8 of
 [follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md) and its definition
 of Follow-ups.
 
@@ -59,64 +62,16 @@ lifecycle:
 
 ## 1. Server: the change check (Tier 2)
 
-### 1.1 Route and CLI
-
-- **Route.** `GET /v1/person/changes`, authenticated like every Person route.
-  The answer is `echo-person-changes-v1`
-  ([`packages/organization-api/src/person-changes-v1.ts`](../../packages/organization-api/src/person-changes-v1.ts)):
-
-  ```json
-  { "kind": "echo-person-changes-v1",
-    "areas": { "projects": "sha256:…", "follow_ups": "sha256:…", "reviews": "sha256:…" },
-    "check_again_after_seconds": 60 }
-  ```
-
-- **CLI.** The person client gains `changes`, a read with no flags, which prints
-  that object as its last JSON line. An Authority without the route answers 404.
-  The client reports that as failure code `not_supported`, distinct from
-  `not_found`.
-- **Desktop host.** It calls it as `changes.read`. That wiring is in the
-  contract commit.
-
-### 1.2 Areas
-
-Each area is the SHA-256 of a canonical JSON array of sorted tuples, built only
-from rows the caller may read under the same policy as the matching read:
-
-| Area | Tuples | Moves when |
-|---|---|---|
-| `projects` | `[project_id, name, status, role]` for every project the caller is an active member of, active and archived | Added or removed, a rename, an archive, a role change |
-| `follow_ups` | `[item_id, state, owner_membership_id, owner_set_at, state_set_at, sent_at]` for every item the caller is **involved** in and may read | A send, a handoff, a reassignment, a done, not-relevant or reopen |
-| `reviews` | `[approval_id, status]` for the meetings waiting for the caller's review, as `tools.meetings` `reviews` lists them | A meeting is ready for you, or a review is decided |
-
-- **Involved** means the item's approver (the person who sent it), its owner,
-  or its `owner_set_by` (the last person to hand it on). The item must also be
-  visible to the caller by the same rows-only policy pass that `runs items`
-  uses.
-- **Checks are left out** (`checked_*`). A sweep must not wake every desktop.
-
-### 1.3 Privacy (ADR-0012)
-
-- A fingerprint is a digest of rows the caller can read. It never moves with
-  activity they cannot see.
-- There is no global position or counter, and no substitute for one.
-- A test proves it: another person's change to an item or project the caller
-  cannot read leaves every one of the caller's fingerprints unchanged.
-
-### 1.4 Cost, audit and pace
-
-- **Database only, no live reads.** Each check runs in one Authority read
-  transaction with no `BEGIN IMMEDIATE`, and makes no Jira, Confluence or
-  Granola call. The record check reads the record log on its own connection,
-  as every record read does.
-- **No audit row.** The check returns no content. The project list reads it
-  triggers (when `projects` moved, and at the first check after sign-in or
-  start, until one full read succeeds) are still audited as today.
-- **The server sets the pace.** `check_again_after_seconds`: the Authority
-  answers 60 today; the field lets a later Authority ask for longer; clients
-  honour 15..3600.
-- **Known scan.** The `owner_set_by` part of involvement has no index, so it
-  scans the organization's items. That is acceptable at pilot size.
+[ADR-0036](../decisions/ADR-0036-person-change-check.md) owns the change
+check as built. `GET /v1/person/changes` answers `echo-person-changes-v1`
+([`person-changes-v1.ts`](../../packages/organization-api/src/person-changes-v1.ts)):
+one fingerprint each for `projects`, `follow_ups` and `reviews`, built only
+from rows the caller may read (ADR-0012), with no audit row, no live read and
+a pace the Authority sets. The person client reports an Authority without the
+route as `not_supported`, and the desktop then runs R8's fallback. This
+design also decided that an area leaves checks out, so a sweep never wakes
+every desktop, and that the Authority ships with or before the desktop
+release. R3 cites the `involved` scope, so it stays below.
 
 ### 1.5 The `involved` scope
 
@@ -131,18 +86,6 @@ from rows the caller may read under the same policy as the matching read:
   with `counts`) lists only items whose latest send, handoff or state change
   is at or after it, chosen before the scope's bound; it narrows the page and
   its cursor like `states`, never the summary.
-- The validator change is in the contract commit; the server implements the
-  query.
-
-### 1.6 Compatibility
-
-- **Exact-key validators.** The desktop and the person client validate exact
-  keys, so the Authority is deployed with or before the desktop release.
-- **Older Authority.** A desktop talking to an older Authority gets
-  `not_supported` from `changes.read`. That one answer also stands for
-  `involved` and `changed_since`, which ship with the change check: the
-  desktop then runs the fallback in R8 and never asks for either.
-- **No schema change and no data reset.**
 
 ## 2. Desktop: one refresh rule (Tier 1)
 

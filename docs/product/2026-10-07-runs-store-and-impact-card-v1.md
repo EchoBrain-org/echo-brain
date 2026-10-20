@@ -1,14 +1,14 @@
 # Runs store and impact card v1
 
 Status: designed on 2026-10-07 under the founder's instruction to take the
-sprint end to end; the founder validates the built result. Every design choice
-here was made on the founder's behalf and is listed under "Rulings made while
-writing". Decision record:
+sprint end to end, and shipped with spec 1 in #294 (b4ca880). Every design
+choice here was made on the founder's behalf and is listed under "Rulings made
+while writing". The rulings made while building both specs are listed in
+[unified meeting approval v1](2026-10-07-unified-meeting-approval-v1.md#rulings-made-while-building).
+Decision record:
 [ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md). Builds on
 [unified meeting approval v1](2026-10-07-unified-meeting-approval-v1.md) and
 the [research trigger contract v1](2026-10-06-research-trigger-contract-v1.md).
-Implementation plan: `docs/superpowers/plans/2026-10-07-unified-approval-and-runs.md`.
-Implementation plan executed; see the plan's As built section.
 
 Implementation note, 2026-10-08: open items and Sweep, listed below under "Not
 in this round", are specified in
@@ -52,8 +52,9 @@ impact card shows on the approved meeting in the desktop app.
 
 - **Coordination, not execution.** The card says what an approval affects and
   who should know. ECHO never writes to Jira, Confluence or Slack.
-- **Acts as the approver; only the approver sees it** (the trigger's `acts_as:
-  approver` and `recipients: actor_only`).
+- **Acts as the approver; only the approver sees it.** The run's actor is the
+  approver (section 1): research runs with the approver's access, and only the
+  actor may list, start, retry or view the run.
 - **No copies of outside text.** Slack's API terms forbid persistent copies of
   Slack data, and ECHO keeps no Jira or Confluence excerpts (RFC-0003,
   connector integration v1). A stored run therefore keeps pointers and ECHO's
