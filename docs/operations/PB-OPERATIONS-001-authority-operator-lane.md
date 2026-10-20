@@ -152,13 +152,15 @@ an unelevated run fails.
 
 For browser onboarding, the local operator privately transfers the invitation
 and accepted record through the reviewed export CLI, verifies the matching
-command-line kit, then installs it and runs `person login` as the
-[invitation export guide](../../deploy/organization-authority/README.md#private-invitation-export-to-the-initial-owner-mac)
-shows. Keep invitation mode `0600`; never print or paste its grant. The human
-completes browser login, any required logout, and Slack setup and connect: an
-owner follows the organization Slack setup row above, then everyone runs
-`person tools connect --tool slack` (or its DM-code fallback without a
-browser). Export does not advance onboarding.
+command-line kit, runs `"<release-matched-kit>/Start-ECHO.sh" --install-only`,
+then runs
+`"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser`.
+Keep invitation mode `0600`; never print or paste its grant. The human completes
+browser login, any required logout, and Slack setup and connect: an owner follows
+the organization Slack setup row above, then everyone runs
+`person tools connect --tool slack` (or, without a browser,
+`person tools connect --tool slack --method dm-code --slack-user U…`). Export
+does not advance onboarding.
 
 For the ordinary release-canary path, after initial approval the local operator
 on the designated owner Mac verifies the kit-installed client against the
@@ -175,21 +177,23 @@ of asking the founder to paste full records. A global command or matching
 version string alone is not exact-client evidence. If the local operator cannot
 access that Mac, provide these commands to the human once. The human host
 operator then runs `sudo ./onboard-clean-v1.sh resume` and `sudo ./onboard-clean-v1.sh status`.
-This delegation covers the reads only, never the canary approval or host
-commands.
+The delegation above applies to the reads only, never the canary approval or
+host commands.
 For the fresh four-meeting source, use the linked rehearsal's four approvals
 and owner/employee read checks instead of this single-canary query.
 
 For an update, use the candidate's two checks in the
 [release loop](../../deploy/release/README.md#ec2-authority-replacement), which
 include a cited Ask. After `stage` and synthetic `canary`, stop for the founder's
-approval of the canary meeting, on the desktop or in Slack if linked. Only after
-the operator's candidate-client checks pass, show their evidence and ask the
-founder for the final decision on that exact candidate. Preserve the separate
-release- and client-digest-bound authorization before `promote`, and the
-feed approvals above for a coordinated release. Never create it merely because
-the PR was approved or the founder authorized automation. Nor create either
-approval because the candidate was staged. If checks fail, run a fresh release `status` action and roll back
+approval of the canary meeting, on the desktop or in Slack if linked. The local operator installs the verified candidate
+client and runs its checks. Only after both checks pass, show their evidence
+and ask the founder for the final decision on that exact candidate.
+Preserve the separate release- and client-digest-bound authorization before
+`promote`. For a coordinated release, retain the exact prepared manifest,
+channel, all four targets and predecessor binding in the existing feed approval
+records as well. Never create it merely because the PR was approved or the
+founder authorized automation. Nor create either approval because the candidate
+was staged. If checks fail, run a fresh release `status` action and roll back
 the exact candidate.
 
 ## Evidence and completion
