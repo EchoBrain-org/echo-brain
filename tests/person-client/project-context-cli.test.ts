@@ -7,6 +7,7 @@ import { runPersonClientCli } from '../../src/product/person-client/composition.
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
+import { signedInHome } from './signed-in-home.js';
 import {
   validatePersonUpdateSubmitV1, validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validateProjectContextBrowseV1,
   validateProjectContextFeedV1, validateProjectContextSearchV1, validateProjectCreateV1, validateProjectMemberSetV1,
@@ -69,25 +70,14 @@ const operation = (id: string) => cliOperations.find(item => item.id === id)!;
 const upload = operation('updates-submit-v3');
 const homes: string[] = [];
 const now = '2026-09-21T22:01:00.000Z';
-function signedInHome(): string {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-project-cli-')));
-  new PersonSessionStore(home).install('https://authority.example', 'oau_00000000-0000-4000-8000-000000000001', {
-    organization_id: 'org_00000000-0000-4000-8000-000000000001',
-    principal_id: 'prn_00000000-0000-4000-8000-000000000001',
-    membership_id: 'mem_00000000-0000-4000-8000-000000000001',
-    display_name: 'Fixture Person', membership_type: 'employee',
-    identity_binding_id: 'oib_00000000-0000-4000-8000-000000000001',
-    session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
-    access_token: 'A'.repeat(43), refresh_token: 'R'.repeat(43),
-    access_expires_at: '2026-09-21T22:11:00.000Z',
-    refresh_expires_at: '2026-09-28T22:00:00.000Z', hard_reauthentication_at: '2026-09-28T22:00:00.000Z',
-  });
+function projectHome(): string {
+  const home = signedInHome({ prefix: 'echo-project-cli-', now, authority: 'https://authority.example', display_name: 'Fixture Person' });
   writeFileSync(join(home, 'snapshot.txt'), 'We agreed to ship.\n');
   return home;
 }
 /** A signed-in home of the test's own, for tests that change its account. */
 function setup() {
-  const home = signedInHome();
+  const home = projectHome();
   homes.push(home);
   return { home };
 }
@@ -95,7 +85,7 @@ function setup() {
 let shared: { home: string; session: string } | undefined;
 function sharedHome(): string {
   if (shared === undefined) {
-    const home = signedInHome();
+    const home = projectHome();
     shared = { home, session: readFileSync(new PersonSessionStore(home).paths.live, 'utf8') };
   }
   return shared.home;

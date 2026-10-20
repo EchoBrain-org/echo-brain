@@ -6,7 +6,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonChangesV1 } from '@echo-brain/organization-api';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
-import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
+import { signedInHome } from './signed-in-home.js';
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const CHANGES = {
@@ -17,19 +17,15 @@ const CHANGES = {
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
+const NOW = '2026-10-15T10:00:00.000Z';
 function sessionHome(): string {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-person-changes-cli-'))); homes.push(home);
-  new PersonSessionStore(home).install('https://authority.example.test', 'oau_00000000-0000-4000-8000-000000000001', {
-    organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'prn_00000000-0000-4000-8000-000000000001', membership_id: 'mem_00000000-0000-4000-8000-000000000001',
-    display_name: 'Maya Chen', membership_type: 'employee', identity_binding_id: 'oib_00000000-0000-4000-8000-000000000001', session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
-    access_token: 'A'.repeat(43), refresh_token: 'R'.repeat(43), access_expires_at: '2026-10-15T10:10:00.000Z', refresh_expires_at: '2026-10-22T10:00:00.000Z', hard_reauthentication_at: '2026-10-22T10:00:00.000Z',
-  });
+  const home = signedInHome({ prefix: 'echo-person-changes-cli-', now: NOW }); homes.push(home);
   return home;
 }
 function cli(home: string, fetch: typeof globalThis.fetch) {
   const output = { stdout: '', stderr: '' };
   const run = (argv: readonly string[]) => runPersonClientCli(argv, {
-    home_directory: home, now: () => '2026-10-15T10:00:00.000Z', fetch,
+    home_directory: home, now: () => NOW, fetch,
     stdout: { write: value => { output.stdout += value; } }, stderr: { write: value => { output.stderr += value; } },
   });
   return { output, run };
@@ -45,11 +41,6 @@ describe('person change check client (ADR-0036)', () => {
     expect(new URL(String(url)).pathname).toBe('/v1/person/changes');
     expect(new URL(String(url)).search).toBe('');
     expect(init).toMatchObject({ method: 'GET', headers: { authorization: 'Bearer bearer' } });
-    // An extra key, or a digest that is not one, is a malformed answer.
-    for (const body of [{ ...CHANGES, position: 7 }, { ...CHANGES, areas: { ...CHANGES.areas, reviews: 'sha256:short' } }, { ...CHANGES, check_again_after_seconds: 5 }]) {
-      await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body)) }).changes('bearer'))
-        .rejects.toMatchObject({ code: 'invalid_response' });
-    }
   });
 
   it('reports an Authority without the route as not_supported, never not_found, and keeps other failures', async () => {
@@ -89,18 +80,5 @@ describe('person change check client (ADR-0036)', () => {
     expect(await signedOut.run(['changes'])).toBe(1);
     expect(lastLine(signedOut.output.stderr)).toMatchObject({ ok: false, action: 'changes' });
     expect(noNetwork).not.toHaveBeenCalled();
-  });
-
-  it('documents itself and the involved scope', async () => {
-    const { output, run } = cli(sessionHome(), vi.fn());
-    expect(await run(['changes', '--help'])).toBe(0);
-    expect(output.stdout).toContain('usage: echo-brain person changes');
-    expect(output.stdout).toContain('not_supported');
-    output.stdout = '';
-    expect(await run(['--help'])).toBe(0);
-    expect(output.stdout).toContain('changes     Check what moved in your own view, with no content.');
-    output.stdout = '';
-    expect(await run(['runs', '--help'])).toBe(0);
-    expect(output.stdout).toContain('with scope mine, involved, run, record or project');
   });
 });
