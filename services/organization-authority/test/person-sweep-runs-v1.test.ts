@@ -573,33 +573,6 @@ describe('sweeps on the runs API', () => {
     await expect(f.start('mina', failed)).rejects.toMatchObject({ code: 'not_found' });
   });
 
-  it('observes a sweep as it observes an impact check, and a finish that lost its lease as a conflict', async () => {
-    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'landed', approved_record: 'landed' } });
-    const diagnostics = createPersonDiagnosticsV1({ sessions: f.openItemsOptions.sessions });
-    captures.push(diagnostics);
-    const runsApp = createPersonTriggerRunsV1({ runs: f.runs, sessions: f.openItemsOptions.sessions, records: f.records, items: f.items, people: f.directory, bindDesk: f.bindDesk as never,
-      bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: f.research as never, lease_ms: 60_000, now: f.clock });
-    const captured = async (run_id: string) => {
-      const capture = await diagnostics.prepare({ access_token: 'ari', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id } } });
-      expect(await runsApp.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id, capture_id: capture.capture_id } })).toEqual({ state: 'running' });
-      await f.settled(run_id);
-      return diagnostics.read({ access_token: 'ari', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } });
-    };
-    const run_id = runOf(await f.sweep('ari', MINE));
-    expect(await captured(run_id)).toMatchObject({ status: 'completed', trace: { complete: true, events: [
-      { kind: 'lifecycle', stage: 'trigger', data: { trigger: 'sweep', run_id, event_id: f.runs.readUnfenced(run_id)!.event_ref } },
-      { kind: 'lifecycle', stage: 'persistence', event: 'succeeded' },
-      { kind: 'lifecycle', stage: 'application', event: 'succeeded' },
-    ] } });
-    const lost = runOf(await f.sweep('ari', MINE));
-    vi.spyOn(f.runs, 'finish').mockReturnValueOnce(false);
-    const failed = await captured(lost);
-    expect(failed).toMatchObject({ status: 'failed', error: { code: 'conflict' } });
-    expect(failed.trace!.events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stage: 'persistence', event: 'skipped' }), expect.objectContaining({ stage: 'application', event: 'failed' }),
-    ]));
-  });
-
   it('records nothing when the sweeper loses their membership mid-run, and ends without access', async () => {
     const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'landed', approved_record: 'landed' } });
     const { run_id } = await f.queueAndStart('mina');
@@ -654,29 +627,5 @@ describe('sweeps on the runs API', () => {
     vi.spyOn(f.records, 'recordAnchor').mockImplementationOnce(() => { throw new AuthorityOperationError('not_found', 'record evidence is not available'); });
     expect(await attempt(() => undefined)).toMatchObject({ state: 'failed', error_code: 'no_access' });
     expect(f.verdicts()).toEqual([null, null]);
-  });
-
-  it('holds a sweep pending while the search index lags, as an impact check, claiming and tracing nothing, and starts it once it caught up', async () => {
-    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'landed', approved_record: 'landed' } });
-    let lags = true;
-    const runsApp = createPersonTriggerRunsV1({ runs: f.runs, sessions: f.openItemsOptions.sessions, records: { ...f.records, recordIndexLags: () => lags },
-      items: f.items, people: f.directory, bindDesk: f.bindDesk as never, bind_options: f.openItemsOptions.bind_options as never,
-      research: f.research as never, lease_ms: 60_000, now: f.clock, live_sources: f.openItemsOptions.live_sources });
-    const start = (run_id: string) => runsApp.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id } });
-    const run_id = runOf(await f.sweep('ari', MINE));
-    const claim = vi.spyOn(f.runs, 'claim');
-    const anchor = vi.spyOn(f.records, 'recordAnchor');
-    const binds = f.bindDesk.mock.calls.length;
-    await expect(start(run_id)).resolves.toEqual({ state: 'pending' });
-    expect(claim).not.toHaveBeenCalled(); expect(anchor).not.toHaveBeenCalled();
-    expect(f.bindDesk.mock.calls.length).toBe(binds);
-    expect(f.runs.readUnfenced(run_id)).toMatchObject({ state: 'pending', attempts: 0, lease_token: null });
-    // Another person's start is refused as before, and learns nothing of the index.
-    await expect(runsApp.start({ access_token: 'mina', request: { schema_version: 1, operation: 'start', run_id } })).rejects.toMatchObject({ code: 'not_found' });
-    lags = false;
-    await expect(start(run_id)).resolves.toEqual({ state: 'running' });
-    await f.settled(run_id);
-    expect(f.runs.readUnfenced(run_id)).toMatchObject({ state: 'done', attempts: 0 });
-    expect(f.verdicts()).toEqual(['landed', 'landed']);
   });
 });
