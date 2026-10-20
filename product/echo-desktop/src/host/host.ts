@@ -1,4 +1,7 @@
-import { validatePersonChangesV1, validatePersonMeetingRequestV2, validatePersonMeetingResultV2, validatePersonRunsRequestV1, validatePersonRunsResultV1 } from '@echo-brain/organization-api';
+import {
+  validatePersonChangesV1, validatePersonDocumentIdV1, validatePersonItemRefV1, validatePersonMeetingRequestV2, validatePersonMeetingResultV2, validatePersonRunsRequestV1,
+  validatePersonRunsResultV1, validatePersonUpdateRequestId, validatePersonUploadContextId, validateProjectIdV1,
+} from '@echo-brain/organization-api';
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
 // token; what it posts back is a token-free view model or a failure code.
@@ -102,17 +105,9 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
-/** A saved note's id, as the client takes it. */
-const CONTEXT_ID = /^ctx_[0-9a-f]{64}$/;
-/** A request id the client accepts: a lowercase UUID v4. */
-const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
-const PROJECT_ID = new RegExp(`^prj_${UUID}$`);
 const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
-const DOCUMENT_ID = /^doc_[0-9a-f]{64}$/;
-/** An approved meeting's record digest: the id of a meeting's ref. */
-const RECORD_ID = /^sha256:[0-9a-f]{64}$/;
-const ASK_CANCEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ASK_CANCEL_ID = new RegExp(`^${UUID}$`);
 /** A page cursor, as the API writes one. */
 const CURSOR = /^[A-Za-z0-9_-]{1,1024}$/;
 /** A list's or an opened item's cursor, as person list and open write one. */
@@ -132,6 +127,11 @@ function projectName(value: unknown): string | null {
 /** An employee's name and email, bounded; the client checks them exactly before anything is sent. */
 function employeeText(value: unknown, maximum: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+/** Whether what the page sent is what the API's validator takes, as the client checks it again. */
+function valid(validate: (value: unknown) => unknown, value: unknown): boolean {
+  try { validate(value); return true; } catch { return false; }
 }
 
 /** Values the page supplied go in `--name=value` form: a leading '-' stays text. */
@@ -305,7 +305,7 @@ async function login(identity: string[], fallback: string): Promise<Result<AppSt
  */
 function projectSet(value: unknown, minimum: number): string | null {
   if (!Array.isArray(value) || value.length < minimum || value.length > MAX_CAPTURE_PROJECTS) return null;
-  if (!value.every(id => typeof id === 'string' && PROJECT_ID.test(id))) return null;
+  if (!value.every(id => valid(validateProjectIdV1, id))) return null;
   const sorted = [...value as string[]].sort();
   return sorted.some((id, index) => index > 0 && id === sorted[index - 1]) ? null : JSON.stringify(sorted);
 }
@@ -335,14 +335,14 @@ function audienceArgs(audience: Audience | undefined, projectIds: unknown): stri
 function listScopeArgs(scope: ListScope | undefined): string[] | null {
   if (scope === null || typeof scope !== 'object') return null;
   if (scope.kind === 'mine') return ['--mine'];
-  return scope.kind === 'project' && typeof scope.project_id === 'string' && PROJECT_ID.test(scope.project_id) ? [option('project', scope.project_id)] : null;
+  return scope.kind === 'project' && valid(validateProjectIdV1, scope.project_id) ? [option('project', scope.project_id)] : null;
 }
 
 /** An item's ref as the client takes it, built only from a known kind and an id of that kind's shape. Null for anything else. */
 function refArgument(ref: ItemRef | undefined): string | null {
   if (ref === null || typeof ref !== 'object' || typeof ref.id !== 'string') return null;
-  const shape = ref.kind === 'imported_meeting' ? /^cap_[a-f0-9]{64}$/ : ref.kind === 'note' ? CONTEXT_ID : ref.kind === 'document' ? DOCUMENT_ID : ref.kind === 'meeting' ? RECORD_ID : null;
-  return shape?.test(ref.id) ? option('ref', `${ref.kind}:${ref.id}`) : null;
+  const value = `${ref.kind}:${ref.id}`;
+  return valid(validatePersonItemRefV1, value) ? option('ref', value) : null;
 }
 
 /** No cursor, or one of a list's or an opened item's pages. */
@@ -357,12 +357,12 @@ function page(cursor: string | undefined): string[] {
 
 /** A project, and the cursor of a page the host gave: anything else is refused before the client sees it. */
 function pageable(projectId: unknown, cursor: unknown): boolean {
-  return typeof projectId === 'string' && PROJECT_ID.test(projectId) && (cursor === undefined || (typeof cursor === 'string' && CURSOR.test(cursor)));
+  return valid(validateProjectIdV1, projectId) && (cursor === undefined || (typeof cursor === 'string' && CURSOR.test(cursor)));
 }
 
 /** The command for one project change, or null for anything the page should not have sent. */
 function changeArgs(change: ProjectChange | undefined, requestId: string, expect: Expect): string[] | null {
-  if (!change || typeof change !== 'object' || typeof change.project_id !== 'string' || !PROJECT_ID.test(change.project_id)) return null;
+  if (!change || typeof change !== 'object' || !valid(validateProjectIdV1, change.project_id)) return null;
   const common = [option('project-id', change.project_id), option('request-id', requestId)];
   switch (change.kind) {
     case 'member-add':
@@ -374,11 +374,11 @@ function changeArgs(change: ProjectChange | undefined, requestId: string, expect
       return ['projects', 'member-set', ...common, option('membership-id', change.membership_id), option('role', change.role)];
     case 'associate':
     case 'dissociate':
-      if (typeof change.context_id !== 'string' || !CONTEXT_ID.test(change.context_id)) return null;
+      if (!valid(validatePersonUploadContextId, change.context_id)) return null;
       return ['projects', change.kind, ...common, option('context-id', change.context_id)];
     case 'document-associate':
     case 'document-dissociate':
-      if (typeof change.document_id !== 'string' || !DOCUMENT_ID.test(change.document_id)) return null;
+      if (!valid(validatePersonDocumentIdV1, change.document_id)) return null;
       return ['documents', change.kind.slice('document-'.length), ...common, option('document-id', change.document_id), ...expected(expect)];
     default:
       return null;
@@ -437,19 +437,19 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       // Main put the chosen file here in place of the page's handle.
       const { expect, document_id } = params as Params<'documents.save'>;
       const out = (params as { out?: unknown }).out;
-      if (typeof out !== 'string' || typeof document_id !== 'string' || !DOCUMENT_ID.test(document_id)) return code('invalid_request');
+      if (typeof out !== 'string' || !valid(validatePersonDocumentIdV1, document_id)) return code('invalid_request');
       return forAccount(method, expect, ['documents', 'download-v2', option('document-id', document_id), option('out', out)],
         stdout => savedOriginalView(lastJson(stdout), document_id));
     }
     case 'projects.jiraRead': {
       const { expect, project_id } = params as Params<'projects.jiraRead'>;
-      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) return code('invalid_request');
+      if (!valid(validateProjectIdV1, project_id)) return code('invalid_request');
       return forAccount(method, expect, ['tools', 'project', '--tool=jira', option('echo-project', project_id)], stdout => projectJiraMappingView(lastJson(stdout), project_id));
     }
     case 'projects.jiraSet': {
       const { expect, project_id, request_id, expected_revision, jira_project } = params as Params<'projects.jiraSet'>;
-      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id) || typeof request_id !== 'string' || !REQUEST_ID.test(request_id) ||
-          (expected_revision !== null && (typeof expected_revision !== 'string' || !REQUEST_ID.test(expected_revision))) ||
+      if (!valid(validateProjectIdV1, project_id) || !valid(validatePersonUpdateRequestId, request_id) ||
+          (expected_revision !== null && !valid(validatePersonUpdateRequestId, expected_revision)) ||
           (jira_project !== null && (typeof jira_project !== 'string' || !/^(?:[A-Z][A-Z0-9_]{0,63}|[1-9][0-9]{0,19})$/.test(jira_project)))) return code('invalid_request', true);
       return forAccount(method, expect, ['tools', 'project', '--tool=jira', option('echo-project', project_id),
         option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(jira_project === null ? ['--clear'] : [option('jira-project', jira_project)])],
@@ -457,13 +457,13 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     }
     case 'projects.confluenceRead': {
       const { expect, project_id } = params as Params<'projects.confluenceRead'>;
-      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) return code('invalid_request');
+      if (!valid(validateProjectIdV1, project_id)) return code('invalid_request');
       return forAccount(method, expect, ['tools', 'project', '--tool=confluence', option('echo-project', project_id)], stdout => projectConfluenceMappingView(lastJson(stdout), project_id));
     }
     case 'projects.confluenceSet': {
       const { expect, project_id, request_id, expected_revision, space_ids } = params as Params<'projects.confluenceSet'>;
-      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id) || typeof request_id !== 'string' || !REQUEST_ID.test(request_id) ||
-          (expected_revision !== null && (typeof expected_revision !== 'string' || !REQUEST_ID.test(expected_revision))) ||
+      if (!valid(validateProjectIdV1, project_id) || !valid(validatePersonUpdateRequestId, request_id) ||
+          (expected_revision !== null && !valid(validatePersonUpdateRequestId, expected_revision)) ||
           (space_ids !== null && (!Array.isArray(space_ids) || space_ids.length < 1 || space_ids.length > 20 || !space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)) || new Set(space_ids).size !== space_ids.length))) return code('invalid_request', true);
       return forAccount(method, expect, ['tools', 'project', '--tool=confluence', option('echo-project', project_id), option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(space_ids === null ? ['--clear'] : [option('space-ids', space_ids.join(','))])], stdout => projectConfluenceMappingView(lastJson(stdout), project_id), request_id);
     }
@@ -474,7 +474,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     }
     case 'projects.read': {
       const { expect, project_id } = params as Params<'projects.read'>;
-      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) return code('invalid_request');
+      if (!valid(validateProjectIdV1, project_id)) return code('invalid_request');
       return forAccount(method, expect, ['projects', 'read-v2', option('project-id', project_id)], stdout => projectView(lastJson(stdout), project_id));
     }
     case 'projects.members': {
@@ -495,14 +495,14 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     }
     case 'projects.change': {
       const { expect, request_id, change } = params as Params<'projects.change'>;
-      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id)) return code('invalid_request');
+      if (!valid(validatePersonUpdateRequestId, request_id)) return code('invalid_request');
       const argv = changeArgs(change, request_id, expect);
       if (!argv) return code('invalid_request', true, request_id);
       return forAccount(method, expect, argv, stdout => changeView(lastJson(stdout), request_id, change), request_id);
     }
     case 'projects.create': {
       const { expect, request_id, name } = params as Params<'projects.create'>;
-      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id)) return code('invalid_request');
+      if (!valid(validatePersonUpdateRequestId, request_id)) return code('invalid_request');
       const title = projectName(name);
       if (title === null) return code('invalid_request', true, request_id);
       return forAccount(method, expect, ['projects', 'create', option('request-id', request_id), option('name', title)],
@@ -511,7 +511,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     case 'projects.rename': {
       const { expect, request_id, project_id, name } = params as Params<'projects.rename'>;
       const title = projectName(name);
-      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id) || typeof project_id !== 'string' || !PROJECT_ID.test(project_id) || title === null) {
+      if (!valid(validatePersonUpdateRequestId, request_id) || !valid(validateProjectIdV1, project_id) || title === null) {
         return code('invalid_request', true, typeof request_id === 'string' ? request_id : undefined);
       }
       return forAccount(method, expect, ['projects', 'rename', option('request-id', request_id), option('project-id', project_id), option('name', title)],
@@ -519,7 +519,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     }
     case 'projects.archive': {
       const { expect, request_id, project_id, archived } = params as Params<'projects.archive'>;
-      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id) || typeof project_id !== 'string' || !PROJECT_ID.test(project_id) || typeof archived !== 'boolean') {
+      if (!valid(validatePersonUpdateRequestId, request_id) || !valid(validateProjectIdV1, project_id) || typeof archived !== 'boolean') {
         return code('invalid_request', true, typeof request_id === 'string' ? request_id : undefined);
       }
       return forAccount(method, expect, ['projects', archived ? 'archive' : 'unarchive', option('request-id', request_id), option('project-id', project_id)],
@@ -527,7 +527,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     }
     case 'projects.leave': {
       const { expect, request_id, project_id } = params as Params<'projects.leave'>;
-      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id) || typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) {
+      if (!valid(validatePersonUpdateRequestId, request_id) || !valid(validateProjectIdV1, project_id)) {
         return code('invalid_request', true, typeof request_id === 'string' ? request_id : undefined);
       }
       return forAccount(method, expect, ['projects', 'leave', option('request-id', request_id), option('project-id', project_id)],
@@ -590,7 +590,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     }
     case 'documents.abandon': {
       const { expect, request_id } = params as Params<'documents.abandon'>;
-      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id)) return code('invalid_request');
+      if (!valid(validatePersonUpdateRequestId, request_id)) return code('invalid_request');
       return forAccount(method, expect, ['documents', 'abandon', option('request-id', request_id), ...expected(expect)],
         stdout => abandonView(lastJson(stdout), request_id));
     }
