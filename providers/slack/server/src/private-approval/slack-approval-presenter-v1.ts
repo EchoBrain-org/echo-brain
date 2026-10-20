@@ -107,9 +107,12 @@ type PresentationRow = {
 };
 
 const MAX_ATTEMPTS = 5;
+/** The longest Slack Retry-After a row waits out, so a huge one cannot park it for days, unretried and never failed. */
+const MAX_RETRY_AFTER_MS = 15 * 60_000;
 const asIso = (value: Date): string => value.toISOString();
-// Never sooner than Slack's Retry-After. Each step gets a fresh poster, so the row, not the poster, keeps it.
-const nextRetryAt = (now: Date, attempts: number, retryAfterMs = 0): string => new Date(now.getTime() + Math.max(Math.min(60_000, 1_000 * 2 ** attempts), retryAfterMs)).toISOString();
+// Never sooner than Slack's Retry-After, up to the cap. Each step gets a fresh poster, so the row, not the poster, keeps it.
+const nextRetryAt = (now: Date, attempts: number, retryAfterMs = 0): string =>
+  new Date(now.getTime() + Math.max(Math.min(60_000, 1_000 * 2 ** attempts), Math.min(retryAfterMs, MAX_RETRY_AFTER_MS))).toISOString();
 
 function record(value: unknown, label: string): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`approval snapshot ${label} must be an object`);
