@@ -67,8 +67,9 @@ Option 3.
   shows an opened body only when it fits that step's scratchpad budget, and the
   writer chooses its own context, so an item can first enter a prompt several
   calls after the check that covered it. The same check still verifies, on
-  every call, the session, membership tenure, ECHO grants and authorization
-  revision, each live connection's binding, account and site, and the record
+  every call, the session, membership tenure, the caller's own ECHO grants
+  (the organization's authorization revision until 2026-10-19, see Later
+  decisions), each live connection's binding, account and site, and the record
   snapshot pin. A live connection is verified once, after the new reads,
   instead of before and after them.
 - **At release** the full cumulative check is unchanged. It runs before the
@@ -134,7 +135,16 @@ final one included. Each release now pins the caller's own active project
 grants, each by its grant row, as the record releases already do. Every check,
 incremental or full, still refuses once those grants change, rejoining a
 project included, so one request never mixes two snapshots of the caller's
-project grants. A change to one released item's audience or project
-association is still refused by the full check at release, as the security
-trade-off above describes. The tests are the two desk fence tests in
+project grants.
+
+Audiences are immutable and notes and documents are never deleted, so the
+one change to a released item itself that the revision caught is a change to
+its project association. Such a change used to refuse the answer at the next
+model call. Now the item stays in model input, and can be named in
+[ADR-0039](ADR-0039-ask-progress-names-after-the-access-check.md) progress
+events, until the final check, which refuses it. This is within the trade-off
+above and ADR-0039's: the person never loses read access to the item, only the
+project stops holding it. The desk release audit row is now `schema_version`
+2, committing `grants_sha256` where version 1 committed
+`authorization_revision`. The tests are the three desk fence tests in
 `person-original-context-adversarial.test.ts`.

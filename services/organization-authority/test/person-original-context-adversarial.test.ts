@@ -590,6 +590,9 @@ describe("adversarial original-context retrieval", () => {
     const releases = [{ kind: "global" as const }, { kind: "project" as const, project_id: PROJECT_ALPHA }]
       .map(scope => f.retrieval.deskSearch({ access_token: "member", scope, query: "orgwide-revision-marker" }));
     expect(releases.map(release => release.items.length)).toEqual([1, 1]);
+    const audit = JSON.parse((f.database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1 WHERE row_sha256=?").get(releases[0]!.receipt) as { body_json: string }).body_json) as Record<string, unknown>;
+    expect(audit).toMatchObject({ schema_version: 2, grants_sha256: releases[0]!.release.grants_sha256 });
+    expect(audit).not.toHaveProperty("authorization_revision");
     const note = (token: string) => projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: "Mid-answer note", text: "saved while the Ask runs", association_project_ids: [], audience: { kind: "team" } });
     const rename = (principalId: string, name: string) => f.database.prepare("UPDATE authority_principals SET display_name=? WHERE principal_id=?").run(name, principalId);
     const revision = () => f.database.prepare("SELECT revision FROM authority_project_authorization_state_v1").pluck().get() as number;
@@ -634,6 +637,19 @@ describe("adversarial original-context retrieval", () => {
     expect(check(rejoined, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
     expect(check(rejoined)).toThrow(expect.objectContaining({ code: "unauthorized" }));
     expect(check(search(), true)).not.toThrow();
+  });
+
+  it("keeps a project release through the incremental check once its item leaves the project, and refuses it at the full check", () => {
+    const f = fixture();
+    const documentId = f.upload("Alpha plan", "association-fence-marker", { project_id: PROJECT_ALPHA });
+    const release = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "association-fence-marker" });
+    expect(release.items).toHaveLength(1);
+    // Audiences are immutable and originals are never deleted, so the project association is what can change about an item.
+    f.database.prepare("DELETE FROM authority_person_document_associations_v1 WHERE document_id=? AND project_id=?").run(documentId, PROJECT_ALPHA);
+    // The member still reads it; only the project no longer holds it (ADR-0038's accepted trade-off).
+    expect(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "association-fence-marker" }).items).toHaveLength(1);
+    expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release, items_checked: true })).not.toThrow();
+    expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release })).toThrow(expect.objectContaining({ code: "unauthorized" }));
   });
 
   it("rejects a tampered representation body when its stored hash is unchanged", () => {
