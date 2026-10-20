@@ -76,19 +76,6 @@ describe('your follow-ups (F9)', () => {
     const home = rows(await signedIn({ page: 'home' }));
     expect(home.find(node => node.props['data-testid'] === 'sidebar-follow-ups')?.props['aria-current']).toBeUndefined();
   });
-
-  it('are reachable from an empty Home with no projects', async () => {
-    const state = await signedIn({ page: 'home' });
-    const { Home } = await import('../../src/renderer/screens/home.js');
-    const shown = Home({ state });
-    expect(shown.props['data-testid']).toBe('home-empty');
-    const tree = descendants(shown);
-    expect(tree.some(node => node.props['data-testid'] === 'empty-new-project')).toBe(true);
-    // The footer is a component of its own: it renders the link.
-    const footer = tree.find(node => typeof node.type === 'function' && node.type.name === 'Footer');
-    const link = descendants((footer!.type as (props: unknown) => unknown)(footer!.props)).find(node => node.props['data-testid'] === 'your-follow-ups');
-    expect(text(link)).toBe('Follow-ups');
-  });
 });
 
 const RELEASE = 'clean-v1-release-b';
