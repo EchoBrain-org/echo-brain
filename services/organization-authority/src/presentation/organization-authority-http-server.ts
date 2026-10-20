@@ -196,7 +196,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
   readonly person_diagnostics?: PersonDiagnosticsHttpApplicationV1;
-  /** Provider-owned account connection routes, selected by the composition root. */
+  /** Provider-owned routes (account connections and the Slack approval click), selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
   readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
@@ -210,16 +210,13 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly project_context?: ProjectContextApplicationV1;
   readonly person_documents?: PersonDocumentApplicationV1;
   readonly document_upload_staging?: PersonDocumentUploadStagingV1;
-  /** Optional until an active private-approval surface is fully composed. */
-  readonly private_approval_interaction_ingress?:
-    ProviderHttpApplicationV1;
 }
 
 function providerIngressRoutes(
   options: OrganizationAuthorityHttpServerOptions,
 ): ReadonlyMap<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }> {
   const mounted = new Map<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }>();
-  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link, options.person_tools, options.person_tools_v4, ...(options.person_tool_connections ?? [])]) {
+  for (const application of [options.person_external_identity_link, options.person_tools, options.person_tools_v4, ...(options.person_tool_connections ?? [])]) {
     if (application === undefined) continue;
     const routeIds = new Set<string>();
     for (const route of application.routes) {

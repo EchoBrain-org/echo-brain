@@ -151,9 +151,6 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly answer_composition_background?: AnswerCompositionGenerationBindingV1["structured_output"];
   /** Bound by the active rebuild runtime so serving accepts the same model profile. */
   readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
-  /** Present only when the signed private-approval surface is active. */
-  readonly private_approval_interaction_ingress?:
-    ProviderHttpApplicationV1;
 }
 
 /** Recover personal writes before search startup, then attach the API's authenticated sessions. */
@@ -413,7 +410,7 @@ export async function startOrganizationAuthorityApiRuntime(
       const owners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
       return Object.freeze({
         ...createPersonTriggerRunsV1({
-          runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, audit: answerOptions.audit, bind_options: answerOptions, live_sources: liveSources,
+          runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources,
           research: ({ desk, context }) => createAgenticResearchV1({ desk, model: dependencies.answer_composition_background ?? answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context),
             ...(answerOptions.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }),
           items, people, ...(owners === undefined ? {} : { owners }),
@@ -499,12 +496,6 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(externalIdentity === undefined
         ? {}
         : { person_external_identity_link: externalIdentity.application }),
-      ...(dependencies.private_approval_interaction_ingress === undefined
-        ? {}
-        : {
-            private_approval_interaction_ingress:
-              dependencies.private_approval_interaction_ingress,
-          }),
     });
     server.listen(config.port, config.host);
     await once(server, "listening");

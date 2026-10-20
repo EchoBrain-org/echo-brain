@@ -17,7 +17,7 @@ function serverOptions(input: {
     expected_issuer: "https://issuer.example",
     ...(input.approval === undefined
       ? {}
-      : { private_approval_interaction_ingress: input.approval }),
+      : { person_tool_connections: [input.approval] }),
     ...(input.external_identity === undefined
       ? {}
       : { person_external_identity_link: input.external_identity }),
