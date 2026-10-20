@@ -196,7 +196,9 @@ that `/v4` route for compatibility.
 `--live --progress` streams Ask's progress
 ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)): one JSON line per step before the final
 line, which adds the answer's receipt; on `/v6` a step may name a follow-up,
-and on `/v7` also a project, a person, a tool or a tool container. An Authority that does not stream
+and on `/v7` also a project, a person, a tool or a tool container. On `/v7` the receipt counts every
+item research looked through, a row of a list or search as well as an item read in full
+([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)). An Authority that does not stream
 gets today's output. The desktop pins the streamed Ask to the account it
 shows (`--expected-membership-id` and `--expected-authority`): a client
 signed in as another asks nothing and prints no step. See [Person client architecture](../architecture/person-client-architecture.md)

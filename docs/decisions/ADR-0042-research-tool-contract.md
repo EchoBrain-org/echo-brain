@@ -380,3 +380,11 @@ in `services/organization-authority/test/` unless shown in full:
   (`person-evidence-desk-records.test.ts`);
 - every answer version below V8 refuses a workspace or container citation
   (`packages/organization-api/test/person-answer-v8.test.ts`).
+
+## Later decisions
+
+[ADR-0043](ADR-0043-ask-receipt-counts-what-research-looked-through.md)
+(2026-10-19, proposed) lifts the known limit "The receipt still counts only
+items read in full": progress V3's receipt counts every item research looked
+through, rows included, and every version's `found` counts only what its
+reads gave research.

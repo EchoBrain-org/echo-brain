@@ -590,6 +590,22 @@ test('an answer that cites your project, a person, a tool and a Jira project ope
   expect(run.calls().filter(call => call.path === '/v7/person/ask')).toHaveLength(2);
 });
 
+test('an Ask that only listed rows says it looked through every row, and its receipt opens onto its searches alone (ADR-0043)', async () => {
+  run = await launch('ask-progress-listed');
+  const { page } = run;
+  await askFromHome(page, 'Which Jira tickets are open?');
+  await expect.poll(() => run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.progress)).toEqual(['3']);
+  // Jira's 30 rows came as a page of 25, then the other 5: one search, as a person reads it.
+  await openLine(page);
+  await expect(progressSteps(page)).toHaveText(['Searched Jira · 30 found']);
+
+  // Nothing was read in full, and the receipt still counts all 30 rows it looked through, with no line about names.
+  writeFileSync(join(run.home, 'release-ask'), '');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 30 items · \d+s$/);
+  await expect(page.getByTestId('receipt-rows').getByTestId('ask-step')).toHaveText(['Searched Jira · 30 found']);
+});
+
 test('an opened line\'s new row follows a person at the bottom of Ask, and never pulls one who scrolled up back down', async () => {
   run = await launch('ask-progress');
   const { page } = run;

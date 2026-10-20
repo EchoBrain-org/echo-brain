@@ -37,7 +37,9 @@ import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8 } from
  *
  * A run streams the progress version its answer has: V1 for the V6 answer
  * on `/v5`, V2 for the V7 answer on `/v6`, which alone may name follow-ups
- * (ADR-0040). Each event is validated as its version before it is sent.
+ * (ADR-0040), V3 for the V8 answer on `/v7`. Each event is validated as its
+ * version before it is sent. A V3 receipt counts every item research looked
+ * through, rows included; V1 and V2 count only what it read in full (ADR-0043).
  */
 
 /** What research reports while it runs. The loop calls these; a run without progress passes none. */
@@ -45,16 +47,20 @@ export interface AgenticResearchProgressReporterV1 {
   /** A batch of reads starts: the small-scope preload, or one research step's reads. */
   reads(searching: boolean): void;
   /**
-   * One read's released items. `source_id` is the catalog source a search or
-   * list chose; undefined means it read every catalog source.
+   * The rows one search or list gives research: a search's hits, a list's page (never the rows fetched behind it), or
+   * the preload's items, only when research is shown them. `source_id` is the catalog source it chose; undefined means
+   * it read every catalog source.
    */
-  returned(tool: "search" | "open" | "list", source_id: string | undefined, items: readonly EvidenceDeskItemV2[]): void;
+  returned(tool: "search" | "list", source_id: string | undefined, items: readonly EvidenceDeskItemV2[]): void;
   /** The batch's results are applied: a batch that searched or listed becomes one `searched` row. */
   reads_done(): void;
   /** A research call is about to be given these items' complete text, perhaps none. Its access check has not run yet. */
   before_check(items: readonly EvidenceDeskItemV2[]): void;
-  /** The gate's `before_call`: the access check before that call passed, and the model is given these items in full. */
-  given(items: readonly EvidenceDeskItemV2[]): void;
+  /**
+   * The gate's `before_call`: the access check before that call passed. The model is given `items` in full and shown
+   * `shown`, every item the call shows as a row or in full, `items` among them.
+   */
+  given(items: readonly EvidenceDeskItemV2[], shown?: readonly EvidenceDeskItemV2[]): void;
 }
 
 export interface AgenticAskProgressRecorderV1 {
@@ -63,7 +69,10 @@ export interface AgenticAskProgressRecorderV1 {
   stage(stage: "writing" | "checking_access"): void;
   /** `canonicalSha256` of each item this run named, in naming order: its audit record's commitments. */
   named_citation_digests(): readonly Sha256Digest[];
-  /** Built only after the release step passed, from this run's record; a V1 run's is a V1 receipt. */
+  /**
+   * Built only after the release step passed, from this run's record; a V1 run's is a V1 receipt. Its `looked_through`
+   * counts, in V3, every item research was shown, as a row or in full; in V1 and V2, the items it read in full.
+   */
   receipt(elapsed_ms: number): PersonAskReceiptV3;
   /** The run settled: nothing is sent after this. */
   settle(): void;
@@ -174,10 +183,12 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
   const everySource = options.sources.map(source => sourcesById.get(source.source_id)).filter((value): value is PersonAskProgressSourceV3 => value !== undefined);
   let settled = false;
   let lastStage: string | undefined;
-  /** Items a search or list returned to this person: a later one counts only what none returned before. */
+  /** Items a search or list gave research: a later one counts only what none gave before. */
   const returnedKeys = new Set<string>();
-  /** Items research read in full (looked through), and the ones it named. */
+  /** Items research read in full, and the ones it named. */
   const readKeys = new Set<string>();
+  /** Items research was shown after an access check, as a row or in full: what a V3 receipt counts as looked through. */
+  const shownKeys = new Set<string>();
   const named: PersonAskProgressItemV3[] = [];
   /** Every item the request named, an earlier attempt's included: each is named once, and the bound counts them all. */
   const namedKeys = options.named ?? new Set<string>();
@@ -207,9 +218,8 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
       batch = { sources: new Map(), found: 0 };
       stage(searching ? "searching" : "reading");
     },
-    returned(tool: "search" | "open" | "list", sourceId: string | undefined, items: readonly EvidenceDeskItemV2[]) {
-      // Found is what searches and lists returned: neighbours an open brought along count once a search or list returns them.
-      if (tool === "open") return;
+    returned(_tool: "search" | "list", sourceId: string | undefined, items: readonly EvidenceDeskItemV2[]) {
+      // Found is what searches and lists gave research: neighbours an open brought along count once one of them gives them.
       let fresh = 0;
       for (const item of items) {
         const key = itemKey(item);
@@ -235,9 +245,10 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
       const fresh = new Set(items.map(itemKey).filter(key => !readKeys.has(key) && !namedKeys.has(key)));
       stage("reading", fresh.size);
     },
-    given(items: readonly EvidenceDeskItemV2[]) {
+    given(items: readonly EvidenceDeskItemV2[], shown: readonly EvidenceDeskItemV2[] = items) {
       // Synchronous from here: a cancel or deadline cannot fall between the check and these names.
       if (!live()) return;
+      for (const item of [...items, ...shown]) shownKeys.add(itemKey(item));
       const fresh: { readonly key: string; readonly item: PersonAskProgressItemV3 }[] = [];
       for (const item of items) {
         const key = itemKey(item);
@@ -264,7 +275,8 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
     named_citation_digests: () => Object.freeze(named.map(item => canonicalSha256(item.citation))),
     receipt(elapsedMs: number): PersonAskReceiptV3 {
       const elapsed = Math.min(PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1, Math.max(0, Math.round(elapsedMs)));
-      const lookedThrough = bounded(readKeys.size);
+      // V3 counts every item research looked through, rows included; V1 and V2 keep their count of items read in full.
+      const lookedThrough = bounded(version === 3 ? shownKeys.size : readKeys.size);
       // Fit the byte bound by dropping named items from the end; looked_through stays.
       for (let keep = named.length; ; keep -= 1) {
         let left = keep;

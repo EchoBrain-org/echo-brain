@@ -621,6 +621,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       { text: 'Its work is in the APOLLO Jira project, which your Jira connection reads.', citation_indexes: [2, 3], private: true },
     ] }],
   });
+  /** What `ask-progress-listed` answers from Jira's 30 listed rows, none read in full: two of them, cited as rows. */
+  const listedAnswer = (question: string, scope: Record<string, unknown>) => ({
+    schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered',
+    citations: [ticket('APOLLO-1', 'Fixture work 1', '10101'), ticket('APOLLO-2', 'Fixture work 2', '10102')], parts: [{ question, status: 'answered', statements: [
+      { text: '30 Jira tickets are open, APOLLO-1 and APOLLO-2 among them.', citation_indexes: [0, 1], private: true },
+    ] }],
+  });
   /**
    * A streamed Ask, framed by the contract itself: a search of meetings,
    * documents and Jira, its four reads, then, once the test lets it answer
@@ -633,25 +640,32 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * answer cites the follow-up. On `/v7` (progress V3,
    * `ask-progress-workspace`) it searches your projects, people and tools and
    * Jira's projects, reads Apollo, Mina, Jira and Apollo's Jira project, and
-   * the V8 answer cites all four.
+   * the V8 answer cites all four. `ask-progress-listed`, on `/v7` too, only
+   * lists Jira's 30 rows, a page of 25 and then the other 5, and reads none
+   * in full: its receipt counts all 30 rows it looked through (ADR-0043).
    */
   const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, version: 1 | 2 | 3 = 1): Response => {
     const format = version === 3 ? api.formatPersonAskProgressEventV3 : version === 2 ? api.formatPersonAskProgressEventV2 : api.formatPersonAskProgressEventV1;
-    const items = version === 3 ? workspaceCitations : version === 2 ? [progressItems()[0]!, followUpCitation] : progressItems();
-    const searched = version === 3 ? { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 }
-      : version === 2 ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 2 }
-        : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
+    const listed = mode === 'ask-progress-listed';
+    const items = listed ? [] : version === 3 ? workspaceCitations : version === 2 ? [progressItems()[0]!, followUpCitation] : progressItems();
+    const searched = listed ? { type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira' }], found: 30 }
+      : version === 3 ? { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 }
+        : version === 2 ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 2 }
+          : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
     const [part] = desktop.answer.parts as Record<string, unknown>[];
-    const response = version === 3 ? workspaceAnswer(question, scope) : version === 2
+    const response = listed ? listedAnswer(question, scope) : version === 3 ? workspaceAnswer(question, scope) : version === 2
       ? { ...desktop.answer, schema_version: 7, kind: 'echo-clean-person-answer-v7', scope, citations: [followUpCitation], parts: [{ question, status: 'answered', statements: [
         { text: 'Mina still owes the launch checklist.', citation_indexes: [0], private: false }] }] }
       : { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
+    const steps = listed
+      ? [{ type: 'stage', stage: 'searching' }, { ...searched, found: 25 }, { ...searched, found: 5 }]
+      : [{ type: 'stage', stage: 'searching' }, searched, { type: 'stage', stage: 'reading', pending: items.length }, { type: 'read', items }];
+    // Every row it looked through: a row research was shown, or an item it read in full.
+    const receipt = { looked_through: listed ? 30 : items.length, elapsed_ms: 48_000, rows: listed ? [searched] : [searched, { type: 'read', items }] };
     const encoder = new TextEncoder();
     let cancelled = false;
     const frames = (async function* () {
-      for (const step of [{ type: 'stage', stage: 'searching' }, searched, { type: 'stage', stage: 'reading', pending: items.length }, { type: 'read', items }]) {
-        yield format(step);
-      }
+      for (const step of steps) yield format(step);
       let more = false;
       while (mode !== 'ask-progress-quick' && !existsSync(join(home, 'release-ask'))) {
         if (cancelled || signal?.aborted) return;
@@ -666,7 +680,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       yield format({ type: 'stage', stage: 'checking_access' });
       yield format(mode === 'ask-progress-fails'
         ? { type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } }
-        : { type: 'answer', response, receipt: { looked_through: items.length, elapsed_ms: 48_000, rows: [searched, { type: 'read', items }] } });
+        : { type: 'answer', response, receipt });
     })();
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
@@ -1734,10 +1748,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    // Only ask-progress-follow-up's Authority has `/v6` (ADR-0040), and only ask-progress-workspace's has `/v7` (research tool
-    // contract v1); every other mode's predates both, so its client asks `/v5`.
+    // Only ask-progress-follow-up's Authority has `/v6` (ADR-0040), and only ask-progress-workspace's and ask-progress-listed's
+    // have `/v7` (research tool contract v1); every other mode's predates both, so its client asks `/v5`.
     const v6 = mode === 'ask-progress-follow-up' && path === '/v6/person/ask';
-    const v7 = mode === 'ask-progress-workspace' && path === '/v7/person/ask';
+    const v7 = (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed') && path === '/v7/person/ask';
     if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask' || v6 || v7)) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
@@ -1759,7 +1773,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
       if (v7) {
         if (progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) return progressStream(api, question, scope, init?.signal ?? undefined, 3);
-        const answered = json(workspaceAnswer(question, scope));
+        const answered = json(mode === 'ask-progress-listed' ? listedAnswer(question, scope) : workspaceAnswer(question, scope));
         answered.headers.set('x-echo-person-ask-route', '7');
         return answered;
       }
