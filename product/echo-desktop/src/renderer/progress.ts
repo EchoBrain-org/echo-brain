@@ -1,5 +1,5 @@
 import type { AnswerSource, AskRead, AskReceipt, AskSearched, AskSearchedSource, AskStage, AskStep, ConnectedTool } from '../shared/protocol.js';
-import { documentName, groupKey } from './answer.js';
+import { documentName, externalSourceProvider, groupKey } from './answer.js';
 
 /**
  * What Ask shows while it works (Ask progress and internal links v1,
@@ -117,8 +117,7 @@ export function listWords(words: readonly string[]): string {
  */
 export function sourceWords(source: AskSearchedSource, tools?: readonly ConnectedTool[] | null): string {
   if (!('tool_id' in source)) return source.kind === 'slack' ? 'Slack' : source.kind === 'follow_ups' ? 'follow-ups' : source.kind;
-  return tools?.find(tool => tool.tool_id === source.tool_id)?.name ??
-    source.tool_id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  return externalSourceProvider(source, tools);
 }
 
 /**

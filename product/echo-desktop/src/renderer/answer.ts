@@ -1,4 +1,5 @@
 import type { Answer, AnswerSource, AnswerStatement, ConnectedTool, ExternalAnswerSource } from '../shared/protocol.js';
+import { sourceKey } from './openers.js';
 
 /**
  * One source as an answer shows it: a document, a meeting's approved record,
@@ -20,13 +21,10 @@ export interface SourceGroup {
  */
 export function groupKey(source: AnswerSource): string {
   if (source.kind === 'record') return `record:${source.record.record_sha256}`;
-  if (source.kind === 'follow_up') return `follow_up:${source.item_id}`;
-  if (source.kind === 'project') return `project:${source.project_id}`;
-  if (source.kind === 'person') return `person:${source.membership_id}`;
-  if (source.kind === 'tool') return `tool:${source.tool_id}`;
   if (source.kind === 'original') return `original:${source.ref.source_id}`;
   if (source.kind === 'transcript') return `transcript:${source.meeting}`;
-  return `${source.kind}:${source.tool_id}:${source.permalink}`;
+  // Any other source is one place already: the item itself.
+  return sourceKey(source);
 }
 
 /** Every sentence of an answer, by the id the pane knows it by: "direct", or its part and place ("0.2", "0.r1" for a passage found). */
@@ -143,7 +141,7 @@ export function passageBlocks(text: string, label: string): Block[] {
 }
 
 /** Use the server's tool label when loaded; otherwise show its identity, never infer from the citation kind. */
-export function externalSourceProvider(source: ExternalAnswerSource, tools?: readonly ConnectedTool[] | null): string {
+export function externalSourceProvider(source: Pick<ExternalAnswerSource, 'tool_id'>, tools?: readonly ConnectedTool[] | null): string {
   return tools?.find(tool => tool.tool_id === source.tool_id)?.name ??
     source.tool_id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }

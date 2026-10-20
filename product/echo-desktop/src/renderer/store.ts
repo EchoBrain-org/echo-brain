@@ -1017,11 +1017,6 @@ async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknow
   return result.value as T;
 }
 
-/** Open in Jira, Confluence or Slack, from an impact card: the tool checks your access when it opens. */
-export async function openImpactSource(source: ExternalAnswerSource): Promise<boolean> {
-  return !state.concealed && (await rpc('source.openExternal', { kind: source.kind, permalink: source.permalink })).ok;
-}
-
 export function manageTool(tool: ConnectedTool): void {
   if (!state.status?.account || state.concealed || newProjectInTheWay() || state.sheet) return;
   set({ sheet: { kind: 'tool-manage', tool, busy: false } });
@@ -3712,7 +3707,7 @@ export function openNamed(items: readonly AnswerSource[]): void {
   readPane(sources.gen, source);
 }
 
-/** External providers check current access when the person opens a cited or named link; main checks the link again. */
+/** External providers check current access when the person opens a cited or named link, or a follow-up's; main checks the link again. */
 export async function openExternalSource(source: ExternalAnswerSource): Promise<boolean> {
   return !state.concealed && (await rpc('source.openExternal', { kind: source.kind, permalink: source.permalink })).ok;
 }
