@@ -32,13 +32,7 @@ import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open
 import type { PersonWorkspaceReleaseAuditV1, PersonWorkspaceReleaseV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { ProjectContextApplicationV1, ProjectContextRepositoryV1, ProjectMembershipGrantV1 } from '../application/ports/project-context-v1.js';
 import {
-  createEvidenceCursorsV1,
-  evidenceInvalidV1 as invalid,
-  evidenceNotFoundV1 as notFound,
-  evidencePageSizeV1,
-  evidenceTermsV1,
-  evidenceWordsV1,
-  newestFirstV1,
+  createEvidenceCursorsV1, evidenceInvalidV1 as invalid, evidenceNotFoundV1 as notFound, evidencePageSizeV1, evidenceTermsV1, evidenceWordsV1, newestFirstV1,
 } from './person-local-source-helpers-v1.js';
 
 /**

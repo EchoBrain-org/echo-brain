@@ -1,11 +1,5 @@
 import type { EvidenceDeskUncheckedV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
-import {
-  EVIDENCE_ANY_DATE_V1,
-  EVIDENCE_DATE_FIELDS_V1,
-  type EvidenceDateFieldV1,
-  type EvidenceDateSelectionV1,
-  type EvidenceDatesV1,
-} from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
+import { EVIDENCE_ANY_DATE_V1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1, type EvidenceDatesV1 } from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
 
 /**
  * What a dated read could not test (research tool contract v1): each item that does not record the date the read tests
