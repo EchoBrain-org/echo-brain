@@ -160,8 +160,8 @@ its diagnostic reads. Mine and unmapped projects exclude Jira.
 The same EC2 overlay selects `ECHO_STAGING_CONFLUENCE_ASK_V1=true` when the
 fixed connector profile is present. Confluence uses only that profile's
 Atlassian Cloud ID, with a separately configured Nango Cloud integration named
-`confluence`. It uses each Person's own Confluence grant and no Jira project or
-Slack channel restriction. Global Ask follows the person's Confluence access;
+`confluence`. It uses each Person's own Confluence grant and no Jira project
+restriction. Global Ask follows the person's Confluence access;
 project Ask filters discovery through the project's Confluence space mapping.
 Conflicting explicit Confluence flags refuse startup. Without the staging switch
 or both explicit Confluence flags, the Confluence source remains unconfigured.
@@ -428,9 +428,7 @@ A sweep acts as the person who asked, with their access, and stores only
 verdicts and which items it could not read. It covers items on a Jira ticket
 or a page in a tool the caller has connected (a live source a desk binds is for
 that tool and the caller's link to it is live, read locally, never from the
-provider), or on an ECHO record or document. Items on a Slack message are left
-out, and the sweep trigger refuses a Slack message citation: no reader in ECHO
-can open one yet, so a sweep could only record it unreadable. At start it takes
+provider), or on an ECHO record or document. At start it takes
 up to 20 of the items the caller still sees, never checked first, then the
 oldest last check; an item one of their sweeps that finished in the last day
 could not read goes after all the others. It names the decision to research

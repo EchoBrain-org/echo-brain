@@ -57,7 +57,6 @@ export type Scenario = {
   readonly replies: readonly unknown[];
   /** Pinned clock advances only when the model is called, so the stop is deterministic. */
   readonly model_call_ms?: number;
-  readonly shortcut?: boolean;
   readonly asker?: string;
 };
 
@@ -169,19 +168,6 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       { sentences: [{ text: "The review decided hit-DVT status.", evidence: ["E1"] }], not_found: ["whether DVT is on track"] },
     ],
   },
-  small_scope_preload: {
-    version: 4, question: "Summarize what was approved.", shortcut: true,
-    desk: () => ({
-      scope: { kind: "mine" }, live_sources: [],
-      search: async (input: { readonly query?: string }) => input.query === undefined ? result([listed("p1"), listed("p2")]) : result([]),
-      open: async (input: { readonly item: string }) => result([record(input.item.endsWith(canonicalSha256({ id: "p1" }).slice(7)) ? "p1" : "p2")]),
-      list: async () => result([]), revalidate: async () => checked,
-    }),
-    replies: [
-      step([part("What was approved?", [need("approved decisions", "found", ["E1", "E2"])])], [{ tool: "finish", args: {} }]),
-      { sentences: [{ text: "Two decisions were approved.", evidence: ["E1", "E2"] }], not_found: [] },
-    ],
-  },
   unusable_step_stop: {
     version: 4, question: "What did the review decide?",
     desk: () => ({
@@ -260,7 +246,6 @@ export async function replay(name: string, scenario: Scenario, hooks: { readonly
     desk: scenario.desk(), model, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); hooks.on_append?.(entry); } },
     now_ms: () => time, today: () => "2026-10-06", wall_ms,
     ...(scenario.asker === undefined ? {} : { asker: { display_name: scenario.asker } }),
-    ...(scenario.shortcut === true ? { small_scope_shortcut: true } : {}),
   };
   const input = { question: scenario.question, ...(hooks.signal === undefined ? {} : { signal: hooks.signal }) };
   const response = scenario.version === 6
@@ -274,7 +259,7 @@ export async function replay(name: string, scenario: Scenario, hooks: { readonly
  * With `usage`, the model also reports each call's token usage (call numbers start at 1).
  */
 export function researchHarness(replies: readonly unknown[] | ((input: StructuredGenerationInput, index: number) => unknown), desk: Partial<EvidenceDeskPortV2> = {}, core: {
-  readonly small_scope_shortcut?: true; readonly now_ms?: () => number; readonly usage?: (call: number) => StructuredGenerationUsageV1; readonly wall_ms?: () => number;
+  readonly now_ms?: () => number; readonly usage?: (call: number) => StructuredGenerationUsageV1; readonly wall_ms?: () => number;
 } = {}) {
   const inputs: StructuredGenerationInput[] = [];
   const audit: AgenticAskAuditEntryV1[] = [];

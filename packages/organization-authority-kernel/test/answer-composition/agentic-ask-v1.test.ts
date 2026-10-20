@@ -91,22 +91,13 @@ const search = (query: string): ActionSpec => ({ tool: "search", args: { query }
 const open = (id: string): ActionSpec => ({ tool: "open", args: { id } });
 const answer = (sentences: readonly { text: string; evidence: readonly string[] }[], notFound: readonly string[] = []) => ({ sentences, not_found: notFound });
 
-function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; shortcut?: boolean; context_tokens?: number; asker?: string }) {
+function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; context_tokens?: number; asker?: string }) {
   const audit = options.audit ?? [];
   return createAgenticAskV1({
     desk: options.desk, model: options.model, generation: { ...generation, ...(options.context_tokens === undefined ? {} : { context_tokens: options.context_tokens }) }, audit: { append: entry => { audit.push(entry); } },
     today: () => "2026-09-28",
     ...(options.asker === undefined ? {} : { asker: { display_name: options.asker } }),
-    ...(options.now === undefined ? {} : { now_ms: options.now }), ...(options.shortcut === true ? { small_scope_shortcut: true } : {}),
-  });
-}
-
-function slackItem(ts: string, text: string, options: { channel?: string; kind?: "public_channel" | "im"; thread?: string } = {}): EvidenceDeskItemV1 {
-  const citation = { kind: "slack_message" as const, team_id: "T0001", channel_id: "C0001", message_ts: ts, ...(options.thread === undefined ? {} : { thread_ts: options.thread }), permalink: `https://acme.slack.com/archives/C0001/p${ts.replace(".", "")}`, text_sha256: canonicalSha256({ text }) };
-  return Object.freeze({
-    id: `desk_${canonicalSha256(citation).slice(7)}`, citation, kind: "slack_message" as const, text,
-    label: `#${options.channel ?? "hw-dvt"} · Priya · 2026-09-26`, visibility: options.kind === "im" ? "only_me" as const : "team" as const,
-    occurred_at: "2026-09-26", receipt_sha256: canonicalSha256({ receipt: ts }),
+    ...(options.now === undefined ? {} : { now_ms: options.now }),
   });
 }
 
@@ -384,22 +375,25 @@ describe("agentic Ask: research loop", () => {
   it("normalizes list arguments and explains the ones it rejects", async () => {
     const script = scripted([
       step([{}], [
-        { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: "7d" } },
-        { tool: "list", args: { source: "slack" } },
+        { tool: "list", args: { source: "tickets", channel: "#hw-dvt", since: "7d" } },
+        { tool: "list", args: { source: "meetings", channel: "hw-dvt" } },
         { tool: "list", args: { source: "meetings", since: "sometime" } },
         { tool: "list", args: { source: "meetings", kind: "ideas" } },
       ]),
       finish([missing()]),
       finish([missing()]),
     ]);
-    // A V1 desk binds no live source: the V6 core reads this Slack source, which declares no capabilities.
+    // A V1 desk binds no live source: the V6 core reads this ticket source, which declares no capabilities.
     const evidence = desk();
-    const withSlack = { ...evidence, live_sources: [{ source_id: "slack", kind: "slack_message", selector: "slack", description: "Live discussion messages.", metadata_only_list: false, requires_channel: true, default_since_days: 14, tool_id: "slack" }] } as unknown as EvidenceDeskPortV2;
-    await createAgenticAskV3({ desk: withSlack, model: script.model, generation, audit: { append: () => undefined }, today: () => "2026-09-28" }).answer({ question: "When is launch?" });
-    expect(evidence.list).toHaveBeenCalledTimes(1);
-    expect(evidence.list).toHaveBeenCalledWith(expect.objectContaining({ source: "slack", channel: "hw-dvt", since: "2026-09-21" }));
-    expect(script.prompt(1).last_results.slice(1)).toEqual([
-      expect.objectContaining({ error: expect.stringContaining("slack needs a channel") }),
+    const withTickets = { ...evidence, live_sources: [{ source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" }] } as unknown as EvidenceDeskPortV2;
+    await createAgenticAskV3({ desk: withTickets, model: script.model, generation, audit: { append: () => undefined }, today: () => "2026-09-28" }).answer({ question: "When is launch?" });
+    // No source takes a channel: each list ignores it, says so, and never sends it to the desk.
+    expect(evidence.list).toHaveBeenCalledTimes(2);
+    expect(evidence.list).toHaveBeenNthCalledWith(1, expect.objectContaining({ source: "jira", since: "2026-09-21" }));
+    expect(evidence.list.mock.calls.map(([request]) => Object.hasOwn(request as object, "channel"))).toEqual([false, false]);
+    expect(script.prompt(1).last_results).toEqual([
+      expect.objectContaining({ filters: { channel: "ignored", since: "applied" }, note: "channel is unsupported by this source; ignored; nothing more to list" }),
+      expect.objectContaining({ filters: { channel: "ignored" }, note: "meetings takes no channel; ignored; nothing more to list" }),
       expect.objectContaining({ error: expect.stringContaining("since and until") }),
       // A value the source's capabilities do not allow is refused, never an error: nothing was read (research tool contract v1).
       expect.objectContaining({ filters: { kind: "refused" }, note: expect.stringContaining("kind must be decision, action, rationale"), supports: expect.objectContaining({ dates: ["occurred", "approved", "received", "due"] }) }),
@@ -919,24 +913,6 @@ describe("agentic Ask: research loop", () => {
     expect(result.parts[0]!.statements[0]!.private).toBe(true);
   });
 
-  it("reads Slack like any source and cites it with a Slack citation", async () => {
-    const record = item("review", "DVT build starts Oct 12.", { label: "DVT review · Sep 24" });
-    const slack = slackItem("1758873600.000100", "Vendor says fixtures may slip to Oct 16.", { kind: "im" });
-    const script = scripted([
-      step([{ needs: [{ need: "approved start" }, { need: "latest vendor date" }] }], [search("DVT fixtures")]),
-      finish([{ needs: [{ need: "approved start", status: "found", evidence: ["E1"] }, { need: "latest vendor date", status: "found", evidence: ["E2"] }] }]),
-      answer([
-        { text: "The Sep 24 review approved a DVT start of Oct 12.", evidence: ["E1"] },
-        { text: "In a DM on Sep 26 the vendor said fixtures may slip to Oct 16; no new date is approved.", evidence: ["E2"] },
-      ]),
-    ]);
-    const result = await ask({ desk: desk({ search: () => [record, slack] }), model: script.model }).answer({ question: "Is DVT on track?" });
-    expect(script.prompt(1).seen[1]).toMatchObject({ id: "E2", source: "slack", kind: "slack_message", date: "2026-09-26", text: slack.text, full: true });
-    expect(validatePersonAnswerResponseV4(result)).toEqual(result);
-    expect(result.citations[1]).toMatchObject({ kind: "slack_message", citation: { kind: "slack_message", channel_id: "C0001" }, visibility: "only_me" });
-    expect(result.parts[0]!.statements.map(value => value.private)).toEqual([false, true]);
-  });
-
   it("tells the model that project scope and available live sources come from server composition", async () => {
     const script = scripted([finish([missing()]), finish([missing()])]);
     await ask({ desk: desk({ scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000002" } as EvidenceDeskPortV1["scope"] }), model: script.model }).answer({ question: "When is launch?" });
@@ -962,13 +938,13 @@ describe("agentic Ask: research loop", () => {
       kind: "document_passage", label: "Atlas plan.md", ref: `document:${document_id}`,
       citation: { kind: "source_revision", source_id: `source:${"d".repeat(64)}`, revision_id: "revision-1", source_sha256: canonicalSha256({ source: 1 }), representation_sha256: canonicalSha256({ representation: 1 }), anchor_sha256: canonicalSha256({ anchor: 1 }), document_id },
     });
-    const slack = slackItem("1758873600.000100", "Launch still Tuesday.");
+    const unreferenced = item("standup", "Launch still Tuesday.");
     const script = scripted([
       step([{}], [search("launch")]),
       finish([found(["E1", "E2", "E3"])]),
       answer([{ text: "Launch is Tuesday.", evidence: ["E1", "E2", "E3"] }]),
     ]);
-    const result = await ask({ desk: desk({ search: () => [meeting, passage, slack] }), model: script.model }).answer({ question: "When is launch?" });
+    const result = await ask({ desk: desk({ search: () => [meeting, passage, unreferenced] }), model: script.model }).answer({ question: "When is launch?" });
     expect(validatePersonAnswerResponseV4(result)).toEqual(result);
     expect(result.citations.map(value => value.ref)).toEqual([meeting.ref, passage.ref, undefined]);
     expect(result.citations[2]).not.toHaveProperty("ref");
@@ -1364,40 +1340,6 @@ describe("agentic Ask: failures never lose found evidence", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     // The witness binds the access check before the cancelled step call.
     expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 1, checked_at: checked, generations: [{ role: "step", finish_reason: null, usage: null }] });
-  });
-});
-
-describe("agentic Ask: small-scope preload", () => {
-  it("opens a small complete scope before step 1 so the model can finish at once", async () => {
-    const listed = [listedItem("a"), listedItem("b")];
-    const opened = new Map([[listed[0]!.id, item("a", "Full text A.")], [listed[1]!.id, item("b", "Full text B.")]]);
-    const evidence = desk({ inventory: listed, open: id => [opened.get(id)!] });
-    const script = scripted([
-      finish([found(["E1"])]),
-      answer([{ text: "A.", evidence: ["E1"] }]),
-    ]);
-    const result = await ask({ desk: evidence, model: script.model, shortcut: true }).answer({ question: "When is launch?" });
-    expect(evidence.search).toHaveBeenCalledWith(expect.objectContaining({ inventory_mode: "items" }));
-    expect(script.prompt(0).opened.map((value: { text: string }) => value.text)).toEqual(expect.arrayContaining(["Full text A.", "Full text B."]));
-    expect(result.outcome).toBe("answered");
-  });
-
-  it("starts no preload search once the caller has cancelled, and leaves no rejection unhandled", async () => {
-    const unhandled: unknown[] = [];
-    const record = (reason: unknown) => { unhandled.push(reason); };
-    process.on("unhandledRejection", record);
-    try {
-      const evidence = desk({ inventory: [listedItem("a")] });
-      const audit: AgenticAskAuditEntryV1[] = [];
-      const controller = new AbortController();
-      controller.abort();
-      await expect(ask({ desk: evidence, model: scripted([]).model, audit, shortcut: true }).answer({ question: "When is launch?", signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
-      expect(evidence.search).not.toHaveBeenCalled();
-      expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 0 });
-      // A desk call started after the cancel would reject after the request settled; wait a macrotask for it.
-      await new Promise(resolve => setTimeout(resolve, 0));
-      expect(unhandled).toEqual([]);
-    } finally { process.off("unhandledRejection", record); }
   });
 });
 

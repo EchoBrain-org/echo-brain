@@ -5,7 +5,6 @@ it('dispatches generic external opening through the correct closed link policy',
   const page = 'https://wiki.example.test/page?id=12345';
   expect(externalSourcePermalink('page', page)).toBe(page);
   expect(externalSourcePermalink('ticket', page)).toBeNull();
-  expect(externalSourcePermalink('slack', page)).toBeNull();
   expect(externalSourcePermalink('unknown', page)).toBeNull();
 });
 
@@ -24,8 +23,8 @@ describe('ticket display link containment', () => {
 });
 
 describe('tool container display link containment (research tool contract v1)', () => {
-  it.each(['https://example.atlassian.net/browse/THERM', 'https://example.atlassian.net/wiki/spaces/THT', 'https://acme.slack.com/archives/C0123456'])(
-    'opens a Jira project, Confluence space or Slack channel as a ticket opens: %s', link => {
+  it.each(['https://example.atlassian.net/browse/THERM', 'https://example.atlassian.net/wiki/spaces/THT'])(
+    'opens a Jira project or Confluence space as a ticket opens: %s', link => {
       expect(externalSourcePermalink('container', link)).toBe(link);
     });
   it.each(['http://example.test/browse/THERM', 'https://user:pass@example.test/browse/THERM', 'https://example.test/browse/THERM?redirect=evil',

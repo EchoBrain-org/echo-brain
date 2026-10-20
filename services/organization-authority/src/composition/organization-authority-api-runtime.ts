@@ -128,8 +128,6 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly person_http_runtime_factory?: (authentication: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>, resources: PersonHttpRuntimeResourcesV1) => PersonHttpRuntimeV1;
   /** Selected capabilities; adding a provider does not add a runtime or Ask slot. */
   readonly live_connectors?: readonly PersonLiveConnectorDefinitionV1[];
-  /** Server-only agentic Ask experiment: open the whole readable scope first when it is small. */
-  readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /**
    * Staging-only research evaluation endpoint (research loop evaluation v1).
    * Composed only for the staging Authority origin and only with the answer model.
@@ -378,7 +376,6 @@ export async function startOrganizationAuthorityApiRuntime(
       generation: dependencies.answer_composition_generation.generation,
       audit: new SqlitePersonAgenticAskAuditV1(database),
       ...(diagnostics === undefined ? {} : { diagnostics }),
-      ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
     };
     const items = new SqliteImpactItemsV1(database);
     const people = new SqliteOpenItemPeopleV1(database);
@@ -408,8 +405,7 @@ export async function startOrganizationAuthorityApiRuntime(
       return Object.freeze({
         ...createPersonTriggerRunsV1({
           runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources,
-          research: ({ desk, context }) => createAgenticResearchV1({ desk, model: dependencies.answer_composition_background ?? answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context),
-            ...(answerOptions.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }),
+          research: ({ desk, context }) => createAgenticResearchV1({ desk, model: dependencies.answer_composition_background ?? answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context) }),
           items, people, ...(owners === undefined ? {} : { owners }),
         }),
         ...createPersonOpenItemsV1({ sessions, runs, items, people, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources }),

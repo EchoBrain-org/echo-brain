@@ -372,15 +372,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     readonly query?: string;
     readonly kinds?: readonly DeskKind[];
     readonly limit?: number;
-    readonly inventory_mode?: "items";
   }): OriginalContextDeskReleaseV1 {
     validateEvidenceDateFilterV1(input, input.source === "meeting" ? PERSON_MEETING_DATE_FIELDS_V1 : input.source === "document" ? PERSON_DOCUMENT_DATE_FIELDS_V1 : ANY_SOURCE_DATE_FIELDS);
     const limit = input.limit ?? (input.query === undefined ? 50 : 10);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > (input.query === undefined ? 50 : 10)) {
-      throw new AuthorityOperationError("invalid_request", "request is invalid");
-    }
-    if (input.inventory_mode !== undefined &&
-      (input.query !== undefined || input.inventory_mode !== "items")) {
       throw new AuthorityOperationError("invalid_request", "request is invalid");
     }
     const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
@@ -389,25 +384,11 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const terms = input.query === undefined ? [] : queryTerms(input.query);
     const filteredInventory = input.query === undefined && (input.source !== undefined || input.since !== undefined || input.until !== undefined);
     const candidates = input.query === undefined && !filteredInventory
-      ? this.deskInventoryRows(
-          actor,
-          input.scope,
-          limit + 1,
-          input.kinds,
-          input.inventory_mode === "items",
-        )
+      ? this.deskInventoryRows(actor, input.scope, limit + 1, input.kinds)
       : [];
-    // Complete-items inventory counts canonical desk packets, rather than
-    // extraction rows. A single long note or extracted chunk can contain many
-    // independently citable 3 KiB packets. The SQL candidates are already
-    // bounded to limit+1 rows; every row has at least one packet, so expanding
-    // then taking limit+1 is sufficient to prove truncation without an
-    // unbounded source scan.
     const expanded: DeskEntry[] = input.query !== undefined
       ? this.deskBm25Entries(actor, input.scope, terms, limit + 1, input.kinds, input)
       : filteredInventory ? this.deskFilteredInventory(actor, input.scope, limit + 1, input)
-      : input.inventory_mode === "items"
-      ? candidates.flatMap((row) => this.deskAtoms(row, [], true).map((atom) => ({ score: 0, received_at: row.received_at, atom, item: () => this.deskItem(row, atom, false) })))
       : candidates.map((row) => { const atom = this.deskAtom(row, []); return { score: row.lexical_score, received_at: row.received_at, atom, item: () => this.deskItem(row, atom, false) }; });
     const selected = expanded.slice(0, limit);
     annotateCoreRuntimeV1({ counts: { transcript_items: selected.filter((entry) => entry.transcript === true).length } });
@@ -909,25 +890,23 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     });
   }
 
-  private deskInventoryRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, limit: number, kinds: readonly DeskKind[] | undefined, allDocumentPassages: boolean): readonly (SourceRow | DocumentRow)[] {
-    // Ordinary source inventory exposes one stable representative passage per
-    // document. The internal complete-items mode needs every readable atom,
-    // but fetches only limit+1 rows from each sorted source before merging.
-    const sourceLimit = allDocumentPassages ? limit : 100;
+  private deskInventoryRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, limit: number, kinds: readonly DeskKind[] | undefined): readonly (SourceRow | DocumentRow)[] {
+    // Source inventory exposes one stable representative passage per document.
+    const sourceLimit = 100;
     const candidates = [
       ...this.textRows(actor, scope, [], { inventory: true, limit: sourceLimit }),
       // Transcript-only imports remain visible in the original-item list, but
       // have no notes passage to cite. Exclude them before applying the limit
       // so they neither break packet construction nor hide readable notes.
       ...this.imported.rows(actor, scope).filter(row => row.text.length > 0).slice(0, sourceLimit),
-      ...this.documentRows(actor, scope, [], { inventory: true, limit: sourceLimit, ...(allDocumentPassages ? {} : { first_document_passage: true }) }),
+      ...this.documentRows(actor, scope, [], { inventory: true, limit: sourceLimit, first_document_passage: true }),
     ]
       .filter((row) => kinds === undefined || kinds.includes("document_id" in row ? "document_passage" : row.api_version === 0 ? "imported_meeting" : "note"))
       .sort((left, right) => right.received_at.localeCompare(left.received_at) || left.source_id.localeCompare(right.source_id) || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0));
     const documents = new Set<string>();
     const selected: (SourceRow | DocumentRow)[] = [];
     for (const row of candidates) {
-      if (!allDocumentPassages && "document_id" in row) {
+      if ("document_id" in row) {
         if (documents.has(row.document_id)) continue;
         documents.add(row.document_id);
       }
@@ -938,15 +917,9 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private deskAtom(row: SourceRow | DocumentRow, terms: readonly string[]): ReleasedSourceContextAtomV1 {
-    return this.deskAtoms(row, terms, false)[0]!;
-  }
-
-  private deskAtoms(row: SourceRow | DocumentRow, terms: readonly string[], allPackets: boolean): readonly ReleasedSourceContextAtomV1[] {
-    const selected = allPackets
-      ? packets(row.title, row.text).map((text, index) => ({ index, text }))
-      : [wholeMatchingPacket(row.title, row.text, terms)];
+    const packet = wholeMatchingPacket(row.title, row.text, terms);
     this.assertRowRevision(row);
-    return Object.freeze(selected.map((packet) => originalPacketAtomV1(row, packet)));
+    return originalPacketAtomV1(row, packet);
   }
 
   /** A released packet's row must still match its immutable source revision. */

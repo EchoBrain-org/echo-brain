@@ -78,6 +78,7 @@ try {
     ECHO_CLEAN_AUTHORITY_HOST: 'authority-staging.echobrain.org', ECHO_CLEAN_AUTHORITY_UID: '999', ECHO_CLEAN_AUTHORITY_GID: '988',
     ECHO_CLEAN_AUTHORITY_IMAGE: accepted.authority_image.reference, ECHO_CLEAN_RELEASE_ID: accepted.release_id,
     ECHO_CLEAN_RELEASE_SOURCE_SHA: COMMIT, ECHO_CLEAN_RUNTIME_PROFILE_SHA256: profileSha, ECHO_CLEAN_RUNTIME_PROFILE_VERSION: 'clean-v1-profile-1',
+    // An older prepare wrote the retired content telemetry switch; updates carry it forward unread.
     PRIVATE_FIXTURE: 'synthetic-never-publish-value', ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: 'true',
   };
   const acceptedEnv = Object.entries(acceptedEnvironment).map(([key, value]) => `${key}=${value}\n`).join('');

@@ -67,7 +67,7 @@ export interface AgenticResearchItemV1 {
   /** The research model saw its complete released text. */
   readonly read_in_full: boolean;
   readonly opened: boolean;
-  /** Loaded before round 1 (starting evidence or the small-scope preload). */
+  /** Loaded before round 1 (starting evidence). */
   readonly preloaded: boolean;
   readonly cited_by_plan: boolean;
 }

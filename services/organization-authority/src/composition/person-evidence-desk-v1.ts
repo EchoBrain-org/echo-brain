@@ -60,12 +60,11 @@ export interface PersonEvidenceDeskV1 extends EvidenceDeskPortV1 {
  * transcript_items for that subset. Never text, ids or labels.
  */
 function deskCounts(items: readonly EvidenceDeskItemV1[]): CoreRuntimeCountsV1 {
-  let meeting = 0; let document = 0; let slack = 0;
+  let meeting = 0; let document = 0;
   for (const item of items) {
-    const source = evidenceDeskSourceV1(item);
-    if (source === "meeting") meeting += 1; else if (source === "slack") slack += 1; else document += 1;
+    if (evidenceDeskSourceV1(item) === "meeting") meeting += 1; else document += 1;
   }
-  return { included_count: items.length, meeting_items: meeting, document_items: document, slack_items: slack };
+  return { included_count: items.length, meeting_items: meeting, document_items: document };
 }
 
 /** Each desk call is one span under the current request, Ask step or evidence door. */
@@ -241,10 +240,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     expanded.anchor_truncated === undefined ? value : Object.freeze({ ...value, anchor_truncated: expanded.anchor_truncated });
   const search = async (input: EvidenceDeskSearchInputV1): Promise<PersonEvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
-    if (input.inventory_mode !== undefined &&
-      (input.query !== undefined || input.inventory_mode !== "items")) {
-      throw new AuthorityOperationError("invalid_request", "evidence inventory mode is invalid");
-    }
     initialize();
     const limit = input.limit ?? (input.query === undefined ? 50 : 10);
     if (input.query === undefined) {
@@ -255,7 +250,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
         scope: options.scope,
         limit,
         ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }),
-        ...(input.inventory_mode === "items" ? { inventory_mode: "items" } : {}),
       });
       const beforeRecords = recordReleases.length;
       const recordKinds = recordKindsOf(input.kinds);
@@ -272,13 +266,11 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
   };
   const list = async (input: EvidenceDeskListInputV1): Promise<PersonEvidenceDeskResultV1> => {
-    // Each source takes the dates its capabilities declare (research tool contract v1); this desk reads no Slack.
+    // Each source takes the dates its capabilities declare (research tool contract v1).
     validateEvidenceDateFilterV1(input, input.source === "meeting" ? PERSON_MEETING_DATE_FIELDS_V1 : input.source === "document" ? PERSON_DOCUMENT_DATE_FIELDS_V1 : undefined);
     input.signal?.throwIfAborted();
     initialize();
     const limit = Math.min(50, Math.max(1, input.limit ?? 50));
-    // This desk reads no Slack. A live Slack source, when one is bound, is a separate desk source.
-    if (input.source === "slack") return result([], false, []);
     const kinds = input.kinds ?? (input.source === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : ['note', 'document_passage'] as const);
     const page = await search({ ...evidenceDateFilterV1(input), source: input.source, kinds, limit, ...(input.signal === undefined ? {} : { signal: input.signal }) });
     // The inventory reads one row past its limit and says truncated when more exist, so its end is confirmed (ADR-0041).
@@ -301,7 +293,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const openCitation = async (input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
     initialize();
-    if ((input.citation as { readonly kind: string }).kind === "slack_message") throw new AuthorityOperationError("not_found", "Slack messages open in Slack");
     if (input.citation.kind === "approved_record") {
       const expanded = options.records.openDeskCitation({ access_token: options.access_token, atom_id: input.citation.atom_id, record_sha256: input.citation.record_sha256, policy_id: input.citation.policy_id, ...recordScope(options.scope) });
       latestRecordTruncated = false;

@@ -1,4 +1,4 @@
-import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { claudeStructuredSchema } from "./claude-structured-schema.js";
 import {
   type StructuredGenerationFailureClassV1,
@@ -319,7 +319,6 @@ function fail(
   annotateCoreRuntimeV1({ result: input.failure_class === "adapter_timeout" ? "timeout" :
     input.response?.status === 429 ? "rate_limited" : input.failure_class === "adapter_json" ? "parse_failure" :
     ["adapter_finish", "adapter_refusal", "adapter_response"].includes(input.failure_class) ? "invalid_output" : "provider_failure" });
-  captureCoreRuntimeContentV1("validation_error", { message, failure_class: input.failure_class });
   throw new OpenRouterStructuredGenerationError(
     message,
     failureDiagnostic(input),
@@ -411,7 +410,6 @@ export function createOpenRouterStructuredGenerationAdapter(
         },
       }),
     };
-    captureCoreRuntimeContentV1("model_request", request.body);
     annotateCoreRuntimeV1({ counts: { input_bytes: Buffer.byteLength(request.body as string), input_tokens: null, output_tokens: null, total_tokens: null } });
     const providerStartedAt = safeNow(nowMs);
     let response: Response;
@@ -432,7 +430,6 @@ export function createOpenRouterStructuredGenerationAdapter(
     try {
       annotateCoreRuntimeV1({ counts: { http_status: response.status } });
       payloadText = await response.text();
-      captureCoreRuntimeContentV1("model_response", { request_id: response.headers.get("x-request-id"), body: payloadText });
       annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(payloadText) } });
       providerLatency = elapsed(providerStartedAt, nowMs);
     } catch (error) {

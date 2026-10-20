@@ -76,12 +76,11 @@ describe("Slack browser identity link workflow", () => {
     const { workflow, callback, commit } = setup({ proof: { user_id: "U123", team_id: "TOTHER" } });
     const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
     const events: CoreRuntimeObservationV1[] = [];
-    const content: unknown[] = [];
     await observeCoreRuntimeV1("http_request", async () => {
       await callback("sensitive-oauth-code");
-    }, { observer: (event) => { events.push(event); }, content_observer: (event) => { content.push(event); } });
+    }, { observer: (event) => { events.push(event); } });
     expect(events.some((event) => event.phase === "person_tool_completion" && event.event === "succeeded" && event.result === "invalid_output")).toBe(true);
-    expect(JSON.stringify([events, content])).not.toContain("sensitive-oauth-code");
+    expect(JSON.stringify(events)).not.toContain("sensitive-oauth-code");
     await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "failed", failure_reason: "provider_rejected" });
     expect(commit).not.toHaveBeenCalled();
   });

@@ -151,8 +151,8 @@ and desktop-screen questions. A case of the family has `family: open_ended`,
 a `category` (`goal`, `time`, `own_work`, `structure`, `reach`, `tools`) and a
 `reach` key: the collections holding part of its answer (`meetings`,
 `documents`, `follow_ups`, `projects`, `people`, `tools`, `tickets`, `pages`,
-`slack`, `jira_projects`, `confluence_spaces`, `slack_channels`; an entry that
-lists several is met by any of them) and an optional time `window`
+`jira_projects`, `confluence_spaces`; an entry that lists several is met by any
+of them) and an optional time `window`
 (`yesterday`, `this_week`, `last_week`). Its parts name workspace items as
 `world/README.md` ("Reading the keys") says. A case whose answer the world
 cannot fix in advance ("What happened yesterday?") has no parts.
@@ -340,8 +340,8 @@ bounded server memory, except while an operator has enabled
 then the staging server also exports each research run, including this traced
 Ask or run, to the chosen LangSmith project, with its exact prompts, model
 outputs, tool arguments and results and released source text. That export is
-separate from this capture. CloudWatch and Journey Explorer retain separate,
-content-free operational metadata.
+separate from this capture. CloudWatch retains separate, content-free
+operational metadata.
 
 If execution or polling is interrupted, use the saved capture id to resume
 **reading only**, including when the ordinary Ask response was lost:

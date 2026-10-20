@@ -59,11 +59,11 @@ describe('Ask progress V3 wire contract (/v7, research tool contract v1)', () =>
 
   it('names up to sixteen sources in one row', () => {
     expect(PERSON_ASK_PROGRESS_SOURCES_MAX_V3).toBe(2 * PERSON_ASK_PROGRESS_SOURCES_MAX_V1);
-    const many = ['jira', 'confluence', 'slack', 'linear', 'notion'].flatMap(tool_id => [{ kind: 'containers', tool_id }, { kind: 'tickets', tool_id }]);
-    const sixteen = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'slack' }, { kind: 'follow_ups' }, { kind: 'projects' }, { kind: 'people' }, ...many];
+    const many = ['jira', 'confluence', 'github', 'linear', 'notion'].flatMap(tool_id => [{ kind: 'containers', tool_id }, { kind: 'tickets', tool_id }]);
+    const sixteen = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'follow_ups' }, { kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, ...many];
     expect(sixteen).toHaveLength(16);
     expect(validatePersonAskProgressStepEventV3({ type: 'searched', sources: sixteen, found: 3 }).type).toBe('searched');
-    expect(() => validatePersonAskProgressStepEventV3({ type: 'searched', sources: [...sixteen, { kind: 'tools' }], found: 3 })).toThrow('sources is invalid');
+    expect(() => validatePersonAskProgressStepEventV3({ type: 'searched', sources: [...sixteen, { kind: 'pages', tool_id: 'confluence' }], found: 3 })).toThrow('sources is invalid');
   });
 
   it('names a workspace item read as its V8 citation: a project and a tool with their refs, a container with its key', () => {

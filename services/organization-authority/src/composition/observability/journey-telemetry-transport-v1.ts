@@ -9,10 +9,6 @@ import {
   type JourneyFailureClassV1,
 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import {
-  formatStagingJourneyContentRecordsV2,
-  type StagingJourneyContentRecordInputV2 as JourneyContentRecordInputV2,
-} from "../staging/observability/staging-journey-content-telemetry-v1.js";
-import {
   formatJourneyTelemetryMetricsV1,
   formatJourneyLivenessMetricV1,
   type OperationalJourneyEnvironmentV1,
@@ -32,11 +28,7 @@ export interface JourneyTelemetryIdentityV1 {
 /** Exhaustive local rejection origins. No caller-controlled keys or error values. */
 export interface TelemetryRejectionCountsV1 {
   readonly journey_observer: { readonly invalid_journey_event: number };
-  readonly content_capture: {
-    readonly invalid_content_record: number;
-    readonly content_format_error: number;
-  };
-  /** Historical Explorer health shape; this obsolete producer never reports failures. */
+  /** Historical health shape; this obsolete producer never reports failures. */
   readonly meeting_approval_observer: { readonly observation_callback_failure: number };
 }
 
@@ -68,13 +60,7 @@ export interface JourneyTelemetryTransportDependenciesV1 {
 
 export interface JourneyTelemetryTransportOptionsV1 {
   readonly vocabulary?: TelemetryVocabularyV1;
-  /** Staging debugging switch: also write prompts, released text, and raw model output. */
-  readonly content_enabled?: boolean;
 }
-
-export type JourneyContentObserverV1 = (
-  record: JourneyContentRecordInputV2,
-) => void;
 
 export interface JourneyTelemetryTransportV1 {
   readonly environment: OperationalJourneyEnvironmentV1 | null;
@@ -90,10 +76,6 @@ export interface JourneyTelemetryTransportV1 {
   start(): void;
   /** Safe to pass directly to createJourneyTelemetryV1, including while liveness is inert. */
   readonly observer: JourneyTelemetryObserverV1;
-  /** True only when the staging content switch is on for a valid identity. */
-  readonly content_enabled: boolean;
-  /** Writes bounded content records; inert unless content_enabled. */
-  readonly content_observer: JourneyContentObserverV1;
   /** Stops liveness emission. Safe to call more than once. */
   close(): void;
 }
@@ -146,8 +128,6 @@ function disabledTransport(): JourneyTelemetryTransportV1 {
     identity: null,
     start: () => undefined,
     observer: () => undefined,
-    content_enabled: false,
-    content_observer: () => undefined,
     close: () => undefined,
   });
 }
@@ -166,8 +146,6 @@ export function createJourneyTelemetryTransportV1(
   if (!["staging", "production"].includes(deploymentEnvironment) || !isValidIdentity(identity)) return disabledTransport();
   const immutableIdentity = Object.freeze({ release_sha: identity.release_sha, build_number: identity.build_number });
   const vocabulary = createTelemetryVocabularyV1(options.vocabulary ?? EMPTY_TELEMETRY_VOCABULARY_V1);
-  // Historical staging content capture is never enabled in production.
-  const contentEnabled = deploymentEnvironment === "staging" && options.content_enabled === true;
 
   const now = dependencies.now ?? (() => new Date().toISOString());
   const scheduler = dependencies.scheduler ?? defaultScheduler();
@@ -175,10 +153,9 @@ export function createJourneyTelemetryTransportV1(
   let started = false;
   let intervalId: unknown | undefined;
   let intervalScheduled = false;
-  const delivery = { writes_attempted: 0, writes_failed: 0, writes_pending: 0, writes_dropped: 0, rejected_events: 0, attempted_bytes: 0, observer_overhead_us: 0, partial_captures: 0 };
+  const delivery = { writes_attempted: 0, writes_failed: 0, writes_pending: 0, writes_dropped: 0, rejected_events: 0, attempted_bytes: 0, observer_overhead_us: 0 };
   const rejectionCounts = {
     journey_observer: { invalid_journey_event: 0 },
-    content_capture: { invalid_content_record: 0, content_format_error: 0 },
     meeting_approval_observer: { observation_callback_failure: 0 },
   } satisfies TelemetryRejectionCountsV1;
 
@@ -229,7 +206,6 @@ export function createJourneyTelemetryTransportV1(
         delivery: { ...delivery },
         rejection_counts: {
           journey_observer: { ...rejectionCounts.journey_observer },
-          content_capture: { ...rejectionCounts.content_capture },
           meeting_approval_observer: { ...rejectionCounts.meeting_approval_observer },
         },
       } satisfies JourneyTelemetryLivenessEventV1;
@@ -262,26 +238,7 @@ export function createJourneyTelemetryTransportV1(
     }
   };
 
-  const contentObserver: JourneyContentObserverV1 = (record) => {
-    if (!contentEnabled || closed) return;
-    try {
-      if (
-        record.release_sha !== immutableIdentity.release_sha ||
-        record.build_number !== immutableIdentity.build_number
-      ) {
-        return;
-      }
-      const records = formatStagingJourneyContentRecordsV2(record);
-      if (records.length === 0) reject("content_capture", "invalid_content_record");
-      if (records[0]?.truncated === true) delivery.partial_captures += 1;
-      for (const formatted of records) write(formatted);
-    } catch {
-      reject("content_capture", "content_format_error");
-      // Content telemetry is strictly outside answer control flow.
-    }
-  };
-
-  const coreJourneys = new Map<string, { journey: NonNullable<ReturnType<ReturnType<typeof createJourneyTelemetryV1>["resumeJourney"]>>; content_sequence: number }>();
+  const coreJourneys = new Map<string, { journey: NonNullable<ReturnType<ReturnType<typeof createJourneyTelemetryV1>["resumeJourney"]>> }>();
   const coreEmitter = createJourneyTelemetryV1(observer, {}, vocabulary);
   const coreRuntime: CoreRuntimeObservationScopeV1 = {
     vocabulary,
@@ -292,7 +249,7 @@ export function createJourneyTelemetryTransportV1(
         if (coreJourneys.size >= 1000) { delivery.writes_dropped += 1; return; }
         const journey = coreEmitter.resumeJourney({ environment: deploymentEnvironment, workflow: "core_runtime", ...immutableIdentity, journey_id: event.operation_id, previous_sequence: 0 });
         if (!journey) return;
-        entry = { journey, content_sequence: 0 };
+        entry = { journey };
         coreJourneys.set(event.operation_id, entry);
       }
       entry.journey.emit({ stage: "core_operation", event: event.event, elapsed_ms: event.elapsed_ms, diagnostic: { ...event,
@@ -301,12 +258,6 @@ export function createJourneyTelemetryTransportV1(
         ...(event.event === "failed" ? coreFailure(event.result) : {}) });
       if (event.root && event.event !== "started") coreJourneys.delete(event.operation_id);
     },
-    ...(contentEnabled ? { content_observer(event) {
-      const entry = coreJourneys.get(event.operation_id);
-      if (!entry) return;
-      contentObserver({ journey_id: event.operation_id, sequence: ++entry.content_sequence, observed_at: now(), ...immutableIdentity,
-        stage: "core_operation", content_kind: event.content_kind, span_id: event.span_id, content: event.content });
-    } } satisfies CoreRuntimeObservationScopeV1 : {}),
   };
   return Object.freeze({
     environment: deploymentEnvironment,
@@ -329,8 +280,6 @@ export function createJourneyTelemetryTransportV1(
       }
     },
     observer,
-    content_enabled: contentEnabled,
-    content_observer: contentObserver,
     close(): void {
       if (closed) return;
       closed = true;
@@ -349,7 +298,7 @@ export function createJourneyTelemetryTransportV1(
 /**
  * Reads validated deploy identity baked into the image. The historical staging
  * capability name remains the release verifier's image binding for both
- * environments; its separate content switch is ignored in production.
+ * environments.
  */
 export function createJourneyTelemetryTransportFromEnvironmentV1(
   deploymentEnvironment: OperationalJourneyEnvironmentV1,
@@ -373,10 +322,6 @@ export function createJourneyTelemetryTransportFromEnvironmentV1(
       build_number: parsedBuildNumber,
     },
     dependencies,
-    {
-      vocabulary,
-      content_enabled:
-        environment.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1 === "true",
-    },
+    { vocabulary },
   );
 }

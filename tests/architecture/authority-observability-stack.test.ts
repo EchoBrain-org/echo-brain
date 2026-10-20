@@ -253,6 +253,6 @@ describe("Authority minimal observability stack", () => {
     expect(heartbeat).toContain("content-free and best effort");
     expect(heartbeat).toContain("log-stream-only permission");
     expect(heartbeat).toContain("Staging and production use the same core context and transport implementation.");
-    expect(heartbeat).toContain("Production never enables the legacy global development-content logger.");
+    expect(heartbeat).toContain("`EchoBrain/AuthorityJourneyV1`; staging retains `EchoBrain/StagingJourneyV1`.");
   });
 });

@@ -62,15 +62,15 @@ for the change-set review, deployment, notification rehearsal, controlled
 outage, and recovery checks. This intentionally creates one small observable
 loop, not a dashboard or tracing platform.
 
-### Staging journey overview and Explorer
+### Staging journey overview
 
-The journey overview and its Explorer are separate staging-only stacks that
-accept only the exact `authority-staging.echobrain.org` Authority log group.
-Never add them to, or deploy them through, the generic
-`authority-observability-v1.template.json` flow, which accepts an arbitrary
-Authority host and is also used outside staging. For their contract, access,
-change procedure and evidence, use
-[RB-OPERATIONS-001](../../docs/operations/RB-OPERATIONS-001-authority-observability.md#staging-journey-overview-and-explorer).
+The journey overview is a separate staging-only stack that accepts only the
+exact `authority-staging.echobrain.org` Authority log group. Never add it to,
+or deploy it through, the generic `authority-observability-v1.template.json`
+flow, which accepts an arbitrary Authority host and is also used outside
+staging. For its contract, change procedure and evidence, and for removing
+the Journey Explorer stack retired on 2026-10-19, use
+[RB-OPERATIONS-001](../../docs/operations/RB-OPERATIONS-001-authority-observability.md#staging-journey-overview).
 
 The confidential OIDC client must allow
 `https://<authority-host>/v2/session/oidc/callback`. Create one private input
@@ -571,8 +571,7 @@ commands in Session Manager, using the operation ID from the receipt:
 
 ```sh
 sudo ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users \
-  --reuse-provider-inputs onboarding-fresh-four-meetings-001 \
-  --content-telemetry true
+  --reuse-provider-inputs onboarding-fresh-four-meetings-001
 sudo ./onboard-clean-v1.sh prepare-rehearsal \
   --operation-id onboarding-fresh-four-meetings-001
 sudo ./onboard-clean-v1.sh resume
@@ -602,15 +601,13 @@ an interrupted operation's receipt and lock, and follow the shared recovery
 procedure instead of deleting them or starting a competing operation.
 
 The new environment is rendered from its release-matched profile. Region and
-host remain bound to the existing log group. Without `--content-telemetry`, the
-current explicit staging journey content-telemetry setting is preserved. The
-provider-reuse command may explicitly select `true` or `false`; the selection is
-bound into its receipt before reset and is reused by every `prepare-rehearsal`
-retry. The wrapper still requires the running value to match the verified
-Compose setting. Duplicate or malformed settings, or a new profile unable to
-support content telemetry, stop replacement before data is reset. No old
-environment file is copied into the new rehearsal. Continue with the browser
-login, Slack link and four-meeting permission proof above.
+host remain bound to the existing log group. No old environment file is copied
+into the new rehearsal, so the retired staging content telemetry switch, which
+earlier rehearsals could carry, is dropped; the wrapper no longer accepts
+`--content-telemetry`. A wrapper from before 2026-10-19 refuses a runtime
+profile without that switch, so install the current host tooling first, as
+above. Continue with the browser login, Slack link and four-meeting permission
+proof above.
 
 ## Resumable initial-owner onboarding
 

@@ -1,4 +1,4 @@
-import { observeCoreRuntimeSyncV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
   AdapterError,
   type AdapterErrorCode,
@@ -222,8 +222,6 @@ async function requestProviderJson(
   signal: AbortSignal | undefined,
   fetchImpl: typeof fetch,
 ): Promise<ProviderJsonResponse> {
-  const provider = profile.id;
-  if (typeof init.body === "string") captureCoreRuntimeContentV1("model_request", { provider, body: init.body });
   const signals = [AbortSignal.timeout(requestTimeoutMs)];
   if (signal !== undefined) signals.push(signal);
   let response: Response;
@@ -257,12 +255,10 @@ async function requestProviderJson(
   }
   annotateCoreRuntimeV1({ counts: { http_status: response.status } });
   if (!response.ok) {
-    captureCoreRuntimeContentV1("model_response", { provider, status: response.status, body_status: "not_read_after_http_rejection", request_id: response.headers.get("x-request-id") });
     throw providerStatusError(profile.displayName, response.status, profile.unbilledStatus?.(response.status) === true);
   }
   try {
     const body = await response.text();
-    captureCoreRuntimeContentV1("model_response", { provider, request_id: response.headers.get("x-request-id"), body });
     const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(body) as unknown);
     observeProviderUsage(profile, payload);
     return { payload, response };

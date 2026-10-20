@@ -1,5 +1,4 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { withoutCoreRuntimeContentV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { AnswerCompositionGenerationBindingV1 } from '@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonUpdateEnrichmentWorkItemV2, PersonUpdateEnrichmentWorkV2 } from '../application/ports/person-update-enrichment-work-v2.js';
@@ -24,7 +23,7 @@ export class PersonUpdateProcessingV1 {
     private readonly v2: PersonUpdateEnrichmentWorkV2,
   ) {}
   runOnce(signal: AbortSignal): Promise<void> {
-    return withoutCoreRuntimeContentV1(() => this.run(signal));
+    return this.run(signal);
   }
   private async run(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();

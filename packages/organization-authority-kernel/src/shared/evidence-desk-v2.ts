@@ -16,20 +16,20 @@ import type { WorkspaceSourceDescriptorV1 } from './workspace-evidence-v1.js';
 /**
  * The V1 desk plus request-only live work items and knowledge-page sections, ECHO's shared follow-ups (ADR-0040), and
  * the workspace (research tool contract v1): the asker's projects, the people in their organization, their tools, and
- * the containers of their connected tools (Jira projects, Confluence spaces, Slack channels).
+ * the containers of their connected tools (Jira projects, Confluence spaces).
  */
 export type EvidenceDeskKindV2 = EvidenceDeskKindV1 | 'ticket' | 'page' | 'follow_up' | EvidenceDeskWorkspaceKindV1;
 export type EvidenceDeskWorkspaceKindV1 = 'project' | 'person' | 'tool' | 'tool_container';
 
 /** A filter a source may take; which ones, and their allowed values, are in its capabilities. */
-export type EvidenceFilterNameV1 = 'kind' | 'status' | 'owner' | 'channel' | 'role';
+export type EvidenceFilterNameV1 = 'kind' | 'status' | 'owner' | 'role';
 
 /**
  * What a source can do, as data (research tool contract v1). Research is shown it in its source catalog, and checks
  * each call against it before the desk, so what research is told and what the desk accepts cannot drift apart.
  */
 export interface EvidenceSourceCapabilitiesV1 {
-  /** Each filter it applies: its allowed values, `name` for a person's name, or `text` for free text such as a channel. */
+  /** Each filter it applies: its allowed values, `name` for a person's name, or `text` for free text. */
   readonly filters: Readonly<Partial<Record<EvidenceFilterNameV1, readonly string[] | 'name' | 'text'>>>;
   /**
    * Each date field it can filter on, with a one-line meaning. A meaning says when not every item records the date,
@@ -63,14 +63,12 @@ export type EvidenceDeskSourceV2 = string;
 /** Server-owned identity is independent of content kind; two providers may both supply pages. */
 export interface PersonLiveSourceDescriptorV2 {
   readonly source_id: string;
-  /** `tool_container`: the tool's containers (Jira projects, Confluence spaces, Slack channels), research tool contract v1. */
-  readonly kind: 'ticket' | 'page' | 'slack_message' | 'tool_container';
+  /** `tool_container`: the tool's containers (Jira projects, Confluence spaces), research tool contract v1. */
+  readonly kind: 'ticket' | 'page' | 'tool_container';
   readonly selector: string;
   readonly description: string;
   readonly metadata_only_list: boolean;
   readonly tool_id?: string;
-  readonly requires_channel?: boolean;
-  readonly default_since_days?: number;
   /** What the source can do (research tool contract v1). A source without it is described only in prose. */
   readonly capabilities?: EvidenceSourceCapabilitiesV1;
 }

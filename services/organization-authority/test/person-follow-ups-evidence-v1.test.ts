@@ -300,7 +300,6 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
       expect((await list(desk, dates)).items).toHaveLength(2);
       expect((await search(desk, 'launch', dates)).items).toHaveLength(1);
     }
-    await expect(list(desk, { channel: 'hw-dvt' })).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(list(desk, { owner: ' @ ' })).rejects.toMatchObject({ code: 'invalid_request' });
     // A time zone alone bounds nothing.
     expect((await list(desk, { time_zone: 'America/Los_Angeles' })).items).toHaveLength(2);

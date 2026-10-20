@@ -202,16 +202,21 @@ async function disclosureWorld() {
     admitMeeting: (input) => records.admitMeeting(input),
     revalidateMeetingRelease: (input) => records.revalidateMeetingRelease(input),
   } satisfies PersonMeetingItemsPortV1, storeCalls);
-  // N-16's Ask model takes every item the small-scope preload opened and cites all of them.
+  // N-16's Ask model lists both sources, opens everything they list, four reads a step, and cites all of it.
+  let unopened: string[] = [];
   const everything: StructuredGenerationPort = {
     async generate(input: StructuredGenerationInput) {
-      const prompt = JSON.parse(input.user_prompt) as { readonly question: string; readonly opened?: readonly { readonly id: string }[]; readonly evidence?: readonly { readonly id: string }[] };
+      const prompt = JSON.parse(input.user_prompt) as { readonly question: string; readonly step?: number; readonly last_results?: readonly { readonly tool: string; readonly items?: readonly string[] }[];
+        readonly opened?: readonly { readonly id: string }[]; readonly evidence?: readonly { readonly id: string }[] };
       if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
         const ids = prompt.evidence!.map((entry) => entry.id);
         return { sentences: Array.from({ length: Math.ceil(ids.length / 12) }, (_, index) => ({ text: `Group ${index + 1} of what I added.`, evidence: ids.slice(index * 12, index * 12 + 12) })), not_found: [] };
       }
-      const opened = (prompt.opened ?? []).map((entry) => entry.id);
-      return { parts: [{ question: prompt.question, needs: [{ need: "what I added", status: "found", evidence: opened.slice(0, 12) }], notes: "" }], actions: [{ tool: "finish", args: {} }] };
+      const part = (status: string, evidence: readonly string[] = []) => [{ question: prompt.question, needs: [{ need: "what I added", status, evidence }], notes: "" }];
+      if (prompt.step === 1) return { parts: part("open"), actions: [{ tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "documents" } }] };
+      if (prompt.step === 2) unopened = (prompt.last_results ?? []).flatMap((result) => result.tool === "list" ? result.items ?? [] : []);
+      if (unopened.length > 0) return { parts: part("open"), actions: unopened.splice(0, 4).map((id) => ({ tool: "open", args: { id } })) };
+      return { parts: part("found", (prompt.opened ?? []).map((entry) => entry.id).slice(0, 12)), actions: [{ tool: "finish", args: {} }] };
     },
   };
   const server = createOrganizationAuthorityHttpServer({
@@ -224,7 +229,7 @@ async function disclosureWorld() {
       authority_id: COORDINATES.authority_id, organization_id: org, state_lineage_id: COORDINATES.state_lineage_id,
       sessions: sessions as never, originals, records, model: everything,
       generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
-      audit: new SqlitePersonAgenticAskAuditV1(w.authority), small_scope_shortcut: true,
+      audit: new SqlitePersonAgenticAskAuditV1(w.authority),
     }),
   });
   server.listen(0, "127.0.0.1");
@@ -516,7 +521,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     }
   });
 
-  it("N-16, N-17: Ask with mine cites only what the reader added or approved, every citation opens, and no Slack or transcript is read", async () => {
+  it("N-16, N-17: Ask with mine cites only what the reader added or approved, every citation opens, and no transcript is read", async () => {
     const f = await disclosureWorld();
     await f.admitNotes();
     const approvers = new Map<string, { readonly principal_id: string; readonly membership_id: string }>([
@@ -547,7 +552,6 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       expect(new Set(refs)).toEqual(new Set(mine));
       for (const citation of answer.citations) {
         const ref = citation.ref!;
-        expect(citation.citation.kind).not.toBe("slack_message");
         expect(ref).toMatch(/^(note|document|meeting):/);
         const owner = ref.startsWith("meeting:") ? approvers.get(ref) : added(ref);
         expect({ ref, principal_id: owner?.principal_id, membership_id: owner?.membership_id }).toEqual({ ref, principal_id: actor.principal_id, membership_id: actor.membership_id });

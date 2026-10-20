@@ -12,7 +12,6 @@ import { WORKSPACE_SOURCE_IDS_V1, type WorkspaceSourceIdV1 } from '@echo-brain/o
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
 import { mergeUncheckedV1 } from '../application/evidence-unchecked-v1.js';
 
-const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'];
 /** Live inventory pages match the research loop's list fetch; each reader still applies its own smaller cap. */
 const LIVE_LIST_MAX = 50;
 /**
@@ -22,7 +21,6 @@ const LIVE_LIST_MAX = 50;
 const UNAVAILABLE_NOTICES: Readonly<Record<Exclude<PersonLiveSourceDescriptorV2['kind'], 'tool_container'> | typeof FOLLOW_UP_EVIDENCE_KIND_V1 | 'project', string>> = Object.freeze({
   ticket: 'Live tickets could not be searched just now, so these results leave them out.',
   page: 'Live pages could not be searched just now, so these results leave them out.',
-  slack_message: 'Live Slack messages could not be searched just now, so these results leave them out.',
   follow_up: 'Follow-ups could not be searched just now, so these results leave them out.',
   project: 'Your projects could not be searched just now, so these results leave them out.',
 });
@@ -42,7 +40,7 @@ export interface RegisteredPersonLiveEvidenceSourceV2 {
 /** The workspace source that owns items of a desk kind, for a workspace kind. */
 const WORKSPACE_KIND_SOURCES: Readonly<Record<string, WorkspaceSourceIdV1>> = Object.freeze({ project: 'projects', person: 'people', tool: 'tools' });
 const workspaceKind = (kind: string): boolean => Object.hasOwn(WORKSPACE_KIND_SOURCES, kind);
-/** Kinds only a bound live source serves; Slack messages may also be ECHO's own imports. */
+/** Kinds only a bound live source serves. */
 const LIVE_ONLY_KINDS: ReadonlySet<string> = new Set(['ticket', 'page', 'tool_container']);
 
 /** Items several reads released beside their rows, each once. */
@@ -79,7 +77,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
   type Source = EvidenceDeskPortV1 | LiveSource;
   const issued = new Map<string, Source>();
   const lookup = (phase: 'evidence_search' | 'evidence_list' | 'evidence_open', source: RegisteredPersonLiveEvidenceSourceV2, operation: () => Promise<EvidenceDeskResultV2>) =>
-    observePersonLiveEvidenceV1(phase, source.descriptor.kind === 'slack_message' ? 'slack' : source.descriptor.kind, async () => {
+    observePersonLiveEvidenceV1(phase, source.descriptor.kind, async () => {
       const result = await operation();
       annotateCoreRuntimeV1({ counts: { included_count: result.items.length }, result: result.items.length === 0 ? 'empty' : 'returned' });
       return result;
@@ -139,9 +137,8 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       if (requestedKinds?.includes(FOLLOW_UP_EVIDENCE_KIND_V1) === true && followUpSource === undefined) refused();
       if (requestedKinds?.some(workspaceKind) === true && workspaceSources === undefined) refused();
       if (selectedSource !== undefined && requestedKinds?.some(kind => kind !== selectedSource.descriptor.kind)) refused();
-      const liveKinds = new Set([...sources.values()].map(value => value.descriptor.kind));
       const localKinds = selectedId === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : undefined;
-      const kinds = (requestedKinds ?? localKinds)?.filter((kind): kind is EvidenceDeskKindV1 => !LIVE_ONLY_KINDS.has(kind) && kind !== FOLLOW_UP_EVIDENCE_KIND_V1 && !workspaceKind(kind) && !liveKinds.has(kind as 'slack_message')) ?? (liveKinds.has('slack_message') ? LOCAL_KINDS : undefined);
+      const kinds = (requestedKinds ?? localKinds)?.filter((kind): kind is EvidenceDeskKindV1 => !LIVE_ONLY_KINDS.has(kind) && kind !== FOLLOW_UP_EVIDENCE_KIND_V1 && !workspaceKind(kind));
       type Page = { readonly source: Source; readonly result: EvidenceDeskResultV2 };
       type Unavailable = { readonly notice: string; readonly result?: undefined; readonly failure: unknown };
       /** Across sources, a source's transient failure becomes a coverage notice and the others still answer. */
@@ -177,7 +174,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       }
       // Follow-ups join a keyword search across sources, dated too, on the dates they record; they hold no inventory. Only some
       // of them are kept below, so they are released with ECHO-held text and none is read live (ADR-0040).
-      if (followUpSource !== undefined && selectedId === undefined && input.query !== undefined && input.inventory_mode === undefined &&
+      if (followUpSource !== undefined && selectedId === undefined && input.query !== undefined &&
           (requestedKinds === undefined || requestedKinds.includes(FOLLOW_UP_EVIDENCE_KIND_V1))) {
         const query = input.query;
         lookups.push(tolerate(FOLLOW_UP_EVIDENCE_KIND_V1, page(followUpSource, () => followUpSource.search({ ...evidenceDateFilterV1(input), query, limit: Math.min(maximum, FOLLOW_UPS_LIMITS_V1.search_hits), live: false, signal: input.signal }))));
@@ -186,7 +183,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       // contract v1). People and tools are searched only when named: their names rarely answer a search for content, and
       // the directory is read whole.
       const projects = workspaceSources?.get('projects');
-      if (projects !== undefined && selectedId === undefined && input.query !== undefined && input.inventory_mode === undefined &&
+      if (projects !== undefined && selectedId === undefined && input.query !== undefined &&
           (requestedKinds === undefined || requestedKinds.includes(projects.descriptor.kind))) {
         const query = input.query;
         lookups.push(tolerate('project', page(projects, () => projects.search({ ...evidenceDateFilterV1(input), query, limit: maximum, signal: input.signal }))));
@@ -271,8 +268,8 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         return remember(result, base);
       }
       const { source, descriptor } = registration;
-      if ((input.channel !== undefined && !descriptor.requires_channel) || input.kinds?.some(kind => kind !== descriptor.kind)) refused();
-      const result = await lookup('evidence_list', registration, () => source.list({ ...evidenceDateFilterV1(input), ...(input.channel === undefined ? {} : { container: input.channel }), limit: Math.min(input.limit ?? 20, LIVE_LIST_MAX), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
+      if (input.kinds?.some(kind => kind !== descriptor.kind)) refused();
+      const result = await lookup('evidence_list', registration, () => source.list({ ...evidenceDateFilterV1(input), limit: Math.min(input.limit ?? 20, LIVE_LIST_MAX), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
       input.signal?.throwIfAborted();
       return remember(result, registration);
     },
@@ -287,7 +284,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       const value = input.citation;
       if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new AuthorityOperationError('invalid_request', 'Evidence citation is invalid');
       const { kind, tool_id: toolId } = value as { readonly kind?: unknown; readonly tool_id?: unknown };
-      if (kind === 'ticket' || kind === 'page' || kind === 'slack_message') {
+      if (kind === 'ticket' || kind === 'page') {
         const registration = [...sources.values()].find(entry => entry.descriptor.kind === kind && entry.source.tool_id === toolId);
         if (registration === undefined || registration.source.openCitation === undefined) return refused();
         const result = await lookup('evidence_open', registration, () => registration.source.openCitation!({ citation: value, signal: input.signal }));
@@ -329,7 +326,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       // final grant checks remain in place; every provider must succeed.
       for (let offset = 0; offset < providers.length; offset += 4) {
         await Promise.all(providers.slice(offset, offset + 4).map(({ source, descriptor }) =>
-          observePersonLiveEvidenceV1('evidence_revalidate', descriptor.kind === 'slack_message' ? 'slack' : descriptor.kind, () => source.revalidate(input))));
+          observePersonLiveEvidenceV1('evidence_revalidate', descriptor.kind, () => source.revalidate(input))));
         input.signal?.throwIfAborted();
       }
       // Local snapshots and original grants may change while a live reader awaits provider I/O.

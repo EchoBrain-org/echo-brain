@@ -98,7 +98,7 @@ token; the Authority never
 asks the owner for it directly. The install requests exactly four bot
 scopes: `chat:write`, `im:history`, `im:write`, and `users:read`. The bot only
 delivers private DMs: the DM-code link challenge and approval cards. The bot reads
-no channel; reading Slack for Ask is a person's own grant, not the bot's. The
+no channel, and Ask reads no Slack. The
 stored connection contract names those four scopes as required. Install and
 reconnect accept a granted superset, because a token installed before the
 retired public-channel option keeps `channels:history` and `channels:read`

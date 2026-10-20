@@ -17,7 +17,7 @@ import {
 } from './person-record-search-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
-import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1, withoutCoreRuntimeContentV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonDiagnosticCaptureHandleV1 } from './person-diagnostics-v1.js';
 import { openItemViewerV1, taskLiveSourcesV1 } from './person-open-items-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
@@ -258,7 +258,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         throw new AuthorityOperationError('not_found', 'run is not available');
       }
       const resultJson = row.result_json;
-      return withoutCoreRuntimeContentV1(() => observeCoreRuntimeV1('research_output_view', async () => {
+      return observeCoreRuntimeV1('research_output_view', async () => {
         const card = readStoredImpactCardV1(resultJson);
         annotateCoreRuntimeV1({ trigger: row.trigger, run_id: coreRuntimeIdentityV1('research-run', row.run_id), event_id: coreRuntimeIdentityV1('research-event', row.event_ref), output_id: coreRuntimeIdentityV1('research-output', canonicalSha256(JSON.parse(resultJson))) });
         const scope = personRecordRunScopeV1(options.records, input.access_token, record_sha256); const requestContext = context(authorization);
@@ -269,7 +269,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         const refreshed = refreshImpactCardV1(card, fresh); await desk.revalidate({ ...(input.signal === undefined ? {} : { signal: input.signal }) });
         annotateCoreRuntimeV1({ result: 'returned', counts: { citation_count: refreshed.card.citations.length, excluded_count: refreshed.hidden } });
         return Object.freeze({ card: refreshed.card, checked_at: row.updated_at, hidden: refreshed.hidden });
-      }));
+      });
     },
     close() { closing = true; for (const controller of controllers) controller.abort(); },
   });

@@ -123,7 +123,7 @@ describe("release step: request terminals", () => {
     let clock = 0;
     // The first step's reply lands after the five-minute background deadline.
     const h = researchHarness(() => { clock += 301_000; return step([part("Dashboard", [need("dashboard published", "open")])], [{ tool: "search", args: { query: "dashboard" } }]); }, {}, { now_ms: () => clock });
-    const brief = { goal: { kind: "task" as const, task: "Recheck the dashboard." }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false } };
+    const brief = { goal: { kind: "task" as const, task: "Recheck the dashboard." }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {} };
     await expect(withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: "sweep", brief }))).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
     // The witness binds the access check before the late step call.
     expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", budget: "background", outcome: "timed_out", model_calls: 1, checked_at: deskCheck.checked_at, prompt_sha256: null, answer_sha256: null, response_sha256: null })]);

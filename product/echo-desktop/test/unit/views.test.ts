@@ -180,18 +180,6 @@ describe('view models copy only what the renderer may see', () => {
     expect(answer.text).toBe('Ship it.');
   });
 
-  it('keeps a Slack citation label and permalink without exposing its other coordinates', () => {
-    const permalink = 'https://acme.slack.com/archives/C01ABCDEF/p1758873600000100?thread_ts=1758873600.000100';
-    const answer = answerView({ ok: true, result: { schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: { kind: 'global' }, outcome: 'answered',
-      citations: [{ kind: 'slack_message', label: '#launch · Maya', visibility: 'only_me', citation: {
-        kind: 'slack_message', team_id: 'T01ABCDEF', channel_id: 'C01ABCDEF', message_ts: '1758873600.000100', permalink, text_sha256: sha('7'),
-      } }],
-      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch is ready.', citation_indexes: [0], private: true }] }],
-    } }, { kind: 'global' });
-    expect(answer.sources).toEqual([{ kind: 'slack', tool_id: 'slack', label: '#launch · Maya', permalink }]);
-    expect(answer.parts[0]?.statements[0]).toEqual({ text: 'The launch is ready.', citation_indexes: [0], private: true });
-  });
-
   it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace', () => {
     const citation = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' };
     const answer = answerView({ ok: true, result: {
@@ -744,15 +732,13 @@ describe('your workspace and your tools\' containers in a V8 answer and its prog
     for (const behind of ['cloud-1', '10001', 'project:', 'tool:', 'tool_container']) expect(JSON.stringify(answer)).not.toContain(behind);
   });
 
-  it('keeps a Slack channel, which has no key, and a Confluence space, each by its link', () => {
+  it('keeps a container with no key, and a Confluence space, each by its link', () => {
     const { key: _key, ...unkeyed } = container;
-    const channel = { ...unkeyed, label: '#therm-dvt', citation: { ...containerCitation, tool_id: 'slack', container: 'slack_channel', container_id: 'C0123456',
-      permalink: 'https://acme.slack.com/archives/C0123456' } };
     const space = { ...container, label: 'Thermal team', key: 'THT', citation: { ...containerCitation, tool_id: 'confluence', container: 'confluence_space',
       container_id: '98765', permalink: 'https://example.atlassian.net/wiki/spaces/THT' } };
-    const [slack, confluence] = answerView({ ok: true, result: v8([channel, space]) }, { kind: 'global' }).sources;
-    expect(slack).toEqual({ kind: 'container', tool_id: 'slack', label: '#therm-dvt', permalink: 'https://acme.slack.com/archives/C0123456', container: 'slack_channel' });
-    expect(slack).not.toHaveProperty('key');
+    const [jira, confluence] = answerView({ ok: true, result: v8([unkeyed, space]) }, { kind: 'global' }).sources;
+    expect(jira).toEqual({ kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: containerCitation.permalink, container: 'jira_project' });
+    expect(jira).not.toHaveProperty('key');
     expect(confluence).toEqual({ kind: 'container', tool_id: 'confluence', label: 'Thermal team', permalink: 'https://example.atlassian.net/wiki/spaces/THT',
       container: 'confluence_space', key: 'THT' });
   });

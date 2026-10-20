@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV2, type AgenticAskAuditEntryV1 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { deferred } from './fixtures/deferred.js';
 
 const checked = { checked_at: '2026-10-01T00:00:00.000Z' };
@@ -52,7 +52,6 @@ function fixture(options: {
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const index = inputs.length;
     inputs.push(input);
-    captureCoreRuntimeContentV1('model_request', input.user_prompt);
     if (replies[index] === undefined) throw new Error('unexpected model retry');
     return replies[index];
   });

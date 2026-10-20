@@ -29,7 +29,7 @@ export const CONFLUENCE_PAGE_CAPABILITIES_V1: EvidenceSourceCapabilitiesV1 = Obj
   any_date: true,
   links: Object.freeze([]),
 });
-/** Jira projects, Confluence spaces and Slack channels are listed and searched by key and name: no filters, dates or links. */
+/** Jira projects and Confluence spaces are listed and searched by key and name: no filters, dates or links. */
 export const TOOL_CONTAINER_CAPABILITIES_V1: EvidenceSourceCapabilitiesV1 = Object.freeze({
   filters: Object.freeze({}), dates: Object.freeze({}), any_date: false, links: Object.freeze([]),
 });
@@ -126,7 +126,7 @@ export function personLiveConnectorDefinitionsV1(input: {
     const { source_id, selector, kind } = entry.descriptor;
     if (!/^[a-z][a-z0-9_-]{0,63}$/.test(source_id) || !/^[a-z][a-z0-9_-]{0,63}$/.test(selector) ||
         routingNames.has(source_id) || routingNames.has(selector) ||
-        !['ticket', 'page', 'slack_message', 'tool_container'].includes(kind) || ![5, 6, 8].includes(entry.minimum_response_version) ||
+        !['ticket', 'page', 'tool_container'].includes(kind) || ![5, 6, 8].includes(entry.minimum_response_version) ||
         (kind === 'page' && entry.minimum_response_version < 6) ||
         // A tool container cites only in the V8 answer, and says what it can do (research tool contract v1).
         (kind === 'tool_container' && (entry.minimum_response_version < WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 || entry.descriptor.capabilities === undefined)) ||

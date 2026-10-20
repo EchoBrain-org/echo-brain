@@ -113,6 +113,8 @@ citation projection alone, and only the final check keeps a since-revoked item
 out of the answer and its receipt. What an event may carry, the terminal error
 and the audit are ADR-0039's
 [Decision and consequences](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md#decision-and-consequences).
+Since 2026-10-19 only `/v6` and `/v7` stream; `/v5` answers in JSON
+([Later decisions](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md#later-decisions)).
 
 ADR-0026 extends this boundary to Jira live evidence on `POST /v4/person/ask`.
 The provider reads as the authenticated Person's current Jira grant. Audits commit
@@ -226,8 +228,7 @@ mine, one the reader approved) is waiting to be indexed.
 ADR-0024's mine scope on `POST /v3/person/ask` is a caller-selected narrowing
 of the same global readable set: the evidence desk pushes it into every store
 query, mine with a project is a 400, and mine without the composed approver
-projectors is a 503 rather than global. Mine reads no Slack and no shared
-transcript. The answer audit and the per-store release audits are unchanged.
+projectors is a 503 rather than global. Mine reads no shared transcript. The answer audit and the per-store release audits are unchanged.
 
 ## Verification and change procedure
 

@@ -60,7 +60,7 @@ function capitalized(text: string): string {
 
 /** What an item is, when its title is not shown. */
 const WHAT: Readonly<Record<PersonOpenItemKindV1, string>> = {
-  action: 'An action', ticket: 'A Jira ticket', page: 'A page', slack_message: 'A Slack message', record: 'A record', document: 'A document',
+  action: 'An action', ticket: 'A Jira ticket', page: 'A page', record: 'A record', document: 'A document',
 };
 
 /**
@@ -149,7 +149,6 @@ export function itemKind(item: OpenItemView, tools?: readonly ConnectedTool[] | 
     case 'action': return 'Meeting action';
     case 'ticket': return `${tool ?? 'Jira'} ticket`;
     case 'page': return tool ? `${tool} page` : 'Page';
-    case 'slack_message': return 'Slack message';
     case 'record': return 'Record';
     case 'document': return 'Document';
   }

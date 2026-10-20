@@ -356,7 +356,7 @@ function originalSource(citation: SourceRevision, label: string, ref: string | u
 /**
  * One cited item, as the contract has it, kept by what it names: an approved
  * record by its digest and policy, an original by its revision and anchor, a
- * live Slack message, ticket or page by its permalink, a follow-up, a project,
+ * live ticket or page by its permalink, a follow-up, a project,
  * a person or a tool by its id, and a container in a tool you connected by its
  * link, its scope and own id left behind. A name Ask shows while it works, or
  * in its receipt, is such a citation too: it opens the same way.
@@ -374,10 +374,9 @@ function answerSource({ citation, label, ref, key }: PersonAnswerCitationV8): An
       return { kind: 'container', tool_id: citation.tool_id, label, permalink: citation.permalink, container: citation.container, ...(key === undefined ? {} : { key }) };
     default: {
       // Live evidence opens in its own app, by a link the page and main check by its kind's rule.
-      const kind = citation.kind === 'slack_message' ? 'slack' : citation.kind;
-      const permalink = externalSourcePermalink(kind, citation.permalink);
+      const permalink = externalSourcePermalink(citation.kind, citation.permalink);
       if (permalink === null) throw new ViewError();
-      return { kind, tool_id: citation.kind === 'slack_message' ? 'slack' : citation.tool_id, label, permalink };
+      return { kind: citation.kind, tool_id: citation.tool_id, label, permalink };
     }
   }
 }

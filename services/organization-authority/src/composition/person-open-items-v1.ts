@@ -138,7 +138,7 @@ const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const GLOBAL = Object.freeze({ kind: 'global' as const });
 /** Send row kinds in one fixed order: the meeting's own actions first. */
-const KIND_ORDER: readonly PersonOpenItemKindV1[] = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'];
+const KIND_ORDER: readonly PersonOpenItemKindV1[] = ['action', 'ticket', 'page', 'record', 'document'];
 const UNKNOWN_MEMBER = 'Unknown member';
 /** The codes an Authority error can carry: an observation names one of these, else `error`, never a message. */
 const ERROR_CODES: readonly AuthorityErrorCode[] = ['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable'];
@@ -182,7 +182,7 @@ function invalidOutput(): never {
 export function openItemKindV1(pointer: Pointer): PersonOpenItemKindV1 {
   switch (pointer.kind) {
     case 'meeting_action': return 'action';
-    case 'ticket': case 'page': case 'slack_message': return pointer.kind;
+    case 'ticket': case 'page': return pointer.kind;
     case 'approved_record': return 'record';
     case 'source_revision': return 'document';
     default: return invalidOutput();
@@ -448,13 +448,11 @@ function connectedToolsFor(sources: Pick<OpenItemSourcesV1, 'live_sources' | 'on
 /**
  * A sweep re-reads an item through its pointer, as a finding's citation the
  * sweep trigger takes: a ticket or a page in a tool the viewer has connected,
- * an ECHO record or document, and no Slack message today. An item on any
- * other pointer, a meeting action included, is never swept, so it never makes
- * a sweep due either.
+ * or an ECHO record or document. An item on any other pointer, a meeting
+ * action included, is never swept, so it never makes a sweep due either.
  */
 function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>, connected: ReadonlySet<string>): boolean {
-  // A desk without the item's tool, or no Slack message (no desk can read a Slack citation yet), would always record it
-  // unreadable (R62).
+  // A desk without the item's tool would always record it unreadable.
   const tool = outsideToolOf(row);
   if (tool !== undefined && !connected.has(tool)) return false;
   try {

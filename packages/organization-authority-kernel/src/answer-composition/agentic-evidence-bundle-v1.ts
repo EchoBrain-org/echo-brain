@@ -31,7 +31,7 @@ export interface AgenticEvidenceBundleItemV1 {
   /** Research read its complete released text: a planner step was shown it, or, with no planner, it was starting evidence read in full. */
   readonly full: boolean;
   readonly opened: boolean;
-  /** Loaded before round 1: starting evidence or the small-scope preload. */
+  /** Loaded before round 1: starting evidence. */
   readonly preloaded: boolean;
   /** When research last used it; larger is more recent. */
   readonly touched: number;

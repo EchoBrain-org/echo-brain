@@ -5,10 +5,6 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./context/granola-context-source-v1": {
-      "types": "./dist/context/granola-context-source-v1.d.ts",
-      "import": "./dist/context/granola-context-source-v1.js"
-    },
     "./granola-meeting-normalizer-v1": {
       "types": "./dist/granola-meeting-normalizer-v1.d.ts",
       "import": "./dist/granola-meeting-normalizer-v1.js"

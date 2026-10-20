@@ -1,7 +1,6 @@
 import {
   createAgenticAskProgressRequestV1, createAgenticAskV2, createAgenticAskV3, createAgenticAskV4, createAgenticAskV5,
-  type AgenticAskAnswerWithReceiptV1, type AgenticAskAnswerWithReceiptV2, type AgenticAskAnswerWithReceiptV3,
-  type AgenticAskProgressSinkV1, type AgenticAskProgressSinkV2, type AgenticAskProgressSinkV3,
+  type AgenticAskAnswerWithReceiptV2, type AgenticAskAnswerWithReceiptV3, type AgenticAskProgressSinkV2, type AgenticAskProgressSinkV3,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { PersonAnswerResponseV5, PersonAnswerResponseV6, PersonAnswerResponseV7, PersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -67,9 +66,8 @@ export async function bindPersonLiveEvidenceDeskV1(
   // Each binding verifies its own connection, so sources bind concurrently.
   // They register in catalog order, and the first failure in that order is
   // the request's failure, exactly as when they bound one after another.
-  const settled = await Promise.allSettled(compatible.map(selected => {
-    const category = selected.descriptor.kind === 'slack_message' ? 'slack' : selected.descriptor.kind;
-    return observePersonLiveEvidenceV1('evidence_connection', category, async (): Promise<RegisteredPersonLiveEvidenceSourceV2 | undefined> => {
+  const settled = await Promise.allSettled(compatible.map(selected =>
+    observePersonLiveEvidenceV1('evidence_connection', selected.descriptor.kind, async (): Promise<RegisteredPersonLiveEvidenceSourceV2 | undefined> => {
       if (scope.kind === 'mine' || !selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return undefined; }
       const source = await selected.application.source({
         ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}),
@@ -79,8 +77,7 @@ export async function bindPersonLiveEvidenceDeskV1(
       input.signal?.throwIfAborted();
       annotateCoreRuntimeV1({ result: source === undefined ? (scope.kind === 'project' ? 'unavailable' : 'unlinked') : 'verified' });
       return source === undefined ? undefined : { descriptor: selected.descriptor, source, scope };
-    });
-  }));
+    })));
   const bound: RegisteredPersonLiveEvidenceSourceV2[] = [];
   for (const result of settled) {
     if (result.status === 'rejected') throw result.reason;
@@ -133,11 +130,11 @@ interface PersonLiveAnswerRoutesV1 {
 export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAnswerRoutesV1>(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: Version): PersonLiveAnswerRoutesV1[Version] {
   const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= response_version);
   type Input = PersonAnswerHttpInputV1;
-  /** A V6 Ask's sink takes progress V1, a V7 Ask's progress V2 (ADR-0040), a V8 Ask's progress V3. */
-  type Progress = { readonly on_start: () => void; readonly on_progress: AgenticAskProgressSinkV1 | AgenticAskProgressSinkV2 | AgenticAskProgressSinkV3 };
-  /** A streamed V6, V7 or V8 Ask (ADR-0039) also reports when it starts and what it does; every other request is unchanged. */
+  /** A V7 Ask's sink takes progress V2 (ADR-0040), a V8 Ask's progress V3. */
+  type Progress = { readonly on_start: () => void; readonly on_progress: AgenticAskProgressSinkV2 | AgenticAskProgressSinkV3 };
+  /** A streamed V7 or V8 Ask (ADR-0039) also reports when it starts and what it does; every other request is unchanged. */
   async function run(input: Input): Promise<PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8>;
-  async function run(input: Input, progress: Progress): Promise<AgenticAskAnswerWithReceiptV1 | AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3>;
+  async function run(input: Input, progress: Progress): Promise<AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3>;
   async function run(input: Input, progress?: Progress) {
     // A streamed request spans every attempt a snapshot restart runs: one stream, each item named once, timed from here.
     const streamed = progress === undefined ? undefined : { on_progress: progress.on_progress, request: createAgenticAskProgressRequestV1() };
@@ -149,18 +146,16 @@ export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAn
       capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
       const askOptions = { ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-        ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+        ...(asker === undefined ? {} : { asker }),
       };
       // Each attempt audits what it named; only the released attempt's receipt is returned.
       // The V8 answer streams progress V3, whose names may be workspace items and tool containers; the V7 answer
-      // streams V2, whose names may be follow-ups; the V6 answer streams V1.
+      // streams V2, whose names may be follow-ups.
       if (streamed !== undefined) {
         const question = { question: input.request.question, signal, request: streamed.request };
         return response_version === 8
           ? createAgenticAskV5(askOptions).answerWithReceipt({ ...question, on_progress: streamed.on_progress as AgenticAskProgressSinkV3 })
-          : response_version === 7
-            ? createAgenticAskV4(askOptions).answerWithReceipt({ ...question, on_progress: streamed.on_progress as AgenticAskProgressSinkV2 })
-            : createAgenticAskV3(askOptions).answerWithReceipt({ ...question, on_progress: streamed.on_progress as AgenticAskProgressSinkV1 });
+          : createAgenticAskV4(askOptions).answerWithReceipt({ ...question, on_progress: streamed.on_progress as AgenticAskProgressSinkV2 });
       }
       const create = response_version === 8 ? createAgenticAskV5 : response_version === 7 ? createAgenticAskV4 : response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
       return create(askOptions).answer({ question: input.request.question, signal });
@@ -168,8 +163,8 @@ export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAn
   }
   return Object.freeze({
     ask: (input: Input) => run(input),
-    // Only the /v5 (V6), /v6 (V7) and /v7 (V8) routes stream: /v4 and the older routes never do.
+    // Only the /v6 (V7) and /v7 (V8) routes stream: /v5, whose progress V1 was retired, and the older routes never do.
     // A method, so each version's application, with its own progress sink, is this one.
-    ...(response_version >= 6 ? { askWithProgress(input: Input & Progress) { return run(input, input); } } : {}),
+    ...(response_version >= 7 ? { askWithProgress(input: Input & Progress) { return run(input, input); } } : {}),
   }) as PersonLiveAnswerRoutesV1[Version];
 }

@@ -1,4 +1,4 @@
-import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1, coreRuntimeDiagnosticErrorKindV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, coreRuntimeDiagnosticErrorKindV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { createHash } from 'node:crypto';
 import {
   AdapterError,
@@ -883,7 +883,6 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         false,
       );
     }
-    captureCoreRuntimeContentV1("meeting_input", meeting);
     const evidence = buildMeetingEvidenceV1(meeting);
     if (evidence.units.length === 0) return this.decisionSet(meeting, []);
     const userPrompt = renderMeeting(evidence);

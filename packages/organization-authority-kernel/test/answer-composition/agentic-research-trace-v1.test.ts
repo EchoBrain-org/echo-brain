@@ -1,7 +1,7 @@
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
+import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import type { EvidenceDeskItemV2 } from '../../src/shared/evidence-desk-v2.js';
 import { need, part, record, researchHarness, result, step } from './fixtures/agentic-scenarios.js';
 
@@ -16,7 +16,7 @@ function ticket(id: string, text?: string): EvidenceDeskItemV2 {
 }
 
 describe('request-owned research trace', () => {
-  it('captures exact linked-open prompts, raw rejected decisions and repair calls without enabling runtime content capture', async () => {
+  it('captures exact linked-open prompts, raw rejected decisions and repair calls', async () => {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const anchor = ticket('THERM-50');
     const linked = ticket('THERM-51');
@@ -33,17 +33,13 @@ describe('request-owned research trace', () => {
       { sentences: [{ text: 'DVT awaits the fixture; PVT needs the approved package and fixture readiness.', evidence: ['E1', 'E2'] }], not_found: [] },
     ];
     const usage = { input_tokens: 100, output_tokens: 20, total_tokens: 120, cached_input_tokens: null, reasoning_tokens: null };
-    const h = researchHarness((input, index) => {
-      captureCoreRuntimeContentV1('model_request', input.user_prompt);
-      return replies[index];
-    }, {
+    const h = researchHarness((_input, index) => replies[index], {
       live_sources: [{ source_id: 'jira', kind: 'ticket', selector: 'tickets', description: 'Live tickets', metadata_only_list: true, tool_id: 'jira' }],
       list: async () => result([anchor]),
       open: async input => input.item === anchor.id ? result([anchorBody, linked]) : result([linkedBody]),
     }, { usage: () => usage });
-    const runtimeContent = vi.fn();
     const output = await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('ask_request', () => h.research.answerWithResearch({ question: 'Why is DVT on hold and what is required for PVT?' }),
-      { observer: () => undefined, content_observer: runtimeContent }));
+      { observer: () => undefined }));
 
     expect(output.response.outcome).toBe('answered');
     const requests = events.filter(event => event.kind === 'model_request');
@@ -77,8 +73,6 @@ describe('request-owned research trace', () => {
     expect(expanded).toMatchObject({ result: beforeLinkedRead.last_results[0] });
     expect(JSON.stringify(events)).not.toContain('private-desk-');
     expect(JSON.stringify(events)).not.toContain('receipt_sha256');
-    // Opt-in diagnostics never restore the separate global content observer.
-    expect(runtimeContent).not.toHaveBeenCalled();
   });
 
   it('correlates batched reads that finish out of order while preserving the model-visible admission order', async () => {

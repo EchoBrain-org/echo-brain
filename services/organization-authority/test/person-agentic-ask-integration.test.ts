@@ -29,7 +29,7 @@ type Prompt = {
   evidence?: Listing[];
 };
 type Membership = { organization_id: string; principal_id: string; membership_id: string; display_name: string };
-function fixture(options: { readonly small_scope_shortcut?: boolean; readonly membership?: (id: string) => Membership | undefined; readonly generate?: StructuredGenerationPort["generate"] } = {}) {
+function fixture(options: { readonly membership?: (id: string) => Membership | undefined; readonly generate?: StructuredGenerationPort["generate"] } = {}) {
   const database = projectContextDatabase(); databases.push(database);
   database.prepare(`INSERT INTO authority_projects_v1
     (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
@@ -90,7 +90,6 @@ function fixture(options: { readonly small_scope_shortcut?: boolean; readonly me
     records: { initializeDesk() { recordProbes += 1; throw new PersonRecordSearchIndexLagV1(); } } as never,
     model, generation: { generation_adapter_id: "fixture", planner_model: "unused", answer_model: "fixture", timeout_ms: 1000 },
     audit: new SqlitePersonAgenticAskAuditV1(database),
-    ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
     ...(options.membership === undefined ? {} : { memberships: { membership: options.membership } }),
   });
   const ask = (access_token = "owner") => route.ask({ access_token, request: { schema_version: 3, question: "Summarize this project", project_id: PROJECT_ALPHA } });
@@ -104,7 +103,6 @@ function fixture(options: { readonly small_scope_shortcut?: boolean; readonly me
 }
 
 const auditRow = (database: Database.Database) => database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").get() as { body_json: string } | undefined;
-const openedTexts = (prompts: readonly string[]) => (JSON.parse(prompts[0]!) as Prompt).opened?.map(item => item.text) ?? [];
 
 describe("Agentic Ask with stored source evidence", () => {
   it("answers globally from unread project search passages without releasing another member's private text", async () => {
@@ -197,10 +195,10 @@ describe("Agentic Ask with stored source evidence", () => {
   });
 
   it.each([
-    { name: "stops before the answer if access is revoked during research", shortcut: false, step: 2, roles: ["step", "step"] },
-    { name: "revalidates after research before releasing evidence to the answer", shortcut: true, step: 1, roles: ["step"] },
-  ])("$name", async ({ shortcut, step, roles }) => {
-    const f = fixture({ small_scope_shortcut: shortcut }); f.upload("Atlas plan", "The launch window is October."); f.revokeAfterStep(step);
+    { name: "stops before the answer if access is revoked during research", step: 2, roles: ["step", "step"] },
+    { name: "revalidates after research before releasing evidence to the answer", step: 3, roles: ["step", "step", "step"] },
+  ])("$name", async ({ step, roles }) => {
+    const f = fixture(); f.upload("Atlas plan", "The launch window is October."); f.revokeAfterStep(step);
     await expect(f.ask()).rejects.toThrow("membership revoked"); expect(f.roles).toEqual(roles);
     expect(auditRow(f.database)).toBeUndefined();
   });
@@ -212,44 +210,8 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(f.roles.filter(role => role === "answer")).toHaveLength(2); expect(answer.direct).toBeUndefined();
   });
 
-  it("preloads a small scope only when the route enables it, so one step can finish", async () => {
-    const f = fixture({ small_scope_shortcut: true });
-    f.upload("Atlas plan", "The launch window is October.");
-    const answer = await f.ask();
-    expect(answer.outcome).toBe("answered");
-    expect(f.roles).toEqual(["step", "answer"]);
-    expect(openedTexts(f.prompts)).toEqual([expect.stringContaining("October")]);
-    expect(JSON.parse(auditRow(f.database)!.body_json)).toMatchObject({ outcome: "answered", model_calls: 2 });
-  });
-
-  it("preloads every readable passage when the complete inventory fits", async () => {
-    const f = fixture({ small_scope_shortcut: true });
-    f.uploadChunks("Atlas plan", ["Passage one.", "Passage two.", "Passage three."]);
-    await f.ask();
-    expect(f.roles).toEqual(["step", "answer"]);
-    expect(openedTexts(f.prompts)).toEqual(expect.arrayContaining([
-      expect.stringContaining("Passage one."), expect.stringContaining("Passage two."), expect.stringContaining("Passage three."),
-    ]));
-  });
-
-  it("preloads every canonical packet of a long extracted chunk", async () => {
-    const f = fixture({ small_scope_shortcut: true });
-    f.uploadChunks("Atlas plan", [`${"head ".repeat(610)}distinct tail fact`]);
-    await f.ask();
-    expect(openedTexts(f.prompts).length).toBeGreaterThan(1);
-    expect(openedTexts(f.prompts).some(text => text?.includes("distinct tail fact"))).toBe(true);
-  });
-
-  it("does not preload when the complete readable-passage inventory exceeds twenty items", async () => {
-    const f = fixture({ small_scope_shortcut: true });
-    f.uploadChunks("Atlas plan", Array.from({ length: 21 }, (_, index) => `Passage ${index + 1}.`));
-    await f.ask();
-    expect(openedTexts(f.prompts)).toEqual([]);
-    expect(f.roles).toEqual(["step", "step", "step", "answer"]);
-  });
-
   it("cancels before publication and records one cancelled terminal audit", async () => {
-    const f = fixture({ small_scope_shortcut: true });
+    const f = fixture();
     f.upload("Atlas plan", "The launch window is October.");
     const controller = new AbortController();
     f.abortAfterStep(1, controller);

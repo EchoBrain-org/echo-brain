@@ -118,9 +118,9 @@ export type PersonOpenItemStateV1 = 'unsent' | 'open' | 'done' | 'not_relevant';
 export type PersonOpenItemVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unreadable';
 /**
  * What an item is: an action the approved meeting decided (`action`, follow-ups thread v1), or an existing item the impact
- * check found the meeting affects: a Jira ticket, a page, a Slack message, another ECHO record or an ECHO document.
+ * check found the meeting affects: a Jira ticket, a page, another ECHO record or an ECHO document.
  */
-export type PersonOpenItemKindV1 = 'action' | 'ticket' | 'page' | 'slack_message' | 'record' | 'document';
+export type PersonOpenItemKindV1 = 'action' | 'ticket' | 'page' | 'record' | 'document';
 export type PersonOpenItemOwnerMatchV1 = 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned';
 /**
  * How this request's live read of an item went, for this viewer. `opened`: it
@@ -262,7 +262,7 @@ const SWEEP_SCOPES = ['mine', 'record', 'project'] as const;
 const SET_STATES = ['open', 'done', 'not_relevant'] as const;
 const ITEM_STATES = ['unsent', ...SET_STATES] as const;
 const VERDICTS = ['landed', 'still_open', 'changed', 'unreadable'] as const;
-const KINDS = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'] as const;
+const KINDS = ['action', 'ticket', 'page', 'record', 'document'] as const;
 const OWNER_MATCHES = ['jira_account', 'name', 'picked', 'approver', 'reassigned'] as const;
 const RELATIONS = ['conflicts', 'needs_updating'] as const;
 const WAITS_ON = ['owner', 'approver', 'leads'] as const;

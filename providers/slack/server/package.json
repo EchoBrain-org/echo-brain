@@ -65,7 +65,6 @@
       "types": "./dist/organization-control-plane/adapters/nango/nango-connection-client-v1.d.ts",
       "import": "./dist/organization-control-plane/adapters/nango/nango-connection-client-v1.js"
     },
-    "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json",
     "./setup/initial-owner-slack-setup-v1": {
       "types": "./dist/setup/initial-owner-slack-setup-v1.d.ts",
       "import": "./dist/setup/initial-owner-slack-setup-v1.js"
@@ -75,8 +74,7 @@
     "dist/**/*.js",
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
-    "dist/**/*.d.ts.map",
-    "assets/**"
+    "dist/**/*.d.ts.map"
   ],
   "scripts": {
     "build": "tsc -b",

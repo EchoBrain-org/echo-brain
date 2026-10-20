@@ -145,7 +145,6 @@ describe("Person Slack identity-link workflow", () => {
     let current = authorization;
     const context = await setup(() => current);
     const events: CoreRuntimeObservationV1[] = [];
-    const content: unknown[] = [];
     await observeCoreRuntimeV1("http_request", async () => {
       await context.application.tools("bearer");
       const begun = await context.application.begin(beginRequest(), "bearer");
@@ -153,12 +152,12 @@ describe("Person Slack identity-link workflow", () => {
       current = { ...authorization, checked_at: "2026-08-22T00:01:00.000Z" };
       vi.mocked(context.slack.openIdentityLinkDirectMessage!).mockRejectedValue(new Error("provider-private-body"));
       await expect(context.application.begin(beginRequest("psb_00000000-0000-4000-8000-000000000002", OTHER_CODE), "bearer")).rejects.toMatchObject({ code: "unavailable" });
-    }, { observer: event => { events.push(event); }, content_observer: event => { content.push(event); } });
+    }, { observer: event => { events.push(event); } });
     for (const phase of ["person_tools_status", "person_tool_delivery", "person_tool_completion"]) {
       expect(events.some(event => event.phase === phase && event.event === "succeeded")).toBe(true);
     }
     expect(events.some(event => event.phase === "person_tool_delivery" && event.event === "failed")).toBe(true);
-    const output = JSON.stringify([events, content]);
+    const output = JSON.stringify(events);
     for (const secret of ["provider-private-body", PRINCIPAL_ID, MEMBERSHIP_ID, "U12345679", CODE, TOKEN]) expect(output).not.toContain(secret);
   });
 

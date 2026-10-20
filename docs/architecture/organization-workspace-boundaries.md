@@ -36,12 +36,10 @@ The registry is
 [`tools/workspace-source-boundaries.v1.json`](../../tools/workspace-source-boundaries.v1.json).
 Every production module has an owner. The gate follows whole modules, including
 unused re-exports, namespace/side-effect imports, type queries and literal dynamic
-imports. Runtime asset references obey the same direction. The Explorer
-deployment has an explicit source assembly shared by its builder and the same
-architecture gate. Deployment JavaScript has exact external and builtin import
-allowlists shared by the gate and builder, with computed imports and loader
-acquisition rejected. The native Swift app and its assemblies are retired; the
-gate rejects any Swift source under `product/` or `providers/`.
+imports. Runtime asset references obey the same direction. The native Swift
+app, its assemblies and the JavaScript source assembly of the retired Journey
+Explorer are gone; the gate rejects any Swift source under `product/` or
+`providers/`.
 There is no provider-name registry, symbol-based
 traversal or exception mechanism.
 
@@ -131,8 +129,7 @@ The server uses separate databases with explicit responsibilities:
   anchors, bounded pre-record processing state including raw meeting and
   decision documents, and immutable source custody under
   [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md):
-  Person originals and admitted source revisions, including opt-in retained
-  context captures. Custody grants no read;
+  Person originals and admitted source revisions. Custody grants no read;
 - the control-plane database owns verified provider identity, opaque
   connection handles, Person identity links, and private approval evidence;
 - `record-log.sqlite` is the append-only organization record;

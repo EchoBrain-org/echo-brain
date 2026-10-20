@@ -9,7 +9,7 @@ component_ids:
 created_at: 2026-10-02
 reviewed_at: 2026-10-02
 reviewed_ref: 8998a5ac6ca71e755b2b8159bdc5eddeb405a971
-status: proposed
+status: withdrawn
 supersedes: []
 superseded_by: []
 updates:
@@ -22,6 +22,11 @@ updates:
 ---
 
 # ADR-0028: Layer 1 holds the people directory, signed record log and source captures
+
+## Disposition
+
+Withdrawn on 2026-10-19, before acceptance: the capture and context-intake
+foundation it names was removed unused (its test is named below without a link).
 
 This is a proposal awaiting founder acceptance. The founder chose the broadened
 Layer 1 on 2026-10-02. No accepted record is edited by this proposal; the
@@ -133,8 +138,8 @@ the meeting, note, ticket and message payloads, without `source_type`,
 required fresh staging rehearsal discards captures retained before the trim; a
 future capture reader accepts only the trimmed shape.
 
-Evidence is source-only: the
-[shared intake tests](../../services/organization-authority/test/context-intake-v1.test.ts)
+Evidence is source-only: the shared intake tests
+(`context-intake-v1.test.ts`)
 prove the capture contract and its atomic retention fence, and the architecture
 boundary keeps the Layer 4 root free of lower-layer imports. Nothing is deployed
 or qualified by this record.

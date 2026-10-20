@@ -23,7 +23,7 @@ export function readStoredImpactCardV1(json: string): StoredImpactCardV1 {
     const citations = rawCitations.map(pointer => {
       if (typeof pointer !== 'object' || pointer === null || Array.isArray(pointer) || typeof (pointer as { readonly kind?: unknown }).kind !== 'string') throw new Error('stored citation is invalid');
       const kind = (pointer as { readonly kind: string }).kind;
-      const citationKind = kind === 'ticket' || kind === 'page' || kind === 'slack_message' ? kind : 'decision';
+      const citationKind = kind === 'ticket' || kind === 'page' ? kind : 'decision';
       return validatePersonAnswerCitationV6({ citation: pointer, kind: citationKind, label: 'Stored pointer', visibility: 'only_me' }).citation;
     });
     const affected = rawAffected.map(entry => {
@@ -35,7 +35,7 @@ export function readStoredImpactCardV1(json: string): StoredImpactCardV1 {
     });
     const validated = validatePersonImpactCardV1({
       status: raw.status, decided: rawDecided, affected, unconfirmed: rawUnconfirmed, people: [],
-      citations: citations.map(citation => ({ citation, kind: citation.kind === 'ticket' || citation.kind === 'page' || citation.kind === 'slack_message' ? citation.kind : 'decision', label: 'Stored pointer', visibility: 'only_me' })),
+      citations: citations.map(citation => ({ citation, kind: citation.kind === 'ticket' || citation.kind === 'page' ? citation.kind : 'decision', label: 'Stored pointer', visibility: 'only_me' })),
     });
     const local = (index: number) => citations[index]?.kind === 'approved_record' || citations[index]?.kind === 'source_revision';
     if (validated.decided.some(row => !local(row.citation_index)) || rawAffected.some((entry, index) => Object.hasOwn(entry as object, 'says_now') && !local(validated.affected[index]!.citation_index))) throw new Error('stored card contains outside text');

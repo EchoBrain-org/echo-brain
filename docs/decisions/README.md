@@ -7,7 +7,8 @@ hard-to-reverse choice was made.
 
 1. Create an ADR as `proposed` when the alternatives and tradeoffs are ready
    for review.
-2. Mark it `accepted` or `rejected` after the decision.
+2. Mark it `accepted` or `rejected` after the decision, or `withdrawn` when
+   what it proposes is removed before a decision, with a dated reason.
 3. Do not rewrite accepted or rejected rationale to match later history. Only
    lifecycle and relationship metadata may be appended after disposition.
 4. When direction changes, create a new ADR. The old ADR changes to
@@ -49,8 +50,8 @@ separately.
 | [ADR-0025](ADR-0025-nango-holds-slack-connection-credentials.md) | Nango holds Slack connection credentials | accepted |
 | [ADR-0026](ADR-0026-jira-person-live-evidence-nango.md) | Person-bound Jira live evidence with Nango custody | accepted |
 | [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md) | Rebind a lost Nango Slack connection under the same credential handle | proposed |
-| [ADR-0028](ADR-0028-broadened-layer-1-source-captures.md) | Layer 1 holds the people directory, signed record log and source captures | proposed |
-| [ADR-0029](ADR-0029-capture-and-derive-foundation.md) | Project-scoped capture and exact derivation inputs | proposed |
+| [ADR-0028](ADR-0028-broadened-layer-1-source-captures.md) | Layer 1 holds the people directory, signed record log and source captures | withdrawn |
+| [ADR-0029](ADR-0029-capture-and-derive-foundation.md) | Project-scoped capture and exact derivation inputs | withdrawn |
 | [ADR-0030](ADR-0030-personal-meeting-custody-and-review.md) | Personal Granola custody and shared in-app meeting review | accepted |
 | [ADR-0031](ADR-0031-unified-meeting-approval-core.md) | One meeting approval core with optional surfaces | accepted |
 | [ADR-0032](ADR-0032-stored-trigger-runs.md) | Stored trigger runs keep pointers and judgments, not outside text | accepted |
