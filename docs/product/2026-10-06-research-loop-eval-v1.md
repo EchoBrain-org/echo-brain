@@ -1,9 +1,8 @@
 # Research loop evaluation v1
 
-Status: implemented on branch `feat/research-loop-eval` (base main `b108ad3`,
-which includes #280, #281 and #282). Founder steps remain: deploy staging with
-the switch on, seed the THERM additions, run the baseline and calibrate the
-judge (`tools/evals/research-loop/README.md`).
+Status: shipped in #284. The
+[evaluation README](../../tools/evals/research-loop/README.md) owns how to run
+it, seed the THERM additions and calibrate the judge.
 
 ## Goal
 
@@ -157,7 +156,8 @@ A sweep never reuses earlier text.
 
 **Budgets.**
 
-- Live (Ask): 90 s deadline, 10 rounds, 24 model calls, 4 reads per round,
+- Live (Ask): 90 s deadline, 10 rounds, 24 model calls, 4 reads per round
+  (10 since [ADR-0042](../decisions/ADR-0042-research-tool-contract.md)),
   25 s writer reserve.
 - Background (Check, Sweep): initial values 5 minutes, 20 rounds, 48 model
   calls; other limits unchanged.
@@ -370,43 +370,9 @@ and within budget.
   connector rehearsal profile; without that selection it stays off. Ask
   requests through it keep the product's 240-character question limit, so the
   over-long case is measured as an ingress rejection.
-- The dataset has 29 cases: 19 development and 10 held out.
-- Implementation note, 2026-10-08: the evaluation now also grades a Sweep's
-  rendered result, the verdict per finding that the sweep renderer of the
-  [research trigger contract](2026-10-06-research-trigger-contract-v1.md)
-  returns, checked by code against the key. `landed` counts as landed,
-  `still_open` and `changed` as not landed, and `unreadable` as no evidence.
-  Each key verdict is compared with the result's entry for the same finding
-  position, so a case's key verdicts must follow its findings' order (the
-  dataset's `validate` fails on a key that does not). A null verdict is wrong
-  and is counted as not assessed. A Sweep run that fails, one that cannot
-  start included, scores zero: every finding counts as wrong. So does a run
-  that completes without a sweep result, and what its research returned is
-  still scanned for restricted leaks. Verdicts are counted, not averaged: per
-  case over its runs, then over all Sweep cases. The judge's Sweep verdicts,
-  read from the items research read, stay a separate measure
-  (`tools/evals/research-loop/README.md`). "Round one grades Check and Sweep
-  on the research result only" above describes round one.
-- Implementation note, 2026-10-16: sweeps no longer run the planner
-  ([open items and Home v1](2026-10-08-open-items-and-home-v1.md), ruling
-  R77): research re-reads each finding's items and stops. The evaluation no longer grades a Sweep on planner needs, invented
-  needs, items handed over (cited by a plan), noise or distractors handed, or
-  gaps reported in the plan: they stay unknown for a Sweep, never zero, and
-  the cross-case averages leave Sweep cases out. The Sweep cases no longer
-  carry expected needs or a gap, and `validate` refuses a Sweep case that
-  does; the delivery-date gap of `sweep-bug-412-and-gate` stays covered by
-  its `no_evidence` verdict and its must-not rule. Sweep baselines taken
-  before R77 must be retaken.
-- Implementation note, 2026-10-17: [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md)
-  makes a complete list Ask evidence of which items exist, and adds a part
-  type, `list`, for situation 12, "which items a filter selects". A list
-  part's evidence names every member, and it scores on the whole list: found,
-  read (a complete list research read holds every member), handed over and
-  correct in the answer only when that holds for every member, so naming some
-  members earns nothing, whatever the judge says. Whether the answer names
-  every member is a code check, reported as "lists named in full". An answer's
-  citation of a list member's row resolves like one of an item read in full.
-  The development case `confluence-pages-created-on-october-4-global` asks the
-  question of trace `ee2f0973`, whose answer named 4 of the 8 pages; the
-  dataset now has 30 cases, 20 of them development. Ask baselines taken before
-  ADR-0041 must be retaken.
+- The dataset started with 29 cases (19 development, 10 held out); on
+  2026-10-19 it had 57 (37 and 20).
+- Later changes (Sweep verdict grading, sweeps without a planner after ruling
+  R77, and [ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md)'s
+  list parts) are recorded in the
+  [evaluation README](../../tools/evals/research-loop/README.md).

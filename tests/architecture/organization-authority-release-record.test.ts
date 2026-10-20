@@ -1596,7 +1596,7 @@ fi
     expect(result.stderr).toContain(diagnostic);
   });
 
-  it("carries onboarding's unterminated telemetry line into the candidate and preserves its rollback bytes", () => {
+  it("carries onboarding's unterminated telemetry line and only the candidate's Ask switches into the candidate, and rollback restores the accepted bytes", () => {
     const fixture = environmentDriftFixture();
     const original = fixture.original + "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true";
     writeFileSync(fixture.envFile, original);
@@ -1604,36 +1604,23 @@ fi
     const candidateRecord = releaseWithRuntimeProfile(fixture.profile, {
       release_id: "clean-v1-20260822-002",
       authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, "d".repeat(64)) },
+      agentic_ask_v1: true,
+      small_scope_shortcut: true,
     });
     const stage = fixture.execute("stage", "--release", writeRecord(candidateRecord),
       "--runtime-profile", fixture.profile);
     expect(stage.status, stage.stderr).toBe(0);
-    expect(readFileSync(fixture.envFile, "utf8")).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n");
+    const candidateSnapshot = readFileSync(acceptedRuntimeEnvironment(fixture.state, candidateRecord.release_id), "utf8");
+    const staged = readFileSync(fixture.envFile, "utf8");
+    for (const line of ["ECHO_AGENTIC_ASK_V1=true\n", "ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true\n"]) {
+      expect(candidateSnapshot).toContain(line);
+      expect(staged).toContain(line);
+    }
+    expect(staged).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n");
     expect(readFileSync(fixture.snapshot, "utf8")).toBe(original);
     expect(fixture.execute("rollback").status).toBe(0);
     expect(readFileSync(fixture.envFile, "utf8")).toBe(original);
-  });
-
-  it("materializes only the candidate's Ask switches and restores the accepted environment on rollback", () => {
-    const fixture = environmentDriftFixture();
-    writeFileSync(fixture.envFile, fixture.original);
-    const candidateRecord = releaseWithRuntimeProfile(fixture.profile, {
-      release_id: "clean-v1-20260822-002",
-      authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, "d".repeat(64)) },
-      agentic_ask_v1: true,
-      small_scope_shortcut: true,
-    });
-    const candidate = writeRecord(candidateRecord);
-    const stage = fixture.execute("stage", "--release", candidate, "--runtime-profile", fixture.profile);
-    expect(stage.status, stage.stderr).toBe(0);
-    const candidateSnapshot = acceptedRuntimeEnvironment(fixture.state, candidateRecord.release_id);
-    expect(readFileSync(candidateSnapshot, "utf8")).toContain("ECHO_AGENTIC_ASK_V1=true\n");
-    expect(readFileSync(candidateSnapshot, "utf8")).toContain("ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true\n");
-    expect(readFileSync(fixture.envFile, "utf8")).toContain("ECHO_AGENTIC_ASK_V1=true\n");
-    expect(readFileSync(fixture.envFile, "utf8")).toContain("ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true\n");
-    expect(fixture.execute("rollback").status).toBe(0);
-    expect(readFileSync(fixture.envFile, "utf8")).toBe(fixture.original);
-    expect(readFileSync(fixture.snapshot, "utf8")).toBe(fixture.original);
+    expect(readFileSync(fixture.snapshot, "utf8")).toBe(original);
   });
 
   it.each([

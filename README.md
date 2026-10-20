@@ -39,8 +39,7 @@ It can:
   ([ADR-0035](docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
 
 It does not run meeting processing, hold provider OAuth or Slack service
-credentials, manage a LaunchAgent, keep a local product database, write a
-JSONL outbox, use installation signing keys or leases, or receive fleet update
+credentials, keep a local product database, or receive fleet update
 directives.
 
 Person session state is stored below
@@ -53,16 +52,14 @@ Tokens are never printed by successful commands.
 
 - external OIDC Person identity and rotating sessions;
 - organization authorization and audit;
-- meeting-source, decision-processing, and Slack approval and identity
+- meeting-source, decision-processing, and Slack presentation and identity
   adapters, plus the per-person live Jira and Confluence readers;
 - the append-only organization record; and
 - deterministic, permission-aware record reads and cited answers.
 
 The server starts only from six byte-pinned baseline schemas, one per state
-role: Authority V14, control-plane V4, record-log V4, retrieval facts V3,
-retrieval lexical V2 and retrieval content V2. Startup refuses older state
-instead of migrating it; historical baselines and converters remain in Git
-history.
+role ([current baselines](services/organization-authority/README.md#state-and-baselines)).
+Startup refuses older state instead of migrating it.
 
 Ask is the agentic research loop of
 [ADR-0019](docs/decisions/ADR-0019-agentic-ask-v1.md) as updated by
@@ -254,14 +251,9 @@ Coding agents select the lane from
 [PB-OPERATIONS-001](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
 before any staging, onboarding, or deploy command.
 
-For an existing accepted staging host, the reviewed
-[`authority:staging-release` lane](deploy/release/README.md#automated-current-host-staging-lane)
-automates non-secret artifact transfer and named release-wrapper actions without
-Session Manager copying. Login/MFA, approval of the canary meeting (desktop or
-Slack), and the exact candidate's final release decision remain human inputs.
-Initial onboarding retains human host-wrapper actions; the local operator can
-verify the release-installed client and run its authenticated Person reads.
-Infrastructure changes retain their plan-review gate.
+An existing accepted staging host is updated through the reviewed
+[`authority:staging-release` lane](deploy/release/README.md#automated-current-host-staging-lane),
+not through this slot controller.
 
 The staging controller holds one fixed Cloudflare edge and retained EBS data
 volume around a disposable EC2 host. Its initial host onboarding and three
@@ -422,11 +414,8 @@ the marker-bound completion of an interrupted blank-volume initialization; it
 does not permit reformatting a volume that already has a filesystem. Omit the
 flag only after the first host has reached ready.
 
-Token creation, SNS email confirmation, provider setup, initial-owner login and
-the first host canary command need their designated human actor. The local
-operator executes reviewed observability plans and authenticated client checks.
-Reuse completed setup evidence while its target and configuration remain unchanged.
-V1 is single-operator: never run overlapping lifecycle commands for this
+The [playbook's actor table](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md#human-decisions-and-operator-work)
+says who acts at each step. V1 is single-operator: never run overlapping lifecycle commands for this
 slot from different terminals or machines. For failed-create, rollback, mount,
 and recovery procedures, follow the full staging specification rather than
 deleting or renaming the stack.
@@ -541,10 +530,6 @@ metadata and KMS key exactly match the private receipt. Only that proved-owned
 version is deleted and absence is rechecked. A different, multiple, marked, or
 multipart object is a collision: it is never deleted by this controller.
 Do not reuse the operation ID until cleanup has proved absence.
-
-The first `slot-init` must use this template. No staging slot exists before this
-rollout; deliberately, there is no controller path for upgrading an older slot
-before a credential transfer.
 
 ## Design records
 

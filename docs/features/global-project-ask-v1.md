@@ -168,41 +168,23 @@ scope rules here still apply to every route. The CLI accepts
 `--project` and `--mine` are exclusive, as are `--tickets` and `--live`. The
 client does not silently downgrade a project or mine request to global Ask.
 
-`--live` calls `POST /v7/person/ask`, which returns V8 answers: those of
-`/v6` (V7), which may cite ECHO's shared follow-ups, seen as Home shows them
-([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)), and may
-also cite the asker's workspace: their projects, the people in their
-organization, their tools, and the Jira projects and Confluence spaces of the
-tools they connected
-([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). A follow-up's
-`follow_up:<item_id>` ref opens with `person runs` operation `item`, a
-project's `project:<project-id>` with `person projects read-v2`, and a tool's
-`tool:<tool>` in `person tools`, not `person open`; a person and a tool
-container carry no ref. In a project Ask the workspace is that project and
-its roster, and the containers are those its lead mapped. It uses every
-configured request-local live source: Jira ticket citations
-([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md)) and
-Confluence page citations, read under the asker's own connections. Global
-scope reads what those connections can access; a project reads only its
-lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
-[Confluence spaces](project-settings-v1.md#confluence-space-mapping). Mine and
-unmapped projects exclude live tools, and Mine excludes follow-ups and the
-workspace. The desktop uses `--live` for every question outside Mine. An older
-Authority gets the newest route it has, down to the ticket-capable
-`POST /v4/person/ask`, as the
+`--live` asks on the newest Ask route; the
 [Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)
-describes; permission failures never fall back. `person ask --tickets` keeps
-that `/v4` route for compatibility.
-`--live --progress` streams Ask's progress
-([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)): one JSON line per step before the final
-line, which adds the answer's receipt; on `/v6` a step may name a follow-up,
-and on `/v7` also a project, a person, a tool or a tool container. On `/v7` the receipt counts every
-item research looked through, a row of a list or search as well as an item read in full
-([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)). An Authority that does not stream
-gets today's output. The desktop pins the streamed Ask to the account it
-shows (`--expected-membership-id` and `--expected-authority`): a client
-signed in as another asks nothing and prints no step. See [Person client architecture](../architecture/person-client-architecture.md)
-for the client side.
+owns its routes, refs, fallback to an older Authority and `--progress` stream.
+Live Ask may cite ECHO's shared follow-ups
+([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)), the asker's
+workspace ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)), and
+Jira tickets and Confluence pages read under the asker's own connections.
+Global scope reads what those connections can access; a project reads only its
+lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
+[Confluence spaces](project-settings-v1.md#confluence-space-mapping), and its
+workspace is that project, its roster and the containers its lead mapped. Mine
+and unmapped projects exclude live tools, and Mine excludes follow-ups and the
+workspace. The desktop uses `--live` for every question outside Mine.
+Permission failures never fall back. `--tickets` keeps the ticket-capable
+`/v4` route for compatibility, and on `/v7` the receipt counts every item
+research looked through
+([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)).
 
 Cited original evidence is read through `POST /v2/person/ask/source` or
 `person ask-source`, using the answer's project scope (global for a global or
@@ -231,19 +213,15 @@ natural-language question.
 Both keyword `search` and keyword-free `list` carry date bounds. An explicit
 `date_field` selects the meaning and requires a source for keyword search:
 
-| Source | Date fields | Default |
-| --- | --- | --- |
-| Meetings: approved records, imported notes and shared transcripts | `occurred` (when recorded), `approved` (approved records), `received` (imported notes and transcripts), action `due` | `occurred` |
-| Saved notes and uploaded documents | `received` | `received` |
-| Follow-ups | `created`, `sent`, `reassigned`, `checked` | any of them |
-| Projects | `created` | `created` |
-| Jira tickets | `created`, `updated`, `due` | `created` |
-| Confluence pages | `created`, `updated` | `updated` |
-
-Each source declares these in its capabilities. For Ask, a window with no
-field matches any of an item's dates, and a field a source does not declare
-is refused; [ADR-0042](../decisions/ADR-0042-research-tool-contract.md#dates)
-says how items without the asked date are counted.
+Each source declares its date fields in its capabilities
+([ADR-0042 sources](../decisions/ADR-0042-research-tool-contract.md#sources)).
+For Ask, a window with no field matches any of an item's dates, and a field a
+source does not declare is refused;
+[ADR-0042](../decisions/ADR-0042-research-tool-contract.md#dates) says how
+items without the asked date are counted. Other research uses a source's own
+default: `occurred` for meetings, `received` for notes and documents, `created`
+for projects and Jira tickets, `updated` for Confluence pages, and any date for
+follow-ups.
 
 Timestamps are compared in the request's time zone; date-only deadlines and
 all-day events retain their stated date. The evidence carries named source
@@ -258,20 +236,11 @@ A meeting inventory includes readable imported notes and explicitly shared
 transcripts as well as approved records. Transcript permission and Mine-scope
 exclusion remain unchanged. Every metadata release remains audited and fenced.
 
-A list read to its end answers which items exist
-([ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md)). For a
-question such as "Which Confluence pages were created on October 4?", research
-may finish on a complete list without opening its items, and code writes the
-sentence that counts and names them, citing each item's own row: at most 25
-names across an answer, then "and N more", with N from ECHO's own list of
-items the asker can read, never a vendor's total. A list not read to a
-confirmed end (its last page was exactly full, or it was cut short) gives "at
-least N" and a partial answer. A requested filter the source cannot apply,
-such as an owner on pages, is named in the response notice rather than
-silently widening the list; a date field the source lacks is refused. A list
-supports titles, dates, status and owner only: what an item says still needs
-the item opened, and a question about which listed items say something notes
-how many were checked.
+A list read to its end answers which items exist, and research may finish on
+it without opening its items;
+[ADR-0041](../decisions/ADR-0041-complete-lists-as-ask-evidence.md) owns how
+the answer counts and names them, "at least N" for a list not read to its end,
+and the notice for a filter the source cannot apply.
 
 An upload date is not an event date inside a document, a due date is not a
 completion date, and the current revision's update timestamp is not a complete

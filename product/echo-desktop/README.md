@@ -4,8 +4,10 @@ The app shares its TypeScript client, host, renderer and Electron main process
 across macOS and Linux. Packages currently target macOS arm64 and Linux x64.
 Windows packaging is not implemented.
 
-Global Ask includes live Jira reads through the person's connected account and
-shows ticket citations that open directly in Jira. Project Ask includes Jira only through a saved project mapping. Mine excludes Jira.
+Global Ask includes live Jira and Confluence reads through the person's
+connected accounts, with citations that open directly in Jira or Confluence.
+Project Ask includes them only through the project's saved Jira project and
+Confluence spaces. Mine excludes them.
 
 While a global or project Ask works (ADR-0039), one line says what it is
 doing (Searching, Reading, Checking access, Writing) beside its timer and
@@ -209,6 +211,23 @@ sweep makes no Home row and changes no item's status; it only records each
 item's latest verdict. A meeting's actions and items on a Slack message are
 never re-checked. Projects and archived projects live in the sidebar.
 
+A project's **Tools** (in its title bar, the line above its feed, or the
+project menu) is one sheet for every tool a project can read: a Jira project
+key and up to 20 Confluence spaces. Each row shows your own connection; a tool
+you have not connected has **Connect** in its row, which waits on the browser
+and then shows the pick, without leaving the sheet. A project lead's **Save**
+writes every changed setting and closes the sheet; a member sees what the
+project reads and can connect their own account. Project Ask uses the saved
+settings for live reads and citations, under each asker's own connection; a
+project with none includes no Jira or Confluence evidence. The settings retain
+only project coordinates.
+
+**Create** in New project opens the project at once. The people picked are
+added and the files saved behind it, with a toast saying how far it got; the
+sheet comes back only for one whose outcome needs you (Try again, Check status,
+Skip…), and otherwise closes by itself. Toasts that confirm something go after
+a few seconds; warnings stay until the next page.
+
 Tools → Granola manages folder watching and individual meeting imports. Home and
 decision content is covered while another app is in front, and is read again,
 unfinished checks included, when ECHO returns.
@@ -395,44 +414,13 @@ with a release package, before it can update itself. Development runs
 
 ## Compatibility evidence and remaining desktop checks
 
-The initial Linux x64 assessment ran the unchanged application under X11/Xvfb:
-357 Person-client tests passed (one pre-existing platform skip), and 30 of 31
-selected desktop tests passed. The only failure expected a Mac shortcut label;
-the app correctly displayed `Ctrl+Shift+E`. Tests now use the platform's actual
-Control/Command modifier and shortcut labels. No application runtime code change
-was needed for those workflows.
-
-The full Linux run also exposed a timing assumption in the cancellation fixture:
-its delayed answer could arrive before a slower runner clicked Cancel. The test
-now explicitly releases that response after cancellation. This fixture is
-compiled out of release builds; application behavior is unchanged.
-
-The `desktop-app` CI matrix runs on macOS 15 arm64 and Ubuntu 24.04 x64 in
-parallel. Whenever CI selects it, both runs are required; a failure on one does
-not cancel the other.
-Each typechecks the desktop, runs unit and full Electron end-to-end tests,
-builds the platform's packages, and verifies release fuses and packaged startup.
-Linux uses Xvfb and additionally checks the deb with `scripts/check-deb.mjs`
-against the commit, then installs it, validates its desktop entry,
-and smokes the installed executable under Ubuntu's default user-namespace
-restriction, so it starts only through the deb's AppArmor profile. It then
-reinstalls the deb over itself, as the update helper does, and checks that the
-AppArmor profile, the root-owned helper, a non-setuid `chrome-sandbox` and the
-smoke test survive. macOS
-verifies the app's code signature.
-A pull request into `main` selects the matrix when its tested merge changes the
-desktop inputs listed in
-[`tools/ci-select-jobs.mjs`](../../tools/ci-select-jobs.mjs) or `main`'s own
-required check has not passed; a manual dispatch or an unverified push to
-`main` always does.
-
-CI caches npm downloads and Electron/packaging-tool downloads separately by
-OS, architecture and lockfile. After a lockfile change, a pull request starts
-from the newest Electron/packaging-tool entry saved on `main`. CI rebuilds the
-application from the current commit on every run that selects it. Packaging
-already compiles and checks the release bundles, so CI does not repeat that
-build before packaging. All repository, CLI and Authority checks keep their
-independent jobs; `CI required checks` gates them and both desktop targets.
+The `desktop-app` job in [`ci.yml`](../../.github/workflows/ci.yml) runs on
+macOS 15 arm64 and Ubuntu 24.04 x64, when
+[`tools/ci-select-jobs.mjs`](../../tools/ci-select-jobs.mjs) selects it; both
+runs are then required. Each typechecks, runs the unit and Electron end-to-end
+tests, packages, and smokes the packaged app. Linux also checks, installs and
+reinstalls the deb under its AppArmor profile; macOS verifies the code
+signature.
 
 Xvfb exercises X11, not a complete GNOME/KDE desktop. Before claiming support
 for a particular Wayland desktop, check portal consent, global capture shortcuts,
@@ -443,21 +431,3 @@ global shortcut is unavailable. Linux ARM64 is outside this package target.
 CI cannot show a polkit password prompt or a real macOS app swap, so the
 [desktop update check](../../deploy/client-updates/README.md#verify-the-desktop-update)
 still needs native macOS arm64 and Ubuntu 24.04 x64 seats.
-
-
-A project's **Tools** (in its title bar, the line above its feed, or the
-project menu) is one sheet for every tool a project can read: a Jira project
-key and up to 20 Confluence spaces. Each row shows your own connection; a tool
-you have not connected has **Connect** in its row, which waits on the browser
-and then shows the pick, without leaving the sheet. A project lead's **Save**
-writes every changed setting and closes the sheet; a member sees what the
-project reads and can connect their own account. Project Ask uses the saved
-settings for live reads and citations, under each asker's own connection; a
-project with none includes no Jira or Confluence evidence. The settings retain
-only project coordinates.
-
-**Create** in New project opens the project at once. The people picked are
-added and the files saved behind it, with a toast saying how far it got; the
-sheet comes back only for one whose outcome needs you (Try again, Check status,
-Skip…), and otherwise closes by itself. Toasts that confirm something go after
-a few seconds; warnings stay until the next page.

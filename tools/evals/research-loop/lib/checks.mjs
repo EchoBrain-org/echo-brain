@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
+import { NEED_KINDS } from "./dataset.mjs";
 import { itemMatches, leakMarkers, matching, meetingIndex, satisfying, sectionCovered } from "./match.mjs";
-import { failedReach, reachChecks, traceCounts } from "./reach.mjs";
+import { failedReach, reachChecks, reliedLists, traceCounts } from "./reach.mjs";
 
 /**
  * Code checks for one saved run (spec section 5): what research found, read,
@@ -79,15 +80,11 @@ export function codeChecks(testCase, run, dataset) {
     status: "completed",
     stop: research.stop,
     cost: research.cost,
-    rounds: research.rounds.length,
-    plan_needs: research.plan.reduce((total, part) => total + part.needs.length, 0),
     expected_gaps: testCase.gaps,
     parts,
     coverage: {
-      required: parts.length,
       found: parts.filter(part => part.found).length,
       read: parts.filter(part => part.read).length,
-      cited_by_plan: parts.filter(part => part.cited_by_plan).length,
       handed: parts.filter(part => part.handed).length,
       ...(listParts === 0 ? {} : { lists_named: parts.filter(part => part.named === true).length }),
     },
@@ -96,12 +93,6 @@ export function codeChecks(testCase, run, dataset) {
     noise_handed: noise.length,
     answer_citations: { total: answer?.citations.length ?? 0, resolved_to_read: (answer?.citations.length ?? 0) - answer_citation_violations.length, unresolved: answer_citation_violations.length },
     answer_citation_violations,
-    ask: answer === null ? null : {
-      outcome: answer.outcome,
-      statements: answer.parts.reduce((total, part) => total + part.statements.length, 0),
-      citations: answer.citations.length,
-      gap: answer.parts.map(part => part.gap).filter(value => typeof value === "string"),
-    },
     card: card === null ? null : cardChecks(testCase, card, items, meetings),
     ...(testCase.trigger === "sweep" ? { sweep: { status: rendered.status, ...gradeSweep(testCase, rendered) } } : {}),
     ...(testCase.trigger === "ask" ? { kinds: kindsOf(research.plan) } : {}),
@@ -111,9 +102,6 @@ export function codeChecks(testCase, run, dataset) {
     ...(testCase.reach === undefined ? {} : { reach: reachChecks(testCase, run) }),
   };
 }
-
-/** The kinds an Ask need declares (ADR-0041). */
-const NEED_KINDS = ["which_items", "which_say", "content"];
 
 /** A run's final plan's needs by declared kind; a need saved without one (a run from before ADR-0041) is `missing`. */
 function kindsOf(plan) {
@@ -139,7 +127,7 @@ const ROW_FACT_PARTS = new Set(["date", "owner", "status"]);
 function listIndex(research) {
   const all = Array.isArray(research.lists) ? research.lists : [];
   const of = id => all.filter(list => list.members.includes(id));
-  const stated = new Set(research.plan.flatMap(part => part.needs.filter(need => need.status === "found" && need.kind === "which_items").flatMap(need => need.evidence)));
+  const stated = reliedLists(research);
   return { of, relied: list => stated.has(list.id) };
 }
 

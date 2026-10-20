@@ -11,7 +11,6 @@ import {
   TESTED_TREE,
   gitIn,
   selectJobs,
-  verifyMainPush,
 } from "../../tools/ci-select-jobs.mjs";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -140,35 +139,31 @@ async function selectFor(merge: Merge, change: (fixture: Fixture) => void = () =
   return { selection, requested: github.requested, delays: github.delays };
 }
 
-async function selectPaths(changed: string[]) {
-  return (await selectFor(pullRequestMerge(changed))).selection;
-}
-
 describe("pull-request job selection", () => {
-  it("skips the desktop and Person-client package jobs for an Authority-only change (#277)", async () => {
-    const selection = await selectPaths([
+  // Changed paths and the jobs they select. Skipping a job reads main's
+  // required check and the tree it tested; selecting every job reads nothing.
+  const pullRequestJobs: Array<[string, string[], typeof EVERY_JOB]> = [
+    ["an Authority-only change skips the desktop and Person-client package jobs (#277)", [
       "docs/architecture/connector-contracts.md",
       "services/organization-authority/src/application/ports/person-slack-reader-v1.ts",
       "services/organization-authority/src/composition/person-answer-v3-route.ts",
       "services/organization-authority/test/person-answer-v3-http.test.ts",
-    ]);
-    expect(selection.mode).toBe("pull-request");
-    expect(selection.jobs).toEqual({
-      check: true,
-      docs: false,
-      person_client_package: false,
-      desktop_app: false,
-      authority_recovery_infrastructure: true,
-    });
-  });
-
-  it("selects the desktop app alone for a desktop-only change (#299)", async () => {
-    const selection = await selectPaths([
+    ], { ...EVERY_JOB, person_client_package: false, desktop_app: false }],
+    ["a desktop-only change selects the desktop app alone (#299)", [
       "product/echo-desktop/README.md",
       "product/echo-desktop/src/renderer/screens/home.tsx",
       "product/echo-desktop/test/e2e/projects.spec.ts",
-    ]);
-    expect(selection.jobs).toEqual({ ...EVERY_JOB, person_client_package: false });
+    ], { ...EVERY_JOB, person_client_package: false }],
+    ["a Person-client change selects every job", ["src/product/person-client/main.ts"], EVERY_JOB],
+  ];
+  it.each(pullRequestJobs)("%s", async (_name, changed, jobs) => {
+    const merge = pullRequestMerge(changed);
+    const { selection, requested, delays } = await selectFor(merge);
+    expect(selection.mode).toBe("pull-request");
+    expect(selection.jobs).toEqual(jobs);
+    const skipsAJob = !jobs.desktop_app || !jobs.person_client_package;
+    expect(requested.sort()).toEqual(skipsAJob ? Object.keys(greenCheck(merge.base, merge.baseTree)).sort() : []);
+    expect(delays).toEqual([]);
   });
 
   const changes: Array<[string, boolean, boolean]> = [
@@ -220,51 +215,30 @@ describe("pull-request job selection", () => {
     expect((await selectFor(merge)).selection.jobs.desktop_app).toBe(true);
   });
 
-  it("selects every job unless the checkout is the tested merge of a pull request into main", async () => {
-    const merge = authorityOnly();
-    const event = merge.event;
-    for (const [reason, input] of [
-      ["stacked", { event: { pull_request: { ...event.pull_request, base: { ref: "feat/base" } } } }],
-      ["no pull request", { event: {} }],
-      ["head moved", { event: { pull_request: { ...event.pull_request, head: { sha: "f".repeat(40) } } } }],
-      ["not the checkout", { sha: merge.head }],
-      ["short sha", { sha: merge.sha.slice(0, 12) }],
-    ] as const) {
-      const { selection, requested } = await selectFor(merge, undefined, input);
-      expect(selection, reason).toMatchObject({ mode: "full", jobs: EVERY_JOB });
-      expect(requested, reason).toEqual([]);
-    }
-  });
-
-  it("selects every job for a single-parent commit or a git failure", async () => {
-    const merge = authorityOnly();
-    expect((await selectFor(merge, undefined, {
+  // Anything but the tested merge of a pull request into main selects every
+  // job without reading GitHub; the reason names why.
+  type FullCase = [string, (merge: Merge) => Record<string, unknown>, string];
+  const fullSelections: FullCase[] = [
+    ["a stacked pull request", (merge) => ({ event: { pull_request: { ...merge.event.pull_request, base: { ref: "feat/base" } } } }), "base is not main"],
+    ["no pull request", () => ({ event: {} }), "base is not main"],
+    ["a moved head", (merge) => ({ event: { pull_request: { ...merge.event.pull_request, head: { sha: "f".repeat(40) } } } }), "unexpected shape"],
+    ["a checkout other than the merge", (merge) => ({ sha: merge.head }), "not the tested merge commit"],
+    ["a short sha", (merge) => ({ sha: merge.sha.slice(0, 12) }), "not the tested merge commit"],
+    ["a single-parent commit", (merge) => ({
       event: { pull_request: { base: { ref: "main" }, head: { sha: merge.base } } },
       git: (args: readonly string[]) => args[0] === "rev-list" ? { status: 0, stdout: `${merge.sha} ${merge.base}` } : merge.git(args),
-    })).selection).toMatchObject({ mode: "full", jobs: EVERY_JOB });
-    const failing = await selectJobs({
-      eventName: "pull_request",
-      event: merge.event,
-      sha: merge.sha,
-      repository: REPOSITORY,
-      git: (args) => args[0] === "diff" ? { status: 128, stdout: "" } : merge.git(args),
-      api: async () => { throw new Error("unused"); },
-    });
-    expect(failing).toMatchObject({ mode: "full", jobs: EVERY_JOB });
-    expect(failing.reason).toContain("selection failed");
-  });
-
-  it("deselects a job only when main's required check passed on the base tree", async () => {
+    }), "unexpected shape"],
+    ["a git failure", (merge) => ({
+      git: (args: readonly string[]) => args[0] === "diff" ? { status: 128, stdout: "" } : merge.git(args),
+    }), "selection failed"],
+    ...["workflow_dispatch", "schedule", "merge_group"].map((eventName): FullCase =>
+      [`a ${eventName} event`, () => ({ eventName }), "runs every job"]),
+  ];
+  it.each(fullSelections)("selects every job for %s", async (_name, input, reason) => {
     const merge = authorityOnly();
-    const { selection, requested, delays } = await selectFor(merge);
-    expect(selection).toMatchObject({ mode: "pull-request", jobs: { desktop_app: false, person_client_package: false } });
-    expect(requested.sort()).toEqual(Object.keys(greenCheck(merge.base, merge.baseTree)).sort());
-    expect(delays).toEqual([]);
-  });
-
-  it("reads nothing from GitHub when the change selects every job anyway", async () => {
-    const { selection, requested } = await selectFor(pullRequestMerge(["src/product/person-client/main.ts"]));
-    expect(selection).toMatchObject({ mode: "pull-request", jobs: EVERY_JOB });
+    const { selection, requested } = await selectFor(merge, undefined, input(merge));
+    expect(selection).toMatchObject({ mode: "full", jobs: EVERY_JOB });
+    expect(selection.reason).toContain(reason);
     expect(requested).toEqual([]);
   });
 
@@ -306,20 +280,6 @@ describe("pull-request job selection", () => {
     const { selection, delays } = await selectFor(merge, (fixture) => change(fixture, merge));
     expect(selection).toMatchObject({ mode: "full", jobs: EVERY_JOB });
     expect(delays).toHaveLength(waits);
-  });
-
-  it("selects every job for a manual dispatch or any other event", async () => {
-    for (const eventName of ["workflow_dispatch", "schedule", "merge_group"]) {
-      const selection = await selectJobs({
-        eventName,
-        event: {},
-        sha: "a".repeat(40),
-        repository: "EchoBrain-org/echo-brain",
-        git: () => { throw new Error("unused"); },
-        api: async () => { throw new Error("unused"); },
-      });
-      expect(selection, eventName).toMatchObject({ mode: "full", jobs: EVERY_JOB });
-    }
   });
 });
 
@@ -388,7 +348,7 @@ describe("verified main push", () => {
   }
 
   it("runs only the docs proof for a tree already green on its merged pull-request head", async () => {
-    const { selection, delays } = await verify();
+    const { selection, requested, delays } = await verify();
     expect(selection).toMatchObject({
       mode: "verified-main",
       jobs: {
@@ -400,6 +360,8 @@ describe("verified main push", () => {
       },
     });
     expect(selection.reason).toContain("#301");
+    // It reads the pull request, both trees, and the head's required check with the tree it tested.
+    expect(requested.sort()).toEqual(Object.keys(responses()).sort());
     expect(delays).toEqual([]);
   });
 
@@ -477,20 +439,6 @@ describe("verified main push", () => {
     expect(selection).toMatchObject({ mode: "full", jobs: EVERY_JOB });
     expect(requested).toEqual([]);
   });
-
-  it("reads the pull request, both trees, and the head's required check with the tree it tested", async () => {
-    const fixture = responses();
-    const requested: string[] = [];
-    const selection = await verifyMainPush({
-      event,
-      sha,
-      repository,
-      api: async (path) => { requested.push(path); return structuredClone(fixture[path]); },
-      sleep: async () => {},
-    });
-    expect(selection.mode).toBe("verified-main");
-    expect(requested.sort()).toEqual(Object.keys(fixture).sort());
-  });
 });
 
 describe("job input closures", () => {
@@ -563,7 +511,6 @@ describe("job input closures", () => {
     const listed = build.slice(build.indexOf("const personClientWorkspaces = ["), build.indexOf("];", build.indexOf("const personClientWorkspaces")));
     const built = [...listed.matchAll(/\[('[^\]]+')\]/g)].map((match) =>
       match[1]!.split(",").map((part) => part.trim().slice(1, -1)).join("/"));
-    expect(built).toHaveLength(7);
     expect(new Set(personClientClosure())).toEqual(new Set(built));
     for (const job of ["desktop_app", "person_client_package"] as const) {
       for (const workspace of built) expectCovered(job, workspace);

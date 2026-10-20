@@ -9,7 +9,6 @@ test("M1 generator is deterministic and fulfills corpus shape", () => {
   const first = buildSyntheticCorpus({ milestone: "M1", seed: "oracle-test" });
   const second = buildSyntheticCorpus({ milestone: "M1", seed: "oracle-test" });
   assert.equal(first.exact_head.hash, second.exact_head.hash);
-  assert.equal(first.atoms.length, 350);
   assert.deepEqual(assertCorpusShape(first), { posting_count: 8750, age_buckets: Array(10).fill(35) });
   assert.equal(ANALYZER_SOURCE_SHA256, "340d7f303a96bfb59b9661ce998a6b12b7cfd4947322eae7cd9a794451415d91");
 });

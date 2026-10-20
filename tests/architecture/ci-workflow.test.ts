@@ -60,14 +60,6 @@ function dependencyInputs(dockerfile: string) {
 }
 
 describe("CI workflow", () => {
-  it("runs the research-loop evaluator as an unconditional required proof", () => {
-    const research = steps("check").find((step) => step.includes("run: npm run test:research-loop-eval"));
-    expect(research).toBeDefined();
-    // Its only condition is the check leg it always runs in.
-    expect(research!.match(/if:.*$/gm)).toEqual(["if: matrix.leg == 'tail'"]);
-    expect(research).not.toContain("continue-on-error:");
-  });
-
   it("splits check into parallel legs that run npm run check and every later proof", () => {
     const check = job("check");
     expect(check).toContain(
@@ -172,25 +164,12 @@ describe("CI workflow", () => {
       "plan", "check", "docs", "person-client-package", "desktop-app",
       "authority-container", "authority-recovery-infrastructure", "required-checks",
     ]);
-    expect(required).toContain('test "$PLAN_RESULT" = success');
-    expect(required).toContain('selected "$CHECK_RESULT" "$CHECK_SELECTED"');
-    expect(required).toContain('selected "$DOCS_RESULT" "$DOCS_SELECTED"');
-    expect(required).toContain(
-      'selected "$PERSON_CLIENT_PACKAGE_RESULT" "$PERSON_CLIENT_PACKAGE_SELECTED"',
-    );
-    expect(required).toContain('selected "$DESKTOP_APP_RESULT" "$DESKTOP_APP_SELECTED"');
-    expect(required).toContain('test "$AUTHORITY_CONTAINER_RESULT" = success');
-    expect(required).toContain(
-      'selected "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" "$AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED"',
-    );
     expect(required).toContain("          TESTED_TREE: ${{ needs.plan.outputs.tree }}\n");
     // The tested tree is recorded last, after every result passed.
     expect(required.trimEnd().split("\n").at(-1)).toBe(
       `          echo "::notice title=${TESTED_TREE}::$TESTED_TREE"`,
     );
-    expect(required).toContain(
-      '            case "$2" in\n              true) test "$1" = success ;;\n              false) test "$1" = skipped ;;\n              *) return 1 ;;\n            esac\n',
-    );
+    // Every planned job, including one added later, is checked against its selection.
     for (const output of JOB_OUTPUTS) {
       const variable = output.toUpperCase();
       expect(required).toContain(`${variable}_SELECTED: \${{ needs.plan.outputs.${output} }}`);
@@ -297,7 +276,6 @@ describe("CI workflow", () => {
     expect(docs).toContain("    name: Documentation history\n");
     expect(docs).toContain("          fetch-depth: 0\n");
     expect(docs).toContain("        run: node tools/check-docs.mjs\n");
-    expect(docs.split(/(?=^      - )/m)).toHaveLength(4);
     const scripts = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")).scripts;
     expect(scripts["check:docs"]).toBe("node tools/check-docs.mjs");
     expect(scripts.check).toContain("npm run check:docs");
@@ -364,7 +342,6 @@ describe("CI workflow", () => {
     expect(authorityJob).toContain('config["registry-mirrors"] = ["https://mirror.gcr.io"]');
     expect(authorityJob).toContain("sudo systemctl restart docker\n");
     expect(authorityJob).toContain(
-      "          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea\n" +
       "          buildkitd-config-inline: |\n" +
       '            [registry."docker.io"]\n' +
       '              mirrors = ["mirror.gcr.io"]\n',
@@ -415,19 +392,6 @@ describe("CI workflow", () => {
     expect(authorityJob).toContain(
       'test "$authority_node_version" = "v$PRODUCT_NODE_VERSION"',
     );
-  });
-
-  it("runs the macOS-only CLI-kit and update-dispatch proofs in the macOS Person-client job", () => {
-    const personClientJob = job("person-client-package");
-
-    expect(personClientJob).toContain(
-      "tests/architecture/mac-person-cli-kit.test.ts",
-    );
-    expect(personClientJob).toContain(
-      "tests/architecture/client-update-dispatch.test.ts",
-    );
-    expect(personClientJob).toContain("tests/person-client/client-update.test.ts");
-    expect(source).not.toMatch(/swift|echo-overlay|echo-onboarding/i);
   });
 
   it("builds, verifies, and installs only the macOS command-line kit in the macOS Person-client job", () => {

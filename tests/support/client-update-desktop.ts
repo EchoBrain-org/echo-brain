@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -11,6 +12,7 @@ type Committed = (path: string) => Buffer;
 interface DesktopFixtureInputs {
   root: string;
   clientArchive: string;
+  /** The whole release record; the CLI kits carry its canonical bytes. */
   release: Release;
   releaseSha256: string;
   /** The feed's cli-kit bootstrap config; the identity carries it as electron. */
@@ -224,4 +226,56 @@ export function desktopArtifacts(inputs: DesktopFixtureInputs, debOptions: Param
     "macos-app": { path: zip, identity: join(resources, "echo-desktop-identity.v1.json"), client: join(resources, "person-client"), rebuild: zipApp },
     "linux-deb": { path: deb.path, identity: join(opt, "echo-desktop-identity.v1.json"), client: join(opt, "person-client"), rebuild: deb.rebuild },
   };
+}
+
+const CLI_KITS = {
+  linux: { platform: "linux", architecture: "x64", schema_version: 2, kind: "echo-person-onboarding-kit-v2", start: "deploy/release/start-person-onboarding-kit-linux.sh" },
+  macos: { platform: "darwin", architecture: "arm64", schema_version: 3, kind: "echo-person-cli-kit-v1", start: "deploy/release/start-person-cli-kit-macos.sh" },
+} as const;
+export type CliKitTarget = keyof typeof CLI_KITS;
+interface CliKit {
+  /** The unpacked kit folder. */
+  directory: string;
+  zip: string;
+  /** Rezips the folder after a test edits it. */
+  rebuild: () => void;
+}
+
+/**
+ * The Linux and macOS command-line kit ZIPs for the release, with the files
+ * deploy/release/create-person-onboarding-kit.mjs puts in them; only the Linux
+ * kit carries the update bootstrap. Each folder stays unpacked for a test to edit.
+ */
+export function cliKits(inputs: DesktopFixtureInputs): Record<CliKitTarget, CliKit> {
+  const { root, release, config, committed } = inputs;
+  const kits = {} as Record<CliKitTarget, CliKit>;
+  for (const name of ["linux", "macos"] as const) {
+    const target = CLI_KITS[name];
+    const kit = join(root, name, "echo-person-onboarding-kit");
+    mkdirSync(kit, { recursive: true, mode: 0o700 });
+    const write = (file: string, bytes: Buffer | string) => writeFileSync(join(kit, file), bytes, { mode: 0o600 });
+    const digest = (file: string) => createHash("sha256").update(readFileSync(join(kit, file))).digest("hex");
+    write("Start-ECHO.sh", committed(target.start));
+    write("clean-v1-release.mjs", committed("tools/clean-v1-release.mjs"));
+    write("verify-person-onboarding-kit.mjs", committed("deploy/release/verify-person-onboarding-kit.mjs"));
+    write("release.json", `${canonicalJsonForTest(release)}\n`);
+    write("person-client.tgz", readFileSync(inputs.clientArchive));
+    write("build-identity.v1.json", `${canonicalJsonForTest({
+      schema_version: 1, kind: "echo-person-onboarding-kit-identity-v1", product_version: release.person_client.version,
+      source_sha: release.source_sha, platform: target.platform, architecture: target.architecture, release_id: release.release_id,
+    })}\n`);
+    write("node", `synthetic ${name} runtime`);
+    write("kit-manifest.v1.json", `${canonicalJsonForTest({
+      schema_version: target.schema_version, kind: target.kind, release_id: release.release_id, source_sha: release.source_sha,
+      release_record_sha256: digest("release.json"), person_client_artifact_sha256: release.person_client.artifact_sha256,
+      build_identity_sha256: digest("build-identity.v1.json"),
+      runtime: { platform: target.platform, architecture: target.architecture, version: "v22.22.1", node_sha256: digest("node") },
+      ...(name === "linux" ? { update_bootstrap: config } : {}),
+    })}\n`);
+    const zip = join(root, `${name}-kit.zip`);
+    const rebuild = () => { rmSync(zip, { force: true }); execFileSync("zip", ["-qr", zip, "echo-person-onboarding-kit"], { cwd: join(root, name) }); };
+    rebuild();
+    kits[name] = { directory: kit, zip, rebuild };
+  }
+  return kits;
 }

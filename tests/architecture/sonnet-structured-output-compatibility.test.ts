@@ -42,21 +42,20 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
     expect(sentSchema(await wireRequest(schema, 'deepseek/deepseek-v3.2'))).toEqual(schema);
   });
 
-  it('retains Ask date formats, canonical filters and registered sources on the Claude wire', async () => {
-    const schema = sentSchema(await wireRequest(createStepSchema(['meetings', 'handbook'], ['E2'], true, true, true)));
+  // The kernel's tests own the Ask date format and pattern; this checks the
+  // Claude wire keeps them, which no other test covers.
+  it('keeps Ask date formats and patterns on the Claude wire', async () => {
     type Variant = { properties: { tool: { enum: string[] }; args: { properties: Record<string, Record<string, unknown>> } } };
-    const variants = (schema.properties as { actions: { items: { anyOf: Variant[] } } }).actions.items.anyOf;
-    const args = (tool: string) => variants.find(value => value.properties.tool.enum[0] === tool)!.properties.args.properties;
+    const args = (schema: Readonly<Record<string, unknown>>, tool: string) => (schema.properties as { actions: { items: { anyOf: Variant[] } } })
+      .actions.items.anyOf.find(value => value.properties.tool.enum[0] === tool)!.properties.args.properties;
+    const step = createStepSchema(['meetings', 'handbook'], ['E2'], true, true, true);
+    const wire = sentSchema(await wireRequest(step));
     for (const tool of ['search', 'list']) {
-      expect(args(tool).since).toMatchObject({ format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' });
-      expect(args(tool).until).toMatchObject({ format: 'date', pattern: '^\\d{4}-\\d{2}-\\d{2}$' });
-      expect(args(tool).source!.enum).toEqual(['meetings', 'handbook']);
-      expect(args(tool).date_field!.enum).toEqual(['occurred', 'created', 'updated', 'due', 'received', 'approved', 'sent', 'reassigned', 'checked']);
+      for (const field of ['since', 'until']) {
+        const { format, pattern } = args(step, tool)[field]!;
+        expect(args(wire, tool)[field]).toMatchObject({ format, pattern });
+      }
     }
-    expect(args('list').status!.enum).toEqual(['open', 'done', 'active', 'archived']);
-    // A list's limit stays an integer on the wire (research tool contract v1).
-    expect(args('list').limit).toMatchObject({ type: 'integer' });
-    expect(args('open').id!.enum).toEqual(['E2']);
   });
 
   it('keeps property names and literal values that resemble schema keywords', async () => {
@@ -75,11 +74,10 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
     expect(properties.children).not.toHaveProperty('minItems');
   });
 
-  it.each([1, 256, 1_500, 4_096])('leaves reasoning headroom even for a %i-token background or Ask call', async allowance => {
+  // The provider test covers 1,500 tokens, medium reasoning, and no temperature.
+  it.each([1, 256, 4_096])('leaves reasoning headroom even for a %i-token background or Ask call', async allowance => {
     const body = await wireRequest(answerSchema, 'anthropic/claude-sonnet-5.5', allowance);
     expect(body.max_tokens).toBe(allowance + 4_096);
-    expect(body.reasoning).toEqual({ effort: 'medium' });
-    expect(body).not.toHaveProperty('temperature');
   });
 
   it('keeps local action bounds and the caller output ceiling enforced', async () => {

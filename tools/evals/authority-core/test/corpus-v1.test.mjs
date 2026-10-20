@@ -42,7 +42,6 @@ test("every V4 milestone rounds source-level policy, owner, and age assignments 
       ageBuckets[ageBucketForSource(sourceIndex, meetingCount)] += 1;
     }
     assert.equal(sharedMeetings, Math.floor((meetingCount * 7) / 10));
-    assert.equal(meetingCount - sharedMeetings, Math.ceil((meetingCount * 3) / 10));
     assert.equal(restrictedOwners.size, milestone.active_employees);
     assert.ok(ageBuckets.every((count) => count > 0));
     assert.ok(Math.max(...ageBuckets) - Math.min(...ageBuckets) <= 1);

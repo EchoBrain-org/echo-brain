@@ -1,7 +1,7 @@
 # Desktop refresh and notifications v1
 
-Date: 2026-10-15. Status: approved by the founder for build (Tier 1 + Tier 2);
-the founder validates the finished result. Decision record:
+Date: 2026-10-15. Status: shipped in #326 (3442c51), Tier 1 and Tier 2; its
+tests sit beside the code they cover. Decision record:
 [ADR-0036](../decisions/ADR-0036-person-change-check.md). Replaces F8 of
 [follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md) and its definition
 of Follow-ups.
@@ -294,36 +294,3 @@ from rows the caller may read under the same policy as the matching read:
     opens.
   - A click brings the window forward and opens that target.
   - Where the system has no notifications, nothing shows.
-
-## 4. Testing
-
-- **Organization API:**
-  - the `echo-person-changes-v1` validator: exact keys, digests, seconds bounds;
-  - the `involved` request validation.
-- **Authority:**
-  - each area moves on its listed changes and on nothing else;
-  - the ADR-0012 privacy test (§1.3);
-  - `involved` lists approver, owner and `owner_set_by` items and nothing
-    unreadable;
-  - no audit row and no live read;
-  - an HTTP route test.
-- **Person client:** the `changes` command, including 404 → `not_supported`.
-- **Desktop unit tests, using the existing harness:**
-  - every R2 trigger, on both platforms' lifecycle;
-  - R3 re-reads for each area, and R4 for each page;
-  - the hidden-window hold (R6);
-  - the fallback (R8);
-  - each N2 event and each N3 non-event;
-  - coalescing, open-item suppression, and first-check learning;
-  - the open project header following its sidebar row;
-  - a lost project going Home.
-- **Desktop e2e:** the 2026-10-15 scenario. B's window keeps focus, A adds B
-  to a project, and within one check B's sidebar shows it and B is notified,
-  with no click.
-- **Final gate:** one `npm run check` on the integrated branch.
-
-## 5. Rollout
-
-- Deploy the Authority first, then publish the desktop release. The desktop
-  tolerates an older Authority (R8).
-- No schema change and no data reset.

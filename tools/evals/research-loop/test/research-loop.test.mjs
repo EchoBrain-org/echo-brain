@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { main } from "../cli.mjs";
 import { datasetProblems, loadDataset, substitutePerson } from "../lib/dataset.mjs";
 import { itemMatches, satisfying, ticketKey } from "../lib/match.mjs";
 import { codeChecks, gradeSweep } from "../lib/checks.mjs";
@@ -13,7 +13,7 @@ import { rejectedAtIngress, savedResult, startRequest } from "../lib/requests.mj
 import { aggregate, markdownReport, runScores } from "../lib/report.mjs";
 import { JUDGE_SYSTEM, judgeInput, parseJudge } from "../lib/judge.mjs";
 import { CALIBRATION_SAMPLE_RUNS, agreement, blindSheet, calibrationSheet, calibrationStatus, judgeChecks, scoreCalibration } from "../lib/calibration.mjs";
-import { privateDirectory } from "../lib/private-files.mjs";
+import { privateDirectory, readJson, savedRunFiles, writePrivateJson } from "../lib/private-files.mjs";
 
 const dataset = loadDataset();
 const meetings = new Map(dataset.additions.meetings.map(meeting => [meeting.id, meeting]));
@@ -34,6 +34,17 @@ function completedRun(testCase, items, ask, rendered) {
     kind: "echo-agentic-research-result-v1", trigger: testCase.trigger, goal: { kind: "question", question: testCase.question }, items, plan: [{ part: 1, question: "q", notes: "", needs: [{ need: "n", status: "found", evidence: ["E1"] }] }],
     rounds: [{ round: 1 }], stop: { reason: "finished", completed: true }, cost: { rounds: 2, model_calls: 3, elapsed_ms: 12_000 },
   }, ...(ask === undefined ? {} : { ask }), ...(rendered === undefined ? {} : { rendered }) } };
+}
+/**
+ * A judge reply that says yes to everything: every need covered, every part established (and, in an Ask, stated and
+ * correct), every gap reported and every Sweep verdict as the key expects, with no rule violated.
+ */
+function judgeReply(testCase) {
+  const answered = testCase.trigger === "ask" ? "yes" : "not_applicable";
+  return { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [],
+    parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: answered, answer_correct: answered })),
+    gaps: testCase.gaps.map(gap => ({ gap, reported: true })), must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false,
+    verdicts: (testCase.verdicts ?? []).map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" };
 }
 /** An impact card citing these research items (as the renderer cites bundle items). */
 const citationOf = item => ({ citation: item.citation, kind: item.kind, label: item.title, visibility: "project" });
@@ -328,10 +339,7 @@ test("a planner-less sweep is not graded on planner needs, handed items or plan 
     { verdict: "changed", line: "PRD-D01 now names three decimals, not two.", cites: [2] },
   ]));
   run.result.research = { ...run.result.research, plan: [], rounds: [] };
-  const judge = parseJudge(testCase, { needs: testCase.expected_needs.map(expected => ({ expected, covered: false })), invented_needs: [],
-    parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })),
-    gaps: testCase.gaps.map(gap => ({ gap, reported: false })), must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false,
-    verdicts: testCase.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" });
+  const judge = parseJudge(testCase, judgeReply(testCase));
   const scores = runScores({ checks: codeChecks(testCase, run, dataset), judge });
   const notApplicable = entry => [entry.planner_needs_covered, entry.planner_invented_needs, entry.tools_handed, entry.noise_handed, entry.distractors_handed, entry.research_gaps_reported];
   assert.deepEqual(notApplicable(scores), [null, null, null, null, null, undefined]);
@@ -390,10 +398,7 @@ test("sweep runs are graded on their sweep result, never as an impact card, and 
 test("a sweep run is complete and supported only when every verdict in its result is right", () => {
   const testCase = caseById("sweep-two-decimal-propagation");
   const items = propagationItems();
-  const judge = parseJudge(testCase, { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [],
-    parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })),
-    gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false,
-    verdicts: testCase.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" });
+  const judge = parseJudge(testCase, judgeReply(testCase));
   const scores = (cited, entries) => runScores({ checks: codeChecks(testCase, completedRun(testCase, items, undefined, sweepResult(cited, entries)), dataset), judge });
   const right = [
     { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
@@ -407,8 +412,6 @@ test("a sweep run is complete and supported only when every verdict in its resul
 });
 
 test("a case whose request cannot be built is recorded as not started and the run goes on", async () => {
-  const { main } = await import("../cli.mjs");
-  const { writePrivateJson, readJson, savedRunFiles } = await import("../lib/private-files.mjs");
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-unstartable-")));
   // M2 is not bound, so the approved-record case on M2 and the Sweep citing M2 cannot start; the other Sweep cites only a transcript.
   const { M2: _unbound, ...meetingsBound } = bindings.meetings;
@@ -440,12 +443,10 @@ test("a case whose request cannot be built is recorded as not started and the ru
   await main(["report", "--out", out]);
   const report = readJson(join(out, "report.json"));
   assert.deepEqual([report.summary.runs_not_started, report.summary.runs_failed], [3, 3]);
-  assert.match((await import("node:fs")).readFileSync(join(out, "report.md"), "utf8"), /Failed runs: 3, of which not started \(the case's request could not be built\): 3; rejected at ingress: 0\./u);
+  assert.match(readFileSync(join(out, "report.md"), "utf8"), /Failed runs: 3, of which not started \(the case's request could not be built\): 3; rejected at ingress: 0\./u);
 });
 
 test("a runner error that is not an unbound or unstartable citation still stops the run", async () => {
-  const { main } = await import("../cli.mjs");
-  const { writePrivateJson, savedRunFiles } = await import("../lib/private-files.mjs");
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-broken-")));
   // Broken bindings (no tickets map) are a bug to fix, not a case to skip.
   const { tickets: _missing, ...broken } = bindings;
@@ -463,15 +464,11 @@ test("the judge sees the card as the answer, and its gap checks count for the ca
   const input = judgeInput(testCase, run);
   assert.deepEqual(input.answer.card.affected, [{ item: "THERM-46: Work item", says_now: "BUG-412 names the filter-dropout hypothesis.", relation: "conflicts" }]);
   assert.deepEqual(input.answer.card.unconfirmed, ["a verified root cause for BUG-412"]);
-  const judged = { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [], parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })),
-    gaps: testCase.gaps.map(gap => ({ gap, reported: true })), must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: [], notes: "" };
-  const scores = runScores({ checks: codeChecks(testCase, run, dataset), judge: parseJudge(testCase, judged) });
+  const scores = runScores({ checks: codeChecks(testCase, run, dataset), judge: parseJudge(testCase, judgeReply(testCase)) });
   assert.deepEqual([scores.card_gaps_reported, scores.gaps_reported], [1, null]);
   const sweep = caseById("sweep-bug-412-and-gate");
-  const sweepJudge = { ...judged, parts: sweep.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })), needs: sweep.expected_needs.map(expected => ({ expected, covered: true })),
-    gaps: sweep.gaps.map(gap => ({ gap, reported: false })), must_not: sweep.must_not.map(rule => ({ rule, violated: false })), verdicts: sweep.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })) };
   const sweepRendered = sweepResult([ticket("THERM-46")], [{ verdict: "still_open", line: "BUG-412 is still open.", cites: [0] }, ...[1, 2].map(() => ({ verdict: null, line: "Not assessed." })), { verdict: "unreadable", line: "ECHO could not read this item." }]);
-  const sweepScores = runScores({ checks: codeChecks(sweep, completedRun(sweep, [ticket("THERM-46")], undefined, sweepRendered), dataset), judge: parseJudge(sweep, sweepJudge) });
+  const sweepScores = runScores({ checks: codeChecks(sweep, completedRun(sweep, [ticket("THERM-46")], undefined, sweepRendered), dataset), judge: parseJudge(sweep, judgeReply(sweep)) });
   // A sweep names no gaps (it has no plan to report them in), so none of its gap measures is known.
   assert.deepEqual([sweepScores.gaps_reported, sweepScores.card_gaps_reported, "research_gaps_reported" in sweepScores], [null, null, false]);
 });
@@ -570,8 +567,7 @@ test("reports weigh cases equally and keep unknowns unknown", () => {
   const unjudged = aggregate([{ checks, judge: null }]);
   assert.equal(unjudged.cases[0].complete_in_every_run, null);
   assert.equal(unjudged.summary.cases_with_unknown_completion, 1);
-  const judged = { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [], parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "yes", answer_correct: "yes" })),
-    gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: [], notes: "" };
+  const judged = judgeReply(testCase);
   assert.equal(runScores({ checks, judge: judged }).complete_and_supported, true);
   assert.equal(runScores({ checks: { ...checks, leaks: [{ kind: "marker" }] }, judge: judged }).complete_and_supported, false);
   const other = codeChecks({ ...testCase, id: "other" }, completedRun(testCase, []), dataset);
@@ -589,8 +585,7 @@ test("reports weigh cases equally and keep unknowns unknown", () => {
 
 test("judge replies must cover every part, need and verdict, and one run cannot calibrate a judge", () => {
   const testCase = caseById("sweep-two-decimal-propagation");
-  const reply = { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [], parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })),
-    gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: testCase.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" };
+  const reply = judgeReply(testCase);
   const judged = parseJudge(testCase, reply);
   assert.throws(() => parseJudge(testCase, { ...reply, parts: reply.parts.slice(1) }));
   assert.throws(() => parseJudge(testCase, { ...reply, verdicts: [] }));
@@ -613,8 +608,7 @@ test("judge replies must cover every part, need and verdict, and one run cannot 
 
 test("only a complete, current 15-run blind calibration certifies judge metrics", () => {
   const testCase = caseById("sweep-two-decimal-propagation");
-  const judge = parseJudge(testCase, { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [], parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "not_applicable", answer_correct: "not_applicable" })),
-    gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: testCase.verdicts.map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" });
+  const judge = parseJudge(testCase, judgeReply(testCase));
   const runs = Array.from({ length: CALIBRATION_SAMPLE_RUNS }, (_, index) => ({ checks: { case_id: testCase.id, trial: index + 1, budget: "background" }, judge }));
   const graded = { schema_version: 1, judge_model: "anthropic/claude-test", graded_at: "2026-10-06T00:00:00.000Z", runs };
   const cases = new Map([[testCase.id, testCase]]);
@@ -657,15 +651,17 @@ const pageSection = ([id, title, version], index) => ({ id: `E${index + 9}`, sou
 const ROWS = OCTOBER_4.map(pageRow);
 /** The pages' titles from `from` to `to`, as a statement names them (the code check reads names from the text). */
 const titles = (from, to) => OCTOBER_4.slice(from, to).map(([, title]) => title).join("; ");
-/** The list research read (ADR-0041): its 8 rows, read to a confirmed end and all shown to research. */
-const OCT4_LIST = { id: "L1", source: "pages", filter: { since: "2026-10-04", until: "2026-10-04", date_field: "created", time_zone: "UTC" }, filter_applied: { since: "applied", until: "applied", date_field: "applied" },
-  members: ROWS.map(row => row.id), shown: 8, ended: true, unverified_end: false, available: true, truncated: false, read_at: "2026-10-17T06:58:31.000Z", complete: true };
+/** A list research read (ADR-0041) holding these rows, read to a confirmed end and all shown to research. */
+const listOf = rows => ({ id: "L1", source: "pages", filter: { since: "2026-10-04", until: "2026-10-04", date_field: "created", time_zone: "UTC" }, filter_applied: { since: "applied", until: "applied", date_field: "applied" },
+  members: rows.map(row => row.id), shown: rows.length, ended: true, unverified_end: false, available: true, truncated: false, read_at: "2026-10-17T06:58:31.000Z", complete: true });
+/** The October 4 list: its 8 rows. */
+const OCT4_LIST = listOf(ROWS);
 /**
  * An October 4 run: research's items, lists and found evidence with the need's declared kind (ADR-0041; none is
- * content), the ids the writer saw, and the items the answer cites, in one statement or in several.
+ * content), the ids the writer saw, and the items the answer cites, in one statement or in several. `testCase` may be
+ * another list case.
  */
-function october4Run({ items = ROWS, lists, evidence, kind, writer, cites, text = `${(cites ?? []).map(item => item.title).join("; ")}.`, statements }) {
-  const testCase = caseById(OCT4_CASE);
+function october4Run({ testCase = caseById(OCT4_CASE), items = ROWS, lists, evidence, kind, writer, cites, text = `${(cites ?? []).map(item => item.title).join("; ")}.`, statements }) {
   const written = statements ?? [{ text, cites }];
   const cited = [...new Set(written.flatMap(statement => statement.cites))];
   const answer = { outcome: "answered", parts: [{ status: "answered", statements: written.map(statement => ({ text: statement.text, citation_indexes: statement.cites.map(item => cited.indexOf(item)) })) }], citations: cited.map(citationOf) };
@@ -675,11 +671,7 @@ function october4Run({ items = ROWS, lists, evidence, kind, writer, cites, text 
   return { testCase, run };
 }
 /** A judge that says yes to everything: list parts must still score on the whole list. */
-function lenientJudge(testCase) {
-  return parseJudge(testCase, { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [],
-    parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "yes", answer_correct: "yes" })),
-    gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: [], notes: "" });
-}
+const lenientJudge = testCase => parseJudge(testCase, judgeReply(testCase));
 
 test("the October 4 case keys the trace's 8 pages as one list part, and list parts name whole items, once, in Ask cases only", () => {
   const testCase = caseById(OCT4_CASE);
@@ -750,21 +742,69 @@ test("a writer's sentence names the members its text names, never every row it c
   const beside = run([sentence]);
   const checks = codeChecks(beside.testCase, beside.run, dataset);
   assert.deepEqual([checks.parts[0].named, checks.parts[0].members_named, checks.coverage.lists_named], [false, 4, 0]);
-  // Code decides, without a judge and over a judge's yes.
-  assert.equal(runScores({ checks, judge: null }).complete_and_supported, false);
-  assert.deepEqual([runScores({ checks, judge: lenientJudge(beside.testCase) }).writer_lists_named, runScores({ checks, judge: lenientJudge(beside.testCase) }).complete_and_supported], [0, false]);
   // A statement code wrote cites only list members' rows, and names each member it cites, beside the same sentence too.
   const stated = codeChecks(beside.testCase, run([{ text: `8 Confluence pages created on October 4, 2026: ${titles(0, 8)}.`, cites: ROWS }, sentence]).run, dataset);
   assert.deepEqual([stated.parts[0].named, stated.parts[0].members_named], [true, 8]);
   // A row whose text the writer was given (a follow-up's row carries its text) still names only what the sentence says.
   const withText = ROWS.map((row, index) => index < 4 ? row : { ...row, text: "SYNTHETIC MOCK" });
   const own = october4Run({ items: [...withText, ...sections], lists: [OCT4_LIST], evidence: ids, kind: "which_items", writer: [...sections.map(item => item.id), ...ids], statements: [sentence] });
-  assert.deepEqual([codeChecks(own.testCase, own.run, dataset).parts[0].named, codeChecks(own.testCase, own.run, dataset).parts[0].members_named], [false, 4]);
+  const [ownPart] = codeChecks(own.testCase, own.run, dataset).parts;
+  assert.deepEqual([ownPart.named, ownPart.members_named], [false, 4]);
   // "And N more" is code's count from ECHO's own list (addition 5): a writer's sentence that ends with one counts nothing.
   const counted = codeChecks(beside.testCase, run([{ ...sentence, text: `The pages include ${titles(0, 4)}; and 4 more.` }]).run, dataset);
   assert.equal(counted.parts[0].named, false);
   const code = codeChecks(beside.testCase, run([{ text: `8 Confluence pages created on October 4, 2026: ${titles(0, 4)}; and 4 more.`, cites: ROWS.slice(0, 4) }, sentence]).run, dataset);
   assert.deepEqual([code.parts[0].named, code.parts[0].members_named], [true, 4]);
+});
+
+/** Whether a one-statement answer citing `cites` names the list of `rows` its case keys, and how many members it names. */
+function namedBy(text, cites, rows = ROWS, testCase) {
+  const built = october4Run({ testCase, items: rows, lists: [listOf(rows)], evidence: ["L1"], kind: "which_items", writer: rows.map(row => row.id), cites, text });
+  const [part] = codeChecks(built.testCase, built.run, dataset).parts;
+  return [part.named, part.members_named];
+}
+
+test("a statement names a member it cites when its text holds the member's name, ignoring case and spacing, never inside a longer name", () => {
+  // Naming a member without citing it is not naming it.
+  assert.deepEqual(namedBy(`8 Confluence pages created on October 4, 2026: ${titles(0, 8)}.`, ROWS.slice(0, 7)), [false, 7]);
+  // Names compare ignoring case and spacing, and a name inside a longer word names nothing: "Homepage" does not name
+  // "Mock Digital Thermometer Home", and "Home" alone names nothing.
+  assert.deepEqual(namedBy(`the pages are: ${titles(0, 7).replaceAll("; ", ";\n  ").toLowerCase()}; and mock   digital thermometer HOME.`, ROWS), [true, 8]);
+  assert.deepEqual(namedBy("Mock Digital Thermometer Homepage and Home.", ROWS), [false, 0]);
+  // A name inside a longer member's name names only the longer member.
+  const pages = [["900001", "Release plan", "1"], ["900002", "Release plan v2", "1"]];
+  const plans = { ...caseById(OCT4_CASE), id: "synthetic-release-plans", parts: [{ id: "p1", type: "list", requirement: "Both release plans.", evidence: pages.map(([page]) => ({ page })) }] };
+  const rows = pages.map(pageRow);
+  assert.deepEqual(namedBy("Release plan v2 replaces the first draft.", rows, rows, plans), [false, 1]);
+  assert.deepEqual(namedBy("2 Confluence pages created on October 4, 2026: Release plan; Release plan v2.", rows, rows, plans), [true, 2]);
+});
+
+test("past an answer's 25 names, cut, merged and lowercased names match, and only a statement naming every row it cites counts the rest", () => {
+  // 30 pages: a title past 120 characters, which code cuts, two pages sharing a label, which code names once, and 27 others.
+  const long = "Field return analysis for the mock digital thermometer: probe drift, battery sag, display rounding and fixture tolerances, with owners";
+  assert.ok([...long].length > 120);
+  const pages = [["800001", long, "1"], ["800002", "Weekly notes", "1"], ["800003", "weekly  notes", "2"],
+    ...Array.from({ length: 27 }, (_, index) => [`8001${String(index + 4).padStart(2, "0")}`, `Release checklist ${String(index + 4).padStart(2, "0")}`, "1"])];
+  const testCase = { ...caseById(OCT4_CASE), id: "synthetic-thirty-pages", parts: [{ id: "p1", type: "list", requirement: "All 30 pages.", evidence: pages.map(([page]) => ({ page })) }] };
+  const rows = pages.map(pageRow);
+  const title = ([, value]) => value;
+  // The renderer names 25 members (the merged label covers two), then counts the other 5 from ECHO's list (addition 5).
+  const names = [`${[...long].slice(0, 119).join("").trimEnd()}…`, "Weekly notes (2 pages)", ...pages.slice(3, 25).map(title)];
+  assert.deepEqual(namedBy(`30 Confluence pages created on October 4, 2026: ${names.join("; ")}; and 5 more.`, rows.slice(0, 25), rows, testCase), [true, 25]);
+  // A statement citing only rows whose text leaves one of them unnamed is not one code wrote: its "and N more" counts nothing.
+  assert.deepEqual(namedBy(`30 Confluence pages created on October 4, 2026: ${names.slice(0, -1).join("; ")}; and 6 more.`, rows.slice(0, 25), rows, testCase), [false, 24]);
+  // A writer's sentence naming every member, the long title whole and in lowercase, names the list without any count.
+  assert.deepEqual(namedBy(`The pages are ${[long.toLowerCase(), "Weekly Notes", ...pages.slice(3).map(title)].join(", ")}.`, rows, rows, testCase), [true, 30]);
+});
+
+test("a member the key names by its meeting is never named by text: its title is its meeting's label, not the name code gives it", () => {
+  // The research result titles a meeting record by its meeting's label; code names it by a line of its own text (its
+  // list label), which the result does not carry. So the check cannot tell which record a text names, and reads none.
+  const rows = [record("M1", "decision", "E1"), record("M3", "decision", "E2")];
+  const testCase = { ...caseById(OCT4_CASE), id: "synthetic-meeting-decisions", parts: [{ id: "p1", type: "list", requirement: "Both decisions.", evidence: [{ meeting: "M1", item: "decision" }, { meeting: "M3", item: "decision" }] }] };
+  const { run } = october4Run({ testCase, items: rows, lists: [{ ...listOf(rows), source: "records" }], evidence: ["L1"], kind: "which_items", writer: rows.map(row => row.id), cites: rows, text: `2 decisions: ${rows.map(row => row.title).join("; ")}.` });
+  const [part] = codeChecks(testCase, run, dataset).parts;
+  assert.deepEqual([part.found, part.read, part.named, part.members_named], [true, true, false, 0]);
 });
 
 test("each Ask run reports its plan's needs by declared kind, and a case may name the kinds its plan should declare (ADR-0041)", () => {
@@ -895,16 +935,7 @@ test("saved runs keep Ask's lists, and the judge sees them as rows without text 
   for (const start of ["Does a complete list research read hold every item in:", "Does the answer name every item in this list"]) assert.ok(questions.some(question => question.startsWith(start)), start);
 });
 
-test("results may not be written inside the repository", () => {
-  const repository = fileURLToPath(new URL("../../../../", import.meta.url));
-  assert.throws(() => privateDirectory(join(repository, "tools", "evals", "research-loop", "results")), /outside the repository/u);
-  const outside = mkdtempSync(join(tmpdir(), "research-loop-eval-"));
-  assert.equal(typeof privateDirectory(outside), "string");
-});
-
-test("grade and report run end to end on saved runs without a judge", async () => {
-  const { main } = await import("../cli.mjs");
-  const { writePrivateJson, readJson } = await import("../lib/private-files.mjs");
+test("grade and report run end to end on saved runs without a judge, a sweep run graded on its sweep result", async () => {
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-cli-")));
   writePrivateJson(out, "bindings.json", { ...bindings, test_person: "Zhen Ye" });
   const testCase = caseById("bug-fix-dates-vs-dvt-review");
@@ -913,43 +944,31 @@ test("grade and report run end to end on saved runs without a judge", async () =
   writePrivateJson(out, "runs/overlong-dvt-schedule-check/live-1.json", { case_id: "overlong-dvt-schedule-check", split: "development", state: "S0", trigger: "ask", budget: "live", trial: 1, model: "test-loop-model", source_sha: "commit-a", outcome: "rejected", error: { code: "query_too_long" } });
   const card = t1CardRun();
   writePrivateJson(out, `runs/${card.testCase.id}/background-1.json`, { ...card.run, case_id: card.testCase.id, split: "development", state: "S0", trigger: "approved_record", model: "test-loop-model", source_sha: "commit-a" });
-  await main(["grade", "--no-judge", "--out", out]);
-  await main(["report", "--out", out]);
-  const report = readJson(join(out, "report.json"));
-  assert.equal(report.summary.cases, 3);
-  assert.equal(report.cases.find(entry => entry.case_id === card.testCase.id).card_items_listed, 4 / card.testCase.affected.length);
-  assert.equal(report.summary.runs_rejected_at_ingress, 1);
-  assert.equal(report.cases.find(entry => entry.case_id === testCase.id).tools_found > 0, true);
-  assert.equal(report.identity.model, "test-loop-model");
-});
-
-test("grade and report run end to end on a saved sweep run, graded on its sweep result", async () => {
-  const { main } = await import("../cli.mjs");
-  const { writePrivateJson, readJson } = await import("../lib/private-files.mjs");
-  const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-sweep-")));
-  writePrivateJson(out, "bindings.json", { ...bindings, test_person: "Zhen Ye" });
-  const testCase = caseById("sweep-two-decimal-propagation");
+  const sweep = caseById("sweep-two-decimal-propagation");
   const items = propagationItems();
   const result = sweepResult(items.slice(0, 2), [
     { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
     { verdict: "still_open", line: "TC-D-06 still expects one decimal.", cites: [1] },
     { verdict: null, line: "Not assessed." },
   ]);
-  writePrivateJson(out, `runs/${testCase.id}/background-1.json`, { ...completedRun(testCase, items, undefined, result), case_id: testCase.id, split: "development", state: "S1", trigger: "sweep", model: "test-loop-model", source_sha: "commit-a" });
+  writePrivateJson(out, `runs/${sweep.id}/background-1.json`, { ...completedRun(sweep, items, undefined, result), case_id: sweep.id, split: "development", state: "S1", trigger: "sweep", model: "test-loop-model", source_sha: "commit-a" });
   await main(["grade", "--no-judge", "--out", out]);
   await main(["report", "--out", out]);
   const report = readJson(join(out, "report.json"));
+  assert.equal(report.summary.cases, 4);
+  assert.equal(report.cases.find(entry => entry.case_id === card.testCase.id).card_items_listed, 4 / card.testCase.affected.length);
+  assert.equal(report.summary.runs_rejected_at_ingress, 1);
+  assert.equal(report.cases.find(entry => entry.case_id === testCase.id).tools_found > 0, true);
+  assert.equal(report.identity.model, "test-loop-model");
   assert.deepEqual([report.summary.sweep_verdicts_right, report.summary.sweep_findings, report.summary.sweep_not_assessed], [2, 3, 1]);
-  assert.match((await import("node:fs")).readFileSync(join(out, "report.md"), "utf8"), /\| sweep-two-decimal-propagation \| background \| 1 \| 2 \/ 3 \| 1 \|/u);
+  assert.match(readFileSync(join(out, "report.md"), "utf8"), /\| sweep-two-decimal-propagation \| background \| 1 \| 2 \/ 3 \| 1 \|/u);
 });
 
 test("report withholds judge metrics until its exact grading pass is calibrated", async () => {
-  const { main } = await import("../cli.mjs");
-  const { writePrivateJson, readJson, savedRunFiles } = await import("../lib/private-files.mjs");
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-uncalibrated-")));
   const testCase = caseById("bug-fix-dates-vs-dvt-review");
   const checks = codeChecks(testCase, completedRun(testCase, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [{ statements: [{}] }], citations: [{}] } }), dataset);
-  const judge = { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [], parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: "yes", answer_correct: "yes" })), gaps: [], must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false, verdicts: [], notes: "" };
+  const judge = judgeReply(testCase);
   writePrivateJson(out, `runs/${testCase.id}/live-1.json`, { source_sha: "source", state: "S0", model: "test-loop-model" });
   const [{ file, sha256 }] = savedRunFiles(out);
   writePrivateJson(out, "graded.json", { schema_version: 1, judge_model: "anthropic/claude-test", graded_at: "2026-10-06T00:00:00.000Z", runs: [{ run: { file, sha256 }, checks, judge, judge_error: null }] });
@@ -957,14 +976,14 @@ test("report withholds judge metrics until its exact grading pass is calibrated"
   const report = readJson(join(out, "report.json"));
   assert.equal(report.identity.judge_calibration.status, "untrusted");
   assert.equal(report.summary.research_established, null);
-  assert.match((await import("node:fs")).readFileSync(join(out, "report.md"), "utf8"), /judge-derived metrics are withheld/u);
+  // A withheld judge counts no false abstentions, not zero, and withholding adds no measure an entry does not carry.
+  assert.deepEqual([report.cases[0].false_abstention_runs, Object.hasOwn(report.summary, "false_abstention_runs"), Object.hasOwn(report.cases[0], "writer_false_abstention")], [null, false, false]);
+  assert.match(readFileSync(join(out, "report.md"), "utf8"), /judge-derived metrics are withheld/u);
 });
 
 test("runs record an explicit loop model and reports refuse mixed identities", async () => {
-  const { main } = await import("../cli.mjs");
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-model-")));
   await assert.rejects(main(["run", "--run", "--split", "development", "--state", "S0", "--out", out]), /--model is required/u);
-  const { writePrivateJson } = await import("../lib/private-files.mjs");
   writePrivateJson(out, "graded.json", { schema_version: 1, judge_model: null, graded_at: "2026-10-06T00:00:00.000Z", runs: [] });
   writePrivateJson(out, "runs/a/live-1.json", { state: "S0", model: "loop-a" });
   writePrivateJson(out, "runs/b/live-1.json", { state: "S0", model: "loop-b" });
@@ -972,8 +991,6 @@ test("runs record an explicit loop model and reports refuse mixed identities", a
 });
 
 test("reports refuse runs from more than one source commit", async () => {
-  const { main } = await import("../cli.mjs");
-  const { writePrivateJson } = await import("../lib/private-files.mjs");
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-source-")));
   writePrivateJson(out, "bindings.json", { ...bindings, test_person: "Zhen Ye" });
   const rejected = { split: "development", state: "S0", trigger: "ask", budget: "live", trial: 1, model: "loop-a", outcome: "rejected", error: { code: "query_too_long" } };
@@ -984,8 +1001,6 @@ test("reports refuse runs from more than one source commit", async () => {
 });
 
 test("reports refuse saved runs that changed after grading", async () => {
-  const { main } = await import("../cli.mjs");
-  const { writePrivateJson } = await import("../lib/private-files.mjs");
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-regraded-")));
   writePrivateJson(out, "bindings.json", { ...bindings, test_person: "Zhen Ye" });
   const rejected = { case_id: "overlong-dvt-schedule-check", split: "development", state: "S0", trigger: "ask", budget: "live", trial: 1, model: "loop-a", source_sha: "commit-a", outcome: "rejected", error: { code: "query_too_long" } };

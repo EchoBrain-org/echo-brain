@@ -938,4 +938,6 @@ is unchanged. No tools, access scope, research budgets, or stop rules change.
 ## Later decisions
 
 [ADR-0042](ADR-0042-research-tool-contract.md#one-outcome-per-filter) (2026-10-19)
-adds, for Ask, refused filters, `unchecked` counts and any-date windows.
+adds, for Ask, refused filters, `unchecked` counts and any-date windows, and
+raises Ask's limit of 4 actions per step, which "Safety rules kept" and the
+considered options above name, to 10.

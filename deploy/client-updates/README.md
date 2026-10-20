@@ -69,19 +69,11 @@ is needed.
 
 ## Existing CloudFront operation
 
-The original `staging-feed-v1.template.json` and CloudFront receipt format remain
-supported for inspecting the existing `echo-client-update-staging-v1` operation.
-That stack reached `ROLLBACK_COMPLETE` because AWS required account verification
-before creating CloudFront resources. Its retained bucket was confirmed private
-and empty. Preserve that stack, bucket, and receipt unchanged: do not delete or
-reuse them, reset the receipt, or retry an uncertain execution.
-
-The new S3-only plan has its own stack identity and independently scoped receipt.
-It supersedes the failed hosting path after the prior rollback is confirmed and
-requires review of its own exact change set. Approval for the old CloudFront
-change set does not approve the new resources. This is not a recovery operation
-on the failed stack. Existing CloudFront receipts stay bound to their original
-template and resource inventory.
+The original `staging-feed-v1.template.json` operation
+(`echo-client-update-staging-v1`) rolled back before creating CloudFront
+resources; the tool can still inspect its receipt. Preserve that stack, bucket,
+and receipt unchanged: do not delete or reuse them, reset the receipt, or retry
+an uncertain execution. Its approval does not cover the S3-only stack.
 
 ## Sign and publish the first release
 
@@ -114,11 +106,10 @@ npm run client-update:sign -- init --directory /absolute/private/new-staging-sig
 ```
 
 Keep `private-key.pkcs8.der` in that private directory. `signer.json` contains
-only the public key and its fingerprint. Write the bootstrap configuration
-with exactly these keys: `schema_version: 1`,
-`kind: "echo-client-update-config-v1"`, the intended `channel`, the deployed S3
-`feed_url`, `public_key_spki` copied from `signer.json`, the sequence floor
-`minimum_sequence`, `automatic: true` and `installation: "cli-kit"`. For
+only the public key and its fingerprint. Write the
+[bootstrap configuration](../../docs/features/client-updates-v1.md#trusted-bootstrap)
+with the deployed S3 `feed_url`, `public_key_spki` copied from `signer.json`,
+`automatic: true` and `installation: "cli-kit"`. For
 [desktop release packaging](../release/README.md#desktop-release-packages),
 keep a copy that differs only in `installation: "electron"`. No client, kit,
 desktop package, feed, repository or publication receipt receives the private
@@ -300,9 +291,7 @@ PUT, or use an unconditional upload to force progress.
 An existing ZIP-delivered Mac client needs one trusted CLI kit installation
 before enrollment. Its command is
 `~/Library/Application Support/ECHO/cli/bin/echo-brain`. Configure that exact
-command only after the hosted feed has been verified. The retired Swift app and
-its paired command at `~/Library/Application Support/ECHO/bin/echo-brain`
-remain outside this CLI update channel.
+command only after the hosted feed has been verified.
 
 ```sh
 "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" update configure \
@@ -385,22 +374,12 @@ On each platform:
    Match its source SHA to the canonical release, and retain the verified
    installer/update artifact evidence.
    The displayed product version alone may be identical between releases.
-   The managed wrapper normally points directly into a versioned release;
-   that is supported. A custom seat launcher that runs a versioned release
-   directly stays on that release after the shared installation updates.
-   Through such a launcher, clients with the running-release check return
-   `running_release_mismatch` (exit 1) from `update`, `--check`, `--status`
-   and `--if-due`, naming the running and managed releases, and print the
-   mismatch on stderr before Person commands when automatic checks are
-   enabled. To recover, keep the launcher's own sign-in and session
-   environment and make it run the managed command with the same arguments;
-   do not edit other seats' launchers or remove retained releases. A launcher
-   pinned to an older client still reports the managed installation as its
-   own (for example `current` with exit 0), and its `update` installs into the
-   managed command while the launcher stays pinned. Publishing a new release
-   cannot change that executable. Verify the executable that actually serves
-   this seat's commands: its `person status` `client_build.source_sha` must
-   match the canonical release.
+   A custom seat launcher pinned to a versioned release stays on it after the
+   shared installation updates
+   ([running-release mismatch](../../docs/features/client-updates-v1.md#platform-and-installation-boundary));
+   do not edit other seats' launchers or remove retained releases. Verify the
+   executable that actually serves this seat's commands: its `person status`
+   `client_build.source_sha` must match the canonical release.
 4. Complete an authenticated record/document read and a positive cited Ask
    against a known readable fixture with that account. Include a Linux member
    path when members are affected; do not substitute the owner's private canary
@@ -441,15 +420,13 @@ A seat with no updater-capable build cannot run these steps. Its one manual
 reinstall from [Enroll a desktop](#enroll-a-desktop) is its first enrollment,
 and step 4 after that reinstall counts as that seat's evidence.
 
-Retain the latest publication/replacement receipt with `state: "succeeded"` and
-`metadata_fresh: true`, both CLI activation/read proofs and both desktop
-proofs, each saying whether the seat reached B through the in-app update or its
-first enrollment, with the coordinated release handoff. Until they pass, report
-"client published; verification incomplete." A failed in-app update on an
-updater-capable seat keeps that result after a manual reinstall. State the
-seats tested and those outstanding rather than claiming fleet-wide completion.
-Publishing reaches only enrolled installations: a desktop installed before
-ADR-0035, or one whose updater is off, such as a `.tar.gz` outside `/opt/ECHO`,
-stays on its release until it is reinstalled by hand. Local packaging/updater
+Record for each desktop proof whether the seat reached B through the in-app
+update or its first enrollment, in the
+[coordinated release](../release/README.md#coordinated-server-and-client-release)
+handoff; until every proof passes, the release is "client published". A failed
+in-app update on an updater-capable seat keeps that result after a manual
+reinstall. Publishing reaches only enrolled installations: a desktop installed
+before ADR-0035, or one whose updater is off, such as a `.tar.gz` outside
+`/opt/ECHO`, stays on its release until it is reinstalled by hand. Local packaging/updater
 tests and an already-current client do not prove a live A-to-B update or
 fleet-wide rollout of the new update policy.

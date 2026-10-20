@@ -96,17 +96,9 @@ bounded error code locally.
 
 New Linux kits enroll update checks during the normal `Start-ECHO.sh`
 installation. The release operator supplies the reviewed public configuration
-while building the kit; the user runs no additional update command:
-
-```sh
-npm run kit:person-onboarding -- \
-  --target linux-x64 \
-  --update-config /absolute/path/to/bootstrap-config.json \
-  --release /absolute/path/to/accepted-release.json \
-  --artifact /absolute/path/to/person-client.tgz \
-  --runtime-node /absolute/path/to/node-v22.22.1-linux-x64/bin/node \
-  --output /absolute/path/to/ECHO-linux-x64.zip
-```
+with `--update-config` while building the
+[Linux x64 kit](../../deploy/release/README.md#linux-x64-terminal-kit); the
+user runs no additional update command.
 
 The configuration must have `automatic: true` and `installation: "cli-kit"`.
 `automatic` enables checks and availability notices, never installation.
@@ -134,27 +126,15 @@ authenticated operator channel:
 echo-brain update configure --file /absolute/path/to/bootstrap-config.json
 ```
 
-For macOS, build the command-line kit. It is the only macOS kit, and the
-builder requires the installation type explicitly:
-
-```sh
-npm run kit:person-onboarding -- \
-  --target darwin-arm64 --installation cli-kit \
-  --release /absolute/path/to/accepted-release.json \
-  --artifact /absolute/path/to/person-client.tgz \
-  --runtime-node /absolute/path/to/node-v22.22.1-darwin-arm64/bin/node \
-  --output /absolute/path/to/ECHO-cli-macos-arm64.zip
-```
-
-Extract the ZIP and run `./echo-person-onboarding-kit/Start-ECHO.sh --install-only`.
-The Mac CLI installs to
-`~/Library/Application Support/ECHO/cli/bin/echo-brain`; add that directory to
-PATH or use the absolute command. It has its own release/updater directory
-and never modifies `~/Applications` or the retired Swift app's paired command
-at `~/Library/Application Support/ECHO/bin/echo-brain`. The retired app kits
-are no longer built, and an installation from one cannot be enrolled as an
-independent CLI installation. The CLI kit uses manifest schema 3
-(`echo-person-cli-kit-v1`) and contains no app archive.
+For macOS, build the
+[command-line kit](../../deploy/release/README.md#macos-arm64-command-line-kit).
+It is the only macOS kit, and the builder requires `--installation cli-kit`
+explicitly. Extract the ZIP and run
+`./echo-person-onboarding-kit/Start-ECHO.sh --install-only`. The Mac CLI
+installs to `~/Library/Application Support/ECHO/cli/bin/echo-brain`; add that
+directory to PATH or use the absolute command. It has its own
+release/updater directory and never modifies `~/Applications`. The CLI kit
+uses manifest schema 3 (`echo-person-cli-kit-v1`) and contains no app archive.
 
 Linux continues to use `${XDG_DATA_HOME:-~/.local/share}/echo/person/bin/echo-brain`
 and its existing schema-2 kit. Both installations keep the current Person session
@@ -400,8 +380,8 @@ node tools/client-update-feed.mjs seal \
 ```
 
 The authorization must bind the release and Person-client artifact hashes and
-record the existing Slack approval, record/Ask checks and final release
-decision. Signing the manifest additionally authorizes its exact artifacts
+record the canary approval (its `slack_approved` field, from either approval
+surface), record/Ask checks and final release decision. Signing the manifest additionally authorizes its exact artifacts
 and channel selection. One final human review may also approve the prepared
 manifest digest and, for a replacement, the expected predecessor digest, while
 the existing authorization and exact digest approval records retain their
@@ -417,21 +397,10 @@ server must serve these bytes without redirects or content encoding. Hosting,
 signer provisioning, first-seat enrollment and live document-read qualification
 are separate deployment steps.
 
-The S3 lane has a separate reviewed replacement operation for a later approved
-release or expiry refresh. It requires a human-approved SHA-256 of the current
-raw feed, verifies that predecessor's signature with the existing pinned key and
-channel, and requires a strictly higher signed sequence. The replacement reuses
-the enrolled client's bootstrap configuration, so its feed origin, publisher
-key, channel, and installation type remain pinned at the client. Existing
-content-addressed artifacts can be reused only when
-their authenticated metadata and public bytes match the new signed digest;
-otherwise artifact creation remains conditional. The final `feed.json` write is
-the sole overwrite and is conditional on the verified predecessor ETag. A
-changed predecessor, failed condition, or lost PUT result is unconfirmed and is
-resolved only by the replacement receipt's read-only status command. There is
-no retry of an attempted write, delete, forced overwrite, signer rollover, or
-automatic rollback. The original first-publication receipt remains historical
-evidence and must not be used to poll a feed after replacement.
+A later approved release or expiry refresh uses the S3 lane's separate
+[replacement operation](../../deploy/client-updates/README.md#replace-an-existing-feed).
+It reuses the enrolled client's bootstrap configuration, so its feed origin,
+publisher key, channel, and installation type remain pinned at the client.
 
 ## Verification and recovery
 
@@ -469,17 +438,12 @@ Recover to a retained release through the reviewed installer and recheck its
 build and authenticated reads. A network or metadata error alone does not
 trigger rollback or alter the session.
 
-Acceptance: publish B; a supported seat on A reports B during a normal Person
-command while its wrapper and command build identity remain A. Then an explicit
-`echo-brain update` installs B without file copying or a new login, and the seat
-reads Stout's MRD/PRD. A must already implement check-only automatic behavior
-to prove that policy; an older client's existing behavior is separate rollout
-evidence. Offline tests cover checks without artifact downloads or activation,
-cached notices, explicit installation, platform selection, signature/freshness
-failures, bounded downloads, concurrent starts, installation races and session
-preservation. Offline proof does not establish that this live acceptance test
-has occurred.
-
-Desktop acceptance is the separate
+Live acceptance is the
+[client activation check](../../deploy/client-updates/README.md#verify-mac-and-linux-client-activation)
+on native macOS arm64 and Linux x64 seats and the
 [desktop update check](../../deploy/client-updates/README.md#verify-the-desktop-update)
-on native macOS arm64 and Ubuntu x64 seats.
+on native macOS arm64 and Ubuntu x64 seats. Offline tests cover checks without
+artifact downloads or activation, cached notices, explicit installation,
+platform selection, signature/freshness failures, bounded downloads, concurrent
+starts, installation races and session preservation; they do not show that the
+live checks have occurred.

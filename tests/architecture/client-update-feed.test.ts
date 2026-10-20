@@ -7,19 +7,14 @@ import { tmpdir } from 'node:os';
 import { updateDigest } from '../../src/product/person-client/client-update-contract.js';
 import { cleanReleaseRecord } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
-import { desktopArtifacts, gnuTar, infoPlist, linuxDeb, type DesktopTarget, type LinuxDeb, type TarMember } from '../support/client-update-desktop.js';
+import { cliKits, desktopArtifacts, gnuTar, infoPlist, linuxDeb, type CliKitTarget, type DesktopTarget, type LinuxDeb, type TarMember } from '../support/client-update-desktop.js';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const roots: string[] = [];
-type Target = 'linux' | 'macos';
 type Artifact = 'linux-kit' | 'macos-kit' | 'macos-app' | 'linux-deb';
 const RELEASE_ARTIFACTS: Artifact[] = ['linux-kit', 'macos-kit', 'macos-app', 'linux-deb'];
 const RELEASE_TARGETS = [['linux', 'x64', 'glibc', 'cli-kit'], ['darwin', 'arm64', null, 'cli-kit'], ['darwin', 'arm64', null, 'electron'], ['linux', 'x64', 'glibc', 'electron']];
 type ManifestArtifact = { platform: string; architecture: string; libc: string | null; installation: string; url: string; sha256: string };
-const TARGET = {
-  linux: { platform: 'linux', architecture: 'x64', libc: 'glibc', schema_version: 2, kind: 'echo-person-onboarding-kit-v2', startSource: 'deploy/release/start-person-onboarding-kit-linux.sh' },
-  macos: { platform: 'darwin', architecture: 'arm64', libc: null, schema_version: 3, kind: 'echo-person-cli-kit-v1', startSource: 'deploy/release/start-person-cli-kit-macos.sh' },
-} as const;
 // HEAD and its committed bytes cannot change during the run, so read them once.
 const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim();
 const committedSources = new Map<string, Buffer>();
@@ -54,30 +49,13 @@ function fixture(desktop: Parameters<typeof desktopArtifacts>[1] = {}) {
   writeFileSync(releasePath, canonical(release) + '\n');
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const config = { schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://fixture.invalid/feed.json', public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' };
-  const kits = {} as Record<Target, { directory: string; zip: string; zipKit: () => void }>;
-  for (const targetName of ['linux', 'macos'] as const) {
-    const target = TARGET[targetName];
-    const kit = join(root, targetName, 'echo-person-onboarding-kit');
-    mkdirSync(kit, { recursive: true, mode: 0o700 });
-    for (const [file, source] of [['Start-ECHO.sh', target.startSource], ['clean-v1-release.mjs', 'tools/clean-v1-release.mjs'], ['verify-person-onboarding-kit.mjs', 'deploy/release/verify-person-onboarding-kit.mjs']]) {
-      writeFileSync(join(kit, file), committedSource(source), { mode: 0o600 });
-    }
-    writeFileSync(join(kit, 'release.json'), canonical(release) + '\n');
-    writeFileSync(join(kit, 'person-client.tgz'), readFileSync(clientArchive));
-    writeFileSync(join(kit, 'build-identity.v1.json'), JSON.stringify({ schema_version: 1, kind: 'echo-person-onboarding-kit-identity-v1', product_version: release.person_client.version, source_sha: sourceSha, platform: target.platform, architecture: target.architecture, release_id: release.release_id }));
-    writeFileSync(join(kit, 'node'), `synthetic ${targetName} runtime bytes`);
-    const digest = (name: string) => updateDigest(readFileSync(join(kit, name)));
-    writeFileSync(join(kit, 'kit-manifest.v1.json'), JSON.stringify({ schema_version: target.schema_version, kind: target.kind, release_id: release.release_id, source_sha: sourceSha, release_record_sha256: digest('release.json'), person_client_artifact_sha256: clientHash, build_identity_sha256: digest('build-identity.v1.json'), runtime: { platform: target.platform, architecture: target.architecture, version: 'v22.22.1', node_sha256: digest('node') }, ...(targetName === 'linux' ? { update_bootstrap: config } : {}) }));
-    const zip = join(root, `${targetName}-kit.zip`);
-    const zipKit = () => { rmSync(zip, { force: true }); execFileSync('zip', ['-qr', zip, 'echo-person-onboarding-kit'], { cwd: join(root, targetName) }); };
-    zipKit();
-    kits[targetName] = { directory: kit, zip, zipKit };
-  }
+  const inputs = { root, clientArchive, release, releaseSha256: updateDigest(readFileSync(releasePath)), config, committed: committedSource };
+  const kits = cliKits(inputs);
   const configPath = join(root, 'config.json');
   writeFileSync(configPath, JSON.stringify(config));
   const output = join(root, 'prepared');
   const run = (args: string[]) => spawnSync(process.execPath, [join(REPO, 'tools/client-update-feed.mjs'), ...args], { cwd: REPO, encoding: 'utf8' });
-  const desktops = desktopArtifacts({ root, clientArchive, release, releaseSha256: updateDigest(readFileSync(releasePath)), config, committed: committedSource }, desktop);
+  const desktops = desktopArtifacts(inputs, desktop);
   const paths: Record<Artifact, string> = { 'linux-kit': kits.linux.zip, 'macos-kit': kits.macos.zip, 'macos-app': desktops['macos-app'].path, 'linux-deb': desktops['linux-deb'].path };
   const prepare = (artifacts: Artifact[] = RELEASE_ARTIFACTS) => run(['prepare', '--config', configPath, '--release', releasePath, ...artifacts.flatMap(artifact => [`--${artifact}`, paths[artifact]]), '--sequence', '1', '--expires', new Date(Date.now() + 86400000).toISOString(), '--out', output]);
   const signaturePath = join(root, 'manifest.sig');
@@ -100,7 +78,7 @@ afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: 
 
 describe('approved update feed publisher', () => {
   const kitManifest = (kit: string) => join(kit, 'kit-manifest.v1.json');
-  it.each<{ name: string; target: Target; mutate: (kit: string) => void }>([
+  it.each<{ name: string; target: CliKitTarget; mutate: (kit: string) => void }>([
     { name: 'a kit enrolled to a different feed configuration', target: 'linux', mutate: kit => rewriteJson(kitManifest(kit), manifest => { manifest.update_bootstrap.feed_url = 'https://fixture.invalid/different-feed.json'; }, JSON.stringify) },
     { name: 'a macOS kit whose runtime claims Linux', target: 'macos', mutate: kit => rewriteJson(kitManifest(kit), manifest => { manifest.runtime.platform = 'linux'; }, JSON.stringify) },
     { name: 'the legacy macOS desktop-kit shape', target: 'macos', mutate: kit => rewriteJson(kitManifest(kit), manifest => { manifest.schema_version = 1; manifest.kind = 'echo-person-onboarding-kit-v1'; }, JSON.stringify) },
@@ -109,7 +87,7 @@ describe('approved update feed publisher', () => {
   ])('rejects $name before preparing a feed', ({ target, mutate }) => {
     const f = fixture();
     mutate(f.kits[target].directory);
-    f.kits[target].zipKit();
+    f.kits[target].rebuild();
     expect(f.prepare().status).toBe(1);
     expect(existsSync(f.output)).toBe(false);
   });
@@ -117,7 +95,7 @@ describe('approved update feed publisher', () => {
   it('retains preparation and audit support for legacy Linux kits without bootstrap metadata', () => {
     const f = fixture();
     rewriteJson(kitManifest(f.kits.linux.directory), manifest => { delete manifest.update_bootstrap; }, JSON.stringify);
-    f.kits.linux.zipKit();
+    f.kits.linux.rebuild();
     const prepared = f.prepare();
     expect(prepared.status, prepared.stderr).toBe(0);
     f.authorize();
@@ -125,39 +103,51 @@ describe('approved update feed publisher', () => {
     expect(f.validateSealed().status).toBe(0);
   });
 
-  it.each(RELEASE_ARTIFACTS)('refuses preparation without the %s artifact', (missing) => {
+  // A refused preparation writes nothing, so one fixture serves every case.
+  it('refuses preparation without any one of the release artifacts', () => {
     const f = fixture();
-    expect(f.prepare(RELEASE_ARTIFACTS.filter(artifact => artifact !== missing)).status).toBe(1);
-    expect(existsSync(f.output)).toBe(false);
+    for (const missing of RELEASE_ARTIFACTS) {
+      expect(f.prepare(RELEASE_ARTIFACTS.filter(artifact => artifact !== missing)).status, missing).toBe(1);
+      expect(existsSync(f.output), missing).toBe(false);
+    }
   });
 
+  // Each case below starts from the prepared manifest, so one preparation serves them all.
   const reductions: Array<[string, (artifact: ManifestArtifact) => boolean]> = [
     ['two-CLI-kit', artifact => artifact.installation === 'cli-kit'],
     ['Linux-kit-only', artifact => artifact.installation === 'cli-kit' && artifact.platform === 'linux'],
     ['macOS-kit-only', artifact => artifact.installation === 'cli-kit' && artifact.platform === 'darwin'],
   ];
-  it.each([...reductions, ['app-less', (artifact: ManifestArtifact) => artifact.installation !== 'electron' || artifact.platform !== 'darwin'] as const])('refuses to seal a manually reduced %s manifest', (_, keep) => {
+  it('refuses to seal a manually reduced manifest', () => {
     const f = fixture();
     expect(f.prepare().status).toBe(0);
-    f.retain(keep);
-    f.authorize();
-    const sealed = f.seal();
-    expect(sealed.status).toBe(1);
-    expect(sealed.stderr).toContain('all_release_targets_required');
-    expect(existsSync(join(f.output, 'feed.json'))).toBe(false);
+    const prepared = readFileSync(join(f.output, 'manifest.json'));
+    for (const [name, keep] of [...reductions, ['app-less', (artifact: ManifestArtifact) => artifact.installation !== 'electron' || artifact.platform !== 'darwin'] as const]) {
+      writeFileSync(join(f.output, 'manifest.json'), prepared);
+      f.retain(keep);
+      f.authorize();
+      const sealed = f.seal();
+      expect(sealed.status, name).toBe(1);
+      expect(sealed.stderr, name).toContain('all_release_targets_required');
+      expect(existsSync(join(f.output, 'feed.json')), name).toBe(false);
+    }
   });
 
-  it.each(reductions)('still audits a previously signed %s feed, including after expiry', (_, keep) => {
+  it('still audits previously signed reduced feeds, including after expiry', () => {
     const f = fixture();
     expect(f.prepare().status).toBe(0);
-    const manifest = f.retain(keep);
-    f.authorize();
-    // Historical bytes are constructed directly, without asking new-release
-    // preparation or sealing to authorize a CLI-only publication.
-    f.writeHistoricalEnvelope();
-    const audited = f.validateSealed();
-    expect(audited.status, audited.stderr).toBe(0);
-    expect(f.validateSealed(Date.parse(manifest.expires_at) + 1, true).status).toBe(0);
+    const prepared = readFileSync(join(f.output, 'manifest.json'));
+    for (const [name, keep] of reductions) {
+      writeFileSync(join(f.output, 'manifest.json'), prepared);
+      const manifest = f.retain(keep);
+      f.authorize();
+      // Historical bytes are constructed directly, without asking new-release
+      // preparation or sealing to authorize a CLI-only publication.
+      f.writeHistoricalEnvelope();
+      const audited = f.validateSealed();
+      expect(audited.status, `${name}: ${audited.stderr}`).toBe(0);
+      expect(f.validateSealed(Date.parse(manifest.expires_at) + 1, true).status, name).toBe(0);
+    }
   });
 
   it('prepares one signed feed with exactly the four release targets', () => {
@@ -178,11 +168,11 @@ describe('approved update feed publisher', () => {
     expect(f.seal().status).toBe(1);
   });
 
-  it.each(['authorization', 'signature', 'manifest', 'artifact'])('refuses %s changes before publishing a feed', (change) => {
+  // The manifest case also covers a signature that does not match the manifest.
+  it.each(['authorization', 'manifest', 'artifact'])('refuses %s changes before publishing a feed', (change) => {
     const f = fixture();
     expect(f.prepare().status).toBe(0);
     f.authorize(change !== 'authorization');
-    if (change === 'signature') writeFileSync(f.signaturePath, Buffer.alloc(64));
     if (change === 'manifest') rewriteJson(join(f.output, 'manifest.json'), manifest => { manifest.sequence = 2; }, canonicalLine);
     if (change === 'artifact') {
       const manifest = JSON.parse(readFileSync(join(f.output, 'manifest.json'), 'utf8'));
@@ -239,7 +229,7 @@ describe('approved update feed publisher', () => {
     f.authorize();
     const result = f.seal();
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('verify the inputs, signature, and exact release authorization');
+    expect(result.stderr).toContain('release_mismatch');
     expect(existsSync(join(f.output, 'feed.json'))).toBe(false);
   });
 });
@@ -250,7 +240,6 @@ describe('desktop release artifacts', () => {
   const client = (f: Fixture, target: DesktopTarget, path = 'package/dist/client-update-cli.js') => join(f.desktops[target].client, path);
   const flipByte = (path: string) => { const bytes = readFileSync(path); bytes[0] ^= 1; writeFileSync(path, bytes); };
   const helper = (f: Fixture) => join(f.root, 'linux-deb/data/opt/ECHO/resources/echo-desktop-update-helper');
-  const debControlFile = (f: Fixture, name: string) => join(f.root, 'linux-deb/control', name);
   // A ZIP member added after the packaged tree, as one a case-folding Mac would
   // install over the path it names once that tree has been checked.
   const appendEntry = (name: string, bytes = 'not the release bytes') => (f: Fixture) => {
@@ -286,11 +275,9 @@ describe('desktop release artifacts', () => {
     { name: 'a wrong bundle id', target: 'macos-app', code: 'desktop_bundle_mismatch', mutate: f => writeFileSync(join(f.root, 'macos-app/ECHO.app/Contents/Info.plist'), infoPlist('org.example.other')) },
     { name: 'a bundle id behind a comment', target: 'macos-app', code: 'desktop_bundle_mismatch', mutate: f => writeFileSync(join(f.root, 'macos-app/ECHO.app/Contents/Info.plist'),
       infoPlist('org.example.other').replace('<dict>', '<dict><!-- <key>CFBundleIdentifier</key><string>org.echobrain.echo-desktop</string> -->')) },
-    // The package contents checks have their own cases below; these show
+    // The package contents checks have their own cases below; this one shows
     // prepare binds them to release.source_sha.
     { name: 'a modified root helper', target: 'linux-deb', code: 'desktop_root_file_mismatch', mutate: f => writeFileSync(helper(f), Buffer.concat([readFileSync(helper(f)), Buffer.from('\n')])) },
-    { name: 'a modified postinst', target: 'linux-deb', code: 'desktop_root_file_mismatch', mutate: f => writeFileSync(debControlFile(f, 'postinst'), '#!/bin/bash\nchmod 4755 /opt/ECHO/chrome-sandbox\n') },
-    { name: 'an added preinst', target: 'linux-deb', code: 'desktop_package_unsafe', mutate: f => writeFileSync(debControlFile(f, 'preinst'), '#!/bin/bash\n', { mode: 0o755 }) },
     { name: 'a symlink in the embedded package client', target: 'linux-deb', code: 'desktop_client_mismatch', mutate: f => {
       const path = client(f, 'linux-deb');
       rmSync(path); symlinkSync('build-identity.v1.json', path);

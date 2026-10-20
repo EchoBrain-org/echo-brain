@@ -2,11 +2,6 @@
   "schema_version": 1,
   "world": "therm-v1",
   "note": "Synthetic additions to the THERM mock world. All people, the customer and the supplier are fictional. Seeded by hand by the founder; see README.md.",
-  "echo_project": {
-    "name": "THERM",
-    "jira_project_id": "10003",
-    "confluence_space_id": "1015812"
-  },
   "restricted_project": {
     "name": "THERM Supplier Review",
     "members_note": "{{TEST_PERSON}} must NOT be a member. Approve M6 from a different account that is a member of this project only.",

@@ -27,14 +27,13 @@ release check before command dispatch. Its public publisher trust and local
 release checkpoint are separate from Person authorization state. macOS arm64
 and Linux x64 CLI-kit activation reuse their platform installers. The desktop
 app runs the same updater with its own installation adapter (see
-[Desktop updates](#desktop-updates)). The standalone Mac CLI root is
-separate from the retired Swift app's paired CLI. This adds no background
-runtime or automatic Person-request replay.
+[Desktop updates](#desktop-updates)). This adds no background runtime or
+automatic Person-request replay.
 
 ## Desktop app
 
 The Electron app in `product/echo-desktop` is the graphical interface, packaged
-for macOS arm64 and Linux x64; it replaced the retired Swift app. Its person
+for macOS arm64 and Linux x64. Its person
 host, an Electron utility process, loads this client's `composition.js` and
 runs the same commands in process, as the terminal CLI would. The host is the
 only process that reads the session or holds a token. It sends the app window
@@ -243,8 +242,9 @@ An ECHO record approval does not establish who authorized its business decision.
 
 The client requests optional source metadata with
 `X-Echo-Person-Record-Version: 2`. Each readable record may then include
-`source_metadata.record_approved_by.display_name`, resolved from the private
-Slack approval's exact organization, principal, and membership tuple. The lookup
+`source_metadata.record_approved_by.display_name`, resolved from the approval
+core's recorded approver (the record approver projector): its exact
+organization, principal, and membership tuple. The lookup
 uses the current directory display name, including historical revoked tenures
 when they remain available; it supplies no job title, email, or authorization.
 Participants continue to come from the approved brief. The signed envelope and
@@ -365,7 +365,7 @@ an independent `--association-project-ids-json` set that does not change the
 audience. `status-v3` returns the durable receipt and optional enrichment
 progress. `search-v3` and `search` find original uploads, and
 `person open --ref note:<context-id>` reads one, under current membership and
-stored audience, without Slack approval or a model dependency. Content/search
+stored audience, without approval or a model dependency. Content/search
 releases revalidate the session and audit before returning. Unknown submissions
 require the same request ID and exact file, title, audience, and project
 coordinates on retry; no local queue or automatic upload exists. The V2
