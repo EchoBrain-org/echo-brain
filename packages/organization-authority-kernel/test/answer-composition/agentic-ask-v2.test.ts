@@ -13,6 +13,8 @@ const citation = (id: string, text: string) => ({ kind: 'ticket' as const, tool_
 const metadata: EvidenceDeskItemV2 = Object.freeze({ id: 'request-private-ticket-1', kind: 'ticket', citation: citation('10001', ''), label: 'ECHO-1: Launch', visibility: 'only_me', attributes: { status: 'Open' }, receipt_sha256: canonicalSha256('inventory-1') });
 const uncitedMetadata: EvidenceDeskItemV2 = Object.freeze({ id: 'request-private-ticket-2', kind: 'ticket', citation: citation('10002', ''), label: 'ECHO-2: Uncited ticket', visibility: 'only_me', receipt_sha256: canonicalSha256('inventory-2') });
 const opened: EvidenceDeskItemV2 = Object.freeze({ ...metadata, citation: citation('10001', body), text: body, receipt_sha256: canonicalSha256('open-1') });
+/** A live ticket source of another provider's tool, which declares no capabilities. */
+const TICKETS = { source_id: 'ticket', kind: 'ticket', selector: 'tickets', description: 'Live work items: discover summaries, then open selected items for their current body and state.', metadata_only_list: true, tool_id: 'issue-fixture' } as const;
 const need = (status: string, evidence: string[]) => [{ question: 'When is launch?', notes: '', needs: [{ need: 'ticket launch date', status, evidence }] }];
 const replies = [
   { parts: need('open', []), actions: [{ tool: 'list', args: { source: 'tickets' } }] },
@@ -33,7 +35,7 @@ function fixture(options: {
   };
   const desk: EvidenceDeskPortV2 = {
     scope: { kind: 'global' },
-    live_sources: [{ source: 'ticket', tool_id: 'issue-fixture' }],
+    live_sources: [TICKETS],
     search: vi.fn(async () => { throw new Error('unexpected search'); }),
     list: vi.fn(async () => release([metadata, uncitedMetadata])),
     open: vi.fn(async input => {
@@ -110,7 +112,7 @@ describe('Agentic Ask V2 ticket release', () => {
     };
     const desk: EvidenceDeskPortV2 = {
       scope: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' }, ticket_available: true,
-      live_sources: [{ source: 'ticket', tool_id: 'issue-fixture' }],
+      live_sources: [TICKETS],
       search: vi.fn(async () => ({ items: [ticket], truncated: false, receipt_digests: [ticket.receipt_sha256] })),
       list: vi.fn(async () => { throw new Error('model did not choose list'); }),
       open: vi.fn(async () => { throw new Error('search already returned full text'); }),

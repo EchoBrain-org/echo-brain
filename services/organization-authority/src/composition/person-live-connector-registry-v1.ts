@@ -1,5 +1,5 @@
 import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
-import { liveSourceDescriptorV2, type EvidenceSourceCapabilitiesV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import type { EvidenceSourceCapabilitiesV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type {
   OpenedPersonLiveConnectorV1, PersonContextLiveApplicationV1, PersonLiveConnectorDefinitionV1,
@@ -34,24 +34,18 @@ export const TOOL_CONTAINER_CAPABILITIES_V1: EvidenceSourceCapabilitiesV1 = Obje
   filters: Object.freeze({}), dates: Object.freeze({}), any_date: false, links: Object.freeze([]),
 });
 
-export const LEGACY_TICKET_CONNECTOR_V1 = Object.freeze({
-  descriptor: liveSourceDescriptorV2({ source: 'ticket' }),
-  scopes: Object.freeze(['global', 'project'] as const), minimum_response_version: 5 as const,
-});
-export const LEGACY_PAGE_CONNECTOR_V1 = Object.freeze({
-  descriptor: liveSourceDescriptorV2({ source: 'page' }),
-  scopes: Object.freeze(['global', 'project'] as const), minimum_response_version: 6 as const,
-});
 /** Descriptions say what a source holds; its capabilities say how it filters (research tool contract v1). */
 export const JIRA_LIVE_CONNECTOR_V1 = Object.freeze({
-  ...LEGACY_TICKET_CONNECTOR_V1,
-  descriptor: Object.freeze({ ...LEGACY_TICKET_CONNECTOR_V1.descriptor, source_id: 'jira', tool_id: 'jira', capabilities: JIRA_ISSUE_CAPABILITIES_V1,
-    description: "Jira issues the asker can see with their own Jira account: each issue's key, title, status, assignee and due date, its description, and the issues linked to it." }),
+  descriptor: Object.freeze({ source_id: 'jira', kind: 'ticket' as const, selector: 'tickets',
+    description: "Jira issues the asker can see with their own Jira account: each issue's key, title, status, assignee and due date, its description, and the issues linked to it.",
+    metadata_only_list: true, tool_id: 'jira', capabilities: JIRA_ISSUE_CAPABILITIES_V1 }),
+  scopes: Object.freeze(['global', 'project'] as const), minimum_response_version: 5 as const,
 });
 export const CONFLUENCE_LIVE_CONNECTOR_V1 = Object.freeze({
-  ...LEGACY_PAGE_CONNECTOR_V1,
-  descriptor: Object.freeze({ ...LEGACY_PAGE_CONNECTOR_V1.descriptor, source_id: 'confluence', tool_id: 'confluence', capabilities: CONFLUENCE_PAGE_CAPABILITIES_V1,
-    description: "Confluence pages the asker can see with their own Confluence account: each page's title and status, and its text section by section." }),
+  descriptor: Object.freeze({ source_id: 'confluence', kind: 'page' as const, selector: 'pages',
+    description: "Confluence pages the asker can see with their own Confluence account: each page's title and status, and its text section by section.",
+    metadata_only_list: true, tool_id: 'confluence', capabilities: CONFLUENCE_PAGE_CAPABILITIES_V1 }),
+  scopes: Object.freeze(['global', 'project'] as const), minimum_response_version: 6 as const,
 });
 
 /** A connected tool's containers (research tool contract v1), which only the V8 answer can cite. */

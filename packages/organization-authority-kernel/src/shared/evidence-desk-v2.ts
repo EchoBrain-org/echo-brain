@@ -59,17 +59,6 @@ export interface EvidenceDeskUncheckedV1 {
 }
 /** Meeting records/documents live in Echo; these additions are read live. */
 export type EvidenceDeskSourceV2 = string;
-export type EvidenceDeskLiveSourceKindV2 = 'slack' | 'ticket' | 'page';
-export type EvidenceDeskCatalogSelectorV2 = string;
-/** Server-selected descriptor. It contains no provider host, container, or user coordinate. */
-export interface LegacyEvidenceDeskLiveSourceV2 {
-  readonly source: EvidenceDeskLiveSourceKindV2;
-  /** V1 callers can omit descriptors; V2 composition supplies all three. */
-  readonly selector?: EvidenceDeskCatalogSelectorV2;
-  readonly description?: string;
-  readonly metadata_only_list?: boolean;
-  readonly tool_id?: string;
-}
 
 /** Server-owned identity is independent of content kind; two providers may both supply pages. */
 export interface PersonLiveSourceDescriptorV2 {
@@ -90,25 +79,7 @@ export interface PersonLiveSourceDescriptorV2 {
  * follow-ups (ADR-0040), or a workspace source (research tool contract v1).
  * The last two have no tool of their own.
  */
-export type EvidenceDeskLiveSourceV2 = PersonLiveSourceDescriptorV2 | FollowUpsSourceDescriptorV1 | WorkspaceSourceDescriptorV1 | LegacyEvidenceDeskLiveSourceV2;
-
-/** Translation for older desks only; registration and execution use the descriptor contract. */
-export function liveSourceDescriptorV2(source: PersonLiveSourceDescriptorV2 | LegacyEvidenceDeskLiveSourceV2): PersonLiveSourceDescriptorV2;
-export function liveSourceDescriptorV2(source: EvidenceDeskLiveSourceV2): PersonLiveSourceDescriptorV2 | FollowUpsSourceDescriptorV1 | WorkspaceSourceDescriptorV1;
-export function liveSourceDescriptorV2(source: EvidenceDeskLiveSourceV2): PersonLiveSourceDescriptorV2 | FollowUpsSourceDescriptorV1 | WorkspaceSourceDescriptorV1 {
-  if ('source_id' in source) return source;
-  const defaults: Record<EvidenceDeskLiveSourceKindV2, Omit<PersonLiveSourceDescriptorV2, 'source_id'>> = {
-    ticket: { kind: 'ticket', selector: 'tickets', description: 'Live work items: discover summaries, then open selected items for their current body and state.', metadata_only_list: true },
-    page: { kind: 'page', selector: 'pages', description: 'Live knowledge pages: discover pages, then open selected pages and continuation handles for their current text.', metadata_only_list: true },
-    slack: { kind: 'slack_message', selector: 'slack', description: 'Live discussion messages.', metadata_only_list: false, requires_channel: true, default_since_days: 14 },
-  };
-  return Object.freeze({ source_id: source.source, ...defaults[source.source],
-    ...(source.selector === undefined ? {} : { selector: source.selector }),
-    ...(source.description === undefined ? {} : { description: source.description }),
-    ...(source.metadata_only_list === undefined ? {} : { metadata_only_list: source.metadata_only_list }),
-    ...(source.tool_id === undefined ? {} : { tool_id: source.tool_id }),
-  });
-}
+export type EvidenceDeskLiveSourceV2 = PersonLiveSourceDescriptorV2 | FollowUpsSourceDescriptorV1 | WorkspaceSourceDescriptorV1;
 
 /** The source of an item, from its kind. */
 export function evidenceDeskSourceV2(item: { readonly kind: EvidenceDeskKindV2; readonly source_id?: string; readonly ref?: string }): EvidenceDeskSourceV2 {

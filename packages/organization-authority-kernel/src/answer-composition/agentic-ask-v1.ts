@@ -9,11 +9,7 @@ import type {
 } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import type { StructuredGenerationPort } from "./structured-generation-v1.js";
-import {
-  liveSourceDescriptorV2,
-  type EvidenceDeskPortV2,
-  type EvidenceDeskSourceV2,
-} from "../shared/evidence-desk-v2.js";
+import type { EvidenceDeskPortV2, EvidenceDeskSourceV2 } from "../shared/evidence-desk-v2.js";
 import type { EvidenceDeskPortV1 } from "../shared/evidence-desk-v1.js";
 import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1, FOLLOW_UPS_SOURCE_ID_V1 } from "../shared/follow-up-evidence-v1.js";
 import { DOCUMENTS_SOURCE_CAPABILITIES_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } from "../shared/source-capabilities-v1.js";
@@ -260,8 +256,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     return `${part('year')}-${part('month')}-${part('day')}`;
   });
   const askedBy = askerName(options.asker);
-  const liveCatalog: AgenticResearchSourceV1[] = (options.desk.live_sources ?? []).flatMap(value => {
-    const descriptor = liveSourceDescriptorV2(value);
+  const liveCatalog: AgenticResearchSourceV1[] = (options.desk.live_sources ?? []).flatMap(descriptor => {
     // Citation compatibility belongs to the response version, never a provider name.
     if (descriptor.kind === 'ticket' && (!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine')) return [];
     if (descriptor.kind === 'page' && (responseVersion < 6 || options.desk.scope.kind === 'mine')) return [];

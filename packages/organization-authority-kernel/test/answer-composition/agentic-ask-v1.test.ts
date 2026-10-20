@@ -393,9 +393,9 @@ describe("agentic Ask: research loop", () => {
       finish([missing()]),
       finish([missing()]),
     ]);
-    // A V1 desk binds no live source: the V6 core reads this legacy Slack source, which declares no capabilities.
+    // A V1 desk binds no live source: the V6 core reads this Slack source, which declares no capabilities.
     const evidence = desk();
-    const withSlack = { ...evidence, live_sources: [{ source: "slack" as const, tool_id: "slack" }] } as unknown as EvidenceDeskPortV2;
+    const withSlack = { ...evidence, live_sources: [{ source_id: "slack", kind: "slack_message", selector: "slack", description: "Live discussion messages.", metadata_only_list: false, requires_channel: true, default_since_days: 14, tool_id: "slack" }] } as unknown as EvidenceDeskPortV2;
     await createAgenticAskV3({ desk: withSlack, model: script.model, generation, audit: { append: () => undefined }, today: () => "2026-09-28" }).answer({ question: "When is launch?" });
     expect(evidence.list).toHaveBeenCalledTimes(1);
     expect(evidence.list).toHaveBeenCalledWith(expect.objectContaining({ source: "slack", channel: "hw-dvt", since: "2026-09-21" }));

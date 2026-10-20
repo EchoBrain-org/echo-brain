@@ -3,19 +3,24 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
-import { liveSourceDescriptorV2, type EvidenceDeskItemV2, type EvidenceDeskPortV2, type EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2, PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { PEOPLE_SOURCE_DESCRIPTOR_V1, PROJECTS_SOURCE_DESCRIPTOR_V1, TOOLS_SOURCE_DESCRIPTOR_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { PersonLiveEvidenceCitationV1, PersonLiveEvidenceItemV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createRegisteredPersonLiveEvidenceDeskV2, type RegisteredPersonLiveEvidenceSourceV2 } from '../src/composition/person-live-evidence-desk-v2.js';
 import type { PersonWorkspaceEvidenceSourcesV1 } from '../src/composition/person-workspace-evidence-v1.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 const empty = { items: [], truncated: false, receipt_digests: [] };
+/** A descriptor of each live kind, with no capabilities, for its reader's tool. */
+function descriptorOf(kind: 'ticket' | 'page' | 'slack', tool_id: string): PersonLiveSourceDescriptorV2 {
+  if (kind === 'slack') return { source_id: 'slack', kind: 'slack_message', selector: 'slack', description: 'Live discussion messages.', metadata_only_list: false, requires_channel: true, default_since_days: 14, tool_id };
+  return { source_id: kind, kind, selector: `${kind}s`, description: kind === 'ticket' ? 'Live work items.' : 'Live knowledge pages.', metadata_only_list: true, tool_id };
+}
 /** Test shorthand: registers ticket, page and Slack readers in the fixed order production composition uses. */
 function deskWith(base: EvidenceDeskPortV1, ticket?: PersonLiveEvidenceSourceV1, slack?: PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1>, ticketProjectId?: string, page?: PersonLiveEvidenceSourceV1<PersonPageCitationV1>, pageProjectId?: string): EvidenceDeskPortV2 {
   const registrations: RegisteredPersonLiveEvidenceSourceV2[] = [];
   for (const [source, kind, project] of [[ticket, 'ticket', ticketProjectId], [page, 'page', pageProjectId], [slack, 'slack', undefined]] as const) {
     if (source === undefined) continue;
-    registrations.push({ source, descriptor: liveSourceDescriptorV2({ source: kind, tool_id: source.tool_id }), scope: project === undefined ? { kind: 'global' } : { kind: 'project', project_id: project } });
+    registrations.push({ source, descriptor: descriptorOf(kind, source.tool_id), scope: project === undefined ? { kind: 'global' } : { kind: 'project', project_id: project } });
   }
   return createRegisteredPersonLiveEvidenceDeskV2(base, registrations);
 }
@@ -390,7 +395,7 @@ describe('registered live source dispatch', () => {
     const second = live('other-knowledge', secondItems);
     vi.mocked(f.page.list).mockClear();
     const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [registration(f.page, 'knowledge-one'), registration(second, 'knowledge-two')]);
-    expect(desk.live_sources?.map(value => 'source_id' in value ? value.source_id : undefined)).toEqual(['knowledge-one', 'knowledge-two']);
+    expect(desk.live_sources?.map(value => value.source_id)).toEqual(['knowledge-one', 'knowledge-two']);
     const one = await desk.list({ source: 'knowledge-one' });
     expect(one.items[0]).toMatchObject({ id: 'page-1', source_id: 'knowledge-one' });
     expect(second.list).not.toHaveBeenCalled();
@@ -489,9 +494,9 @@ describe('workspace sources (research tool contract v1)', () => {
   it('describes the workspace sources, and refuses a live source named like one', () => {
     const f = fixture(); const w = workspace();
     const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [], undefined, w.sources);
-    expect((desk.live_sources ?? []).map(source => 'source_id' in source ? source.source_id : undefined)).toEqual(['projects', 'people', 'tools']);
+    expect((desk.live_sources ?? []).map(source => source.source_id)).toEqual(['projects', 'people', 'tools']);
     for (const name of ['projects', 'people', 'tools']) {
-      const registration: RegisteredPersonLiveEvidenceSourceV2 = { source: f.ticket, scope: { kind: 'global' }, descriptor: { ...liveSourceDescriptorV2({ source: 'ticket', tool_id: 'jira' }), source_id: name } };
+      const registration: RegisteredPersonLiveEvidenceSourceV2 = { source: f.ticket, scope: { kind: 'global' }, descriptor: { ...descriptorOf('ticket', 'jira'), source_id: name } };
       expect(() => createRegisteredPersonLiveEvidenceDeskV2(f.base, [registration], undefined, w.sources)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     }
   });
@@ -554,7 +559,7 @@ describe('workspace sources (research tool contract v1)', () => {
     const f = fixture();
     const containers: PersonLiveEvidenceSourceV1 = { tool_id: 'jira', search: vi.fn(async () => empty), open: vi.fn(async () => empty), list: vi.fn(async () => empty), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) };
     const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [
-      { source: f.ticket, scope: { kind: 'global' }, descriptor: liveSourceDescriptorV2({ source: 'ticket', tool_id: 'jira' }) },
+      { source: f.ticket, scope: { kind: 'global' }, descriptor: descriptorOf('ticket', 'jira') },
       { source: containers, scope: { kind: 'global' }, descriptor: { source_id: 'jira_projects', selector: 'jira_projects', kind: 'tool_container', tool_id: 'jira', description: 'Jira projects',
         metadata_only_list: false, capabilities: { filters: {}, dates: {}, any_date: false, links: [] } } },
     ]);
@@ -594,7 +599,7 @@ describe('workspace sources (research tool contract v1)', () => {
     w.projects.revalidate.mockImplementation(() => { order.push('projects'); });
     w.people.revalidate.mockImplementation(() => { order.push('people'); });
     vi.mocked(f.ticket.assertCurrent).mockImplementation(() => { order.push('jira grant'); });
-    const registration: RegisteredPersonLiveEvidenceSourceV2 = { source: f.ticket, scope: { kind: 'global' }, descriptor: liveSourceDescriptorV2({ source: 'ticket', tool_id: 'jira' }) };
+    const registration: RegisteredPersonLiveEvidenceSourceV2 = { source: f.ticket, scope: { kind: 'global' }, descriptor: descriptorOf('ticket', 'jira') };
     const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [registration], undefined, w.sources);
     await desk.revalidate({ mode: 'incremental' });
     expect(order).toEqual(['base', 'tools', 'jira', 'base', 'projects', 'people', 'jira grant']);
