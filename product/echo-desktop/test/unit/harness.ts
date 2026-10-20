@@ -4,7 +4,7 @@
 // as plain functions, hooks that do so and the tree those calls show.
 import type { VNode } from 'preact';
 import { vi } from 'vitest';
-import type { ProjectSummary } from '../../src/shared/protocol.js';
+import type { AnswerSource, AskStep, Expect, ProjectSummary } from '../../src/shared/protocol.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
 export const fail = (code: string, extra: Record<string, unknown> = {}) => ({ ok: false, failure: { code, retryable: false, ...extra } });
@@ -116,6 +116,29 @@ export async function startStore() {
   await store.refreshStatus();
   await flush();
   return store;
+}
+
+/**
+ * A question on its way, its reply held: the store, the release, and the Ask's cancel id, as `rpc` (the test's mock) saw it
+ * sent; a step the host posts for it (`notice` may say another Ask or account), or a read of `items`; and the page's side
+ * pane and thread as they show now.
+ */
+export async function asking(rpc: { mock: { calls: unknown[][] } }, held: Held, question = 'What did we agree?') {
+  const store = await startStore();
+  const screens = await import('../../src/renderer/screens/ask.js');
+  const release = held.hold('ask.run');
+  void store.ask(question);
+  await flush();
+  const cancelId = (rpc.mock.calls.filter(([name]) => name === 'ask.run').at(-1)![1] as { cancel_id: string }).cancel_id;
+  const account: Expect = { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id };
+  const step = (value: AskStep, notice: Partial<{ cancel_id: string; expect: Expect }> = {}) =>
+    store.askProgress({ cancel_id: cancelId, expect: account, step: value, ...notice });
+  return {
+    store, release, cancelId, step,
+    read: (items: readonly AnswerSource[]) => step({ type: 'read', items }),
+    pane: () => render(screens.SourcePane({ state: store.getState() })),
+    thread: () => render(screens.AskView({ state: store.getState() })),
+  };
 }
 
 export function stubWindow(): void {

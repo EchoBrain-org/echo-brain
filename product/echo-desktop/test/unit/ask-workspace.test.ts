@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, ConnectedTool, Expect } from '../../src/shared/protocol.js';
 import { Folder, Hash, Plug } from '../../src/renderer/screens/icons.js';
-import { ACCOUNT, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, stubWindow, text } from './harness.js';
+import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, stubWindow, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -58,25 +58,12 @@ const heading = (tree: unknown) => text(elements(tree).filter(node => node.props
 const drawn = (tree: unknown) => elements(tree).filter(node => node.type === 'path').map(node => node.props.d);
 
 /** A question on its way, its reply held; and the page's pane and thread as they show now. */
-async function asking(question = 'Who leads Thermal recovery?') {
-  const store = await startStore();
-  const screens = await import('../../src/renderer/screens/ask.js');
-  const release = held.hold('ask.run');
-  void store.ask(question);
-  await flush();
-  const cancel_id = rpc.mock.calls.filter(([name]) => name === 'ask.run').at(-1)![1].cancel_id as string;
-  return {
-    store, release,
-    step: (items: readonly AnswerSource[]) => store.askProgress({ cancel_id, expect: EXPECT, step: { type: 'read', items } }),
-    pane: () => render(screens.SourcePane({ state: store.getState() })),
-    thread: () => render(screens.AskView({ state: store.getState() })),
-  };
-}
+const asking = (question = 'Who leads Thermal recovery?') => askingWith(rpc, held, question);
 
 describe('your workspace and your tools\' containers open beside Ask (research tool contract v1)', () => {
   it('shows a project by its name while Ask runs, with nothing read and no Open; once answered, Open goes to the project, from its sidebar row', async () => {
-    const { store, release, step, pane } = await asking();
-    step([cited]);
+    const { store, release, read, pane } = await asking();
+    read([cited]);
     const before = rpc.mock.calls.length;
     store.openNamed([cited]);
     await flush();

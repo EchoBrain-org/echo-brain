@@ -3,7 +3,7 @@
 // the receipt an answer keeps.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, AskStep, Expect } from '../../src/shared/protocol.js';
-import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, asking as askingWith, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -43,18 +43,8 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params as Record<string, unknown>);
-
-/** A question on its way, its reply held: the store, its cancel id, and the release. */
-async function asking(question = 'What did we agree?') {
-  const store = await startStore();
-  const release = held.hold('ask.run');
-  void store.ask(question);
-  await flush();
-  const cancelId = calls('ask.run').at(-1)!.cancel_id as string;
-  const step = (value: AskStep, notice: Partial<{ cancel_id: string; expect: Expect }> = {}) =>
-    store.askProgress({ cancel_id: cancelId, expect: EXPECT, step: value, ...notice });
-  return { store, release, cancelId, step };
-}
+/** A question on its way, its reply held. */
+const asking = (question?: string) => askingWith(rpc, held, question);
 
 describe('the steps of the Ask on its way', () => {
   it('build its stage and rows; a step of another Ask, a cancelled one or another account is dropped', async () => {

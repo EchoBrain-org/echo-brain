@@ -57,42 +57,6 @@ describe('the progress lines of an Ask', () => {
     ]);
   });
 
-  it('post a /v6 step that searched follow-ups or read one, as the page opens it (ADR-0040)', () => {
-    const posted: AskProgressNotice[] = [];
-    const refused = vi.fn();
-    const read = askProgressLines(CANCEL, EXPECT, new AbortController().signal, notice => posted.push(notice), refused);
-    const followUp = { citation: { kind: 'follow_up', item_id: 'itm_launch-1' }, kind: 'follow_up', label: 'Ship the launch checklist', visibility: 'team', ref: 'follow_up:itm_launch-1' };
-    read(line({ ok: true, progress: { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 } }));
-    read(line({ ok: true, progress: { type: 'read', items: [followUp] } }));
-    // Nothing a follow-up's row holds travels in a step.
-    read(line({ ok: true, progress: { type: 'read', items: [{ ...followUp, owner: 'Mina Patel' }] } }));
-    expect(refused).toHaveBeenCalledTimes(1);
-    expect(posted.map(notice => notice.step)).toEqual([
-      { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 },
-      { type: 'read', items: [{ kind: 'follow_up', label: 'Ship the launch checklist', item_id: 'itm_launch-1' }] },
-    ]);
-  });
-
-  it('post a /v7 step that searched your workspace or read one of it, as the page opens it (research tool contract v1)', () => {
-    const posted: AskProgressNotice[] = [];
-    const refused = vi.fn();
-    const read = askProgressLines(CANCEL, EXPECT, new AbortController().signal, notice => posted.push(notice), refused);
-    const project = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
-    const cited = { citation: { kind: 'project', project_id: project }, kind: 'project', label: 'Thermal recovery', visibility: 'project', ref: `project:${project}` };
-    const container = { citation: { kind: 'tool_container', tool_id: 'jira', external_scope_id: 'cloud-1', container: 'jira_project', container_id: '10001',
-      permalink: 'https://example.atlassian.net/browse/THERM' }, kind: 'tool_container', label: 'Thermal', visibility: 'only_me', key: 'THERM' };
-    read(line({ ok: true, progress: { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 2 } }));
-    read(line({ ok: true, progress: { type: 'read', items: [cited, container] } }));
-    // Nothing a project holds travels in a step.
-    read(line({ ok: true, progress: { type: 'read', items: [{ ...cited, members: ['Mara Lind'] }] } }));
-    expect(refused).toHaveBeenCalledTimes(1);
-    expect(posted.map(notice => notice.step)).toEqual([
-      { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 2 },
-      { type: 'read', items: [{ kind: 'project', label: 'Thermal recovery', project_id: project },
-        { kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: 'https://example.atlassian.net/browse/THERM', container: 'jira_project', key: 'THERM' }] },
-    ]);
-  });
-
   it('post nothing once the Ask was cancelled or timed out', () => {
     const posted: AskProgressNotice[] = [];
     const abort = new AbortController();

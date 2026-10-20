@@ -4,7 +4,7 @@
 // and its source row says "owner · status", with no kind label.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, Expect, OpenItemView } from '../../src/shared/protocol.js';
-import { ACCOUNT, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, stubWindow, text } from './harness.js';
+import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, stubWindow, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -48,25 +48,12 @@ const itemReads = () => rpc.mock.calls.filter(([name, params]) => name === 'runs
   .map(([, params]) => params as Record<string, unknown>);
 
 /** A question on its way, its reply held; and the page's pane and thread as they show now. */
-async function asking() {
-  const store = await startStore();
-  const screens = await import('../../src/renderer/screens/ask.js');
-  const release = held.hold('ask.run');
-  void store.ask('What are my open tasks?');
-  await flush();
-  const cancel_id = rpc.mock.calls.filter(([name]) => name === 'ask.run').at(-1)![1].cancel_id as string;
-  return {
-    store, release,
-    step: (items: readonly AnswerSource[]) => store.askProgress({ cancel_id, expect: EXPECT, step: { type: 'read', items } }),
-    pane: () => render(screens.SourcePane({ state: store.getState() })),
-    thread: () => render(screens.AskView({ state: store.getState() })),
-  };
-}
+const asking = (question = 'What are my open tasks?') => askingWith(rpc, held, question);
 
 describe('a follow-up opens beside Ask (ADR-0040)', () => {
   it('shows its title, owner, status and latest check while Ask runs, with no Open until the answer, then opens its item page', async () => {
-    const { store, release, step, pane } = await asking();
-    step([followUp]);
+    const { store, release, read, pane } = await asking();
+    read([followUp]);
     store.openNamed([followUp]);
     await flush();
     // Its row, read as Home reads it, rows only.
