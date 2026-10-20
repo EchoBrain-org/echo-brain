@@ -163,7 +163,7 @@ function meteredReads(database: Database.Database, maximumBytes: number) {
 }
 
 describe("adversarial original-context retrieval", () => {
-  it('filters document and note capture dates in the client zone and keeps meeting scope separate', async () => {
+  it('filters document and note capture dates in the client zone by received or any, keeps meeting scope separate, and counts what a meeting date cannot test', async () => {
     const f = fixture();
     f.upload('Launch plan', 'launch marker');
     f.upload('Private launch', 'launch marker', { audience: { kind: 'only_me' } });
@@ -182,33 +182,27 @@ describe("adversarial original-context retrieval", () => {
       expect(() => f.retrieval.deskSearch({ ...base, date_field })).toThrow('This source supports date_field: received');
     }
     expect(() => f.retrieval.revalidateDeskRelease({ access_token: 'member', release: searched })).not.toThrow();
-  });
 
-  it('takes received and any for documents, and counts notes and documents a meeting date cannot test (research tool contract v1)', async () => {
-    const f = fixture();
-    f.upload('Launch plan', 'launch marker');
-    f.upload('Private launch', 'launch marker', { audience: { kind: 'only_me' } });
-    await f.admitTeamNote('Launch note', 'launch marker');
-    const base = { access_token: 'member', scope: { kind: 'global' as const }, since: '2026-09-22', until: '2026-09-22', time_zone: 'Asia/Shanghai' };
-    // Any of a document's or a note's dates is when ECHO received it.
-    const any = f.retrieval.deskSearch({ ...base, source: 'document', date_field: 'any' });
+    // Any of a document's or a note's dates is when ECHO received it (research tool contract v1).
+    const { source: _source, date_field: _field, ...window } = base;
+    const any = f.retrieval.deskSearch({ ...window, source: 'document', date_field: 'any' });
     expect(any.items.map(item => item.label).sort()).toEqual(['Launch note', 'Launch-plan.md']);
     expect(any).not.toHaveProperty('unchecked');
-    expect(f.retrieval.deskSearch({ ...base, source: 'document', date_field: 'any', query: 'launch' }).items).toHaveLength(2);
-    expect(f.retrieval.deskSearch({ ...base, source: 'document', date_field: 'any', time_zone: 'America/Los_Angeles' }).items).toEqual([]);
-    expect(() => f.retrieval.deskSearch({ ...base, source: 'document', date_field: 'approved' })).toThrow('This source supports date_field: received, any');
+    expect(f.retrieval.deskSearch({ ...window, source: 'document', date_field: 'any', query: 'launch' }).items).toHaveLength(2);
+    expect(f.retrieval.deskSearch({ ...window, source: 'document', date_field: 'any', time_zone: 'America/Los_Angeles' }).items).toEqual([]);
+    expect(() => f.retrieval.deskSearch({ ...window, source: 'document', date_field: 'approved' })).toThrow('This source supports date_field: received, any');
     // Across both sources a meeting's date tests no note or document: each readable one is counted, with the date it records,
     // whatever a search's words match, and none is listed.
     for (const query of [undefined, 'launch', 'nothing matches this']) {
-      const across = f.retrieval.deskSearch({ ...base, date_field: 'occurred', ...(query === undefined ? {} : { query }) });
+      const across = f.retrieval.deskSearch({ ...window, date_field: 'occurred', ...(query === undefined ? {} : { query }) });
       expect([query, across.items, across.unchecked]).toEqual([query, [], { count: 2, dates: ['received'] }]);
     }
-    for (const date_field of ['received', 'any'] as const) expect(f.retrieval.deskSearch({ ...base, date_field })).not.toHaveProperty('unchecked');
+    for (const date_field of ['received', 'any'] as const) expect(f.retrieval.deskSearch({ ...window, date_field })).not.toHaveProperty('unchecked');
     // An upload the member cannot read is never counted; its owner's count has it.
-    expect(f.retrieval.deskSearch({ ...base, access_token: 'owner', date_field: 'approved' }).unchecked).toEqual({ count: 3, dates: ['received'] });
-    expect(f.retrieval.deskSearch({ ...base, date_field: 'approved', kinds: ['document_passage'] }).unchecked).toEqual({ count: 1, dates: ['received'] });
+    expect(f.retrieval.deskSearch({ ...window, access_token: 'owner', date_field: 'approved' }).unchecked).toEqual({ count: 3, dates: ['received'] });
+    expect(f.retrieval.deskSearch({ ...window, date_field: 'approved', kinds: ['document_passage'] }).unchecked).toEqual({ count: 1, dates: ['received'] });
     // The count is audited with the release it describes.
-    const release = f.retrieval.deskSearch({ ...base, date_field: 'due' });
+    const release = f.retrieval.deskSearch({ ...window, date_field: 'due' });
     const audit = JSON.parse((f.database.prepare('SELECT body_json FROM authority_person_upload_read_audit_v1 WHERE row_sha256=?').get(release.receipt) as { body_json: string }).body_json) as Record<string, unknown>;
     expect(audit.unchecked).toEqual({ count: 2, dates: ['received'] });
     expect(() => f.retrieval.revalidateDeskRelease({ access_token: 'member', release })).not.toThrow();

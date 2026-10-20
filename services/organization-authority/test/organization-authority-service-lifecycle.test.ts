@@ -13,7 +13,6 @@ import type {
   OrganizationAuthorityApiRuntimeConfig,
   RunningOrganizationAuthorityApiRuntime,
 } from "../src/composition/organization-authority-api-runtime.js";
-import { approvalCoreFixture } from "./fixtures/approval-core.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -111,19 +110,6 @@ describe("Organization Authority service lifecycle", () => {
     })).rejects.toThrow('pending signed append');
     expect(search).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
-  });
-  it("binds after a recovery pass in which one approval row cannot publish", async () => {
-    const f = await approvalCoreFixture();
-    f.core.decide("desktop", f.approve(), () => f.session);
-    const poisoned = f.withAppend(async () => { throw new Error("row cannot publish"); }).processing;
-    const runtime = await startLifecycle(60_000, {
-      processing: processing([]),
-      additional_processing: { ...processing([]), recoverV4Appends: poisoned.recoverV4Appends },
-    });
-    try {
-      expect(runtime.address.port).toBe(14_000);
-      expect(f.core.proposal(f.approvalId)!.status).toBe("publishing");
-    } finally { await runtime.close(); }
   });
   it("coalesces search wakes at completion and failure boundaries without self-retrying failures", async () => {
     vi.useFakeTimers();

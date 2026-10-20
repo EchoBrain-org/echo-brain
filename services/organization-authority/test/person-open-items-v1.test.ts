@@ -309,20 +309,6 @@ describe('open items: counts and live reads', () => {
     expect((await f.app.items({ access_token: 'ari', request: { ...closedRequest, states: ['done'] } })).items.map(entry => entry.state)).toEqual(Array(30).fill('done'));
   });
 
-  it('tells an outage from lost access, and reports the outage without content', async () => {
-    const failures: unknown[] = [];
-    const f = await openItemsFixture({ on_live_failure: event => failures.push(event), openFails: { ticket: new AuthorityOperationError('rate_limited', 'slow down') } });
-    await f.finishImpactRun();
-    const items = (await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record } })).items;
-    expect(items.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'unavailable' });
-    expect(items.find(item => item.kind === 'ticket')).not.toHaveProperty('current');
-    expect(items.find(item => item.kind === 'record')).toMatchObject({ reach: 'opened', current: { says_now: 'Start the pilot after the freeze.' } });
-    expect(failures).toEqual([{ kind: 'open_items_live_read', reason: 'open', code: 'rate_limited' }]);
-    const rafael = (await f.app.items({ access_token: 'rafael', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record } })).items;
-    expect(rafael.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'no_access' });
-    expect(failures).toHaveLength(1);                                       // a refusal is not an outage
-  });
-
   // A refusal by the viewer's own access is no_access; anything else says nothing about access, and is reported without content.
   it.each([
     { name: 'unauthorized', error: new AuthorityOperationError('unauthorized', 'refused'), reach: 'no_access', code: null },
@@ -706,8 +692,9 @@ describe('open items: Home', () => {
     expect(after.items.map(entry => [entry.kind, entry.waits_on])).toEqual([['record', 'owner']]);   // Ari owns the action
   });
 
-  it('answers the same Home with no live read when asked for rows only (F8)', async () => {
-    const f = await sentFixture({ owner: 'mina' });
+  it('answers the same Home with no live read when asked for rows only, even where the full read cannot open an item (F8)', async () => {
+    // Mina's ticket read fails (an outage): her full read says so, rows only says nothing.
+    const f = await sentFixture({ owner: 'mina', openFails: { ticket: new AuthorityOperationError('rate_limited', 'slow down') } });
     f.check(f.ticket.item_id, 'landed');
     const binds = f.bindDesk.mock.calls.length;
     const opens = f.opened.length;
@@ -723,28 +710,16 @@ describe('open items: Home', () => {
     expect(sweepReads.map(read => read.mock.calls.length)).toEqual([0, 0]);
     // Everything else is what a full Home read answers, which does find a sweep due: Mina's action was never checked.
     const full = await f.app.home({ access_token: 'mina' });
-    expect(full.items.map(entry => entry.reach)).toEqual(['opened', 'opened']);
+    expect(Object.fromEntries(full.items.map(entry => [entry.kind, entry.reach]))).toEqual({ ticket: 'unavailable', record: 'opened' });
     expect(full.sweep_due).toBe(true);
     const rows = (home: typeof full) => ({ ...home, sweep_due: undefined, items: home.items.map(({ current: _current, reach: _reach, ...rest }) => rest) });
     expect(rows(quiet)).toEqual(rows(full));
+    expect(rows(await f.app.home({ access_token: 'ari', request: { schema_version: 1, operation: 'home', read: 'rows' } }))).toEqual(rows(await f.app.home({ access_token: 'ari' })));
     // A Send row needs no live read either.
     const unsent = await openItemsFixture(); await unsent.finishImpactRun();
     const quietSend = await unsent.app.home({ access_token: 'ari', request: { schema_version: 1, operation: 'home', read: 'rows' } });
     expect(quietSend).toEqual(await unsent.app.home({ access_token: 'ari' }));
     expect(quietSend.send).toHaveLength(1);
-  });
-
-  it('answers the same Home rows with rows only when the full read cannot open some of them', async () => {
-    // Mina's ticket read fails (an outage); Rafael cannot open the ticket at all: their full reads say so, rows only says nothing.
-    const f = await sentFixture({ owner: 'mina', openFails: { ticket: new AuthorityOperationError('rate_limited', 'slow down') } });
-    const rows = (home: Awaited<ReturnType<typeof f.app.home>>) => ({ ...home, sweep_due: undefined, items: home.items.map(({ current: _current, reach: _reach, ...rest }) => rest) });
-    for (const viewer of ['mina', 'ari'] as const) {
-      const full = await f.app.home({ access_token: viewer });
-      const quiet = await f.app.home({ access_token: viewer, request: { schema_version: 1, operation: 'home', read: 'rows' } });
-      expect(quiet.items.map(entry => entry.reach).every(reach => reach === 'not_read')).toBe(true);
-      expect(rows(quiet)).toEqual(rows(full));
-    }
-    expect((await f.app.home({ access_token: 'mina' })).items.find(entry => entry.kind === 'ticket')?.reach).toBe('unavailable');
   });
 
   it('lists the newest handoffs first, regardless of older check results', async () => {

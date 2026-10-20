@@ -199,44 +199,33 @@ describe('sweep runs record a shared last check', () => {
     expect(await f.sweepDue('ari')).toBe(true);
   });
 
-  it('waits a day from a sweep of the caller\'s that could not read an item whose judged check it left standing', async () => {
+  it.each([
+    { started: 'at once', wait: 0 },
+    // Asked for on Friday; the desktop closed before it started, and it starts on Monday.
+    { started: 'days after it was asked for', wait: 64 * HOUR },
+  ])('waits a day from when a sweep of the caller\'s that could not read an item whose judged check it left standing finished, started $started', async ({ wait }) => {
     const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'unreadable' } });
     await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
     // Mina read the ticket and judged it; a day on, Ari's desk no longer can (the ticket was deleted, or his Jira access changed).
     f.check(f.ticket.item_id, 'still_open', 'mina');
     f.advance(25 * HOUR);
     expect(await f.sweepDue('ari')).toBe(true);
-    const { run_id } = await f.queueAndStart('ari');
-    await f.settled(run_id);
-    // Mina's verdict stays the last check, and Ari's run keeps which item he could not read.
-    expect(f.items.read(f.ticket.item_id)!.check).toMatchObject({ verdict: 'still_open', by: f.membership('mina') });
-    expect(f.counts(run_id)).toEqual({ ...ZERO, unreadable: 1, unreadable_items: [f.ticket.item_id] });
-    // The last check is over a day old, but asking Ari again every hour would not let him read the ticket: not due for a day.
-    f.advance(2 * HOUR);
-    expect(await f.sweepDue('ari')).toBe(false);
-    expect(await f.sweepDue('mina')).toBe(true);                 // she reads it, and her own sweep may judge it again
-    f.advance(22 * HOUR);
-    expect(await f.sweepDue('ari')).toBe(false);                 // a day after his sweep, not later
-    f.advance(1);
-    expect(await f.sweepDue('ari')).toBe(true);
-  });
-
-  it('waits that day from when the sweep finished, though it was asked for days before', async () => {
-    const f = await sweepFixture({ owner: 'mina', verdicts: { ticket: 'unreadable' } });
-    await f.app.set_state({ access_token: 'mina', request: { schema_version: 1, operation: 'set_state', item_id: f.action.item_id, state: 'done' } });
-    f.check(f.ticket.item_id, 'still_open', 'mina');
-    f.advance(25 * HOUR);
-    // Asked for on Friday; the desktop closed before it started, and it starts on Monday.
     const run_id = runOf(await f.sweep('ari', MINE));
-    f.advance(64 * HOUR);
+    f.advance(wait);
     const before = f.findings.length;
     expect(await f.start('ari', run_id)).toEqual({ state: 'running' });
     await vi.waitFor(() => expect(f.findings.length).toBeGreaterThan(before));
     await f.settled(run_id);
+    // Mina's verdict stays the last check, and Ari's run keeps which item he could not read.
+    expect(f.items.read(f.ticket.item_id)!.check).toMatchObject({ verdict: 'still_open', by: f.membership('mina') });
     expect(f.counts(run_id)).toEqual({ ...ZERO, unreadable: 1, unreadable_items: [f.ticket.item_id] });
-    // The sweep is days old, but its unreadable ticket waits a day from now: no second sweep is asked for at once.
+    // Asking Ari again every hour would not let him read the ticket: not due for a day from when his sweep finished.
+    f.advance(2 * HOUR);
     expect(await f.sweepDue('ari')).toBe(false);
-    f.advance(24 * HOUR + 1);
+    expect(await f.sweepDue('mina')).toBe(true);                 // she reads it, and her own sweep may judge it again
+    f.advance(22 * HOUR);
+    expect(await f.sweepDue('ari')).toBe(false);
+    f.advance(1);
     expect(await f.sweepDue('ari')).toBe(true);
   });
 

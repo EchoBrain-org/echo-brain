@@ -9,6 +9,7 @@ import { testAuthority } from '../../../packages/organization-protocol/test/fixt
 import { createPersonMeetingRuntimeV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { authorityRecordPolicyProjectorsV1 } from '../src/composition/authority-record-protocols-v1.js';
 import { runStagingSyntheticPersonalCanaryV1 } from '../src/composition/staging/staging-synthetic-personal-canary-v1.js';
+import { seedOwner } from './fixtures/authority-admission-seed.js';
 
 const NOW = '2026-10-07T00:00:00.000Z';
 const OWNER = { principal_id: 'prn_00000000-0000-4000-8000-000000000003', membership_id: 'mem_00000000-0000-4000-8000-000000000004' };
@@ -28,8 +29,7 @@ async function syntheticWorld(options: { readonly signals?: boolean; readonly ho
   const authority = testAuthority();
   const organization_id = authority.descriptor.organization_id;
   const db = new Database(':memory:'); opened.push(db); db.pragma('foreign_keys = ON'); applyAuthorityBaseline(db);
-  db.prepare("INSERT INTO authority_metadata VALUES (1, ?, ?, 'Test', '{}', ?, ?)").run(authority.descriptor.authority_id, organization_id, NOW, NOW);
-  addOwner(db, organization_id, OWNER);
+  seedOwner(db, NOW, { authority_id: authority.descriptor.authority_id, organization_id, ...OWNER, organization_name: 'Test', name: 'Founder' });
   const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys = ON'); applyOrganizationRecordLogBaselineV4(record);
   const coordinates = { authority_id: authority.descriptor.authority_id, organization_id, state_lineage_id: 'lineage-test' };
   record.prepare('INSERT INTO organization_record_log_metadata VALUES (1,?,?,?,?)').run(coordinates.authority_id, coordinates.organization_id, coordinates.state_lineage_id, NOW);
