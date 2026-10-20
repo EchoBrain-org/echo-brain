@@ -1,0 +1,1809 @@
+{
+  "kind": "echo-synthetic-headless-research-trial-v1",
+  "evaluated_at": "2026-10-20T22:03:56.300Z",
+  "source_sha": "819a9efac47b6e53355f6227936c7c6c68ddfbb8",
+  "sdk_version": "0.3.305",
+  "cli_version": "2.1.302",
+  "model": "claude-sonnet-5-5",
+  "limitations": [
+    "Synthetic data only; no live authorization qualification.",
+    "Current loop uses headless one-shot generation, not deployed OpenRouter.",
+    "One run per engine/case; caching, startup and model variation prevent production speed/cost claims.",
+    "Original smoke checker was corrected to accept requester pronouns and reject partial final answers; saved runs are re-evaluated without rerunning models."
+  ],
+  "runs": [
+    {
+      "engine": "current",
+      "case": "open_items",
+      "elapsed_ms": 28644.046542,
+      "research_metrics": {
+        "calls": [
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 2,
+            "model_calls": 1,
+            "input_tokens": 9730,
+            "output_tokens": 265,
+            "total_tokens": 9995,
+            "model_ms": 2823,
+            "elapsed_ms": 3179.141458,
+            "estimated_cost_usd": 0.010015,
+            "permission_denials": []
+          },
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 3,
+            "model_calls": 2,
+            "input_tokens": 28294,
+            "output_tokens": 374,
+            "total_tokens": 28668,
+            "model_ms": 3811,
+            "elapsed_ms": 4077.813667,
+            "estimated_cost_usd": 0.062046699999999996,
+            "permission_denials": []
+          },
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 2,
+            "model_calls": 1,
+            "input_tokens": 17555,
+            "output_tokens": 322,
+            "total_tokens": 17877,
+            "model_ms": 2872,
+            "elapsed_ms": 3127.1049999999996,
+            "estimated_cost_usd": 0.073436,
+            "permission_denials": []
+          },
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 2,
+            "model_calls": 1,
+            "input_tokens": 21081,
+            "output_tokens": 342,
+            "total_tokens": 21423,
+            "model_ms": 3860,
+            "elapsed_ms": 4130.667208999999,
+            "estimated_cost_usd": 0.08774,
+            "permission_denials": []
+          },
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 2,
+            "model_calls": 1,
+            "input_tokens": 24604,
+            "output_tokens": 357,
+            "total_tokens": 24961,
+            "model_ms": 3268,
+            "elapsed_ms": 3549.1364589999994,
+            "estimated_cost_usd": 0.10198199999999999,
+            "permission_denials": []
+          },
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 2,
+            "model_calls": 1,
+            "input_tokens": 25263,
+            "output_tokens": 359,
+            "total_tokens": 25622,
+            "model_ms": 2998,
+            "elapsed_ms": 3290.2870000000003,
+            "estimated_cost_usd": 0.104638,
+            "permission_denials": []
+          }
+        ],
+        "model_calls": 7,
+        "estimated_cost_usd": 0.4398577
+      },
+      "writer_metrics": [
+        {
+          "models": [
+            "claude-sonnet-5-5"
+          ],
+          "turns": 3,
+          "model_calls": 2,
+          "input_tokens": 34647,
+          "output_tokens": 675,
+          "total_tokens": 35322,
+          "model_ms": 6916,
+          "elapsed_ms": 7227.655500000001,
+          "estimated_cost_usd": 0.0626109,
+          "permission_denials": []
+        }
+      ],
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": false,
+        "missing": [
+          "checklist"
+        ],
+        "output_contract_accepted": true,
+        "answer_complete": false,
+        "passed": false
+      },
+      "original_smoke_checks": {
+        "research_completed": true,
+        "expected_facts_present": false,
+        "missing": [
+          "checklist"
+        ],
+        "output_contract_accepted": true,
+        "passed": false
+      },
+      "research": {
+        "stop": {
+          "reason": "finished",
+          "completed": true
+        },
+        "plan": [
+          {
+            "part": 1,
+            "question": "What are the open items, and who owns them? Include meeting actions and Jira issues.",
+            "notes": "L1 complete: E1 open, owner Mara Quinn. L2 complete (105 tickets); open: E18 DEMO-17 (Mara), E35 DEMO-34 (Tobias), E52 DEMO-51 (Mara), E69 DEMO-68 (Tobias), E86 DEMO-85 (Mara), E103 DEMO-102 (Tobias); rest Done.",
+            "needs": [
+              {
+                "need": "open meeting actions and their owners",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L1"
+                ]
+              },
+              {
+                "need": "Jira issues (current) with status and owner",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L2"
+                ]
+              }
+            ]
+          }
+        ],
+        "reads": [
+          {
+            "tool": "list",
+            "source": "meetings",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 25,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 25,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 25,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 25,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 5,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          }
+        ],
+        "items": 106,
+        "lists": [
+          {
+            "id": "L1",
+            "source": "meetings",
+            "members": 1,
+            "complete": true
+          },
+          {
+            "id": "L2",
+            "source": "tickets",
+            "members": 105,
+            "complete": true
+          }
+        ]
+      },
+      "rendered": {
+        "schema_version": 8,
+        "kind": "echo-clean-person-answer-v8",
+        "scope": {
+          "kind": "global"
+        },
+        "outcome": "partial",
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:615bbcfeb9d5e51d8e8948fb2a3710f43b2f5b5fbbbf473ea640cb476912224b",
+              "record_sha256": "sha256:a46d265fead7148d681c4477bf6872b11cef02757aaa5d90aad423196af4eaf9",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "action",
+            "label": "Synthetic release review action",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "17",
+              "permalink": "https://example.test/browse/DEMO-17",
+              "text_sha256": "sha256:289eeb9dcdace2045e48b7125772448b7d80a205388a88cba717ac2add2c27c8"
+            },
+            "kind": "ticket",
+            "label": "DEMO-17: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "34",
+              "permalink": "https://example.test/browse/DEMO-34",
+              "text_sha256": "sha256:672ff6e8984a88d8f41cc54e7408ad0c94102e98dac769bc506f271363e04352"
+            },
+            "kind": "ticket",
+            "label": "DEMO-34: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "51",
+              "permalink": "https://example.test/browse/DEMO-51",
+              "text_sha256": "sha256:fb5b8f49f5bcb8c52dfca4af0414335fe3e8c00429d82dc5ebb01c8f84d5ae33"
+            },
+            "kind": "ticket",
+            "label": "DEMO-51: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "68",
+              "permalink": "https://example.test/browse/DEMO-68",
+              "text_sha256": "sha256:b6d7c58729bade5d8fcc2e47ecdadb2e3aef8bc1389a681d904ef6a4c5014a27"
+            },
+            "kind": "ticket",
+            "label": "DEMO-68: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "85",
+              "permalink": "https://example.test/browse/DEMO-85",
+              "text_sha256": "sha256:6f083548291b3383945f71e9418276b83b7f5f8492f22eaabc450a66b34a3dde"
+            },
+            "kind": "ticket",
+            "label": "DEMO-85: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "102",
+              "permalink": "https://example.test/browse/DEMO-102",
+              "text_sha256": "sha256:b753d39c6e4cfd1765207a18298c0c556ea01d64004c9a5dc37b0dd3ca2f63a9"
+            },
+            "kind": "ticket",
+            "label": "DEMO-102: Calibration follow-up",
+            "visibility": "only_me"
+          }
+        ],
+        "parts": [
+          {
+            "question": "What are the open items, and who owns them? Include meeting actions and Jira issues.",
+            "status": "partial",
+            "statements": [
+              {
+                "text": "1 action with status open: Synthetic release review action.",
+                "citation_indexes": [
+                  0
+                ],
+                "private": true
+              },
+              {
+                "text": "6 of the 105 Jira tickets have status Open: DEMO-17: Calibration follow-up (owner Mara Quinn); DEMO-34: Calibration follow-up (owner Tobias Lund); DEMO-51: Calibration follow-up (owner Mara Quinn); DEMO-68: Calibration follow-up (owner Tobias Lund); DEMO-85: Calibration follow-up (owner Mara Quinn); DEMO-102: Calibration follow-up (owner Tobias Lund).",
+                "citation_indexes": [
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  6
+                ],
+                "private": true
+              }
+            ],
+            "gap": "Not found: Status and owner of the 5 Jira issues that were read but not listed (the list shows 100 of 105), so I can't confirm the open Jira items are complete; Due dates for the open meeting action and the open Jira issues."
+          }
+        ]
+      },
+      "renderer_outcome": "partial",
+      "renderer_fallbacks": 0,
+      "raw_result": {
+        "path": "results/current-open_items.json",
+        "sha256": "9c274e4531213a1f7a16d433aa312641f11643e4856d575d1e81da9ebc54b55c"
+      }
+    },
+    {
+      "engine": "current",
+      "case": "projects",
+      "elapsed_ms": 11766.828791,
+      "research_metrics": {
+        "calls": [
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 2,
+            "model_calls": 1,
+            "input_tokens": 9719,
+            "output_tokens": 172,
+            "total_tokens": 9891,
+            "model_ms": 1993,
+            "elapsed_ms": 2303.415583,
+            "estimated_cost_usd": 0.040592,
+            "permission_denials": []
+          },
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 3,
+            "model_calls": 2,
+            "input_tokens": 21097,
+            "output_tokens": 259,
+            "total_tokens": 21356,
+            "model_ms": 6739,
+            "elapsed_ms": 7049.111458000001,
+            "estimated_cost_usd": 0.0461019,
+            "permission_denials": []
+          }
+        ],
+        "model_calls": 3,
+        "estimated_cost_usd": 0.0866939
+      },
+      "writer_metrics": [
+        {
+          "models": [
+            "claude-sonnet-5-5"
+          ],
+          "turns": 2,
+          "model_calls": 1,
+          "input_tokens": 6371,
+          "output_tokens": 180,
+          "total_tokens": 6551,
+          "model_ms": 1996,
+          "elapsed_ms": 2390.6583329999994,
+          "estimated_cost_usd": 0.011122300000000002,
+          "permission_denials": []
+        }
+      ],
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": true,
+        "passed": true
+      },
+      "original_smoke_checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "passed": true
+      },
+      "research": {
+        "stop": {
+          "reason": "finished",
+          "completed": true
+        },
+        "plan": [
+          {
+            "part": 1,
+            "question": "What are my active projects, and who leads each one?",
+            "notes": "L1 complete: Atlas (E1) lead Mara Quinn; Beacon (E2) lead Tobias Lund.",
+            "needs": [
+              {
+                "need": "active projects the asker belongs to, with leads",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L1"
+                ]
+              }
+            ]
+          }
+        ],
+        "reads": [
+          {
+            "tool": "list",
+            "source": "projects",
+            "returned_items": 2,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          }
+        ],
+        "items": 2,
+        "lists": [
+          {
+            "id": "L1",
+            "source": "projects",
+            "members": 2,
+            "complete": true
+          }
+        ]
+      },
+      "rendered": {
+        "schema_version": 8,
+        "kind": "echo-clean-person-answer-v8",
+        "scope": {
+          "kind": "global"
+        },
+        "outcome": "answered",
+        "citations": [
+          {
+            "citation": {
+              "kind": "project",
+              "project_id": "prj_00000000-0000-4000-8000-000000000001"
+            },
+            "kind": "project",
+            "label": "Atlas",
+            "visibility": "only_me",
+            "ref": "project:prj_00000000-0000-4000-8000-000000000001"
+          },
+          {
+            "citation": {
+              "kind": "project",
+              "project_id": "prj_00000000-0000-4000-8000-000000000002"
+            },
+            "kind": "project",
+            "label": "Beacon",
+            "visibility": "only_me",
+            "ref": "project:prj_00000000-0000-4000-8000-000000000002"
+          }
+        ],
+        "parts": [
+          {
+            "question": "What are my active projects, and who leads each one?",
+            "status": "answered",
+            "statements": [
+              {
+                "text": "2 projects with status active: Atlas; Beacon.",
+                "citation_indexes": [
+                  0,
+                  1
+                ],
+                "private": true
+              },
+              {
+                "text": "Atlas is led by you (Mara Quinn).",
+                "citation_indexes": [
+                  0
+                ],
+                "private": true
+              },
+              {
+                "text": "Beacon is led by Tobias Lund, and you are a member.",
+                "citation_indexes": [
+                  1
+                ],
+                "private": true
+              }
+            ]
+          }
+        ]
+      },
+      "renderer_outcome": "answered",
+      "renderer_fallbacks": 0,
+      "raw_result": {
+        "path": "results/current-projects.json",
+        "sha256": "232e1b2d40aa7bef68597ef538a8f4458d0cab6a661ebdd2f7052abf5a4a4efe"
+      }
+    },
+    {
+      "engine": "current",
+      "case": "sweep",
+      "elapsed_ms": 2026.6935419999998,
+      "research_metrics": {
+        "calls": [],
+        "model_calls": 0,
+        "estimated_cost_usd": 0
+      },
+      "writer_metrics": [
+        {
+          "models": [
+            "claude-sonnet-5-5"
+          ],
+          "turns": 2,
+          "model_calls": 1,
+          "input_tokens": 1988,
+          "output_tokens": 112,
+          "total_tokens": 2100,
+          "model_ms": 1597,
+          "elapsed_ms": 2016.120333,
+          "estimated_cost_usd": 0.0028241,
+          "permission_denials": []
+        }
+      ],
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": true,
+        "passed": true
+      },
+      "original_smoke_checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "passed": true
+      },
+      "research": {
+        "stop": {
+          "reason": "finished",
+          "completed": true
+        },
+        "plan": [],
+        "reads": [
+          {
+            "tool": "open",
+            "source": "tickets",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          }
+        ],
+        "items": 1,
+        "lists": []
+      },
+      "rendered": {
+        "findings": [
+          {
+            "finding_index": 0,
+            "verdict": "still_open",
+            "line": "DEMO-17 status is Open and its text says the calibration review remains open; no completion shown.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "status": "assessed",
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "17",
+              "permalink": "https://example.test/browse/DEMO-17",
+              "text_sha256": "sha256:289eeb9dcdace2045e48b7125772448b7d80a205388a88cba717ac2add2c27c8"
+            },
+            "kind": "ticket",
+            "label": "DEMO-17: Calibration follow-up",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "renderer_outcome": "answered",
+      "renderer_fallbacks": 0,
+      "raw_result": {
+        "path": "results/current-sweep.json",
+        "sha256": "ade8322e49d1b7239c6239b8a61cfa56e52486e2c05760ef3918fa625892a9b5"
+      }
+    },
+    {
+      "engine": "current",
+      "case": "yesterday",
+      "elapsed_ms": 15895.852458000001,
+      "research_metrics": {
+        "calls": [
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 2,
+            "model_calls": 1,
+            "input_tokens": 9738,
+            "output_tokens": 423,
+            "total_tokens": 10161,
+            "model_ms": 3205,
+            "elapsed_ms": 3550.111333,
+            "estimated_cost_usd": 0.011626999999999998,
+            "permission_denials": []
+          },
+          {
+            "models": [
+              "claude-sonnet-5-5"
+            ],
+            "turns": 6,
+            "model_calls": 2,
+            "input_tokens": 23013,
+            "output_tokens": 684,
+            "total_tokens": 23697,
+            "model_ms": 4887,
+            "elapsed_ms": 5162.16,
+            "estimated_cost_usd": 0.0549583,
+            "permission_denials": []
+          }
+        ],
+        "model_calls": 3,
+        "estimated_cost_usd": 0.0665853
+      },
+      "writer_metrics": [
+        {
+          "models": [
+            "claude-sonnet-5-5"
+          ],
+          "turns": 3,
+          "model_calls": 2,
+          "input_tokens": 13620,
+          "output_tokens": 390,
+          "total_tokens": 14010,
+          "model_ms": 6883,
+          "elapsed_ms": 7156.666792,
+          "estimated_cost_usd": 0.0161427,
+          "permission_denials": []
+        }
+      ],
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": false,
+        "passed": false
+      },
+      "original_smoke_checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "passed": true
+      },
+      "research": {
+        "stop": {
+          "reason": "finished",
+          "completed": true
+        },
+        "plan": [
+          {
+            "part": 1,
+            "question": "What happened yesterday (2026-10-19)? Meeting decisions, actions, Jira updates, Confluence changes.",
+            "notes": "L1 complete: E1 decision 'Synthetic release review'; E2 action 'Synthetic release review action' owner Mara Quinn, open. L2 complete: E3 DEMO-17 Calibration follow-up, Open, owner Mara Quinn, updated 2026-10-19 18:30. L3 complete: E4 Calibration verification plan, v2, updated 2026-10-19 19:00. Bodies not read.",
+            "needs": [
+              {
+                "need": "meeting decisions and actions from 2026-10-19",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L1"
+                ]
+              },
+              {
+                "need": "Jira issues updated on 2026-10-19",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L2"
+                ]
+              },
+              {
+                "need": "Confluence pages changed on 2026-10-19",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L3"
+                ]
+              }
+            ]
+          }
+        ],
+        "reads": [
+          {
+            "tool": "list",
+            "source": "meetings",
+            "returned_items": 2,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "pages",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          }
+        ],
+        "items": 4,
+        "lists": [
+          {
+            "id": "L1",
+            "source": "meetings",
+            "members": 2,
+            "complete": true
+          },
+          {
+            "id": "L2",
+            "source": "tickets",
+            "members": 1,
+            "complete": true
+          },
+          {
+            "id": "L3",
+            "source": "pages",
+            "members": 1,
+            "complete": true
+          }
+        ]
+      },
+      "rendered": {
+        "schema_version": 8,
+        "kind": "echo-clean-person-answer-v8",
+        "scope": {
+          "kind": "global"
+        },
+        "outcome": "partial",
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:a63404393d9a54ec82d2a055315fd1a23ad7e4f9f928ecf29af12f705dd7bcea",
+              "record_sha256": "sha256:723234a57fa6be50dc16378d1dafef8188989aaa523c0d92bcb73ca20fc73c67",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "decision",
+            "label": "Synthetic release review",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:615bbcfeb9d5e51d8e8948fb2a3710f43b2f5b5fbbbf473ea640cb476912224b",
+              "record_sha256": "sha256:a46d265fead7148d681c4477bf6872b11cef02757aaa5d90aad423196af4eaf9",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "action",
+            "label": "Synthetic release review action",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "17",
+              "permalink": "https://example.test/browse/DEMO-17",
+              "text_sha256": "sha256:289eeb9dcdace2045e48b7125772448b7d80a205388a88cba717ac2add2c27c8"
+            },
+            "kind": "ticket",
+            "label": "DEMO-17: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "synthetic-site",
+              "page_id": "1234",
+              "section_id": "s1",
+              "version": "2",
+              "permalink": "https://example.test/wiki/pages/1234",
+              "text_sha256": "sha256:6261fc6cbbe2d92568cfc55c3e748665876f97dae0dd225ca5f3ecbd4be72c91"
+            },
+            "kind": "page",
+            "label": "Calibration verification plan",
+            "visibility": "only_me"
+          }
+        ],
+        "parts": [
+          {
+            "question": "What happened yesterday? Include meeting decisions, actions, Jira updates and Confluence changes.",
+            "status": "partial",
+            "statements": [
+              {
+                "text": "2 items from meetings dated on October 19, 2026: Synthetic release review (1 decision); Synthetic release review action (1 action, open, owner Mara Quinn).",
+                "citation_indexes": [
+                  0,
+                  1
+                ],
+                "private": true
+              },
+              {
+                "text": "1 Jira ticket updated on October 19, 2026: DEMO-17: Calibration follow-up.",
+                "citation_indexes": [
+                  2
+                ],
+                "private": true
+              },
+              {
+                "text": "1 Confluence page updated on October 19, 2026: Calibration verification plan.",
+                "citation_indexes": [
+                  3
+                ],
+                "private": true
+              }
+            ],
+            "gap": "Not found: Text of the meeting decision and action, which only appear as list rows; What changed in DEMO-17 and in the Calibration verification plan page, since only metadata was retrieved."
+          }
+        ]
+      },
+      "renderer_outcome": "partial",
+      "renderer_fallbacks": 0,
+      "raw_result": {
+        "path": "results/current-yesterday.json",
+        "sha256": "9551799c538da3c29b630ad5cece40a761e6a9fbac6795a1c28b1dbf7c3449aa"
+      }
+    },
+    {
+      "engine": "sdk",
+      "case": "open_items",
+      "elapsed_ms": 26668.699125,
+      "research_metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 9,
+        "model_calls": 6,
+        "input_tokens": 81133,
+        "output_tokens": 1062,
+        "total_tokens": 82195,
+        "model_ms": 21626,
+        "elapsed_ms": 21948.428957999997,
+        "estimated_cost_usd": 0.0919864,
+        "permission_denials": []
+      },
+      "writer_metrics": [
+        {
+          "models": [
+            "claude-sonnet-5-5"
+          ],
+          "turns": 2,
+          "model_calls": 1,
+          "input_tokens": 18056,
+          "output_tokens": 474,
+          "total_tokens": 18530,
+          "model_ms": 4439,
+          "elapsed_ms": 4704.727416999998,
+          "estimated_cost_usd": 0.0608023,
+          "permission_denials": []
+        }
+      ],
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": false,
+        "passed": false
+      },
+      "original_smoke_checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "passed": true
+      },
+      "research": {
+        "stop": {
+          "reason": "finished",
+          "completed": true
+        },
+        "plan": [
+          {
+            "question": "What are the open items, and who owns them (meeting actions and Jira issues)?",
+            "needs": [
+              {
+                "need": "Open meeting actions and owners",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L1",
+                  "E1"
+                ]
+              },
+              {
+                "need": "Open Jira issues and owners",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L2",
+                  "E18",
+                  "E35",
+                  "E52",
+                  "E69",
+                  "E86",
+                  "E103"
+                ]
+              },
+              {
+                "need": "Content of open meeting action",
+                "kind": "content",
+                "status": "found",
+                "evidence": [
+                  "E1"
+                ]
+              }
+            ],
+            "notes": "Meeting actions: complete list L1 has one open action, E1, owned by Mara Quinn: publish the calibration checklist (meeting on 2026-10-19). Jira: complete list L2 has 105 issues (DEMO-1 to DEMO-105). Six are Open and the rest are Done. All six open issues are titled 'Calibration follow-up'. Mara Quinn owns DEMO-17 (E18, updated 2026-10-19), DEMO-51 (E52) and DEMO-85 (E86). Tobias Lund owns DEMO-34 (E35), DEMO-68 (E69) and DEMO-102 (E103). I did not open the ticket bodies.",
+            "part": 1
+          }
+        ],
+        "reads": [
+          {
+            "tool": "list",
+            "source": "meeting",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 25,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 25,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "open",
+            "source": "meetings",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 25,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 25,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 5,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          }
+        ],
+        "items": 106,
+        "lists": [
+          {
+            "id": "L1",
+            "source": "meetings",
+            "members": 1,
+            "complete": true
+          },
+          {
+            "id": "L2",
+            "source": "tickets",
+            "members": 105,
+            "complete": true
+          }
+        ]
+      },
+      "rendered": {
+        "schema_version": 8,
+        "kind": "echo-clean-person-answer-v8",
+        "scope": {
+          "kind": "global"
+        },
+        "outcome": "partial",
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:615bbcfeb9d5e51d8e8948fb2a3710f43b2f5b5fbbbf473ea640cb476912224b",
+              "record_sha256": "sha256:a46d265fead7148d681c4477bf6872b11cef02757aaa5d90aad423196af4eaf9",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "action",
+            "label": "Synthetic release review action",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "17",
+              "permalink": "https://example.test/browse/DEMO-17",
+              "text_sha256": "sha256:289eeb9dcdace2045e48b7125772448b7d80a205388a88cba717ac2add2c27c8"
+            },
+            "kind": "ticket",
+            "label": "DEMO-17: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "34",
+              "permalink": "https://example.test/browse/DEMO-34",
+              "text_sha256": "sha256:672ff6e8984a88d8f41cc54e7408ad0c94102e98dac769bc506f271363e04352"
+            },
+            "kind": "ticket",
+            "label": "DEMO-34: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "51",
+              "permalink": "https://example.test/browse/DEMO-51",
+              "text_sha256": "sha256:fb5b8f49f5bcb8c52dfca4af0414335fe3e8c00429d82dc5ebb01c8f84d5ae33"
+            },
+            "kind": "ticket",
+            "label": "DEMO-51: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "68",
+              "permalink": "https://example.test/browse/DEMO-68",
+              "text_sha256": "sha256:b6d7c58729bade5d8fcc2e47ecdadb2e3aef8bc1389a681d904ef6a4c5014a27"
+            },
+            "kind": "ticket",
+            "label": "DEMO-68: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "85",
+              "permalink": "https://example.test/browse/DEMO-85",
+              "text_sha256": "sha256:6f083548291b3383945f71e9418276b83b7f5f8492f22eaabc450a66b34a3dde"
+            },
+            "kind": "ticket",
+            "label": "DEMO-85: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "102",
+              "permalink": "https://example.test/browse/DEMO-102",
+              "text_sha256": "sha256:b753d39c6e4cfd1765207a18298c0c556ea01d64004c9a5dc37b0dd3ca2f63a9"
+            },
+            "kind": "ticket",
+            "label": "DEMO-102: Calibration follow-up",
+            "visibility": "only_me"
+          }
+        ],
+        "parts": [
+          {
+            "question": "What are the open items, and who owns them? Include meeting actions and Jira issues.",
+            "status": "partial",
+            "statements": [
+              {
+                "text": "1 action with status open: Synthetic release review action.",
+                "citation_indexes": [
+                  0
+                ],
+                "private": true
+              },
+              {
+                "text": "6 of the 105 Jira tickets have status Open: DEMO-17: Calibration follow-up (owner Mara Quinn); DEMO-34: Calibration follow-up (owner Tobias Lund); DEMO-51: Calibration follow-up (owner Mara Quinn); DEMO-68: Calibration follow-up (owner Tobias Lund); DEMO-85: Calibration follow-up (owner Mara Quinn); DEMO-102: Calibration follow-up (owner Tobias Lund).",
+                "citation_indexes": [
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  6
+                ],
+                "private": true
+              },
+              {
+                "text": "The one open meeting action is owned by you, Mara Quinn: publish the calibration checklist, from the approved record of the Oct 19 release review.",
+                "citation_indexes": [
+                  0
+                ],
+                "private": true
+              }
+            ],
+            "gap": "Not found: Open status for the 5 Jira issues not shown in the retrieved ticket list (only DEMO-102 among them was seen)."
+          }
+        ]
+      },
+      "renderer_outcome": "partial",
+      "renderer_fallbacks": 0,
+      "raw_result": {
+        "path": "results/sdk-open_items.json",
+        "sha256": "4862c5986a29e08ea68de4f6d1db88b7412bd83db391e8314905eb2bf9e0844c"
+      }
+    },
+    {
+      "engine": "sdk",
+      "case": "projects",
+      "elapsed_ms": 6907.543375,
+      "research_metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 3,
+        "model_calls": 2,
+        "input_tokens": 8499,
+        "output_tokens": 343,
+        "total_tokens": 8842,
+        "model_ms": 3862,
+        "elapsed_ms": 4609.632542,
+        "estimated_cost_usd": 0.0220208,
+        "permission_denials": []
+      },
+      "writer_metrics": [
+        {
+          "models": [
+            "claude-sonnet-5-5"
+          ],
+          "turns": 2,
+          "model_calls": 1,
+          "input_tokens": 6371,
+          "output_tokens": 185,
+          "total_tokens": 6556,
+          "model_ms": 2044,
+          "elapsed_ms": 2288.1881249999997,
+          "estimated_cost_usd": 0.02733,
+          "permission_denials": []
+        }
+      ],
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": true,
+        "passed": true
+      },
+      "original_smoke_checks": {
+        "research_completed": true,
+        "expected_facts_present": false,
+        "missing": [
+          "Mara Quinn"
+        ],
+        "output_contract_accepted": true,
+        "passed": false
+      },
+      "research": {
+        "stop": {
+          "reason": "finished",
+          "completed": true
+        },
+        "plan": [
+          {
+            "question": "What are my active projects, and who leads each one?",
+            "needs": [
+              {
+                "need": "List active projects and their leads",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L1",
+                  "E1",
+                  "E2"
+                ]
+              }
+            ],
+            "notes": "Complete active project list (L1) has two projects. Atlas: lead Mara Quinn (the asker); members Mara Quinn and Tobias Lund. Beacon: lead Tobias Lund; members Mara Quinn and Tobias Lund. Both were created 2026-10-01.",
+            "part": 1
+          }
+        ],
+        "reads": [
+          {
+            "tool": "list",
+            "source": "projects",
+            "returned_items": 2,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          }
+        ],
+        "items": 2,
+        "lists": [
+          {
+            "id": "L1",
+            "source": "projects",
+            "members": 2,
+            "complete": true
+          }
+        ]
+      },
+      "rendered": {
+        "schema_version": 8,
+        "kind": "echo-clean-person-answer-v8",
+        "scope": {
+          "kind": "global"
+        },
+        "outcome": "answered",
+        "citations": [
+          {
+            "citation": {
+              "kind": "project",
+              "project_id": "prj_00000000-0000-4000-8000-000000000001"
+            },
+            "kind": "project",
+            "label": "Atlas",
+            "visibility": "only_me",
+            "ref": "project:prj_00000000-0000-4000-8000-000000000001"
+          },
+          {
+            "citation": {
+              "kind": "project",
+              "project_id": "prj_00000000-0000-4000-8000-000000000002"
+            },
+            "kind": "project",
+            "label": "Beacon",
+            "visibility": "only_me",
+            "ref": "project:prj_00000000-0000-4000-8000-000000000002"
+          }
+        ],
+        "parts": [
+          {
+            "question": "What are my active projects, and who leads each one?",
+            "status": "answered",
+            "statements": [
+              {
+                "text": "2 projects with status active: Atlas; Beacon.",
+                "citation_indexes": [
+                  0,
+                  1
+                ],
+                "private": true
+              },
+              {
+                "text": "You lead Atlas, and Tobias Lund is also a member of it.",
+                "citation_indexes": [
+                  0
+                ],
+                "private": true
+              },
+              {
+                "text": "Tobias Lund leads Beacon, where you are a member.",
+                "citation_indexes": [
+                  1
+                ],
+                "private": true
+              }
+            ]
+          }
+        ]
+      },
+      "renderer_outcome": "answered",
+      "renderer_fallbacks": 0,
+      "raw_result": {
+        "path": "results/sdk-projects.json",
+        "sha256": "b7e985623b2e7554768dea6ad2f346312bbb0a4477165c78cf7a7e042db6ee50"
+      }
+    },
+    {
+      "engine": "sdk",
+      "case": "sweep",
+      "elapsed_ms": 1862.565666,
+      "research_metrics": {
+        "model_calls": 0,
+        "estimated_cost_usd": 0
+      },
+      "writer_metrics": [
+        {
+          "models": [
+            "claude-sonnet-5-5"
+          ],
+          "turns": 2,
+          "model_calls": 1,
+          "input_tokens": 1988,
+          "output_tokens": 112,
+          "total_tokens": 2100,
+          "model_ms": 1545,
+          "elapsed_ms": 1848.528959,
+          "estimated_cost_usd": 0.009068,
+          "permission_denials": []
+        }
+      ],
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": true,
+        "passed": true
+      },
+      "original_smoke_checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "passed": true
+      },
+      "research": {
+        "stop": {
+          "reason": "finished",
+          "completed": true
+        },
+        "plan": [
+          {
+            "question": "Recheck the current state of E1 against the approved calibration change.",
+            "needs": [
+              {
+                "need": "starting evidence",
+                "kind": "content",
+                "status": "found",
+                "evidence": [
+                  "E1"
+                ]
+              }
+            ],
+            "notes": "Starting evidence reread; trigger disables planning.",
+            "part": 1
+          }
+        ],
+        "reads": [
+          {
+            "tool": "openCitation",
+            "source": "tickets",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          }
+        ],
+        "items": 1,
+        "lists": []
+      },
+      "rendered": {
+        "findings": [
+          {
+            "finding_index": 0,
+            "verdict": "still_open",
+            "line": "DEMO-17 status is Open and its text says the calibration review remains open; no completion shown.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "status": "assessed",
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "17",
+              "permalink": "https://example.test/browse/DEMO-17",
+              "text_sha256": "sha256:289eeb9dcdace2045e48b7125772448b7d80a205388a88cba717ac2add2c27c8"
+            },
+            "kind": "ticket",
+            "label": "DEMO-17: Calibration follow-up",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "renderer_outcome": "answered",
+      "renderer_fallbacks": 0,
+      "raw_result": {
+        "path": "results/sdk-sweep.json",
+        "sha256": "3f3a3a0a83eaf6d788c877620b2178eec8db65efa8c1380079c6c69e486c69db"
+      }
+    },
+    {
+      "engine": "sdk",
+      "case": "yesterday",
+      "elapsed_ms": 10771.067708,
+      "research_metrics": {
+        "models": [
+          "claude-sonnet-5-5"
+        ],
+        "turns": 9,
+        "model_calls": 3,
+        "input_tokens": 16088,
+        "output_tokens": 1015,
+        "total_tokens": 17103,
+        "model_ms": 7006,
+        "elapsed_ms": 7625.535792,
+        "estimated_cost_usd": 0.0282399,
+        "permission_denials": []
+      },
+      "writer_metrics": [
+        {
+          "models": [
+            "claude-sonnet-5-5"
+          ],
+          "turns": 2,
+          "model_calls": 1,
+          "input_tokens": 7395,
+          "output_tokens": 365,
+          "total_tokens": 7760,
+          "model_ms": 2846,
+          "elapsed_ms": 3135.1053329999995,
+          "estimated_cost_usd": 0.017068299999999998,
+          "permission_denials": []
+        }
+      ],
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": true,
+        "passed": true
+      },
+      "original_smoke_checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "passed": true
+      },
+      "research": {
+        "stop": {
+          "reason": "finished",
+          "completed": true
+        },
+        "plan": [
+          {
+            "question": "What happened yesterday (2026-10-19)?",
+            "needs": [
+              {
+                "need": "Meeting decisions and actions",
+                "kind": "content",
+                "status": "found",
+                "evidence": [
+                  "E1",
+                  "E2"
+                ]
+              },
+              {
+                "need": "Jira updates",
+                "kind": "content",
+                "status": "found",
+                "evidence": [
+                  "E3"
+                ]
+              },
+              {
+                "need": "Confluence changes",
+                "kind": "content",
+                "status": "found",
+                "evidence": [
+                  "E4"
+                ]
+              },
+              {
+                "need": "Which meeting records occurred yesterday",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L1"
+                ]
+              },
+              {
+                "need": "Which Jira tickets were updated yesterday",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L2"
+                ]
+              },
+              {
+                "need": "Which Confluence pages were updated yesterday",
+                "kind": "which_items",
+                "status": "found",
+                "evidence": [
+                  "L3"
+                ]
+              }
+            ],
+            "notes": "Yesterday's activity was one meeting decision, one meeting action, one Jira ticket update and one Confluence page update. All of it concerns calibration.",
+            "part": 1
+          }
+        ],
+        "reads": [
+          {
+            "tool": "list",
+            "source": "meeting",
+            "returned_items": 2,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "tickets",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "list",
+            "source": "pages",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "open",
+            "source": "meetings",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "open",
+            "source": "meetings",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "open",
+            "source": "tickets",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          },
+          {
+            "tool": "open",
+            "source": "pages",
+            "returned_items": 1,
+            "truncated": false,
+            "notice": false,
+            "unavailable": false
+          }
+        ],
+        "items": 4,
+        "lists": [
+          {
+            "id": "L1",
+            "source": "meetings",
+            "members": 2,
+            "complete": true
+          },
+          {
+            "id": "L2",
+            "source": "tickets",
+            "members": 1,
+            "complete": true
+          },
+          {
+            "id": "L3",
+            "source": "pages",
+            "members": 1,
+            "complete": true
+          }
+        ]
+      },
+      "rendered": {
+        "schema_version": 8,
+        "kind": "echo-clean-person-answer-v8",
+        "scope": {
+          "kind": "global"
+        },
+        "outcome": "answered",
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:a63404393d9a54ec82d2a055315fd1a23ad7e4f9f928ecf29af12f705dd7bcea",
+              "record_sha256": "sha256:723234a57fa6be50dc16378d1dafef8188989aaa523c0d92bcb73ca20fc73c67",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "decision",
+            "label": "Synthetic release review",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:615bbcfeb9d5e51d8e8948fb2a3710f43b2f5b5fbbbf473ea640cb476912224b",
+              "record_sha256": "sha256:a46d265fead7148d681c4477bf6872b11cef02757aaa5d90aad423196af4eaf9",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "action",
+            "label": "Synthetic release review action",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "synthetic-site",
+              "ticket_id": "17",
+              "permalink": "https://example.test/browse/DEMO-17",
+              "text_sha256": "sha256:289eeb9dcdace2045e48b7125772448b7d80a205388a88cba717ac2add2c27c8"
+            },
+            "kind": "ticket",
+            "label": "DEMO-17: Calibration follow-up",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "synthetic-site",
+              "page_id": "1234",
+              "section_id": "s1",
+              "version": "2",
+              "permalink": "https://example.test/wiki/pages/1234",
+              "text_sha256": "sha256:6261fc6cbbe2d92568cfc55c3e748665876f97dae0dd225ca5f3ecbd4be72c91"
+            },
+            "kind": "page",
+            "label": "Calibration verification plan",
+            "visibility": "only_me"
+          }
+        ],
+        "parts": [
+          {
+            "question": "What happened yesterday? Include meeting decisions, actions, Jira updates and Confluence changes.",
+            "status": "answered",
+            "statements": [
+              {
+                "text": "2 items from meetings dated on October 19, 2026: Synthetic release review (1 decision); Synthetic release review action (1 action, open, owner Mara Quinn).",
+                "citation_indexes": [
+                  0,
+                  1
+                ],
+                "private": true
+              },
+              {
+                "text": "1 Jira ticket updated on October 19, 2026: DEMO-17: Calibration follow-up.",
+                "citation_indexes": [
+                  2
+                ],
+                "private": true
+              },
+              {
+                "text": "1 Confluence page updated on October 19, 2026: Calibration verification plan.",
+                "citation_indexes": [
+                  3
+                ],
+                "private": true
+              },
+              {
+                "text": "Meeting decision (Synthetic release review, Oct 19): the team approved calibration on every unit before shipment.",
+                "citation_indexes": [
+                  0
+                ],
+                "private": true
+              },
+              {
+                "text": "Meeting action from the same review: you (Mara Quinn) will publish the calibration checklist; it is still open.",
+                "citation_indexes": [
+                  1
+                ],
+                "private": true
+              },
+              {
+                "text": "Jira: DEMO-17 (Calibration follow-up) was updated on Oct 19 and is still Open, owned by you; its text says the calibration review remains open.",
+                "citation_indexes": [
+                  2
+                ],
+                "private": true
+              },
+              {
+                "text": "Confluence: the Calibration verification plan (version 2) was updated on Oct 19 and now requires one calibration record for each shipped unit.",
+                "citation_indexes": [
+                  3
+                ],
+                "private": true
+              }
+            ]
+          }
+        ]
+      },
+      "renderer_outcome": "answered",
+      "renderer_fallbacks": 0,
+      "raw_result": {
+        "path": "results/sdk-yesterday.json",
+        "sha256": "2ca3879cf9bc6645e9b8e33d7cc748a6e8473d14700c1e2bd3e0e1945edf7437"
+      }
+    }
+  ],
+  "revocation_probe": {
+    "passed": true,
+    "released_bundle": false,
+    "error_class": "Error",
+    "elapsed_ms": 4718.816625,
+    "fixture_reads": 1,
+    "raw_result": {
+      "path": "results/sdk-revocation.json",
+      "sha256": "afd356c91f881a73256880d501b135b5a471b95fee1f5469192096e678ae2ccc"
+    },
+    "limitation": "A stop after observed access loss; does not qualify every outbound model request."
+  }
+}

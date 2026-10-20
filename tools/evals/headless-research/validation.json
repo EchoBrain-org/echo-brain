@@ -1,0 +1,37 @@
+{
+  "base_commit": "819a9efac47b6e53355f6227936c7c6c68ddfbb8",
+  "validated_at": "2026-10-20T22:12:34.464Z",
+  "commands": [
+    {
+      "command": "npm test --prefix tools/evals/headless-research",
+      "exit_code": 0,
+      "tests_passed": 15
+    },
+    {
+      "command": "npm run check",
+      "exit_code": 0,
+      "test_files_passed": 366,
+      "tests_passed": 5841,
+      "expected_failures": 2,
+      "skipped": 2,
+      "duration_seconds": 276.62
+    }
+  ],
+  "full_check_log_sha256": "5f9380c5e14e887bac82eb6ad1848349845bab26032fbb29094ac3d8b2a0d6b3",
+  "files": {
+    "assess.mjs": "785eb3f58860650a3203c21c11a284331fe2fb920954da0ca6bd1eded3822c0f",
+    "bridge.mjs": "482c43cad258821d97df26656edbf5b2698c5190005afc5a453b685b8671ecb8",
+    "client.mjs": "3cdd8aea5518a570badf4dab982f9506acdf3646ca2655ff35dd08f8b62d4ea9",
+    "core.mjs": "ec0f05438b22724ceac3d2c60b2fef53600b4c0f44999349e40aa2fd1cb44bec",
+    "fixtures.mjs": "9020c71cfc18239b0cd02f46486eb3b67df66fd39b0ff3f894bdd69ba707399b",
+    "package-lock.json": "786a3eb0b45bc74ca0f187d11ff9b53373e513ccf623278a1c6a6eca84035cfb",
+    "package.json": "90a2f5407828fb3d51af84eaa84f82b3fb0f653af7d8e064cf0347ce2543b3f6",
+    "research.mjs": "fb99ddbc31d92a966abf59169b87b6c8f0fe3cae2a30f66864267f4b1eba72f8",
+    "run.mjs": "4b0cd39506db71525465ba446845c2c1baa841fa02a8862b4f787803e10fd75d",
+    "test/assess.test.mjs": "5c4551b127c34956ee43ebcf88bae0f4ef86fcd3d539dbcbcff35004d93f79e7",
+    "test/bridge.test.mjs": "f0f11f22a899b98bdc14e57bb0a3b9ce2374dd0830d69478fa9e76f5f71cf8b1"
+  },
+  "live_trial": false,
+  "staged": false,
+  "ci": "not run; local experiment only"
+}
