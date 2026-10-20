@@ -152,8 +152,8 @@ const DEFAULT_TITLE = 'Follow-up';
  * query and on the reads the request made before any key lookup, never on
  * whether a follow-up holds the key.
  */
-const KEY_ACROSS_SOURCES = 'Follow-ups are found by a ticket key only when follow_ups is searched on its own.';
-const KEY_PAST_READS = 'This request has read as many follow-up items as it can, so a ticket key may not find every follow-up.';
+export const FOLLOW_UPS_KEY_ACROSS_SOURCES_V1 = 'Follow-ups are found by a ticket key only when follow_ups is searched on its own.';
+export const FOLLOW_UPS_KEY_PAST_READS_V1 = 'This request has read as many follow-up items as it can, so a ticket key may not find every follow-up.';
 /** Private visibilities first: an answer statement citing any of them is private. */
 const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_only', 'project', 'projects', 'team'];
 
@@ -486,7 +486,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       }
       input.signal?.throwIfAborted();
       // Each key may need one more read than the request had made before its lookup.
-      const notice = keys.length === 0 ? undefined : !live ? KEY_ACROSS_SOURCES : readBefore + keys.length > FOLLOW_UPS_LIMITS_V1.live_reads ? KEY_PAST_READS : undefined;
+      const notice = keys.length === 0 ? undefined : !live ? FOLLOW_UPS_KEY_ACROSS_SOURCES_V1 : readBefore + keys.length > FOLLOW_UPS_LIMITS_V1.live_reads ? FOLLOW_UPS_KEY_PAST_READS_V1 : undefined;
       // What the window could not test is counted over every follow-up the asker sees, as a meeting search's is, whatever its words
       // match. A search across sources links nothing: the desk keeps only some of its hits, so nothing is opened for them.
       return release('search', view, hits.slice(0, limit), wordsCut || hits.length > limit,

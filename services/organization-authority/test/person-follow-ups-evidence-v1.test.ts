@@ -8,7 +8,7 @@ import type { EvidenceDeskPortV2, EvidenceDeskResultV2 } from '@echo-brain/organ
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { SqlitePersonAgenticAskAuditV1 } from '../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
-import { createPersonFollowUpsEvidenceSourceV1 } from '../src/composition/person-follow-ups-evidence-v1.js';
+import { FOLLOW_UPS_KEY_ACROSS_SOURCES_V1, FOLLOW_UPS_KEY_PAST_READS_V1, createPersonFollowUpsEvidenceSourceV1 } from '../src/composition/person-follow-ups-evidence-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import { createRegisteredPersonLiveEvidenceDeskV2 } from '../src/composition/person-live-evidence-desk-v2.js';
@@ -55,8 +55,6 @@ function askDesk(f: OpenItemsFixtureV1, name: FixturePerson, options: { readonly
 const search = (desk: EvidenceDeskPortV2, query: string, extra: Record<string, unknown> = {}) => desk.search({ source: 'follow_ups', kinds: ['follow_up'], query, limit: 8, ...extra });
 const list = (desk: EvidenceDeskPortV2, extra: Record<string, unknown> = {}) => desk.list({ source: 'follow_ups', limit: 50, ...extra });
 const titles = (result: EvidenceDeskResultV2) => result.items.map(item => item.label).sort();
-const ACROSS = 'Follow-ups are found by a ticket key only when follow_ups is searched on its own.';
-const CAPPED = 'This request has read as many follow-up items as it can, so a ticket key may not find every follow-up.';
 /** Rows straight into the store, for the fixture's one decision: every decision reader sees them, nobody else does. */
 function insertRows(f: OpenItemsFixtureV1, count: number, expected = 'launch next week', from = 0) {
   const run = f.runs.read(f.person, f.runId)!;
@@ -328,7 +326,7 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     await list(desk);
     expect(f.opened.length - opens).toBe(21);
     // Past the bound a ticket key cannot be checked, and the search says so whether or not any follow-up holds that key.
-    for (const query of ['ECHO-12', 'ECHO-999']) expect([query, await search(desk, query)]).toEqual([query, expect.objectContaining({ items: [], notice: CAPPED })]);
+    for (const query of ['ECHO-12', 'ECHO-999']) expect([query, await search(desk, query)]).toEqual([query, expect.objectContaining({ items: [], notice: FOLLOW_UPS_KEY_PAST_READS_V1 })]);
     expect(f.opened.length - opens).toBe(21);
     // Within it, a key no follow-up holds says nothing.
     expect(await search(askDesk(f, 'mina').desk, 'ECHO-999')).not.toHaveProperty('notice');
@@ -469,7 +467,7 @@ describe('follow-ups on the request desk (ADR-0040)', () => {
     // A key alone needs a live open, so across sources it finds no follow-up, and says so whether or not one holds it.
     for (const query of ['ECHO-12', 'ECHO-999']) {
       const keyed = await desk.search({ query, limit: 8 });
-      expect([query, keyed.items, keyed.notice]).toEqual([query, [], ACROSS]);
+      expect([query, keyed.items, keyed.notice]).toEqual([query, [], FOLLOW_UPS_KEY_ACROSS_SOURCES_V1]);
     }
     expect(f.opened.length).toBe(opens);
     expect(audits().map(row => (row.body.items as unknown[]).length)).toEqual([2, 0, 0]);
