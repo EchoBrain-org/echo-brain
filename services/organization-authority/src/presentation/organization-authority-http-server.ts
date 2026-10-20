@@ -1,7 +1,7 @@
 import { PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1 } from "@echo-brain/organization-api";
 import {
-  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  formatPersonAskProgressEventV1, formatPersonAskProgressEventV2, formatPersonAskProgressEventV3, type PersonAskProgressErrorStatusV1,
+  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  formatPersonAskProgressEventV2, formatPersonAskProgressEventV3, type PersonAskProgressErrorStatusV1,
 } from "@echo-brain/organization-api";
 import { startPersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
@@ -538,19 +538,22 @@ function personCancellablePost<Application, Request>(
 const streamedFailureStatus = new WeakMap<ServerResponse, number>();
 
 /**
- * `POST /v5/person/ask`. A client that sends the progress header gets the
- * same Ask as server-sent events (ADR-0039), once the request authenticated
- * and validated; before that, and for every other client, the response is
- * today's JSON. A disconnect still cancels the Ask, and nothing more is written.
+ * `POST /v5/person/ask`, the V6 answer, always as JSON. Its Ask progress V1
+ * stream was retired on 2026-10-19: every Authority that streamed it also
+ * serves `/v6`, which every streaming client asks first, so a progress header
+ * here gets the JSON answer every client handles. A disconnect still cancels the Ask.
  */
 function personAskV5Post(application: PersonAnswerV5HttpApplication | undefined): PersonPostHandler {
-  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, response => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV1));
+  return personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
 }
 
 /**
- * `POST /v6/person/ask`, the V7 answer (ADR-0040), streamed exactly as `/v5`
- * is, in Ask progress V2, for the header value `2`. Any other value, `1`
- * included, gets the JSON V7 answer: a V1 client never meets a follow-up.
+ * `POST /v6/person/ask`, the V7 answer (ADR-0040). A client that sends the
+ * progress header value `2` gets the same Ask as server-sent events in Ask
+ * progress V2 (ADR-0039), once the request authenticated and validated; before
+ * that, and for any other value, `1` included, the response is the JSON V7
+ * answer: a V1 client never meets a follow-up. A disconnect still cancels the
+ * Ask, and nothing more is written.
  */
 function personAskV6Post(application: PersonAnswerV6HttpApplication | undefined): PersonPostHandler {
   return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, response => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV2));

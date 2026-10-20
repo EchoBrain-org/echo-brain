@@ -928,13 +928,11 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(opened).toMatchObject({ text: '', next_cursor: null });
     expect(JSON.stringify(opened)).not.toContain('TRANSCRIPT_SECRET_DO_NOT_SHARE');
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
-    for (const inventory_mode of [undefined, 'items'] as const) {
-      const release = originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, kinds: ['imported_meeting'], ...(inventory_mode ? { inventory_mode } : {}) });
-      expect(release).toMatchObject({ items: [], release: { released_atoms: [] }, truncated: false });
-      expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release })).not.toThrow();
-    }
+    const release = originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, kinds: ['imported_meeting'] });
+    expect(release).toMatchObject({ items: [], release: { released_atoms: [] }, truncated: false });
+    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release })).not.toThrow();
   });
-  it.each([undefined, 'items'] as const)('lists readable meeting evidence past transcript-only imports (inventory mode %s)', async (inventory_mode) => {
+  it('lists readable meeting evidence past transcript-only imports', async () => {
     const f = await fixture(), storage = new Database(':memory:');
     try {
       const provider = createStagingSyntheticPersonalMeetingProviderV1({ custom_store: new StagingSyntheticMeetingStoreV1(storage) });
@@ -950,7 +948,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(listed.items).toHaveLength(5);
       const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
       for (const limit of [1, 2]) {
-        const release = originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, kinds: ['imported_meeting'], limit, ...(inventory_mode ? { inventory_mode } : {}) });
+        const release = originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, kinds: ['imported_meeting'], limit });
         expect(release.items).toHaveLength(limit);
         expect(release.truncated).toBe(limit === 1);
         expect(release.release.released_atoms.every(atom => atom.text.includes('Ship the cohort onboarding.'))).toBe(true);

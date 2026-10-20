@@ -91,13 +91,13 @@ const search = (query: string): ActionSpec => ({ tool: "search", args: { query }
 const open = (id: string): ActionSpec => ({ tool: "open", args: { id } });
 const answer = (sentences: readonly { text: string; evidence: readonly string[] }[], notFound: readonly string[] = []) => ({ sentences, not_found: notFound });
 
-function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; shortcut?: boolean; context_tokens?: number; asker?: string }) {
+function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; context_tokens?: number; asker?: string }) {
   const audit = options.audit ?? [];
   return createAgenticAskV1({
     desk: options.desk, model: options.model, generation: { ...generation, ...(options.context_tokens === undefined ? {} : { context_tokens: options.context_tokens }) }, audit: { append: entry => { audit.push(entry); } },
     today: () => "2026-09-28",
     ...(options.asker === undefined ? {} : { asker: { display_name: options.asker } }),
-    ...(options.now === undefined ? {} : { now_ms: options.now }), ...(options.shortcut === true ? { small_scope_shortcut: true } : {}),
+    ...(options.now === undefined ? {} : { now_ms: options.now }),
   });
 }
 
@@ -1364,40 +1364,6 @@ describe("agentic Ask: failures never lose found evidence", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     // The witness binds the access check before the cancelled step call.
     expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 1, checked_at: checked, generations: [{ role: "step", finish_reason: null, usage: null }] });
-  });
-});
-
-describe("agentic Ask: small-scope preload", () => {
-  it("opens a small complete scope before step 1 so the model can finish at once", async () => {
-    const listed = [listedItem("a"), listedItem("b")];
-    const opened = new Map([[listed[0]!.id, item("a", "Full text A.")], [listed[1]!.id, item("b", "Full text B.")]]);
-    const evidence = desk({ inventory: listed, open: id => [opened.get(id)!] });
-    const script = scripted([
-      finish([found(["E1"])]),
-      answer([{ text: "A.", evidence: ["E1"] }]),
-    ]);
-    const result = await ask({ desk: evidence, model: script.model, shortcut: true }).answer({ question: "When is launch?" });
-    expect(evidence.search).toHaveBeenCalledWith(expect.objectContaining({ inventory_mode: "items" }));
-    expect(script.prompt(0).opened.map((value: { text: string }) => value.text)).toEqual(expect.arrayContaining(["Full text A.", "Full text B."]));
-    expect(result.outcome).toBe("answered");
-  });
-
-  it("starts no preload search once the caller has cancelled, and leaves no rejection unhandled", async () => {
-    const unhandled: unknown[] = [];
-    const record = (reason: unknown) => { unhandled.push(reason); };
-    process.on("unhandledRejection", record);
-    try {
-      const evidence = desk({ inventory: [listedItem("a")] });
-      const audit: AgenticAskAuditEntryV1[] = [];
-      const controller = new AbortController();
-      controller.abort();
-      await expect(ask({ desk: evidence, model: scripted([]).model, audit, shortcut: true }).answer({ question: "When is launch?", signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
-      expect(evidence.search).not.toHaveBeenCalled();
-      expect(audit.at(-1)).toMatchObject({ outcome: "cancelled", model_calls: 0 });
-      // A desk call started after the cancel would reject after the request settled; wait a macrotask for it.
-      await new Promise(resolve => setTimeout(resolve, 0));
-      expect(unhandled).toEqual([]);
-    } finally { process.off("unhandledRejection", record); }
   });
 });
 

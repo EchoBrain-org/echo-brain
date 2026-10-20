@@ -131,8 +131,7 @@ The server uses separate databases with explicit responsibilities:
   anchors, bounded pre-record processing state including raw meeting and
   decision documents, and immutable source custody under
   [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md):
-  Person originals and admitted source revisions, including opt-in retained
-  context captures. Custody grants no read;
+  Person originals and admitted source revisions. Custody grants no read;
 - the control-plane database owns verified provider identity, opaque
   connection handles, Person identity links, and private approval evidence;
 - `record-log.sqlite` is the append-only organization record;

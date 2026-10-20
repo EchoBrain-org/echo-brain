@@ -1,6 +1,8 @@
 # Connector and context capture integration V1
 
-**Status: implementation for source testing; production activation is deferred.**
+**Status: retired 2026-10-19.** The capture foundation and intake described
+here were removed unused; this page is historical.
+**Former status: implementation for source testing; production activation is deferred.**
 This combines the connector implementation and the context foundation, merged
 in #251 (`1d7e72b`). It implements the ingestion-only direction in the
 [foundation design](2026-10-01-context-intake-foundation-v1-design.md).
@@ -69,7 +71,7 @@ fake provider responses, then use the shared intake and real SQLite:
 
 - Granola integration (retired organization-Granola proof): actual meeting adapter over a fake Granola API client; one configured pull, retained captures, immutable replay/change and configured-instance refusal.
 - Staging runtime HTTP (retired organization-Granola proof): the fixed profile's request binding, owner-bound Jira connection across restart, retained Granola, live Jira reads, no Slack read at all, and rejection of tool capture before provider I/O or custody writes.
-- [Intake composition](../../services/organization-authority/test/context-source-intake-v1.test.ts): provider-byte ownership across async checks, concurrent pull exclusion, retry cursor ownership, cancellation and identity drift.
+- Intake composition (`context-source-intake-v1.test.ts`, removed 2026-10-19): provider-byte ownership across async checks, concurrent pull exclusion, retry cursor ownership, cancellation and identity drift.
 
 These are local source proofs. They are not provider-live, artifact, deployment
 or customer acceptance qualification. Real Slack/Nango and Granola probes from

@@ -164,6 +164,12 @@
     "retired_source_paths": [
       "services/organization-authority/src/composition/person-meeting-approval-projection-v1.ts",
       "services/organization-authority/src/composition/slack-context-capture-runtime-v1.ts",
+      "services/organization-authority/src/application/context-capture-rehearsal-v1.ts",
+      "services/organization-authority/src/application/context-intake-v1.ts",
+      "services/organization-authority/src/application/capture-foundation-v1.ts",
+      "services/organization-authority/src/composition/context-source-intake-v1.ts",
+      "services/organization-authority/src/adapters/persistence/sqlite/capture-foundation-v1.ts",
+      "services/organization-authority/src/adapters/persistence/sqlite/context-capture-store-v1.ts",
       "services/organization-authority/src/application/ports/runtime-ports.ts",
       "services/organization-authority/src/adapters/runtime/system-runtime-ports.ts",
       "services/organization-authority/src/composition/granola-admitted-meeting-source-cursor-policy-v1.ts",

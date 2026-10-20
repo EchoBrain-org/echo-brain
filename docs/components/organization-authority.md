@@ -120,10 +120,8 @@ boundary.
 
 Central state also holds immutable source custody under
 [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md):
-Person originals and admitted source revisions, including opt-in retained
-context captures, which the proposed
-[ADR-0028](../decisions/ADR-0028-broadened-layer-1-source-captures.md) names
-Layer 1 source captures. Custody grants no read access. The
+Person originals and admitted source revisions. Custody grants no read
+access. The
 [persistence ownership](../architecture/organization-workspace-boundaries.md#persistence-ownership)
 map lists the databases and the provider-owned and operational sidecars.
 
@@ -140,12 +138,10 @@ would weaken the Authority boundary.
 
 ## Current references
 
-An opt-in [connector capture composition](../product/2026-10-01-connector-context-integration-v1.md)
-binds provider-neutral capture envelopes to explicit Authority disposition,
-organization, read authorization and atomic retention checks. It is dormant
-library code with no production or rehearsal registration, and it grants no
-retrieval or release authority. The staging connector rehearsal serves only the
-owner's `status` and `verify-read` actions.
+The staging connector rehearsal serves only the owner's `status` and
+`verify-read` actions. The dormant connector capture composition was removed
+unused on 2026-10-19
+([ADR-0029](../decisions/ADR-0029-capture-and-derive-foundation.md)).
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)

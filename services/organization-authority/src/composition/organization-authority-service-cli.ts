@@ -185,8 +185,11 @@ export async function runOrganizationAuthorityServiceCli(
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
     // Agentic Ask is the only Ask (ADR-0022). ECHO_AGENTIC_ASK_V1 is still
     // written by older release records and profiles; it no longer has an effect.
-    const agenticAskSmallScopeShortcut =
-      process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT === "true";
+    // Release records still carry the removed small-scope shortcut's switch:
+    // false has no effect, and true is refused rather than ignored.
+    if (process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT === "true") {
+      throw new Error("the small-scope shortcut was removed; release records must set it to false");
+    }
     const environmentSyntheticMeetingsDirectory =
       process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR;
     const requestedSyntheticMeetingsDirectory =
@@ -280,9 +283,6 @@ export async function runOrganizationAuthorityServiceCli(
               ),
             },
       pkce_key_file: manifest.pkce_key_file,
-      ...(agenticAskSmallScopeShortcut
-        ? { agentic_ask_v1_small_scope_shortcut: true }
-        : {}),
       ...(stagingResearchEval === 'true' ? { staging_research_eval_v1: true as const } : {}),
       nango,
       ...(jiraCloudId === undefined ? {} : { jira_person_live: {

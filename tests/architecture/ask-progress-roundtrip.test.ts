@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3, validatePersonAskProgressStepEventV1, validatePersonRunsRequestV1, validatePersonRunsResultV1,
+  validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3, validatePersonRunsRequestV1, validatePersonRunsResultV1,
   type PersonAnswerCitationV8, type PersonAskProgressStepEventV3,
 } from '@echo-brain/organization-api';
 import { derivedAtomIdentity } from '@echo-brain/organization-record/application/atom-identity';
@@ -23,8 +23,9 @@ import { JIRA_TEXT, SLACK_TEXT } from '../../services/organization-authority/tes
 // The client asks /v7 first (the V8 answer, research tool contract v1); here
 // each Authority is one from before /v7, which answers it with a 404 without
 // the route header. So the client streams the V7 answer on /v6 (progress V2,
-// ADR-0040), whose Ask may cite a follow-up, and falls back to V1 on /v5 for
-// an Authority without /v6 either, as an older one answers.
+// ADR-0040), whose Ask may cite a follow-up. For an Authority without /v6
+// either it falls back to /v5, which answers in JSON: its progress V1 stream
+// was retired on 2026-10-19.
 //
 // The desktop's modules are loaded by path, as approval-proposal-roundtrip
 // loads the Authority's: the root typecheck never reads the app (its DOM and
@@ -185,16 +186,12 @@ function stepsOf(lines: readonly string[]): PersonAskProgressStepEventV3[] {
   return lines.map(line => validatePersonAskProgressLineV3(JSON.parse(line)).progress);
 }
 
-/** The catalog's sources, as a step names them: follow-ups only on /v6, which alone reads them (ADR-0040). */
-const SEARCHED_V1 = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'slack' }];
-const SEARCHED_V2 = [...SEARCHED_V1, { kind: 'follow_ups' }];
+/** The catalog's sources, as a step on /v6 names them (ADR-0040). */
+const SEARCHED = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'slack' }, { kind: 'follow_ups' }];
 
 describe('Ask progress from the Authority through the Person client to the desktop page', () => {
-  it.each([
-    { route: '/v6' as const, older: false, schema: 7, sources: SEARCHED_V2 },
-    { route: '/v5' as const, older: true, schema: 6, sources: SEARCHED_V1 },
-  ])('streams each step to the page while the Authority works on $route, then folds into the audited receipt, and opens what it named', async ({ route, older, schema, sources }) => {
-    const { f, store, views, lines, refused, runs, audits, asked } = await app({ route });
+  it('streams each step to the page while the Authority works on /v6, then folds into the audited receipt, and opens what it named', async () => {
+    const { f, store, views, lines, refused, runs, audits, asked } = await app();
     try {
       // The desktop's atom ids are the Authority's own.
       expect(views.atomId(f.seeded.approved_record_sha256, 'd1')).toBe(derivedAtomIdentity(f.seeded.approved_record_sha256, 'd1'));
@@ -214,13 +211,10 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
 
       // --- The client: every step, in order, then the one final line, from the newest route this Authority has. ---
-      expect(asked).toEqual(older ? ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask'] : ['/v7/person/ask', '/v6/person/ask']);
-      expect(asked.at(-1)).toBe(`${route}/person/ask`);
+      expect(asked).toEqual(['/v7/person/ask', '/v6/person/ask']);
       const steps = stepsOf(lines.slice(0, -1));
-      // A /v5 stream is V1 throughout: a V1 client reads every step of it.
-      if (older) for (const step of steps) validatePersonAskProgressStepEventV1(step);
       const final = validatePersonAskProgressResultLineV3(JSON.parse(lines.at(-1)!));
-      expect(final.result.schema_version).toBe(schema);
+      expect(final.result.schema_version).toBe(7);
       expect(final.receipt).toBeDefined();
       const receipt = final.receipt!;
       // Everything up to the writer's stage reached the page while the Authority was still writing.
@@ -230,7 +224,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
 
       const searched = steps.filter((step): step is Extract<PersonAskProgressStepEventV3, { type: 'searched' }> => step.type === 'searched');
       expect(searched).toHaveLength(1);
-      expect(searched[0]!.sources).toEqual(sources);
+      expect(searched[0]!.sources).toEqual(SEARCHED);
       const named = steps.flatMap(step => step.type === 'read' ? step.items : []);
       expect(named.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'slack_message', 'slack_message', 'ticket']);
       // The private document, the hidden meeting and the unapproved one match the search too: no count includes them.
@@ -283,6 +277,25 @@ describe('Ask progress from the Authority through the Person client to the deskt
     } finally { await f.close(); }
   });
 
+  it('falls back to /v5 for an Authority without /v6, whose JSON answer the page shows with no progress or receipt', async () => {
+    const { f, store, lines, refused, runs, asked } = await app({ route: '/v5' });
+    try {
+      await store.ask(QUESTION, { kind: 'global' });
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
+      expect(asked).toEqual(['/v7/person/ask', '/v6/person/ask', '/v5/person/ask']);
+      // /v5 no longer streams: the client prints only its final line, the V6 answer with no receipt.
+      expect(lines).toHaveLength(1);
+      const final = validatePersonAskProgressResultLineV3(JSON.parse(lines[0]!));
+      expect(final.result.schema_version).toBe(6);
+      expect(final.receipt).toBeUndefined();
+      expect(refused).not.toHaveBeenCalled();
+      const shown = store.getState().ask!.shown!;
+      expect(shown.receipt).toBeUndefined();
+      expect(shown.answer.sources.length).toBeGreaterThan(0);
+    } finally { await f.close(); }
+  });
+
   it('cites and names a follow-up on /v6, opens it beside the running Ask with its owner and status, and after the answer opens its item page (ADR-0040)', async () => {
     const { f, store, views, progress, openerOf, account, lines, refused, runs, audits } = await app();
     const EXPECTED = 'Send the Launchscope checklist to the pilot group';
@@ -313,7 +326,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(final.result.schema_version).toBe(7);
       const followUp = expect.objectContaining({ citation: { kind: 'follow_up', item_id }, kind: 'follow_up', label: EXPECTED, ref: `follow_up:${item_id}` });
       const searched = steps.filter(step => step.type === 'searched');
-      expect(searched).toEqual([{ type: 'searched', sources: SEARCHED_V2, found: expect.any(Number) }]);
+      expect(searched).toEqual([{ type: 'searched', sources: SEARCHED, found: expect.any(Number) }]);
       const named = steps.flatMap(step => step.type === 'read' ? step.items : []);
       expect(named.filter(item => item.kind === 'follow_up')).toEqual([followUp]);
       expect(searched[0]!.type === 'searched' && searched[0]!.found).toBe(named.length);

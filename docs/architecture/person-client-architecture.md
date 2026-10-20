@@ -165,7 +165,8 @@ coordinates and a fresh authorized read.
 `person ask --live --progress` asks `/v7/person/ask` to stream its progress
 ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) in progress V3 by sending `x-echo-ask-progress: 3`;
 on an Authority without `/v7`, `/v6/person/ask` in V2 with `x-echo-ask-progress: 2`;
-and on one without `/v6`, `/v5/person/ask` in V1 with `x-echo-ask-progress: 1`.
+and on one without `/v6`, `/v5/person/ask` in V1 with `x-echo-ask-progress: 1`,
+which every Authority without `/v6` answers in JSON.
 
 - **Reading the stream.** The client reads the server-sent events with the
   shared decoder of the route's version in `@echo-brain/organization-api`.

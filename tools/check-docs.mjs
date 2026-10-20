@@ -36,6 +36,7 @@ const DECISION_STATUSES = new Set([
   "accepted",
   "rejected",
   "superseded",
+  "withdrawn",
 ]);
 const ID_PATTERNS = new Map([
   ["component-index", /^CMP-CATALOG$/],

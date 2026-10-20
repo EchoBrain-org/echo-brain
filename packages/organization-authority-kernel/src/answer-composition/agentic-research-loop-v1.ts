@@ -75,7 +75,7 @@ import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 /**
  * The research loop (research trigger contract v1): a brief in, the full
  * evidence bundle out. Starting evidence is read fresh through the
- * access-checked desk, then the optional small-scope preload, then planner
+ * access-checked desk, then planner
  * rounds over three read tools (search, open, list) plus `finish` until a stop
  * rule fires; a brief with no planner stops after its starting reads. It
  * never answers, renders or releases, never learns which
@@ -102,7 +102,6 @@ const OPEN_EXTRA_ITEMS = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
 const OPEN_NEIGHBOURS = 2;
 const OPEN_BYTES = 24 * 1024;
-const SHORTCUT_ITEMS = 20;
 /** Starting reads in flight at once: as many as one planner step's reads, so a sweep of many items never floods a source. */
 const STARTING_READS_AT_ONCE = AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
 const MAX_SEEN_ENTRIES = 300;
@@ -208,7 +207,7 @@ type Entry = {
   full: boolean;
   /** Opened explicitly (or preloaded); full text stays in the prompt while budget allows. */
   opened: boolean;
-  /** Loaded before round 1: starting evidence or the small-scope preload. */
+  /** Loaded before round 1: starting evidence. */
   preloaded?: boolean;
   /**
    * A read returned this item itself: a search or list row, an open's anchor, or a starting or preloaded item. A
@@ -653,7 +652,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const matched = matchedEvidenceDatesV1(entry.item.dates, filter);
     if (matched.length > 0) entry.matched = matched; else delete entry.matched;
   };
-  /** Released source projections for automatic starting/preload reads, before short ids are assigned. */
+  /** Released source projections for automatic starting reads, before short ids are assigned. */
   const releasedView = (result: EvidenceDeskResultV2): Record<string, unknown> => ({
     released_items: result.items.map(item => {
       const { id: _id, ...metadata } = describeAgenticEvidenceItemV1({ short: '', source: selectorOf(item), item }, ask ? context.time_zone ?? 'UTC' : undefined);
@@ -1252,7 +1251,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   let goal: AgenticResearchGoalV1 = brief.goal;
   const goalFields = (): Record<string, unknown> => goal.kind === "question" ? { question: goal.question } : { task: goal.task };
 
-  /** The research phase: optional preload, then the loop until a stop rule fires. */
+  /** The research phase: starting reads, then the loop until a stop rule fires. */
   const research = async (gate: AgenticModelGateV1): Promise<void> => {
     // ---- starting evidence: read fresh through the access-checked desk ----
     // The reads run together, a few at a time in brief order, and are registered in brief order, so ids, receipts and
@@ -1326,35 +1325,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       for (const item of opened.items.filter(value => value.text === undefined)) register(item);
     }
     if (brief.goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(brief.goal.task, startingIds, brief.goal.data) });
-
-    // ---- optional small-scope preload -----------------------------------
-    if (brief.options.small_scope_preload) {
-      assertLive();
-      report?.reads(true);
-      const inventory = await observeAgenticLifecycleV1('preload', 'research_preload', { operation: 'search', limit: SHORTCUT_ITEMS, inventory_mode: 'items' },
-        () => raceAbort(activeSignal, desk.search({ limit: SHORTCUT_ITEMS, inventory_mode: "items", signal: activeSignal })), releasedView);
-      observe(inventory);
-      cover('search', undefined, inventory);
-      if (!inventory.truncated && inventory.items.length <= SHORTCUT_ITEMS) {
-        let used = 0;
-        const shown: EvidenceDeskItemV2[] = [];
-        for (const listed of inventory.items) {
-          assertLive();
-          const opened = await observeAgenticLifecycleV1('preload', 'research_preload', { operation: 'open', citation: listed.citation },
-            () => raceAbort(activeSignal, desk.open({ item: listed.id, signal: activeSignal })), releasedView);
-          observe(opened);
-          cover('open', evidenceDeskSourceV2(listed), opened);
-          const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
-          if (exact === undefined || used + bytes(exact.text) > researchBudget / 2) continue;
-          const entry = register(exact); entry.opened = true; entry.preloaded = true; entry.direct = true; used += bytes(exact.text);
-          shown.push(exact);
-        }
-        // Research is shown the preload only when everything fits, and then only what fits: progress finds that alone
-        // (ADR-0043). An empty inventory still says the search found nothing.
-        if (shown.length > 0 || inventory.items.length === 0) report?.returned('search', undefined, shown);
-      }
-      report?.reads_done();
-    } else observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'preload', event: 'skipped' });
 
     // ---- no planner: the reads above are the research --------------------
     // The starting items were read in full, so they count as read; the renderer judges from them. No plan is written.

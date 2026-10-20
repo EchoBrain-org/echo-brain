@@ -241,10 +241,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     expanded.anchor_truncated === undefined ? value : Object.freeze({ ...value, anchor_truncated: expanded.anchor_truncated });
   const search = async (input: EvidenceDeskSearchInputV1): Promise<PersonEvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
-    if (input.inventory_mode !== undefined &&
-      (input.query !== undefined || input.inventory_mode !== "items")) {
-      throw new AuthorityOperationError("invalid_request", "evidence inventory mode is invalid");
-    }
     initialize();
     const limit = input.limit ?? (input.query === undefined ? 50 : 10);
     if (input.query === undefined) {
@@ -255,7 +251,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
         scope: options.scope,
         limit,
         ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }),
-        ...(input.inventory_mode === "items" ? { inventory_mode: "items" } : {}),
       });
       const beforeRecords = recordReleases.length;
       const recordKinds = recordKindsOf(input.kinds);

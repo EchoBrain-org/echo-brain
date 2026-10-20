@@ -7,14 +7,12 @@ tools, Ask responses, source admission and Slack onboarding continue through
 their current interfaces.
 
 The [connector/context integration](../product/2026-10-01-connector-context-integration-v1.md)
-retains shared capture contracts and personal live-read verification. The
+left personal live-read verification. The
 organization Granola capture route is retired. Jira and Slack capture requests
 are refused, and their
-pointers, metadata and bodies are not admitted to Layer 1. Existing provider
-capture contracts remain dormant library code; they have no active rehearsal
-or production registration. Shared capture types remain in
-`organization-processing/core`. A retained meeting capture is a source
-observation, never an approved fact.
+pointers, metadata and bodies are not admitted to Layer 1. The dormant shared
+capture contracts, intake and provider capture mapping were removed unused on
+2026-10-19.
 
 ## Shared connection commands
 

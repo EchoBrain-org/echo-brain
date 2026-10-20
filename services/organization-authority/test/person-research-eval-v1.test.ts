@@ -31,7 +31,7 @@ const openedRecord = () => ({
 });
 
 /** No records, no originals: research finishes as unusable and the writer is skipped, which is enough to exercise the registry. */
-function harness(options: { readonly generate?: (input: StructuredGenerationInput) => Promise<unknown>; readonly openRecord?: () => unknown; readonly recordProjects?: () => readonly string[]; readonly small_scope_shortcut?: true;
+function harness(options: { readonly generate?: (input: StructuredGenerationInput) => Promise<unknown>; readonly openRecord?: () => unknown; readonly recordProjects?: () => readonly string[];
   readonly extra?: Partial<CreatePersonResearchEvalOptionsV1> } = {}) {
   let clock = 1_000_000;
   let revoked = false;
@@ -65,7 +65,6 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
     audit: { forRequest: () => ({ append: (entry: unknown) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('release') }),
       forWorkspaceRequest: () => ({ record: () => canonicalSha256('workspace release') }) },
     now: () => clock,
-    ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
     ...options.extra,
   } as unknown as CreatePersonResearchEvalOptionsV1;
   const application = createPersonResearchEvalV1(dependencies);
@@ -151,13 +150,6 @@ describe('staging research evaluation runs', () => {
     h.revoke();
     expect(await h.read('token-a', run.run_id)).toMatchObject({ status: 'failed', error: { code: 'unauthorized' } });
     await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
-  });
-
-  it('runs Ask with the served small-scope preload when it is configured', async () => {
-    const h = harness({ small_scope_shortcut: true });
-    const run = await h.application.start({ access_token: 'token-a', request: ask('Small project?') });
-    expect((await h.settled('token-a', run.run_id)).status).toBe('completed');
-    expect(h.deskSearch).toHaveBeenCalledWith(expect.objectContaining({ inventory_mode: 'items' }));
   });
 
   it("never shows one person's run to another", async () => {

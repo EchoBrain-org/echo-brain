@@ -21,6 +21,12 @@ const GRANOLA_PHASE2_FIXTURE = new URL("./agentic-ask-granola-phase2.v1.json", i
 /** Current quality behavior is a separately reviewed baseline, never a rewrite of Phase 2. */
 const QUALITY_FIXTURE = new URL("./agentic-ask-quality-baseline.v1.json", import.meta.url);
 const GRANOLA_PHASE2_HISTORICAL_SHA256 = "sha256:74eb19f50284fd33ca09c5cc030531dc97c02f84816af4d2e07434de0fe8db93";
+/**
+ * Scenarios the pinned fixtures still record but Ask no longer runs. The small-scope shortcut was removed unmeasured on
+ * 2026-10-19; its recorded entries stay so the fixtures remain byte-identical.
+ */
+const RETIRED_SCENARIOS = new Set(["small_scope_preload"]);
+const current = <T>(recorded: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(recorded).filter(([name]) => !RETIRED_SCENARIOS.has(name)));
 
 async function run(name: string, scenario: Scenario) {
   const { response, inputs, audit } = await replay(name, scenario);
@@ -44,7 +50,7 @@ describe("agentic Ask golden replay", () => {
   it("preserves the b108 semantic response replay", async () => {
     const observed: Record<string, Awaited<ReturnType<typeof run>>> = {};
     for (const [name, scenario] of Object.entries(SCENARIOS)) observed[name] = await run(name, scenario);
-    const recorded = JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as typeof observed;
+    const recorded = current(JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as typeof observed);
     const semantic = (value: Awaited<ReturnType<typeof run>>) => ({ calls: value.calls, response_sha256: value.response_sha256, outcome: value.outcome });
     expect(Object.fromEntries(Object.entries(observed).map(([name, value]) => [name, semantic(value)])))
       .toEqual(Object.fromEntries(Object.entries(recorded).map(([name, value]) => [name, semantic(value)])));
@@ -59,7 +65,7 @@ describe("agentic Ask golden replay", () => {
     const observed: Record<string, Awaited<ReturnType<typeof run>>> = {};
     for (const [name, scenario] of Object.entries(SCENARIOS)) observed[name] = await run(name, scenario);
     if (process.env.ASK_QUALITY_BASELINE_WRITE === "1") writeFileSync(QUALITY_FIXTURE, `${JSON.stringify(observed, null, 2)}\n`);
-    const recorded = JSON.parse(readFileSync(QUALITY_FIXTURE, "utf8")) as typeof observed;
+    const recorded = current(JSON.parse(readFileSync(QUALITY_FIXTURE, "utf8")) as typeof observed);
     expect(observed).toEqual(recorded);
   });
 });

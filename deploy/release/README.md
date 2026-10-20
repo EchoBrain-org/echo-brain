@@ -366,7 +366,10 @@ configuration settings in the release record: booleans materialized as
 candidate's saved environment tuple, and covered by the record SHA bound to the
 staging request. A true `small_scope_shortcut` requires `agentic_ask_v1=true`.
 Since [ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md) the
-Authority ignores `ECHO_AGENTIC_ASK_V1`; set it to `true` in new records.
+Authority ignores `ECHO_AGENTIC_ASK_V1`; set it to `true` in new records. The
+small-scope shortcut was removed on 2026-10-19: the Authority refuses to start
+with `ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true`, so set `small_scope_shortcut`
+to `false` in new records.
 Rollback restores the accepted tuple verbatim. No command accepts arbitrary
 environment names or values.
 

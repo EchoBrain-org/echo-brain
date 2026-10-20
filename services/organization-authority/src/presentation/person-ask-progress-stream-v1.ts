@@ -3,7 +3,6 @@ import {
   PERSON_ASK_PROGRESS_CONTENT_TYPE_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
-  type PersonAskProgressEventV1,
   type PersonAskProgressEventV2,
   type PersonAskProgressEventV3,
 } from '@echo-brain/organization-api';
@@ -25,10 +24,11 @@ export interface PersonAskProgressStreamV1<Event> {
 
 /**
  * Starts one stream with V1's framing, heartbeat and terminal rules; `format` validates each event in its version:
- * Ask progress V1 for `/v5`, V2 for `/v6` (events may name follow-ups, ADR-0040), V3 for `/v7` (workspace items and
- * tool containers, research tool contract v1). Status and headers set before this call (the route header) are kept.
+ * Ask progress V2 for `/v6` (events may name follow-ups, ADR-0040), V3 for `/v7` (workspace items and tool containers,
+ * research tool contract v1). `/v5` no longer streams: its progress V1 was retired on 2026-10-19. Status and headers set
+ * before this call (the route header) are kept.
  */
-export function startPersonAskProgressStreamV1<Event extends PersonAskProgressEventV1 | PersonAskProgressEventV2 | PersonAskProgressEventV3>(
+export function startPersonAskProgressStreamV1<Event extends PersonAskProgressEventV2 | PersonAskProgressEventV3>(
   response: ServerResponse, format: (event: Event) => string, options: { readonly heartbeat_ms?: number } = {}): PersonAskProgressStreamV1<Event> {
   const heartbeatMs = options.heartbeat_ms ?? PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1;
   response.writeHead(200, { 'content-type': `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}; charset=utf-8`, 'cache-control': 'no-store' });

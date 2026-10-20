@@ -9,7 +9,7 @@ import { researchHarness as harness, listed, need, part, record, result, step } 
 const finish = (evidence: readonly string[]) => step([part("Part", [need("state", "found", evidence)])], [{ tool: "finish", args: {} }]);
 const search = (query: string) => step([part("Part", [need("state", "open")])], [{ tool: "search", args: { query } }]);
 
-const task = (text: string, starting: AgenticBriefV1["starting"], options: AgenticBriefV1["options"] = { small_scope_preload: false }, data?: readonly string[]): AgenticBriefV1 =>
+const task = (text: string, starting: AgenticBriefV1["starting"], options: AgenticBriefV1["options"] = {}, data?: readonly string[]): AgenticBriefV1 =>
   ({ goal: { kind: "task", task: text, ...(data === undefined ? {} : { data }) }, starting, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options });
 
 describe("brief: task slots", () => {
@@ -82,7 +82,7 @@ describe("brief: goals", () => {
       finish(["E1"]),
       { sentences: [{ text: "Due September 11.", evidence: ["E1"] }], not_found: [] },
     ], { search: vi.fn(async () => result([record("dashboard", "Approved: due September 11.")])) });
-    const brief: AgenticBriefV1 = { goal: { kind: "question", question: "When is the dashboard due?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: true } };
+    const brief: AgenticBriefV1 = { goal: { kind: "question", question: "When is the dashboard due?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} };
     const view = await h.research.research({ trigger: "ask", brief });
     expect(h.inputs[0]!.system_prompt).toBe(ASK_STEP_PROMPT);
     expect(Object.keys(h.prompt(0))[0]).toBe("question");
@@ -93,18 +93,6 @@ describe("brief: goals", () => {
     expect(h.generate).toHaveBeenCalledTimes(3);
   });
 
-  it("preloads a small scope only when the brief asks for it and the core allows it", async () => {
-    const approved = record("approved");
-    const asked = harness([finish(["E1"])], { openCitation: async () => result([approved]) }, { small_scope_shortcut: true });
-    await asked.research.research({ trigger: "sweep", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: approved.citation, if_unreadable: "fail" }], { small_scope_preload: true }) });
-    expect(asked.port.search).toHaveBeenCalledWith(expect.objectContaining({ inventory_mode: "items" }));
-    const notAsked = harness([finish(["E1"])], { openCitation: async () => result([approved]) }, { small_scope_shortcut: true });
-    await notAsked.research.research({ trigger: "sweep", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: approved.citation, if_unreadable: "fail" }]) });
-    expect(notAsked.port.search).not.toHaveBeenCalled();
-    const notAllowed = harness([finish(["E1"])], { openCitation: async () => result([approved]) });
-    await notAllowed.research.research({ trigger: "sweep", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: approved.citation, if_unreadable: "fail" }], { small_scope_preload: true }) });
-    expect(notAllowed.port.search).not.toHaveBeenCalled();
-  });
 });
 
 describe("brief: unreadable starting items", () => {

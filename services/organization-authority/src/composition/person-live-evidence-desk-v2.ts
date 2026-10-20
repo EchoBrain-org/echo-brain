@@ -177,7 +177,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       }
       // Follow-ups join a keyword search across sources, dated too, on the dates they record; they hold no inventory. Only some
       // of them are kept below, so they are released with ECHO-held text and none is read live (ADR-0040).
-      if (followUpSource !== undefined && selectedId === undefined && input.query !== undefined && input.inventory_mode === undefined &&
+      if (followUpSource !== undefined && selectedId === undefined && input.query !== undefined &&
           (requestedKinds === undefined || requestedKinds.includes(FOLLOW_UP_EVIDENCE_KIND_V1))) {
         const query = input.query;
         lookups.push(tolerate(FOLLOW_UP_EVIDENCE_KIND_V1, page(followUpSource, () => followUpSource.search({ ...evidenceDateFilterV1(input), query, limit: Math.min(maximum, FOLLOW_UPS_LIMITS_V1.search_hits), live: false, signal: input.signal }))));
@@ -186,7 +186,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       // contract v1). People and tools are searched only when named: their names rarely answer a search for content, and
       // the directory is read whole.
       const projects = workspaceSources?.get('projects');
-      if (projects !== undefined && selectedId === undefined && input.query !== undefined && input.inventory_mode === undefined &&
+      if (projects !== undefined && selectedId === undefined && input.query !== undefined &&
           (requestedKinds === undefined || requestedKinds.includes(projects.descriptor.kind))) {
         const query = input.query;
         lookups.push(tolerate('project', page(projects, () => projects.search({ ...evidenceDateFilterV1(input), query, limit: maximum, signal: input.signal }))));

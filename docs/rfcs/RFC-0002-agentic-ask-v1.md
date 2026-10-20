@@ -19,6 +19,10 @@ superseded_by: []
 Accepted for implementation under [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md).
 Acceptance is separate from deployment and live qualification.
 
+On 2026-10-19 the small-scope shortcut (amendment A1, switch
+`small_scope_shortcut`) was removed unmeasured: no release ever switched it on,
+and its measurement arm below never ran.
+
 ## Problem, goals, and current boundary
 
 ### Problem

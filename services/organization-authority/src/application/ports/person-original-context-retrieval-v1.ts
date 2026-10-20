@@ -173,8 +173,6 @@ export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalC
     readonly query?: string;
     readonly kinds?: readonly OriginalContextDeskKindV1[];
     readonly limit?: number;
-    /** Server-internal complete passage inventory, valid only without a query. */
-    readonly inventory_mode?: "items";
   }): OriginalContextDeskReleaseV1;
   deskOpen(input: {
     readonly access_token: string;
