@@ -90,7 +90,7 @@ function generation(state_directory: string, atoms: readonly ReadableSearchAtomV
 
 function emptyOriginals(): PersonOriginalContextEvidenceDeskPortV1 {
   const release = {
-    release: { authorization: { principal_id: 'principal_reader', membership_id: 'membership_reader', session_family_id: 'session_reader', checked_at: '2026-09-27T01:00:00.000Z' }, scope: { kind: 'global' as const }, authorization_revision: 0, released_atoms: [] },
+    release: { authorization: { principal_id: 'principal_reader', membership_id: 'membership_reader', session_family_id: 'session_reader', checked_at: '2026-09-27T01:00:00.000Z' }, scope: { kind: 'global' as const }, grants_sha256: canonicalSha256([]), released_atoms: [] },
     receipt: digest('empty-original-release'), items: [],
   };
   return {

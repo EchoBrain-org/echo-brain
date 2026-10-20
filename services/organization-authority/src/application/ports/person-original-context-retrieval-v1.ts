@@ -28,7 +28,8 @@ export interface OriginalContextAuthorizationV1 {
 export interface OriginalContextReleaseV1 {
   readonly authorization: OriginalContextAuthorizationV1;
   readonly scope: PersonAskScopeV2;
-  readonly authorization_revision: number;
+  /** The caller's own project grants at release; the desk's checks pin it (ADR-0038). */
+  readonly grants_sha256: Sha256Digest;
   readonly released_atoms: readonly ReleasedSourceContextAtomV1[];
 }
 
@@ -185,8 +186,8 @@ export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalC
     readonly release: OriginalContextDeskReleaseV1;
     /**
      * The request's desk already checked this release's items (an incremental
-     * check, ADR-0038): recheck only the session, identity, scope and
-     * authorization pins, not each item. An implementation may ignore it and
+     * check, ADR-0038): recheck only the session, identity, scope and the
+     * caller's grants pin, not each item. An implementation may ignore it and
      * check everything.
      */
     readonly items_checked?: true;

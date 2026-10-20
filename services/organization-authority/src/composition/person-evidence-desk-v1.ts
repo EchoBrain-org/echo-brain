@@ -306,7 +306,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     let checkedAt: string | undefined = initialize();
     // An incremental check (ADR-0038) re-reads the items of original releases
     // made since this desk's last successful check; earlier ones keep only
-    // their session, scope and authorization pins. Record releases re-read no
+    // their session, scope and grant pins. Record releases re-read no
     // items either way, so each one's session, grant and snapshot pin runs on
     // every check. The check is synchronous: no release can land during it.
     const incremental = input.mode === "incremental";

@@ -48,7 +48,7 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
   const originals = {
     deskAuthorize: vi.fn(check), revalidateDeskRelease: vi.fn(revalidate),
     deskSearch: vi.fn(() => ({ items: attempt === 0 ? [note] : [note, later], truncated: false, receipt: canonicalSha256('note release'),
-      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, authorization_revision: 0, released_atoms: [] },
+      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
     })),
   };
   // Searches once, finishes on what it found, then writes one sentence.

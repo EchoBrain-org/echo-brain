@@ -501,9 +501,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       : this.revalidate({ access_token: input.access_token, release: input.release.release });
     const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
     // The release keeps its per-atom revalidation semantics.  The
-    // request-bound desk additionally pins the authorization revision so a
-    // later desk call cannot mix project-association snapshots.
-    if (this.authorizationRevision(actor.organization_id) !== input.release.release.authorization_revision) denied();
+    // request-bound desk additionally pins the caller's own project grants, so
+    // a later desk call cannot mix this caller's project-association
+    // snapshots. Not the org-wide revision: anyone's note or rename moves it.
+    if (this.grantsSha256(actor) !== input.release.release.grants_sha256) denied();
     if (input.items_checked === true) return checked;
     for (const item of input.release.items) {
       const atom = input.release.release.released_atoms.find((candidate) => this.citationMatches(candidate, item.citation));
@@ -638,10 +639,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       !this.database.prepare("SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active'").get(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type)) denied();
   }
 
-  private authorizationRevision(organizationId: string): number {
-    const row = this.database.prepare("SELECT revision FROM authority_project_authorization_state_v1 WHERE organization_id=?").get(organizationId) as { readonly revision: number } | undefined;
-    if (row === undefined || !Number.isSafeInteger(row.revision)) unavailable();
-    return row.revision;
+  /**
+   * The caller's active project grants, each by its grant row, so leaving and
+   * rejoining a project also moves it. Only this caller's grants change their
+   * access to a release; other people's writes do not.
+   */
+  private grantsSha256(actor: PersonAccessAuthorization): Sha256Digest {
+    return canonicalSha256(this.database.prepare("SELECT project_id,project_membership_id FROM authority_project_memberships_v1 WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active' ORDER BY project_id,project_membership_id")
+      .all(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type));
   }
 
   private projectGrant(actor: PersonAccessAuthorization, projectId: string): boolean {
@@ -956,10 +961,11 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private commitDeskRelease(actor: PersonAccessAuthorization, accessToken: string, scope: PersonAskScopeV2, items: readonly OriginalContextDeskItemV1[], atoms: readonly ReleasedSourceContextAtomV1[], truncated = false, unchecked?: EvidenceDeskUncheckedV1): OriginalContextDeskReleaseV1 {
-    const release: OriginalContextReleaseV1 = Object.freeze({ authorization: Object.freeze({ principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, checked_at: actor.checked_at }), scope: Object.freeze({ ...scope }), authorization_revision: this.authorizationRevision(actor.organization_id), released_atoms: Object.freeze([...atoms]) });
+    const release: OriginalContextReleaseV1 = Object.freeze({ authorization: Object.freeze({ principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, checked_at: actor.checked_at }), scope: Object.freeze({ ...scope }), grants_sha256: this.grantsSha256(actor), released_atoms: Object.freeze([...atoms]) });
     this.releases.add(release);
     this.revalidate({ access_token: accessToken, release });
-    const audit = { schema_version: 1, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, authorization_revision: release.authorization_revision, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text, ref, dates }) => ({ citation, kind, visibility, label, received_at, version, ...(dates === undefined ? {} : { dates }), ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ...(ref === undefined ? {} : { ref }) }))), released_count: items.length, ...(unchecked === undefined ? {} : { unchecked }), checked_at: actor.checked_at };
+    // Version 2 commits the caller's grants digest; version 1 rows carry the org-wide authorization revision instead.
+    const audit = { schema_version: 2, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, grants_sha256: release.grants_sha256, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text, ref, dates }) => ({ citation, kind, visibility, label, received_at, version, ...(dates === undefined ? {} : { dates }), ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ...(ref === undefined ? {} : { ref }) }))), released_count: items.length, ...(unchecked === undefined ? {} : { unchecked }), checked_at: actor.checked_at };
     const receipt = appendAuditRowV1(this.database, "authority_person_upload_read_audit_v1", audit, actor.checked_at);
     const result: OriginalContextDeskReleaseV1 = Object.freeze({ release, receipt, items: Object.freeze([...items]), truncated, ...(unchecked === undefined ? {} : { unchecked }) });
     this.deskReleases.add(result);

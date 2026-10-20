@@ -338,6 +338,15 @@ permissions. The narrow optional startup inputs are `--jira-cloud-id` and
 `--jira-nango-integration` alongside modern Nango configuration; there are no
 retired Slack credential/configuration fields in this path.
 
+With `--jira-cloud-id`, connections live in `jira-person-connections.sqlite`
+in the Authority state directory, a private file like Granola's and
+Confluence's: the Authority creates it 0600 and will not start while other
+users can read it. A file created before this check, with the process umask
+(often 0644), stops the first start after the upgrade: the service writes only
+the bare `echo-clean-live-startup-failed-v1` marker, which does not name the
+file, until an operator runs `chmod 600` on it. The staging rehearsal below
+keeps its own private sidecar.
+
 For the fixed staging connector profile, `ECHO_STAGING_JIRA_ASK_V1=true` selects
 its cloud ID and integration. The EC2 Compose overlay supplies this flag only when
 the connector profile is selected. Live Ask allows each Person's own connection;

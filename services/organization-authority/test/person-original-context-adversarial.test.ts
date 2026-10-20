@@ -566,6 +566,75 @@ describe("adversarial original-context retrieval", () => {
       .toThrow(expect.objectContaining({ code: "unauthorized" }));
   });
 
+  it("keeps a desk release on both checks when writes that change none of the caller's access move the org-wide revision", () => {
+    const f = fixture();
+    f.upload("Alpha plan", "orgwide-revision-marker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
+    const projects = createProjectContextApplicationV1({ authenticate: token => authorization(token === "member" ? MEMBER : OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
+    const releases = [{ kind: "global" as const }, { kind: "project" as const, project_id: PROJECT_ALPHA }]
+      .map(scope => f.retrieval.deskSearch({ access_token: "member", scope, query: "orgwide-revision-marker" }));
+    expect(releases.map(release => release.items.length)).toEqual([1, 1]);
+    const audit = JSON.parse((f.database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1 WHERE row_sha256=?").get(releases[0]!.receipt) as { body_json: string }).body_json) as Record<string, unknown>;
+    expect(audit).toMatchObject({ schema_version: 2, grants_sha256: releases[0]!.release.grants_sha256 });
+    expect(audit).not.toHaveProperty("authorization_revision");
+    const note = (token: string) => projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: "Mid-answer note", text: "saved while the Ask runs", association_project_ids: [], audience: { kind: "team" } });
+    const rename = (principalId: string, name: string) => f.database.prepare("UPDATE authority_principals SET display_name=? WHERE principal_id=?").run(name, principalId);
+    const revision = () => f.database.prepare("SELECT revision FROM authority_project_authorization_state_v1").pluck().get() as number;
+    const writes: Record<string, () => unknown> = {
+      "another person saves a note": () => note("owner"),
+      "another person renames themself": () => rename(OWNER.principal_id, "Owner Renamed"),
+      "another project is created": () => projects.createProject("owner", { schema_version: 1, kind: "echo-project-create-v1", request_id: randomUUID(), name: "Gamma" }),
+      "the caller saves a note": () => note("member"),
+      "the caller renames themself": () => rename(MEMBER.principal_id, "Member Renamed"),
+    };
+    for (const [write, run] of Object.entries(writes)) {
+      const before = revision();
+      run();
+      // Each of these refused the answer while the desk pinned the org-wide revision.
+      expect(revision(), write).toBeGreaterThan(before);
+      for (const release of releases) {
+        expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release, items_checked: true }), write).not.toThrow();
+        expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release }), write).not.toThrow();
+      }
+    }
+  });
+
+  it("refuses a desk release on both checks once the caller's own project grants change", () => {
+    const f = fixture();
+    f.upload("Alpha plan", "caller-grant-marker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
+    const search = () => f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "caller-grant-marker" });
+    const check = (release: ReturnType<typeof search>, items_checked?: true) =>
+      () => f.retrieval.revalidateDeskRelease({ access_token: "member", release, ...(items_checked === undefined ? {} : { items_checked }) });
+    const release = search();
+    expect(release.items).toHaveLength(1);
+    f.leave(PROJECT_ALPHA);
+    expect(check(release, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    expect(check(release)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    // Rejoining is a new grant, so the earlier release stays refused even though the item is readable again.
+    grant(f.database, PROJECT_ALPHA, MEMBER, "member");
+    expect(check(release, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    const rejoined = search();
+    expect(rejoined.items).toHaveLength(1);
+    expect(check(rejoined, true)).not.toThrow();
+    // Any change to the caller's own grants refuses the releases before it, so one request never mixes two snapshots of them.
+    grant(f.database, PROJECT_BETA, MEMBER, "member");
+    expect(check(rejoined, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    expect(check(rejoined)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    expect(check(search(), true)).not.toThrow();
+  });
+
+  it("keeps a project release through the incremental check once its item leaves the project, and refuses it at the full check", () => {
+    const f = fixture();
+    const documentId = f.upload("Alpha plan", "association-fence-marker", { project_id: PROJECT_ALPHA });
+    const release = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "association-fence-marker" });
+    expect(release.items).toHaveLength(1);
+    // Audiences are immutable and originals are never deleted, so the project association is what can change about an item.
+    f.database.prepare("DELETE FROM authority_person_document_associations_v1 WHERE document_id=? AND project_id=?").run(documentId, PROJECT_ALPHA);
+    // The member still reads it; only the project no longer holds it (ADR-0038's accepted trade-off).
+    expect(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "association-fence-marker" }).items).toHaveLength(1);
+    expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release, items_checked: true })).not.toThrow();
+    expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release })).toThrow(expect.objectContaining({ code: "unauthorized" }));
+  });
+
   it("rejects a tampered representation body when its stored hash is unchanged", () => {
     const f = fixture();
     f.upload("Representation check", "representation-corruption-marker");
