@@ -67,10 +67,11 @@ export function createPersonProviderValidationV1(id: string, scope: RegExp, mess
 
 /** Text bounded to `bytes` of UTF-8, cut only between code points, then NFC again. */
 export function boundUtf8V1(value: string, bytes: number): string {
-  let text = '';
+  let text = ''; let size = 0;
   for (const point of value.normalize('NFC')) {
-    if (Buffer.byteLength(text + point, 'utf8') > bytes) break;
-    text += point;
+    const next = Buffer.byteLength(point, 'utf8');
+    if (size + next > bytes) break;
+    size += next; text += point;
   }
   return text.normalize('NFC');
 }

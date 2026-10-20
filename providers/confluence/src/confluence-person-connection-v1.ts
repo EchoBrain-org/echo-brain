@@ -14,7 +14,7 @@ import { createConfluencePersonLiveContainerReaderV1 } from './confluence-person
 import { createConfluencePersonLiveEvidenceReaderV1 } from './confluence-person-live-evidence-reader-v1.js';
 import type { ConfluenceNangoV1 } from './confluence-nango-v1.js';
 import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
-import { CONFLUENCE_PERSON_PROVIDER_V1, confluenceArray, confluenceFailure, confluenceString, confluenceRecord } from './confluence-validation-v1.js';
+import { CONFLUENCE_ID, CONFLUENCE_PERSON_PROVIDER_V1, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceString, confluenceRecord } from './confluence-validation-v1.js';
 
 export type ConfluencePersonAuthorizationV1 = PersonConnectionAuthorizationV1;
 export function createConfluencePersonConnectionV1(options: {
@@ -39,19 +39,6 @@ export function createConfluencePersonConnectionV1(options: {
   const space_cursors = new Map<string, Readonly<{ person_sha256: Sha256Digest; grant_sha256: Sha256Digest; provider_cursor?: string }>>();
   const access = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
   const { projectAccess, mappingInput, projectScope } = access;
-  function parseProviderCursor(raw: unknown): string | undefined {
-    if (raw === undefined || raw === null) return undefined;
-    const value = confluenceString(raw, 4096);
-    let url: URL;
-    try { url = new URL(value, 'https://api.atlassian.com'); } catch { confluenceFailure('invalid_output'); }
-    const paths = ['/api/v2/spaces', '/wiki/api/v2/spaces', `/ex/confluence/${cloud}/wiki/api/v2/spaces`];
-    if (url.origin !== 'https://api.atlassian.com' || !paths.includes(url.pathname) || url.username !== '' || url.password !== '' || url.hash !== '' ||
-        url.searchParams.getAll('cursor').length !== 1) confluenceFailure('invalid_output');
-    // Next links can repeat selectors and use either the public wiki path or
-    // the OAuth proxy path. Never follow them; carry only the opaque cursor
-    // into our own pinned endpoint and fixed page size.
-    return confluenceString(url.searchParams.get('cursor'), 4096);
-  }
   function visibleProjectMappings(accessToken: string, organizationId: string): readonly ConfluenceProjectMappingV1[] {
     if (options.project_mappings === undefined || options.authorize_project === undefined) confluenceFailure('unavailable');
     const selected: ConfluenceProjectMappingV1[] = [];
@@ -95,11 +82,11 @@ export function createConfluencePersonConnectionV1(options: {
       const raw = confluenceRecord(await transport.request({ path: '/api/v2/spaces', query: { limit: '20', ...(cursor?.provider_cursor === undefined ? {} : { cursor: cursor.provider_cursor }) }, signal: input.signal }));
       const results = confluenceArray(raw.results, 20).map(value => {
         const space = confluenceRecord(value);
-        return Object.freeze({ id: confluenceString(space.id, 128, /^[1-9][0-9]{0,19}$/), key: confluenceString(space.key, 256), name: confluenceString(space.name, 256) });
+        return Object.freeze({ id: confluenceString(space.id, 128, CONFLUENCE_ID), key: confluenceString(space.key, 256), name: confluenceString(space.name, 256) });
       });
       if (new Set(results.map(space => space.id)).size !== results.length) confluenceFailure('invalid_output');
       const links = raw._links === undefined ? {} : confluenceRecord(raw._links);
-      const provider_cursor = parseProviderCursor(links.next);
+      const provider_cursor = confluenceNextCursorV1(links.next, cloud, '/api/v2/spaces');
       let next_cursor: string | null = null;
       if (provider_cursor !== undefined) {
         // Cursors are short-lived request conveniences. Evict the oldest rather

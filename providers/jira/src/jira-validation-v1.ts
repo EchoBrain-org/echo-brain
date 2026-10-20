@@ -1,4 +1,4 @@
-import { createPersonProviderValidationV1, type PersonProviderFailureCodeV1 } from '@echo-brain/provider-runtime/person-provider-v1';
+import { boundUtf8V1, createPersonProviderValidationV1, type PersonProviderFailureCodeV1 } from '@echo-brain/provider-runtime/person-provider-v1';
 export const JIRA_CLOUD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const JIRA_ID = /^[1-9][0-9]{0,19}$/;
 export const JIRA_PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -13,13 +13,8 @@ export function jiraFailure(code: PersonProviderFailureCodeV1): never { return v
 export function jiraBoundText(value: string, maximum: number): { readonly text: string; readonly truncated: boolean } {
   const normalized = value.normalize('NFC');
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cs}]/u.test(normalized)) jiraFailure('invalid_output');
-  let text = ''; let bytes = 0;
-  for (const point of normalized) {
-    const size = Buffer.byteLength(point, 'utf8');
-    if (bytes + size > maximum) break;
-    bytes += size; text += point;
-  }
-  return { text: text.normalize('NFC'), truncated: text !== normalized };
+  const text = boundUtf8V1(normalized, maximum);
+  return { text, truncated: text !== normalized };
 }
 
 export function jiraDay(value: unknown, code: 'invalid_output' | 'invalid_request' = 'invalid_output'): string {
