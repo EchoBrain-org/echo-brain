@@ -277,9 +277,8 @@ Production never enables the legacy global development-content logger.
 
 `shared/core-runtime-observation-v1.ts` owns operation/span context for source
 processing, approval, research, model calls, tools, release and output reads.
-CloudWatch events and metrics are projections of that context. Ask no longer
-creates a second journey or aggregates planner calls into a synthetic attempt.
-Historical Ask journey records remain readable.
+CloudWatch events and metrics are projections of that context. Historical Ask
+journey records remain readable.
 
 Each research execution carries a registered trigger label and hashed run ID.
 An approved-record execution also carries a hashed approval event ID and a
@@ -382,8 +381,8 @@ checks the retained source's current intake settings and pinned membership.
 Routine metadata contains none of these payloads.
 
 Prepare after any Authority restart: an existing host retry wrapper that
-restarts Authority discards an earlier in-memory selection. This change does
-not add persistent payload storage or retrofit evidence for past attempts.
+restarts Authority discards an earlier in-memory selection. Capture keeps no
+persistent payload and adds no evidence for past attempts.
 
 #### Follow sweep runs and failed open-item reads
 
@@ -437,13 +436,10 @@ just now" for those items.
 
 #### Staging journey overview and Explorer
 
-A read-only staging inspection on 2026-09-08 verified the journey overview,
-the fixed Explorer Lambda and policy, and a redacted Journey Explorer query.
-This is dated staging evidence, not a standing claim about a future deployment:
-inspect the stack, alarm state, and current journey before relying on it. The
-deployed overview and Explorer remain staging-only. The shared Explorer reader
-now supports one explicitly configured production metadata log group, but this
-change does not deploy or authorize a production Explorer.
+Inspect the stack, alarm state, and current journey before relying on the
+overview or Explorer. Both remain staging-only. The shared Explorer reader
+supports one explicitly configured production metadata log group; that does
+not deploy or authorize a production Explorer.
 
 The overview `authority-staging-journey-observability-v1.template.json`
 remains dedicated to staging and distinct from the
@@ -736,7 +732,7 @@ active HTTP/model counts and event-loop delay can overlap other operations.
 Event-loop maximum is since transport startup. SQLite lock and disk-I/O latency
 are unavailable; filesystem counters are neither latency nor physical bytes.
 
-#### Reading an agentic Ask (V3) and evidence-desk calls
+#### Reading an agentic Ask and its evidence-desk calls
 
 Ask is the agentic loop (RFC-0003; the only Ask since ADR-0022). It uses the
 Ask journey, so it is listed, counted and alarmed like any Ask:
@@ -777,7 +773,7 @@ A request that fails marks the first research-to-audit stage still open as
 failed with the request's failure class, then fails `ask_response`. The deadline
 is `timeout`; a closed client connection is `cancelled`. A failed `ask_response`
 ends its journey in the Explorer even when the failure is retryable; a retry is
-a new journey. Before this change such a journey stayed pending.
+a new journey.
 
 **Linked core operations** hold the detail. Each research step and answer call
 is an `ask_planner` or `ask_answer` span with its provider `model_call` inside
@@ -789,10 +785,10 @@ subset of `document_items`. The evidence HTTP doors use the same desk spans.
 Model request and response content is captured per call under the content
 switch, except calls whose prompt carries live Slack or ticket text.
 
-#### Jira visibility in V4 Ask
+#### Live Jira and Confluence reads in Ask
 
-The V4 Person Ask route uses the existing `core_runtime` request trace. New
-metadata shares its `journey_id`; existing events and fields remain available.
+Every Person Ask route that reads live tools uses the existing `core_runtime`
+request trace. Its live-read metadata shares the `journey_id`.
 
 | Signal | How to read it |
 | --- | --- |

@@ -8,23 +8,12 @@ paths.
 
 ## Current qualification status
 
-The integrated extraction-to-Slack path passed live staging on 2026-09-01:
-
-- four real private approval cards reached the meeting owner;
-- three Team records and one Only-me record reconciled at V4 head position `4`;
-- pre-approval Ask ECHO disclosed nothing; and
-- the team-member identity could not access the restricted commercial record.
-
-The customer rehearsal is not yet qualified. The exact hero question produced a
-complete answer in 3 of 6 trials, and the exact approver's private-price answer
-omitted required scope and follow-on pricing conditions. Those are Layer-4
-retrieval and answer-composition gaps; the approved records already contain the
-required facts. See [RUNBOOK.md](RUNBOOK.md) for the pass gate.
-
-Implementation note, 2026-10-08: unified meeting approval replaced the Team
-audience with projects, and the four fixtures now reach the owner through the
-staging synthetic personal source. The results above describe the earlier
-organization-source run.
+The customer rehearsal is not yet qualified; [RUNBOOK.md](RUNBOOK.md) holds the
+pass gate. The last live staging run (2026-09-01) predates unified meeting
+approval: it used the retired organization source and Team audience. Its
+approval and permission checks passed, but the hero question was complete in
+only 3 of 6 trials and the approver's private-price answer omitted required
+conditions: retrieval and answer-composition gaps, not missing record facts.
 
 Claude Sonnet 4.6 remains the accepted pre-Slack extraction baseline. Ordinary
 recall variation is deferred unless a run introduces a hard fact, status, date,
@@ -97,9 +86,7 @@ Authority state, publishes V4 records, or calls retrieval.
 For a live rehearsal, follow
 [Fresh four-meeting staging rehearsal](../deploy/organization-authority/README.md#fresh-four-meeting-staging-rehearsal),
 then the customer sequence in [RUNBOOK.md](RUNBOOK.md), and judge the result
-with its [pass/fail gate](RUNBOOK.md#passfail-gate). The captured-rehearsal
-evaluator was retired on 2026-10-11 because it could only grade the retired
-V3 answer.
+with its [pass/fail gate](RUNBOOK.md#passfail-gate).
 
 The runtime receives only the four meeting files. `expectations.json` is applied
 afterward by the pre-Slack evaluator and is never available to extraction,
