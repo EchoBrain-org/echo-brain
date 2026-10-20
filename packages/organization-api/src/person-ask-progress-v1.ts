@@ -1,9 +1,7 @@
 import type { OrganizationApiErrorV1 } from './contracts.js';
-import type { PersonAnswerResponseV5 } from './person-answer-v5.js';
 import type { PersonAnswerCitationV6, PersonAnswerResponseV6 } from './person-answer-v6.js';
-import { validatePersonAnswerCitationV6, validatePersonAnswerResponseV5, validatePersonAnswerResponseV6 } from './person-answer-v4.js';
+import { validatePersonAnswerCitationV6, validatePersonAnswerResponseV6 } from './person-answer-v4.js';
 import { askProgressCodec } from './person-ask-progress-codec.js';
-import { asEnumerableRecord as object, assertExactKeys, fail } from './validation.js';
 
 /**
  * Ask progress V1 (ADR-0039): while a live Ask runs, `POST /v5/person/ask`
@@ -162,26 +160,6 @@ export type PersonAskProgressStepEventV1 = PersonAskProgressStageEventV1 | Perso
 export type PersonAskProgressTerminalEventV1 = PersonAskProgressAnswerEventV1 | PersonAskProgressErrorEventV1;
 export type PersonAskProgressEventV1 = PersonAskProgressStepEventV1 | PersonAskProgressTerminalEventV1;
 
-/**
- * `person ask --live --progress`: one line per step event before the final
- * line. Answer and error events are not printed as progress: the answer is
- * the final line, and an error is the command's ordinary failure.
- */
-export interface PersonAskProgressLineV1 {
-  readonly ok: true;
-  readonly progress: PersonAskProgressStepEventV1;
-}
-/**
- * The final line keeps today's `{ok, result}` shape. `receipt` is present
- * only when the Authority streamed; an older Authority, or the `/v4`
- * fallback, prints exactly today's line.
- */
-export interface PersonAskProgressResultLineV1 {
-  readonly ok: true;
-  readonly result: PersonAnswerResponseV6 | PersonAnswerResponseV5;
-  readonly receipt?: PersonAskReceiptV1;
-}
-
 const V1 = askProgressCodec({
   plain_sources: ['meetings', 'documents', 'slack'],
   tool_sources: ['tickets', 'pages'],
@@ -201,11 +179,6 @@ export function validatePersonAskProgressStepEventV1(value: unknown): PersonAskP
 
 export function validatePersonAskReceiptV1(value: unknown): PersonAskReceiptV1 {
   return V1.receipt(value) as PersonAskReceiptV1;
-}
-
-/** Any one stream event, terminal events included. */
-export function validatePersonAskProgressEventV1(value: unknown): PersonAskProgressEventV1 {
-  return V1.event(value) as PersonAskProgressEventV1;
 }
 
 /** One event as its stream frame. `JSON.stringify` escapes newlines, so the frame is one data line. */
@@ -228,19 +201,4 @@ export interface PersonAskProgressDecoderV1 {
  */
 export function createPersonAskProgressDecoderV1(): PersonAskProgressDecoderV1 {
   return V1.decoder() as PersonAskProgressDecoderV1;
-}
-
-export function validatePersonAskProgressLineV1(value: unknown): PersonAskProgressLineV1 {
-  return V1.line(value) as PersonAskProgressLineV1;
-}
-
-export function validatePersonAskProgressResultLineV1(value: unknown): PersonAskProgressResultLineV1 {
-  const input = object(value, 'Ask result line');
-  assertExactKeys(input, ['ok', 'result', ...(Object.hasOwn(input, 'receipt') ? ['receipt'] : [])], 'Ask result line');
-  if (input.ok !== true) fail('Ask result line is invalid');
-  const version = object(input.result, 'Ask result line result').schema_version;
-  // A receipt comes only with a streamed answer, which is always V6.
-  if (Object.hasOwn(input, 'receipt') && version !== 6) fail('Ask result line receipt needs a V6 answer');
-  const result = version === 6 ? validatePersonAnswerResponseV6(input.result) : validatePersonAnswerResponseV5(input.result);
-  return Object.freeze({ ok: true, result, ...(Object.hasOwn(input, 'receipt') ? { receipt: validatePersonAskReceiptV1(input.receipt) } : {}) });
 }

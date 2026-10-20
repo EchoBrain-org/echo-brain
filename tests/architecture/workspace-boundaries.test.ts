@@ -400,7 +400,6 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-control-plane",
-        "@echo-brain/organization-processing",
         "@echo-brain/organization-protocol",
         "@echo-brain/provider-runtime",
         "@echo-brain/provider-slack-client"

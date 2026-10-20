@@ -34,11 +34,12 @@ function isExactDisplayText(value: unknown): value is string {
 /**
  * An owner as offered: one line, NFC, single spaces, trimmed, at most 120
  * characters, with no control or format characters. Empty or invalid is no
- * owner. Every offered owner satisfies the shared confirmed-owner rule
- * (isApprovalOwnerTextV1 in organization-protocol, which this package cannot
- * import); a services test pins that.
+ * owner, and so is anything but text. Every offered owner satisfies the shared
+ * confirmed-owner rule (isApprovalOwnerTextV1 in organization-protocol, which
+ * this package cannot import); a services test pins that.
  */
-function canonicalProposedOwner(value: string): string | null {
+export function canonicalProposedOwnerV1(value: unknown): string | null {
+  if (typeof value !== "string") return null;
   const owner = value.normalize("NFC").replace(/\s+/gu, " ").trim();
   if (owner.length === 0) return null;
   if (owner.length > OWNER_MAX_CHARACTERS_V1 || /[\p{Cc}\p{Cf}]/u.test(owner)) return null;
@@ -66,7 +67,7 @@ export function ownerProposalsV1(brief: DecisionBrief): readonly OwnerProposalV1
   const proposals: OwnerProposalV1[] = [];
   for (const [action_index, action] of brief.actions.entries()) {
     if (action.owner === null || !isExactDisplayText(action.text)) continue;
-    const owner = canonicalProposedOwner(action.owner);
+    const owner = canonicalProposedOwnerV1(action.owner);
     if (owner !== null) proposals.push(Object.freeze({ action_index, action_text: action.text, owner }));
   }
   return Object.freeze(proposals.length > OWNER_PROPOSALS_MAX_V1 ? [] : proposals);

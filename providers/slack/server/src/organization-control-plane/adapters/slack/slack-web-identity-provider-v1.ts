@@ -1,5 +1,6 @@
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
-import { BoundedJsonFetchErrorV1, boundedJsonFetchV1, type BoundedJsonFetchResultV1 } from "../../../shared/bounded-json-fetch-v1.js";
+import { BoundedJsonResponseErrorV1 } from "@echo-brain/provider-runtime/bounded-json-response-v1";
+import { boundedJsonFetchV1, type BoundedJsonFetchResultV1 } from "../../../shared/bounded-json-fetch-v1.js";
 import type { ObservedSlackIdentityLinkChallenge, ObserveSlackIdentityLinkChallengeInput, PostedSlackIdentityLinkChallenge, PostSlackIdentityLinkChallengeInput, SlackIntegrationProvider, VerifiedSlackConnection, VerifiedSlackHuman } from "../../application/slack-integration-contracts.js";
 import { slackConnectionVerificationEvidenceSha256V1 } from "../../application/slack-connection-verification-evidence-v1.js";
 
@@ -264,7 +265,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
         maxBytes: MAXIMUM_RESPONSE_BYTES,
       });
     } catch (error) {
-      if (!(error instanceof BoundedJsonFetchErrorV1)) throw error;
+      if (!(error instanceof BoundedJsonResponseErrorV1)) throw error;
       throw error.code === "transport"
         ? new SlackIdentityProviderErrorV1(
             "Slack integration verification is unavailable",

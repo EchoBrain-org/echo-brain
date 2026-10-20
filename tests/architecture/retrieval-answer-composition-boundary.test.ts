@@ -43,7 +43,6 @@ describe('retrieval and answer-composition boundaries', () => {
     expect(errors).toEqual([]);
     const visited = closure([
       ...files('packages/organization-record/src/retrieve'), ...files('packages/organization-retrieval/src'),
-      'packages/organization-authority-kernel/src/application/readable-search-authorization-fence.ts',
       ...['person-record-read-route', 'person-record-search-route', 'person-meeting-items-v1'].map(name => `services/organization-authority/src/composition/${name}.ts`),
       'services/organization-authority/src/application/ports/person-original-context-retrieval-v1.ts',
       'services/organization-authority/src/adapters/persistence/sqlite/person-original-context-retrieval-v1.ts',

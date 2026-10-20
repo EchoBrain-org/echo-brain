@@ -1,14 +1,13 @@
 import { expect, it, vi } from 'vitest';
 import type { ProviderHttpRequestV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
-import {
-  PERSON_JIRA_CANCEL_PATH_V1,
-  PERSON_JIRA_CONNECT_PATH_V1,
-  PERSON_JIRA_DISCONNECT_PATH_V1,
-  PERSON_JIRA_STATUS_PATH_V1,
-} from '@echo-brain/provider-jira-client/organization-api/jira-person-connection-v1';
 import { createJiraPersonConnectionHttpApplicationV1, type JiraPersonConnectionHttpPortV1 } from '../src/jira-person-connection-http-application-v1.js';
 
 const attempt = '00000000-0000-4000-8000-000000000001';
+// The four routes the shared person connection application builds for every tool.
+const PERSON_JIRA_CONNECT_PATH_V1 = '/v1/person/tools/jira/connect';
+const PERSON_JIRA_STATUS_PATH_V1 = '/v1/person/tools/jira/status';
+const PERSON_JIRA_CANCEL_PATH_V1 = '/v1/person/tools/jira/cancel';
+const PERSON_JIRA_DISCONNECT_PATH_V1 = '/v1/person/tools/jira/disconnect';
 const expires_at = '2026-10-01T00:30:00.000Z';
 function request(route_id: string, path: string, value: unknown, input: Partial<ProviderHttpRequestV1> = {}): ProviderHttpRequestV1 {
   return {

@@ -62,6 +62,10 @@ describe("Person client help", () => {
     [["updates", "--help"], "<submit-v3|status-v3|search|search-v3>"],
     [["documents", "--help"], "<upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate>"],
     [["projects", "--help"], "<list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2>"],
+    [["changes", "--help"], "usage: echo-brain person changes"],
+    [["changes", "--help"], "not_supported"],
+    [["--help"], "changes     Check what moved in your own view, with no content."],
+    [["runs", "--help"], "with scope mine, involved, run, record or project"],
   ])("documents %j with %s", async (argv, needle) => {
     await expect(help(argv)).resolves.toContain(needle);
   });
@@ -88,7 +92,7 @@ describe("Person client help", () => {
   it("documents list without overstating what it covers", async () => {
     // An agent reads this help: it must not overstate what list covers, and must say how a waiting page fails.
     const listHelp = await help(["list", "--help"]);
-    expect(listHelp).toContain("not Slack messages or shared transcripts");
+    expect(listHelp).toContain("not shared transcripts");
     expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
     expect(listHelp).toContain("usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]");
   });

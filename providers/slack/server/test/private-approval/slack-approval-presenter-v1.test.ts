@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { coreRuntimeIdentityV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1, type ApprovalProposalViewV1 } from '../../src/private-approval/slack-approval-presenter-v1.js';
 
 const databases: Database.Database[] = [];
@@ -31,7 +31,7 @@ function fixture() {
     core: { proposal: id => views.get(id), ownerProposals: () => [] },
     target: reviewer => linked && !unlinkedPrincipals.has(reviewer.principal_id) ? target : null, targetCurrent: () => current, projects: () => projects, now: () => clock,
     poster: () => ({
-      async openDirectMessage() { const x = take('open'); afterOpen?.(); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1' } : { kind: 'retry_allowed' as const }; },
+      async openDirectMessage() { const x = take('open'); afterOpen?.(); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1', user_id: 'U1' } : { kind: 'retry_allowed' as const }; },
       async postMarker() { const x = take('post'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async reconcileMarker(input) { reconcileInputs.push(input); const x = take('reconcile'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async publish() { const x = take('publish'); return x === 'done' ? { kind: 'done' as const } : { kind: 'uncertain' as const }; },
@@ -69,16 +69,17 @@ describe('Slack approval presenter V1', () => {
   it('refuses a token selected across an active-connection switch before Slack receives a request', async () => {
     const connection = (connection_id: string) => ({ connection: { connection_id, provider_tenant_id: 'T1', provider_app_id: 'A1' }, state_sha256: `sha256:${connection_id.padEnd(64, 'x')}` });
     let active = connection('con_1');
-    let providerCalls = 0;
+    const providerCalls = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true })));
     const poster = createTargetBoundSlackApprovalPosterV1({ target,
       activeConnection: () => active as never,
       targetCurrent: candidate => active.connection.connection_id === candidate.connection_id,
       botToken: { async botToken(selected: { connection: { connection_id: string } }) { expect(selected.connection.connection_id).toBe('con_1'); active = connection('con_2'); return 'token'; } } as never,
       needsReinstall: () => false, markNeedsReinstall: () => undefined,
-      fetchImpl: async () => { providerCalls += 1; return new Response(JSON.stringify({ ok: true })); },
     });
-    await expect(poster.openDirectMessage('U1')).resolves.toEqual({ kind: 'retry_allowed' });
-    expect(providerCalls).toBe(0);
+    try {
+      await expect(poster.openDirectMessage('U1')).resolves.toEqual({ kind: 'retry_allowed' });
+      expect(providerCalls).not.toHaveBeenCalled();
+    } finally { providerCalls.mockRestore(); }
   });
 
   it('starts from an eligible staged proposal and posts exactly one first marker', async () => {

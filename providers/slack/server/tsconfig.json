@@ -29,9 +29,6 @@
       "path": "../client"
     },
     {
-      "path": "../../../packages/organization-processing"
-    },
-    {
       "path": "../../../packages/organization-protocol"
     },
     {

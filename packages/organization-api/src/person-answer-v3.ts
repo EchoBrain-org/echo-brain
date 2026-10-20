@@ -4,10 +4,11 @@ import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import {
   asEnumerableRecord as object,
   assertDigest,
+  assertEvidenceText,
   assertExactKeys,
+  boundedLine as line,
   fail,
   MAX_ORGANIZATION_API_BODY_BYTES,
-  utf8ByteLength,
 } from './validation.js';
 
 /**
@@ -77,55 +78,10 @@ export interface PersonSourceEvidenceV1 {
   readonly text: string;
 }
 
-function boundedText(value: unknown, label: string, maximumCodePoints: number): asserts value is string {
-  if (
-    typeof value !== 'string' ||
-    value.length === 0 ||
-    value.trim() !== value ||
-    value !== value.normalize('NFC') ||
-    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) ||
-    [...value].length > maximumCodePoints
-  ) {
-    fail(`${label} is invalid`);
-  }
-}
-
-function sourceId(value: unknown): asserts value is `source:${string}` {
-  if (typeof value !== 'string' || !/^source:[a-f0-9]{64}$/.test(value)) {
-    fail('Ask source citation source_id is invalid');
-  }
-}
-
-function sourceRevision(value: unknown): asserts value is string {
-  boundedText(value, 'Ask source citation revision_id', 512);
-}
-
-function evidenceText(value: unknown): asserts value is string {
-  if (
-    typeof value !== 'string' ||
-    value.length === 0 ||
-    value !== value.normalize('NFC') ||
-    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) ||
-    utf8ByteLength(value) > PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1
-  ) {
-    fail('Ask source evidence text is invalid');
-  }
-}
-
-function scope(value: unknown): PersonSourceReadScopeV1 {
-  const input = object(value, 'Ask response scope');
-  if (input.kind === 'global') {
-    assertExactKeys(input, ['kind'], 'Ask response scope');
-    return Object.freeze({ kind: 'global' });
-  }
-  if (input.kind === 'project') {
-    assertExactKeys(input, ['kind', 'project_id'], 'Ask response scope');
-    return Object.freeze({
-      kind: 'project',
-      project_id: validateProjectIdV1(input.project_id, 'Ask response scope project_id'),
-    });
-  }
-  fail('Ask response scope is invalid');
+/** A cited original or a transcript page is read under global or project scope, never mine. */
+export function validatePersonSourceReadScopeV1(value: unknown, label = 'Ask response scope'): PersonSourceReadScopeV1 {
+  if (object(value, label).kind === 'mine') fail(`${label} is invalid`);
+  return validatePersonAnswerScopeV3(value, label) as PersonSourceReadScopeV1;
 }
 
 /**
@@ -148,8 +104,17 @@ export function validatePersonAnswerScopeV3(value: unknown, label = 'Ask respons
   fail(`${label} is invalid`);
 }
 
-function sourceEvidenceCitation(value: unknown, labelRequired: boolean): PersonSourceEvidenceCitationV1 | (PersonSourceEvidenceCitationV1 & { readonly label: string }) {
-  const input = object(value, 'Ask source evidence citation');
+/**
+ * A source-revision citation. Its display label is optional on an Ask
+ * citation, required on a source read's answer and absent from its request.
+ */
+export function validatePersonSourceRevisionCitationV1(
+  value: unknown,
+  label: 'optional' | 'required' | 'absent',
+  context = 'Ask citation',
+): Extract<PersonAnswerCitationV3, { readonly kind: 'source_revision' }> {
+  const input = object(value, context);
+  const labelled = label === 'required' || (label === 'optional' && Object.hasOwn(input, 'label'));
   assertExactKeys(
     input,
     [
@@ -160,29 +125,30 @@ function sourceEvidenceCitation(value: unknown, labelRequired: boolean): PersonS
       'representation_sha256',
       'anchor_sha256',
       ...(Object.hasOwn(input, 'document_id') ? ['document_id'] : []),
-      ...(labelRequired ? ['label'] : []),
+      ...(labelled ? ['label'] : []),
     ],
-    'Ask source evidence citation',
+    context,
   );
-  if (input.kind !== 'source_revision') fail('Ask source evidence citation kind is invalid');
-  sourceId(input.source_id);
-  sourceRevision(input.revision_id);
-  assertDigest(input.source_sha256, 'Ask source evidence citation source_sha256');
-  assertDigest(input.representation_sha256, 'Ask source evidence citation representation_sha256');
-  assertDigest(input.anchor_sha256, 'Ask source evidence citation anchor_sha256');
+  if (input.kind !== 'source_revision') fail(`${context} kind is invalid`);
+  if (typeof input.source_id !== 'string' || !/^source:[a-f0-9]{64}$/.test(input.source_id)) {
+    fail('Ask source citation source_id is invalid');
+  }
+  const revision_id = line(input.revision_id, 'Ask source citation revision_id', 512);
+  assertDigest(input.source_sha256, 'Ask source citation source_sha256');
+  assertDigest(input.representation_sha256, 'Ask source citation representation_sha256');
+  assertDigest(input.anchor_sha256, 'Ask source citation anchor_sha256');
   const document_id = Object.hasOwn(input, 'document_id')
     ? validatePersonDocumentIdV1(input.document_id)
     : undefined;
-  if (labelRequired) boundedText(input.label, 'Ask source evidence citation label', 200);
   return Object.freeze({
     kind: 'source_revision',
-    source_id: input.source_id,
-    revision_id: input.revision_id,
+    source_id: input.source_id as `source:${string}`,
+    revision_id,
     source_sha256: input.source_sha256 as `sha256:${string}`,
     representation_sha256: input.representation_sha256 as `sha256:${string}`,
     anchor_sha256: input.anchor_sha256 as `sha256:${string}`,
     ...(document_id === undefined ? {} : { document_id }),
-    ...(labelRequired ? { label: input.label as string } : {}),
+    ...(labelled ? { label: line(input.label, 'Ask source citation label', 200) } : {}),
   });
 }
 
@@ -192,8 +158,8 @@ export function validatePersonSourceEvidenceReadRequestV1(value: unknown): Perso
   if (input.schema_version !== 1) fail('Ask source evidence request schema_version is unsupported');
   const result: PersonSourceEvidenceReadRequestV1 = {
     schema_version: 1,
-    scope: scope(input.scope),
-    citation: sourceEvidenceCitation(input.citation, false) as PersonSourceEvidenceCitationV1,
+    scope: validatePersonSourceReadScopeV1(input.scope),
+    citation: validatePersonSourceRevisionCitationV1(input.citation, 'absent', 'Ask source evidence citation') as PersonSourceEvidenceCitationV1,
   };
   if (canonicalJsonBytes(result).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) {
     fail('Ask source evidence request exceeds JSON byte bound');
@@ -210,11 +176,11 @@ export function validatePersonSourceEvidenceV1(value: unknown): PersonSourceEvid
   const result: PersonSourceEvidenceV1 = {
     schema_version: 1,
     kind: 'echo-person-source-evidence-v1',
-    scope: scope(input.scope),
-    citation: sourceEvidenceCitation(input.citation, true) as PersonSourceEvidenceCitationV1 & { readonly label: string },
+    scope: validatePersonSourceReadScopeV1(input.scope),
+    citation: validatePersonSourceRevisionCitationV1(input.citation, 'required', 'Ask source evidence citation') as PersonSourceEvidenceCitationV1 & { readonly label: string },
     text: input.text as string,
   };
-  evidenceText(result.text);
+  assertEvidenceText(result.text, 'Ask source evidence text', PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1);
   if (canonicalJsonBytes(result).byteLength > PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 + 2048) {
     fail('Ask source evidence response exceeds JSON byte bound');
   }

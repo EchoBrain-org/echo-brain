@@ -1,6 +1,6 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { validatePersonQueryText } from './person-query.js';
-import { asEnumerableRecord, assertExactKeys, fail, MAX_ORGANIZATION_API_BODY_BYTES, utf8ByteLength } from './validation.js';
+import { asEnumerableRecord, assertBoundedText, assertExactKeys, fail, MAX_ORGANIZATION_API_BODY_BYTES } from './validation.js';
 
 /** Retired route. The Authority keeps it reserved against provider adapters. */
 export const PERSON_UPDATES_PATH_V1 = '/v1/person/updates';
@@ -32,12 +32,6 @@ export function validatePersonUploadVisibilityV1(value: unknown): PersonUploadVi
   if (value !== 'only_me' && value !== 'team') fail('Person upload visibility must be only_me or team');
   return value;
 }
-function text(value: unknown, maximum: number, multiline: boolean): asserts value is string {
-  if (typeof value !== 'string' || value.trim().length === 0 ||
-      utf8ByteLength(value) > maximum ||
-      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) ||
-      (!multiline && /[\t\r\n]/u.test(value)) || /[\uD800-\uDFFF]/u.test(value)) fail('Person update text is invalid');
-}
 function object(value: unknown): Record<string, unknown> {
   return asEnumerableRecord(value, 'Person upload');
 }
@@ -46,7 +40,7 @@ export function validatePersonUpdateSubmitV1(value: unknown): PersonUpdateSubmit
   assertExactKeys(r, ['schema_version', 'kind', 'request_id', 'title', 'text', ...(Object.hasOwn(r, 'visibility') ? ['visibility'] : [])], 'Person update');
   if (r.schema_version !== 1 || r.kind !== 'echo-person-update-submit-v1') fail('Person update version or kind is unsupported');
   validatePersonUpdateRequestId(r.request_id);
-  text(r.title, PERSON_UPDATE_TITLE_MAX_BYTES, false); text(r.text, PERSON_UPDATE_TEXT_MAX_BYTES, true);
+  assertBoundedText(r.title, 'Person update text', PERSON_UPDATE_TITLE_MAX_BYTES); assertBoundedText(r.text, 'Person update text', PERSON_UPDATE_TEXT_MAX_BYTES, true);
   const visibility = Object.hasOwn(r, 'visibility') ? validatePersonUploadVisibilityV1(r.visibility) : 'only_me';
   const result = { schema_version: 1 as const, kind: 'echo-person-update-submit-v1' as const, request_id: r.request_id as string, title: r.title, text: r.text, visibility };
   if (canonicalJsonBytes(result).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail('Person update exceeds JSON byte bound');

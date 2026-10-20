@@ -2,7 +2,7 @@ import { canonicalJson } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerCitationV6 } from './person-answer-v4.js';
 import type { PersonAnswerCitationV6 } from './person-answer-v6.js';
 import { PERSON_IMPACT_CARD_LIMITS_V1 } from './person-impact-card-v1.js';
-import { asEnumerableRecord as object, assertExactKeys, fail } from './validation.js';
+import { asEnumerableRecord as object, assertExactKeys, assertUnique as unique, boundedLine as line, boundedList as list, fail } from './validation.js';
 
 /**
  * A sweep's result (open items and Home v1, section 6): for each open item a
@@ -59,20 +59,6 @@ function judged(verdict: PersonSweepVerdictV1 | null): boolean {
  */
 export function personSweepResultStatusV1(findings: readonly Pick<PersonSweepFindingResultV1, 'verdict'>[]): PersonSweepResultV1['status'] {
   return !findings.some(entry => judged(entry.verdict)) && findings.some(entry => entry.verdict === null) ? 'not_assessed' : 'assessed';
-}
-
-/** One trimmed NFC line of 1 to `maximum` characters, as the impact card's lines are. */
-function line(value: unknown, label: string, maximum: number): string {
-  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || value !== value.normalize('NFC') ||
-      /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) || [...value].length > maximum) fail(`${label} is invalid`);
-  return value;
-}
-function list(value: unknown, label: string, maximum: number, minimum = 0): readonly unknown[] {
-  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) fail(`${label} is invalid`);
-  return value;
-}
-function unique(values: readonly unknown[], label: string): void {
-  if (new Set(values).size !== values.length) fail(`${label} repeats an entry`);
 }
 
 /**

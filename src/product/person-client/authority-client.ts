@@ -1,6 +1,5 @@
 import { PERSON_DIAGNOSTICS_PATH_V1, PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1, validatePersonDiagnosticsRequestV1, validatePersonDiagnosticsResultV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
-import { validatePersonUploadContextId } from '@echo-brain/organization-api';
 import { PERSON_CHANGES_ROUTE_V1, validatePersonChangesV1, type PersonChangesV1 } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
@@ -20,7 +19,6 @@ import {
   PERSON_ANSWER_PATH_V6,
   PERSON_ANSWER_PATH_V7,
   PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1,
@@ -56,7 +54,6 @@ import {
   validatePersonAnswerResponseV6,
   validatePersonAnswerResponseV7,
   validatePersonAnswerResponseV8,
-  validatePersonCapabilitiesV1,
   validatePersonEvidenceSearchRequestV1,
   validatePersonEvidenceOpenRequestV1,
   validatePersonEvidenceDeskResponseV1,
@@ -70,7 +67,6 @@ import {
   type PersonAnswerResponseV6 as OrganizationPersonAnswerV6,
   type PersonAnswerResponseV7 as OrganizationPersonAnswerV7,
   type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
-  type PersonCapabilitiesV1,
   type PersonEvidenceSearchRequestV1,
   type PersonEvidenceOpenRequestV1,
   type PersonEvidenceDeskResponseV1,
@@ -98,19 +94,17 @@ import {
 } from '@echo-brain/organization-api';
 import {
   PERSON_PROJECTS_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
-  validateProjectPageRequestV1, validateProjectListV1, validateProjectCreateV1, validateProjectCreateReceiptV1,
+  validateProjectCreateV1, validateProjectCreateReceiptV1,
   validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1, validateProjectSettingsReceiptV1,
-  validateProjectIdV1, validateProjectSummaryV1, validateProjectContextBrowseV1, validateProjectMembersV1,
+  validateProjectIdV1, validateProjectContextBrowseV1, validateProjectMembersV1,
   validateProjectDirectorySearchV1, validateProjectDirectoryV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1,
   validateProjectMutationReceiptV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectContextFeedV1, validateProjectContextSearchV1, validateProjectContextSearchResultV1,
-  validateProjectContextReadRequestV1, validateProjectContextReadV1,
-  validatePersonUpdateSubmitV2, validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2,
-  validatePersonUploadContentV2, validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
-  type ProjectPageRequestV1, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
+  validateProjectContextSearchV1,
+  validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
+  type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
   type ProjectRenameV1, type ProjectArchiveV1, type ProjectLeaveV1,
   type ProjectMemberAddV1, type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
-  type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2,
+  type ProjectContextSearchV1, type PersonUploadSearchV2,
 } from '@echo-brain/organization-api';
 import {
   PERSON_UPDATES_PATH_V3,
@@ -179,9 +173,9 @@ export interface PersonRecordSearchItemV1 {
     | "project-members-readable-person-v1";
 }
 
-/** Current global-or-project Ask response. V1 remains available for old installed clients. */
+/** An Ask citation of an approved record or a source passage. */
 export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
-/** The Agentic Ask response, selected only after the authenticated capability probe. */
+/** The ordinary Ask's response, on `/v3` (ADR-0022). */
 export type PersonAnswerV4 = OrganizationPersonAnswerV4;
 /** Explicit ticket-capable Ask; the ordinary Ask response remains strict V4. */
 export type PersonAnswerV5 = OrganizationPersonAnswerV5;
@@ -1110,14 +1104,6 @@ export class PersonAuthorityClient {
     return response;
   }
 
-  async projects(accessToken: string, value: ProjectPageRequestV1 = {}) {
-    const request = validateProjectPageRequestV1(value);
-    const query = new URLSearchParams({ limit: String(request.limit) });
-    if (request.cursor !== undefined) query.set('cursor', request.cursor);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}?${query}`, validate: validateProjectListV1,
-      matches: result => result.items.length <= (request.limit ?? 10) });
-  }
-
   async projectsV2(accessToken: string, value: ProjectPageRequestV2 = {}) {
     const request = validateProjectPageRequestV2(value);
     const query = new URLSearchParams({ limit: String(request.limit), status: request.status ?? 'active' });
@@ -1131,12 +1117,6 @@ export class PersonAuthorityClient {
     return this.contextRequest(accessToken, { path: PERSON_PROJECTS_PATH_V1, body: request, status: 201,
       request_id: request.request_id, validate: validateProjectCreateReceiptV1,
       matches: result => result.request_id === request.request_id });
-  }
-
-  async readProject(accessToken: string, projectId: string) {
-    const project = validateProjectIdV1(projectId);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/${project}`, validate: validateProjectSummaryV1,
-      matches: result => result.project_id === project });
   }
 
   async readProjectV2(accessToken: string, projectId: string) {
@@ -1225,48 +1205,10 @@ export class PersonAuthorityClient {
         result.project_id === request.project_id && result.context_id === request.context_id });
   }
 
-  async projectFeed(accessToken: string, value: ProjectContextBrowseV1) {
-    const request = validateProjectContextBrowseV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/context/feed`, body: request, validate: validateProjectContextFeedV1,
-      matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
-  }
-
-  async searchProjectContext(accessToken: string, value: ProjectContextSearchV1) {
-    const request = validateProjectContextSearchV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/context/search`, body: request, validate: validateProjectContextSearchResultV1,
-      matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
-  }
-
-  async readProjectContext(accessToken: string, value: ProjectContextReadRequestV1) {
-    const request = validateProjectContextReadRequestV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/${request.project_id}/context/${request.context_id}`,
-      validate: validateProjectContextReadV1, matches: result => result.project_id === request.project_id && result.context_id === request.context_id });
-  }
-
   async searchProjectContextV2(accessToken: string, value: ProjectContextSearchV1) {
     const request = validateProjectContextSearchV1(value);
     return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/context/search`, body: request, validate: validateProjectContextSearchResultV2,
       matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
-  }
-
-  async submitUpdateV2(accessToken: string, value: PersonUpdateSubmitV2) {
-    const request = validatePersonUpdateSubmitV2(value);
-    return this.contextRequest(accessToken, { path: PERSON_UPDATES_PATH_V2, body: request, status: 202,
-      request_id: request.request_id, validate: validatePersonUpdateReceiptV2,
-      matches: result => result.request_id === request.request_id && result.project_id === request.project_id &&
-        canonicalJson(result.audience) === canonicalJson(request.audience) });
-  }
-
-  async updateStatusV2(accessToken: string, requestId: string) {
-    validatePersonUpdateRequestId(requestId);
-    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V2}/${requestId}`, validate: validatePersonUpdateStatusV2,
-      matches: result => result.request_id === requestId });
-  }
-
-  async readUploadV2(accessToken: string, contextId: string) {
-    validatePersonUploadContextId(contextId);
-    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V2}/content/${contextId}`, validate: validatePersonUploadContentV2,
-      matches: result => result.context_id === contextId });
   }
 
   async searchUploadsV2(accessToken: string, value: PersonUploadSearchV2) {
@@ -1460,17 +1402,6 @@ export class PersonAuthorityClient {
       validate_response: validatePersonRecordSearch,
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-    });
-  }
-
-  /** Authenticated capability discovery; every current Authority reports agentic Ask. */
-  capabilities(accessToken: string, signal?: AbortSignal): Promise<PersonCapabilitiesV1> {
-    return this.getJson({
-      path: PERSON_CAPABILITIES_PATH_V1,
-      access_token: accessToken,
-      validate_response: validatePersonCapabilitiesV1,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-      signal,
     });
   }
 

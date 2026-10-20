@@ -1,22 +1,15 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
-import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
+import { signedInHome } from './signed-in-home.js';
 
 const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
 function sessionHome(): string {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-person-runs-cli-'))); homes.push(home);
-  new PersonSessionStore(home).install('https://authority.example.test', 'oau_00000000-0000-4000-8000-000000000001', {
-    organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'prn_00000000-0000-4000-8000-000000000001', membership_id: 'mem_00000000-0000-4000-8000-000000000001',
-    display_name: 'Maya Chen', membership_type: 'employee', identity_binding_id: 'oib_00000000-0000-4000-8000-000000000001', session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
-    access_token: 'A'.repeat(43), refresh_token: 'R'.repeat(43), access_expires_at: '2026-10-07T10:10:00.000Z', refresh_expires_at: '2026-10-14T10:00:00.000Z', hard_reauthentication_at: '2026-10-14T10:00:00.000Z',
-  });
+  const home = signedInHome({ prefix: 'echo-person-runs-cli-', now: '2026-10-07T10:00:00.000Z' }); homes.push(home);
   return home;
 }
 

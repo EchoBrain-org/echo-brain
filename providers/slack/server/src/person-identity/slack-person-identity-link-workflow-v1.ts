@@ -12,7 +12,6 @@ import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../organization-control-plane/a
 import { isSlackIdentityTokenRejectedV1, SlackIdentityProviderErrorV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
-import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
 
 export interface SlackPersonIdentityLinkAuthenticationPort {
   authenticateAccess(input: {
@@ -96,7 +95,6 @@ export interface SlackPersonIdentityLinkWorkflowOptionsV1 {
   readonly authentication: SlackPersonIdentityLinkAuthenticationPort;
   readonly repository: SlackPersonIdentityLinkRepositoryPort;
   readonly slack: SlackIdentityProviderV1;
-  readonly authorization_fence: ReadableSearchAuthorizationFence;
   /** Synchronous invalidation of ephemeral provider proof held by this runtime. */
   readonly invalidate_browser_attempts?: (membershipId: string) => void;
   readonly now?: () => string;
@@ -262,16 +260,14 @@ export class SlackPersonIdentityLinkWorkflowV1 {
   }
 
   private async readTools(accessToken: string) {
-    return this.options.authorization_fence.withRead(() => {
-      const current = this.authenticate(accessToken);
-      try {
-        return validateOrganizationPersonTools({ schema_version: 2, kind: "echo-organization-person-tools",
-          organization_id: current.organization_id, membership_id: current.membership_id,
-          tools: this.options.repository.personTools(personSession(current, this.options.authority_id)) });
-      } catch {
-        throw new AuthorityOperationError("unavailable", "Connected tools status is unavailable; try refreshing");
-      }
-    });
+    const current = this.authenticate(accessToken);
+    try {
+      return validateOrganizationPersonTools({ schema_version: 2, kind: "echo-organization-person-tools",
+        organization_id: current.organization_id, membership_id: current.membership_id,
+        tools: this.options.repository.personTools(personSession(current, this.options.authority_id)) });
+    } catch {
+      throw new AuthorityOperationError("unavailable", "Connected tools status is unavailable; try refreshing");
+    }
   }
 
   private async beginInternal(
@@ -291,7 +287,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     const before = this.authenticate(accessToken);
     const disconnectGeneration = this.disconnectGeneration(before.membership_id);
     const activeTool = this.requireActiveTool();
-    const earlyReplay = await this.options.authorization_fence.withRead(() => {
+    const earlyReplay = (() => {
       const current = this.authenticate(accessToken);
       this.assertDisconnectGeneration(current.membership_id, disconnectGeneration);
       if (!samePersonSession(before, current)) {
@@ -323,7 +319,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         );
       }
       return replay;
-    });
+    })();
     if (earlyReplay !== null) {
       return beginResponse(activeTool, earlyReplay, earlyReplay.challenge_message_ts);
     }
@@ -342,7 +338,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     } catch {
       throw new AuthorityOperationError("unavailable", "Could not open a private Slack DM; check your Slack member ID and try again");
     }
-    const begun = await this.options.authorization_fence.withRead(() => {
+    const begun = (() => {
       const current = this.authenticate(accessToken);
       if (
         !samePersonSession(before, current) ||
@@ -377,7 +373,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
           request_id: string;
         }),
       );
-    });
+    })();
 
     if (begun.replayed === true && begun.challenge_message_ts !== undefined) {
       return beginResponse(activeTool, begun, begun.challenge_message_ts);
@@ -412,7 +408,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       providerFailure(error);
     }
 
-    await this.options.authorization_fence.withRead(() => {
+    {
       const current = this.authenticate(accessToken);
       if (
         !samePersonSession(before, current) ||
@@ -448,7 +444,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
           now: current.checked_at,
         }),
       );
-    });
+    }
 
     return beginResponse(activeTool, begun, posted.challenge_message_ts);
   }
@@ -550,40 +546,38 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       throw new AuthorityOperationError("unavailable", "Could not revalidate the private Slack DM; try again");
     }
 
-    return await this.options.authorization_fence.withRead(() => {
-      const current = this.authenticate(accessToken);
-      const currentTool = this.options.repository.activeSlackOrganizationTool();
-      if (
-        !samePersonSession(before, current) ||
-        !this.isDisconnectGenerationCurrent(current.membership_id, disconnectGeneration) ||
-        !sameTool(activeTool, currentTool) ||
-        currentDestination.team_id !== activeTool.team_id ||
-        currentDestination.channel_id !== challenge.channel_id ||
-        currentDestination.recipient_user_id !== challenge.recipient_user_id ||
-        observed.user_id !== challenge.recipient_user_id
-      ) {
-        throw new AuthorityOperationError(
-          "conflict",
-          "Person or Slack state changed during the identity proof",
-        );
-      }
-      return validateOrganizationPersonSlackIdentityLinkResult(
-        repositoryOperation(() =>
-          this.options.repository.completePersonSlackIdentityLinkChallenge({
-            command_id: request.request_id,
-            command_sha256: commandSha256,
-            challenge_attempt_id: request.challenge_attempt_id,
-            challenge_code_sha256: codeSha256,
-            challenge_message_ts: request.challenge_message_ts,
-            person_session: personSession(current, this.options.authority_id),
-            organization_tool: currentTool,
-            observed,
-            authority_checked_at: current.checked_at,
-            now: current.checked_at,
-          }),
-        ),
+    const current = this.authenticate(accessToken);
+    const currentTool = this.options.repository.activeSlackOrganizationTool();
+    if (
+      !samePersonSession(before, current) ||
+      !this.isDisconnectGenerationCurrent(current.membership_id, disconnectGeneration) ||
+      !sameTool(activeTool, currentTool) ||
+      currentDestination.team_id !== activeTool.team_id ||
+      currentDestination.channel_id !== challenge.channel_id ||
+      currentDestination.recipient_user_id !== challenge.recipient_user_id ||
+      observed.user_id !== challenge.recipient_user_id
+    ) {
+      throw new AuthorityOperationError(
+        "conflict",
+        "Person or Slack state changed during the identity proof",
       );
-    });
+    }
+    return validateOrganizationPersonSlackIdentityLinkResult(
+      repositoryOperation(() =>
+        this.options.repository.completePersonSlackIdentityLinkChallenge({
+          command_id: request.request_id,
+          command_sha256: commandSha256,
+          challenge_attempt_id: request.challenge_attempt_id,
+          challenge_code_sha256: codeSha256,
+          challenge_message_ts: request.challenge_message_ts,
+          person_session: personSession(current, this.options.authority_id),
+          organization_tool: currentTool,
+          observed,
+          authority_checked_at: current.checked_at,
+          now: current.checked_at,
+        }),
+      ),
+    );
   }
 
   private async disconnectInternal(input: unknown, accessToken: string) {
@@ -592,27 +586,25 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     } catch {
       throw new AuthorityOperationError("invalid_request", "Person Slack disconnect request is invalid");
     }
-    return await this.options.authorization_fence.withWrite(() => {
-      const current = this.authenticate(accessToken);
-      const session = personSession(current, this.options.authority_id);
-      const tools = repositoryOperation(() =>
-        this.options.repository.disconnectPersonSlackIdentity({
-          person_session: session,
-          now: current.checked_at,
-        }),
-      );
-      this.disconnect_generation_by_membership.set(
-        session.membership_id,
-        this.disconnectGeneration(session.membership_id) + 1,
-      );
-      this.options.invalidate_browser_attempts?.(session.membership_id);
-      return validateOrganizationPersonTools({
-        schema_version: 2,
-        kind: "echo-organization-person-tools",
-        organization_id: current.organization_id,
-        membership_id: current.membership_id,
-        tools,
-      });
+    const current = this.authenticate(accessToken);
+    const session = personSession(current, this.options.authority_id);
+    const tools = repositoryOperation(() =>
+      this.options.repository.disconnectPersonSlackIdentity({
+        person_session: session,
+        now: current.checked_at,
+      }),
+    );
+    this.disconnect_generation_by_membership.set(
+      session.membership_id,
+      this.disconnectGeneration(session.membership_id) + 1,
+    );
+    this.options.invalidate_browser_attempts?.(session.membership_id);
+    return validateOrganizationPersonTools({
+      schema_version: 2,
+      kind: "echo-organization-person-tools",
+      organization_id: current.organization_id,
+      membership_id: current.membership_id,
+      tools,
     });
   }
 

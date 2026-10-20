@@ -4,15 +4,14 @@ import {
   PERSON_ASK_PROGRESS_CONTENT_TYPE_V1,
   PERSON_ASK_PROGRESS_HEADER_V1,
   PERSON_ASK_PROGRESS_HEADER_VALUE_V1,
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
   PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1,
   PERSON_ASK_PROGRESS_NAMED_MAX_V1,
   PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1,
   createPersonAskProgressDecoderV1,
   formatPersonAskProgressEventV1,
-  validatePersonAskProgressEventV1,
-  validatePersonAskProgressLineV1,
-  validatePersonAskProgressResultLineV1,
   validatePersonAskProgressStepEventV1,
   validatePersonAskReceiptV1,
   type PersonAskProgressEventV1,
@@ -24,13 +23,15 @@ const ticket = { citation: { kind: 'ticket' as const, tool_id: 'jira', external_
 const passage = (n: number) => ({ citation: { kind: 'source_revision' as const, source_id: `source:${n.toString(16).padStart(64, 'a')}`, revision_id: `rev-${n}`, source_sha256: canonicalSha256(`s${n}`), representation_sha256: canonicalSha256(`r${n}`), anchor_sha256: canonicalSha256(`a${n}`), document_id: `doc_${'b'.repeat(64)}` as const }, kind: 'document_passage' as const, label: `Spec part ${n}`, visibility: 'only_me' as const, ref: `document:doc_${'b'.repeat(64)}` as const });
 const response = () => ({ schema_version: 6 as const, kind: 'echo-clean-person-answer-v6' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations: [decision], parts: [{ question: 'What did we decide?', status: 'answered' as const, statements: [{ text: 'The team chose the recovery plan.', citation_indexes: [0], private: false }] }] });
 const receipt = () => ({ looked_through: 3, elapsed_ms: 48_000, rows: [{ type: 'searched' as const, sources: [{ kind: 'meetings' as const }, { kind: 'tickets' as const, tool_id: 'jira' }], found: 22 }, { type: 'read' as const, items: [decision, ticket] }] });
+/** Any value as the formatter's argument, which it checks. */
+const asEvent = (value: unknown) => value as PersonAskProgressEventV1;
 
 describe('Ask progress V1 wire contract', () => {
-  it('pins the opt-in header, media type and heartbeat', () => {
-    expect(PERSON_ASK_PROGRESS_HEADER_V1).toBe('x-echo-ask-progress');
-    expect(PERSON_ASK_PROGRESS_HEADER_VALUE_V1).toBe('1');
-    expect(PERSON_ASK_PROGRESS_CONTENT_TYPE_V1).toBe('text/event-stream');
-    expect(PERSON_ASK_PROGRESS_HEARTBEAT_V1).toBe(': keep-alive\n\n');
+  it("pins the opt-in header, each version's value, the media type and the heartbeat", () => {
+    expect({
+      header: PERSON_ASK_PROGRESS_HEADER_V1, values: [PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3],
+      content_type: PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, heartbeat: PERSON_ASK_PROGRESS_HEARTBEAT_V1,
+    }).toEqual({ header: 'x-echo-ask-progress', values: ['1', '2', '3'], content_type: 'text/event-stream', heartbeat: ': keep-alive\n\n' });
   });
 
   it('accepts each step event exactly and freezes it', () => {
@@ -95,19 +96,17 @@ describe('Ask progress V1 wire contract', () => {
     expect(() => validatePersonAskReceiptV1({ looked_through: tooMany.length, elapsed_ms: 1, rows: [{ type: 'read', items: tooMany }] })).toThrow();
   });
 
-  it('carries the released V6 answer and its receipt as the terminal event', () => {
-    const answer = validatePersonAskProgressEventV1({ type: 'answer', response: response(), receipt: receipt() });
-    expect(answer).toEqual({ type: 'answer', response: response(), receipt: receipt() });
-    expect(() => validatePersonAskProgressEventV1({ type: 'answer', response: { ...response(), schema_version: 5, kind: 'echo-clean-person-answer-v5' }, receipt: receipt() })).toThrow();
-    expect(() => validatePersonAskProgressEventV1({ type: 'answer', response: response() })).toThrow('unexpected shape');
-    expect(() => validatePersonAskProgressEventV1({ type: 'answer', response: { ...response(), receipt: receipt() }, receipt: receipt() })).toThrow();
+  it('carries the answer with its receipt beside it, never without one or inside it', () => {
+    expect(() => formatPersonAskProgressEventV1(asEvent({ type: 'answer', response: response() }))).toThrow('unexpected shape');
+    expect(() => formatPersonAskProgressEventV1(asEvent({ type: 'answer', response: { ...response(), receipt: receipt() }, receipt: receipt() }))).toThrow();
   });
 
   it('carries an error after the stream started with the status the JSON response would have had', () => {
-    expect(validatePersonAskProgressEventV1({ type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } })).toEqual({ type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } });
-    expect(() => validatePersonAskProgressEventV1({ type: 'error', status: 200, error: { code: 'unavailable', message: 'request failed' } })).toThrow('status');
-    expect(() => validatePersonAskProgressEventV1({ type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed', detail: 'x' } })).toThrow();
-    expect(() => validatePersonAskProgressEventV1({ type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' }, receipt: receipt() })).toThrow('unexpected shape');
+    const error = { type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } } as const;
+    expect(createPersonAskProgressDecoderV1().push(formatPersonAskProgressEventV1(error))).toEqual([error]);
+    expect(() => formatPersonAskProgressEventV1(asEvent({ ...error, status: 200 }))).toThrow('status');
+    expect(() => formatPersonAskProgressEventV1(asEvent({ ...error, error: { ...error.error, detail: 'x' } }))).toThrow();
+    expect(() => formatPersonAskProgressEventV1(asEvent({ ...error, receipt: receipt() }))).toThrow('unexpected shape');
   });
 });
 
@@ -163,24 +162,5 @@ describe('Ask progress V1 stream framing', () => {
     expect(() => createPersonAskProgressDecoderV1().push('data: not json\n\n')).toThrow('not JSON');
     expect(() => createPersonAskProgressDecoderV1().push('data: {"type":"stage","stage":"thinking"}\n\n')).toThrow();
     expect(() => createPersonAskProgressDecoderV1().push(`data: "${'x'.repeat(PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1)}`)).toThrow('exceeds its bound');
-  });
-});
-
-describe('person ask --progress lines', () => {
-  it('prints step events as progress lines and nothing else', () => {
-    expect(validatePersonAskProgressLineV1({ ok: true, progress: { type: 'stage', stage: 'searching' } })).toEqual({ ok: true, progress: { type: 'stage', stage: 'searching' } });
-    expect(() => validatePersonAskProgressLineV1({ ok: true, progress: { type: 'answer', response: response(), receipt: receipt() } })).toThrow();
-    expect(() => validatePersonAskProgressLineV1({ ok: true, progress: { type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } } })).toThrow();
-    expect(() => validatePersonAskProgressLineV1({ ok: false, progress: { type: 'stage', stage: 'searching' } })).toThrow();
-    expect(() => validatePersonAskProgressLineV1({ ok: true, result: response() })).toThrow();
-  });
-
-  it("keeps today's final line and adds the receipt only to a streamed V6 answer", () => {
-    expect(validatePersonAskProgressResultLineV1({ ok: true, result: response(), receipt: receipt() })).toEqual({ ok: true, result: response(), receipt: receipt() });
-    expect(validatePersonAskProgressResultLineV1({ ok: true, result: response() })).toEqual({ ok: true, result: response() });
-    const v5 = { ...response(), schema_version: 5 as const, kind: 'echo-clean-person-answer-v5' as const };
-    expect(validatePersonAskProgressResultLineV1({ ok: true, result: v5 }).result.schema_version).toBe(5);
-    expect(() => validatePersonAskProgressResultLineV1({ ok: true, result: v5, receipt: receipt() })).toThrow('needs a V6 answer');
-    expect(() => validatePersonAskProgressResultLineV1({ ok: true, result: response(), receipt: receipt(), progress: {} })).toThrow('unexpected shape');
   });
 });

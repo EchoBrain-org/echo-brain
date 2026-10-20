@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  BoundedJsonFetchErrorV1,
-  boundedJsonFetchV1,
-} from "../../src/shared/bounded-json-fetch-v1.js";
+import { BoundedJsonResponseErrorV1 } from "@echo-brain/provider-runtime/bounded-json-response-v1";
+import { boundedJsonFetchV1 } from "../../src/shared/bounded-json-fetch-v1.js";
 
 const URL_UNDER_TEST = "https://example.test/api/method";
 const MAX_BYTES = 16;
@@ -94,8 +92,8 @@ describe("boundedJsonFetchV1", () => {
   ] as const)("rejects %s without leaking its detail", async (_label, respond, maxBytes, code) => {
     const failure = await caught(call(vi.fn<typeof globalThis.fetch>(respond), { maxBytes }));
 
-    expect(failure).toBeInstanceOf(BoundedJsonFetchErrorV1);
-    const error = failure as BoundedJsonFetchErrorV1;
+    expect(failure).toBeInstanceOf(BoundedJsonResponseErrorV1);
+    const error = failure as BoundedJsonResponseErrorV1;
     expect(error.code).toBe(code);
     expect(error.message).not.toContain("private network detail");
   });

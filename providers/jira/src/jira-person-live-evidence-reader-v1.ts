@@ -209,23 +209,34 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     return pinnedProject !== undefined && parsed.project_id !== pinnedProject.id ? undefined : parsed;
   }
 
+  /** One bulk read, which applies current issue permissions. */
+  function bulkRead(idsOrKeys: readonly string[], inventory: boolean, signal?: AbortSignal): Promise<unknown> {
+    return transport.request({ path: `${pathPrefix}/issue/bulkfetch`, method: 'POST',
+      body: { issueIdsOrKeys: [...idsOrKeys], fields: (inventory ? INVENTORY_FIELDS : TEXT_FIELDS).split(',') }, signal });
+  }
+
+  /**
+   * A bulk read's issues, each to `each` in the order it returned them. Synchronous, so a caller awaits the read itself
+   * and its post-read fence still joins a concurrent read's. issueErrors are retriable failures, never a partial page.
+   */
+  function bulkIssues(value: unknown, count: number, origin: string, inventory: boolean, signal: AbortSignal | undefined, each: (parsed: ParsedJiraIssueV1) => void): void {
+    const page = jiraRecord(value);
+    signal?.throwIfAborted();
+    if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, count).length > 0) jiraFailure('unavailable');
+    for (const raw of jiraArray(page.issues, count)) each(parseJiraIssueV1(raw, { cloudid, origin, inventory }));
+  }
+
   async function revalidateIssues(ids: readonly string[], origin: string, signal?: AbortSignal): Promise<void> {
     for (let offset = 0; offset < ids.length; offset += REVALIDATION_BATCH_SIZE) {
       const batch = ids.slice(offset, offset + REVALIDATION_BATCH_SIZE);
-      const page = jiraRecord(await transport.request({ path: `${pathPrefix}/issue/bulkfetch`, method: 'POST',
-        body: { issueIdsOrKeys: batch, fields: INVENTORY_FIELDS.split(',') }, signal }));
-      signal?.throwIfAborted();
-      // Bulk fetch applies current issue permissions. Missing issues must not
-      // be treated as a successful partial check; issueErrors are retriable failures.
-      if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, batch.length).length > 0) jiraFailure('unavailable');
+      // Missing issues must not be treated as a successful partial check.
       const expected = new Set(batch);
       const returned = new Set<string>();
-      for (const raw of jiraArray(page.issues, batch.length)) {
-        const parsed = parseJiraIssueV1(raw, { cloudid, origin, inventory: true });
+      bulkIssues(await bulkRead(batch, true, signal), batch.length, origin, true, signal, parsed => {
         if (!expected.has(parsed.id) || returned.has(parsed.id)) jiraFailure('invalid_output');
         if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
         returned.add(parsed.id);
-      }
+      });
       if (returned.size !== expected.size) jiraFailure('not_found');
     }
   }
@@ -279,19 +290,13 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
    */
   async function currentIssues(ids: readonly string[], origin: string, inventory: boolean, signal?: AbortSignal): Promise<readonly ParsedJiraIssueV1[]> {
     if (ids.length === 0) return Object.freeze([]);
-    const page = jiraRecord(await transport.request({ path: `${pathPrefix}/issue/bulkfetch`, method: 'POST',
-      body: { issueIdsOrKeys: [...ids], fields: (inventory ? INVENTORY_FIELDS : TEXT_FIELDS).split(',') }, signal }));
-    signal?.throwIfAborted();
-    // issueErrors are retriable failures, never a partial page.
-    if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, ids.length).length > 0) jiraFailure('unavailable');
     const expected = new Set(ids);
     const found = new Map<string, ParsedJiraIssueV1>();
-    for (const raw of jiraArray(page.issues, ids.length)) {
-      const parsed = parseJiraIssueV1(raw, { cloudid, origin, inventory });
+    bulkIssues(await bulkRead(ids, inventory, signal), ids.length, origin, inventory, signal, parsed => {
       if (!expected.has(parsed.id) || found.has(parsed.id)) jiraFailure('invalid_output');
       if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
       found.set(parsed.id, parsed);
-    }
+    });
     const missing = ids.filter(id => !found.has(id));
     for (let offset = 0; offset < missing.length; offset += 4) {
       for (const parsed of await Promise.all(missing.slice(offset, offset + 4).map(id => issue(id, origin, inventory, signal)))) found.set(parsed.id, parsed);
@@ -309,19 +314,14 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     if (keys.length === 0) return Object.freeze([]);
     // Diagnostics name the lookup in JQL form; it runs as a bulk read.
     observeCoreRuntimeDiagnosticV1({ kind: 'provider_query', provider: 'jira', operation: 'search', query: `key in (${keys.map(key => JSON.stringify(key)).join(', ')})`, max_results: keys.length });
-    const page = jiraRecord(await transport.request({ path: `${pathPrefix}/issue/bulkfetch`, method: 'POST',
-      body: { issueIdsOrKeys: [...keys], fields: INVENTORY_FIELDS.split(',') }, signal }));
-    signal?.throwIfAborted();
-    if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, keys.length).length > 0) jiraFailure('unavailable');
     const ids = new Set<string>();
     const found: ParsedJiraIssueV1[] = [];
-    for (const raw of jiraArray(page.issues, keys.length)) {
-      // A moved issue answers to its old key with its current one, so keys cannot be matched one to one.
-      const parsed = parseJiraIssueV1(raw, { cloudid, origin, inventory: true });
+    // A moved issue answers to its old key with its current one, so keys cannot be matched one to one.
+    bulkIssues(await bulkRead(keys, true, signal), keys.length, origin, true, signal, parsed => {
       if (ids.has(parsed.id)) jiraFailure('invalid_output');
       ids.add(parsed.id);
       if (pinnedProject === undefined || parsed.project_id === pinnedProject.id) found.push(parsed);
-    }
+    });
     // Bulk results arrive in id order; answer in the order the keys were named.
     const rank = (issue: ParsedJiraIssueV1) => { const index = keys.indexOf(issue.key); return index < 0 ? keys.length : index; };
     return Object.freeze(found.sort((left, right) => rank(left) - rank(right)));

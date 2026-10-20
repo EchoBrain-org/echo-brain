@@ -881,9 +881,7 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
         );
       } catch (error) {
         if (error instanceof PrivateSlackApprovalInteractionError)
-          throw new Error(
-            `interaction parser rejection: ${error.rejection_stage}`,
-          );
+          throw new Error("interaction parser rejected the replay");
         throw error;
       }
       await expect(post(replay)).resolves.toEqual({ status: 200, body: "" });

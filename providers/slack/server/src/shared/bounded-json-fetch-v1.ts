@@ -14,22 +14,6 @@ import { abortableProviderOperationV1, BoundedJsonResponseErrorV1, disposeProvid
  * response.
  */
 
-export type BoundedJsonFetchErrorCodeV1 =
-  | "transport"
-  | "oversized"
-  | "invalid_json";
-
-/** Fixed messages only: never the request URL, body, or response content. */
-export class BoundedJsonFetchErrorV1 extends Error {
-  constructor(
-    readonly code: BoundedJsonFetchErrorCodeV1,
-    message: string,
-  ) {
-    super(message);
-    this.name = "BoundedJsonFetchErrorV1";
-  }
-}
-
 export interface BoundedJsonFetchResultV1 {
   readonly status: number;
   readonly ok: boolean;
@@ -52,7 +36,8 @@ export interface BoundedJsonFetchInputV1 {
  * `AbortSignal.any`, and a `input.maxBytes` response cap. A non-2xx response
  * resolves at once with `json: undefined`, its body cancelled unread; a 2xx
  * response resolves with its parsed JSON body, or `json: undefined` when the
- * body is null or empty. Throws `BoundedJsonFetchErrorV1` for every
+ * body is null or empty. Throws `BoundedJsonResponseErrorV1`, whose fixed
+ * messages never carry the request URL, body or response content, for every
  * transport-level failure (never for a well-formed JSON body that the
  * caller's own protocol considers an error).
  */
@@ -77,10 +62,8 @@ export async function boundedJsonFetchV1(
     const json = await readBoundedJsonResponseV1(response, { maxBytes: input.maxBytes, signal: combined, emptyBody: 'undefined' });
     return Object.freeze({ status: response.status, ok: true, headers: response.headers, json });
   } catch (error) {
-    if (error instanceof BoundedJsonResponseErrorV1) {
-      throw new BoundedJsonFetchErrorV1(error.code, error.message);
-    }
-    throw new BoundedJsonFetchErrorV1("transport", "The request is unavailable");
+    if (error instanceof BoundedJsonResponseErrorV1) throw error;
+    throw new BoundedJsonResponseErrorV1("transport");
   } finally {
     disposeProviderResponseV1(response);
   }

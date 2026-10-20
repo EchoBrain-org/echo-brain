@@ -1,4 +1,5 @@
 import { withSlackBotTokenV1, type SlackBotTokenGetterV1 } from "../../../../organization-control-plane/application/slack-bot-token-source-v1.js";
+import type { SlackApprovalCardV4 } from "../../../../private-approval/slack-approval-card-v4.js";
 import { SlackApiError, SlackWebApiClient, type SlackWebApiClientOptions } from "../../shared/slack/slack-web-api-client.js";
 
 const POST_RECONCILIATION_LOOKBACK_MS = 5 * 60 * 1_000;
@@ -11,16 +12,6 @@ const DEFINITIVE_POST_FAILURE_CODES = new Set([
 const SLACK_DIRECT_MESSAGE_CHANNEL = /^D[A-Z0-9]{2,255}$/;
 /** The bot token could not be obtained, so no request reached Slack. */
 const TOKEN_UNAVAILABLE = Symbol("Slack bot token unavailable");
-
-export interface PrivateSlackApprovalCardPresentationV1 {
-  readonly text: string;
-  readonly blocks: readonly unknown[];
-  readonly transport: {
-    readonly mrkdwn: false;
-    readonly unfurl_links: false;
-    readonly unfurl_media: false;
-  };
-}
 
 export type PrivateSlackApprovalPostOutcomeV1 =
   | { readonly kind: "posted"; readonly provider_message_ts: string }
@@ -363,7 +354,7 @@ export class PrivateSlackApprovalCardPosterV1 {
       readonly approval_id: string;
       readonly dm_channel_id: string;
       readonly provider_message_ts: string;
-      readonly card: PrivateSlackApprovalCardPresentationV1;
+      readonly card: SlackApprovalCardV4;
     },
     signal?: AbortSignal,
   ): Promise<PrivateSlackApprovalUpdateOutcomeV1> {

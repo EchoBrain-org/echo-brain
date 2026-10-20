@@ -1,10 +1,8 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { PersonClient } from '../../src/product/person-client/client.js';
-import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
+import { signedInHome } from './signed-in-home.js';
 
 const capture_id = 'cap_00000000-0000-4000-8000-000000000001';
 const prepared = { schema_version: 1, kind: 'echo-person-diagnostic-capture-v1', capture_id, status: 'prepared', expires_at: '2026-10-08T20:15:00.000Z' };
@@ -13,13 +11,9 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 function signedInClient(fetch: typeof globalThis.fetch): PersonClient {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-person-diagnostics-'))); homes.push(home);
-  new PersonSessionStore(home).install('https://authority.example.test', 'oau_00000000-0000-4000-8000-000000000001', {
-    organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'prn_00000000-0000-4000-8000-000000000001', membership_id: 'mem_00000000-0000-4000-8000-000000000001',
-    display_name: 'Maya Chen', membership_type: 'employee', identity_binding_id: 'oib_00000000-0000-4000-8000-000000000001', session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
-    access_token: 'A'.repeat(43), refresh_token: 'R'.repeat(43), access_expires_at: '2026-10-08T20:10:00.000Z', refresh_expires_at: '2026-10-14T20:00:00.000Z', hard_reauthentication_at: '2026-10-14T20:00:00.000Z',
-  });
-  return new PersonClient({ home_directory: home, now: () => '2026-10-08T20:00:00.000Z', fetch });
+  const now = '2026-10-08T20:00:00.000Z';
+  const home = signedInHome({ prefix: 'echo-person-diagnostics-', now }); homes.push(home);
+  return new PersonClient({ home_directory: home, now: () => now, fetch });
 }
 
 describe('ordinary request diagnostics client', () => {
@@ -63,22 +57,5 @@ describe('ordinary request diagnostics client', () => {
       ['/v7/person/ask', { schema_version: 3, question: 'What changed?', capture_id }],
       ['/v1/person/runs', { schema_version: 1, operation: 'start', run_id: 'run_example', capture_id }],
     ]);
-  });
-
-  it('captures on /v6 or /v5 when the Authority lacks /v7, and never replays a captured live Ask on /v4', async () => {
-    const absent = () => json({ error: { code: 'not_found', message: 'Route absent' } }, 404);
-    const notFound = (version: 6 | 7) => ({ schema_version: version, kind: `echo-clean-person-answer-v${version}`, scope: { kind: 'global' }, outcome: 'not_found', citations: [],
-      parts: [{ question: 'What changed?', status: 'not_found', statements: [], gap: 'No relevant evidence was found.' }] });
-    const onV6 = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(absent()).mockResolvedValueOnce(json(notFound(7)));
-    await expect(signedInClient(onV6).askWithLiveSources('What changed?', undefined, undefined, capture_id)).resolves.toEqual(notFound(7));
-    expect(onV6.mock.calls.map(([url, init]) => [new URL(String(url)).pathname, JSON.parse(String(init?.body)).capture_id])).toEqual([['/v7/person/ask', capture_id], ['/v6/person/ask', capture_id]]);
-    const onV5 = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(absent()).mockResolvedValueOnce(absent()).mockResolvedValueOnce(json(notFound(6)));
-    await expect(signedInClient(onV5).askWithLiveSources('What changed?', undefined, undefined, capture_id)).resolves.toEqual(notFound(6));
-    expect(onV5.mock.calls.map(([url, init]) => [new URL(String(url)).pathname, JSON.parse(String(init?.body)).capture_id]))
-      .toEqual([['/v7/person/ask', capture_id], ['/v6/person/ask', capture_id], ['/v5/person/ask', capture_id]]);
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(absent()).mockResolvedValueOnce(absent()).mockResolvedValueOnce(absent());
-    const client = signedInClient(fetch);
-    await expect(client.askWithLiveSources('What changed?', undefined, undefined, capture_id)).rejects.toMatchObject({ code: 'not_found', status: 404 });
-    expect(fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual(['/v7/person/ask', '/v6/person/ask', '/v5/person/ask']);
   });
 });

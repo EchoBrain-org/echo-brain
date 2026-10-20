@@ -1,14 +1,16 @@
 import { expect, it, vi } from 'vitest';
 import type { ProviderHttpRequestV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import {
-  PERSON_CONFLUENCE_CANCEL_PATH_V1, PERSON_CONFLUENCE_CONNECT_PATH_V1, PERSON_CONFLUENCE_DISCONNECT_PATH_V1, PERSON_CONFLUENCE_STATUS_PATH_V1,
-} from '@echo-brain/provider-confluence-client/organization-api/confluence-person-connection-v1';
-import {
   PERSON_CONFLUENCE_PROJECT_LIST_PATH_V1, PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, PERSON_CONFLUENCE_SPACES_LIST_PATH_V1,
 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
 import { createConfluencePersonConnectionHttpApplicationV1, type ConfluencePersonConnectionHttpPortV1 } from '../src/confluence-person-connection-http-application-v1.js';
 
 const attempt = '00000000-0000-4000-8000-000000000001';
+// The four routes the shared person connection application builds for every tool.
+const PERSON_CONFLUENCE_CONNECT_PATH_V1 = '/v1/person/tools/confluence/connect';
+const PERSON_CONFLUENCE_STATUS_PATH_V1 = '/v1/person/tools/confluence/status';
+const PERSON_CONFLUENCE_CANCEL_PATH_V1 = '/v1/person/tools/confluence/cancel';
+const PERSON_CONFLUENCE_DISCONNECT_PATH_V1 = '/v1/person/tools/confluence/disconnect';
 const project = 'prj_00000000-0000-4000-8000-000000000010';
 const revision = '00000000-0000-4000-8000-000000000011';
 function request(route_id: string, path: string, value: unknown, input: Partial<ProviderHttpRequestV1> = {}): ProviderHttpRequestV1 {

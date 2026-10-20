@@ -173,7 +173,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
     });
   }
 
-  /** Called synchronously under the DM workflow's disconnect write fence. */
+  /** Called synchronously by the DM workflow's disconnect, right after the durable revoke. */
   invalidateMembership(membershipId: string): void {
     for (const attempt of this.attempts.values()) {
       if (attempt.session.membership_id === membershipId && attempt.status === "pending") {

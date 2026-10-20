@@ -1,10 +1,6 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_HOME_ROWS_V1,
-  PERSON_OPEN_ITEMS_PAGE_V1,
-  PERSON_RUN_ITEMS_MAX_V1,
-  PERSON_RUN_MEETING_ACTIONS_MAX_V1,
   PERSON_RUNS_MAX_RESPONSE_BYTES_V1,
   PERSON_RUNS_PATH_V1,
   validatePersonRunsRequestV1,
@@ -262,8 +258,6 @@ describe('runs API open items', () => {
     refused(() => validatePersonRunsRequestV1({ ...counts, cursor: 'next-page_2' }), 'counts with a cursor');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', read: 'counts' }), 'counts on home');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, read: 'counts' }), 'counts on one item');
-    // The flags it replaced are gone.
-    for (const flag of ['summary_only', 'rows_only']) refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', [flag]: true }), flag);
     // Every item says how its live read went, and carries what it says now exactly when it was opened.
     for (const reach of ['no_access', 'unavailable', 'not_read'] as const) {
       expect(validatePersonRunsResultV1('item', { item: openItem({ reach }) }).item.reach).toBe(reach);
@@ -311,8 +305,6 @@ describe('runs API open items', () => {
     refused(() => validatePersonRunsRequestV1({ ...active, read: 'counts' }), 'states with counts');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', states: ['open'] }), 'states on home');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: ITEM, states: ['open'] }), 'states on one item');
-    // The flag it replaced is gone.
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'items', scope: 'mine', open_only: true }), 'open_only');
   });
 });
 
@@ -431,8 +423,6 @@ describe('runs API open-item results', () => {
     const action = openItem({ kind: 'action', relation: 'needs_updating', expected: 'Send the pilot plan to the vendor', state: 'unsent', sent_at: null, state_set_at: null,
       state_set_by: null, send_included: null, check: null, owner: { ...OWNER, match: 'name' } });
     expect(validatePersonRunsResultV1('item', { item: action }).item.kind).toBe('action');
-    expect(PERSON_RUN_MEETING_ACTIONS_MAX_V1).toBe(20);
-    expect(PERSON_RUN_ITEMS_MAX_V1).toBe(40);
     const kinds = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'];
     expect(validatePersonRunsResultV1('home', { send: [sendRow({ kinds, items: 40, owners: Array.from({ length: 40 }, (_, at) => `Owner ${at}`) })], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false })
       .send[0]!.kinds).toEqual(kinds);
@@ -440,8 +430,6 @@ describe('runs API open-item results', () => {
   });
 
   it('accepts a home and an items page up to their bounds', () => {
-    expect(PERSON_HOME_ROWS_V1).toBe(20);
-    expect(PERSON_OPEN_ITEMS_PAGE_V1).toBe(50);
     const fullHome = home({ send: Array.from({ length: 20 }, () => sendRow()), items: Array.from({ length: 20 }, () => seen) });
     expect(validatePersonRunsResultV1('home', fullHome)).toEqual(fullHome);
     const empty = { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: true };

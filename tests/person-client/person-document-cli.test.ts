@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
+import { signedInHome } from './signed-in-home.js';
 import { PERSON_DOCUMENT_MAX_ORIGINAL_BYTES } from '@echo-brain/organization-api';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 
@@ -20,14 +21,7 @@ afterAll(() => { if (templateHome !== undefined) rmSync(templateHome, { recursiv
 function setup(bytes = Buffer.from('# SCOUT PRD\n' + 'robot requirements\n'.repeat(750))) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-document-cli-'))); homes.push(home);
   if (templateHome === undefined) {
-    templateHome = realpathSync(mkdtempSync(join(tmpdir(), 'echo-document-cli-template-')));
-    new PersonSessionStore(templateHome).install('https://authority.example', 'oau_00000000-0000-4000-8000-000000000001', {
-      organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'prn_00000000-0000-4000-8000-000000000001',
-      membership_id: 'mem_00000000-0000-4000-8000-000000000001', display_name: 'Document Fixture', membership_type: 'employee',
-      identity_binding_id: 'oib_00000000-0000-4000-8000-000000000001', session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
-      access_token: 'A'.repeat(43), refresh_token: 'R'.repeat(43), access_expires_at: '2026-09-23T01:10:00.000Z',
-      refresh_expires_at: '2026-09-30T01:00:00.000Z', hard_reauthentication_at: '2026-09-30T01:00:00.000Z',
-    });
+    templateHome = signedInHome({ prefix: 'echo-document-cli-template-', now: NOW, authority: 'https://authority.example', display_name: 'Document Fixture' });
   }
   const template = new PersonSessionStore(templateHome);
   const store = new PersonSessionStore(home);

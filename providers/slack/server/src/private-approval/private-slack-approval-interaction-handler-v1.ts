@@ -8,7 +8,6 @@ import {
   parseVerifiedPrivateSlackApprovalInteractionV1,
   verifiedSlackResponseUrlV1,
   verifyPrivateSlackApprovalRequestV1,
-  type PrivateSlackApprovalInteractionRejectionStageV1,
   type VerifiedSlackApprovalClickV1,
 } from "./private-slack-approval-interaction-protocol-v1.js";
 
@@ -34,9 +33,6 @@ export interface PrivateSlackApprovalInteractionHandlerInputV1 {
     readonly text: string;
   }) => Promise<void>;
   readonly now_unix_seconds?: () => number;
-  readonly on_rejection?: (event: {
-    readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
-  }) => void;
 }
 async function sendFeedbackBestEffort(
   feedback: NonNullable<PrivateSlackApprovalInteractionHandlerInputV1["feedback"]>,
@@ -122,9 +118,6 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
         interaction = parseVerifiedPrivateSlackApprovalInteractionV1(verified);
       } catch (error) {
         if (error instanceof PrivateSlackApprovalInteractionError) {
-          try {
-            input.on_rejection?.({ stage: error.rejection_stage });
-          } catch {}
           throw new AuthorityOperationError(
             "invalid_request",
             "Slack interaction payload is invalid",

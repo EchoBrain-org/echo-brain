@@ -143,22 +143,13 @@ const SLACK_ENTERPRISE_ID_RE = /^E[A-Z0-9]{2,}$/;
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,}$/;
 const SLACK_BOT_ID_RE = /^B[A-Z0-9]{2,}$/;
 const SLACK_APP_ID_RE = /^A[A-Z0-9]{2,}$/;
+/** The bot posts, updates and reads only its own direct messages, never a channel. */
 const SLACK_DM_ID_RE = /^D[A-Z0-9]{2,}$/;
-const SLACK_CONVERSATION_ID_RE = /^[CGD][A-Z0-9]{2,}$/;
 const SLACK_MESSAGE_TS_RE = /^[0-9]{1,16}\.[0-9]{6}$/;
 const SLACK_SCOPE_RE = /^[a-z][a-z0-9:_-]{0,127}$/;
 const SLACK_IDENTITY_REQUIRED_SCOPE = "users:read";
 const SLACK_DIRECT_MESSAGE_OPEN_REQUIRED_SCOPE = "im:write";
-
-/** The bot reads only its own DMs, to reconcile card delivery; never a channel. */
-function requiredSlackHistoryScope(channel: string): string {
-  if (channel.startsWith("D")) return "im:history";
-  throw new SlackApiError(
-    "invalid",
-    "Slack conversations.history reads only the bot's own direct messages",
-    false,
-  );
-}
+const SLACK_DIRECT_MESSAGE_HISTORY_REQUIRED_SCOPE = "im:history";
 
 function requiredSlackId(
   body: Record<string, unknown>,
@@ -403,7 +394,7 @@ export class SlackWebApiClient {
     input: SlackPostMessageInput,
     signal?: AbortSignal,
   ): Promise<SlackPostedMessage> {
-    if (!SLACK_CONVERSATION_ID_RE.test(input.channel)) {
+    if (!SLACK_DM_ID_RE.test(input.channel)) {
       throw new SlackApiError(
         "invalid",
         "Slack chat.postMessage requires a canonical conversation ID",
@@ -438,7 +429,7 @@ export class SlackWebApiClient {
     // It can be absent, stale, or differ in shape from Slack's stored card.
     if (
       channel !== input.channel ||
-      !SLACK_CONVERSATION_ID_RE.test(channel) ||
+      !SLACK_DM_ID_RE.test(channel) ||
       !SLACK_MESSAGE_TS_RE.test(ts)
     ) {
       throw new SlackApiError(
@@ -460,7 +451,7 @@ export class SlackWebApiClient {
     input: SlackUpdateMessageInput,
     signal?: AbortSignal,
   ): Promise<SlackPostedMessage> {
-    if (!SLACK_CONVERSATION_ID_RE.test(input.channel)) {
+    if (!SLACK_DM_ID_RE.test(input.channel)) {
       throw new SlackApiError(
         "invalid",
         "Slack chat.update requires a canonical conversation ID",
@@ -499,7 +490,7 @@ export class SlackWebApiClient {
     if (
       channel !== input.channel ||
       ts !== input.ts ||
-      !SLACK_CONVERSATION_ID_RE.test(channel) ||
+      !SLACK_DM_ID_RE.test(channel) ||
       !SLACK_MESSAGE_TS_RE.test(ts)
     ) {
       throw new SlackApiError(
@@ -525,7 +516,7 @@ export class SlackWebApiClient {
     signal?: AbortSignal,
   ): Promise<readonly SlackChannelMessage[]> {
     if (
-      !SLACK_CONVERSATION_ID_RE.test(input.channel) ||
+      !SLACK_DM_ID_RE.test(input.channel) ||
       !SLACK_MESSAGE_TS_RE.test(input.oldest) ||
       !SLACK_MESSAGE_TS_RE.test(input.latest)
     ) {
@@ -566,7 +557,7 @@ export class SlackWebApiClient {
         {
           signal,
           method: "GET",
-          requiredScope: requiredSlackHistoryScope(input.channel),
+          requiredScope: SLACK_DIRECT_MESSAGE_HISTORY_REQUIRED_SCOPE,
         },
       );
       const pageMessages = body["messages"];

@@ -173,6 +173,61 @@ export function assertPatternString(
   if (!pattern.test(value)) fail(`${label} is invalid`);
 }
 
+/** An open item's id, as the runs API and a follow-up citation name it. */
+export function openItemId(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !/^itm_[A-Za-z0-9-]{4,60}$/.test(value)) fail(`${label} is invalid`);
+  return value;
+}
+
+/** One trimmed NFC line of 1 to `maximum` characters (code points). */
+export function boundedLine(value: unknown, label: string, maximum: number): string {
+  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || value !== value.normalize('NFC') ||
+      /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) || [...value].length > maximum) fail(`${label} is invalid`);
+  return value;
+}
+
+/**
+ * Text that is not blank, of at most `maximumBytes` UTF-8 bytes, with no
+ * control character or lone surrogate and, unless `multiline`, no tab or
+ * line break. Surrounding whitespace is kept.
+ */
+export function assertBoundedText(value: unknown, label: string, maximumBytes: number, multiline = false): asserts value is string {
+  if (typeof value !== 'string' || value.trim().length === 0 ||
+      utf8ByteLength(value) > maximumBytes ||
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value) ||
+      (!multiline && /[\t\r\n]/u.test(value))) fail(`${label} is invalid`);
+}
+
+/** Released evidence keeps its exact whitespace: NFC text of 1 to `maximumBytes` UTF-8 bytes, with no control but tab and line breaks. */
+export function assertEvidenceText(value: unknown, label: string, maximumBytes: number): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0 || value !== value.normalize('NFC') ||
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || utf8ByteLength(value) > maximumBytes) {
+    fail(`${label} is invalid`);
+  }
+}
+
+/** A page cursor: canonical unpadded base64url of at most MAX_ORGANIZATION_API_CURSOR_CHARACTERS. */
+export function pageCursor(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_ORGANIZATION_API_CURSOR_CHARACTERS || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) fail(`${label} is invalid`);
+  const last = value.at(-1)!; const remainder = value.length % 4;
+  if ((remainder === 2 && !/^[AQgw]$/.test(last)) || (remainder === 3 && !/^[AEIMQUYcgkosw048]$/.test(last))) fail(`${label} is invalid`);
+  return value;
+}
+
+export function boundedList(value: unknown, label: string, maximum: number, minimum = 0): readonly unknown[] {
+  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) fail(`${label} is invalid`);
+  return value;
+}
+
+export function assertUnique(values: readonly unknown[], label: string): void {
+  if (new Set(values).size !== values.length) fail(`${label} repeats an entry`);
+}
+
+export function oneOf<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
+  if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) fail(`${label} is invalid`);
+  return value as T;
+}
+
 /** A tool's id, as citations, tools lists, refs and progress sources name it. */
 export function assertToolId(
   value: unknown,

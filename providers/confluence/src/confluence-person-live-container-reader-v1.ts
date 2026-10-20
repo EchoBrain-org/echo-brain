@@ -5,12 +5,10 @@ import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime
 import { createPersonToolContainerReaderV1, personToolContainerRowsV1, type PersonToolContainerV1 } from '@echo-brain/provider-runtime/person-tool-container-reader-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
 import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
-import { confluenceArray, confluenceFailure, confluenceRecord, confluenceString, copyConfluenceBindingV1 } from './confluence-validation-v1.js';
+import { CONFLUENCE_ID as ID, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString, copyConfluenceBindingV1 } from './confluence-validation-v1.js';
 
-const ID = /^[1-9][0-9]{0,19}$/;
 /** A global space key, or a personal space's "~" and its owner's account or user name. */
 const SPACE_KEY = /^~?[A-Za-z0-9][A-Za-z0-9_:.-]{0,253}$/;
-const API_ORIGIN = 'https://api.atlassian.com';
 /** A search looks through at most this many pages of spaces, each as large as Confluence serves. */
 const SCAN_PAGES = 4;
 const SCAN_PAGE = 250;
@@ -48,21 +46,11 @@ export async function createConfluencePersonLiveContainerReaderV1(options: {
     if (name.trim() === '') confluenceFailure('invalid_output');
     return Object.freeze({ id: confluenceString(value.id, 20, ID), key: confluenceString(value.key, 255, SPACE_KEY), name });
   }
-  /** Only the opaque cursor is taken from Confluence's next link, never the link itself. */
-  function nextCursor(raw: unknown): string | undefined {
-    if (raw === undefined || raw === null) return undefined;
-    let url: URL;
-    try { url = new URL(confluenceString(raw, 4096), API_ORIGIN); } catch { confluenceFailure('invalid_output'); }
-    const paths = ['/api/v2/spaces', '/wiki/api/v2/spaces', `/ex/confluence/${cloud}/wiki/api/v2/spaces`];
-    if (url.origin !== API_ORIGIN || !paths.includes(url.pathname) || url.username !== '' || url.password !== '' || url.hash !== '' ||
-        url.searchParams.getAll('cursor').length !== 1) confluenceFailure('invalid_output');
-    return confluenceString(url.searchParams.get('cursor'), 4096);
-  }
   async function spaces(limit: number, cursor: string | undefined, signal?: AbortSignal) {
     const page = confluenceRecord(await transport.request({ path: '/api/v2/spaces', query: { limit: String(limit), ...(cursor === undefined ? {} : { cursor }) }, signal }));
     signal?.throwIfAborted();
     const { containers, left_out } = personToolContainerRowsV1(confluenceArray(page.results, limit), space);
-    const next = nextCursor(page._links === undefined ? undefined : confluenceRecord(page._links).next);
+    const next = confluenceNextCursorV1(page._links === undefined ? undefined : confluenceRecord(page._links).next, cloud, '/api/v2/spaces');
     return { containers, left_out, next };
   }
 

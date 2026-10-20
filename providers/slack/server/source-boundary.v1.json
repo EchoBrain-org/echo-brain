@@ -41,7 +41,6 @@
     "@echo-brain/organization-authority-kernel",
     "@echo-brain/federation-protocol",
     "@echo-brain/provider-slack-client",
-    "@echo-brain/organization-processing",
     "@echo-brain/organization-protocol",
     "@echo-brain/organization-api",
     "@echo-brain/provider-runtime"
@@ -51,7 +50,6 @@
     "openid-client"
   ],
   "allowed_node_builtins": [
-    "fs",
     "crypto",
     "path"
   ],
@@ -71,7 +69,6 @@
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-control-plane",
         "@echo-brain/provider-slack-client",
-        "@echo-brain/organization-processing",
         "@echo-brain/organization-api",
         "@echo-brain/provider-runtime"
       ],
@@ -80,7 +77,6 @@
         "openid-client"
       ],
       "allowed_node_builtins": [
-        "fs",
         "crypto",
         "path"
       ]
@@ -116,7 +112,7 @@
       {
         "name": "Slack approval integration API",
         "path": "providers/slack/server/src/organization-control-plane/slack-approval-integration-v1.ts",
-        "export": "resolveCurrentSlackDmApprovalReviewerTargetV1"
+        "export": "resolveSlackDmApprovalTargetV1"
       },
       {
         "name": "Slack web identity provider",

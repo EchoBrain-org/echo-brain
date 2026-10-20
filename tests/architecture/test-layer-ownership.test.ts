@@ -91,7 +91,7 @@ const rules: readonly TestLayerRule[] = [
   {
     root: 'tests/person-client',
     allows: (path) =>
-      path.startsWith('src/product/person-client/') ||
+      path.startsWith('src/product/person-client/') || path.startsWith('tests/person-client/') ||
       path === 'workspace:@echo-brain/person-client' ||
       path === 'workspace:@echo-brain/federation-protocol' ||
       path === 'workspace:@echo-brain/organization-api' ||

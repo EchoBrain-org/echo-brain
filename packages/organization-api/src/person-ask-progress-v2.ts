@@ -1,7 +1,5 @@
-import type { PersonAnswerResponseV5 } from './person-answer-v5.js';
-import type { PersonAnswerResponseV6 } from './person-answer-v6.js';
 import type { PersonAnswerCitationV7, PersonAnswerResponseV7 } from './person-answer-v7.js';
-import { validatePersonAnswerCitationV7, validatePersonAnswerResponseV5, validatePersonAnswerResponseV6, validatePersonAnswerResponseV7 } from './person-answer-v4.js';
+import { validatePersonAnswerCitationV7, validatePersonAnswerResponseV7 } from './person-answer-v4.js';
 import { askProgressCodec } from './person-ask-progress-codec.js';
 import {
   PERSON_ASK_PROGRESS_COUNT_MAX_V1,
@@ -13,12 +11,10 @@ import {
   PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1,
   PERSON_ASK_RECEIPT_MAX_BYTES_V1,
   PERSON_ASK_RECEIPT_ROWS_MAX_V1,
-  validatePersonAskReceiptV1,
   type PersonAskProgressErrorEventV1,
   type PersonAskProgressSourceV1,
   type PersonAskProgressStageEventV1,
 } from './person-ask-progress-v1.js';
-import { asEnumerableRecord as object, assertExactKeys, fail } from './validation.js';
 
 /**
  * Ask progress V2 (ADR-0039, ADR-0040): the same stream as V1, for the V7
@@ -72,26 +68,6 @@ export type PersonAskProgressStepEventV2 = PersonAskProgressStageEventV2 | Perso
 export type PersonAskProgressTerminalEventV2 = PersonAskProgressAnswerEventV2 | PersonAskProgressErrorEventV2;
 export type PersonAskProgressEventV2 = PersonAskProgressStepEventV2 | PersonAskProgressTerminalEventV2;
 
-/**
- * `person ask --live --progress` on a client that prefers `/v6`: one line per
- * step event. A V1 step, from an Authority that only streams `/v5`, is a V2
- * step too, so one line shape serves both.
- */
-export interface PersonAskProgressLineV2 {
-  readonly ok: true;
-  readonly progress: PersonAskProgressStepEventV2;
-}
-/**
- * The final line: the V7 answer with a V2 receipt when `/v6` streamed, the V6
- * answer with a V1 receipt when only `/v5` did, and no receipt when the
- * Authority did not stream (or for the `/v4` fallback).
- */
-export interface PersonAskProgressResultLineV2 {
-  readonly ok: true;
-  readonly result: PersonAnswerResponseV7 | PersonAnswerResponseV6 | PersonAnswerResponseV5;
-  readonly receipt?: PersonAskReceiptV2;
-}
-
 const V2 = askProgressCodec({
   plain_sources: ['meetings', 'documents', 'slack', 'follow_ups'],
   tool_sources: ['tickets', 'pages'],
@@ -112,11 +88,6 @@ export function validatePersonAskReceiptV2(value: unknown): PersonAskReceiptV2 {
   return V2.receipt(value) as PersonAskReceiptV2;
 }
 
-/** Any one `/v6` stream event, terminal events included. */
-export function validatePersonAskProgressEventV2(value: unknown): PersonAskProgressEventV2 {
-  return V2.event(value) as PersonAskProgressEventV2;
-}
-
 export function formatPersonAskProgressEventV2(event: PersonAskProgressEventV2): string {
   return V2.format(event);
 }
@@ -129,20 +100,4 @@ export interface PersonAskProgressDecoderV2 {
 /** V1's decoder, for V2 events: it fails closed exactly as V1's does. */
 export function createPersonAskProgressDecoderV2(): PersonAskProgressDecoderV2 {
   return V2.decoder() as PersonAskProgressDecoderV2;
-}
-
-export function validatePersonAskProgressLineV2(value: unknown): PersonAskProgressLineV2 {
-  return V2.line(value) as PersonAskProgressLineV2;
-}
-
-export function validatePersonAskProgressResultLineV2(value: unknown): PersonAskProgressResultLineV2 {
-  const input = object(value, 'Ask result line');
-  assertExactKeys(input, ['ok', 'result', ...(Object.hasOwn(input, 'receipt') ? ['receipt'] : [])], 'Ask result line');
-  if (input.ok !== true) fail('Ask result line is invalid');
-  const version = object(input.result, 'Ask result line result').schema_version;
-  // A receipt comes only with a streamed answer: V7 from `/v6`, V6 from `/v5`, each with its own receipt.
-  if (Object.hasOwn(input, 'receipt') && version !== 7 && version !== 6) fail('Ask result line receipt needs a streamed answer');
-  const result = version === 7 ? validatePersonAnswerResponseV7(input.result) : version === 6 ? validatePersonAnswerResponseV6(input.result) : validatePersonAnswerResponseV5(input.result);
-  const receipt = !Object.hasOwn(input, 'receipt') ? undefined : version === 7 ? validatePersonAskReceiptV2(input.receipt) : validatePersonAskReceiptV1(input.receipt);
-  return Object.freeze({ ok: true, result, ...(receipt === undefined ? {} : { receipt }) });
 }

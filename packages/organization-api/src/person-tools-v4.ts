@@ -24,16 +24,21 @@ export interface OrganizationPersonToolsV4 {
  * external identities.
  */
 export function validateOrganizationPersonToolsV4(value: unknown): OrganizationPersonToolsV4 {
+  return validatePersonToolsVersion(value, 4) as OrganizationPersonToolsV4;
+}
+
+/** The V3 or V4 tools list; V4 adds each tool's organization setup. Internal: each version's module exports its own validator. */
+export function validatePersonToolsVersion(value: unknown, version: 3 | 4): unknown {
   const r = asRecord(value, 'Person tools');
   assertExactKeys(r, ['schema_version', 'kind', 'organization_id', 'membership_id', 'tools'], 'Person tools');
-  if (r.schema_version !== 4 || r.kind !== 'echo-organization-person-tools') fail('Person tools version is unsupported');
+  if (r.schema_version !== version || r.kind !== 'echo-organization-person-tools') fail('Person tools version is unsupported');
   assertId(r.organization_id, 'org', 'organization_id');
   assertId(r.membership_id, 'mem', 'membership_id');
   if (!Array.isArray(r.tools) || r.tools.length > 32) fail('Person tools list is invalid');
   const seen = new Set<string>();
   for (const value of r.tools as unknown[]) {
     const tool = asRecord(value, 'Person tool');
-    assertExactKeys(tool, ['tool_id', 'display_name', 'availability', 'personal_status', 'external_scope_id', 'external_subject_id', 'organization_setup'], 'Person tool');
+    assertExactKeys(tool, ['tool_id', 'display_name', 'availability', 'personal_status', 'external_scope_id', 'external_subject_id', ...(version === 4 ? ['organization_setup'] : [])], 'Person tool');
     assertToolId(tool.tool_id);
     assertPatternString(tool.display_name, 'display_name', 128, /^[^\u0000-\u001f\u007f]+$/);
     if (seen.has(String(tool.tool_id))) fail('Person tool identity is duplicated');
@@ -43,7 +48,7 @@ export function validateOrganizationPersonToolsV4(value: unknown): OrganizationP
     for (const field of ['external_scope_id', 'external_subject_id'] as const) {
       if (tool[field] !== null) assertPatternString(tool[field], field, 256, /^[^\u0000-\u001f\u007f]+$/);
     }
-    if (tool.organization_setup !== null && !ORGANIZATION_TOOL_SETUP_STATUSES_V4.includes(tool.organization_setup as OrganizationToolSetupStatusV4)) {
+    if (version === 4 && tool.organization_setup !== null && !ORGANIZATION_TOOL_SETUP_STATUSES_V4.includes(tool.organization_setup as OrganizationToolSetupStatusV4)) {
       fail('Person tool organization setup is invalid');
     }
     if (tool.availability === 'unavailable') {
@@ -51,7 +56,7 @@ export function validateOrganizationPersonToolsV4(value: unknown): OrganizationP
     } else if (tool.personal_status === 'unavailable' ||
         (tool.personal_status === 'linked' ? tool.external_subject_id === null : tool.external_subject_id !== null)) fail('Person tool identity state is invalid');
   }
-  return r as unknown as OrganizationPersonToolsV4;
+  return r;
 }
 
 /** Strips the owner-only organization setup status for a V3 consumer. */

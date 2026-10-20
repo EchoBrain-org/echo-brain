@@ -13,7 +13,6 @@ import { findSlackAppCredentialsByReferenceSha256V1 } from "../organization-cont
 import type { ActiveSlackOrganizationTool } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { readActiveSlackConnectionV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
-import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type {
   ProviderHttpRequestV1,
@@ -193,7 +192,6 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
             isActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
               health.needsReinstall(connection.state_sha256),
           },
-          authorization_fence: new ReadableSearchAuthorizationFence(),
         } satisfies CreateSqliteSlackPersonIdentityLinkWorkflowV1Input;
         const repository = createSqliteSlackPersonIdentityLinkRepositoryV1(workflowInput);
         let appBrowser: { readonly reference_sha256: string; readonly provider: SlackBrowserIdentityProvider } | undefined;

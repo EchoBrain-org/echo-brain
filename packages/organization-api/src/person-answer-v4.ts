@@ -11,23 +11,23 @@ import {
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
 import { PERSON_WORKSPACE_CITATION_KINDS_V1, validatePersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { validatePersonDocumentIdV1 } from './person-documents-v1.js';
 import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
-import { validatePersonAnswerScopeV3, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
+import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
 import { validatePersonOpenRefV1, type PersonOpenRefV1 } from './person-list-v1.js';
 import {
   asEnumerableRecord as object,
   assertDigest,
+  assertEvidenceText as evidenceText,
   assertExactKeys,
   fail,
   MAX_ORGANIZATION_API_BODY_BYTES,
   utf8ByteLength,
 } from './validation.js';
 
-/** The Agentic Ask endpoint: the only Ask since ADR-0022 retired V1 and V2. */
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
 export const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
+/** The ordinary Agentic Ask route, with the V4 answer. ADR-0022 retired the V1 and V2 Asks. */
 export const PERSON_ANSWER_PATH_V3 = '/v3/person/ask';
 export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
 export const PERSON_EVIDENCE_OPEN_PATH_V1 = '/v3/person/evidence/open';
@@ -185,22 +185,6 @@ function text(value: unknown, label: string, maximumBytes: number, multiline = f
   ) fail(`${label} is invalid`);
 }
 
-/** Immutable released packets retain their exact whitespace. */
-function evidenceText(value: unknown, label: string, maximumBytes: number): asserts value is string {
-  if (
-    typeof value !== 'string' || value.length === 0 || value !== value.normalize('NFC') ||
-    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || utf8ByteLength(value) > maximumBytes
-  ) fail(`${label} is invalid`);
-}
-
-/** Matches the existing V3 source-coordinate character limits, including non-ASCII labels. */
-function coordinateText(value: unknown, label: string, maximumCodePoints: number): asserts value is string {
-  if (
-    typeof value !== 'string' || value.length === 0 || value.trim() !== value || value !== value.normalize('NFC') ||
-    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) || [...value].length > maximumCodePoints
-  ) fail(`${label} is invalid`);
-}
-
 function scope(value: unknown): PersonAnswerScopeV3 {
   return validatePersonAnswerScopeV3(value, 'Ask response scope');
 }
@@ -251,23 +235,7 @@ function citation(value: unknown): PersonAnswerCitationV3 {
     if (!['organization-member-readable-person-v2', 'restricted-reviewer-person-v2', 'project-members-readable-person-v1'].includes(input.policy_id as string)) fail('Ask approved-record citation policy_id is invalid');
     return Object.freeze({ kind: 'approved_record', atom_id: input.atom_id as `sha256:${string}`, record_sha256: input.record_sha256 as `sha256:${string}`, policy_id: input.policy_id as ApprovedRecordPolicyV3 });
   }
-  if (input.kind === 'source_revision') {
-    const keys = ['kind', 'source_id', 'revision_id', 'source_sha256', 'representation_sha256', 'anchor_sha256', ...(Object.hasOwn(input, 'document_id') ? ['document_id'] : []), ...(Object.hasOwn(input, 'label') ? ['label'] : [])];
-    assertExactKeys(input, keys, 'Ask citation');
-    if (typeof input.source_id !== 'string' || !/^source:[a-f0-9]{64}$/.test(input.source_id)) fail('Ask source citation source_id is invalid');
-    coordinateText(input.revision_id, 'Ask source citation revision_id', 512);
-    assertDigest(input.source_sha256, 'Ask source citation source_sha256');
-    assertDigest(input.representation_sha256, 'Ask source citation representation_sha256');
-    assertDigest(input.anchor_sha256, 'Ask source citation anchor_sha256');
-    const document_id = Object.hasOwn(input, 'document_id') ? validatePersonDocumentIdV1(input.document_id) : undefined;
-    if (Object.hasOwn(input, 'label')) coordinateText(input.label, 'Ask source citation label', 200);
-    return Object.freeze({
-      kind: 'source_revision', source_id: input.source_id as `source:${string}`, revision_id: input.revision_id as string,
-      source_sha256: input.source_sha256 as `sha256:${string}`, representation_sha256: input.representation_sha256 as `sha256:${string}`,
-      anchor_sha256: input.anchor_sha256 as `sha256:${string}`,
-      ...(document_id === undefined ? {} : { document_id }), ...(Object.hasOwn(input, 'label') ? { label: input.label as string } : {}),
-    });
-  }
+  if (input.kind === 'source_revision') return validatePersonSourceRevisionCitationV1(input, 'optional');
   fail('Ask citation kind is invalid');
 }
 
