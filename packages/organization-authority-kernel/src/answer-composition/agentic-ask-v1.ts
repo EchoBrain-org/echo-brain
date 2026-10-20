@@ -251,7 +251,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const askedBy = askerName(options.asker);
   const liveCatalog: AgenticResearchSourceV1[] = (options.desk.live_sources ?? []).flatMap(descriptor => {
     // Citation compatibility belongs to the response version, never a provider name.
-    if (descriptor.kind === 'ticket' && (!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine')) return [];
+    if (descriptor.kind === 'ticket' && (!tickets || options.desk.scope.kind === 'mine')) return [];
     if (descriptor.kind === 'page' && (responseVersion < 6 || options.desk.scope.kind === 'mine')) return [];
     // Follow-ups are cited only from V7, and Mine reads only what the asker added (ADR-0040).
     if (descriptor.kind === FOLLOW_UP_EVIDENCE_KIND_V1 && (responseVersion < FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 || options.desk.scope.kind === 'mine')) return [];

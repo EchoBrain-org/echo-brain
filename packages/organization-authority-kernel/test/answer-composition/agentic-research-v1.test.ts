@@ -113,7 +113,6 @@ describe("research result beside Ask", () => {
       const calls: { tool: string; source?: string; kinds?: readonly string[]; item?: string }[] = [];
       const port: Partial<EvidenceDeskPortV2> = {
         scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" },
-        ticket_available: true,
         live_sources: [{ source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" }],
         search: async input => {
           calls.push({ tool: "search", source: input.source, kinds: input.kinds });

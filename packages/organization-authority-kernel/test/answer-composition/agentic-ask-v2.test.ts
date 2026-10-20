@@ -90,7 +90,7 @@ describe('Agentic Ask V2 ticket release', () => {
     const empty = { items: [], truncated: false, receipt_digests: [] };
     const desk: EvidenceDeskPortV2 = {
       scope: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' },
-      ticket_available: false, live_sources: [],
+      live_sources: [],
       search: async () => empty, list: async () => empty, open: async () => empty, revalidate: async () => checked,
     };
     await createAgenticAskV2({ desk,
@@ -111,7 +111,7 @@ describe('Agentic Ask V2 ticket release', () => {
       receipt_sha256: canonicalSha256('other-provider-release'),
     };
     const desk: EvidenceDeskPortV2 = {
-      scope: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' }, ticket_available: true,
+      scope: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' },
       live_sources: [TICKETS],
       search: vi.fn(async () => ({ items: [ticket], truncated: false, receipt_digests: [ticket.receipt_sha256] })),
       list: vi.fn(async () => { throw new Error('model did not choose list'); }),

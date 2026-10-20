@@ -140,8 +140,6 @@ export interface EvidenceDeskListInputV2 extends Omit<EvidenceDeskListInputV1, '
 }
 
 export interface EvidenceDeskPortV2 extends Omit<EvidenceDeskPortV1, 'search' | 'open' | 'list'> {
-  /** Request-local availability selected by server composition, without provider coordinates. */
-  readonly ticket_available?: boolean;
   /** Connected live sources let research choose without provider implementation details. */
   readonly live_sources?: readonly EvidenceDeskLiveSourceV2[];
   search(input: Omit<EvidenceDeskSearchInputV1, 'kinds' | 'source'> & { readonly source?: string; readonly kinds?: readonly EvidenceDeskKindV2[] }): Promise<EvidenceDeskResultV2>;

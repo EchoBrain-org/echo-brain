@@ -81,7 +81,7 @@ function fixture(options: {
   const log: Log = [];
   let checks = 0; let calls = 0;
   const desk: EvidenceDeskPortV2 = {
-    scope: { kind: "global" }, ticket_available: true,
+    scope: { kind: "global" },
     live_sources: [{ source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" }],
     search: vi.fn(async input => {
       log.push(`search:${input.source ?? "all"}`);
@@ -347,7 +347,7 @@ describe("the receipt counts what research looked through (ADR-0043)", () => {
     ];
     const list = pager(tickets(1, 30), 50, {}, { page_full: false });
     const desk: EvidenceDeskPortV2 = {
-      scope: { kind: "global" }, ticket_available: true, live_sources: [JIRA], list, revalidate: vi.fn(async () => checked),
+      scope: { kind: "global" }, live_sources: [JIRA], list, revalidate: vi.fn(async () => checked),
       search: vi.fn(async () => { throw new Error("unexpected search"); }), open: vi.fn(async () => { throw new Error("unexpected open"); }),
     };
     const generate = vi.fn(async () => replies.shift());

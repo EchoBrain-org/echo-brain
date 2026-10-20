@@ -87,7 +87,7 @@ function oct4({ team = false, more = false, ...desk }: { readonly team?: boolean
 /** Jira over `rows`, `size` a page; with `body`, opening a ticket returns its body under the row's own id. */
 function jira(rows: readonly EvidenceDeskItemV2[], { size = 50, more = {}, last = {}, body, ...desk }: { readonly size?: number; readonly more?: object; readonly last?: object; readonly body?: (n: number) => string } & Partial<EvidenceDeskPortV2> = {}): Partial<EvidenceDeskPortV2> {
   return {
-    live_sources: [JIRA], ticket_available: true, list: pager(rows, size, more, last),
+    live_sources: [JIRA], list: pager(rows, size, more, last),
     ...(body === undefined ? {} : { open: vi.fn(async (input: { readonly item: string }) => { const n = Number(/THERM-(\d+)/u.exec(input.item)![1]); return result([ticketBody(n, body(n))]) as EvidenceDeskResultV2; }) }), ...desk,
   };
 }

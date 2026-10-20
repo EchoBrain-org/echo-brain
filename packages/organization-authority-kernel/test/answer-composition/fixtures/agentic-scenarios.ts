@@ -220,7 +220,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       const listedPage = page("1441793", undefined);
       const openPage = page("1441793", "DVT review: HOLD until TC-D-03 and BUG-412 are resolved.");
       const desk: EvidenceDeskPortV2 = {
-        scope: { kind: "global" }, ticket_available: true,
+        scope: { kind: "global" },
         live_sources: [
           { source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" },
           { source_id: "confluence", kind: "page", selector: "pages", description: "Live knowledge pages.", metadata_only_list: true, tool_id: "confluence" },

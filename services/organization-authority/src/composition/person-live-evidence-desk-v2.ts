@@ -108,7 +108,6 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
   const refused = (): never => { throw new AuthorityOperationError('unauthorized', 'Live source is unavailable in this scope'); };
   const desk: EvidenceDeskPortV2 = Object.freeze<EvidenceDeskPortV2>({
     scope: base.scope,
-    ticket_available: [...sources.values()].some(value => value.descriptor.kind === 'ticket'),
     live_sources: Object.freeze([...[...sources.values()].map(value => value.descriptor), ...(followUpSource === undefined ? [] : [followUpSource.descriptor]),
       ...(workspaceSources === undefined ? [] : [...workspaceSources.values()].map(value => value.descriptor))]),
     async search(input) {

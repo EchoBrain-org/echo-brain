@@ -37,7 +37,6 @@ describe('request-owned research trace', () => {
       captureCoreRuntimeContentV1('model_request', input.user_prompt);
       return replies[index];
     }, {
-      ticket_available: true,
       live_sources: [{ source_id: 'jira', kind: 'ticket', selector: 'tickets', description: 'Live tickets', metadata_only_list: true, tool_id: 'jira' }],
       list: async () => result([anchor]),
       open: async input => input.item === anchor.id ? result([anchorBody, linked]) : result([linkedBody]),

@@ -34,7 +34,7 @@ const result = (...items: EvidenceDeskItemV2[]): EvidenceDeskResultV2 => ({ item
 
 function deskWith(live: NonNullable<EvidenceDeskPortV2['live_sources']>, items: readonly EvidenceDeskItemV2[] = [fanCurve, thresholds]) {
   return {
-    scope: { kind: 'global' as const }, live_sources: live, ticket_available: live.some(source => 'kind' in source && source.kind === 'ticket'),
+    scope: { kind: 'global' as const }, live_sources: live,
     search: vi.fn(async (_input: Parameters<EvidenceDeskPortV2['search']>[0]) => result(...items)),
     list: vi.fn(async (input: Parameters<EvidenceDeskPortV2['list']>[0]) => input.source === 'follow_ups' ? result(...items) : result()),
     open: vi.fn(async () => result(items[0]!)),
