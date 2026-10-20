@@ -327,8 +327,7 @@ is an exact project read, and each project cites its `/browse/<key>` link.
 
 [ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md) accepts
 Nango custody and the person-bound live release path, now covered by
-INV-PERMISSIONS-015. `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=true` opens the code gate;
-runtime selection remains explicit. Modern Slack Nango wiring is preserved and
+INV-PERMISSIONS-015. Runtime selection remains explicit. Modern Slack Nango wiring is preserved and
 exercised with Jira in the same Authority composition proof.
 
 Configure the Nango Cloud Jira integration and distributable
