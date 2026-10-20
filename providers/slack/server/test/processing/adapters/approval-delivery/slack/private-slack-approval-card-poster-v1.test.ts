@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { PrivateSlackApprovalCardPosterV1, type PrivateSlackApprovalCardPresentationV1 } from "../../../../../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+import { PrivateSlackApprovalCardPosterV1 } from "../../../../../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+import type { SlackApprovalCardV4 } from "../../../../../src/private-approval/slack-approval-card-v4.js";
 
-const CARD: PrivateSlackApprovalCardPresentationV1 = Object.freeze({
+const CARD: SlackApprovalCardV4 = Object.freeze({
   text: "Private meeting-owner approval requested.",
   blocks: Object.freeze([
     Object.freeze({

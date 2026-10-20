@@ -5,24 +5,12 @@ import {
 } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { VerifiedSlackApprovalClickV1 } from "./private-slack-approval-interaction-protocol-v1.js";
+import type { ApprovalActorV1, SlackApprovalTargetV1 as TargetV1 } from "./slack-approval-presenter-v1.js";
 
-export interface ApprovalActorV1 {
-  readonly organization_id: string;
-  readonly principal_id: string;
-  readonly membership_id: string;
-}
 type LinkV1 = ApprovalActorV1 & {
   readonly external_identity_link_id: string;
   readonly contract_sha256: string;
   readonly connection_id: string;
-  readonly api_app_id: string;
-};
-type TargetV1 = {
-  readonly connection_id: string;
-  readonly external_identity_link_id: string;
-  readonly external_identity_link_contract_sha256: string;
-  readonly slack_workspace_id: string;
-  readonly slack_subject_id: string;
   readonly api_app_id: string;
 };
 type CoreV1 = {
