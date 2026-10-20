@@ -1,6 +1,5 @@
 import { JiraProjectMappingStoreV1 } from '@echo-brain/provider-jira/jira-project-mapping-store-v1';
-import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
-import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import type { PersonContextProjectAuthorizationV1, PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1, personToolLiveConnectorsV1 } from './person-live-connector-registry-v1.js';
 import { createJiraPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-jira/jira-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
@@ -8,14 +7,12 @@ import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import { JiraConnectionStoreV1 } from '@echo-brain/provider-jira/jira-connection-store-v1';
 import { createJiraNangoV1, type JiraNangoV1 } from '@echo-brain/provider-jira/jira-nango-v1';
 import { createJiraPersonConnectionV1, type JiraPersonConnectionV1 } from '@echo-brain/provider-jira/jira-person-connection-v1';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import { join } from 'node:path';
+import { openPersonProviderDatabaseV1 } from './person-provider-state-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
-
-/** ADR-0026 permits person-bound live reads; runtime selection remains explicit. */
-export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = true;
 
 /** Explicit selecting configuration, absent until enabled by an operator. */
 export interface JiraPersonLiveConfigurationV1 {
@@ -44,18 +41,16 @@ export function openJiraPersonLiveRuntimeV1(options: {
   readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   readonly configuration: JiraPersonLiveConfigurationV1;
   readonly seams?: JiraPersonLiveRuntimeSeamsV1;
-  readonly authorize_project?: PersonTicketProjectAuthorizationV1;
+  readonly authorize_project?: PersonContextProjectAuthorizationV1;
   /** Lets a Jira project's container item name the ECHO projects mapped to it (research tool contract v1). */
   readonly project_names?: PersonContextProjectNamesV1;
 }): OpenedJiraPersonLiveRuntimeV1 {
   if (options.configuration.enabled !== true) throw new Error('Jira live evidence is not enabled');
-  const owned = options.seams?.database === undefined;
-  const database = options.seams?.database ?? new Database(join(options.state_directory, 'jira-person-connections.sqlite'));
+  // Private like every person provider's file; unlike Confluence's, it carries no lineage binding.
+  const opened = openPersonProviderDatabaseV1(join(options.state_directory, 'jira-person-connections.sqlite'),
+    options.seams?.database === undefined ? {} : { supplied: options.seams.database });
+  const { database } = opened;
   try {
-    if (database.inTransaction) throw new Error('Jira connection store must own its transaction boundary');
-    database.pragma('busy_timeout = 5000');
-    database.pragma('journal_mode = DELETE');
-    database.pragma('synchronous = FULL');
     const transport = options.seams?.fetch ?? fetch;
     const store = new JiraConnectionStoreV1(database);
     const cloud_id = options.configuration.cloud_id;
@@ -82,9 +77,9 @@ export function openJiraPersonLiveRuntimeV1(options: {
       async tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]> {
         return Object.freeze([application.tool({ access_token })]);
       },
-      close() { if (owned) database.close(); },
+      close() { opened.close(); },
     });
-  } catch (error) { if (owned) database.close(); throw error; }
+  } catch (error) { opened.close(); throw error; }
 }
 
 /** Jira's live connectors (research tool contract v1): its issues and, for the V8 answer, its projects, over one runtime. */

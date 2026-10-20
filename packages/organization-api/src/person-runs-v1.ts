@@ -4,7 +4,10 @@ import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 }
 import { PERSON_IMPACT_CARD_LIMITS_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
 import { PERSON_UPLOAD_PROJECT_SET_MAX } from './person-upload-audience-v3.js';
 import { validateProjectIdV1 } from './project-context-v1.js';
-import { asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertString, assertTimestamp, fail, utf8ByteLength } from './validation.js';
+import {
+  asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertString, assertTimestamp, assertUnique as unique, boundedLine as line, boundedList as list, fail, oneOf,
+  openItemId as itemId, utf8ByteLength,
+} from './validation.js';
 
 /**
  * Trigger runs (runs store and impact card v1, section 5; ADR-0032). A signed-in
@@ -115,9 +118,9 @@ export type PersonOpenItemStateV1 = 'unsent' | 'open' | 'done' | 'not_relevant';
 export type PersonOpenItemVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unreadable';
 /**
  * What an item is: an action the approved meeting decided (`action`, follow-ups thread v1), or an existing item the impact
- * check found the meeting affects: a Jira ticket, a page, a Slack message, another ECHO record or an ECHO document.
+ * check found the meeting affects: a Jira ticket, a page, another ECHO record or an ECHO document.
  */
-export type PersonOpenItemKindV1 = 'action' | 'ticket' | 'page' | 'slack_message' | 'record' | 'document';
+export type PersonOpenItemKindV1 = 'action' | 'ticket' | 'page' | 'record' | 'document';
 export type PersonOpenItemOwnerMatchV1 = 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned';
 /**
  * How this request's live read of an item went, for this viewer. `opened`: it
@@ -236,7 +239,6 @@ export const PERSON_RUN_MEETING_ACTIONS_MAX_V1 = 20;
 export const PERSON_RUN_ITEMS_MAX_V1 = PERSON_IMPACT_CARD_LIMITS_V1.affected + PERSON_RUN_MEETING_ACTIONS_MAX_V1;
 
 const RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/;
-const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const COMMAND_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const CURSOR = /^[A-Za-z0-9_-]{1,256}$/;
 const STATES: readonly string[] = ['pending', 'running', 'done', 'failed'];
@@ -260,7 +262,7 @@ const SWEEP_SCOPES = ['mine', 'record', 'project'] as const;
 const SET_STATES = ['open', 'done', 'not_relevant'] as const;
 const ITEM_STATES = ['unsent', ...SET_STATES] as const;
 const VERDICTS = ['landed', 'still_open', 'changed', 'unreadable'] as const;
-const KINDS = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'] as const;
+const KINDS = ['action', 'ticket', 'page', 'record', 'document'] as const;
 const OWNER_MATCHES = ['jira_account', 'name', 'picked', 'approver', 'reassigned'] as const;
 const RELATIONS = ['conflicts', 'needs_updating'] as const;
 const WAITS_ON = ['owner', 'approver', 'leads'] as const;
@@ -286,10 +288,6 @@ function runId(value: unknown, label: string): string {
   return matching(value, RUN_ID, label);
 }
 
-function itemId(value: unknown, label: string): string {
-  return matching(value, ITEM_ID, label);
-}
-
 function membershipId(value: unknown, label: string): string {
   assertId(value, 'mem', label);
   return value as string;
@@ -300,29 +298,8 @@ function recordId(value: unknown, label: string): string {
   return value;
 }
 
-function oneOf<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
-  if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) fail(`${label} is invalid`);
-  return value as T;
-}
-
 function count(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) fail(`${label} is invalid`);
-  return value;
-}
-
-function list(value: unknown, label: string, maximum: number, minimum = 0): readonly unknown[] {
-  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) fail(`${label} is invalid`);
-  return value;
-}
-
-function unique(values: readonly string[], label: string): void {
-  if (new Set(values).size !== values.length) fail(`${label} repeats an entry`);
-}
-
-/** One trimmed NFC line of 1 to `maximum` characters, as the impact card's lines are. */
-function line(value: unknown, label: string, maximum: number): string {
-  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || value !== value.normalize('NFC') ||
-      /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) || [...value].length > maximum) fail(`${label} is invalid`);
   return value;
 }
 

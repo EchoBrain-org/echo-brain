@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureCoreRuntimeContentV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
 import { MeetingProcessingWorkerLifecycleV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 
@@ -23,7 +23,6 @@ const { runtimeState, initialRuntimeState } = vi.hoisted(() => {
     staging_synthetic_meetings_directory: undefined as string | undefined,
     core_runtime_observation: undefined as CoreRuntimeObservationScopeV1 | undefined,
     config_keys: [] as string[],
-    agentic_ask_v1_small_scope_shortcut: undefined as true | undefined,
     staging_research_eval_v1: undefined as true | undefined,
     authority_url: "https://authority.example",
     processing: "active" as "active" | "idle_until_finalize",
@@ -58,7 +57,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
-    readonly agentic_ask_v1_small_scope_shortcut?: true;
     readonly staging_research_eval_v1?: true;
     readonly nango: object;
     readonly jira_person_live?: object;
@@ -72,8 +70,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.worker_telemetry = config.on_worker_telemetry;
     runtimeState.config_keys = Object.keys(config);
     runtimeState.core_runtime_observation = config.core_runtime_observation;
-    runtimeState.agentic_ask_v1_small_scope_shortcut =
-      config.agentic_ask_v1_small_scope_shortcut;
     runtimeState.staging_research_eval_v1 = config.staging_research_eval_v1;
     runtimeState.nango = config.nango;
     runtimeState.jira_person_live = config.jira_person_live;
@@ -145,7 +141,6 @@ const { runOrganizationAuthorityServiceCli } =
 afterEach(() => {
   for (const name of [
     "ECHO_STAGING_JOURNEY_TELEMETRY_V1",
-    "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1",
     "ECHO_STAGING_SYNTHETIC_MEETINGS_DIR",
     "ECHO_AGENTIC_ASK_V1",
     "ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT",
@@ -321,14 +316,13 @@ describe("admitted runtime CLI events", () => {
     expect(runtimeState.worker_error).toBeUndefined();
   });
 
-  it("serves agentic Ask without a flag and passes the shortcut only when it is switched on", async () => {
+  it("serves agentic Ask whatever the retired switches say, and refuses a switched-on small-scope shortcut", async () => {
     for (const input of [
       { agentic: undefined, shortcut: undefined },
-      { agentic: "false", shortcut: "true" },
+      { agentic: "false", shortcut: "false" },
       { agentic: "true", shortcut: undefined },
       { agentic: "true", shortcut: "false" },
-      { agentic: "true", shortcut: "true" },
-      { agentic: undefined, shortcut: "true" },
+      { agentic: undefined, shortcut: "false" },
     ]) {
       if (input.agentic === undefined) delete process.env.ECHO_AGENTIC_ASK_V1;
       else process.env.ECHO_AGENTIC_ASK_V1 = input.agentic;
@@ -339,13 +333,21 @@ describe("admitted runtime CLI events", () => {
       }
       const running = start({ stderr: () => undefined });
       await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-      // ECHO_AGENTIC_ASK_V1 is retired (ADR-0022): older profiles still set it, to no effect.
-      expect(runtimeState.agentic_ask_v1_small_scope_shortcut).toBe(
-        input.shortcut === "true" ? true : undefined,
-      );
+      // ECHO_AGENTIC_ASK_V1 is retired (ADR-0022) and the shortcut removed: release records still write both.
+      expect(runtimeState.config_keys).not.toContain("agentic_ask_v1_small_scope_shortcut");
       process.emit("SIGTERM");
       await expect(running).resolves.toBe(0);
       runtimeState.worker_error = undefined;
+    }
+    // A release record that still switches the shortcut on is refused before the runtime opens.
+    for (const agentic of [undefined, "true"]) {
+      if (agentic === undefined) delete process.env.ECHO_AGENTIC_ASK_V1;
+      else process.env.ECHO_AGENTIC_ASK_V1 = agentic;
+      process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT = "true";
+      const errors: string[] = [];
+      expect(await start({ stderr: (value: string) => { errors.push(value); } })).toBe(1);
+      expect(runtimeState.worker_error).toBeUndefined();
+      expect(errors.join("")).toContain("echo-clean-live-startup-failed-v1");
     }
   });
 
@@ -375,7 +377,7 @@ describe("admitted runtime CLI events", () => {
     ]);
   });
 
-  it("emits identity-bound operational metadata in staging and production without enabling production payload capture", async () => {
+  it("emits identity-bound operational metadata in staging and production", async () => {
     const releaseSha = "a".repeat(40);
     process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
     process.env.ECHO_SOURCE_SHA = releaseSha;
@@ -411,8 +413,6 @@ describe("admitted runtime CLI events", () => {
 
     runtimeState.worker_error = undefined;
     runtimeState.authority_url = "https://authority.example";
-    // A historical staging content switch must never widen production logging.
-    process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1 = "true";
     const nonStagingStderr: string[] = [];
     const nonStaging = start({
       stderr: (value) => {
@@ -421,11 +421,8 @@ describe("admitted runtime CLI events", () => {
     });
     await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
     expect(runtimeState.core_runtime_observation).toBeDefined();
-    expect(runtimeState.core_runtime_observation?.content_observer).toBeUndefined();
     expect(runtimeState.config_keys).not.toContain("staging_research_eval_v1");
-    await observeCoreRuntimeV1("ask_planner", async () => {
-      captureCoreRuntimeContentV1("model_request", { question: "PRODUCTION-PAYLOAD-MUST-STAY-PRIVATE" });
-    }, runtimeState.core_runtime_observation);
+    await observeCoreRuntimeV1("ask_planner", async () => undefined, runtimeState.core_runtime_observation);
     process.emit("SIGTERM");
     await expect(nonStaging).resolves.toBe(0);
     const productionEvents = nonStagingStderr.map(line => JSON.parse(line) as Record<string, unknown>);
@@ -433,57 +430,7 @@ describe("admitted runtime CLI events", () => {
       expect.objectContaining({ kind: "echo-authority-journey-telemetry-liveness-v1", environment: "production", release_sha: releaseSha, build_number: 33_689_731_778 }),
       expect.objectContaining({ kind: "echo-authority-journey-stage-v1", environment: "production", workflow: "core_runtime" }),
     ]));
-    expect(nonStagingStderr.join("")).not.toContain("PRODUCTION-PAYLOAD-MUST-STAY-PRIVATE");
-    expect(nonStagingStderr.join("")).not.toContain("echo-authority-journey-content-v1");
     expect(nonStagingStderr.join("")).toContain("EchoBrain/AuthorityJourneyV1");
-  });
-
-  it("writes content records to stderr only when the staging content switch is on", async () => {
-    const releaseSha = "a".repeat(40);
-    process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
-    process.env.ECHO_SOURCE_SHA = releaseSha;
-    process.env.ECHO_BUILD_NUMBER = "33689731778";
-    runtimeState.authority_url = "https://authority-staging.echobrain.org";
-    for (const enabled of [false, true]) {
-      if (enabled) process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1 = "true";
-      else delete process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1;
-      runtimeState.worker_error = undefined;
-      const stderr: string[] = [];
-      const run = start({
-        stderr: (value) => {
-          stderr.push(value);
-        },
-      });
-      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-      // Ask content is the model request of each agentic step, captured under its span.
-      const scope = runtimeState.core_runtime_observation;
-      expect(scope).toBeDefined();
-      await observeCoreRuntimeV1("ask_planner", async () => {
-        captureCoreRuntimeContentV1("model_request", { question: "CONTENT-SWITCH-QUESTION" });
-      }, scope);
-      process.emit("SIGTERM");
-      await expect(run).resolves.toBe(0);
-      const records = stderr
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .filter((event) => event.kind === "echo-authority-journey-content-v1");
-      if (enabled) {
-        expect(records).toHaveLength(1);
-        expect(records[0]).toMatchObject({
-          schema_version: 2,
-          environment: "staging",
-          workflow: "core_runtime",
-          release_sha: releaseSha,
-          build_number: 33_689_731_778,
-          stage: "core_operation",
-          content_kind: "model_request",
-          truncated: false,
-          content: JSON.stringify({ question: "CONTENT-SWITCH-QUESTION" }),
-        });
-      } else {
-        expect(records).toHaveLength(0);
-        expect(stderr.join("")).not.toContain("CONTENT-SWITCH-QUESTION");
-      }
-    }
   });
 
   it("keeps staging available when immutable telemetry identity is invalid", async () => {

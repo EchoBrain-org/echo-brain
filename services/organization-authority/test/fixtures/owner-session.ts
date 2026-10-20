@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect } from 'vitest';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
-import type { PersonSessionOidcConfiguration } from '@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies';
+import type { OidcAuthorizationCodeResult, PersonSessionOidcConfiguration } from '@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies';
 import { SqlitePersonSessionRepository } from '../../src/adapters/persistence/sqlite/sqlite-person-session-repository.js';
 import { NodePersonSessionCrypto } from '../../src/adapters/security/node-person-session-crypto.js';
 import { SystemAuthorityClock } from '../../src/adapters/system/system-authority-clock.js';
@@ -25,22 +25,34 @@ export async function port(): Promise<number> {
   return result;
 }
 
-/** An OIDC provider that verifies `email()` for the last begun login; `state()` is that login's state. */
-export function syntheticOidcProvider(oidc: { readonly issuer: string; readonly client_id: string }, email: () => string) {
+type OidcFailure = 'retryable_before_redemption' | 'terminal_failure';
+
+/**
+ * An OIDC provider that verifies `email()` for the last begun login; `state()` is that login's state. `subject` and
+ * `claims` replace the token's subject and add to or override its claims; `begun` names the login the next redemption
+ * answers, and `fail` makes every redemption fail before redeeming, or terminally, until it is cleared.
+ */
+export function syntheticOidcProvider(oidc: { readonly issuer: string; readonly client_id: string }, email: () => string,
+  options: { readonly subject?: () => string; readonly claims?: () => Readonly<Record<string, unknown>> } = {}) {
   let attempt: BegunPersonOidcLogin | undefined;
+  let failure: OidcFailure | undefined;
   return {
     buildAuthorizationUrl(value: BegunPersonOidcLogin) {
       attempt = value;
       return `${oidc.issuer}/authorize?state=${encodeURIComponent(value.state)}`;
     },
-    async redeemAuthorizationCode() {
+    async redeemAuthorizationCode(): Promise<OidcAuthorizationCodeResult> {
+      if (failure === 'retryable_before_redemption') return { kind: failure };
+      if (failure === 'terminal_failure') return { kind: failure, diagnostic_stage: 'redemption' };
       if (attempt === undefined) throw new Error('OIDC begin was not called');
       return { kind: 'verified' as const, token: {
-        issuer: oidc.issuer, subject: `fixture-${email()}`, audience: oidc.client_id, nonce: attempt.nonce,
-        issued_at: Math.floor(Date.now() / 1000), claims: { email: email(), email_verified: true },
+        issuer: oidc.issuer, subject: options.subject?.() ?? `fixture-${email()}`, audience: oidc.client_id, nonce: attempt.nonce,
+        issued_at: Math.floor(Date.now() / 1000), claims: { email: email(), email_verified: true, ...options.claims?.() },
       } };
     },
     state: () => attempt?.state ?? '',
+    begun(value: BegunPersonOidcLogin) { attempt = value; },
+    fail(kind: OidcFailure | undefined) { failure = kind; },
   };
 }
 

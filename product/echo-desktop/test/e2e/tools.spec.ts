@@ -1,5 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
-import { chooseFromAccountMenu, emit, launch, type Launched } from './launch.js';
+import { expect, test } from '@playwright/test';
+import { addMeeting, chooseFromAccountMenu, emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -25,8 +25,6 @@ test('Tools lists every tool by your connection, from the sidebar or the Account
   await expect(page.getByTestId('tools')).toHaveCount(0);
   await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Connected tools…');
   await expect(page.getByTestId('tools')).toBeVisible();
-  // Home reads the tools too, on sign-in and on Back: it needs to know whether meetings are turned on.
-  await expect.poll(() => run.calls().filter(call => call.path === '/v4/person/tools')).toHaveLength(4);
 });
 
 test('Tools is covered while ECHO is concealed and returns on resume', async () => {
@@ -126,26 +124,6 @@ test('a stopped connection needs attention and reconnects; Manage disconnects on
   expect(toolCalls()).toEqual(['slack disconnect']);
 });
 
-
-/** Adds the fixture meeting through Tools → Granola, so its decision reaches Home. */
-async function addMeeting(page: Page) {
-  await page.getByTestId('sidebar-tools').click();
-  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
-  const meetings = page.getByRole('region', { name: 'Personal meetings' });
-  await expect(meetings).toContainText('ari@example.test · EchoBrain');
-  await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
-  // Granola's label is the meeting's own day; an evening in Pacific time is already the next day in UTC.
-  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toContainText('Oct 6');
-  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
-  const add = meetings.getByRole('button', { name: 'Add to ECHO', exact: true });
-  await expect(add).toBeDisabled();
-  await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
-  await add.click();
-  await expect(meetings.getByRole('status')).toContainText('Added.');
-  await page.keyboard.press('Escape');
-  await page.getByTestId('sidebar-home').click();
-  return meetings;
-}
 
 test('a meeting added through Granola reaches Home as a decision to approve, with transcript sharing off', async ({}, testInfo) => {
   run = await launch('granola');

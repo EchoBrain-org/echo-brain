@@ -1,4 +1,5 @@
 import { withSlackBotTokenV1, type SlackBotTokenGetterV1 } from "../../../../organization-control-plane/application/slack-bot-token-source-v1.js";
+import type { SlackApprovalCardV4 } from "../../../../private-approval/slack-approval-card-v4.js";
 import { SlackApiError, SlackWebApiClient, type SlackWebApiClientOptions } from "../../shared/slack/slack-web-api-client.js";
 
 const POST_RECONCILIATION_LOOKBACK_MS = 5 * 60 * 1_000;
@@ -12,20 +13,15 @@ const SLACK_DIRECT_MESSAGE_CHANNEL = /^D[A-Z0-9]{2,255}$/;
 /** The bot token could not be obtained, so no request reached Slack. */
 const TOKEN_UNAVAILABLE = Symbol("Slack bot token unavailable");
 
-export interface PrivateSlackApprovalCardPresentationV1 {
-  readonly text: string;
-  readonly blocks: readonly unknown[];
-  readonly transport: {
-    readonly mrkdwn: false;
-    readonly unfurl_links: false;
-    readonly unfurl_media: false;
-  };
+/** How long Slack's Retry-After still holds, when it does: the caller's next try waits at least this long. */
+export interface PrivateSlackRetryAfterV1 {
+  readonly retry_after_ms?: number;
 }
 
 export type PrivateSlackApprovalPostOutcomeV1 =
   | { readonly kind: "posted"; readonly provider_message_ts: string }
-  | { readonly kind: "retry_allowed" }
-  | { readonly kind: "uncertain" };
+  | ({ readonly kind: "retry_allowed" } & PrivateSlackRetryAfterV1)
+  | ({ readonly kind: "uncertain" } & PrivateSlackRetryAfterV1);
 
 export type PrivateSlackDirectMessageOutcomeV1 =
   | {
@@ -33,11 +29,11 @@ export type PrivateSlackDirectMessageOutcomeV1 =
       readonly channel_id: string;
       readonly user_id: string;
     }
-  | { readonly kind: "retry_allowed" };
+  | ({ readonly kind: "retry_allowed" } & PrivateSlackRetryAfterV1);
 
 export type PrivateSlackApprovalUpdateOutcomeV1 =
   | { readonly kind: "done" }
-  | { readonly kind: "uncertain" };
+  | ({ readonly kind: "uncertain" } & PrivateSlackRetryAfterV1);
 
 function marker(approvalId: string): string {
   return `[private-approval:${approvalId}]`;
@@ -203,6 +199,12 @@ export class PrivateSlackApprovalCardPosterV1 {
     return this.retry_not_before_ms > this.now();
   }
 
+  /** The rest of Slack's Retry-After, for the caller's own backoff. */
+  private retryAfter(): PrivateSlackRetryAfterV1 {
+    const remaining = this.retry_not_before_ms - this.now();
+    return remaining > 0 ? { retry_after_ms: remaining } : {};
+  }
+
   private rememberRetryAfter(error: unknown): void {
     if (
       error instanceof SlackApiError &&
@@ -220,7 +222,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     providerSubjectId: string,
     signal?: AbortSignal,
   ): Promise<PrivateSlackDirectMessageOutcomeV1> {
-    if (this.retryBlocked()) return { kind: "retry_allowed" };
+    if (this.retryBlocked()) return { kind: "retry_allowed", ...this.retryAfter() };
     try {
       const opened = await this.slackOrNoToken((client) =>
         client.openDirectMessage(providerSubjectId, signal),
@@ -231,7 +233,7 @@ export class PrivateSlackApprovalCardPosterV1 {
       if (signal?.aborted === true) throw error;
       if (error instanceof SlackApiError && error.code === "rate_limited") {
         this.rememberRetryAfter(error);
-        return { kind: "retry_allowed" };
+        return { kind: "retry_allowed", ...this.retryAfter() };
       }
       throw error;
     }
@@ -242,7 +244,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     signal?: AbortSignal,
   ): Promise<PrivateSlackApprovalPostOutcomeV1> {
     assertDirectMessageChannel(input.dm_channel_id);
-    if (this.retryBlocked()) return { kind: "retry_allowed" };
+    if (this.retryBlocked()) return { kind: "retry_allowed", ...this.retryAfter() };
     try {
       const posted = await this.slackOrNoToken((client) =>
         client.postMessage(
@@ -264,8 +266,8 @@ export class PrivateSlackApprovalCardPosterV1 {
       if (error instanceof SlackApiError) {
         this.rememberRetryAfter(error);
         return DEFINITIVE_POST_FAILURE_CODES.has(error.code)
-          ? { kind: "retry_allowed" }
-          : { kind: "uncertain" };
+          ? { kind: "retry_allowed", ...this.retryAfter() }
+          : { kind: "uncertain", ...this.retryAfter() };
       }
       throw error;
     }
@@ -281,7 +283,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     signal?: AbortSignal,
   ): Promise<PrivateSlackApprovalPostOutcomeV1> {
     assertDirectMessageChannel(input.dm_channel_id);
-    if (this.retryBlocked()) return { kind: "uncertain" };
+    if (this.retryBlocked()) return { kind: "uncertain", ...this.retryAfter() };
     try {
       if (this.auth_identity === undefined) {
         const authIdentity = await this.slackOrNoToken((client) => client.authIdentity(signal));
@@ -352,7 +354,7 @@ export class PrivateSlackApprovalCardPosterV1 {
       if (signal?.aborted === true) throw error;
       if (error instanceof SlackApiError) {
         this.rememberRetryAfter(error);
-        return { kind: "uncertain" };
+        return { kind: "uncertain", ...this.retryAfter() };
       }
       throw error;
     }
@@ -363,12 +365,12 @@ export class PrivateSlackApprovalCardPosterV1 {
       readonly approval_id: string;
       readonly dm_channel_id: string;
       readonly provider_message_ts: string;
-      readonly card: PrivateSlackApprovalCardPresentationV1;
+      readonly card: SlackApprovalCardV4;
     },
     signal?: AbortSignal,
   ): Promise<PrivateSlackApprovalUpdateOutcomeV1> {
     assertDirectMessageChannel(input.dm_channel_id);
-    if (this.retryBlocked()) return { kind: "uncertain" };
+    if (this.retryBlocked()) return { kind: "uncertain", ...this.retryAfter() };
     try {
       const updated = await this.slackOrNoToken((client) =>
         client.updateMessage(
@@ -390,7 +392,7 @@ export class PrivateSlackApprovalCardPosterV1 {
       if (signal?.aborted === true) throw error;
       if (error instanceof SlackApiError) {
         this.rememberRetryAfter(error);
-        return { kind: "uncertain" };
+        return { kind: "uncertain", ...this.retryAfter() };
       }
       throw error;
     }

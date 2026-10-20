@@ -170,6 +170,7 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     const redeem = seams.oidc_provider.redeemAuthorizationCode;
     vi.spyOn(seams.oidc_provider, 'redeemAuthorizationCode').mockImplementation(async () => {
       const result = await redeem();
+      if (result.kind !== 'verified') return result;
       return { ...result, token: { ...result.token, subject: 'fixture-employee', claims: { email: 'employee@example.test', email_verified: true } } };
     });
     expect((await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant: invited.body.login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } })).status).toBe(201);

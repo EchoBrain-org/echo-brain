@@ -1,4 +1,6 @@
+import { PROJECT_PAGE_MAX_ITEMS } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import type { EvidenceDeskRevalidationModeV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import { PERSON_QUERY_FUNCTION_WORDS_V1 } from '../adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 
 /**
@@ -30,6 +32,18 @@ export function evidenceWordsV1(values: readonly (string | null | undefined)[]):
   return new Set(values.flatMap(value => (value ?? '').normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []));
 }
 
+/** Every page of one of the project application's lists, at its largest page size. */
+export function everyProjectPageV1<T>(read: (paging: { readonly limit: number; readonly cursor?: string }) => { readonly items: readonly T[]; readonly next_cursor: string | null }, signal?: AbortSignal): T[] {
+  const all: T[] = [];
+  for (let cursor: string | undefined; ;) {
+    signal?.throwIfAborted();
+    const page = read({ limit: PROJECT_PAGE_MAX_ITEMS, ...(cursor === undefined ? {} : { cursor }) });
+    all.push(...page.items);
+    if (page.next_cursor === null) return all;
+    cursor = page.next_cursor;
+  }
+}
+
 /** Newest first, then by id: the order a source that knows when its items were created lists them in. */
 export function newestFirstV1<T extends { readonly created_at: string }>(idOf: (value: T) => string): (left: T, right: T) => number {
   return (left, right) => {
@@ -37,6 +51,22 @@ export function newestFirstV1<T extends { readonly created_at: string }>(idOf: (
     const [one, other] = [idOf(left), idOf(right)];
     return one < other ? -1 : one > other ? 1 : 0;
   };
+}
+
+/** What one source released in a request, and what it released since its last successful check (ADR-0038). */
+export function createReleaseLedgerV1<T>() {
+  const released = new Map<string, T>();
+  const unchecked = new Set<string>();
+  return Object.freeze({
+    /** A release of `id`; `merge` keeps what its earlier releases carried. */
+    record(id: string, merge: (previous: T | undefined) => T): void { released.set(id, merge(released.get(id))); unchecked.add(id); },
+    get(id: string): T | undefined { return released.get(id); },
+    /** What a check rereads: what was released since the last successful check (`incremental`), or all of it; `checked` once it passes. */
+    due(mode: EvidenceDeskRevalidationModeV1 | undefined): { readonly ids: readonly string[]; readonly checked: () => void } {
+      const ids = [...(mode === 'incremental' ? unchecked : released.keys())];
+      return Object.freeze({ ids, checked: () => { for (const id of ids) unchecked.delete(id); } });
+    },
+  });
 }
 
 /** One request's list cursors: each continues only the selection it was issued for, after the row its page ended on. */

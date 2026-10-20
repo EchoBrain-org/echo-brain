@@ -97,7 +97,7 @@ describe('document extraction runtime', () => {
     let claims = 0;
     let release!: () => void;
     const admitted = new Promise<void>(resolve => { release = resolve; });
-    const content = { schema_version:1 as const, kind:'person-text' as const, original_api_version:1 as const, context_id:'ctx_fixture', title:'fixture', text:'fixture' };
+    const content = { schema_version:1 as const, kind:'person-text' as const, original_api_version:2 as const, context_id:'ctx_fixture', title:'fixture', text:'fixture' };
     const sourceId=sourceItemIdV1(PERSON_SOURCE_IDENTITY_V1,content.context_id);
     const text = {
       source: {

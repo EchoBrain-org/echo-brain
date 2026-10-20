@@ -219,8 +219,8 @@ export interface RecordRef {
   readonly policy_id: RecordPolicy;
 }
 
-/** What a connected tool keeps its items in: a Jira project, a Confluence space or a Slack channel. */
-export type ToolContainerKind = 'jira_project' | 'confluence_space' | 'slack_channel';
+/** What a connected tool keeps its items in: a Jira project or a Confluence space. */
+export type ToolContainerKind = 'jira_project' | 'confluence_space';
 
 /**
  * What an answer is based on, or an item Ask named while it worked: an
@@ -229,11 +229,11 @@ export type ToolContainerKind = 'jira_project' | 'confluence_space' | 'slack_cha
  * through one opener (renderer/openers.ts).
  */
 export type ExternalAnswerSource =
-  | { readonly kind: 'slack' | 'ticket' | 'page'; readonly tool_id: string; readonly label: string; readonly permalink: string }
+  | { readonly kind: 'ticket' | 'page'; readonly tool_id: string; readonly label: string; readonly permalink: string }
   /**
-   * A Jira project, Confluence space or Slack channel in a tool you connected
-   * (research tool contract v1): it opens in its tool, by its link. `key` is
-   * its key there ("THERM"), when it has one; a Slack channel has none.
+   * A Jira project or Confluence space in a tool you connected (research tool
+   * contract v1): it opens in its tool, by its link. `key` is its key there
+   * ("THERM"), when it has one.
    */
   | { readonly kind: 'container'; readonly tool_id: string; readonly label: string; readonly permalink: string; readonly container: ToolContainerKind; readonly key?: string };
 export type AnswerSource =
@@ -263,12 +263,12 @@ export type AnswerSource =
  */
 export type AskStage = 'searching' | 'reading' | 'checking_access' | 'writing';
 /**
- * A kind of source a step searched: meetings, documents, follow-ups or Slack;
- * your projects, the people in your organization or your tools; or a live
- * tool's tickets, pages or containers (its Jira projects, Confluence spaces or
- * Slack channels), by the tool's id.
+ * A kind of source a step searched: meetings, documents or follow-ups; your
+ * projects, the people in your organization or your tools; or a live tool's
+ * tickets, pages or containers (its Jira projects or Confluence spaces), by
+ * the tool's id.
  */
-export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'follow_ups' | 'slack' | 'projects' | 'people' | 'tools' }
+export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'follow_ups' | 'projects' | 'people' | 'tools' }
   | { readonly kind: 'tickets' | 'pages' | 'containers'; readonly tool_id: string };
 /** One step's searches: the source kinds, and how many items they returned that no earlier read had. */
 export interface AskSearched {
@@ -394,6 +394,8 @@ export type Audience =
  * read it: the API's own bound (PERSON_UPLOAD_PROJECT_SET_MAX).
  */
 export const MAX_CAPTURE_PROJECTS = 20;
+/** New project takes up to 20 files. */
+export const MAX_PROJECT_FILES = 20;
 
 /** Where a saved document's text extraction stands (the Authority's own states). */
 export type Extraction = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out'
@@ -566,12 +568,9 @@ export interface HostMethods {
   /** The project as it is now, with your role in it. */
   'projects.read': { params: { expect: Expect; project_id: string }; result: ProjectSummary };
   'projects.members': { params: { expect: Expect; project_id: string; cursor?: string }; result: MemberPage };
-  /** People in the organization a lead can add, by name. */
-  'projects.directory': { params: { expect: Expect; project_id: string; query?: string; cursor?: string }; result: MemberPage };
   /**
    * People in your own organization, by name, for any member and with no
-   * project: New project's people before the project exists. An Authority
-   * without it answers not_found.
+   * project: New project's people, and those a lead adds in People.
    */
   'people.directory': { params: { expect: Expect; query?: string; cursor?: string }; result: MemberPage };
   /** A change to a project. Only the Authority's receipt says it was made. */
@@ -675,7 +674,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'changes.read', 'list.page', 'open.ref',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
-  'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
+  'projects.members', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
   'employees.reissue', 'employees.revoke', 'tools.meetings', 'runs', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
@@ -690,7 +689,7 @@ export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
 /** Operations of a write method that only read. */
 const READ_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   'tools.meetings': new Set<PersonMeetingRequestV2['operation']>(['home', 'reviews', 'browse', 'open', 'review_open']),
-  runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'view', 'items', 'item']),
+  runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'items', 'item']),
 };
 /** Whether a call may change what the Authority stores. An operation not known to only read counts as a write. */
 export function isWriteCall(method: string, params: unknown): boolean {
@@ -700,7 +699,7 @@ export function isWriteCall(method: string, params: unknown): boolean {
 }
 /** Every runs operation: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
-  ['list', 'home', 'start', 'retry', 'view', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
+  ['list', 'home', 'start', 'retry', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
 );
 /**
  * A call as desktop.log names it, content-free: the method, and for runs its operation and how much it read ("runs.home",
@@ -788,13 +787,6 @@ export function externalUrl(raw: unknown): string | null {
   }
 }
 
-/** The Ask contract's Slack permalink grammar, checked again before main opens a renderer request. */
-export function slackPermalink(raw: unknown): string | null {
-  return typeof raw === 'string' && raw.length <= 512 &&
-    /^https:\/\/[a-z0-9-]+(\.enterprise)?\.slack\.com\/archives\/[CDG][A-Z0-9]{2,30}\/p\d{15,17}(\?[A-Za-z0-9_=&.%-]{0,200})?$/.test(raw)
-    ? raw : null;
-}
-
 /** The provider validated tenant and identity; this display boundary constrains URL safety. */
 function webPermalink(raw: unknown, allowQuery: boolean): string | null {
   if (typeof raw !== 'string' || raw.length > 2048 || /[\s\\\p{Cc}]/u.test(raw)) return null;
@@ -811,12 +803,11 @@ export const pagePermalink = (raw: unknown): string | null => webPermalink(raw, 
 export const ticketPermalink = (raw: unknown): string | null => webPermalink(raw, false);
 
 /**
- * A cited link, checked by its kind's rule: a Slack message's, a ticket's, a
- * page's, or a tool container's, which is checked as a ticket's (no query, no
- * fragment), since a Slack channel's link is no message's.
+ * A cited link, checked by its kind's rule: a ticket's, a page's, or a tool
+ * container's, which is checked as a ticket's (no query, no fragment).
  */
 export function externalSourcePermalink(kind: unknown, raw: unknown): string | null {
-  return kind === 'slack' ? slackPermalink(raw) : kind === 'ticket' || kind === 'container' ? ticketPermalink(raw) : kind === 'page' ? pagePermalink(raw) : null;
+  return kind === 'ticket' || kind === 'container' ? ticketPermalink(raw) : kind === 'page' ? pagePermalink(raw) : null;
 }
 
 /** A follow-up's id, in the API's own grammar. */

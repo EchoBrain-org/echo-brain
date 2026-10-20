@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCOUNT, cover, fail, flush, Held, ok, project, rpcFor, startStore, stubWindow, uncover } from './harness.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ACCOUNT, cover, fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle, uncover } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -10,10 +10,8 @@ let held: Held;
 /** Status reads say signed out while set: the session ended elsewhere. */
 let signedOut = false;
 
+storeLifecycle();
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  stubWindow();
   held = new Held();
   signedOut = false;
   rpc.mockReset();
@@ -27,8 +25,6 @@ beforeEach(() => {
     },
   }, () => ({ active: [apollo], archived: [] })));
 });
-
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('a meeting command answered while another app is in front', () => {
   it('Approve that landed is shown as approved, not as a failure', async () => {

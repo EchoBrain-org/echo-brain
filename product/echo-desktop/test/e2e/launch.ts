@@ -158,6 +158,36 @@ export function chooseFromTray(run: Launched, label: string): Promise<void> {
   }, label);
 }
 
+/** Adds the fixture meeting through Tools → Granola, so its decision reaches Home. */
+export async function addMeeting(page: Page): Promise<void> {
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await expect(meetings).toContainText('ari@example.test · EchoBrain');
+  await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
+  // Granola's label is the meeting's own day; an evening in Pacific time is already the next day in UTC.
+  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toContainText('Oct 6');
+  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
+  const add = meetings.getByRole('button', { name: 'Add to ECHO', exact: true });
+  await expect(add).toBeDisabled();
+  await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
+  await add.click();
+  await expect(meetings.getByRole('status')).toContainText('Added.');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('sidebar-home').click();
+}
+
+/** Adds the fixture meeting, then approves it from Home: for the projects it suggests, or for Only me. Returns Home's rows. */
+export async function approveFromHome(page: Page, onlyMe = false): Promise<Locator> {
+  await addMeeting(page);
+  await page.getByTestId('need-row').filter({ hasText: 'Pilot planning' }).click();
+  const card = page.getByTestId('decision');
+  if (onlyMe) await card.getByRole('radio', { name: 'Only me' }).check();
+  await card.getByTestId('decision-approve').click();
+  await expect(page.getByTestId('toast')).toContainText('Approved');
+  return page.getByTestId('need-row');
+}
+
 /**
  * Drops one file on a target, as a drag from Finder does. Playwright cannot
  * drag from the desktop, so a hidden file input makes a File with a real path

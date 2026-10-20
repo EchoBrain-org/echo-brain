@@ -2,13 +2,13 @@ import { canonicalJson, canonicalJsonBytes } from '@echo-brain/federation-protoc
 import { validatePersonQueryText } from './person-query.js';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
-  MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   asEnumerableRecord as object,
+  assertBoundedText as text,
   assertExactKeys,
   assertId,
   assertTimestamp,
   fail,
-  utf8ByteLength,
+  pageCursor as cursor,
 } from './validation.js';
 import { validatePersonUpdateRequestId, validatePersonUploadContextId } from './person-updates.js';
 
@@ -155,7 +155,6 @@ export interface ProjectContextDissociateV1 extends Omit<ProjectContextAssociate
 export interface ProjectPageRequestV1 { readonly limit?: number; readonly cursor?: string }
 export interface ProjectContextBrowseV1 { readonly project_id: ProjectIdV1; readonly limit?: number; readonly cursor?: string }
 export interface ProjectContextSearchV1 extends ProjectContextBrowseV1 { readonly query: string }
-export interface ProjectContextReadRequestV1 { readonly project_id: ProjectIdV1; readonly context_id: string }
 export type ProjectContextAudienceV1 =
   | { readonly kind: 'only_me' }
   | { readonly kind: 'team' }
@@ -198,18 +197,7 @@ function snapshot(value: unknown, label: string): Record<string, unknown> {
 function responseBound(value: unknown, label: string): void {
   if (canonicalJsonBytes(value).byteLength > PROJECT_CONTEXT_RESPONSE_MAX_BYTES) fail(`${label} exceeds JSON byte bound`);
 }
-function text(value: unknown, label: string, maximum: number, multiline = false): asserts value is string {
-  if (typeof value !== 'string' || value.trim().length === 0 ||
-      utf8ByteLength(value) > maximum ||
-      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value) ||
-      (!multiline && /[\t\r\n]/u.test(value))) fail(`${label} is invalid`);
-}
-function name(value: unknown): asserts value is string {
-  text(value, 'Project name', PROJECT_NAME_MAX_BYTES);
-  if ((value as string).trim() !== value || (value as string).normalize('NFC') !== value) fail('Project name is invalid');
-}
 function displayName(value: unknown): asserts value is string { text(value, 'Project display name', 200); }
-function role(value: unknown): asserts value is ProjectRoleV1 { if (value !== 'lead' && value !== 'member') fail('Project role is invalid'); }
 export function validateProjectContextAudienceV1(value: unknown): ProjectContextAudienceV1 {
   const record = object(value, 'Project context audience');
   if (record.kind === 'only_me' || record.kind === 'team') {
@@ -221,12 +209,6 @@ export function validateProjectContextAudienceV1(value: unknown): ProjectContext
     return { kind: 'project', project_id: validateProjectIdV1(record.project_id, 'Project context audience project_id') };
   }
   fail('Project context audience is invalid');
-}
-function cursor(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_ORGANIZATION_API_CURSOR_CHARACTERS || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) fail(`${label} is invalid`);
-  const last = value.at(-1)!; const remainder = value.length % 4;
-  if ((remainder === 2 && !/^[AQgw]$/.test(last)) || (remainder === 3 && !/^[AEIMQUYcgkosw048]$/.test(last))) fail(`${label} is invalid`);
-  return value;
 }
 function optionalPaging(record: Record<string, unknown>, label: string): { limit: number; cursor?: string } {
   if (Object.hasOwn(record, 'limit') && (!Number.isSafeInteger(record.limit) || (record.limit as number) < 1 || (record.limit as number) > PROJECT_PAGE_MAX_ITEMS)) fail(`${label} limit is invalid`);
@@ -246,16 +228,26 @@ function unique<T>(items: readonly T[], field: keyof T, label: string): void {
 export function validateProjectIdV1(value: unknown, label = 'Project ID'): ProjectIdV1 {
   assertId(value, 'prj', label); return value as ProjectIdV1;
 }
+/** One trimmed NFC line of at most PROJECT_NAME_MAX_BYTES bytes. */
+export function validateProjectNameV1(value: unknown): string {
+  text(value, 'Project name', PROJECT_NAME_MAX_BYTES);
+  if (value.trim() !== value || value.normalize('NFC') !== value) fail('Project name is invalid');
+  return value;
+}
+export function validateProjectRoleV1(value: unknown): ProjectRoleV1 {
+  if (value !== 'lead' && value !== 'member') fail('Project role is invalid');
+  return value;
+}
 export function validateProjectCreateV1(value: unknown): ProjectCreateV1 {
   const record = snapshot(value, 'Project create'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'name'], 'Project create');
   if (record.schema_version !== 1 || record.kind !== 'echo-project-create-v1') fail('Project create version or kind is unsupported');
-  validatePersonUpdateRequestId(record.request_id); name(record.name);
+  validatePersonUpdateRequestId(record.request_id); validateProjectNameV1(record.name);
   return record as unknown as ProjectCreateV1;
 }
 export function validateProjectSummaryV1(value: unknown): ProjectSummaryV1 {
   const record = object(value, 'Project summary'); assertExactKeys(record, ['schema_version', 'kind', 'project_id', 'name', 'created_at', 'role'], 'Project summary');
   if (record.schema_version !== 1 || record.kind !== 'echo-project-summary-v1') fail('Project summary version or kind is unsupported');
-  project(record, 'Project summary'); name(record.name); assertTimestamp(record.created_at, 'Project summary created_at'); role(record.role);
+  project(record, 'Project summary'); validateProjectNameV1(record.name); assertTimestamp(record.created_at, 'Project summary created_at'); validateProjectRoleV1(record.role);
   return record as unknown as ProjectSummaryV1;
 }
 export function validateProjectCreateReceiptV1(value: unknown): ProjectCreateReceiptV1 {
@@ -272,7 +264,7 @@ function settingsRequest(value: unknown, kind: ProjectRenameV1['kind'] | Project
   assertExactKeys(record, fields, label);
   if (record.schema_version !== 1 || record.kind !== kind) fail(`${label} version or kind is unsupported`);
   validatePersonUpdateRequestId(record.request_id); project(record, label);
-  if (kind === 'echo-project-rename-v1') name(record.name);
+  if (kind === 'echo-project-rename-v1') validateProjectNameV1(record.name);
   if (kind === 'echo-project-archive-v1' && typeof record.archived !== 'boolean') fail(`${label} archived is invalid`);
   return record as unknown as ProjectRenameV1 | ProjectArchiveV1 | ProjectLeaveV1;
 }
@@ -310,7 +302,7 @@ export function validateProjectListV1(value: unknown): ProjectListV1 {
 }
 function member(value: unknown): ProjectMemberV1 {
   const record = object(value, 'Project member'); assertExactKeys(record, ['membership_id', 'display_name', 'role'], 'Project member');
-  assertId(record.membership_id, 'mem', 'Project member membership_id'); displayName(record.display_name); role(record.role);
+  assertId(record.membership_id, 'mem', 'Project member membership_id'); displayName(record.display_name); validateProjectRoleV1(record.role);
   return record as unknown as ProjectMemberV1;
 }
 export function validateProjectMembersV1(value: unknown): ProjectMembersV1 {
@@ -349,7 +341,7 @@ export function validateOrganizationDirectoryV1(value: unknown): OrganizationDir
 export function validateProjectMemberSetV1(value: unknown): ProjectMemberSetV1 {
   const record = snapshot(value, 'Project member set'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'project_id', 'membership_id', 'role'], 'Project member set');
   if (record.schema_version !== 1 || record.kind !== 'echo-project-member-set-v1') fail('Project member set version or kind is unsupported');
-  validatePersonUpdateRequestId(record.request_id); project(record, 'Project member set'); assertId(record.membership_id, 'mem', 'Project member set membership_id'); role(record.role); return record as unknown as ProjectMemberSetV1;
+  validatePersonUpdateRequestId(record.request_id); project(record, 'Project member set'); assertId(record.membership_id, 'mem', 'Project member set membership_id'); validateProjectRoleV1(record.role); return record as unknown as ProjectMemberSetV1;
 }
 export function validateProjectMemberAddV1(value: unknown): ProjectMemberAddV1 {
   const record = snapshot(value, 'Project member add'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'project_id', 'membership_id'], 'Project member add');
@@ -379,10 +371,6 @@ function browse(value: unknown, search: boolean): ProjectContextBrowseV1 | Proje
 }
 export function validateProjectContextBrowseV1(value: unknown): ProjectContextBrowseV1 { return browse(value, false) as ProjectContextBrowseV1; }
 export function validateProjectContextSearchV1(value: unknown): ProjectContextSearchV1 { return browse(value, true) as ProjectContextSearchV1; }
-export function validateProjectContextReadRequestV1(value: unknown): ProjectContextReadRequestV1 {
-  const record = snapshot(value, 'Project context read request'); assertExactKeys(record, ['project_id', 'context_id'], 'Project context read request');
-  return { project_id: project(record, 'Project context read request'), context_id: validatePersonUploadContextId(record.context_id) };
-}
 function item(value: unknown): ProjectContextItemV1 {
   const record = object(value, 'Project context item'); assertExactKeys(record, ['context_id', 'received_at', 'title', 'excerpt', 'audience'], 'Project context item');
   validatePersonUploadContextId(record.context_id); assertTimestamp(record.received_at, 'Project context item received_at'); text(record.title, 'Project context item title', 200); text(record.excerpt, 'Project context item excerpt', 1200, true);

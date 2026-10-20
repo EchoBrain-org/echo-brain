@@ -18,7 +18,8 @@ import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/pe
 import type { PersonAnswerV3HttpApplication } from "../presentation/person-answer-v3-http-application.js";
 import type { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import { randomUUID } from "node:crypto";
-import type { PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
+import type { PersonDiagnosticCaptureHandleV1, PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
 export interface CreatePersonAnswerV3RouteOptions {
@@ -32,8 +33,6 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
   readonly diagnostics?: PersonDiagnosticsV1;
-  /** Server-only experiment; V3 remains behaviorally unchanged unless enabled. */
-  readonly small_scope_shortcut?: boolean;
   /**
    * The asker's own directory entry, so the loop reads "my" as a name. Only
    * the authenticated membership is looked up; its name reaches the model and
@@ -70,6 +69,54 @@ export function scopeOf(request: { readonly project_id?: string; readonly mine?:
   return request.mine === true ? Object.freeze({ kind: "mine" as const }) : Object.freeze({ kind: "global" as const });
 }
 
+/** The context an Ask's audits bind: this Authority's coordinates and the asker's session. */
+export function personAskRequestContextV1(
+  options: Pick<CreatePersonAnswerV3RouteOptions, "authority_id" | "organization_id" | "state_lineage_id">,
+  authorization: Pick<PersonAccessAuthorization, "principal_id" | "membership_id" | "session_family_id">,
+  request_id: string,
+) {
+  return {
+    authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
+    principal_id: authorization.principal_id, membership_id: authorization.membership_id, session_family_id: authorization.session_family_id, request_id,
+  };
+}
+
+/**
+ * One Ask after its own request checks: the asker authenticated, a diagnostic
+ * capture claimed when the request names one, then `started`. Every attempt a
+ * snapshot restart runs is one observed research run with that capture. A
+ * deadline that is not the client's own cancellation answers unavailable.
+ */
+export async function runPersonAskV1<T>(
+  options: Pick<CreatePersonAnswerV3RouteOptions, "authority_id" | "organization_id" | "state_lineage_id" | "sessions" | "diagnostics">,
+  input: { readonly access_token: string; readonly request: { readonly capture_id?: string }; readonly signal?: AbortSignal },
+  attempt: (run: {
+    readonly authorization: PersonAccessAuthorization;
+    readonly context: ReturnType<typeof personAskRequestContextV1>;
+    readonly capture: PersonDiagnosticCaptureHandleV1 | undefined;
+    readonly signal: AbortSignal;
+  }) => Promise<T>,
+  started?: () => void,
+): Promise<T> {
+  const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+  const context = personAskRequestContextV1(options, authorization, `ask_${randomUUID()}`);
+  const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
+    access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'ask' },
+  });
+  if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
+  started?.();
+  try {
+    return await withPersonAskSnapshotRetryV1({ signal: input.signal, capture: capture !== undefined, run: async signal =>
+      observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, () => attempt({ authorization, context, capture, signal })) });
+  } catch (error) {
+    // Observe the original timeout before translating it into the Person API error.
+    if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) {
+      throw new AuthorityOperationError("unavailable", "Ask deadline exhausted");
+    }
+    throw error;
+  }
+}
+
 function deskFor(options: CreatePersonAnswerV3RouteOptions, access_token: string, request: { readonly project_id?: string; readonly mine?: true }) {
   return createPersonEvidenceDeskV1({
     access_token,
@@ -96,38 +143,16 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
 export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOptions): PersonAnswerV3HttpApplication {
   return Object.freeze({
     async ask(input: Parameters<PersonAnswerV3HttpApplication["ask"]>[0]): Promise<PersonAnswerResponseV4> {
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      const requestId = `ask_${randomUUID()}`;
-      const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
-        access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'ask' },
+      return runPersonAskV1(options, input, async ({ authorization, context, capture, signal }) => {
+        const desk = deskFor(options, input.access_token, input.request);
+        capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
+        const asker = askerOf(options, authorization);
+        return createAgenticAskV1({
+          ...(asker === undefined ? {} : { asker }),
+          ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
+          desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+        }).answer({ question: input.request.question, signal });
       });
-      if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
-      try {
-        return await withPersonAskSnapshotRetryV1({ signal: input.signal, capture: capture !== undefined, run: async signal => {
-          return await observePersonResearchV1({ trigger: 'ask', run_id: requestId, ...(capture === undefined ? {} : { capture }) }, async () => {
-            const desk = deskFor(options, input.access_token, input.request);
-            capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
-            const asker = askerOf(options, authorization);
-            return createAgenticAskV1({
-              ...(asker === undefined ? {} : { asker }),
-              ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
-              desk, model: options.model, generation: options.generation,
-              audit: options.audit.forRequest({
-                authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
-                principal_id: authorization.principal_id, membership_id: authorization.membership_id,
-                session_family_id: authorization.session_family_id, request_id: requestId,
-              }),
-              ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
-            }).answer({ question: input.request.question, signal });
-          });
-        } });
-      } catch (error) {
-        // Observe the original timeout before translating it into the Person API error.
-        if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) {
-          throw new AuthorityOperationError("unavailable", "Ask deadline exhausted");
-        }
-        throw error;
-      }
     },
     async searchEvidence(input: { readonly access_token: string; readonly request: PersonEvidenceSearchRequestV1; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResponseV1> {
       const desk = deskFor(options, input.access_token, input.request);

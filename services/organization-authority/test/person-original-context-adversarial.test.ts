@@ -97,25 +97,14 @@ function fixture() {
   const upload = (title: string, text: string, changes: Parameters<typeof uploadChunks>[2] = {}) =>
     uploadChunks(title, [text], changes);
 
-  const admitLegacyTeamNote = async (title: string, text: string) => {
-    const request = {
-      schema_version: 1 as const,
-      kind: "echo-person-update-submit-v1" as const,
-      request_id: randomUUID(), title, text, visibility: "team" as const,
-    };
-    database.prepare(`INSERT INTO authority_person_updates_v1
-      (organization_id,principal_id,membership_id,membership_type,request_id,context_id,payload_sha256,title,text,visibility,received_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
-      OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type,
-      request.request_id,
-      `ctx_${canonicalSha256({ organization_id: OWNER.organization_id, membership_id: OWNER.membership_id, request_id: request.request_id }).slice(7)}`,
-      canonicalSha256(request), title, text, "team", now(),
-    );
+  const notes = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(database, now) });
+  const admitTeamNote = async (title: string, text: string) => {
+    notes.submitUpload("owner", { schema_version: 2, kind: "echo-person-update-submit-v2", request_id: randomUUID(), title, text, audience: { kind: "team" }, project_id: null });
     const worker = new PersonDocumentProcessingV1(repository, undefined, new SqlitePersonTextSourceInboxV1(database, now));
     expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
   };
 
-  return { database, retrieval, repository, documents, upload, uploadChunks, admitLegacyTeamNote, leave, admit };
+  return { database, retrieval, repository, documents, upload, uploadChunks, admitTeamNote, leave, admit };
 }
 
 function texts(result: ReturnType<SqlitePersonOriginalContextRetrievalV1["deskSearch"]>): readonly string[] {
@@ -174,11 +163,11 @@ function meteredReads(database: Database.Database, maximumBytes: number) {
 }
 
 describe("adversarial original-context retrieval", () => {
-  it('filters document and note capture dates in the client zone and keeps meeting scope separate', async () => {
+  it('filters document and note capture dates in the client zone by received or any, keeps meeting scope separate, and counts what a meeting date cannot test', async () => {
     const f = fixture();
     f.upload('Launch plan', 'launch marker');
     f.upload('Private launch', 'launch marker', { audience: { kind: 'only_me' } });
-    await f.admitLegacyTeamNote('Launch note', 'launch marker');
+    await f.admitTeamNote('Launch note', 'launch marker');
     const base = { access_token: 'member', scope: { kind: 'global' as const }, source: 'document' as const, since: '2026-09-22', until: '2026-09-22', time_zone: 'Asia/Shanghai', date_field: 'received' as const };
     const inventory = f.retrieval.deskSearch(base);
     expect(inventory.items.map(item => item.label).sort()).toEqual(['Launch note', 'Launch-plan.md']);
@@ -193,33 +182,27 @@ describe("adversarial original-context retrieval", () => {
       expect(() => f.retrieval.deskSearch({ ...base, date_field })).toThrow('This source supports date_field: received');
     }
     expect(() => f.retrieval.revalidateDeskRelease({ access_token: 'member', release: searched })).not.toThrow();
-  });
 
-  it('takes received and any for documents, and counts notes and documents a meeting date cannot test (research tool contract v1)', async () => {
-    const f = fixture();
-    f.upload('Launch plan', 'launch marker');
-    f.upload('Private launch', 'launch marker', { audience: { kind: 'only_me' } });
-    await f.admitLegacyTeamNote('Launch note', 'launch marker');
-    const base = { access_token: 'member', scope: { kind: 'global' as const }, since: '2026-09-22', until: '2026-09-22', time_zone: 'Asia/Shanghai' };
-    // Any of a document's or a note's dates is when ECHO received it.
-    const any = f.retrieval.deskSearch({ ...base, source: 'document', date_field: 'any' });
+    // Any of a document's or a note's dates is when ECHO received it (research tool contract v1).
+    const { source: _source, date_field: _field, ...window } = base;
+    const any = f.retrieval.deskSearch({ ...window, source: 'document', date_field: 'any' });
     expect(any.items.map(item => item.label).sort()).toEqual(['Launch note', 'Launch-plan.md']);
     expect(any).not.toHaveProperty('unchecked');
-    expect(f.retrieval.deskSearch({ ...base, source: 'document', date_field: 'any', query: 'launch' }).items).toHaveLength(2);
-    expect(f.retrieval.deskSearch({ ...base, source: 'document', date_field: 'any', time_zone: 'America/Los_Angeles' }).items).toEqual([]);
-    expect(() => f.retrieval.deskSearch({ ...base, source: 'document', date_field: 'approved' })).toThrow('This source supports date_field: received, any');
+    expect(f.retrieval.deskSearch({ ...window, source: 'document', date_field: 'any', query: 'launch' }).items).toHaveLength(2);
+    expect(f.retrieval.deskSearch({ ...window, source: 'document', date_field: 'any', time_zone: 'America/Los_Angeles' }).items).toEqual([]);
+    expect(() => f.retrieval.deskSearch({ ...window, source: 'document', date_field: 'approved' })).toThrow('This source supports date_field: received, any');
     // Across both sources a meeting's date tests no note or document: each readable one is counted, with the date it records,
     // whatever a search's words match, and none is listed.
     for (const query of [undefined, 'launch', 'nothing matches this']) {
-      const across = f.retrieval.deskSearch({ ...base, date_field: 'occurred', ...(query === undefined ? {} : { query }) });
+      const across = f.retrieval.deskSearch({ ...window, date_field: 'occurred', ...(query === undefined ? {} : { query }) });
       expect([query, across.items, across.unchecked]).toEqual([query, [], { count: 2, dates: ['received'] }]);
     }
-    for (const date_field of ['received', 'any'] as const) expect(f.retrieval.deskSearch({ ...base, date_field })).not.toHaveProperty('unchecked');
+    for (const date_field of ['received', 'any'] as const) expect(f.retrieval.deskSearch({ ...window, date_field })).not.toHaveProperty('unchecked');
     // An upload the member cannot read is never counted; its owner's count has it.
-    expect(f.retrieval.deskSearch({ ...base, access_token: 'owner', date_field: 'approved' }).unchecked).toEqual({ count: 3, dates: ['received'] });
-    expect(f.retrieval.deskSearch({ ...base, date_field: 'approved', kinds: ['document_passage'] }).unchecked).toEqual({ count: 1, dates: ['received'] });
+    expect(f.retrieval.deskSearch({ ...window, access_token: 'owner', date_field: 'approved' }).unchecked).toEqual({ count: 3, dates: ['received'] });
+    expect(f.retrieval.deskSearch({ ...window, date_field: 'approved', kinds: ['document_passage'] }).unchecked).toEqual({ count: 1, dates: ['received'] });
     // The count is audited with the release it describes.
-    const release = f.retrieval.deskSearch({ ...base, date_field: 'due' });
+    const release = f.retrieval.deskSearch({ ...window, date_field: 'due' });
     const audit = JSON.parse((f.database.prepare('SELECT body_json FROM authority_person_upload_read_audit_v1 WHERE row_sha256=?').get(release.receipt) as { body_json: string }).body_json) as Record<string, unknown>;
     expect(audit.unchecked).toEqual({ count: 2, dates: ['received'] });
     expect(() => f.retrieval.revalidateDeskRelease({ access_token: 'member', release })).not.toThrow();
@@ -405,9 +388,9 @@ describe("adversarial original-context retrieval", () => {
     expect(() => fixedSession.deskSearch(input)).not.toThrow();
   });
 
-  it("uses actual V8 source admission for legacy notes and excludes a raw meeting source", async () => {
+  it("uses actual V8 source admission for notes and excludes a raw meeting source", async () => {
     const f = fixture();
-    await f.admitLegacyTeamNote("Legacy handoff", "legacycontextmarker is retained through the common Person source adapter");
+    await f.admitTeamNote("Legacy handoff", "legacycontextmarker is retained through the common Person source adapter");
     const legacy = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "legacycontextmarker" });
     expect(texts(legacy).join(" ")).toContain("legacycontextmarker");
 
@@ -583,6 +566,75 @@ describe("adversarial original-context retrieval", () => {
       .toThrow(expect.objectContaining({ code: "unauthorized" }));
   });
 
+  it("keeps a desk release on both checks when writes that change none of the caller's access move the org-wide revision", () => {
+    const f = fixture();
+    f.upload("Alpha plan", "orgwide-revision-marker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
+    const projects = createProjectContextApplicationV1({ authenticate: token => authorization(token === "member" ? MEMBER : OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
+    const releases = [{ kind: "global" as const }, { kind: "project" as const, project_id: PROJECT_ALPHA }]
+      .map(scope => f.retrieval.deskSearch({ access_token: "member", scope, query: "orgwide-revision-marker" }));
+    expect(releases.map(release => release.items.length)).toEqual([1, 1]);
+    const audit = JSON.parse((f.database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1 WHERE row_sha256=?").get(releases[0]!.receipt) as { body_json: string }).body_json) as Record<string, unknown>;
+    expect(audit).toMatchObject({ schema_version: 2, grants_sha256: releases[0]!.release.grants_sha256 });
+    expect(audit).not.toHaveProperty("authorization_revision");
+    const note = (token: string) => projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: "Mid-answer note", text: "saved while the Ask runs", association_project_ids: [], audience: { kind: "team" } });
+    const rename = (principalId: string, name: string) => f.database.prepare("UPDATE authority_principals SET display_name=? WHERE principal_id=?").run(name, principalId);
+    const revision = () => f.database.prepare("SELECT revision FROM authority_project_authorization_state_v1").pluck().get() as number;
+    const writes: Record<string, () => unknown> = {
+      "another person saves a note": () => note("owner"),
+      "another person renames themself": () => rename(OWNER.principal_id, "Owner Renamed"),
+      "another project is created": () => projects.createProject("owner", { schema_version: 1, kind: "echo-project-create-v1", request_id: randomUUID(), name: "Gamma" }),
+      "the caller saves a note": () => note("member"),
+      "the caller renames themself": () => rename(MEMBER.principal_id, "Member Renamed"),
+    };
+    for (const [write, run] of Object.entries(writes)) {
+      const before = revision();
+      run();
+      // Each of these refused the answer while the desk pinned the org-wide revision.
+      expect(revision(), write).toBeGreaterThan(before);
+      for (const release of releases) {
+        expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release, items_checked: true }), write).not.toThrow();
+        expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release }), write).not.toThrow();
+      }
+    }
+  });
+
+  it("refuses a desk release on both checks once the caller's own project grants change", () => {
+    const f = fixture();
+    f.upload("Alpha plan", "caller-grant-marker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
+    const search = () => f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "caller-grant-marker" });
+    const check = (release: ReturnType<typeof search>, items_checked?: true) =>
+      () => f.retrieval.revalidateDeskRelease({ access_token: "member", release, ...(items_checked === undefined ? {} : { items_checked }) });
+    const release = search();
+    expect(release.items).toHaveLength(1);
+    f.leave(PROJECT_ALPHA);
+    expect(check(release, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    expect(check(release)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    // Rejoining is a new grant, so the earlier release stays refused even though the item is readable again.
+    grant(f.database, PROJECT_ALPHA, MEMBER, "member");
+    expect(check(release, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    const rejoined = search();
+    expect(rejoined.items).toHaveLength(1);
+    expect(check(rejoined, true)).not.toThrow();
+    // Any change to the caller's own grants refuses the releases before it, so one request never mixes two snapshots of them.
+    grant(f.database, PROJECT_BETA, MEMBER, "member");
+    expect(check(rejoined, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    expect(check(rejoined)).toThrow(expect.objectContaining({ code: "unauthorized" }));
+    expect(check(search(), true)).not.toThrow();
+  });
+
+  it("keeps a project release through the incremental check once its item leaves the project, and refuses it at the full check", () => {
+    const f = fixture();
+    const documentId = f.upload("Alpha plan", "association-fence-marker", { project_id: PROJECT_ALPHA });
+    const release = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "association-fence-marker" });
+    expect(release.items).toHaveLength(1);
+    // Audiences are immutable and originals are never deleted, so the project association is what can change about an item.
+    f.database.prepare("DELETE FROM authority_person_document_associations_v1 WHERE document_id=? AND project_id=?").run(documentId, PROJECT_ALPHA);
+    // The member still reads it; only the project no longer holds it (ADR-0038's accepted trade-off).
+    expect(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "association-fence-marker" }).items).toHaveLength(1);
+    expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release, items_checked: true })).not.toThrow();
+    expect(() => f.retrieval.revalidateDeskRelease({ access_token: "member", release })).toThrow(expect.objectContaining({ code: "unauthorized" }));
+  });
+
   it("rejects a tampered representation body when its stored hash is unchanged", () => {
     const f = fixture();
     f.upload("Representation check", "representation-corruption-marker");
@@ -676,7 +728,7 @@ describe("adversarial original-context retrieval", () => {
     "does not certify corrupted %s under unchanged immutable digests",
     async carrier => {
       const f = fixture();
-      await f.admitLegacyTeamNote("Integrity proof", "integrity-proof-marker remains original evidence");
+      await f.admitTeamNote("Integrity proof", "integrity-proof-marker remains original evidence");
       const input = { access_token: "member", scope: { kind: "global" as const }, query: "integrity-proof-marker" };
       const released = f.retrieval.deskSearch(input);
       const citation = citationOf(released.release.released_atoms[0]!);
@@ -685,8 +737,8 @@ describe("adversarial original-context retrieval", () => {
       // Simulate retained-state corruption, not an allowed user mutation.
       // Immutability guards themselves are covered by source-custody tests.
       if (carrier === "retained note") {
-        f.database.exec("DROP TRIGGER authority_person_updates_v1_immutable");
-        f.database.prepare("UPDATE authority_person_updates_v1 SET text=?").run("integrity-proof-marker now contains forged evidence");
+        f.database.exec("DROP TRIGGER authority_person_updates_v2_immutable");
+        f.database.prepare("UPDATE authority_person_updates_v2 SET text=?").run("integrity-proof-marker now contains forged evidence");
       } else if (carrier === "canonical source content") {
         f.database.exec("DROP TRIGGER authority_source_contents_v1_update_denied");
         f.database.prepare("UPDATE authority_source_contents_v1 SET content_json=json_set(content_json,'$.text',?)")
@@ -784,44 +836,12 @@ describe("adversarial original-context retrieval", () => {
     expect(opened.items[0]!.text).toContain("later-packet-marker");
   });
 
-  it("keeps the ordinary document inventory representative-only, while the internal item inventory counts every readable passage", () => {
+  it("keeps the document inventory representative-only: one metadata item per document", () => {
     const f = fixture();
-    f.uploadChunks("Complete shortcut inventory", ["first readable passage", "second readable passage", "third readable passage"]);
-    const ordinary = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, limit: 20 });
-    const complete = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, limit: 20, inventory_mode: "items" });
-    expect(ordinary.items).toHaveLength(1);
-    expect(complete.items).toHaveLength(3);
-    expect(complete.truncated).toBe(false);
-    expect(new Set(complete.items.map(item => item.citation.anchor_sha256)).size).toBe(3);
-    expect(complete.items.every(item => item.text === undefined)).toBe(true);
-  });
-
-  it("marks the internal item inventory truncated before the shortcut can treat more than twenty passages as complete", () => {
-    const f = fixture();
-    f.uploadChunks("Oversized shortcut inventory", Array.from({ length: 21 }, (_, index) => `readable passage ${index + 1}`));
-    const complete = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, limit: 20, inventory_mode: "items" });
-    expect(complete.items).toHaveLength(20);
-    expect(complete.truncated).toBe(true);
-  });
-
-  it("counts every canonical packet in a long document and note for complete items inventory", async () => {
-    const f = fixture();
-    const documentTail = "document-tail-fact";
-    const noteTail = "note-tail-fact";
-    // Extraction limits a chunk to 3072 bytes, but a filename heading still
-    // leaves less room in a desk packet and therefore creates two anchors.
-    f.uploadChunks("Packetized document", [`${"d".repeat(3_054)}${documentTail}`]);
-    await f.admitLegacyTeamNote("Packetized note", `${"note body ".repeat(500)}${noteTail}`);
-    const complete = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, limit: 20, inventory_mode: "items" });
-    expect(complete.items.length).toBeGreaterThan(2);
-    expect(complete.truncated).toBe(false);
-    const passages = complete.items.filter(item => item.kind === "document_passage");
-    const notes = complete.items.filter(item => item.kind === "note");
-    expect(passages.length).toBeGreaterThan(1);
-    expect(notes.length).toBeGreaterThan(1);
-    const tailDocument = passages[passages.length - 1]!;
-    const tailNote = notes[notes.length - 1]!;
-    expect(f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: tailDocument.citation }).atom.text).toContain(documentTail);
-    expect(f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: tailNote.citation }).atom.text).toContain(noteTail);
+    f.uploadChunks("Representative inventory", ["first readable passage", "second readable passage", "third readable passage"]);
+    const inventory = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, limit: 20 });
+    expect(inventory.items).toHaveLength(1);
+    expect(inventory.truncated).toBe(false);
+    expect(inventory.items.every(item => item.text === undefined)).toBe(true);
   });
 });

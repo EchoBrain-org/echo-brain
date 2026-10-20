@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { seedOwner } from './fixtures/authority-admission-seed.js';
 
 const databases: Database.Database[] = [];
 const NOW = '2026-09-23T00:00:00.000Z';
@@ -10,9 +11,7 @@ function database() { const db = new Database(':memory:'); databases.push(db); d
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 function seeded() {
   const db = database(); applyAuthorityBaseline(db);
-  db.prepare("INSERT INTO authority_metadata VALUES (1,'oau_fixture','org_fixture','Fixture','{}',?,?)").run(NOW,NOW);
-  db.prepare("INSERT INTO authority_principals VALUES ('prn_fixture','org_fixture','PM',?)").run(NOW);
-  db.prepare("INSERT INTO authority_memberships(membership_id,organization_id,principal_id,membership_type,status,provisioned_at) VALUES ('mem_fixture','org_fixture','prn_fixture','owner','active',?)").run(NOW);
+  seedOwner(db, NOW, { authority_id: 'oau_fixture', organization_id: 'org_fixture', principal_id: 'prn_fixture', membership_id: 'mem_fixture', organization_name: 'Fixture', name: 'PM' });
   db.prepare(`INSERT INTO authority_person_documents_v1(document_id,organization_id,principal_id,membership_id,membership_type,request_id,request_version,filename,title,detected_media_type,original_size,original_sha256,payload_sha256,audience_kind,submitted_association_project_ids_json,audience_project_ids_json,received_at) VALUES (?,'org_fixture','prn_fixture','mem_fixture','owner','fixture-request',1,'fixture.txt','Fixture','text/plain',5,?,?,'only_me','[]','[]',?)`).run(DOCUMENT,SHA,SHA,NOW);
   db.prepare('INSERT INTO authority_person_document_originals_v1 VALUES (?,?)').run(DOCUMENT,Buffer.from('hello'));
   db.prepare('INSERT INTO authority_person_document_work_v1(document_id,retry_at) VALUES (?,?)').run(DOCUMENT,NOW);

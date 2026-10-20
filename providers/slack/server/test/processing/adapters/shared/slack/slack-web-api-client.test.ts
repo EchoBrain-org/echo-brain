@@ -182,7 +182,7 @@ describe("SlackWebApiClient chat.update", () => {
 
     await expect(
       client.updateMessage({
-        channel: "C123",
+        channel: "D123",
         ts: "123.000001",
         text: "Superseded",
       }),
@@ -200,23 +200,23 @@ describe("SlackWebApiClient chat.update", () => {
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init: init ?? {} });
         return new Response(
-          JSON.stringify({ ok: true, channel: "C123", ts: "123.000001" }),
+          JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" }),
         );
       },
     });
 
     await expect(
       client.updateMessage({
-        channel: "C123",
+        channel: "D123",
         ts: "123.000001",
         text: "Superseded",
       }),
-    ).resolves.toEqual({ channel: "C123", ts: "123.000001" });
+    ).resolves.toEqual({ channel: "D123", ts: "123.000001" });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe("https://slack.com/api/chat.update");
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
-      channel: "C123",
+      channel: "D123",
       ts: "123.000001",
       text: "Superseded",
       unfurl_links: false,
@@ -242,8 +242,11 @@ describe("SlackWebApiClient chat.update", () => {
       message: "Slack chat.update requires a canonical conversation ID",
       retryable: false,
     });
+    // The bot writes only to its own direct messages, never to a channel.
+    await expect(client.updateMessage({ channel: "C123", ts: "123.000001", text: "ignored" }))
+      .rejects.toMatchObject({ code: "invalid", retryable: false });
     await expect(
-      client.updateMessage({ channel: "C123", ts: "not-a-ts", text: "ignored" }),
+      client.updateMessage({ channel: "D123", ts: "not-a-ts", text: "ignored" }),
     ).rejects.toMatchObject({
       code: "invalid",
       message: "Slack chat.update requires a canonical message timestamp",
@@ -260,7 +263,7 @@ describe("SlackWebApiClient bounded response bodies", () => {
   ] as const)("maps %s body to Slack error codes, or to unknown_outcome for writes", async (_case, body, code, retryable) => {
     const client = new SlackWebApiClient("test-token", { fetchImpl: async () => body() });
     await expect(client.openDirectMessage("U123")).rejects.toMatchObject({ code, retryable });
-    await expect(client.updateMessage({ channel: "C123", ts: "123.000001", text: "x" }))
+    await expect(client.updateMessage({ channel: "D123", ts: "123.000001", text: "x" }))
       .rejects.toMatchObject({ code: "unknown_outcome", retryable: true });
   });
 });

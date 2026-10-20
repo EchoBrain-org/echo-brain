@@ -5,9 +5,9 @@ import { message, toolMessage } from '../messages.js';
 import {
   askProjectSetting, beginProjectRename, cancelProjectConnect, cancelProjectSettingsAction, clearProjectTool, closeProjectSettings, confirmProjectSetting,
   connectProjectTool, dismissProjectSetting, hiddenSpaces, keepProjectSetting, moreProjectConfluenceSpaces, openProjectTools, PROJECT_MAPPING_TOOLS, projectRenameValid,
-  projectSettingsBlocked, projectToolChange, projectToolEntry, projectToolFailureWords, projectToolsSavable, projectToolUsable, reloadProjectTool, reloadProjectToolList,
+  projectSettingsBlocked, projectToolChange, projectToolEntry, projectToolFailureWords, projectToolReads, projectToolsSavable, projectToolUsable, reloadProjectTool, reloadProjectToolList,
   retryProjectSetting, saveProjectTools, setProjectJira, setProjectRename, sheetShown, toggleProjectConfluenceSpace, toggleProjectSettings,
-  type MappingTool, type ProjectSettingsState, type State,
+  type MappingTool, type ProjectReads, type ProjectSettingsState, type State,
 } from '../store.js';
 import { trapTab } from './compose.js';
 import { Check, Close, Ellipsis, Plug } from './icons.js';
@@ -106,6 +106,10 @@ function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anc
 const NAMES: Record<MappingTool, string> = { jira: 'Jira', confluence: 'Confluence' };
 /** What each tool's setting holds. */
 const SCOPE: Record<MappingTool, string> = { jira: 'One project', confluence: 'Up to 20 spaces' };
+/** What the project reads from each tool, as its row says it. */
+const READS: { readonly [Tool in MappingTool]: (reads: NonNullable<ProjectReads[Tool]>) => string } = {
+  jira: key => `Reads ${key}`, confluence: spaces => `Reads ${spaces} space${spaces === 1 ? '' : 's'}`,
+};
 
 /** What the project reads from a tool now, as the Authority last said. */
 function currentWords(settings: ProjectSettingsState, tool: MappingTool): string {
@@ -113,9 +117,8 @@ function currentWords(settings: ProjectSettingsState, tool: MappingTool): string
   if (!setting || setting.status === 'loading') return 'Loading…';
   if (setting.status === 'failed' && !setting.value) return 'Could not be read';
   if (!setting.value) return SCOPE[tool];
-  if (tool === 'jira') return settings.jira?.value?.mapping ? `Reads ${settings.jira.value.mapping.project_key}` : 'Not set';
-  const spaces = settings.confluence?.value?.mapping?.space_ids.length ?? 0;
-  return spaces > 0 ? `Reads ${spaces} space${spaces === 1 ? '' : 's'}` : 'Not set';
+  const reads = projectToolReads(settings, tool);
+  return reads ? (READS[tool] as (value: string | number) => string)(reads) : 'Not set';
 }
 
 /** Connected, Connect or Reconnect, on the right of a row. */
@@ -230,7 +233,7 @@ function ToolSection({ state, tool, onSave }: { state: State; tool: MappingTool;
   const connecting = sheet.connect?.tool.tool_id === tool;
   const failure = projectToolFailureWords(settings, tool, name);
   const off = projectToolEntry(settings, tool)?.status === 'unavailable';
-  const mapped = tool === 'jira' ? Boolean(settings.jira?.value?.mapping) : Boolean(settings.confluence?.value?.mapping);
+  const mapped = Boolean(settings[tool]?.value?.mapping);
   const change = projectToolChange(settings, tool);
   return (
     <section class="tool-section" aria-label={name} data-testid={`project-${tool}`}>
@@ -278,8 +281,7 @@ function ProjectTools({ state }: { state: State }) {
   const save = () => { if (savable) void saveProjectTools(); };
   const tools = PROJECT_MAPPING_TOOLS.filter(tool => {
     const entry = projectToolEntry(settings, tool);
-    const mapped = tool === 'jira' ? settings.jira?.value?.mapping : settings.confluence?.value?.mapping;
-    return !sheet.items || (entry !== undefined && entry.status !== 'unavailable') || Boolean(mapped);
+    return !sheet.items || (entry !== undefined && entry.status !== 'unavailable') || Boolean(settings[tool]?.value?.mapping);
   });
   return (
     <div class="overlay" onClick={cancelProjectSettingsAction}>

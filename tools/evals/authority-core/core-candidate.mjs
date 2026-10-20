@@ -102,11 +102,9 @@ async function open(state_directory) {
   // These delegates mirror the generic composition root. Phase ordering,
   // recovery, exclusion, wake coalescing and default polling remain production.
   const processing = {
-    hasFineGrainedSourceLifecycle: true,
     setWorkerLifecycle: (value) => source.setWorkerLifecycle(value),
     recoverV4Appends: (signal) => approvals.processing.recoverV4Appends(signal),
     pollAndStageAdmittedMeetings: (signal) => source.runOnce(signal),
-    observeAndFinalizePendingApprovals: (signal) => approvals.processing.observeAndFinalizePendingApprovals(signal),
     appendFinalizedApprovalsToV4: (signal) => approvals.processing.appendFinalizedApprovalsToV4(signal),
     reconcileReadableSearchGeneration: (signal) => search.reconcile(signal),
   };

@@ -10,7 +10,8 @@ Current-host staging updates use the shared
 It transfers only reviewed non-secret tooling and release artifacts, and invokes
 named installed updater actions with exact-target and accepted-record checks.
 It does not automate initial onboarding, change infrastructure, or infer the
-human Slack approval and final release decision.
+human canary approval (on the desktop or its Slack DM copy) and final release
+decision.
 
 This is the deployable Organization Authority. Its current `clean-v1`
 compatibility profile uses a new `clean-data/` directory, never imports
@@ -61,34 +62,15 @@ for the change-set review, deployment, notification rehearsal, controlled
 outage, and recovery checks. This intentionally creates one small observable
 loop, not a dashboard or tracing platform.
 
-### Staging journey overview and Explorer
+### Staging journey overview
 
-The journey overview is the separate staging-only
-`authority-staging-journey-observability-v1.template.json` stack. A read-only
-inspection on 2026-09-08 verified the staging overview, Explorer stack, and
-redacted journey view. That is dated evidence, not a substitute for checking
-the current stack and dashboard before a change. The template accepts only the
-exact `authority-staging.echobrain.org` Authority log group and creates only
-the staging journey dashboard, its worker-cycle metric filter, and three
-quick-detection alarms. It must not be added to, or deployed through, the generic
-`authority-observability-v1.template.json` flow because that flow accepts an
-arbitrary Authority host and is also used outside staging.
-
-The overview emits content-free metrics beside canonical journey events and
-uses the existing 14-day log retention. The Explorer exposes only fixed
-operations: redacted `describe`, recent `list`, UUID-scoped `detail` and
-`related`, transport `health`, and a staging-only `content` operation that
-returns captured development content, including model input and output, when
-the staging content capture recorded it. It has no public endpoint, direct Logs
-access, application credential, or mutation operation. It fails closed for incomplete history, unknown events, and result
-limits.
-
-The companion policy permits only invocation of the fixed Lambda from a
-dedicated staging-only Identity Center assignment. Keep dashboard sharing
-disabled; review the effective assignment rather than attaching policy to an
-`AWSReservedSSO` role. For the dashboard contract, change procedure, and
-rehearsal evidence, use
-[RB-OPERATIONS-001](../../docs/operations/RB-OPERATIONS-001-authority-observability.md#staging-journey-overview-and-explorer).
+The journey overview is a separate staging-only stack that accepts only the
+exact `authority-staging.echobrain.org` Authority log group. Never add it to,
+or deploy it through, the generic `authority-observability-v1.template.json`
+flow, which accepts an arbitrary Authority host and is also used outside
+staging. For its contract, change procedure and evidence, and for removing
+the Journey Explorer stack retired on 2026-10-19, use
+[RB-OPERATIONS-001](../../docs/operations/RB-OPERATIONS-001-authority-observability.md#staging-journey-overview).
 
 The confidential OIDC client must allow
 `https://<authority-host>/v2/session/oidc/callback`. Create one private input
@@ -140,38 +122,28 @@ Jira project needs a fresh rehearsal.
 
 The profile contains no Nango secret or Slack token. The Authority continues to
 read the existing `nango-secret-key`; the profile's Jira integration key is an
-ordinary Nango integration identifier. The V3 profile removes the organization
-Granola capture policy and inert Slack channel field. The Authority and runner
-reject V1/V2 profiles; a selected older profile requires a fresh rehearsal with
-reviewed V3 inputs and new sidecar bindings. No retained rows are silently
-migrated or purged. Jira is read live through `verify-read`; all capture
-requests are rejected before provider I/O and retain no pointers or bodies.
-Approval qualification uses the separate synthetic release canary, whose
-staging-only personal source never discovers provider data. Slack setup asks
-only for the four delivery scopes (`chat:write`, `im:write`, `im:history`,
-`users:read`). A bot token installed before that keeps the two retired channel
-scopes until the app is reinstalled from scratch; nothing uses them. Jira's
-person connection sidecar is owned by the Authority runtime beside its retained
-state directory.
+ordinary Nango integration identifier. Jira is read live through
+`verify-read`; all capture requests are rejected before provider I/O and retain
+no pointers or bodies. Approval qualification uses the separate synthetic
+release canary, whose staging-only personal source never discovers provider
+data. Jira's person connection sidecar is owned by the Authority runtime beside
+its retained state directory.
 
-The committed EC2 runtime profile selects Confluence when the fixed staging
-connector profile is present. `ECHO_STAGING_CONFLUENCE_ASK_V1` reuses only its
-validated Atlassian Cloud ID and selects the independent Nango Cloud integration
-named `confluence`; it inherits no Jira project restriction or grant. Configure
-that integration with the [Confluence OAuth scopes](../../providers/confluence/README.md)
-before staging, then connect each Person through Tools. This selection changes
-through the normal reviewed runtime-profile release, without editing the fixed
-connector profile or host environment. Generic/local deployments remain
-unconfigured unless both nonsecret Cloud ID and Nango integration ID are
-supplied as Authority service arguments. Conflicting explicit flags refuse
-startup when the staging switch is enabled. The
-per-person Confluence connection and ECHO-project mapping database stores only
-provider references and mapping configuration, never page text. It is bound to
-the Authority lineage and that exact Cloud/integration selection. An ordinary
-restart on the same host retains it. Offline backup recovery deliberately
-refuses the database because an archived person-bound grant cannot be
-requalified: after that recovery, revoke or disconnect the old provider grant
-and reconnect through the restored owner's current session.
+When the fixed connector profile is present, the committed EC2 runtime profile
+also selects live Jira and Confluence Ask under each Person's own grant (the
+[service guide](../../services/organization-authority/README.md#staging-connector-rehearsal)
+owns the selection rules). Configure the Nango `confluence` integration with
+the [Confluence OAuth scopes](../../providers/confluence/README.md) before
+staging, then connect each Person through Tools. This selection changes through
+the normal reviewed runtime-profile release, without editing the fixed
+connector profile or host environment. The per-person Confluence connection and
+ECHO-project mapping database stores only provider references and mapping
+configuration, never page text. It is bound to the Authority lineage and that
+exact Cloud/integration selection. An ordinary restart on the same host retains
+it. Offline backup recovery deliberately refuses the database because an
+archived person-bound grant cannot be requalified: after that recovery, revoke
+or disconnect the old provider grant and reconnect through the restored owner's
+current session.
 
 The same fixed profile also admits the owner's explicitly invoked `verify-read`
 diagnostic through the [runner](../../services/organization-authority/README.md#staging-connector-rehearsal).
@@ -191,47 +163,7 @@ provider revocation and a fresh rehearsal. Do not delete or edit the sidecar to
 make a startup pass. The human host operator must first disconnect or revoke
 the affected Jira connection at the provider, then prepare a fresh profile.
 
-#### Moving off the retired V1 profile or V2 rebind
-
-Earlier tooling prepared a request-only V1 profile and rebound it to V2 with
-`configure-connector-rehearsal`. This wrapper has no such action, and the
-Authority refuses both earlier profiles. With no live users, move such a host
-with one fresh rehearsal, in this order:
-
-1. With the old wrapper, confirm `status` does not report an interrupted
-   connector rebind. If it does, rerun the same reviewed
-   `configure-connector-rehearsal` command so the old wrapper reconciles its
-   journal first.
-2. While the old rehearsal is still in place, install the target release's
-   reviewed host tooling through the
-   [current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
-   (`inspect-install`, then `install`, each with `--previous-tooling-source`;
-   while the inspection shows any tool `old`, rerun `inspect-install` and plan
-   the next `install` with `--inspection <succeeded-inspect-install-receipt>`,
-   until every tool is `new`).
-3. Disconnect the retired rehearsal's Jira connection in Nango.
-4. Run `replace-rehearsal --confirm-no-live-users` without
-   `--reuse-provider-inputs`. The archive keeps the old profiles, sidecar and
-   Slack connection state.
-5. Put the profile above in `onboarding.clean-v1.json` and transfer the full
-   seven-file onboarding input directory; the transfer runs `doctor` and
-   `prepare` on the host. Then continue with `resume`.
-6. When host `resume` reports `connect_slack_in_app`, the human reruns
-   `sudo ./onboard-clean-v1.sh resume --existing-slack-app <app-id>` using the ID
-   retained in the operator handoff. Follow its emitted owner-Mac command,
-   `person tools setup --tool slack --existing-app <app-id>`, and the
-   [named hidden prompts](#use-an-existing-slack-app-before-the-first-connection).
-   A missing choice prints selection instructions; only an explicit
-   `resume --create-slack-app` prints setup for a new app. The choice applies to
-   that invocation; retain the existing app ID in the handoff for the next reset.
-   Complete Slack consent. Then link the owner with
-   `person tools connect --tool slack` and complete Jira consent with
-   `person tools connect --tool jira`.
-7. Save the exact profile object as the runner's local profile before the
-   [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal)
-   live Jira read checks.
-
-Check that directory before spending an AWS session on it:
+Check the private input directory before spending an AWS session on it:
 
 ```
 npm run authority:staging-onboarding-transfer -- preflight --input <config.json>
@@ -292,9 +224,7 @@ key outside that shape with `nango_secret_key_invalid`, without printing the
 key. Do not put any secret in this README command or a shell argument. Use
 `nango_integration_key` (the Nango
 Slack integration key, matching `^[a-z0-9][a-z0-9_-]{0,63}$`) as the only
-Slack integration setting in the onboarding JSON. Run the re-onboarding only
-with a wholly fresh provider-neutral V4 staging lineage; do not reuse an older
-V3 or shared-channel rehearsal state directory, database, or approval binding.
+Slack integration setting in the onboarding JSON.
 
 An owner sets Slack up from their own machine using the wrapper's app-choice
 handoff. Staging resets reuse the designated app with `--existing-app <app-id>`
@@ -325,10 +255,12 @@ setup. Any active connection blocks this option, even for the same app ID;
 disconnecting a person's Slack link does not remove the organization connection.
 Standard setup and `--reconnect` retain their existing behavior.
 
-Use a matching Person CLI and Authority release that supports `--existing-app`.
-This requires the [coordinated server and client release](../release/README.md#coordinated-server-and-client-release),
-with no state migration. A source change alone does not switch staging or
-upgrade the installed owner client.
+After a staging reset, when host `resume` reports `connect_slack_in_app`, the
+human reruns `sudo ./onboard-clean-v1.sh resume --existing-slack-app <app-id>`
+with the ID retained in the operator handoff; it prints the owner-Mac command
+below. A missing choice prints selection instructions; only an explicit
+`resume --create-slack-app` prints setup for a new app. The choice applies to
+that invocation; retain the existing app ID in the handoff for the next reset.
 
 The human owner runs the following on their own machine, replacing the
 synthetic app ID with the chosen app's ID:
@@ -377,15 +309,14 @@ update the app. The compatibility DM-code challenge
 available as the fallback for a machine without a browser.
 
 After that setup, the ordinary release updater only replaces artifacts within
-the current lineage: Authority V14, control-plane V4,
-record-log V4, retrieval facts V3, retrieval content/lexical V2, and a six-role
-V2 root. It refuses older or mixed persisted state before runtime,
-configuration, or state mutation. For disposable unreleased rehearsal state
-that does not match these baselines, install the target release's host tooling,
-then use `replace-rehearsal --confirm-no-live-users` and prepare again with the
-exact new release, as described in
-[Replace unreleased rehearsal state](#replace-unreleased-rehearsal-state). The [release procedure](../release/README.md)
-retains separately named historical migrations.
+the current lineage and its
+[baselines](../../services/organization-authority/README.md#state-and-baselines).
+It refuses older or mixed persisted state before runtime, configuration, or
+state mutation. For disposable unreleased rehearsal state that does not match
+these baselines, install the target release's host tooling, then use
+`replace-rehearsal --confirm-no-live-users` and prepare again with the exact
+new release, as described in
+[Replace unreleased rehearsal state](#replace-unreleased-rehearsal-state).
 
 Complete the bootstrap, owner Slack setup and connect, credential installation,
 and finalization. `resume` now continues straight through finalize to the
@@ -443,11 +374,10 @@ organization.
 
 ### Replace unreleased rehearsal state
 
-The current release requires fresh Authority V14 state. It cannot start over
-an earlier rehearsal lineage. V14 adds the held-extraction table, so a V13 host
-needs this reset and then initial-owner onboarding again. For disposable
-rehearsal state with no live users, retire it through the explicit
-initial-owner attestation.
+A release cannot start over a rehearsal lineage that lacks its
+[current baselines](../../services/organization-authority/README.md#state-and-baselines).
+For disposable rehearsal state with no live users, retire it through the
+explicit initial-owner attestation.
 
 While the old rehearsal is still in place, first install the target release's
 reviewed host tooling through the
@@ -455,13 +385,11 @@ reviewed host tooling through the
 (`inspect-install`, then `install`, each with `--previous-tooling-source`;
 while the inspection shows any tool `old`, rerun `inspect-install` and plan the
 next `install` with `--inspection <succeeded-inspect-install-receipt>`, until
-every tool is `new`). The transfer runs the installed wrapper's `doctor` and `prepare`, and an older
-installed wrapper lacks `resume --existing-slack-app` and `langsmith-tracing`
-and prints the bare new-app Slack setup handoff. The lane checks
-the host's accepted release record and environment, which `replace-rehearsal`
-archives, so it refuses to install between the reset and `prepare`. If the
-reset already ran on older tooling, install after `prepare` and before
-`resume`.
+every tool is `new`). The transfer runs the installed wrapper's `doctor` and
+`prepare`. The lane checks the host's accepted release record and environment,
+which `replace-rehearsal` archives, so it refuses to install between the reset
+and `prepare`. If the reset already ran on older tooling, install after
+`prepare` and before `resume`.
 
 ```sh
 sudo ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
@@ -482,32 +410,11 @@ Run `prepare` again with the new exact release record. Never use this command
 after the first user release; subsequent baseline-preserving updates use
 the release procedure below.
 
-A host prepared before Slack moved to Nango uses this same command, not the
-[provider-reuse path](#reuse-provider-credentials-for-a-fresh-staging-rehearsal)
-below: provider reuse needs a host already prepared with the Nango key and
-integration. Keep this order:
-
-1. While the old rehearsal is still in place, install the target release's
-   reviewed host tooling as described above. Here the older wrapper still
-   requires the retired `slack-*` input files, so it cannot prepare the
-   seven-file input and the install-after-`prepare` fallback does not apply.
-2. Run `replace-rehearsal --confirm-no-live-users` without
-   `--reuse-provider-inputs`.
-3. Transfer the full seven-file onboarding input directory (including
-   `nango-secret-key`); the transfer runs `doctor` and `prepare` on the host.
-   Then continue with `resume`.
-
-A rehearsal stage receipt staged before the move is refused as invalid;
-re-stage it under a new operation ID, and delete any leftover captured
-`slack-*` files by hand.
-
 ### Custom synthetic staging meetings
 
 On an onboarded staging Authority, the owner can submit a custom meeting through
-the installed Person CLI. Deploy a reviewed server and matching CLI that support
-this operation through the existing current-host release lane. It is additive to
-V14; no reset, Granola connection, host file copy, or source-profile change is
-needed. Production does not mount the synthetic provider.
+the installed Person CLI. It needs no reset, Granola connection, host file copy,
+or source-profile change. Production does not mount the synthetic provider.
 
 Create a UTF-8 JSON file with exactly these four fields (48 KiB maximum):
 
@@ -628,10 +535,8 @@ Use this path when the current staging Authority is complete and healthy but
 the original Mac onboarding input directory is unavailable. Provider credentials
 stay on the host. The organization, memberships, sessions, signing identity and
 knowledge base are still recreated by the ordinary fresh onboarding flow. This
-path requires a host already running on Nango, prepared with the Nango secret
-key and integration key; it does not move a pre-Nango host to Nango (see
-[Replace unreleased rehearsal state](#replace-unreleased-rehearsal-state)
-above).
+path requires a host already prepared with the Nango secret key and
+integration key.
 
 Roll back any staged candidate, then install the reviewed host tooling through
 the current-host release lane. Verify the accepted Authority is complete and
@@ -666,8 +571,7 @@ commands in Session Manager, using the operation ID from the receipt:
 
 ```sh
 sudo ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users \
-  --reuse-provider-inputs onboarding-fresh-four-meetings-001 \
-  --content-telemetry true
+  --reuse-provider-inputs onboarding-fresh-four-meetings-001
 sudo ./onboard-clean-v1.sh prepare-rehearsal \
   --operation-id onboarding-fresh-four-meetings-001
 sudo ./onboard-clean-v1.sh resume
@@ -697,15 +601,13 @@ an interrupted operation's receipt and lock, and follow the shared recovery
 procedure instead of deleting them or starting a competing operation.
 
 The new environment is rendered from its release-matched profile. Region and
-host remain bound to the existing log group. Without `--content-telemetry`, the
-current explicit staging journey content-telemetry setting is preserved. The
-provider-reuse command may explicitly select `true` or `false`; the selection is
-bound into its receipt before reset and is reused by every `prepare-rehearsal`
-retry. The wrapper still requires the running value to match the verified
-Compose setting. Duplicate or malformed settings, or a new profile unable to
-support content telemetry, stop replacement before data is reset. No old
-environment file is copied into the new rehearsal. Continue with the browser
-login, Slack link and four-meeting permission proof above.
+host remain bound to the existing log group. No old environment file is copied
+into the new rehearsal, so the retired staging content telemetry switch, which
+earlier rehearsals could carry, is dropped; the wrapper no longer accepts
+`--content-telemetry`. A wrapper from before 2026-10-19 refuses a runtime
+profile without that switch, so install the current host tooling first, as
+above. Continue with the browser login, Slack link and four-meeting permission
+proof above.
 
 ## Resumable initial-owner onboarding
 
@@ -745,36 +647,11 @@ Host-local `resume` and `status` still require the human host operator.
 
 ### Inspect and retry a held extraction
 
-The live runtime reserves one automatic model extraction for each unchanged
-review input and source/processor admission. The reservation commits before the
-provider request. Grounding or schema rejection, insufficient credit, other
-provider failures, and interruption all hold that input across polls and
-restarts. Observation timestamps, moving source cursors, and provider revision
-changes alone do not grant another attempt. Frozen candidates continue to reuse
-their existing output.
-
-A hold parks the meeting instead of stopping its source. Authority records it
-in `authority_live_source_held_extractions_v1` with an allowlisted failure stage
-and moves the cursor past it, so the source's later meetings continue. A parked
-import counts as consumed: its "Save to" projects are recorded as for a staged
-meeting. Cancelling an import forgets its held row. An attempt still pending
-for less than 11 minutes is treated as running elsewhere and left in place; an
-older one parks as `interrupted`. The owner's meetings status names the held
-meeting's ID, attempt and stage, and whether a retry is authorized. This is a
-per-input spend bound, not an account-wide budget; changed review content or
-processor configuration can require a new extraction.
-
-An unbilled refusal needs no operator. OpenRouter bills no non-2xx reply, so a
-first attempt refused with a 429 or 5xx before any model output is not
-held: the runtime grants that exact key one automatic retry (status shows
-`retry_authorized: true` with no `held`), keeps the meeting at the head of its
-queue and re-runs it about a minute later. A second failure, a timeout, a
-cancel or any failure after model output holds as above. Any extraction that
-fails at `rate_limited`, `temporarily_unavailable` or `timeout` also pauses all
-meeting intake for 60 s, and the model limiter pauses background calls.
-
-A stop lets running extractions finish for up to 20 s, then cancels the rest;
-each cancelled one holds as `cancelled` and needs its own grant. A deploy and
+Each unchanged review input gets one paid automatic extraction: a per-input
+spend bound, not an account-wide budget. A failure parks the meeting while its source moves on, until an operator grants one more
+attempt; an unbilled 429 or 5xx gets one free automatic retry instead.
+[Meeting processing](../../docs/architecture/meeting-processing-core-and-adapters.md#held-meetings-lanes-and-the-writer-gate)
+owns these rules, the intake pause and the shutdown grace. A deploy and
 `retry-extraction` both stop the Authority, so before granting, check the
 status for `pending` attempts and wait for them to finish.
 
@@ -876,8 +753,8 @@ in with the command it installs:
   --open-browser
 ```
 
-Browser login, identity changes, Slack approval and host wrapper actions remain
-human steps. The local operator handles authorized export, kit verification and
+Browser login, identity changes, meeting approvals and host wrapper actions
+remain human steps. The local operator handles authorized export, kit verification and
 installation, receipt polling, and the post-approval Person reads. Existing
 private-handoff approval continues to cover the same target, accepted release
 and recipient; a changed scope needs review. Export does not advance onboarding
@@ -955,8 +832,8 @@ the same accepted release, and waits for both container health and a public
 descriptor that exactly matches the local Authority. Its result contains
 only the release ID and boolean activation/health outcomes. If the replacement
 cannot start healthily, the previous LLM source and active copies are restored and the old
-runtime is started again. Durable records, staged candidates, and Slack
-approval state are not rewritten. OIDC client-secret rotation and reconnecting
+runtime is started again. Durable records, staged candidates, and approval
+state are not rewritten. OIDC client-secret rotation and reconnecting
 the organization's Slack connection have separate identity/link semantics and
 are intentionally outside this operation.
 

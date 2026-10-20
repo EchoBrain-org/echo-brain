@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { describe, expect, it } from 'vitest';
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { observeProviderHttpRequestV1, providerHttpResponseDiagnosticsV1 } from '../src/provider-http-diagnostics-v1.js';
 
 describe('provider HTTP diagnostics', () => {
@@ -43,13 +43,7 @@ describe('provider HTTP diagnostics', () => {
     expect(providerHttpResponseDiagnosticsV1(response)).toEqual({ counts: { http_status: 429 } });
   });
 
-  it('works with telemetry disabled and excludes content capture from the provider exchange', async () => {
+  it('works with telemetry disabled', async () => {
     await expect(observeProviderHttpRequestV1({ upstream_service: 'confluence', upstream_operation: 'provider_read' }, async () => new Response('private response body', { status: 429 }))).resolves.toBeInstanceOf(Response);
-    const captured = vi.fn();
-    await observeCoreRuntimeV1('ask_request', () => observeProviderHttpRequestV1({ upstream_service: 'confluence', upstream_operation: 'provider_read' }, async () => {
-      captureCoreRuntimeContentV1('model_response', { body: 'private response body' });
-      return new Response('private response body', { status: 429 });
-    }), { observer: () => undefined, content_observer: captured });
-    expect(captured).not.toHaveBeenCalled();
   });
 });

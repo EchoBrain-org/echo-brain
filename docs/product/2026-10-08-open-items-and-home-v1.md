@@ -6,11 +6,11 @@ meeting actions are follow-ups); its Rulings and API changes sections name what
 changed (`items` takes `states` in place of `open_only`).
 
 Status: designed with the founder on 2026-10-08 and approved by the founder the
-same day; rulings 18–23 were added while planning. Implementation plan
-executed; see the plan's
-[As built](../superpowers/plans/2026-10-08-open-items-and-home.md#as-built)
-section. Every section but Rulings describes what was built, including the
-rulings made during execution that change behavior. Updated 2026-10-16 for
+same day; rulings 18–23 were added while planning. Shipped in two parts: Part
+1 in #300 (a7f8df7) with its follow-up #301 (00a9c1f), and Part 2 in #303
+(264757c). Sections 1 to 6 describe what was built, including the rulings
+made while building that change behavior; sections 7 and 8 point to what owns
+the API and the desktop now. Updated 2026-10-16 for
 the research ROI fixes the founder approved that day (R77–R82): sweeps skip
 the planner, take only items in tools the caller has connected, never let
 `unreadable` replace a judged verdict, ground `landed` and `changed` in the
@@ -23,8 +23,6 @@ Builds on
 the [research trigger contract v1](2026-10-06-research-trigger-contract-v1.md).
 Design canvas, row 9:
 https://claude.ai/code/artifact/ffa8478f-578d-40d0-bc7a-578a66f4adb0.
-Implementation plan:
-[open items and Home](../superpowers/plans/2026-10-08-open-items-and-home.md).
 
 ## Goal
 
@@ -427,272 +425,32 @@ dozen or more reads as one person.
 
 ## 7. API
 
-All on `POST /v1/person/runs`, one envelope `{schema_version: 1, operation,
-…}`. Existing operations keep their shapes, with these additions for sweeps:
-
-- `list` returns the caller's runs, newest first, at most 100: at most the 20
-  newest sweeps, with the newest impact runs filling the rest, so however
-  often sweeps run, at least 80 places stay for impact runs and their Try
-  again. Each run carries `trigger`: `approved_record` or `sweep`.
-- A `running` run whose lease has lapsed (its worker stopped) is reported as
-  `pending`, in `list` and in the stages of `items`, because it can be
-  started again; the stored state is unchanged.
-- `start` claims a sweep as it claims an impact run, except that it answers
-  `busy` while one of the caller's impact runs is pending or running.
-- `view` of a sweep is `not_found`: a sweep has no card. `retry` of a failed
-  sweep is refused (`not_found`): the next sweep replaces it.
-
-| Operation | Input | Result | Allowed |
-| --- | --- | --- | --- |
-| `view` | `run_id` | card (unchanged shape) | the approver and anyone who can read the decision (was: approver only) |
-| `home` | — | Send rows; the open items that wait on the caller and open items the caller sent whose last check is `changed` (the desktop's Update and Review rows, section 8); `landed`, `waiting`, `last_checked_at`, and `sweep_due` (section 6) | the caller's own |
-| `items` | `scope: mine \| run \| record \| project`, `id?`, `cursor?`, `summary_only?`, `open_only?` | unsent, open and closed items the caller can see, 50 per page, oldest first; a summary of the whole scope (counts by state, open items by last check, decisions, latest check, and per decision the caller can read its `unsent` and `open` counts and, of the open ones, how many last checked `landed` and `unreadable`); and each decision's impact run stage, with `mine` when the stage's run is the caller's own (they may Send or Try again). With `summary_only: true` (never with `cursor`): the summary and stages only, no items and no live reads. With `open_only: true` (never with `summary_only`): items in state `open` only, paged the same way, with live reads for that page's items only; a `cursor` is sent with the same flag; the summary and stages still cover the whole scope | per section 4 |
-| `item` | `item_id` | one item rebuilt for the caller | per section 4 |
-| `send` | `run_id`, `command_id`, `items: [{item_id, include, owner_membership_id?}]` | `{sent, not_relevant}`. A `command_id` already sent answers the counts it sent, frozen at Send (`send_included`), even after later state or owner changes and after the caller lost read access to the decision. For a new command, items that changed since the card was drawn answer `conflict` and nothing is written | checked first: the run is the caller's own finished impact run, else `not_found`. A replay is answered right after that check. A new command also needs the caller to read the decision now, and each picked owner to be an active member |
-| `set_state` | `item_id`, `state: open \| done \| not_relevant` | `{state}`; a click that changes nothing writes nothing | the approver or the owner, once the item is sent |
-| `assign` | `item_id`, `owner_membership_id` | `{owner}`; the item's current owner writes nothing | the approver, the owner, a lead of one of the decision's active projects, once the item is sent; the new owner is an active member |
-| `sweep` | `scope: mine \| record \| project`, `id?` (none for `mine`) | `{run_id}`: the caller's pending or running sweep of that scope, else a new pending one. `{state: 'nothing_to_check'}` when the scope holds no open item the caller can see that a sweep covers (section 6; a Slack message is not covered); no run is made | anyone, over items they can see. A scope where they see nothing answers `nothing_to_check`, never `unauthorized`, so a request cannot probe what exists |
-
-Every item read rebuilds outside parts with one live open per item shown, at
-most 50 per call. A row's own fields never include a word read from outside
-ECHO. Each item carries `reach` (section 4), and `current` exactly when it is
-`opened`. A refusal by the viewer's access (`unauthorized`, `not_found` or
-`stale_access_state` from the desk, an empty read, or a read of another item)
-is `no_access`; every other failure, including a desk that cannot be bound or
-a final access check that fails, is `unavailable` and is reported as a
-content-free observation (`open_items_live_read` with where it failed and the
-error's code, never an id, a title or outside text), as is a stored card whose
-first decided line cannot be read. The project and Impact lines ask for
-`summary_only`, so showing a count opens nothing in Jira or Confluence. Your
-open items asks for `open_only`, so it spends live reads only on open items.
-
-**The sweep result** (`PersonSweepResultV1`) is what the sweep renderer
-returns. The staging research-eval endpoint shows it; the runs API never
-does, since a sweep run stores its counts and each item only its verdict. It
-holds `findings`, `status` and `citations`:
-
-- One finding per input finding, in input order: `finding_index`, `verdict`
-  (`landed`, `still_open`, `changed`, `unreadable`, or null for not
-  assessed), `line` and `citation_indexes`. At most 20 findings, 12
-  citations each.
-- `status` follows from the verdicts, so each state has one encoding:
-  `not_assessed` exactly when no finding was judged and at least one is
-  null; otherwise `assessed`, even when every finding was unreadable.
-- A judged verdict (`landed`, `still_open`, `changed`) cites at least one
-  item. An `unreadable` or null finding cites nothing. Every citation is used
-  by a finding.
-- The renderer's outcome, which the research audit records, is `answered`
-  only when every finding was judged, else `partial`.
-
-`meetings.reviews` rows (and `review_open`'s review) gain `first_line` (the
-proposal's first decision, else its first action; ECHO text), `action_count`
-and `meeting_at` (when the meeting started, when known), so a Home row names
-the decision, not only the meeting. Pending rows already carry the suggested
-projects in `project_ids`.
+Every operation is on `POST /v1/person/runs` (ruling 5). The contract as built
+is [`person-runs-v1.ts`](../../packages/organization-api/src/person-runs-v1.ts),
+with the sweep result in
+[`person-sweep-result-v1.ts`](../../packages/organization-api/src/person-sweep-result-v1.ts),
+and the
+[Authority runbook](../../services/organization-authority/README.md#person-reads-and-permissions)
+describes each operation. Two later designs changed it:
+[follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md) ("API changes":
+`items` takes `states` in place of `open_only`, and one `read` replaces
+`summary_only`), and
+[desktop refresh and notifications v1](2026-10-15-desktop-refresh-and-notifications-v1.md)
+(the `involved` scope and `changed_since`,
+[ADR-0036](../decisions/ADR-0036-person-change-check.md)).
 
 ## 8. Desktop
 
-The design is the canvas's row 9 (artboards 9.1 to 9.7); copy below is
-quoted from it where it gives one, except where the founder's rulings of
-2026-10-09 (R63–R70, under Rulings) replace it: they replace the canvas's
-Check row, Check card, footer and Did it land? (9.4) copy. "Check" now means
-only ECHO's re-read: "ECHO checked 2 h ago", "Check now", "Checking…" (R63).
-
-**Home (9.1, 9.5)** shows only rows that wait on the viewer, under "Needs you
-· N". Each row is a verb, a title, one or two lines under it, and on the
-right its age and its decision's first project:
-
-| Row | From | Title / lines | Action |
-| --- | --- | --- | --- |
-| Approve | `meetings.reviews` (pending) | the first decision line / "Decision · 2 actions · Pilot planning meeting, Oct 6" | opens Approve this decision? (9.2) |
-| Send | `home` | "<first decided line> — 2 tickets need updating" / "Impact of Pilot planning · owners Mina, Rafael" | opens Tell the owners? (9.3) |
-| Update | `home`: an item the viewer owns, and any item not changed since it was sent | "Thermostat PRD · Pilot scope doesn't match the decision yet" / 'Says "starts after freeze" → decision needs: pilot starts next week' / muted "Confluence page · Pilot planning meeting, approved Oct 6", ending " · changed since you got it, still doesn't match" when its last check is `changed` | not changed: inline "Open in <tool>" and "Mark updated", no page; changed: the whole row opens the item card |
-| Review | `home`: an item whose last check is `changed` and whose owner is not the viewer | the same three lines; the muted one ends "Mina's to update · changed since you sent it" | opens the item card; nothing on the row closes the item |
-| Checking | runs `list` (pending, running impact run) | "Approved · checking what it changes" | none; not counted in the badge |
-| Check failed (verb "Retry") | runs `list` (failed impact run) | "Approved · the check did not finish" | opens the reason and Try again |
-
-A sweep never makes a Home row, and a failed sweep shows nothing: a later
-Home load may ask for another.
-
-**Update or Review** (R64, R65). An item whose last check is `changed` and
-whose owner is not the viewer (the signed-in account's membership) is a
-Review row; every other item row is an Update row, and the owner's changed
-item is an Update row flagged as changed, not another verb. Changed rows,
-Update or Review, sort before the others. An item not changed since it was
-sent acts in place (ruling 20); a changed item opens the item card first
-(ruling 3). An item is at most one row per person.
-
-**An item row's lines** (R66):
-
-- Title: the item's name, then "doesn't match the decision yet", or "may need
-  updating" when the check did not assess it (no `relation`).
-- Under it: what the item says now, as its live details ('Says "…"', "Due Oct
-  30", or its status), then "→ decision needs: <expected>". A part that is
-  missing is left out ("Decision needs: launch next week" for an item the
-  viewer cannot open).
-- Muted: what the item is ("Jira ticket", "Confluence page"), where it came
-  from, and why it is back. Where it came from is "<decision title> meeting,
-  approved Oct 6" for a viewer who can read the decision (every decision with
-  open items is an approved meeting), else "sent by <approver's first name>".
-  Why it is back, when its last check is `changed`: "changed since you got
-  it, still doesn't match" for its owner; "<owner's first name>'s to update ·
-  changed since you sent it" on its approver's Review row.
-- A title that already ends with "meeting" gets no second one ("Approved
-  meeting, approved Oct 6"), here, on the item card, on Your open items and
-  on the Approve row (R76).
-
-The founder accepted these cases as built (2026-10-09). An item is never
-called the viewer's unless the viewer owns it. An item that fell back to its
-approver because its owner left still reads "Mina's to update" (nothing says
-Mina left); changed, it is a Review row. An item that fell back to a
-decision's project lead (approver and owner both left) reads "changed since
-it was sent", since the lead did not send it.
-
-A viewer who cannot open the item in its tool sees "A Jira ticket you can't
-open" (or page, or Slack message) for its name and no live details. An item
-ECHO could not read just now (`unavailable`: an outage or a rate limit) reads
-"A Jira ticket ECHO couldn't read just now", and one not read in that request
-(`not_read`) "A Jira ticket"; only an item ECHO opened offers "Open in Jira".
-
-Names stay distinct. When two rows, buttons or checkboxes would have the same
-accessible name (two items you can't open), each name adds the item's
-`expected` phrase. If they still match (no phrase, or the same one), each adds
-"· from <decision title>" when the viewer can read the decision and the
-matching items come from different decisions, then a position ("(2)"). This
-holds for "Mark updated: <item>", "Open in Jira: <item>", "Close: <item>" and
-Tell the owners?'s ticks and "Pick a person". A row's title adds only the
-position, and only when nothing else on the row tells two rows apart. Tell
-the owners?'s remove buttons name the item too: "Remove Rafael from
-Thermostat PRD · Pilot scope".
-
-**Item card** (R67; no artboard), opened from a changed item's row:
-
-- Header: the item's name by `reach`, then "<kind> · yours to update" for its
-  owner, else "<kind> · Mina's to update", plus " · now <assignee>" when the
-  live read shows one; "Open in <tool>" top right when ECHO opened the item.
-- The decision, for a viewer who can read it: a small "The decision", its
-  first decided line (else its title), and a muted "Pilot planning meeting ·
-  approved Oct 6". Otherwise a muted "Sent by <approver>".
-- Two boxes side by side: "Now" (the live details, else the item's name,
-  which says why they are not shown) and "The decision needs" (`expected`;
-  left out when there is none).
-- ECHO's last check, naming no one: "ECHO checked 2 h ago: it changed since
-  it was sent, but still doesn't match." (`changed`), "…: not updated yet."
-  (`still_open`), "…: it matches the decision now." (`landed`), "ECHO
-  checked 2 h ago but couldn't read it." (`unreadable`); no line when it was
-  never checked.
-- "Mark updated" (`done`) and "No change needed" (`not_relevant`) when the
-  viewer may set the item's state. Either closes the card, and the row leaves
-  Home at once.
-
-**Footer** (R69), under the rows and also on an empty Home (9.5): "1 matches
-its decision now · 2 waiting on others · ECHO checked 2 h ago" ("N match
-their decision now" for more than one). "Match" counts open items the viewer
-sent or owns whose last check is `landed`; "waiting on others" counts open
-items the viewer sent that wait on someone else; parts that are zero are left
-out. "View" opens Your open items for the viewer's own items whenever either
-count is above zero. First-run Home is otherwise unchanged. The
-`echo.seenImpact` browser storage goes away: a sent run leaves Home by its
-items' state.
-
-Check times read "just now" (under a minute), "N min ago", "N h ago" (under
-six hours), then "today", "yesterday", then the date ("Oct 6").
-
-**Tell the owners? (9.3)**: "You approved Pilot planning on Oct 6. ECHO found
-what it changes.", the first decided line large, a "Must change" list (one
-checkbox per item, ticked: the item's title and its live details → `expected`,
-and the owner as a chip, or "Pick a person" where there is no match), "Untick
-anything that's wrong. Owners get it on their Home.", "Details" (the full
-impact card), and "Send to Mina and Rafael" / "Not now". With no one but you to
-tell, the button reads "Keep on my Home"; with nothing ticked, "None of these
-need changing". When the items changed since the card was drawn (`conflict`),
-nothing is sent and the card says "These items changed meanwhile. Open them
-again from Home." Details waits while the card is sending.
-
-**Your open items** (R68; replaces canvas 9.4's "Did it land?") is a status
-view of a scope's open items, over the page it was opened from: the viewer's
-own (from Home's footer), or a decision's or a project's (after Check now).
-
-- Heading: "Your open items"; for one decision "Open items", with its decided
-  line large under it; for a project "Open items · <project name>".
-- Under it: "<N> open · ECHO checked 2 h ago", from the scope's summary, shown
-  once a read of the items succeeded (a failed first read shows its error,
-  not "0 open").
-- It lists the scope's open items only (`items` with `open_only`), as one
-  list with no checkboxes. Each line: the item's name · what the decision
-  needs, its status, and its owner chip.
-- Statuses, by last check: "Matches now" (`landed`), with a small "Close"
-  that sets `done` when the viewer may; "Not updated yet" (`still_open`);
-  "Changed, still doesn't match" (`changed`); "ECHO couldn't read it"
-  (`unreadable`); "Not checked yet" (never checked). Where the viewer's own
-  access refused the item, its name already says so.
-- Order: matches first, then not updated or changed, then couldn't read or
-  not checked. The viewer's own items from more than one decision are grouped
-  under a small header per decision ("Pilot planning meeting, approved Oct
-  6"; "Sent by <approver>" for a decision the viewer cannot read).
-- "Close all <N> that match", a quiet link, when two or more can be closed:
-  one `set_state` each. Closing keeps the view open without the closed
-  lines; an item that could not be closed stays, with a line saying why.
-  Back then reads the page below again.
-- With nothing open: "No open items". It has no Check now of its own. The
-  canvas's "Remind" is not built: an owner already has the item on their
-  Home.
-
-**Reader, an approved decision (9.6)**: an Impact line under the title,
-"Impact · 1 open · 1 handled · 1 couldn't read · checked just now". The parts
-count each sent item once: "open" is open items that neither landed nor were
-unreadable at their last check; "handled" is done, not relevant and landed
-items; "couldn't read" is unreadable ones; unsent items read "N not sent".
-Zero parts are left out. With no items the line gives the check's stage:
-"Not checked yet", "Checking…", "Check failed", "Nothing to change". When the
-decision's impact run is the viewer's own (the stage's `mine`), the line
-offers "Send" while its items wait to be sent and "Try again" after a failed
-check. It offers "Check now" once the decision has items. The line reads the
-decision's counts only (`items` with `summary_only`) and opens the decision's
-items, which are read then. (Its copy is unchanged until the founder reviews
-it.)
-
-**Project page (9.7)**: a line above the feed, "4 open items · from 2
-decisions · checked today", with "Check now", and "N open" on each decision's
-row in the feed. A decision's "open" counts its unsent and open items, less
-the open ones that landed or were unreadable at their last check. Unlike the
-Impact line, which shows unsent items apart as "N not sent", it includes
-them. The project line's total is counted the same way from the project's
-whole summary, not by adding the rows (a summary lists at most 100
-decisions), so it stays exact in a large project; "from M decisions" counts
-the listed decisions with any open. The line stays while any item is unsent
-or open, so Check now and the way to the project's items never go (R72):
-when that count is zero because everything left matched or could not be
-read, the line counts unsent + open items instead ("2 open items"). The line
-reads the project's counts only (`summary_only`) and opens the project's open
-items grouped by owner, oldest first, each with its stage and age. (Its copy
-is unchanged until the founder reviews it.)
-
-**Check now**, on the Impact line and the project line, is a quiet link as
-the canvas draws it. It asks for a `sweep` of that decision or project.
-`nothing_to_check` makes the line say "Nothing open to check". Otherwise the
-line says "Checking…" and the desktop starts the sweep. While the server
-answers `busy` because one of the viewer's impact checks waits, the desktop
-starts those first, then the sweep, and it follows the run with Part 1's
-polling backoff. When the sweep is done, the line's counts are read again,
-and Your open items opens for that scope if the line is still in sight. A
-failed sweep, or a sweep request that fails, makes the line say "Check
-failed · Try again", and Try again asks for a new sweep.
-
-**Runs**: `driveRuns` starts pending impact runs first, then pending sweeps,
-one at a time, under Part 1's polling backoff. A pending sweep may be one put
-back after a timed-out or rate-limited attempt, one whose attempt stopped
-(listed as `pending`, section 7), or one Check now queued; it is started like
-an impact run. A start answered `busy` is tried again later and never shown as
-an error. A start the Authority holds `pending` while its search index has not
-caught up (an impact check's decision is not searchable yet, or a sweep would
-read records through it) is started again at the next look, every 5 seconds,
-not after a failure's backoff. When `home` says `sweep_due` and no run is
-waiting or going, the desktop asks for one new `mine` sweep and starts it: at
-most one new sweep request per Home load, spent only when the request is made.
-A failed runs read, or a failed read of what a check found, never skips the
-start or the request; its failure only lengthens the wait before the next
-look. When a sweep ends, Home is read again to show what it found.
+The design was the canvas's row 9 (artboards 9.1 to 9.7), with the founder's
+rulings of 2026-10-09 (R63–R76, under Rulings) in place of its Check row,
+Check card, footer and Did it land? copy. Two later designs replaced most of
+it: [follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md) (every row
+opens the item page, follow-ups lists for a meeting and a project, one status
+vocabulary) and
+[desktop refresh and notifications v1](2026-10-15-desktop-refresh-and-notifications-v1.md)
+(the change check, notifications, and Follow-ups as what you sent, own or last
+handed on). The [desktop README](../../product/echo-desktop/README.md)
+describes Home, the follow-ups lists and the item page as built.
 
 ## 9. Delivery
 
@@ -712,8 +470,8 @@ with a stop between them:
 
 As delivered: Part 1 merged on its own as PR #300 after the founder's
 walkthrough, with the follow-up PR #301 (Home reads shared items without
-Granola; a Send replay answers the counts frozen at Send). Part 2 follows in a
-separate pull request. The plan's As built section records the split.
+Granola; a Send replay answers the counts frozen at Send). Part 2 followed in a
+separate pull request, PR #303.
 
 ## Acceptance
 
@@ -853,11 +611,9 @@ separate pull request. The plan's As built section records the split.
 
 ## Rulings
 
-Rulings made while executing the plan are listed in the plan's
-[As built](../superpowers/plans/2026-10-08-open-items-and-home.md#as-built)
-section, not here; those that change behavior are folded into the sections
-above. The exceptions are those of 2026-10-09 (R63–R76) and of 2026-10-16
-(R77–R82), which are listed at the end of this section too.
+Numbered rulings (1 to 23) were made while designing. R-numbered rulings (R1
+to R82) were made while building and since, and code cites them by number.
+Those that change behavior are folded into the sections above.
 
 Made with the founder on 2026-10-08:
 
@@ -927,6 +683,218 @@ Made while planning, after reading the code and folding in the canvas's row 9
     "due Oct 30 → next week": live details, then what the decision requires.
 23. Approve rows show the proposal's first decision line, action count and
     meeting date, which the meetings API adds to its review rows.
+
+Made while executing the implementation plan (R1–R62). The plan was retired
+once both parts shipped; a task (Task 1 to Task 14, 9b, 12c, 12d) is one of
+its steps, and "the spec" is this design. Each line gives the ruling, then
+the reason. The plan's ledger numbered two rulings each as R25 and R26 (one
+at the Part 1 stop, one at the Part 2 start); both are listed.
+
+- R1: Move `PersonMeetingReviewV2`'s three fields from Task 4 to Task 8 — Task
+  8 changes the service and fixture that produce them, so Tasks 4–7 keep
+  building.
+- R2: Every task leaves the build, root `tsc` and desktop typecheck green;
+  Task 4 adds a temporary route `default` and raw desktop result types,
+  replaced in Tasks 7 and 9 — the widened unions would otherwise break the
+  tree.
+- R3: Move the `sweep` operation, `home.sweep_due` and `trigger: 'sweep'` from
+  Task 10 to Task 11 — the service implements them there. Reversed by R25
+  (Part 2).
+- R4: The runs scope CHECK tests `scope_kind IS NOT NULL` first — the plan's
+  `IS` form rejected every approved-record row.
+- R5: The items CHECK becomes `relation IS NOT NULL OR expected IS NULL` — a
+  conflict without a usable phrase must still be stored.
+- R6: Task 7 exports the stored-card reader as `readStoredImpactCardV1` — the
+  open-items service needs the first decided line.
+- R7: Task 5's `renderWith(reply)` returns `{ card, calls }` — the two tests
+  used the helper differently.
+- R8: Task 11 sorts sweep candidates by `checked_at` in the service —
+  `forRecords` orders by `created_at`.
+- R9: Task 6 declares a local structural people type — Task 2's DAO was not on
+  its base; the DAO satisfies it.
+- R10: The check-newer trigger covers all four check columns and needs a
+  strictly newer `checked_at` — spec section 2 replaces a check only by a
+  newer one, and the plan's trigger let the verdict change without a newer
+  time.
+- R11: `leadsAny` counts active projects only — archived projects are
+  read-only and the approval-audience trigger requires active ones.
+- R12: The runs CHECK test asserts the CHECK's own message — it passed only
+  because an earlier trigger fired.
+- R13: The policy gains `sent_to_owner` — an owner who cannot read the
+  decision sees only items sent to them (spec section 4).
+- R14: `action_count` has no upper bound — briefs hold more than 40 actions,
+  and a clamp would misreport.
+- R15: Re-pin the impact-card quality baseline's three fingerprints — the
+  mandated prompt and schema change moved them; the Ask goldens are untouched.
+- R16: The policy gains `state` — the rules for unsent and closed items stay
+  in the one policy.
+- R17: Run Task 9 (desktop) in parallel with Task 7 (server) in separate
+  worktrees — they share no files, and Task 9 builds against the merged API
+  types and the fixture.
+- R18: The policy refuses `assign` on unsent items, and `see_row` is checked
+  before "Send it first" — only someone who could act learns that the item is
+  unsent.
+- R19: Unsent items of an approver who left before Send stay unsent; leads see
+  them but cannot send or reassign — parked as a known gap, since letting
+  leads send is new scope.
+- R20: Task 9b adds `summary_only`, `reach`, replay-first Send,
+  `see_decision`, Send gating through the policy and a same-owner assign that
+  writes nothing — rate limits and honest outage copy matter on real data.
+- R21: Task 9's fix round also hides sent runs locally, pins the can't-open
+  row in e2e and names item buttons — same class as the review's Important
+  finding.
+- R22: A stale Send answers `conflict`, shown as "These items changed
+  meanwhile. Open them again from Home." — the desktop reads
+  `stale_access_state` as a lost account.
+- R23: Task 9b takes the Task 9 re-review's store fixes (staleness check
+  first, record a send on any page, no Details while sending, distinct names)
+  — they are small fixes in code 9b touches.
+- R24: Bring main into the Part 1 branch with one `--no-ff` merge after Task
+  9b — a merge keeps the reviewed commits intact.
+- R25 (Part 1 stop): Codex finishes the Part 1 stop (merge main as R24 says,
+  validate once, refresh screenshots, prepare the fixture walkthrough) without
+  starting Part 2 or pushing — the founder's request.
+- R26 (Part 1 stop): Keep all three Home recovery cases from main's `f108cf4`,
+  adapted to the new Home, and add two failed-Home resume cases — main's
+  recovery fix must survive the rewritten Home, and no test is removed.
+- R27: Accept the Part 1 reviewer's limits: no sweep, deferred minors stay
+  deferred, live staging is not proven by fixtures — the limits stay visible
+  at the founder's review.
+- R28: Ship the accepted Part 1 as a standalone PR (#300) on the validated
+  head — Part 2 stays parked; no reset, merge or release is implied.
+- R29: Fix PR #300's two inline review reports in a follow-up, PR #301; Home
+  reads shared open items and runs without Granola, and only meeting reviews
+  depend on it — PR #300 merged while the fixes were being reproduced. That
+  rule answers one report; R30 answers the other.
+- R30: V13 stores an immutable `send_included` per item, and a Send replay
+  returns its original counts — counting current state went wrong after later
+  state changes; this supersedes the Task 2 replay rule.
+- R25 (Part 2): Part 2 runs in waves: Task 10 with the runs API additions,
+  then Tasks 11, 12 and 13 in separate worktrees — the desktop builds against
+  a settled API, as Tasks 7 and 9 did.
+- R26 (Part 2): Fold Part 1's deferred minors into the Part 2 tasks (a
+  record-level policy function, `reach` code tests, `send_included` for
+  `sent_to_owner`, a stage's `mine`, distinct names, plan text) — they touch
+  the same code.
+- R31: Task 10 computes a stage's `mine` for real, while `sweep` and
+  `sweep_due` stay placeholders — a placeholder `mine` would be wrong data,
+  and it is one comparison.
+- R32: `home.sweep_due` also requires no sweep created in the last hour — a
+  failing or unassessed sweep would otherwise be asked for on every Home load,
+  reading Jira and Confluence each time.
+- R33: A sweep finding names the decision only when the caller may see it — an
+  owner sent an item without reading its decision must not get the decision in
+  their run.
+- R34: A sweep claim answers `busy` while the caller has a pending or running
+  impact run — "impact runs start before sweeps" must not depend on the
+  client.
+- R35: The Impact line partitions sent items: open less landed and unreadable,
+  handled (done, not relevant, landed), couldn't read — the canvas 9.6 example
+  reads 1, 1 and 1.
+- R36: Did it land? groups by last check (Landed; Still open with changed and
+  unchecked items; Couldn't read), and Mark N done closes the ticked landed
+  items the viewer may set — the spec lists only three sections. Its card form
+  is superseded by R68.
+- R37: Names that still collide after `expected` add the decision title when
+  readable, else a position; "Remove <person>" names its item — it closes a
+  Part 1 minor.
+- R38: The sweep's work lives in a new composition file called from `launch`,
+  with one observation and error structure — the runs file is already long.
+- R39: Sweep line screens apply per line after the one repair; a line that
+  still fails becomes "ECHO withheld this line." and keeps its verdict —
+  refusing the whole reply let one line void every verdict, every hour.
+- R40: Never judge a finding blind: send it only when all its own items fit,
+  else null; a judged verdict cites at least one item; one status per state —
+  a stored blind verdict could hide a landed ticket for a day.
+- R41: Start Tasks 12 and 13 from `bc2e9a3` while Task 10's fix round runs —
+  the fix changes only renderer internals and the validator; the desktop never
+  sees them, and the evaluation reads the result only by `finding_index`.
+- R42: Match a finding's own items by identity (item key, and section for a
+  page) — matching the whole citation failed for every edited item, and edited
+  items are what a sweep checks.
+- R43: Failed sweep runs score zero, like failed card runs — a sweep the
+  endpoint cannot start is a real failure the report must show.
+- R44: Fold all five Task 13 minors into one fix round, including the leak
+  scan of result-less runs — a hidden leak undercounts runs with leaks, and
+  misaligned verdict keys would misgrade silently.
+- R45: A finding owns its first citation and every further outside-tool
+  citation; ECHO records cited later are context; it is unreadable only when
+  an own item is — eval findings cite several tickets, and an unreadable
+  decision must not be stored as the item's check.
+- R46: Start Task 11 from `41ceec0` alongside Task 10's third fix round — that
+  round changes renderer internals only, not the result contract Task 11 uses.
+- R47: The controller pauses after Tasks 10–13 are merged and checked, leaving
+  Task 14 and the final review to the founder — the founder's instruction at
+  the time; superseded by R52.
+- R48: The same implementer fixes the round-3 re-review's three minors — they
+  are new small findings from a clean re-review, not a stuck loop.
+- R49: Accept Task 12's open choices (relative times, the Check card's layout,
+  where Check now shows, impact runs first, one sweep request per Home load),
+  but R37 also covers the Send card's checkboxes — names must differ there
+  too.
+- R50: "One sweep start per Home load" limits new sweep requests only; an
+  existing pending sweep starts like a pending impact run, after them, with
+  backoff — a released sweep must resume, and nothing may poll every 5 s for
+  work it will not start.
+- R51: Did it land?'s reads of closed items and the feed row's "open" count
+  move to Task 12c — both need API and service changes that neither parallel
+  branch could make.
+- R52: Finish order: merge Tasks 11 and 12, Task 12c, Task 14's docs, a final
+  whole-branch review with one fix round, then `npm run check` and the full
+  desktop e2e on the exact candidate, one push and a draft PR against main —
+  the review's fixes must be inside the validated candidate.
+- R53: Write Task 14's docs in a separate worktree while Tasks 11 and 12
+  finish, and re-check the in-flight parts after they merge — the docs depend
+  only on settled rulings and briefs.
+- R54: `sent_to_owner` is true when the item was sent and Send included it, or
+  it is `open` or `done` since — an item reopened after Send would otherwise
+  wait on an owner who cannot see it.
+- R55: Runs `list` answers at most the 20 newest sweeps and fills the rest of
+  its 100 with the newest impact runs — sweeps, up to hourly plus Check now,
+  must not push failed impact runs and their Try again rows off the list.
+- R56: The kernel's sweep trigger accepts Slack message citations, so Slack
+  items are swept and count toward `sweep_due` like tickets and pages — the
+  live desk already opens them, and leaving them out meant they were never
+  checked. Superseded by R62.
+- R57: `readStoredImpactCardV1` moves to its own small composition module that
+  both services import, and the `sweep_due` API comment states R32's hourly
+  limit — no import cycle, and no 700-line file.
+- R58: `home.sweep_due` ignores a pending sweep created more than an hour ago
+  (stale items, no sweep created in the last hour, none running); asking again
+  returns that same pending run — a stuck sweep is resumed by the server's
+  rule instead of blocking automatic sweeps for good, without depending on the
+  desktop's list.
+- R59: Accept Task 12's narrower R37: a decision's title is added only when
+  alike items come from different decisions, else a position — a title cannot
+  tell apart items of one decision, and R37's aim is distinct names.
+- R60: Runs `list` and the stages of `items` report a `running` run whose
+  lease has lapsed as `pending` (the stored state is unchanged) — otherwise a
+  run whose worker died shows "Checking…" forever and Home polls every 5 s;
+  the gap dates from Part 1 and was found by the Task 12 re-review.
+- R61: A sweep asks again who sees each item synchronously right before
+  `finish`, with no await between, not inside its transaction — the record
+  check behind it opens a project-context transaction, which never nests, so
+  nesting would break every production sweep; nothing in the Authority process
+  can run in between, and a membership another process revokes in that instant
+  is not seen.
+- R62: Supersede R56 in Task 12c: the kernel's sweep trigger refuses Slack
+  message citations again, and the service leaves Slack-message items out of
+  sweeps and `sweep_due`, saying why in a comment and in the spec's "Not in
+  this round" — no desk in this repository can open a Slack citation (it
+  carries no `tool_id`, and no live Slack connector is registered), so a swept
+  Slack item is only ever recorded `unreadable`, at the cost of a background
+  research run; Slack items stay "not checked yet" until a Slack reader
+  exists.
+
+Unnumbered rulings:
+
+- Implementers run on Opus from Task 2 on (Task 1 finished on Sonnet), and
+  reviewers on Opus for substantial diffs — the founder asked for more
+  capability.
+- Keep Task 1's `Co-Authored-By: Claude Sonnet 5.5` trailer — it names the
+  model that wrote the commit, and amending rewrites history.
+- Tasks 3, 4, 5, 6 and 8 run as one parallel wave, each in its own worktree,
+  merged after Task 2's review — the founder opted in.
 
 Made on 2026-10-09. R63–R70 are the founder's review of Part 2's screens; they
 replace the canvas's Check row, Check card, footer and Did it land? (9.4)

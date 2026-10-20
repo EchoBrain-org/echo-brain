@@ -7,14 +7,12 @@ tools, Ask responses, source admission and Slack onboarding continue through
 their current interfaces.
 
 The [connector/context integration](../product/2026-10-01-connector-context-integration-v1.md)
-retains shared capture contracts and personal live-read verification. The
+left personal live-read verification. The
 organization Granola capture route is retired. Jira and Slack capture requests
 are refused, and their
-pointers, metadata and bodies are not admitted to Layer 1. Existing provider
-capture contracts remain dormant library code; they have no active rehearsal
-or production registration. Shared capture types remain in
-`organization-processing/core`. A retained meeting capture is a source
-observation, never an approved fact.
+pointers, metadata and bodies are not admitted to Layer 1. The dormant shared
+capture contracts, intake and provider capture mapping were removed unused on
+2026-10-19.
 
 ## Shared connection commands
 
@@ -81,10 +79,9 @@ A tool container's citation commits to no text
 ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)), so the
 boundary checks that digest for every other citation, and the audit commits a
 container's released value instead.
-A Slack reader, when adapted, uses the existing typed message citation; ticket
-tools use
+Ticket tools use
 [`PersonTicketCitationV1`](../../packages/organization-api/src/person-ticket-citation-v1.ts),
-whose coordinates include the tool, tenant and ticket identity. Neither changes
+whose coordinates include the tool, tenant and ticket identity. It does not change
 the citation union of `PersonAnswerResponseV4`; ticket citations reach Ask only
 through `PersonAnswerResponseV5`.
 
@@ -186,8 +183,6 @@ readers to the dates their sources declare.
   locally with no provider call; each connection pins and fences them
   (`containerProjects` in `providers/shared/src/person-project-mapping-v1.ts`).
 
-Slack registers no containers: no Slack reader is composed.
-
 ## Meeting exports
 
 Meeting ingestion continues to use
@@ -259,16 +254,12 @@ live-read audit. The Authority mounts these routes whenever an answer model is b
 appears only when the matching Jira or Confluence live runtime is selected.
 [ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted
 and [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md) is
-proposed; the CLI requires explicit Jira or Confluence configuration. On staging,
-`ECHO_STAGING_JIRA_ASK_V1` and `ECHO_STAGING_CONFLUENCE_ASK_V1` take the fixed
-connector profile's Atlassian site (Jira also takes its integration; Confluence
-uses the `confluence` integration). Each Person reads under their own grant, with
-no initial-owner or fixed-project restriction and without tool capture; the
-rehearsal's owner and fixed-project limits apply only to its diagnostic reads.
-Jira (tickets, and Jira projects for V8) and Confluence (pages, and spaces
-for V8) are the live readers. No live Slack reader
-is composed, the V3 desk reads no Slack, and read status is not exposed to
-clients.
+proposed; the CLI requires explicit Jira or Confluence configuration. The
+[service guide](../../services/organization-authority/README.md#staging-connector-rehearsal)
+owns the staging selection: each Person reads under their own grant, without
+tool capture. Jira (tickets, and Jira projects for V8) and Confluence (pages, and spaces
+for V8) are the live readers. Ask reads no Slack, and read status is not
+exposed to clients.
 
 The dispatcher must preserve [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)
 scope rules: `mine` excludes live external reads. Provider selection and

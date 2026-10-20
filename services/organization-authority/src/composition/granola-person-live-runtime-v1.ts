@@ -1,5 +1,4 @@
-import Database from 'better-sqlite3';
-import { chmodSync } from 'node:fs';
+import type Database from 'better-sqlite3';
 import { join } from 'node:path';
 import { createGranolaPersonConnectionV1 } from '@echo-brain/provider-granola/granola-person-connection-v1';
 import { GRANOLA_PERSON_PROVIDER_V1 } from '@echo-brain/provider-granola/granola-mcp-v1';
@@ -10,7 +9,7 @@ import { createPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-ru
 import { createNangoPersonConnectionV1, type NangoPersonConnectionV1 } from '@echo-brain/provider-runtime/nango-person-connection-v1';
 import { meetingIntakePersonV1, type PersonMeetingProviderV1 } from './person-meeting-runtime-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
-import { assertPrivatePersonProviderDatabaseV1, bindPersonProviderStateV1 } from './person-provider-state-v1.js';
+import { bindPersonProviderStateV1, openPersonProviderDatabaseV1 } from './person-provider-state-v1.js';
 import type { PersonHttpRuntimeResourcesV1 } from './organization-authority-api-runtime.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 
@@ -20,14 +19,13 @@ export function openGranolaPersonMeetingProviderV1(options: {
   readonly resources: Pick<PersonHttpRuntimeResourcesV1, 'coordinates'>; readonly nango_authorization: () => string;
   readonly seams?: { readonly database?: Database.Database; readonly nango?: NangoPersonConnectionV1; readonly fetch?: typeof fetch };
 }): { readonly provider: PersonMeetingProviderV1; close(): void } {
-  const path = join(options.state_directory, 'granola-person-connections.sqlite'), owned = options.seams?.database === undefined;
-  if (owned) assertPrivatePersonProviderDatabaseV1(path);
-  const connections = options.seams?.database ?? new Database(path);
+  const { coordinates } = options.resources;
+  const opened = openPersonProviderDatabaseV1(join(options.state_directory, 'granola-person-connections.sqlite'), {
+    ...(options.seams?.database === undefined ? {} : { supplied: options.seams.database }),
+    bind: database => bindPersonProviderStateV1(database, 'authority_granola_person_live_binding_v1', { schema_version: 1, ...coordinates, integration_id: 'granola-mcp' }, 'Granola state differs from the Authority lineage or integration'),
+  });
+  const connections = opened.database;
   try {
-    if (owned) chmodSync(path, 0o600);
-    const { coordinates } = options.resources;
-    bindPersonProviderStateV1(connections, 'authority_granola_person_live_binding_v1', { schema_version: 1, ...coordinates, integration_id: 'granola-mcp' }, 'Granola state differs from the Authority lineage or integration');
-    connections.pragma('busy_timeout = 5000'); connections.pragma('journal_mode = DELETE'); connections.pragma('synchronous = FULL');
     const transport = options.seams?.fetch ?? fetch;
     const application = createGranolaPersonConnectionV1({ store: new PersonConnectionStoreV1(connections, GRANOLA_PERSON_PROVIDER_V1),
       nango: options.seams?.nango ?? createNangoPersonConnectionV1({ provider: GRANOLA_PERSON_PROVIDER_V1, integration_id: 'granola-mcp', authorization: options.nango_authorization, fetch: transport }),
@@ -52,6 +50,6 @@ export function openGranolaPersonMeetingProviderV1(options: {
       source(setting, current) { return new GranolaFolderSourceV1({ kind: 'meeting-source', adapter_id: setting.source_adapter_id, version: setting.source_adapter_version, instance_id: setting.source_adapter_instance_id },
         setting.folder_id, signal => application.open(meetingIntakePersonV1(setting), current, signal), current); },
     };
-    return { provider, close() { if (owned) connections.close(); } };
-  } catch (error) { if (owned) connections.close(); throw error; }
+    return { provider, close() { opened.close(); } };
+  } catch (error) { opened.close(); throw error; }
 }

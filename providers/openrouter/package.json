@@ -28,8 +28,7 @@
     "./openrouter-telemetry-vocabulary-v1": {
       "types": "./dist/openrouter-telemetry-vocabulary-v1.d.ts",
       "import": "./dist/openrouter-telemetry-vocabulary-v1.js"
-    },
-    "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json"
+    }
   },
   "files": [
     "dist/**/*.js",

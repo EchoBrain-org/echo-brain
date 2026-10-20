@@ -216,9 +216,13 @@ test("Mine's bar asks only what you added through ordinary Ask", async () => {
   await field.press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(page.locator('.asked')).toHaveText('Mine');
-  const asks = () => run.calls().filter(call => /^\/v[345]\/person\/ask$/.test(call.path)).map(call => ({ path: call.path, body: call.body }));
-  const mineAsk = [{ path: '/v3/person/ask', body: { schema_version: 3, question: 'pricing', mine: true } }];
+  // Asked as every Ask is, with its progress, on the newest route: this Authority, from before /v7 and /v6, answers on /v5.
+  const asks = () => run.calls().filter(call => call.path.endsWith('/person/ask')).map(call => ({ path: call.path, body: call.body, progress: call.progress }));
+  const mineAsk = [['/v7', '3'], ['/v6', '2'], ['/v5', '1']]
+    .map(([route, progress]) => ({ path: `${route}/person/ask`, body: { schema_version: 3, question: 'pricing', mine: true }, progress }));
   expect(asks()).toEqual(mineAsk);
+  // It sent no steps, so the answer has no receipt.
+  await expect(page.getByTestId('ask-receipt')).toHaveCount(0);
   await page.getByTestId('citation').nth(1).click();
   await expect(page.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
   expect(run.calls().find(call => call.path === '/v2/person/ask/source')?.body?.scope).toEqual({ kind: 'global' });
@@ -232,6 +236,37 @@ test("Mine's bar asks only what you added through ordinary Ask", async () => {
   await expect(page.getByTestId('mine-row')).toHaveCount(10);
   expect(asks()).toEqual(mineAsk);
 });
+
+// A Mine Ask shows its work as every Ask does (ADR-0039), on the newest route the Authority has: progress V1 on /v5 from
+// one before /v6, or V3 on /v7. The fixture reads Mine as the Authority does: only what you added.
+for (const [mode, route, progress] of [['ask-progress', '/v5', '1'], ['ask-progress-workspace', '/v7', '3']] as const) {
+  test(`a Mine Ask shows what it reads while it works, then its receipt, streamed on ${route}`, async () => {
+    run = await launch(mode);
+    const { page } = run;
+    await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+    await page.getByTestId('sidebar-mine').click();
+    await expect(page.getByTestId('scope-chip')).toHaveText('Mine');
+    await page.getByTestId('ask-field').fill('What did I note about pricing?');
+    await page.getByTestId('ask-field').press('Enter');
+    await expect.poll(() => run.calls().filter(call => call.path === `${route}/person/ask`).map(call => ({ body: call.body, progress: call.progress })))
+      .toEqual([{ body: { schema_version: 3, question: 'What did I note about pricing?', mine: true }, progress }]);
+
+    // One quiet line names what it reads; opened, its rows: meetings and documents searched, and your note read.
+    await expect(page.getByTestId('ask-stage')).toHaveText('Reading Apollo update', { timeout: 10_000 });
+    const line = page.getByTestId('ask-line');
+    await expect(line).toHaveAttribute('aria-expanded', 'false');
+    await line.click();
+    await expect(page.getByTestId('ask-steps').getByTestId('ask-step')).toHaveText(['Searched meetings and documents · 1 found', 'Reading Apollo update']);
+
+    // The answer, still on Mine, with the receipt the line became.
+    writeFileSync(join(run.home, 'release-ask'), '');
+    await expect(page.getByTestId('answer')).toBeVisible();
+    await expect(page.locator('.asked')).toHaveText('Mine');
+    await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 1 item · \d+s$/);
+    await expect(page.getByTestId('receipt-rows').getByTestId('ask-step')).toHaveText(['Searched meetings and documents · 1 found', 'Read Apollo update']);
+    await expect(page.getByTestId('source-row')).toHaveText([/^1\s*Apollo update$/]);
+  });
+}
 
 test('a save only Mine shows opens it from its toast, and a save made on Mine joins the list', async () => {
   run = await launch('mine');

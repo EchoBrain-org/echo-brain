@@ -4906,7 +4906,6 @@
         "@echo-brain/organization-api": "0.0.0-dev.0",
         "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
         "@echo-brain/organization-control-plane": "0.0.0-dev.0",
-        "@echo-brain/organization-processing": "0.0.0-dev.0",
         "@echo-brain/organization-protocol": "0.0.0-dev.0",
         "@echo-brain/provider-runtime": "0.0.0-dev.0",
         "@echo-brain/provider-slack-client": "0.0.0-dev.0",

@@ -1,19 +1,22 @@
 import Database from 'better-sqlite3';
 import { coreRuntimeIdentityV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1, type ApprovalProposalViewV1 } from '../../src/private-approval/slack-approval-presenter-v1.js';
 
 const databases: Database.Database[] = [];
 const signal = () => new AbortController().signal;
 const target = { connection_id: 'con_1', external_identity_link_id: 'lnk_1', external_identity_link_contract_sha256: `sha256:${'a'.repeat(64)}`, slack_workspace_id: 'T1', slack_subject_id: 'U1', api_app_id: 'A1' };
-afterEach(() => databases.splice(0).forEach(db => db.close()));
+afterEach(() => {
+  databases.splice(0).forEach(db => db.close());
+  vi.restoreAllMocks();
+});
 
 type Outcome = 'opened' | 'retry_allowed' | 'posted' | 'uncertain' | 'done' | Error;
 function proposal(approval_id: string): ApprovalProposalViewV1 {
   return { approval_id, reviewer: { organization_id: 'org_1', principal_id: 'prn_1', membership_id: 'mem_1' }, reviewer_active: true, title: 'Roadmap', status: 'pending' as const, decided_on: null,
     project_ids: [], snapshot_sha256: `sha256:${'b'.repeat(64)}`, snapshot_json: JSON.stringify({ approved_payload: { brief: { meeting: { title: 'Roadmap' }, decisions: [], actions: [{ text: 'Send draft', evidence: [{ block_id: 'blk_1' }] }], rationales: [] } } }) };
 }
-function fixture() {
+function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresenterV1>[0]> = {}) {
   const db = new Database(':memory:'); databases.push(db);
   db.exec(`CREATE TABLE authority_live_approval_outbox_v2(approval_id TEXT PRIMARY KEY,state TEXT,updated_at TEXT);
     CREATE TABLE authority_approval_decisions_v1(approval_id TEXT PRIMARY KEY,action TEXT);
@@ -31,11 +34,11 @@ function fixture() {
     core: { proposal: id => views.get(id), ownerProposals: () => [] },
     target: reviewer => linked && !unlinkedPrincipals.has(reviewer.principal_id) ? target : null, targetCurrent: () => current, projects: () => projects, now: () => clock,
     poster: () => ({
-      async openDirectMessage() { const x = take('open'); afterOpen?.(); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1' } : { kind: 'retry_allowed' as const }; },
+      async openDirectMessage() { const x = take('open'); afterOpen?.(); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1', user_id: 'U1' } : { kind: 'retry_allowed' as const }; },
       async postMarker() { const x = take('post'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async reconcileMarker(input) { reconcileInputs.push(input); const x = take('reconcile'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async publish() { const x = take('publish'); return x === 'done' ? { kind: 'done' as const } : { kind: 'uncertain' as const }; },
-    }) });
+    }), ...overrides });
   const stage = (id = 'apr_live', patch: Partial<ReturnType<typeof proposal>> = {}) => {
     views.set(id, { ...proposal(id), ...patch });
     db.prepare('INSERT INTO authority_live_approval_outbox_v2 VALUES (?,?,?)').run(id, 'staged', clock.toISOString());
@@ -45,6 +48,34 @@ function fixture() {
 }
 function markInFlight(f: ReturnType<typeof fixture>) { f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight',marker_started_at='2026-10-07T00:00:00.000Z' WHERE approval_id='apr_live'").run(); }
 function row(f: ReturnType<typeof fixture>, id = 'apr_live') { return f.db.prepare('SELECT * FROM authority_approval_presentations_v1 WHERE approval_id=?').get(id) as { delivery: string; attempts: number; retry_at: string | null; dm_channel_id: string | null; shows: string; message_ts: string | null }; }
+/**
+ * The presenter over real target-bound posters, a new one for every step as the composition root builds them, and a
+ * fake Slack that answers U0A's first `times` opens with 429 and this Retry-After, then everything as asked. apr_a is
+ * U0A's approval and apr_b U0B's. Date must be faked.
+ */
+function rateLimitedSlack(retryAfter: string, times = 1) {
+  const requests: string[] = [];
+  let limited = times;
+  const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+    const method = new URL(String(url)).pathname.split('/').at(-1)!;
+    const body = JSON.parse(String(init?.body)) as { users?: string; channel?: string; ts?: string };
+    requests.push(`${method}:${body.users ?? body.channel}`);
+    if (method !== 'conversations.open') return new Response(JSON.stringify({ ok: true, channel: body.channel, ts: body.ts ?? '1.000001' }));
+    if (body.users === 'U0A' && limited > 0) { limited -= 1; return new Response('', { status: 429, headers: { 'retry-after': retryAfter } }); }
+    return new Response(JSON.stringify({ ok: true, channel: { id: `D${body.users!.slice(1)}`, is_im: true, user: body.users } }), { headers: { 'x-oauth-scopes': 'im:write' } });
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
+  const f = fixture({
+    now: () => new Date(),
+    target: reviewer => ({ ...target, slack_subject_id: reviewer.principal_id === 'prn_2' ? 'U0B' : 'U0A' }),
+    poster: bound => createTargetBoundSlackApprovalPosterV1({ target: bound,
+      activeConnection: () => ({ connection: { connection_id: 'con_1', provider_tenant_id: 'T1', provider_app_id: 'A1' }, state_sha256: `sha256:${'c'.repeat(64)}` }) as never,
+      targetCurrent: () => true, botToken: { async botToken() { return 'xoxb-test'; } } as never,
+      needsReinstall: () => false, markNeedsReinstall: () => undefined }),
+  });
+  f.stage('apr_a'); f.stage('apr_b', { reviewer: { organization_id: 'org_1', principal_id: 'prn_2', membership_id: 'mem_2' } });
+  return { f, opens: () => requests.filter(request => request === 'conversations.open:U0A').length };
+}
 
 describe('Slack approval presenter V1', () => {
   it('distinguishes a posted marker from a delivered card, links retries, and emits nothing on idle polls', async () => {
@@ -69,16 +100,53 @@ describe('Slack approval presenter V1', () => {
   it('refuses a token selected across an active-connection switch before Slack receives a request', async () => {
     const connection = (connection_id: string) => ({ connection: { connection_id, provider_tenant_id: 'T1', provider_app_id: 'A1' }, state_sha256: `sha256:${connection_id.padEnd(64, 'x')}` });
     let active = connection('con_1');
-    let providerCalls = 0;
+    const providerCalls = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true })));
     const poster = createTargetBoundSlackApprovalPosterV1({ target,
       activeConnection: () => active as never,
       targetCurrent: candidate => active.connection.connection_id === candidate.connection_id,
       botToken: { async botToken(selected: { connection: { connection_id: string } }) { expect(selected.connection.connection_id).toBe('con_1'); active = connection('con_2'); return 'token'; } } as never,
       needsReinstall: () => false, markNeedsReinstall: () => undefined,
-      fetchImpl: async () => { providerCalls += 1; return new Response(JSON.stringify({ ok: true })); },
     });
-    await expect(poster.openDirectMessage('U1')).resolves.toEqual({ kind: 'retry_allowed' });
-    expect(providerCalls).toBe(0);
+    try {
+      await expect(poster.openDirectMessage('U1')).resolves.toEqual({ kind: 'retry_allowed' });
+      expect(providerCalls).not.toHaveBeenCalled();
+    } finally { providerCalls.mockRestore(); }
+  });
+
+  it('waits out Slack Retry-After before that target\'s next step while another target delivers', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const start = Date.parse('2026-10-07T00:00:00.000Z');
+      vi.setSystemTime(start);
+      const { f, opens } = rateLimitedSlack('30');
+      await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+      expect(row(f, 'apr_a')).toMatchObject({ delivery: 'opening', attempts: 1, retry_at: new Date(start + 30_000).toISOString() });
+      // The other target is unaffected: its card is delivered at once.
+      expect(row(f, 'apr_b')).toMatchObject({ delivery: 'posted', shows: 'open', attempts: 0, dm_channel_id: 'D0B' });
+      // The presenter's own backoff alone would have retried after 2 s.
+      for (const at of [2_001, 16_001, 29_999]) { vi.setSystemTime(start + at); await f.presenter.reconcile(signal()); }
+      expect(opens()).toBe(1);
+      vi.setSystemTime(start + 30_000);
+      await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+      expect(opens()).toBe(2);
+      expect(row(f, 'apr_a')).toMatchObject({ delivery: 'posted', shows: 'open', attempts: 1, dm_channel_id: 'D0A' });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['86400', '1e15'])('waits at most 15 minutes for a Retry-After of %s seconds, so a card Slack keeps limiting still fails after five tries', async (retryAfter) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const start = Date.parse('2026-10-07T00:00:00.000Z');
+      const { f, opens } = rateLimitedSlack(retryAfter, Infinity);
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        vi.setSystemTime(start + (attempt - 1) * 15 * 60_000);
+        await f.presenter.reconcile(signal());
+        expect(opens()).toBe(attempt);
+        expect(row(f, 'apr_a')).toMatchObject(attempt < 5
+          ? { delivery: 'opening', attempts: attempt, retry_at: new Date(start + attempt * 15 * 60_000).toISOString() }
+          : { delivery: 'failed', attempts: 5, retry_at: null });
+      }
+    } finally { vi.useRealTimers(); }
   });
 
   it('starts from an eligible staged proposal and posts exactly one first marker', async () => {

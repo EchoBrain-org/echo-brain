@@ -1,6 +1,5 @@
 import type { PersonDocumentRepositoryV1 } from '../application/ports/document-v1.js';
 import { extractDocument, type DocumentExtractionInput, type DocumentExtractionResult } from '../adapters/documents/document-extraction.js';
-import { withoutCoreRuntimeContentV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { pullAndAdmitSourceBatchV1 } from '@echo-brain/organization-processing/core';
 import { PersonSourceAdapterV1 } from '../adapters/sources/person-source-v1.js';
 import type { PersonTextSourceInboxV1, PersonTextSourceFailureObservationV1 } from '../application/ports/person-text-source-v1.js';
@@ -39,28 +38,26 @@ export class PersonDocumentProcessingV1 {
       signal.throwIfAborted();
       let stage: ProcessingFailureStageV1 = 'source_admission';
       try {
-        return await withoutCoreRuntimeContentV1(async () => {
-          let failures: readonly PersonTextSourceFailureObservationV1[]=[];
-          const batch = await (async () => {
-            try { return await pullAndAdmitSourceBatchV1({ source:this.source,request:{limit:1},admission:{store:this.repository.sourceAdmission,scope:source=>this.source.scopeFor(source)},context:{signal} }); }
-            finally {
-              failures=this.source.takeFailureObservations();
-              for(const failure of failures)this.observe(failure);
-            }
-          })();
-          const admitted = batch.sources[0];
-          if (admitted === undefined) return failures.length===0 ? 'idle' : 'skipped';
-          // Editor text is already indexed and readable; it needs no file decoder.
-          if (admitted.content.kind === 'person-text') return 'admitted';
-          const claim = this.source.claimFor(admitted);
-          stage='document_extraction';
-          const result = await this.extract({ bytes: claim.bytes, filename: claim.filename, sourceSha256: claim.source_sha256 }, signal);
-          // Shutdown leaves the lease recoverable; a stale parser never commits.
-          signal.throwIfAborted();
-          stage='document_completion';
-          this.repository.completeExtraction(claim, result);
-          return 'admitted';
-        });
+        let failures: readonly PersonTextSourceFailureObservationV1[]=[];
+        const batch = await (async () => {
+          try { return await pullAndAdmitSourceBatchV1({ source:this.source,request:{limit:1},admission:{store:this.repository.sourceAdmission,scope:source=>this.source.scopeFor(source)},context:{signal} }); }
+          finally {
+            failures=this.source.takeFailureObservations();
+            for(const failure of failures)this.observe(failure);
+          }
+        })();
+        const admitted = batch.sources[0];
+        if (admitted === undefined) return failures.length===0 ? 'idle' : 'skipped';
+        // Editor text is already indexed and readable; it needs no file decoder.
+        if (admitted.content.kind === 'person-text') return 'admitted';
+        const claim = this.source.claimFor(admitted);
+        stage='document_extraction';
+        const result = await this.extract({ bytes: claim.bytes, filename: claim.filename, sourceSha256: claim.source_sha256 }, signal);
+        // Shutdown leaves the lease recoverable; a stale parser never commits.
+        signal.throwIfAborted();
+        stage='document_completion';
+        this.repository.completeExtraction(claim, result);
+        return 'admitted';
       } catch (error) {
         if (!signal.aborted) this.observe(processingFailureV1(stage));
         throw error;

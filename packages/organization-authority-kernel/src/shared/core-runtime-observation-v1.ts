@@ -31,7 +31,7 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "refused_read_count", "repeated_refusal_count", "unchecked_item_count", "sources_looked_at", "most_reads_in_a_step",
   "rss_bytes", "heap_used_bytes", "cpu_user_us", "cpu_system_us", "fs_read_count", "fs_write_count",
   // Items an evidence call returned, by source; transcript_items is the shared-transcript subset of document_items.
-  "meeting_items", "document_items", "transcript_items", "slack_items",
+  "meeting_items", "document_items", "transcript_items",
   "ticket_retrieved_items", "ticket_context_items", "ticket_citations",
   // Bounded rate-limit hints copied from an upstream response, never response headers or text.
   "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds",
@@ -72,7 +72,7 @@ export interface CoreRuntimeDetailV1 extends CoreRuntimeCorrelationV1 {
   readonly grounding_stage?: (typeof CORE_RUNTIME_GROUNDING_STAGES_V1)[number];
   readonly approval_surface?: "desktop" | "slack";
   readonly delivery_step?: "open_dm" | "post_marker" | "reconcile_marker" | "publish_card";
-  readonly evidence_source?: "ticket" | "slack" | "page" | "tool_container";
+  readonly evidence_source?: "ticket" | "page" | "tool_container";
   /** Optional finite attribution for an upstream connector request. */
   readonly upstream_service?: (typeof CORE_RUNTIME_UPSTREAM_SERVICES_V1)[number];
   readonly upstream_operation?: (typeof CORE_RUNTIME_UPSTREAM_OPERATIONS_V1)[number];
@@ -98,16 +98,9 @@ export interface CoreRuntimeObservationV1 extends CoreRuntimeDetailV1 {
   readonly elapsed_ms: number;
 }
 export type CoreRuntimeObserverV1 = (event: CoreRuntimeObservationV1) => void | Promise<void>;
-export interface CoreRuntimeContentV1 {
-  readonly operation_id: string;
-  readonly span_id: string;
-  readonly content_kind: "meeting_input" | "model_request" | "model_response" | "validation_error";
-  readonly content: unknown;
-}
 export interface CoreRuntimeObservationScopeV1 {
   readonly vocabulary?: TelemetryVocabularyV1;
   readonly observer?: CoreRuntimeObserverV1;
-  readonly content_observer?: (event: CoreRuntimeContentV1) => void | Promise<void>;
   /** Explicit private payload selection. It is never forwarded to the metadata observer. */
   readonly diagnostic_observer?: CoreRuntimeDiagnosticObserverV1;
   /** Runtime-selected diagnostic destination, independent of a person's one-use capture.
@@ -165,10 +158,6 @@ export function annotateCoreRuntimeV1(input: { counts?: CoreRuntimeCountsV1; res
     if (input.linked_journey_ids !== undefined) Object.assign(detail, { linked_journey_ids: [...new Set([...detail.linked_journey_ids, ...input.linked_journey_ids])] });
   });
 }
-export function captureCoreRuntimeContentV1(content_kind: CoreRuntimeContentV1["content_kind"], content: unknown): void {
-  const current = context.getStore();
-  if (current?.content_observer && current.detail) safe(() => current.content_observer!({ operation_id: current.detail!.operation_id, span_id: current.detail!.span_id, content_kind, content }));
-}
 /** Attach a selected sink without creating another span or changing sync/async return behavior. */
 export function withCoreRuntimeDiagnosticsV1<T>(observer: CoreRuntimeDiagnosticObserverV1 | undefined, operation: () => T): T {
   const { diagnostic_observer: _previous, ...parent } = context.getStore() ?? {};
@@ -192,13 +181,6 @@ export function observeCoreRuntimeDiagnosticV1(event: CoreRuntimeDiagnosticEvent
       ...(current.diagnostic_tool === undefined ? {} : { tool_context: current.diagnostic_tool }) }));
   }
 }
-/** Keep operational timings while excluding pending-custody payloads from content telemetry. */
-export function withoutCoreRuntimeContentV1<T>(operation: () => T): T {
-  const current = context.getStore();
-  if (current === undefined) return operation();
-  const { content_observer: _contentObserver, ...contentFree } = current;
-  return context.run(contentFree, operation);
-}
 function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1): { current: Context; finish: (event: "succeeded" | "failed", error?: unknown) => void } | null {
   const parent = context.getStore();
   const observer = scope?.observer ?? parent?.observer;
@@ -220,8 +202,7 @@ function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1)
     const current: Context = { ...(observer === undefined ? {} : { observer }), vocabulary,
       ...(diagnosticObserver === undefined ? {} : { diagnostic_observer: diagnosticObserver }),
       ...(diagnosticExporter === undefined ? {} : { diagnostic_exporter: diagnosticExporter }),
-      ...(parent?.diagnostic_tool === undefined ? {} : { diagnostic_tool: parent.diagnostic_tool }),
-      ...(scope?.content_observer ?? parent?.content_observer ? { content_observer: scope?.content_observer ?? parent?.content_observer } : {}), detail };
+      ...(parent?.diagnostic_tool === undefined ? {} : { diagnostic_tool: parent.diagnostic_tool }), detail };
     const emit = (event: CoreRuntimeObservationV1["event"]) => { if (observer !== undefined) safe(() => observer({ ...normalizeCoreRuntimeDetailV1(detail, vocabulary), stage: phase, event, observed_at: new Date().toISOString(), elapsed_ms: event === "started" ? 0 : Math.max(0, Math.floor(performance.now() - started)) })); };
     if (phase === "model_call") { activeModels += 1; Object.assign(detail.counts, { active_models: activeModels }); }
     emit("started");
@@ -233,10 +214,7 @@ function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1)
         Object.assign(detail.counts, { rss_bytes: memory.rss, heap_used_bytes: memory.heapUsed,
           cpu_user_us: Math.max(0, end.userCPUTime - usage.userCPUTime), cpu_system_us: Math.max(0, end.systemCPUTime - usage.systemCPUTime),
           fs_read_count: Math.max(0, end.fsRead - usage.fsRead), fs_write_count: Math.max(0, end.fsWrite - usage.fsWrite) });
-        if (error !== undefined) {
-          captureCoreRuntimeContentV1("validation_error", error instanceof Error ? { name: error.name, message: error.message } : { message: "non-Error failure" });
-          Object.assign(detail, { result: failureResult(error, detail) });
-        }
+        if (error !== undefined) Object.assign(detail, { result: failureResult(error, detail) });
         emit(event);
       });
     } };
@@ -291,7 +269,7 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
       (input.grounding_stage !== undefined && !CORE_RUNTIME_GROUNDING_STAGES_V1.includes(input.grounding_stage)) ||
       (input.approval_surface !== undefined && !["desktop", "slack"].includes(input.approval_surface)) ||
       (input.delivery_step !== undefined && !["open_dm", "post_marker", "reconcile_marker", "publish_card"].includes(input.delivery_step)) ||
-      (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "slack" && input.evidence_source !== "page" && input.evidence_source !== "tool_container") ||
+      (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "page" && input.evidence_source !== "tool_container") ||
       (input.upstream_service !== undefined && !CORE_RUNTIME_UPSTREAM_SERVICES_V1.includes(input.upstream_service)) ||
       (input.upstream_operation !== undefined && !CORE_RUNTIME_UPSTREAM_OPERATIONS_V1.includes(input.upstream_operation)) ||
       (input.upstream_rate_limit_reason !== undefined && !CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1.includes(input.upstream_rate_limit_reason)) ||

@@ -58,9 +58,6 @@ interface Contract {
   PERSON_ASK_PROGRESS_HEADER_V1: string;
   PERSON_ASK_PROGRESS_HEADER_VALUE_V1: string;
   formatPersonAskProgressEventV1(event: unknown): string;
-  /** Ask progress V2 on `/v6` (ADR-0040): its header value, and one event, which may name a follow-up, as its frame. */
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V2: string;
-  formatPersonAskProgressEventV2(event: unknown): string;
   /**
    * Ask progress V3 on `/v7` (research tool contract v1): its header value, and one event, which may name a project, a
    * person, a tool or a tool's container, as its frame.
@@ -117,16 +114,15 @@ interface OpenItem {
 /**
  * A sweep run (open items and Home v1, section 6): it rechecks the open items
  * in its scope (`scope`: the scope and its id) that were open when it was
- * asked for, and keeps a verdict on each. `requeued`: an attempt of it went
- * back to the queue.
+ * asked for, and keeps a verdict on each.
  */
 interface SweepRun {
-  run_id: string; event_ref: string; scope: string; created_at: string; state: 'pending' | 'running' | 'done'; items: string[]; requeued?: true;
+  run_id: string; event_ref: string; scope: string; created_at: string; state: 'pending' | 'running' | 'done'; items: string[];
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
-const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-owner-outage', 'granola-home-fails-once', 'granola-checked', 'granola-paged', 'granola-review',
-  'granola-review-assign-lost', 'granola-sweep', 'granola-sweep-requeued', 'granola-alike']);
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-checked', 'granola-paged', 'granola-review', 'granola-review-assign-lost', 'granola-sweep',
+  'granola-alike']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 /** A project made long ago, that Ari is added to when a test says (`added-oldest`). */
@@ -214,7 +210,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<Contract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   let granolaImported = false, granolaApproved = false, granolaWatch = false, granolaBaselineHomeReads = 0;
-  let granolaPublicationReads = 0;
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
@@ -254,7 +249,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         hard_reauthentication_at: '2026-09-21T00:00:00.000Z',
       } : {}),
       // The weekly sign-in is twelve hours away.
-      ...(mode === 'weekly-soon' ? { refresh_expires_at: '2026-09-22T10:00:00.000Z', hard_reauthentication_at: '2026-09-22T10:00:00.000Z' } : {}),
     });
     if (expired) {
       // What an older client's weekly expiry left behind: the session set aside under a claim.
@@ -593,14 +587,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     ];
   };
   /**
-   * The follow-up `ask-progress-follow-up` cites (ADR-0040): Mina's, on Launch
-   * review's action, sent to her, which Ari reads as a member of its decision's
-   * audience. Its citation names it alone; its row is read again by its id.
-   */
-  const FOLLOW_UP_ITEM = 'itm_00000000-0000-4000-8000-000000000051';
-  const followUpCitation = { citation: { kind: 'follow_up', item_id: FOLLOW_UP_ITEM }, kind: 'follow_up', label: 'Ship the launch checklist', visibility: 'team',
-    ref: `follow_up:${FOLLOW_UP_ITEM}` };
-  /**
    * What `ask-progress-workspace` cites (research tool contract v1): Apollo,
    * which Ari leads; Mina; Jira; and Apollo's Jira project, with its key. Each
    * citation names its item alone; a project and a tool carry the ref that
@@ -628,34 +614,39 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       { text: '30 Jira tickets are open, APOLLO-1 and APOLLO-2 among them.', citation_indexes: [0, 1], private: true },
     ] }],
   });
+  /** What a Mine Ask reads (ADR-0024): only what Ari added, here Ari's note, never a live tool, a follow-up or the workspace. */
+  const mineItems = () => progressItems().filter(item => 'ref' in item && item.ref.startsWith('note:'));
+  /** The answer a Mine Ask gives from Ari's note, in its route's version: V8 on `/v7`, V6 on `/v5`. */
+  const mineAnswer = (question: string, scope: Record<string, unknown>, version: 1 | 3) => ({
+    schema_version: version === 3 ? 8 : 6, kind: `echo-clean-person-answer-v${version === 3 ? 8 : 6}`, scope, outcome: 'answered', citations: mineItems(),
+    parts: [{ question, status: 'answered', statements: [{ text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0], private: false }] }],
+  });
   /**
    * A streamed Ask, framed by the contract itself: a search of meetings,
    * documents and Jira, its four reads, then, once the test lets it answer
    * (`release-ask`), the writer, the final check and the answer with its
-   * receipt. `ask-progress-quick` answers at once; `ask-progress-fails` ends
-   * with an error event instead. A cancelled Ask ends the stream. Once a
-   * test writes `more-steps`, an Ask still waiting searches Jira once more.
-   * On `/v6` (progress V2, `ask-progress-follow-up`) it searches meetings and
-   * follow-ups, reads Tuesday sync's decision and the follow-up, and the V7
-   * answer cites the follow-up. On `/v7` (progress V3,
+   * receipt. `ask-progress-quick` answers at once. A cancelled Ask ends the
+   * stream. Once a test writes `more-steps`, an Ask still waiting searches
+   * Jira once more. On `/v7` (progress V3,
    * `ask-progress-workspace`) it searches your projects, people and tools and
    * Jira's projects, reads Apollo, Mina, Jira and Apollo's Jira project, and
    * the V8 answer cites all four. `ask-progress-listed`, on `/v7` too, only
    * lists Jira's 30 rows, a page of 25 and then the other 5, and reads none
-   * in full: its receipt counts all 30 rows it looked through (ADR-0043).
+   * in full: its receipt counts all 30 rows it looked through (ADR-0043). A
+   * Mine Ask, on either route, searches meetings and documents and reads
+   * Ari's note alone.
    */
-  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, version: 1 | 2 | 3 = 1): Response => {
-    const format = version === 3 ? api.formatPersonAskProgressEventV3 : version === 2 ? api.formatPersonAskProgressEventV2 : api.formatPersonAskProgressEventV1;
-    const listed = mode === 'ask-progress-listed';
-    const items = listed ? [] : version === 3 ? workspaceCitations : version === 2 ? [progressItems()[0]!, followUpCitation] : progressItems();
+  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, version: 1 | 3 = 1): Response => {
+    const format = version === 3 ? api.formatPersonAskProgressEventV3 : api.formatPersonAskProgressEventV1;
+    const mine = scope.kind === 'mine';
+    const listed = !mine && mode === 'ask-progress-listed';
+    const items = listed ? [] : mine ? mineItems() : version === 3 ? workspaceCitations : progressItems();
     const searched = listed ? { type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira' }], found: 30 }
-      : version === 3 ? { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 }
-        : version === 2 ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 2 }
+      : mine ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }], found: items.length }
+        : version === 3 ? { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 }
           : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
     const [part] = desktop.answer.parts as Record<string, unknown>[];
-    const response = listed ? listedAnswer(question, scope) : version === 3 ? workspaceAnswer(question, scope) : version === 2
-      ? { ...desktop.answer, schema_version: 7, kind: 'echo-clean-person-answer-v7', scope, citations: [followUpCitation], parts: [{ question, status: 'answered', statements: [
-        { text: 'Mina still owes the launch checklist.', citation_indexes: [0], private: false }] }] }
+    const response = listed ? listedAnswer(question, scope) : mine ? mineAnswer(question, scope, version) : version === 3 ? workspaceAnswer(question, scope)
       : { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
     const steps = listed
       ? [{ type: 'stage', stage: 'searching' }, { ...searched, found: 25 }, { ...searched, found: 5 }]
@@ -678,9 +669,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       yield format({ type: 'stage', stage: 'writing' });
       yield format({ type: 'stage', stage: 'checking_access' });
-      yield format(mode === 'ask-progress-fails'
-        ? { type: 'error', status: 503, error: { code: 'unavailable', message: 'request failed' } }
-        : { type: 'answer', response, receipt });
+      yield format({ type: 'answer', response, receipt });
     })();
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
@@ -715,10 +704,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       owner_set_at: picked ? item.sent_at : null, owner_set_by: picked ? MINA : null, send_included: item.sent_at === null ? null : true, check: null };
   };
   // Owner modes receive someone else's items without Granola being available.
-  // granola-owner-outage is granola-owner while Jira does not answer for its second item.
   // granola-owner-later holds one back until the test has Mina send it.
-  const sentToAri = mode === 'granola-owner' || mode === 'granola-owner-outage';
-  if (sentToAri || mode === 'granola-home-fails-once' || mode === 'granola-owner-later') {
+  const sentToAri = mode === 'granola-owner';
+  if (sentToAri || mode === 'granola-owner-later') {
     openItems.push(minaSent({
       item_id: 'itm_00000000-0000-4000-8000-000000000041', run_id: 'run_00000000-0000-4000-8000-000000000041', kind: 'ticket',
       decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: sha('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
@@ -728,14 +716,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       relation: 'conflicts', expected: 'launch next week', owner: { ...ARI, match: 'jira_account' }, created_at: '2026-10-06T18:05:00.000Z', sent_at: '2026-10-06T19:00:00.000Z',
     }));
     // A decision reader who cannot open the item: Ari reads Pilot planning, but this ticket is in a
-    // Jira project Ari has no access to. Its title, link and assignee never reach Ari. In
-    // granola-owner-outage, Jira does not answer for it just now instead.
+    // Jira project Ari has no access to. Its title, link and assignee never reach Ari.
     if (sentToAri) {
       openItems.push(minaSent({
         item_id: 'itm_00000000-0000-4000-8000-000000000044', run_id: 'run_00000000-0000-4000-8000-000000000041', kind: 'ticket',
         decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: sha('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
           first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T18:00:00.000Z', project_ids: [THERMOSTAT] },
-        readable: true, opens: false, outage: mode === 'granola-owner-outage',
+        readable: true, opens: false,
         live: { citation: ticket('ECHO-31', 'Trace sign-off', '10031'), says_now: 'The trace is signed off after the launch.',
           assignee: 'S. Okafor', status: 'Blocked', due_at: '2026-11-12' },
         relation: 'conflicts', expected: 'confirm the trace by Friday', owner: { ...ARI, match: 'picked' }, created_at: '2026-10-06T18:05:00.000Z',
@@ -743,8 +730,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }));
     }
     // A ticket Ari cannot open, from a decision Ari cannot read: only Send told Ari of it. In
-    // granola-home-fails-once Mina sends it after Home's read of its rows that failed; in
-    // granola-owner-later, when the test asks.
+    // granola-owner-later Mina sends it when the test asks.
     openItems.push(minaSent({
       item_id: 'itm_00000000-0000-4000-8000-000000000042', run_id: 'run_00000000-0000-4000-8000-000000000042', kind: 'ticket',
       decision: { approval_id: 'apr_' + 'd'.repeat(64), record_sha256: sha('record:Vendor review'), title: 'Vendor review',
@@ -774,16 +760,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (mode === 'granola-paged') {
       for (const item of openItems.filter(entry => entry.run_id === sent.run_id)) Object.assign(item, { state: 'done', state_set_at: '2026-10-01T09:00:00.000Z', state_set_by: MINA });
     }
-  }
-  // ask-progress-follow-up: the follow-up an Ask cites, Launch review's action, which Mina sent to herself; Ari reads its decision.
-  if (mode === 'ask-progress-follow-up') {
-    const launch = { approval_id: 'apr_' + 'f'.repeat(64), record_sha256: sha('record:Launch review'), title: 'Launch review',
-      first_line: 'Ship the launch checklist before Friday.', approved_at: '2026-10-05T15:00:00.000Z', project_ids: [THERMOSTAT] };
-    openItems.push({
-      ...minaSent({ item_id: FOLLOW_UP_ITEM, run_id: 'run_00000000-0000-4000-8000-000000000051', kind: 'action', decision: launch, readable: true, opens: false, live: {},
-        relation: 'needs_updating', expected: 'Ship the launch checklist', owner: { ...MINA, match: 'name' }, created_at: '2026-10-05T15:05:00.000Z', sent_at: '2026-10-05T16:00:00.000Z' }),
-      check: { verdict: 'still_open', checked_at: '2026-10-16T09:00:00.000Z', checked_by: 'Mina Patel' },
-    });
   }
   // The meetings Mina approved that Ari can read, each once: in their project's feed, where their follow-ups line shows.
   for (const item of openItems.filter(entry => entry.readable)) {
@@ -833,7 +809,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     'itm_00000000-0000-4000-8000-000000000031': 'landed', 'itm_00000000-0000-4000-8000-000000000032': 'changed',
     'itm_00000000-0000-4000-8000-000000000033': 'unreadable',
   };
-  // granola-checked, granola-review, granola-sweep and granola-sweep-requeued: Ari approved Pilot
+  // granola-checked, granola-review and granola-sweep: Ari approved Pilot
   // planning into Thermostat redesign and sent what its check found: ECHO-12 to Mina, the PRD page kept
   // by Ari, and a supplier page Ari cannot open to Rafael. In granola-checked Mina's sweep checked them
   // two hours ago; granola-review is the same, except that ECHO-12, Mina's to update, changed and still
@@ -908,9 +884,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let minaDone = false;
   /** Ari's sweeps, newest first. */
   const sweepRuns: SweepRun[] = [];
-  /** Home's reads of its rows, and its live reads. */
-  let homeRowsReads = 0;
-  let homeReads = 0;
   let assigns = 0;
 
   // The proposal as the Authority writes it for review (approvalProposalTextV1) now that meetings are cited by numbered
@@ -1027,7 +1000,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const decidedOn = granolaApproved ? mode === 'granola-decided-in-slack' ? 'slack' : 'desktop' : null;
       const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning',
         project_ids: Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids : [],
-        status: granolaApproved ? mode === 'granola-publishing' && granolaRun === null ? 'publishing' : 'approved' : 'pending', decided_on: decidedOn,
+        status: granolaApproved ? 'approved' : 'pending', decided_on: decidedOn,
         first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' };
       switch (body?.operation) {
         case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
@@ -1042,7 +1015,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
         case 'review':
           granolaReview = body; granolaApproved = true;
-          if (body?.action === 'approve' && granolaRun === null && mode !== 'granola-publishing') granolaRun = { state: 'pending', error_code: null, retried: false };
+          if (body?.action === 'approve' && granolaRun === null) granolaRun = { state: 'pending', error_code: null, retried: false };
           // The approved meeting: in the projects it was approved into, where its record opens.
           if (body?.action === 'approve' && !meetings.some(meeting => meeting.record_sha256 === PILOT_RECORD)) {
             meetings.push(pilotMeeting(Array.isArray(body.project_ids) ? body.project_ids as string[] : []));
@@ -1074,10 +1047,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const live = ['home', 'items', 'item'].includes(request.operation) && request.read === undefined;
       for (let waited = 0; live && existsSync(join(home, 'hold-live')) && waited < 30_000; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
       const runId = PILOT_RUN;
-      // Real publication is asynchronous: the first post-approval list can have no run yet.
-      if (mode === 'granola-publishing' && granolaApproved && granolaRun === null && request.operation === 'list' && ++granolaPublicationReads >= 2) {
-        granolaRun = { state: 'pending', error_code: null, retried: false };
-      }
       const run = granolaRun;
       const row = (value: NonNullable<typeof run>) => ({ run_id: runId, trigger: 'approved_record', event_ref: 'apr_' + 'a'.repeat(64), state: value.state,
         error_code: value.error_code, created_at: '2026-10-07T10:00:00.000Z', updated_at: '2026-10-07T10:05:00.000Z' });
@@ -1090,8 +1059,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       for (const sweep of sweepRuns) {
         if (request.operation !== 'list' || sweep.state !== 'running') continue;
-        // granola-sweep-requeued: the first attempt times out, and the run goes back to the queue (the attempt rules impact checks have).
-        if (mode === 'granola-sweep-requeued' && !sweep.requeued) { Object.assign(sweep, { state: 'pending', requeued: true }); continue; }
         // Done: each item it checked that is still open keeps this check as its last.
         const at = now();
         for (const item of openItems) {
@@ -1101,8 +1068,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       writeFound();
       followUpsElsewhere();
-      // Mina sends Ari another item after Home's read of its rows that failed.
-      if (mode === 'granola-home-fails-once' && request.operation === 'home' && homeRowsReads === 2) minaSendsAnother();
       const shown = openItems.filter(visible).sort((a, b) => a.created_at.localeCompare(b.created_at));
       /**
        * An item in a scope: one Ari sent or owns (`involved`: or last handed on), a run's, or, read by Ari, a decision's or a
@@ -1137,10 +1102,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         // Home: the Send row while Ari's check has items not sent, the open items that wait on
         // Ari, and the open items Ari sent that ECHO saw change; then, of the open items Ari sent
         // or owns, how many landed, how many Ari sent wait on others, and when ECHO last checked
-        // one. Rows only: no live read, and never a sweep due. granola-home-fails-once fails Home's
-        // second read of its rows (so nothing of it is read live), and its second live read.
+        // one. Rows only: no live read, and never a sweep due.
         case 'home': {
-          if ((live ? ++homeReads : ++homeRowsReads) === 2 && mode === 'granola-home-fails-once') return failure('unavailable', 503);
           const unsent = shown.filter(item => item.run_id === runId && item.state === 'unsent');
           const send = run?.state === 'done' && unsent.length > 0 ? [{
             run_id: runId, decision: unsent[0]!.decision, items: unsent.length, kinds: [...new Set(unsent.map(item => item.kind))],
@@ -1497,7 +1460,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (role !== 'lead') return failure('unauthorized', 401);
       jiraMappingWrites += 1;
       if (mode === 'jira-project-slow') while (!existsSync(join(home, 'release-jira-setting'))) await new Promise(resolveLater => setTimeout(resolveLater, 25));
-      if ((mode === 'jira-project-conflict' && jiraMappingWrites === 1) || body?.expected_revision !== current.revision) return failure('conflict', 409);
+      if (body?.expected_revision !== current.revision) return failure('conflict', 409);
       const value = { revision: randomUUID(), mapping: body?.jira_project === null ? null : { cloud_id: JIRA_CLOUD, project_id: '10000', project_key: String(body?.jira_project) } };
       jiraMappings.set(projectId, value);
       if (mode === 'jira-project-reply-lost' && jiraMappingWrites === 1) return failure('unavailable', 503);
@@ -1522,7 +1485,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (space_ids !== null && (!Array.isArray(space_ids) || space_ids.length < 1 || space_ids.length > 20 || !space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)))) return failure('invalid_request', 400);
       const value = { revision: randomUUID(), mapping: space_ids === null ? null : { cloud_id: CONFLUENCE_CLOUD, space_ids } };
       confluenceMappings.set(projectId, value);
-      if (mode === 'confluence-project-reply-lost' && confluenceMappingWrites === 1) return failure('unavailable', 503);
       return json({ schema_version: 1, project_id: projectId, ...value });
     }
     if (method === 'POST' && path === '/v1/person/projects/archive') {
@@ -1588,15 +1550,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const all = (members[projectId] ?? []).map(entry => ({ membership_id: entry.membership_id, display_name: nameOf(entry.membership_id), role: entry.role }));
       return json({ schema_version: 1, kind: 'echo-project-members-v1', project_id: projectId, ...paged(all, body?.cursor) });
     }
-    if (method === 'POST' && path === '/v1/person/projects/directory') {
-      const projectId = String(body?.project_id);
-      if (roleOf(projectId, session.membership_id) !== 'lead') return failure('not_found', 404);
-      const all = desktop.people.filter(person => body?.query === undefined || found(body.query, { title: person.display_name }));
-      return json({ schema_version: 1, kind: 'echo-project-directory-v1', project_id: projectId, ...paged(all, body?.cursor) });
-    }
-    // Everyone in your organization, for any member and with no project (ADR-0016). An
-    // Authority from before it has no such route: not_found, as any unknown path.
-    if (method === 'POST' && path === '/v1/person/directory' && mode !== 'no-person-directory') {
+    // Everyone in your organization, for any member and with no project (ADR-0016).
+    if (method === 'POST' && path === '/v1/person/directory') {
       const api = await contract();
       let request: ReturnType<Contract['validateOrganizationDirectorySearchV1']>;
       try {
@@ -1748,11 +1703,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    // Only ask-progress-follow-up's Authority has `/v6` (ADR-0040), and only ask-progress-workspace's and ask-progress-listed's
-    // have `/v7` (research tool contract v1); every other mode's predates both, so its client asks `/v5`.
-    const v6 = mode === 'ask-progress-follow-up' && path === '/v6/person/ask';
+    // Only ask-progress-workspace's and ask-progress-listed's Authority has `/v7` (research tool contract v1); every other
+    // mode's predates it and `/v6`, so its client asks `/v5`. Every Ask asks the newest route, Mine too: none asks `/v3`.
     const v7 = (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed') && path === '/v7/person/ask';
-    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask' || v6 || v7)) {
+    if (method === 'POST' && (path === '/v5/person/ask' || v7)) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);
@@ -1765,9 +1719,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // One project, only what you added, or all you may read.
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : request.mine ? { kind: 'mine' } : { kind: 'global' };
       const question = request.question;
-      const tickets = path === '/v4/person/ask';
-      const live = path === '/v5/person/ask';
-      const answer = { ...desktop.answer, ...(live ? { schema_version: 6, kind: 'echo-clean-person-answer-v6' } : tickets ? { schema_version: 5, kind: 'echo-clean-person-answer-v5' } : {}) };
+      const answer = { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6' };
       // Ask progress: a client that asks for it gets the Ask's steps as they happen, then its answer and receipt.
       const api = await contract();
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
@@ -1777,18 +1729,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         answered.headers.set('x-echo-person-ask-route', '7');
         return answered;
       }
-      if (v6) {
-        if (progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V2) return progressStream(api, question, scope, init?.signal ?? undefined, 2);
-        const answered = json({ schema_version: 7, kind: 'echo-clean-person-answer-v7', scope, outcome: 'answered', citations: [followUpCitation],
-          parts: [{ question, status: 'answered', statements: [{ text: 'Mina still owes the launch checklist.', citation_indexes: [0], private: false }] }] });
-        answered.headers.set('x-echo-person-ask-route', '6');
-        return answered;
-      }
-      if (mode.startsWith('ask-progress') && live && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V1) {
+      if (mode.startsWith('ask-progress') && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V1) {
         return progressStream(api, question, scope, init?.signal ?? undefined);
       }
       if (mode === 'ask-ticket') {
-        const included = (tickets || live) && (scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null));
+        const included = scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null);
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
           citations: included ? [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
             kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10007',
@@ -1801,7 +1746,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       const pageTool = mode === 'ask-confluence' ? 'confluence' : mode.startsWith('ask-page-') ? mode.slice(9) : undefined;
       if (pageTool !== undefined) {
-        const included = live && (scope.kind === 'global' || (pageTool === 'confluence' && scope.kind === 'project' && confluenceMappings.get(scope.project_id!)?.mapping != null));
+        const included = scope.kind === 'global' || (pageTool === 'confluence' && scope.kind === 'project' && confluenceMappings.get(scope.project_id!)?.mapping != null);
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
           citations: included ? [{ kind: 'page', label: 'EVT readiness · ECHO product', visibility: 'only_me', citation: {
             kind: 'page', tool_id: pageTool, external_scope_id: CONFLUENCE_CLOUD, page_id: '12345', section_id: 'evt-readiness', version: '7',
@@ -1818,20 +1763,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const statements = text === undefined ? part!.statements : [{ ...part!.statements[0], text }];
         return json({ ...answer, scope, parts: [{ ...part, question, statements }] });
       };
-      if (mode === 'ask-slack') {
-        const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];
-        return json({ ...answer, scope,
-          citations: [...desktop.answer.citations as unknown[], {
-            kind: 'slack_message', label: '#launch · Maya', visibility: 'only_me', citation: {
-              kind: 'slack_message', team_id: 'T01ABCDEF', channel_id: 'C01ABCDEF', message_ts: '1758873600.000100',
-              permalink: 'https://acme.slack.com/archives/C01ABCDEF/p1758873600000100?thread_ts=1758873600.000100',
-              text_sha256: sha('The launch is ready.'),
-            },
-          }],
-          parts: [{ ...part, question, statements: [...part!.statements,
-            { text: 'Maya confirmed the launch in Slack.', citation_indexes: [2], private: true }] }],
-        });
-      }
       // One file cited through two passages: one source, with both passages in its pane.
       if (mode === 'ask-passages') {
         const [record, passage] = desktop.answer.citations as { label: string; citation: Record<string, unknown> }[];

@@ -40,20 +40,12 @@ export interface AgenticTriggerDefinitionV1<Event> {
    */
   readonly renderer?: AgenticRendererV1<Event, unknown>;
   /**
-   * Whose access the run uses. In this round the staging evaluation endpoint
-   * stands in for the approver (whoever signs in); the product trigger must
-   * bind the real approver from the approval event.
-   */
-  readonly acts_as: "requester" | "approver";
-  /**
    * Where the run reads. `requested`: the scope the request names.
    * `record_project`: the project of its first starting item, an approved
    * record, or everything the actor can read when the record is in none. A
    * record in no project is researched by search alone: its brief has no list.
    */
   readonly scope: "requested" | "record_project";
-  /** Who may receive the result: in this round only the person the run acted as. */
-  readonly recipients: "actor_only";
 }
 
 /** Where a run reads, as far as its brief may depend on it: the kind of scope the run's desk binds. */
@@ -99,14 +91,14 @@ interface ApprovedRecordEventV1 { readonly record: unknown }
 type SweepEventV1 = SweepTriggerInputV1;
 
 const ask = define<AskEventV1>({
-  name: "ask", budget: "live", acts_as: "requester", scope: "requested", recipients: "actor_only",
+  name: "ask", budget: "live", scope: "requested",
   parseEvent(input: unknown): AskEventV1 {
     const event = fields(input, ["question"], "Ask");
     // The product's question limits, so the evaluation sees what people see.
     try { return Object.freeze({ question: validatePersonQueryText(event.question) }); }
     catch (error) { return invalid(error instanceof Error ? error.message : "Ask question is invalid"); }
   },
-  brief: (event: AskEventV1) => ({ goal: { kind: "question", question: event.question }, starting: [], options: { small_scope_preload: true } }),
+  brief: (event: AskEventV1) => ({ goal: { kind: "question", question: event.question }, starting: [], options: {} }),
 });
 
 /**
@@ -124,7 +116,7 @@ function approvedRecordTask(project: boolean): string {
 }
 
 const approvedRecord = define<ApprovedRecordEventV1>({
-  name: "approved_record", budget: "background", acts_as: "approver", scope: "record_project", recipients: "actor_only", renderer: IMPACT_CARD_RENDERER_V1,
+  name: "approved_record", budget: "background", scope: "record_project", renderer: IMPACT_CARD_RENDERER_V1,
   parseEvent(input: unknown): ApprovedRecordEventV1 {
     const record = citation(fields(input, ["record"], "Approved record").record, "Approved record");
     if ((record as { readonly kind: unknown }).kind !== "approved_record") invalid("An approved-record run starts from an approved record citation");
@@ -136,7 +128,7 @@ const approvedRecord = define<ApprovedRecordEventV1>({
     const project = scope.kind === "project";
     return {
       goal: { kind: "task", task: approvedRecordTask(project) }, starting: [{ citation: event.record, if_unreadable: "fail" }],
-      options: { small_scope_preload: false, ...(project ? {} : { list: false }) },
+      options: project ? {} : { list: false },
     };
   },
 });
@@ -152,7 +144,7 @@ const SWEEP_TASK = [
 ].join("\n");
 
 const sweep = define<SweepEventV1>({
-  name: "sweep", budget: "background", acts_as: "requester", scope: "requested", recipients: "actor_only", renderer: SWEEP_RENDERER_V1,
+  name: "sweep", budget: "background", scope: "requested", renderer: SWEEP_RENDERER_V1,
   parseEvent(input: unknown): SweepEventV1 {
     const findings = fields(input, ["findings"], "Sweep").findings;
     if (!Array.isArray(findings) || findings.length === 0 || findings.length > MAX_FINDINGS) invalid(`Sweep needs 1 to ${MAX_FINDINGS} findings`);
@@ -181,7 +173,7 @@ const sweep = define<SweepEventV1>({
       `${index + 1}. ${text(finding.finding)} Expected: ${text(finding.expected)}. Cited then: ${finding.citations.map(slot).join(", ")}.`);
     return {
       goal: { kind: "task", task: [SWEEP_TASK, ...lines].join("\n"), data }, starting: starting.map(value => ({ citation: value, if_unreadable: "report" })),
-      options: { small_scope_preload: false, planner: false },
+      options: { planner: false },
     };
   },
 });

@@ -249,16 +249,16 @@ organization, grant or site selector in model arguments or connection commands.
    omitted from the answer
    ([ADR-0038](../../docs/decisions/ADR-0038-incremental-access-check-before-model-calls.md)).
    The desk rechecks its local snapshot after Jira I/O.
-4. V5 citations open the adapter-verified Jira permalink directly. The
-   desktop's global and project Ask call `person ask --live`
-   (`POST /v7/person/ask`, strict V8 response,
+4. V5 citations open the adapter-verified Jira permalink directly. Plain
+   `person ask`, and the desktop's Ask in every scope, ask
+   `POST /v7/person/ask` (strict V8 response,
    [ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), which
    falls back on an older Authority down to the V5 ticket route
    (`/v4/person/ask`), as the
    [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
-   describes. The desktop validates V4 to V8 answers, with a safe direct-link
-   opener. `--tickets` is kept for compatibility, and `person ask` with
-   neither flag retains strict V4 behavior.
+   describes; Mine reads no Jira. The desktop validates V5 to V8 answers, with
+   a safe direct-link opener. `--tickets` is kept for compatibility, and
+   `--live`, which once chose `/v7`, changes nothing.
 5. `echo-brain person tools disconnect --tool jira` calls
    `POST /v1/person/tools/jira/disconnect`. Local revocation is committed before
    remote deletion; a failed deletion cannot restore read access. Missing
@@ -327,8 +327,7 @@ is an exact project read, and each project cites its `/browse/<key>` link.
 
 [ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md) accepts
 Nango custody and the person-bound live release path, now covered by
-INV-PERMISSIONS-015. `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=true` opens the code gate;
-runtime selection remains explicit. Modern Slack Nango wiring is preserved and
+INV-PERMISSIONS-015. Runtime selection remains explicit. Modern Slack Nango wiring is preserved and
 exercised with Jira in the same Authority composition proof.
 
 Configure the Nango Cloud Jira integration and distributable
@@ -338,6 +337,15 @@ mechanism, with Connect-session write, connection list/read-credentials/delete
 permissions. The narrow optional startup inputs are `--jira-cloud-id` and
 `--jira-nango-integration` alongside modern Nango configuration; there are no
 retired Slack credential/configuration fields in this path.
+
+With `--jira-cloud-id`, connections live in `jira-person-connections.sqlite`
+in the Authority state directory, a private file like Granola's and
+Confluence's: the Authority creates it 0600 and will not start while other
+users can read it. A file created before this check, with the process umask
+(often 0644), stops the first start after the upgrade: the service writes only
+the bare `echo-clean-live-startup-failed-v1` marker, which does not name the
+file, until an operator runs `chmod 600` on it. The staging rehearsal below
+keeps its own private sidecar.
 
 For the fixed staging connector profile, `ECHO_STAGING_JIRA_ASK_V1=true` selects
 its cloud ID and integration. The EC2 Compose overlay supplies this flag only when

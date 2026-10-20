@@ -4,7 +4,7 @@ import { colorFor, initials } from '../format.js';
 import { message } from '../messages.js';
 import {
   addPerson, askMemberChange, cancelMemberChange, candidates, canManage, closeSheet, confirmMemberChange, findPeople, moreMembers, openPeople,
-  setPeopleQuery, toggleMemberMenu, undoAdd, type FindingSheet, type PeopleSheet, type State,
+  setPeopleQuery, toggleMemberMenu, undoAdd, type PeopleSheet, type State,
 } from '../store.js';
 import { ChangeLine, within } from './change.js';
 import { trapTab } from './compose.js';
@@ -16,7 +16,7 @@ export function Face({ person }: { person: Pick<Member, 'membership_id' | 'displ
 }
 
 /** Make lead, Make member and Remove from project: each is asked first, and Cancel has the focus. */
-export function Confirm({ sheet }: { sheet: FindingSheet }) {
+function Confirm({ sheet }: { sheet: PeopleSheet }) {
   const cancel = useRef<HTMLButtonElement>(null);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => { cancel.current?.focus(); }, []);
@@ -42,13 +42,10 @@ export function Confirm({ sheet }: { sheet: FindingSheet }) {
 
 /**
  * Who is in a project and, for a lead, the organization's people to add by
- * name: People, and New project once its project exists. Adding is instant,
- * with an Undo that removes only that person. You never manage your own row;
- * `menus` gives the others Make lead and Remove from project.
+ * name. Adding is instant, with an Undo that removes only that person. You
+ * never manage your own row; the others have Make lead and Remove from project.
  */
-export function Finder({ state, sheet, menus, field }: {
-  state: State; sheet: FindingSheet; menus: boolean; field?: { current: HTMLInputElement | null };
-}) {
+function Finder({ state, sheet, field }: { state: State; sheet: PeopleSheet; field: { current: HTMLInputElement | null } }) {
   const lead = sheet.project.role === 'lead';
   const manage = canManage(state);
   const roster = state.roster?.projectId === sheet.project.project_id ? state.roster : null;
@@ -71,12 +68,12 @@ export function Finder({ state, sheet, menus, field }: {
             <Face person={person} />
             <span class="name">{person.display_name}</span>
             {person.role === 'lead' && <span class="tag">Lead</span>}
-            {menus && lead && person.membership_id !== me && (
+            {lead && person.membership_id !== me && (
               <button type="button" class="icon-button" aria-label={`More for ${person.display_name}`} aria-haspopup="menu"
                 aria-expanded={sheet.menu === person.membership_id} data-testid="member-more" disabled={!manage}
                 onClick={() => toggleMemberMenu(person.membership_id)}><Ellipsis /></button>
             )}
-            {menus && sheet.menu === person.membership_id && (
+            {sheet.menu === person.membership_id && (
               <div class="menu" role="menu" data-testid="member-menu">
                 <button type="button" role="menuitem" class="menu-item" data-testid="member-role" disabled={!manage}
                   onClick={() => askMemberChange(person.role === 'lead' ? 'member' : 'lead', person)}>
@@ -92,7 +89,7 @@ export function Finder({ state, sheet, menus, field }: {
         {roster?.failure && (
           <div class="choices start">
             <span class="error">{message(roster.failure)}</span>
-            {menus && <button type="button" class="link-button" onClick={() => { closeSheet(); void openPeople(); }}>Try again</button>}
+            <button type="button" class="link-button" onClick={() => { closeSheet(); void openPeople(); }}>Try again</button>
           </div>
         )}
         {roster?.next && (
@@ -154,7 +151,7 @@ export function People({ state, sheet }: { state: State; sheet: PeopleSheet }) {
             <button type="button" class="link-button" onClick={() => { closeSheet(); void openPeople(); }}>Try again</button>
           </div>
         )}
-        <Finder state={state} sheet={sheet} menus field={field} />
+        <Finder state={state} sheet={sheet} field={field} />
       </div>
       {sheet.confirm && <Confirm sheet={sheet} />}
     </div>

@@ -8,7 +8,7 @@ import { createPersonDocumentApplicationV1 } from '../src/application/document-v
 import { extractDocument } from '../src/adapters/documents/document-extraction.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertLegacyTextV1, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 const databases: Database.Database[]=[];
 afterEach(()=>databases.splice(0).forEach(d=>d.close()));
@@ -93,13 +93,11 @@ describe('Document custody and retrieval V1',()=>{
   expect(()=>app.upload('member',{...request,title:'different'},bytes)).toThrow(expect.objectContaining({code:'conflict'}));expect(()=>app.read('member',saved.document_id)).toThrow(expect.objectContaining({code:'not_found'}));expect(()=>app.status('owner',request.request_id)).toThrow(expect.objectContaining({code:'not_found'}));
   revokeMembership(db,MEMBER);addMembership(db,RETURNED_MEMBER,'Returned','member@example.test');expect(()=>app.status('returned',request.request_id)).toThrow(expect.objectContaining({code:'not_found'}));
  });
- it('uses one request namespace across document and project operations in both directions and against retained legacy text',()=>{
+ it('uses one request namespace across document and project operations in both directions',()=>{
   const {app,db}=setup();const projects=createProjectContextApplicationV1({authenticate:()=>authorization(OWNER),repository:new SqliteProjectContextRepositoryV1(db,()=>PROJECT_CONTEXT_NOW)});const bytes=Buffer.from('namespace');
   const create=(request_id:string)=>projects.createProject('owner',{schema_version:1,kind:'echo-project-create-v1',request_id,name:'Namespace project'});
-  const text=(request_id:string)=>insertLegacyTextV1(db,OWNER,{request_id,title:'Text',text:'text',visibility:'team'});
   const priorProject=randomUUID();create(priorProject);expect(()=>app.upload('owner',input(bytes,{request_id:priorProject}),bytes)).toThrow(expect.objectContaining({code:'conflict'}));
   const priorDocument=randomUUID();app.upload('owner',input(bytes,{request_id:priorDocument}),bytes);expect(()=>create(priorDocument)).toThrow(expect.objectContaining({code:'conflict'}));
-  const priorText=randomUUID();text(priorText);expect(()=>app.upload('owner',input(bytes,{request_id:priorText}),bytes)).toThrow(expect.objectContaining({code:'conflict'}));
  });
  it('continues keyset search without repeats after newer inserts and with deterministic equal-time ties',()=>{
   const {app,setTime}=setup();const bytes=Buffer.from('navigation');const first=app.upload('owner',input(bytes,{title:'A'}),bytes);setTime('2026-09-21T22:02:00.000Z');const second=app.upload('owner',input(bytes,{title:'B'}),bytes);
@@ -165,7 +163,6 @@ describe('Document custody and retrieval V1',()=>{
  it('enforces document-only byte quota while retaining the shared note/document count cap',()=>{
   const {app,db}=setup();const bytes=Buffer.alloc(25*1024*1024,0x61);for(let n=0;n<10;n++)app.upload('owner',input(bytes),bytes);
   expect(()=>app.upload('owner',input(Buffer.from('x')),Buffer.from('x'))).toThrow(expect.objectContaining({code:'quota_exceeded'}));
-  insertLegacyTextV1(db,OWNER,{request_id:randomUUID(),title:'Legacy',text:'x',visibility:'team'});
   const projects=createProjectContextApplicationV1({authenticate:()=>authorization(OWNER),repository:new SqliteProjectContextRepositoryV1(db,()=>PROJECT_CONTEXT_NOW)});expect(projects.submitUpload('owner',{schema_version:2,kind:'echo-person-update-submit-v2',request_id:randomUUID(),title:'Project note',text:'x',audience:{kind:'team'},project_id:null})).toMatchObject({state:'received'});
   expect(db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:10});
  });

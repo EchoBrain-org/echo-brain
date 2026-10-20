@@ -1,9 +1,6 @@
-import {
-  canonicalJson,
-  canonicalSha256,
-} from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
+import { appendAuditRowV1 } from "./audit-row-v1.js";
 
 export interface PersonRecordReadAuditEntryV1 {
   readonly read_mode: "layer1" | "layer2" | "person_list" | "person_open";
@@ -54,15 +51,7 @@ export class SqlitePersonRecordReadAuditV1 {
       response_sha256: entry.response_sha256,
       checked_at: entry.checked_at,
     } as const;
-    const body_json = canonicalJson(body);
-    const row_sha256 = canonicalSha256(body);
-    this.database
-      .prepare(
-        `INSERT INTO authority_person_read_decision_audit_v2
-         (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
-         VALUES (?, ?, 'record_read', NULL, NULL, ?)`,
-      )
-      .run(row_sha256, body_json, entry.checked_at);
-    return row_sha256;
+    return appendAuditRowV1(this.database, "authority_person_read_decision_audit_v2", body, entry.checked_at,
+      { context_kind: "record_read", prompt_sha256: null, answer_sha256: null });
   }
 }

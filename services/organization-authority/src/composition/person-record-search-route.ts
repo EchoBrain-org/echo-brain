@@ -131,14 +131,14 @@ export type ExpandReadableSearchRelatedAtomsV1 = (
 ) => ReadableSearchResultV1;
 
 /**
- * In-process input for a bounded record-search batch (the evidence desk and
- * the HTTP search route). This is not part of the Person HTTP contract: the
- * bearer remains server-side while every query runs under one reader tuple
- * and one exact snapshot.
+ * In-process input for a bounded record search (the evidence desk and the
+ * HTTP search route). This is not part of the Person HTTP contract: the
+ * bearer remains server-side while the query runs under one reader tuple and
+ * one exact snapshot.
  */
 export interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
   readonly access_token: string;
-  readonly queries: readonly string[];
+  readonly query: string;
   /** Authority-checked project scope; association never replaces audience. */
   readonly project_id?: string;
   /** Records whose final approver is the caller (ADR-0024); exclusive with project_id. */
@@ -280,6 +280,12 @@ export interface PersonRecordProjectsV1 {
    * audited, and the run then opens the record through its own desk.
    */
   recordProjects(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }): readonly ProjectIdV1[];
+}
+
+/** Where an approved record's run reads: the record's project when the person reads it in exactly one, else everything they read. */
+export function personRecordRunScopeV1(records: PersonRecordProjectsV1, access_token: string, record_sha256: Sha256Digest) {
+  const projects = records.recordProjects({ access_token, record_sha256 });
+  return projects.length === 1 ? Object.freeze({ kind: 'project' as const, project_id: projects[0]! }) : Object.freeze({ kind: 'global' as const });
 }
 
 /** Where an approved record's research run starts (runs store v1, section 3). */
@@ -522,10 +528,7 @@ function assertValidMine(input: { readonly mine?: unknown; readonly project_id?:
 function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
   assertValidMine(input);
   if (
-    input.queries.length < 1 ||
-    input.queries.length > 4 ||
-    new Set(input.queries).size !== input.queries.length ||
-    input.queries.some((query) => !validBatchQuery(query)) ||
+    !validBatchQuery(input.query) ||
     (input.kinds !== undefined && (!Array.isArray(input.kinds) || input.kinds.length < 1 || new Set(input.kinds).size !== input.kinds.length || input.kinds.some((kind) => kind !== "decision" && kind !== "action" && kind !== "rationale"))) ||
     (input.limit !== undefined &&
       (!Number.isSafeInteger(input.limit) ||
@@ -1204,7 +1207,7 @@ export function createPersonRecordSearchRouteV1(
     }
     const dated = datedSelection(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
     const mine = dated.records;
-    const results = readGeneration(() => input.queries.map((query) =>
+    const result = readGeneration(() =>
       search({
         state_directory: options.state_directory,
         active_generation: activeGenerationAt(pointer),
@@ -1212,28 +1215,14 @@ export function createPersonRecordSearchRouteV1(
         ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
         ...(mine === undefined ? {} : { record_sha256s: mine }),
         ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
-        query,
+        query: input.query,
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
       }),
-    ));
-    for (const result of results) assertGeneration(result, pointer);
-    // Preserve the caller's query order while giving every query one result
-    // per round. This is deterministic breadth without pretending that the
-    // route has a cross-query reranker.
-    const merged = new Map<Sha256Digest, ReadableSearchResultItemV1>();
-    const longestResult = Math.max(
-      ...results.map((result) => result.items.length),
     );
-    for (let itemIndex = 0; itemIndex < longestResult; itemIndex += 1) {
-      for (const result of results) {
-        const item = result.items[itemIndex];
-        if (item !== undefined && !merged.has(item.atom_id)) {
-          merged.set(item.atom_id, item);
-        }
-      }
-    }
-    const items = [...merged.values()];
+    assertGeneration(result, pointer);
+    // The first item of each atom, in the search's order.
+    const items = result.items.filter((item, index) => result.items.findIndex((other) => other.atom_id === item.atom_id) === index);
     const released = options.sessions.authenticateAccess({
       access_token: input.access_token,
     });
@@ -1265,7 +1254,7 @@ export function createPersonRecordSearchRouteV1(
       release,
       ...(unchecked === undefined ? {} : { unchecked }),
       ...(deskProjection === undefined ? {} : { desk_items: deskProjection }),
-      truncated: results.some((result) => result.truncated === true) ||
+      truncated: result.truncated === true ||
         (deskSourceItems !== undefined && deskSourceItems.length !== items.length),
     });
   }
@@ -1337,7 +1326,7 @@ export function createPersonRecordSearchRouteV1(
     }): PersonRecordSearchResponseV2 {
       return searchBatch({
         access_token: input.access_token,
-        queries: [input.query],
+        query: input.query,
         ...(input.limit === undefined ? {} : { limit: input.limit }),
       }).response;
     },

@@ -101,7 +101,7 @@ inventory; live staging qualification remains separate:
 | Organization Granola credentials, owner observation, admission, bundle and setup proof | Removed from the provider workspace and selecting composition. |
 | Granola REST client, owner filtering, poll cursors and organization capture route | Removed; no compatibility connector remains. |
 | [`granola-meeting-normalizer-v1.ts`](../../providers/granola/src/granola-meeting-normalizer-v1.ts) | Retained content transforms only. Input is transport-independent and is not claimed to be the MCP response contract. Mapping version stays stable for existing semantic revisions. |
-| [`granola-context-source-v1.ts`](../../providers/granola/src/context/granola-context-source-v1.ts) | Retained shared capture mapping and injected source adapter. No credentials or active acquisition. |
+| `granola-context-source-v1.ts` | Retained shared capture mapping and injected source adapter. No credentials or active acquisition. Removed unused on 2026-10-19 with the capture foundation. |
 | Host preparation and credential activation | Seven-file onboarding input, with no Granola key or owner-email file. LLM credential activation retains its stopped-state install, health checks and rollback. |
 | Generic custody, processing, projects, approval and connectors | Retained. Synthetic approval tests no longer import Granola polling/cursor code. |
 

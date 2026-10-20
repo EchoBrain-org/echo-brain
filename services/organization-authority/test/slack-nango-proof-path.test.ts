@@ -8,7 +8,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -43,6 +42,7 @@ import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
 } from "../src/composition/person-onboarding-service.js";
+import { port as availablePort, syntheticOidcProvider } from "./fixtures/owner-session.js";
 
 /**
  * Spec 2026-09-30-tool-onboarding-slack-v1 §9: the founder's path through the
@@ -364,34 +364,12 @@ function fakeNango(slack: ReturnType<typeof fakeSlack>) {
   return { handle, finishConnect, lose, sessions };
 }
 
+/** The owner's OIDC sign-in; `email` is whoever signs in next. */
 class TestOidcProvider implements PersonSessionOidcAuthorizationProvider {
   email = OWNER_EMAIL;
-  private nonce = "";
-  buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
-    this.nonce = attempt.nonce;
-    return `https://issuer.example/authorize?state=${encodeURIComponent(attempt.state)}`;
-  }
-  async redeemAuthorizationCode() {
-    return {
-      kind: "verified" as const,
-      token: {
-        issuer: OIDC.issuer,
-        subject: `subject-${this.email}`,
-        audience: OIDC.client_id,
-        nonce: this.nonce,
-        issued_at: Math.floor(Date.now() / 1_000),
-        claims: { email: this.email, email_verified: true },
-      },
-    };
-  }
-}
-
-async function availablePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
+  private readonly synthetic = syntheticOidcProvider(OIDC, () => this.email, { subject: () => `subject-${this.email}` });
+  buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string { return this.synthetic.buildAuthorizationUrl(attempt); }
+  redeemAuthorizationCode() { return this.synthetic.redeemAuthorizationCode(); }
 }
 
 function privateFile(path: string, value: string): string {
@@ -903,9 +881,7 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
         );
       } catch (error) {
         if (error instanceof PrivateSlackApprovalInteractionError)
-          throw new Error(
-            `interaction parser rejection: ${error.rejection_stage}`,
-          );
+          throw new Error("interaction parser rejected the replay");
         throw error;
       }
       await expect(post(replay)).resolves.toEqual({ status: 200, body: "" });

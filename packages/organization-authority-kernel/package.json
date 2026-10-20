@@ -129,10 +129,6 @@
       "types": "./dist/composition/staging-authority-environment-v1.d.ts",
       "import": "./dist/composition/staging-authority-environment-v1.js"
     },
-    "./application/readable-search-authorization-fence": {
-      "types": "./dist/application/readable-search-authorization-fence.d.ts",
-      "import": "./dist/application/readable-search-authorization-fence.js"
-    },
     "./state-lineage/state-lineage-preopen-guard": {
       "types": "./dist/state-lineage/state-lineage-preopen-guard.d.ts",
       "import": "./dist/state-lineage/state-lineage-preopen-guard.js"

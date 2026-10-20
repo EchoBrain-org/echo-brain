@@ -1,5 +1,5 @@
 import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
-import { liveSourceDescriptorV2, type EvidenceSourceCapabilitiesV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import type { EvidenceSourceCapabilitiesV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type {
   OpenedPersonLiveConnectorV1, PersonContextLiveApplicationV1, PersonLiveConnectorDefinitionV1,
@@ -29,29 +29,23 @@ export const CONFLUENCE_PAGE_CAPABILITIES_V1: EvidenceSourceCapabilitiesV1 = Obj
   any_date: true,
   links: Object.freeze([]),
 });
-/** Jira projects, Confluence spaces and Slack channels are listed and searched by key and name: no filters, dates or links. */
+/** Jira projects and Confluence spaces are listed and searched by key and name: no filters, dates or links. */
 export const TOOL_CONTAINER_CAPABILITIES_V1: EvidenceSourceCapabilitiesV1 = Object.freeze({
   filters: Object.freeze({}), dates: Object.freeze({}), any_date: false, links: Object.freeze([]),
 });
 
-export const LEGACY_TICKET_CONNECTOR_V1 = Object.freeze({
-  descriptor: liveSourceDescriptorV2({ source: 'ticket' }),
-  scopes: Object.freeze(['global', 'project'] as const), minimum_response_version: 5 as const,
-});
-export const LEGACY_PAGE_CONNECTOR_V1 = Object.freeze({
-  descriptor: liveSourceDescriptorV2({ source: 'page' }),
-  scopes: Object.freeze(['global', 'project'] as const), minimum_response_version: 6 as const,
-});
 /** Descriptions say what a source holds; its capabilities say how it filters (research tool contract v1). */
 export const JIRA_LIVE_CONNECTOR_V1 = Object.freeze({
-  ...LEGACY_TICKET_CONNECTOR_V1,
-  descriptor: Object.freeze({ ...LEGACY_TICKET_CONNECTOR_V1.descriptor, source_id: 'jira', tool_id: 'jira', capabilities: JIRA_ISSUE_CAPABILITIES_V1,
-    description: "Jira issues the asker can see with their own Jira account: each issue's key, title, status, assignee and due date, its description, and the issues linked to it." }),
+  descriptor: Object.freeze({ source_id: 'jira', kind: 'ticket' as const, selector: 'tickets',
+    description: "Jira issues the asker can see with their own Jira account: each issue's key, title, status, assignee and due date, its description, and the issues linked to it.",
+    metadata_only_list: true, tool_id: 'jira', capabilities: JIRA_ISSUE_CAPABILITIES_V1 }),
+  scopes: Object.freeze(['global', 'project'] as const), minimum_response_version: 5 as const,
 });
 export const CONFLUENCE_LIVE_CONNECTOR_V1 = Object.freeze({
-  ...LEGACY_PAGE_CONNECTOR_V1,
-  descriptor: Object.freeze({ ...LEGACY_PAGE_CONNECTOR_V1.descriptor, source_id: 'confluence', tool_id: 'confluence', capabilities: CONFLUENCE_PAGE_CAPABILITIES_V1,
-    description: "Confluence pages the asker can see with their own Confluence account: each page's title and status, and its text section by section." }),
+  descriptor: Object.freeze({ source_id: 'confluence', kind: 'page' as const, selector: 'pages',
+    description: "Confluence pages the asker can see with their own Confluence account: each page's title and status, and its text section by section.",
+    metadata_only_list: true, tool_id: 'confluence', capabilities: CONFLUENCE_PAGE_CAPABILITIES_V1 }),
+  scopes: Object.freeze(['global', 'project'] as const), minimum_response_version: 6 as const,
 });
 
 /** A connected tool's containers (research tool contract v1), which only the V8 answer can cite. */
@@ -132,7 +126,7 @@ export function personLiveConnectorDefinitionsV1(input: {
     const { source_id, selector, kind } = entry.descriptor;
     if (!/^[a-z][a-z0-9_-]{0,63}$/.test(source_id) || !/^[a-z][a-z0-9_-]{0,63}$/.test(selector) ||
         routingNames.has(source_id) || routingNames.has(selector) ||
-        !['ticket', 'page', 'slack_message', 'tool_container'].includes(kind) || ![5, 6, 8].includes(entry.minimum_response_version) ||
+        !['ticket', 'page', 'tool_container'].includes(kind) || ![5, 6, 8].includes(entry.minimum_response_version) ||
         (kind === 'page' && entry.minimum_response_version < 6) ||
         // A tool container cites only in the V8 answer, and says what it can do (research tool contract v1).
         (kind === 'tool_container' && (entry.minimum_response_version < WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 || entry.descriptor.capabilities === undefined)) ||

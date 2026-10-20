@@ -1,6 +1,10 @@
 # Ask progress and internal links v1
 
-Date: 2026-10-16. Status: approved by the founder for build on 2026-10-16; the founder validates the finished result.
+Date: 2026-10-16. Status: shipped in #330 (d2d03c6: progress and links) and
+#331 (6d9e597: follow-ups as an Ask source).
+[Ask progress: the quiet line v1](2026-10-19-ask-progress-quiet-line-v1.md)
+(#338) later replaced what the person sees while Ask works and when the answer
+arrives.
 
 The founder decided on 2026-10-16:
 - Direction B, "a line plus what it opened", chosen from a two-option mockup.
@@ -114,104 +118,21 @@ are not shown on the default case.
 
 ## Follow-ups become something Ask can search
 
-Today Ask cannot see follow-ups at all. They become one more Ask source:
-
-- **Searchable** by words, and listable by owner and status, so "my open
-  tasks" works. That question failed in the traces because ticket lists carry
-  no assignee.
-- **Same visibility as Home.** A person sees a follow-up when they are in its
-  decision's audience or are its owner, and words that came from Jira or
-  Confluence still pass through their own live access to that tool
-  (ADR-0033).
-- **What Ask reads:** title, owner, status, due date, the latest check and its
-  decision. It is cited like any other item and opens the item page.
-- **What word search matches.** Search matches only text ECHO holds: the
-  decision's title and first line, the expected phrase, the item's pointer (a
-  ticket key such as THERM-48), and the owner. Only the hits are then
-  live-read, for their current titles. That keeps each search to a few tool
-  requests, within the per-Ask caps. A follow-up whose only matching words are
-  inside a Jira or Confluence title is found by its key, its owner or its
-  decision, not by those title words.
-
-Meeting decisions and actions are already searchable through approved
-records. They only need the precise link above.
-
-## How it works (for the builder)
-
-1. **Progress signals in the research run.** Add a lean progress callback to
-   the Ask run. Do not reuse the diagnostics observer: that observer replaces
-   a person's capture sink and copies full prompts. The callback emits:
-   - the current stage, from the existing lifecycle stages and model-call
-     hooks;
-   - each read's source kind and released-item count, from the loop's
-     existing content-free read coverage;
-   - the names of items that just passed the access check before the next
-     model call (the `before_call` point). Each name uses the same projection
-     as a citation: kind, label and open reference.
-2. **Authority.** Serve a streaming variant of the live Ask route (`/v5`),
-   opt-in by request header, so older clients get today's response
-   unchanged. Each event is one line. The last event carries the released
-   answer, plus the receipt list rebuilt from items that passed the final
-   check. Errors after the stream starts arrive as a final error event. A
-   disconnect still cancels the Ask. The 90-second research deadline is
-   unchanged.
-3. **Proxy check first.** The chain is Cloudflare tunnel, then Caddy, then
-   Node. It has never carried a streamed response. Verify on staging that
-   events arrive without buffering; Caddy may need its flush setting. If
-   buffering can't be avoided, fall back to start-then-read: the Ask starts
-   and returns an id, the client reads progress every second, then fetches
-   the answer. Either way the screen looks the same.
-4. **Person client.** `ask --progress` prints each progress event as its own
-   JSON line, and the final line keeps today's shape. Without the flag,
-   output is unchanged, so scripts and eval tools are unaffected.
-5. **Desktop.** The host already reads the client's output line by line,
-   which is how sign-in reports its phases. Forward progress lines as a new
-   notice to the renderer:
-   - drop events from an earlier Ask or another account;
-   - render the live line and up to three rows;
-   - announce a step to screen readers at most every few seconds, with the
-     timer hidden from them;
-   - replace the live rows with the audited receipt when the answer arrives;
-   - keep the open reference and item id that the desktop drops today.
-6. **Follow-up source.** A new evidence source over open items. It reuses
-   the open-items visibility path and its live-tool reads. It returns the
-   fields listed above, with an open reference to the item page, and it is
-   checked and audited like the other sources.
+Ask could not see follow-ups. They became one more Ask source: searchable by
+the words ECHO holds, listable by owner and status, and seen exactly as Home
+shows them. [ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)
+owns the source as built (#331).
 
 ## Safety
 
-Names on screen before the final check are a new way for item content to leave
-the Authority. INV-PERMISSIONS-015 requires an accepted ADR, wider enforcement
-and negative disclosure tests for that. This work adds ADR-0039 and amends the
-invariant. The rules:
-
-- **Names only after the check.** A name is sent only after the access check
-  before the next model call has passed for that item. At that moment the
-  person could open the item themselves. In code, this is the point where an
-  item is marked as read in full.
-- **Audit.** Every item is already audited when the evidence desk releases it,
-  before any of its bytes leave the Authority, so naming it adds no new
-  unaudited item. The one end-of-request audit record also lists which
-  released items were named on screen. It uses the same content-free citation
-  commitments as today, never labels, and it does this on cancelled and
-  timed-out runs too. There is no extra durable write per step.
-- **Counts only of what this person may see.** Never hidden counts
-  (ADR-0012).
-- **Never send** notes, needs, plans, model-written queries, Jira queries,
-  bodies or excerpts while the Ask is running.
-- **Nothing kept from a failed run.** Cancel, timeout or a refused final
-  check sends no further names, and the desktop removes what it showed. The
-  receipt that stays on screen comes only from the audited final response.
-- **Accepted trade-off:** an item revoked after its check, but before the
-  final check, may have its name on screen for the rest of that run. It
-  never reaches the answer or the receipt.
-- **Negative tests:**
-  - a revoked item is never named after its revocation is seen;
-  - no hidden count is ever sent;
-  - no note, query or body is ever sent;
-  - cancel emits nothing further;
-  - a refused answer leaves no receipt;
-  - events from another account are dropped.
+A name shows only after the access check before the next model call has
+passed for that item. The founder accepted one trade-off: an item revoked
+after its check may keep its name on screen for the rest of that run, but
+never reaches the answer or the receipt.
+[ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)
+owns these rules, the audit, the progress stream and its negative tests as
+built (#330), with
+[INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md).
 
 ## Non-goals and anti-goals
 
@@ -229,30 +150,6 @@ invariant. The rules:
 - model-written status;
 - anything that looks like a chat client's thinking panel;
 - any name or count that reveals an item the person can't open.
-
-## Compatibility and order
-
-- **Old clients** keep calling the current route and see the spinner as today.
-- **A new desktop on an old Authority** gets no progress events and falls
-  back to the spinner.
-- **Ship order:**
-  - PR 1, the Authority, client and desktop changes for progress and links;
-  - PR 2, follow-ups as an Ask source.
-- **Deploy the Authority first.**
-
-## Calls made in this document (not founder decisions)
-
-- streaming first, with start-then-read as the fallback;
-- the 3-second threshold;
-- three live rows;
-- trailing names, rather than a separate check per name;
-- what counts as read and found;
-- naming recorded in the one end-of-request audit, not per step;
-- transcripts open their meeting;
-- the full-page "Open" button is hidden while Ask runs;
-- the receipt is rebuilt from the audited response;
-- follow-ups searchable with Home's visibility, matching ECHO-held text only;
-- two PRs.
 
 ## Research behind the direction
 

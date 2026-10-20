@@ -16,7 +16,7 @@ Three triggers run the same loop:
   verdict and one line per finding).
 
 **Which Ask it runs.** The Ask trigger here runs Ask as
-`POST /v7/person/ask` runs it, as desktops and `person ask --live` ask it: V8
+`POST /v7/person/ask` runs it, as desktops and `person ask` ask it: V8
 answers on the full catalog, which may also cite ECHO's shared follow-ups
 ([ADR-0040](../../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)),
 the asker's projects, people and tools, and the Jira projects and Confluence
@@ -56,9 +56,16 @@ every member, and correct in the answer only when the answer names every
 member. The response does not say which statements code wrote, so a statement
 names a member only when it cites one of the member's items and its text names
 the member as code writes names: the member's title on one line, cut to 120
-characters (a cut title matches on what stands before its ellipsis), ignoring
-case, as a phrase of its own, never inside a longer word or a longer name the
-text holds; members sharing a label share the one name code gives them. Citing
+characters (a cut title by code's cut name, ellipsis and all, or by its whole
+title), ignoring case, as a phrase of its own, never inside a longer word or a
+longer name the text holds. Members sharing a label share the one name code
+gives them, unless the statement cites some that record another status, owner
+or due date: code keeps those apart and writes the facts that differ after
+each label, so the text names such a member only with its own complete detail,
+including the owner or due prefix. A value inside another value ("open" in
+"not open") does not count. Details use the renderer's character limits:
+60 for status, 80 for owner and 40 for due, including a truncation ellipsis;
+calendar due dates use the renderer's written date. Citing
 a row never names it alone, whether a sentence cites it beside its text for the
 row's facts, its list id brings it, or the row carries text, as a follow-up's
 does. A list longer than the 25 names an answer gives is named in full when a
@@ -151,12 +158,11 @@ and desktop-screen questions. A case of the family has `family: open_ended`,
 a `category` (`goal`, `time`, `own_work`, `structure`, `reach`, `tools`) and a
 `reach` key: the collections holding part of its answer (`meetings`,
 `documents`, `follow_ups`, `projects`, `people`, `tools`, `tickets`, `pages`,
-`slack`, `jira_projects`, `confluence_spaces`, `slack_channels`; an entry that
-lists several is met by any of them), an optional time `window` (`yesterday`,
-`this_week`, `last_week`) and its rounds (`max_rounds`, 4 unless it says
-otherwise). Its parts name workspace items as `world/README.md` ("Reading the
-keys") says. A case whose answer the world cannot fix in advance ("What
-happened yesterday?") has no parts.
+`jira_projects`, `confluence_spaces`; an entry that lists several is met by any
+of them) and an optional time `window`
+(`yesterday`, `this_week`, `last_week`). Its parts name workspace items as
+`world/README.md` ("Reading the keys") says. A case whose answer the world
+cannot fix in advance ("What happened yesterday?") has no parts.
 
 Every case of the family is graded on reach and cost, never on wording, by code
 reading the research result its run saves:
@@ -174,9 +180,12 @@ reading the research result its run saves:
   refusal.
 - **Unchecked items stated**: every list the answer uses (one the plan relied
   on, or one it cites a member of) whose `unchecked` count is above zero has
-  that count in the answer's text. Unknown, never a pass, when the answer used
-  no such list.
-- **Within rounds**: research stopped `finished` within its rounds.
+  that count in the answer's text. When the answer used no such list, nothing
+  needed stating: the check is unknown and leaves the run out of its rate (—
+  when no run counts), but it does not stop the run meeting reach and cost or
+  passing the release check. A failed run is left out of this rate too; it
+  meets nothing.
+- **Within rounds**: research stopped `finished` within 4 rounds.
 
 Every completed run of any case also reports what its trace counts: rounds,
 calls per round, collections looked at, refused calls, repeated refusals,
@@ -251,7 +260,16 @@ LangSmith traces, with the same four checks: see
    npm run eval:research-loop -- grade --judge-model <openrouter-claude-slug> --judge-credential-file ~/.config/echo/openrouter.credential --out ~/.local/state/echo-research-loop-eval-20261006
    ```
 
-   `--no-judge` grades code checks only (found, read, handed over, leaks, cost).
+   `--no-judge` grades code checks only, and the report then withholds every
+   judge measure: expected and invented needs, parts established, the judge's
+   Sweep verdicts, parts correct in the answer, unsupported claims, false
+   abstentions, gaps reported (Ask's and the card's) and must-not violations.
+   Complete and supported stays unknown unless the run failed or a code check
+   fails it: a leak, a citation of something research did not read, an
+   invented card item or person, or a list not named in full. The code checks
+   remain: found, read, handed over, need kinds, lists named, the card's items,
+   relations and owners, the sweep result's verdicts, leaks, noise, reach and
+   cost.
 8. **Calibrate the judge for this grading pass.** `calibrate sheet` requires 15
    judged runs and writes a blind sheet; answer every check `true` or `false`
    without opening `graded.json`, then `calibrate score`. The result is bound to
@@ -329,8 +347,8 @@ bounded server memory, except while an operator has enabled
 then the staging server also exports each research run, including this traced
 Ask or run, to the chosen LangSmith project, with its exact prompts, model
 outputs, tool arguments and results and released source text. That export is
-separate from this capture. CloudWatch and Journey Explorer retain separate,
-content-free operational metadata.
+separate from this capture. CloudWatch retains separate, content-free
+operational metadata.
 
 If execution or polling is interrupted, use the saved capture id to resume
 **reading only**, including when the ordinary Ask response was lost:

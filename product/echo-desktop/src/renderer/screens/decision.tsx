@@ -44,16 +44,16 @@ function Decided({ read }: { read: Read }) {
   );
 }
 
-/**
- * Who does what: each action with its due date, and its owner, a name you
- * can change before approving (the Authority keeps it as typed). Actions the
- * proposal names without an owner to set show as they are.
- */
 /** The same words, whatever their spacing: an owner's action as the proposal text wrote it. */
 function same(a: string, b: string): boolean {
   return a.replace(/\s+/g, ' ').trim() === b.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Who does what: each action with its due date, and its owner, a name you
+ * can change before approving (the Authority keeps it as typed). Actions the
+ * proposal names without an owner to set show as they are.
+ */
 function ToDo({ decision, read, frozen }: { decision: DecisionState; read: Read; frozen: boolean }) {
   const actions = read.actions;
   const loose: ProposalSignal[] = actions.filter(action => !decision.owners.some(owner => same(owner.action, action.text)));

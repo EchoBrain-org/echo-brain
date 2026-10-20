@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ASK_SEARCH_ONLY_STEP_PROMPT, ASK_STEP_PROMPT, createStepSchema } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { ASK_STEP_PROMPT, createStepSchema } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { createAgenticAskV3 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { generation, result } from './fixtures/agentic-scenarios.js';
@@ -9,9 +9,9 @@ const argsFor = (schema: Schema, tool: string): Schema => schema.properties.acti
   .find((variant: Schema) => variant.properties.tool.enum[0] === tool).properties.args.properties;
 
 describe('Ask tool argument contracts', () => {
-  it.each([true, false])('advertises calendar days and canonical filters with list=%s', list => {
-    const schema = createStepSchema(['meetings', 'handbook'], ['E2'], true, list, list, true) as Schema;
-    for (const tool of list ? ['search', 'list'] : ['search']) {
+  it('advertises calendar days and canonical filters', () => {
+    const schema = createStepSchema(['meetings', 'handbook'], ['E2'], true, true, true) as Schema;
+    for (const tool of ['search', 'list']) {
       const args = argsFor(schema, tool);
       for (const field of ['since', 'until']) {
         expect(args[field].format).toBe('date');
@@ -28,13 +28,8 @@ describe('Ask tool argument contracts', () => {
     }
     expect(schema.properties.parts.items.properties.question.minLength).toBe(1);
     expect(argsFor(schema, 'search').date_field.description).toContain('requires source');
-    if (list) {
-      expect(argsFor(schema, 'list').status.enum).toEqual(['open', 'done', 'active', 'archived']);
-      expect(argsFor(schema, 'list').kind).not.toHaveProperty('enum');
-    } else {
-      expect(schema.properties.actions.items.anyOf.map((v: Schema) => v.properties.tool.enum[0]))
-        .toEqual(['search', 'open', 'finish']);
-    }
+    expect(argsFor(schema, 'list').status.enum).toEqual(['open', 'done', 'active', 'archived']);
+    expect(argsFor(schema, 'list').kind).not.toHaveProperty('enum');
     // Opening any discovered id is still an available action; schema tightening does not prescribe a route.
     expect(argsFor(schema, 'open').id.enum).toEqual(['E2']);
   });
@@ -60,20 +55,15 @@ describe('Ask tool argument contracts', () => {
     expect(argsFor(calls[0]!.schema, 'list').status.enum).toEqual(['open', 'done', 'active', 'archived']);
   });
 
-  it('explains adaptive recovery while retaining context reads and available-tool boundaries', () => {
-    for (const prompt of [ASK_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) {
-      expect(prompt).toContain('empty or irrelevant');
-      expect(prompt).toContain('not the parent meeting title');
-      expect(prompt).toContain('Full text from search or a neighbouring passage can still be opened');
-      expect(prompt).toContain('prior notice or truncated read');
-      expect(prompt).toContain('One retry is available after an availability notice');
-      expect(prompt).toContain('same day for both');
-      expect(prompt).toContain('its text must support that fact');
-      expect(prompt).toContain('A complete list can establish which items exist');
-    }
+  it('explains adaptive recovery while retaining context reads', () => {
+    expect(ASK_STEP_PROMPT).toContain('empty or irrelevant');
+    expect(ASK_STEP_PROMPT).toContain('not the parent meeting title');
+    expect(ASK_STEP_PROMPT).toContain('Full text from search or a neighbouring passage can still be opened');
+    expect(ASK_STEP_PROMPT).toContain('prior notice or truncated read');
+    expect(ASK_STEP_PROMPT).toContain('One retry is available after an availability notice');
+    expect(ASK_STEP_PROMPT).toContain('same day for both');
+    expect(ASK_STEP_PROMPT).toContain('its text must support that fact');
+    expect(ASK_STEP_PROMPT).toContain('A complete list can establish which items exist');
     expect(ASK_STEP_PROMPT).toContain('no fixed search/list/open order');
-    expect(ASK_SEARCH_ONLY_STEP_PROMPT).toContain('no fixed search/open order');
-    expect(ASK_SEARCH_ONLY_STEP_PROMPT).not.toContain('list, args');
-    expect(ASK_SEARCH_ONLY_STEP_PROMPT).not.toContain('a supported date/kind list');
   });
 });

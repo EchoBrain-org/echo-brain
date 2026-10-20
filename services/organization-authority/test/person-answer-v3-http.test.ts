@@ -22,7 +22,7 @@ import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-r
 import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV3HttpApplication } from "../src/presentation/person-answer-v3-http-application.js";
-import type { PersonAnswerV5HttpApplication } from "../src/presentation/person-answer-v5-http-application.js";
+import type { PersonAnswerV5HttpApplication } from "../src/presentation/person-live-answer-http-application.js";
 
 async function server(input: { readonly application?: PersonAnswerV3HttpApplication; readonly live_application?: PersonAnswerV5HttpApplication }) {
   const sessions = { authenticateAccess: vi.fn(() => ({})) };
@@ -168,7 +168,7 @@ function mineFixture() {
   });
   const scopes: unknown[] = [];
   const release = (scope: unknown) => ({
-    release: { authorization: { principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker", checked_at }, scope, authorization_revision: 0, released_atoms: [] },
+    release: { authorization: { principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker", checked_at }, scope, grants_sha256: canonicalSha256([]), released_atoms: [] },
     receipt: canonicalSha256({ release: scopes.length }), items: [note], truncated: false,
   });
   const originals = {

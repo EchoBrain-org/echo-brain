@@ -48,7 +48,7 @@ export interface AskResearchListV1 {
   readonly members: readonly string[];
 }
 
-/** What a refusal adds with the list tool: what each kind of support is, never a change of kind (ADR-0041). */
+/** What a refusal adds: what each kind of support is, never a change of kind (ADR-0041). */
 const CONTENT_HINT = ": a list shows which items exist and each member's title, dates, status and owner, never what an item says; open the items for what they say";
 
 /**
@@ -66,13 +66,12 @@ export function askQuestionCompletionProblemsV1(
   observations: readonly AskResearchObservationV1[],
   lists: readonly AskResearchListV1[],
   citable: (id: string) => boolean,
-  list: boolean,
   member_in: (list: AgenticListIdV1, id: string) => string | undefined,
 ): readonly string[] {
-  return completionProblems(parts, observations, list, (need, label) => {
+  return completionProblems(parts, observations, true, (need, label) => {
     const kind = need.kind ?? "content";
     // A found which_say or content need needs text read in full.
-    const read = need.status !== "found" || kind === "which_items" || need.evidence.some(citable) ? [] : [`${label} is found but cites no item whose full text you have read${list ? CONTENT_HINT : ""}`];
+    const read = need.status !== "found" || kind === "which_items" || need.evidence.some(citable) ? [] : [`${label} is found but cites no item whose full text you have read${CONTENT_HINT}`];
     if (!agenticNeedReadsListV1(need)) return read;
     const cited = lists.filter(value => need.evidence.some(id => parseAgenticListIdV1(id) === value.id));
     const holders = cited.length > 0 ? [] : lists.filter(value => need.evidence.some(id => member_in(value.id, id) !== undefined));

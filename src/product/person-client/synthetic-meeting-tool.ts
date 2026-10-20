@@ -1,25 +1,12 @@
-import { openSync, readSync, closeSync, fstatSync, constants } from 'node:fs';
 import { PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1, personMeetingCommandV2, validatePersonMeetingRequestV2,
   validatePersonSyntheticMeetingV1, type PersonToolProviderV1 } from '@echo-brain/organization-api';
+import { readBoundedFile } from './update-file.js';
 
 /** Bound reads, including a growing file; reject devices, directories and invalid UTF-8. */
 function readMeeting(path: string) {
-  let fd: number | undefined;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1) throw new Error();
-    const bytes = Buffer.alloc(PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1 + 1);
-    let size = 0;
-    while (size < bytes.length) {
-      const count = readSync(fd, bytes, size, bytes.length - size, null);
-      if (count === 0) break;
-      size += count;
-    }
-    if (size > PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1) throw new Error();
-    return validatePersonSyntheticMeetingV1(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, size))));
+    return validatePersonSyntheticMeetingV1(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(readBoundedFile(path, PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1))));
   } catch { throw new Error('Meeting file must be a regular UTF-8 JSON file of at most 48 KiB with id (synthetic-custom-...), title, notes and transcript.'); }
-  finally { if (fd !== undefined) closeSync(fd); }
 }
 
 export function createSyntheticMeetingToolV1(): PersonToolProviderV1 {

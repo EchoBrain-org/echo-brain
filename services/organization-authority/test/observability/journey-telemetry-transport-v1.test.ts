@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createJourneyTelemetryEventV1 } from '@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1';
 import { createJourneyTelemetryTransportFromEnvironmentV1, createJourneyTelemetryTransportV1 } from '../../src/composition/observability/journey-telemetry-transport-v1.js';
 import { AUTHORITY_JOURNEY_METRICS_NAMESPACE_V1, formatJourneyTelemetryMetricsV1, STAGING_JOURNEY_METRICS_NAMESPACE_V1 } from '../../src/composition/observability/journey-metrics-v1.js';
@@ -44,17 +44,13 @@ describe('shared operational telemetry transport', () => {
     transport.close();
   });
 
-  it('emits production liveness and core resource spans, never model payloads', async () => {
+  it('emits production liveness and core resource spans', async () => {
     const lines: string[] = [];
-    const transport = createJourneyTelemetryTransportFromEnvironmentV1('production', {
-      ...baked, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: 'true',
-    }, { write: line => { lines.push(line); }, now: () => observedAt, scheduler });
-    expect(transport).toMatchObject({ enabled: true, environment: 'production', content_enabled: false, identity });
-    expect(transport.core_runtime.content_observer).toBeUndefined();
+    const transport = createJourneyTelemetryTransportFromEnvironmentV1('production', baked,
+      { write: line => { lines.push(line); }, now: () => observedAt, scheduler });
+    expect(transport).toMatchObject({ enabled: true, environment: 'production', identity });
     transport.start();
-    await observeCoreRuntimeV1('ask_request', async () => {
-      captureCoreRuntimeContentV1('model_request', { question: 'NEVER-PRODUCTION-CONTENT' });
-    }, transport.core_runtime);
+    await observeCoreRuntimeV1('ask_request', async () => undefined, transport.core_runtime);
     transport.close();
     const records = lines.map(line => JSON.parse(line));
     expect(records).toEqual(expect.arrayContaining([
@@ -62,16 +58,6 @@ describe('shared operational telemetry transport', () => {
       expect.objectContaining({ kind: 'echo-authority-journey-stage-v1', environment: 'production', workflow: 'core_runtime', event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'ask_request', root: true, counts: expect.objectContaining({ rss_bytes: expect.any(Number) }) }) }),
     ]));
     expect(records.filter(record => record._aws).every(record => record._aws.CloudWatchMetrics[0].Namespace === AUTHORITY_JOURNEY_METRICS_NAMESPACE_V1)).toBe(true);
-    expect(lines.join('')).not.toContain('NEVER-PRODUCTION-CONTENT');
-    expect(lines.join('')).not.toContain('echo-authority-journey-content-v1');
-  });
-
-  it('keeps production content entrypoints inert even for hostile payload arguments', () => {
-    const lines: string[] = [];
-    const transport = createJourneyTelemetryTransportV1('production', identity, { write: line => { lines.push(line); }, scheduler }, { content_enabled: true });
-    expect(() => transport.content_observer(new Proxy({}, { get() { throw new Error('must not inspect private payload'); } }) as Parameters<typeof transport.content_observer>[0])).not.toThrow();
-    expect(lines).toEqual([]);
-    transport.close();
   });
 
   it('requires canonical image capability and deploy identity in both environments', () => {

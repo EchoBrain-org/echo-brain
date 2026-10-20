@@ -1,13 +1,13 @@
 import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "./temporal-query-v1.js";
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import type { EvidenceDeskAttributesV1, EvidenceDeskDateKindV1, EvidenceDeskRevalidationModeV1 } from './evidence-desk-v1.js';
-import type { PersonConnectorAccessV1, PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1, PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
+import type { PersonConnectorAccessV1, PersonPageCitationV1, PersonTicketCitationV1, PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 
 /**
- * A tool container (research tool contract v1) is a Jira project, Confluence space or Slack channel. Its citation names
- * the container and commits to no text: what it says is read again wherever it is shown.
+ * A tool container (research tool contract v1) is a Jira project or Confluence space. Its citation names the container
+ * and commits to no text: what it says is read again wherever it is shown.
  */
-export type PersonLiveEvidenceCitationV1 = PersonSlackMessageCitationV1 | PersonTicketCitationV1 | PersonPageCitationV1 | PersonToolContainerCitationV1;
+export type PersonLiveEvidenceCitationV1 = PersonTicketCitationV1 | PersonPageCitationV1 | PersonToolContainerCitationV1;
 /** A live item's row facts: a tool item's owner, due date and status, and a tool container's key and tool. */
 export type PersonLiveEvidenceAttributesV1 = Pick<EvidenceDeskAttributesV1, 'owner' | 'due_at' | 'status' | 'key' | 'tool'>;
 

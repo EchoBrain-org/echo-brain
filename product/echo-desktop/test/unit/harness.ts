@@ -3,8 +3,8 @@
 // one reply back while later ones land; and, for tests that call components
 // as plain functions, hooks that do so and the tree those calls show.
 import type { VNode } from 'preact';
-import { vi } from 'vitest';
-import type { ProjectSummary } from '../../src/shared/protocol.js';
+import { afterEach, beforeEach, vi } from 'vitest';
+import type { AnswerSource, AskStep, Expect, OpenItemsView, ProjectSummary } from '../../src/shared/protocol.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
 export const fail = (code: string, extra: Record<string, unknown> = {}) => ({ ok: false, failure: { code, retryable: false, ...extra } });
@@ -14,6 +14,9 @@ export const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) 
 export const ACCOUNT = { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } as const;
 
 export const PROJECT_PAGE = 10;
+
+/** A follow-ups read's counts, with nothing counted. */
+export const EMPTY_SUMMARY: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 
 /** A project, newest first by day: `project(1, 30)` was made on the 30th, `project(2, 29)` the day before. */
 export function project(n: number, day: number, extra: Partial<ProjectSummary> = {}): ProjectSummary {
@@ -98,7 +101,7 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
       case 'app.setUnresolved': return ok(null);
       case 'account.tools': return ok({ tools: [] });
       case 'projects.list': return ok(keysetPage(params.status === 'archived' ? lists().archived : lists().active, params.cursor));
-      case 'projects.members': case 'people.directory': case 'projects.directory': return ok({ items: [], next_cursor: null });
+      case 'projects.members': case 'people.directory': return ok({ items: [], next_cursor: null });
       case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
       case 'search.run': return ok({ items: [] });
@@ -118,8 +121,44 @@ export async function startStore() {
   return store;
 }
 
+/**
+ * A question on its way, its reply held: the store, the release, and the Ask's cancel id, as `rpc` (the test's mock) saw it
+ * sent; a step the host posts for it (`notice` may say another Ask or account), or a read of `items`; and the page's side
+ * pane and thread as they show now.
+ */
+export async function asking(rpc: { mock: { calls: unknown[][] } }, held: Held, question = 'What did we agree?') {
+  const store = await startStore();
+  const screens = await import('../../src/renderer/screens/ask.js');
+  const release = held.hold('ask.run');
+  void store.ask(question);
+  await flush();
+  const cancelId = (rpc.mock.calls.filter(([name]) => name === 'ask.run').at(-1)![1] as { cancel_id: string }).cancel_id;
+  const account: Expect = { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id };
+  const step = (value: AskStep, notice: Partial<{ cancel_id: string; expect: Expect }> = {}) =>
+    store.askProgress({ cancel_id: cancelId, expect: account, step: value, ...notice });
+  return {
+    store, release, cancelId, step,
+    read: (items: readonly AnswerSource[]) => step({ type: 'read', items }),
+    pane: () => render(screens.SourcePane({ state: store.getState() })),
+    thread: () => render(screens.AskView({ state: store.getState() })),
+  };
+}
+
 export function stubWindow(): void {
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() });
+}
+
+/**
+ * The hooks a store test file starts with: before each test a fresh store module, fake timers (from `now`, when given) and no
+ * storage; after it, real timers and globals again. A file's own setup follows in its own beforeEach.
+ */
+export function storeLifecycle(now?: Date): void {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers(now === undefined ? undefined : { now });
+    stubWindow();
+  });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 }
 
 export const names = (rows: readonly { name: string }[]) => rows.map(row => row.name);

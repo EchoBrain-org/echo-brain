@@ -12,22 +12,26 @@ const binding: PersonConnectorReadBindingV1 = Object.freeze({ organization_id: '
 const LEFT_OUT = 'Some Fixture channels could not be shown, so these results leave them out.';
 const failure = (code: PersonProviderFailureCodeV1): never => { throw new AuthorityOperationError(code, 'Fixture tool refused'); };
 
-/** A tool of four channels, any of which an exact read can hide or find malformed, behind the shared reader and its audited source. */
+/**
+ * A tool of four channels behind the shared reader and its audited source. An exact read can hide one or find it
+ * malformed; a page or a search leaves a malformed one out and counts it, as a tool's own parsing does.
+ */
 async function fixture(pinned?: readonly string[]) {
   const state = {
     containers: new Map<string, PersonToolContainerV1>(['1', '2', '3', '4'].map(id => [id, { id, key: `C${id}`, name: `Channel ${id}` }])),
     hidden: new Set<string>(), malformed: new Set<string>(), rejected: false,
     echo: new Map<string, readonly string[]>([['2', ['Launchscope']]]),
   };
+  const shown = (rows: readonly PersonToolContainerV1[]) => ({ containers: rows.filter(row => !state.malformed.has(row.id)), left_out: rows.filter(row => state.malformed.has(row.id)).length });
   const provider = {
-    binding, tool: 'Fixture', container: 'slack_channel', noun: 'Fixture channel', failure, fence: vi.fn(),
+    binding, tool: 'Fixture', container: 'confluence_space', noun: 'Fixture channel', failure, fence: vi.fn(),
     verify: vi.fn(async () => 'https://fixture.example.test'),
     permalink: (origin, container) => `${origin}/channels/${container.key}`,
     page: vi.fn(async ({ cursor, limit }: { readonly cursor?: string; readonly limit: number }) => {
       const start = Number(cursor ?? '0');
-      return { containers: [...state.containers.values()].slice(start, start + limit), left_out: 0, ...(start + limit < state.containers.size ? { next: String(start + limit) } : {}) };
+      return { ...shown([...state.containers.values()].slice(start, start + limit)), ...(start + limit < state.containers.size ? { next: String(start + limit) } : {}) };
     }),
-    candidates: vi.fn(async () => ({ containers: [...state.containers.values()], left_out: 0, more: false })),
+    candidates: vi.fn(async () => ({ ...shown([...state.containers.values()]), more: false })),
     exact: vi.fn(async (id: string) => {
       if (state.rejected) failure('unauthorized');
       const container = state.containers.get(id);
@@ -82,5 +86,86 @@ describe('the shared tool container reader (research tool contract v1)', () => {
     other.provider.exact.mockResolvedValueOnce(other.state.containers.get('2')!);
     await expect(other.source.open({ item: listed!.id })).rejects.toMatchObject({ code: 'invalid_output' });
     expect([...twice.audit.record.mock.calls, ...other.audit.record.mock.calls]).toHaveLength(1);
+  });
+
+  it('names at most ten mapped ECHO projects, then how many more', async () => {
+    const f = await fixture();
+    const names = Array.from({ length: 12 }, (_, index) => `Project ${String(index + 1).padStart(2, '0')}`);
+    f.state.echo.set('1', names);
+    const [item] = (await f.source.list({ limit: 1 })).items;
+    expect(item!.text).toBe(`Fixture channel C1: Channel 1\nECHO projects: ${names.slice(0, 10).join(', ')}, and 2 more`);
+  });
+
+  it('names mapped ECHO projects only whole, as many as fit its text, then how many more', async () => {
+    const f = await fixture();
+    const names = Array.from({ length: 10 }, (_, index) => `Project ${String(index + 1).padStart(2, '0')} ${'x'.repeat(150)}`);
+    f.state.echo.set('1', names);
+    const text = (await f.source.list({ limit: 1 })).items[0]!.text!;
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1024);
+    const [head, projects] = text.split('\nECHO projects: ');
+    expect(head).toBe('Fixture channel C1: Channel 1');
+    const listed = projects!.split(', ');
+    const more = /^and (\d+) more$/.exec(listed.pop()!);
+    expect(listed).toEqual(names.slice(0, listed.length));
+    expect(listed.length + Number(more?.[1])).toBe(10);
+  });
+
+  it('keeps the first mapped ECHO project whole beside a very long container name, cutting that name instead', async () => {
+    const f = await fixture(); f.state.containers.set('1', { id: '1', key: 'C1', name: 'E'.repeat(1000) });
+    f.state.echo.set('1', ['Atlas', 'Launchscope']);
+    const text = (await f.source.list({ limit: 1 })).items[0]!.text!;
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1024);
+    expect(text).toMatch(/^Fixture channel C1: E+\nECHO projects: Atlas, and 1 more$/);
+  });
+
+  it.each([
+    ['renamed in its tool', 'stale_access_state', (f: Awaited<ReturnType<typeof fixture>>) => { f.state.containers.set('3', { id: '3', key: 'C3', name: 'Channel Three' }); }],
+    ['re-keyed in its tool', 'stale_access_state', (f: Awaited<ReturnType<typeof fixture>>) => { f.state.containers.set('3', { id: '3', key: 'CX', name: 'Channel 3' }); }],
+    ['no longer visible', 'not_found', (f: Awaited<ReturnType<typeof fixture>>) => { f.state.hidden.add('1'); }],
+    ['no longer mapped to a visible ECHO project', 'stale_access_state', (f: Awaited<ReturnType<typeof fixture>>) => { f.state.echo.delete('2'); }],
+  ])('revalidates every released container: one %s stops reuse', async (_change, code, change) => {
+    const f = await fixture();
+    await f.source.list({});
+    await expect(f.source.revalidate({})).resolves.toBeUndefined();
+    change(f);
+    await expect(f.source.revalidate({})).rejects.toMatchObject({ code });
+  });
+
+  it('revalidates every release of a container, not only its latest', async () => {
+    const f = await fixture();
+    const [listed] = (await f.source.list({ limit: 1 })).items;
+    f.state.containers.set('1', { id: '1', key: 'C1', name: 'Channel One' });
+    expect((await f.source.open({ item: listed!.id })).items[0]!.label).toBe('Channel One');
+    // The list released the old name too, and it is no longer what the asker sees.
+    await expect(f.source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+  });
+
+  it('compares a check against the ECHO projects named after the tool answers, so a change during the check is seen', async () => {
+    const f = await fixture();
+    await f.source.list({});
+    const answer = f.provider.exact.getMockImplementation()!;
+    f.provider.exact.mockImplementation(async (id: string) => { const value = await answer(id); f.state.echo.delete('2'); return value; });
+    await expect(f.source.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+  });
+
+  it('finds what it can show when a container that may match cannot be shown, and says so', async () => {
+    const f = await fixture(); f.state.malformed.add('3');
+    const found = await f.source.search({ query: 'Channel 1' });
+    expect(found.items.map(item => item.label)).toEqual(['Channel 1']);
+    expect(found.notice).toBe(LEFT_OUT);
+  });
+
+  it("pages on from where the tool's page ended, past a container it left out", async () => {
+    const f = await fixture(); f.state.malformed.add('1');
+    const first = await f.source.list({ limit: 2 });
+    expect(first.items.map(item => item.label)).toEqual(['Channel 2']);
+    expect(first).toMatchObject({ truncated: true, next_cursor: expect.any(String), notice: LEFT_OUT });
+    const second = await f.source.list({ limit: 2, cursor: first.next_cursor });
+    expect(second.items.map(item => item.label)).toEqual(['Channel 3', 'Channel 4']);
+    expect(f.provider.page.mock.calls.map(([input]) => input.cursor)).toEqual([undefined, '2']);
+    // A last page that held its full size before a row was left out still cannot confirm the list's end (ADR-0041).
+    const whole = await f.source.list({ limit: 4 });
+    expect(whole.items).toHaveLength(3);
+    expect(whole).toMatchObject({ truncated: false, page_full: true, notice: LEFT_OUT });
   });
 });

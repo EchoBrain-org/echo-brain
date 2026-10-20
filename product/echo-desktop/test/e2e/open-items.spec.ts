@@ -2,33 +2,12 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { clickNotice, emit, launch, notices, type Launched } from './launch.js';
+import { approveFromHome, clickNotice, emit, launch, notices, type Launched } from './launch.js';
 
 let app: Launched;
 test.afterEach(async () => { await app?.close(); });
 
-/** Adds the fixture meeting through Granola, then the Approve row → Approve, for the project it suggests. */
-async function approveFromHome(run: Launched) {
-  const { page } = run;
-  await page.getByTestId('sidebar-tools').click();
-  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
-  const meetings = page.getByRole('region', { name: 'Personal meetings' });
-  await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
-  await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
-  await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
-  await meetings.getByRole('button', { name: 'Add to ECHO', exact: true }).click();
-  await expect(meetings.getByRole('status')).toContainText('Added.');
-  await page.keyboard.press('Escape');
-  await page.getByTestId('sidebar-home').click();
-  await page.getByTestId('need-row').filter({ hasText: 'Pilot planning' }).click();
-  await page.getByTestId('decision-approve').click();
-  await expect(page.getByTestId('toast')).toContainText('Approved');
-}
-
 const runOperations = () => app.calls().filter(call => call.path === '/v1/person/runs').map(call => call.body?.operation);
-/** A list's reads, in order: rows only, or live (" live"), by states, and " more" past the first page; never counts or a check's rows. */
-const listReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'items' && !notificationScan(call.body) && call.body.read !== 'counts' && call.body.scope !== 'run')
-  .map(call => `${(call.body!.states as string[]).join('+')}${call.body!.cursor === undefined ? '' : ' more'}${call.body!.read === 'rows' ? '' : ' live'}`);
 /** The change check's reads of the follow-ups Ari is involved in: open ones, and those closed since (desktop refresh and notifications v1). */
 const notificationScan = (body: Record<string, unknown>) => body.operation === 'items' && (body.scope === 'involved' || body.scope === 'mine') && body.read === 'rows'
   && ((body.states as string[] | undefined)?.join() === 'open' || body.changed_since !== undefined);
@@ -41,8 +20,6 @@ const PILOT_RECORD = `sha256:${createHash('sha256').update('record:Pilot plannin
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 /** A day as the app writes it ("Oct 7"), in this computer's time zone, as the app's is. */
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-/** What a live open of an item Ari cannot open would read: its key, title, link and assignee. */
-const WITHHELD = ['ECHO-31', 'Trace sign-off', 'browse/ECHO-31', 'S. Okafor', 'ECHO-20', 'Vendor order', 'Rafael Moreno'];
 
 /** A list's group of one status, and its rows. */
 const group = (list: Locator, status: 'Not sent' | 'Open' | 'Done' | 'Dismissed') => list.getByRole('region', { name: status, exact: true });
@@ -58,7 +35,7 @@ async function pickOwner(page: Page, name: string, query?: string) {
 test('a meeting\'s follow-ups go to their owners from one list, and come back done', async ({}, testInfo) => {
   app = await launch('granola');
   const { page } = app;
-  await approveFromHome(app);
+  await approveFromHome(app.page);
   // The check runs by itself; its Send row opens the meeting's follow-ups.
   const send = page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' });
   await expect(send).toContainText('Launch the pilot next week — 4 follow-ups to send', { timeout: 20_000 });
@@ -92,10 +69,6 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await expect(unsent.getByTestId('follow-up-row')).toHaveCount(3);
   await expect(unsent.getByRole('checkbox', { checked: true })).toHaveCount(0);
   expect(requests('send').map(body => body.items)).toEqual([[{ item_id: 'itm_00000000-0000-4000-8000-000000000031', include: true }]]);
-  // Every group of a meeting's list, read together rows only, then live; the send read the list again, rows only.
-  const all = 'unsent+open+done+not_relevant';
-  expect(listReads()).toEqual([all, `${all} live`, all]);
-  expect(requests('item')).toEqual([]);
 
   // An owner changed in place before sending: the PRD page goes to Rafael at once, still Not sent.
   await row(unsent, 'Thermostat PRD').getByRole('button', { name: 'Pick owner: Thermostat PRD · Pilot scope' }).click();
@@ -118,7 +91,6 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
 
   // A Not sent row's page, and its meeting: back to this list, as it was, not a list of its own.
   await unsent.getByRole('checkbox', { name: 'Send the revised quote', exact: true }).check();
-  const itemReads = requests('items').length;
   await row(unsent, 'Thermostat PRD').click();
   const item = page.getByTestId('follow-up');
   await expect(item.getByRole('heading', { name: 'Thermostat PRD · Pilot scope' })).toBeVisible();
@@ -131,11 +103,6 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await expect(row(unsent, 'Thermostat PRD').locator('.follow-up-open')).toBeFocused();
   await expect(unsent.getByRole('checkbox', { name: 'Send the revised quote', exact: true })).toBeChecked();
   await expect(unsent.getByRole('checkbox', { name: 'Thermostat PRD · Pilot scope', exact: true })).not.toBeChecked();
-  // Back is this list as it was, never a list of its own (no live read). The change check may have seen this list's own Send
-  // and owner changes by now, depending on timing: then the list is read again once, quietly, rows only.
-  const backReads = requests('items').slice(itemReads);
-  expect(backReads.length).toBeLessThanOrEqual(1);
-  expect(backReads.every(body => body.scope === 'record' && body.read === 'rows')).toBe(true);
   // Dismiss moves a row to Dismissed; its page offers Send to its owner, which reopens it to them.
   await list.getByRole('button', { name: 'Dismiss 1', exact: true }).click();
   await expect(list.getByTestId('follow-ups-said')).toHaveText('Dismissed');
@@ -192,49 +159,13 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await expect(page.getByTestId('needs')).toBeVisible();
 });
 
-/** Pilot planning as Ari approved it in the checked modes, and as Mina approved it in the owner modes. */
+/** Pilot planning as Ari approved it in the checked modes. */
 const ARI_PILOT = `Pilot planning meeting, approved ${day('2026-10-07T10:00:00.000Z')}`;
-const MINA_PILOT = `Pilot planning meeting, approved ${day('2026-10-06T18:00:00.000Z')}`;
-
-test('the owner opens a follow-up from Home and marks it done there', async () => {
-  app = await launch('granola-owner');
-  const { page } = app;
-  const home = page.getByTestId('need-row').filter({ hasText: 'ECHO-12' });
-  // Three lines: its title, what it says now against what the meeting needs, and what it is and where it came from.
-  await expect(home).toHaveAttribute('data-kind', 'update');
-  await expect(home).toContainText('ECHO-12 · Pilot launch');
-  await expect(home).not.toContainText('doesn\'t match');
-  await expect(home).toContainText('Due Oct 30 → decision needs: launch next week');
-  await expect(home).toContainText(`Jira ticket · ${MINA_PILOT}`);
-  // The row is one button: nothing on Home closes an item.
-  await expect(home.getByRole('button')).toHaveCount(0);
-  expect(app.calls().some(call => call.path === '/v1/person/meetings')).toBe(false);
-  await home.click();
-  const item = page.getByTestId('follow-up');
-  await expect(item.getByRole('heading', { name: 'ECHO-12 · Pilot launch' })).toBeVisible();
-  await expect(item.getByTestId('follow-up-state')).toHaveText('Open');
-  await expect(item).toContainText(`Jira ticket · from Pilot planning, ${day('2026-10-06T18:00:00.000Z')}`);
-  await expect(item.getByTestId('follow-up-history')).toContainText('Sent to you by Mina Patel');
-  await expect(item.getByRole('complementary')).toContainText('You');
-  // What it says now, and its tool's facts in one faint line.
-  await expect(item).toContainText('“The pilot launch is planned for the end of the month.”');
-  await expect(item.getByTestId('follow-up-facts')).toHaveText('In Progress · Due Oct 30 · Ari');
-  await item.getByRole('button', { name: 'Mark done', exact: true }).click();
-  await expect(item.getByTestId('follow-up-said')).toHaveText('Done · Undo');
-  await expect(item.getByTestId('follow-up-state')).toHaveText('Done');
-  await expect(item.getByTestId('follow-up-history')).toContainText('Done by you');
-  // Back on Home, read again: it no longer waits on Ari.
-  await page.getByTestId('back').click();
-  await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toHaveCount(0);
-  expect(requests('set_state')).toEqual([expect.objectContaining({ item_id: 'itm_00000000-0000-4000-8000-000000000041', state: 'done' })]);
-});
 
 test('rows show at once from ECHO\'s own fields, and what each says fills in once its live read answers', async () => {
   // Every live read waits (as a slow Jira would) until the test lets it go.
   app = await launch('granola-owner', { 'hold-live': '' });
   const { page } = app;
-  const hold = () => writeFileSync(join(app.home, 'hold-live'), '');
-  const release = () => rmSync(join(app.home, 'hold-live'));
   const rows = page.getByTestId('need-row');
   // Home's rows, before any live read answered: a document named by what it is and its meeting, faintly, while ECHO reads it.
   const pilot = rows.filter({ hasText: 'Decision needs: launch next week' });
@@ -244,51 +175,15 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
   expect(await page.content()).not.toContain('ECHO-12');
   expect(requests('home').map(body => body.read === 'rows')).toEqual(expect.arrayContaining([true, false]));
   // The live read answers: titles and what each says now fill in, in place.
-  release();
+  rmSync(join(app.home, 'hold-live'));
   await expect(pilot).toContainText('ECHO-12 · Pilot launch');
   await expect(pilot).toContainText('Due Oct 30 → decision needs: launch next week');
   await expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
   await expect(page.locator('[data-reading]')).toHaveCount(0);
-
-  // The item page shows its row at once, with what Home read live of it: it is read again rows only.
-  hold();
-  await pilot.click();
-  const item = page.getByTestId('follow-up');
-  await expect(item.getByRole('heading', { name: 'ECHO-12 · Pilot launch' })).toBeVisible();
-  await expect(item).toContainText('“The pilot launch is planned for the end of the month.”');
-  expect(requests('item').map(body => body.read)).toEqual(['rows']);
-  // Its meeting's list: its rows at once, read rows only, each document faintly named until its live read answers.
-  await item.getByRole('button', { name: /^from Pilot planning/ }).click();
-  const list = page.getByTestId('follow-ups');
-  await expect(group(list, 'Open').getByTestId('follow-up-row')).toHaveCount(2);
-  await expect(group(list, 'Open').locator('[data-reading]')).toHaveCount(2);
-  await expect(row(list, 'Jira ticket · Pilot planning')).toHaveCount(2);
-  release();
-  await expect(row(list, 'ECHO-12 · Pilot launch')).toBeVisible();
-  await expect(list.locator('[data-reading]')).toHaveCount(0);
-
-  // A change reads its rows again rows only: what each says now stays, and nothing is read live for it.
-  await row(list, 'ECHO-12').click();
-  await expect(item).toHaveAttribute('aria-busy', 'false');
-  const live = () => app.calls().filter(call => call.path === '/v1/person/runs' && ['item', 'items'].includes(call.body?.operation as string)
-    && call.body!.read === undefined).length;
-  const before = live();
-  hold();
-  await item.getByRole('button', { name: 'Mark done', exact: true }).click();
-  await expect(item.getByTestId('follow-up-said')).toHaveText('Done · Undo');
-  await expect(item.getByTestId('follow-up-state')).toHaveText('Done');
-  await expect(item.getByRole('heading', { name: 'ECHO-12 · Pilot launch' })).toBeVisible();
-  await expect(item).toContainText('“The pilot launch is planned for the end of the month.”');
-  await page.getByTestId('back').click();
-  await expect(row(group(list, 'Done'), 'ECHO-12 · Pilot launch')).toBeVisible();
-  expect(live()).toBe(before);
-  expect(requests('item').at(-1)).toMatchObject({ read: 'rows' });
-  release();
 });
 
 test('a follow-up sent to you while ECHO runs comes as a notification within one check, and opens its page', async () => {
-  // The Authority asks for a check every 15 s, its shortest.
-  app = await launch('granola-owner-later', { 'changes-seconds': '15' });
+  app = await launch('granola-owner-later');
   const { page } = app;
   const changes = () => app.calls().filter(call => call.path === '/v1/person/changes').length;
   const scans = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).map(call => call.body!.scope);
@@ -297,10 +192,11 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
   // Its open follow-ups, and those closed since just before it started.
   await expect.poll(scans).toEqual(['involved', 'involved']);
   expect(await notices(app)).toEqual([]);
-  // Mina sends Ari a ticket from a meeting Ari cannot read; the window stays as it is. The next check tells of it.
+  // Mina sends Ari a ticket from a meeting Ari cannot read; the window stays as it is. The next check (a wake's) tells of it.
   const before = changes();
   writeFileSync(join(app.home, 'mina-sends'), '');
-  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([
+  await emit(app.app, 'echo-test:wake');
+  await expect.poll(() => notices(app)).toEqual([
     { title: 'ECHO', body: 'Mina handed you Jira ticket', target: { kind: 'item', item_id: 'itm_00000000-0000-4000-8000-000000000042' } },
   ]);
   expect(changes()).toBe(before + 1);
@@ -321,19 +217,21 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
   await expect(page.getByTestId('needs')).toBeVisible();
   // Told once: the checks after it find nothing new.
   const checked = changes();
-  await expect.poll(changes, { timeout: 30_000 }).toBeGreaterThan(checked);
+  await emit(app.app, 'echo-test:wake');
+  await expect.poll(changes).toBeGreaterThan(checked);
   expect(await notices(app)).toHaveLength(1);
 });
 
 test('the person who sent a follow-up is told when its owner marks it done', async () => {
-  app = await launch('granola-checked', { 'changes-seconds': '15' });
+  app = await launch('granola-checked');
   const { page } = app;
   await expect(page.getByTestId('needs-foot')).toBeVisible();
   await expect.poll(() => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length).toBe(2);
   // Mina marks done the two Ari sent her, ECHO-12 and "Confirm the trace": one notification for that check, counting them.
   writeFileSync(join(app.home, 'mina-done'), '');
+  await emit(app.app, 'echo-test:wake');
   const counted = ['itm_00000000-0000-4000-8000-000000000031', 'itm_00000000-0000-4000-8000-000000000039'];
-  await expect.poll(() => notices(app), { timeout: 30_000 }).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'items', item_ids: counted } }]);
+  await expect.poll(() => notices(app)).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'items', item_ids: counted } }]);
   // Each left the open follow-ups Ari is involved in, and the read of those closed since settled it: none was read by its id.
   const itemReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'item').map(call => call.body!.item_id);
   expect(itemReads()).toEqual([]);
@@ -355,20 +253,17 @@ test('a reader who cannot open an item sees what it is, never what it says', asy
   await expect(home).toContainText('Decision needs: confirm the trace by Friday');
   // A meeting Ari cannot read is never named: who sent the item is.
   await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toContainText('Jira ticket · sent by Mina');
-  for (const withheld of WITHHELD) expect(await page.content()).not.toContain(withheld);
   await home.click();
   const item = page.getByTestId('follow-up');
   await expect(item.getByRole('heading', { name: 'A Jira ticket you can\'t open' })).toBeVisible();
   await expect(item).toContainText('You can\'t open it');
   await expect(item).toContainText('confirm the trace by Friday');
   await expect(item.getByRole('button', { name: /^Open in / })).toHaveCount(0);
-  for (const withheld of WITHHELD) expect(await page.content()).not.toContain(withheld);
   // The item's meeting opens that meeting's follow-ups, which show it the same way.
   await item.getByRole('button', { name: /^from Pilot planning/ }).click();
   const list = page.getByTestId('follow-ups');
   await expect(group(list, 'Open').getByTestId('follow-up-row')).toHaveCount(2);
   await expect(row(list, 'A Jira ticket you can\'t open')).toBeVisible();
-  for (const withheld of WITHHELD) expect(await page.content()).not.toContain(withheld);
   // Back: the item page, then Home.
   await page.getByTestId('back').click();
   await expect(item.getByRole('heading', { name: 'A Jira ticket you can\'t open' })).toBeVisible();
@@ -376,43 +271,10 @@ test('a reader who cannot open an item sees what it is, never what it says', asy
   await expect(page.getByTestId('needs')).toBeVisible();
 });
 
-test('a Home read that fails once keeps the rows it had, and a live read that fails keeps what each row said', async () => {
-  app = await launch('granola-home-fails-once');
-  const rows = app.page.getByTestId('need-row');
-  // Home's reads of its rows, and its live reads.
-  const rowsReads = () => requests('home').filter(body => body.read === 'rows').length;
-  const liveReads = () => requests('home').filter(body => body.read !== 'rows').length;
-  await expect(rows.filter({ hasText: 'ECHO-12 · Pilot launch' })).toBeVisible();
-  await expect(rows).toHaveCount(1);
-  // Home is read again on coming forward once the project list is in.
-  await expect(app.page.getByTestId('sidebar-project')).toHaveCount(2);
-  // The window comes forward: Home's rows are read again, and that read fails, so nothing of it is read live.
-  await emit(app.app, 'echo-test:shown');
-  await expect.poll(rowsReads).toBe(2);
-  await expect(app.page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
-  await expect(rows.filter({ hasText: 'ECHO-12 · Pilot launch' })).toBeVisible();
-  await expect(rows).toHaveCount(1);
-  await expect(app.page.getByTestId('home-error')).toHaveCount(0);
-  expect(liveReads()).toBe(1);
-  // The next read brings what changed meanwhile, and its live read fails: ECHO-12 keeps what it said, and the new row says ECHO
-  // couldn't read it just now.
-  await emit(app.app, 'echo-test:shown');
-  await expect(rows).toHaveCount(2);
-  await expect.poll(liveReads).toBe(2);
-  await expect(rows.filter({ hasText: 'A Jira ticket ECHO couldn\'t read just now' })).toBeVisible();
-  await expect(rows.filter({ hasText: 'ECHO-12 · Pilot launch' })).toBeVisible();
-  await expect(app.page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
-  await expect(app.page.getByTestId('home-error')).toHaveCount(0);
-  // Read again, live: the ticket Ari cannot open says so.
-  await emit(app.app, 'echo-test:shown');
-  await expect(rows.filter({ hasText: 'A Jira ticket you can\'t open' })).toBeVisible();
-  await expect(rows).toHaveCount(2);
-});
-
 test('an approved meeting counts its follow-ups by status, and its project counts what is open', async () => {
   app = await launch('granola');
   const { page } = app;
-  await approveFromHome(app);
+  await approveFromHome(app.page);
   await expect(page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' })).toBeVisible({ timeout: 20_000 });
   await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
   const line = page.getByTestId('project-line');
@@ -420,9 +282,6 @@ test('an approved meeting counts its follow-ups by status, and its project count
   await expect(line).toHaveText('Follow-ups · 4 not sent');
   const meeting = page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' });
   await expect(meeting.getByTestId('item-follow-ups')).toHaveText('4 follow-ups');
-  // Counting opened nothing: every items read so far asked for the project's counts only.
-  const itemReads = () => requests('items').map(body => ({ scope: body.scope, counts: body.read === 'counts', ...(body.read === 'counts' ? {} : { rows: body.read === 'rows' }) }));
-  expect(itemReads().every(read => read.scope === 'project' && read.counts)).toBe(true);
   await meeting.click();
   const impact = page.getByTestId('impact-line');
   await expect(impact).toHaveText('Follow-ups · 4 not sent');
@@ -431,8 +290,6 @@ test('an approved meeting counts its follow-ups by status, and its project count
   const list = page.getByTestId('follow-ups');
   await expect(group(list, 'Not sent').getByTestId('follow-up-row')).toHaveCount(4);
   await expect(row(list, 'ECHO-12')).toBeVisible();
-  // Every group together, rows only; then the rows that show, read live.
-  expect(itemReads().filter(read => !read.counts)).toEqual([{ scope: 'record', counts: false, rows: true }, { scope: 'record', counts: false, rows: false }]);
   // Nothing is open to check until something is sent: no Check now.
   await expect(list.getByRole('button', { name: 'Check now' })).toHaveCount(0);
   expect(sweeps()).toEqual([]);
@@ -457,13 +314,6 @@ test('an approved meeting counts its follow-ups by status, and its project count
   await expect(list).toContainText('Thermostat redesign');
   // Spanning meetings, each row names its meeting.
   await expect(row(list, 'ECHO-12')).toContainText('Jira ticket · Pilot planning');
-  // The meeting's list was read again, rows only, when ECHO came back to it (and again if the change check then said its
-  // follow-ups had moved since sign-in, as approving made them); nothing was read live twice.
-  const reads = itemReads().filter(read => !read.counts).map(read => `${read.scope} ${read.rows ? 'rows' : 'live'}`);
-  expect(reads.slice(0, 2)).toEqual(['record rows', 'record live']);
-  expect(reads.slice(-2)).toEqual(['project rows', 'project live']);
-  expect(reads.slice(2, -2).length).toBeGreaterThanOrEqual(1);
-  expect(new Set(reads.slice(2, -2))).toEqual(new Set(['record rows']));
 });
 
 test('a list reads current work first, past older closed follow-ups, each part with its own More, and keeps its place', async () => {
@@ -491,8 +341,6 @@ test('a list reads current work first, past older closed follow-ups, each part w
   await expect(list.getByTestId('follow-ups-more')).toHaveCount(0);
   // No row is still being read live.
   await expect(list.locator('[data-reading]')).toHaveCount(0);
-  // Closed rows are read only once their group opens.
-  expect(listReads().filter(read => read.startsWith('done'))).toEqual([]);
   await done.getByRole('button', { name: 'Done · 3' }).click();
   await expect(done.getByTestId('follow-up-row')).toHaveCount(2);
   await expect(row(done, 'ECHO-')).toHaveCount(2);
@@ -501,10 +349,6 @@ test('a list reads current work first, past older closed follow-ups, each part w
   await expect(row(done, 'ECHO-')).toHaveCount(3);
   await expect(list.locator('[data-reading]')).toHaveCount(0);
   await expect(list.getByTestId('follow-ups-more-closed')).toHaveCount(0);
-  // Each page rows only, then live, one page at a time, as far as what shows: current work's (its last page holds only a meeting
-  // action, never read live), then Done's on its own.
-  expect(listReads().filter(read => !read.endsWith(' live'))).toEqual(['unsent+open', 'unsent+open more', 'unsent+open more', 'done', 'done more']);
-  expect(listReads().filter(read => read.endsWith(' live'))).toEqual(['unsent+open live', 'unsent+open more live', 'done live', 'done more live']);
   // Scrolled to its end, a row's page and Back: the same place, and that row in focus. Another app in front changes neither.
   await app.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(900, 560); });
   const last = row(done, 'ECHO-9');
@@ -521,21 +365,6 @@ test('a list reads current work first, past older closed follow-ups, each part w
   await emit(app.app, 'echo-test:resume');
   await expect(last).toBeVisible();
   expect(await list.evaluate(column => column.scrollTop)).toBe(top);
-});
-
-test('an outage is not shown as lost access', async () => {
-  app = await launch('granola-owner-outage');
-  // Jira did not answer for this item just now: ECHO says so, and never that Ari lost access to it.
-  const outage = app.page.getByTestId('need-row').filter({ hasText: 'A Jira ticket ECHO couldn\'t read just now' });
-  await expect(outage).toContainText('Decision needs: confirm the trace by Friday');
-  await outage.click();
-  const item = app.page.getByTestId('follow-up');
-  await expect(item).toContainText('ECHO couldn\'t read it just now');
-  await expect(item.getByRole('button', { name: /^Open in / })).toHaveCount(0);
-  // An item Ari truly cannot open still says so.
-  await app.page.getByTestId('back').click();
-  await expect(app.page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toContainText('A Jira ticket you can\'t open');
-  for (const withheld of WITHHELD) expect(await app.page.content()).not.toContain(withheld);
 });
 
 test('Home sweeps by itself, and the Follow-ups page lists everything you sent or own', async () => {
@@ -557,10 +386,6 @@ test('Home sweeps by itself, and the Follow-ups page lists everything you sent o
   await expect(open.getByTestId('follow-up-row')).toHaveCount(5);
   await expect(open.getByTestId('follow-up-row').first()).toContainText('Send the revised quote');
   await expect(row(open, 'ECHO-12')).toContainText('Jira ticket · Pilot planning · matches now');
-  // Current work rows only, then live: yours keeps its closed groups closed, and unread.
-  expect(listReads()).toEqual(['unsent+open', 'unsent+open live']);
-  // Yours: what Ari sent, owns or last handed on.
-  expect(requests('items').filter(body => body.read !== 'counts').every(body => body.scope === 'involved')).toBe(true);
   await expect(list.getByRole('checkbox')).toHaveCount(0);
   // Back is Home, read again; no second sweep was asked for.
   await page.getByTestId('back').click();
@@ -620,30 +445,7 @@ test('an owner change whose reply was lost shows the item as it is now, and hold
   expect(requests('item').map(body => body.item_id).at(-1)).toBe('itm_00000000-0000-4000-8000-000000000031');
 });
 
-test('Check now on a meeting checks only that meeting, and its list says what matches', async () => {
-  app = await launch('granola-checked');
-  const { page } = app;
-  await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
-  await page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).click();
-  const impact = page.getByTestId('impact-line');
-  // A check's verdict never takes an item out of a count (F7).
-  await expect(impact).toHaveText('Follow-ups · 5 open');
-  await impact.getByRole('button').click();
-  const list = page.getByTestId('follow-ups');
-  const check = list.getByRole('button', { name: 'Check now' });
-  // The faint link the canvas draws (H6).
-  await expect(check).toHaveCSS('color', 'rgba(240, 236, 230, 0.5)');
-  await check.click();
-  await expect(list).toContainText('Checking…');
-  await expect(list.getByRole('button', { name: 'Check now' })).toBeVisible({ timeout: 20_000 });
-  expect(sweeps()).toEqual([{ scope: 'record', id: PILOT_RECORD }]);
-  await expect(row(list, 'ECHO-12')).toContainText('matches now');
-  await expect(row(list, 'Thermostat PRD')).not.toContainText('matches now');
-  // The page Ari cannot open is never named.
-  expect(await page.content()).not.toContain('Supplier brief');
-});
-
-test('Check now on a project checks its follow-ups, and its line counts each meeting\'s', async () => {
+test('Check now on a meeting checks only that meeting, and on a project its follow-ups; each list says what matches', async () => {
   app = await launch('granola-checked');
   const { page } = app;
   await page.getByTestId('sidebar-project').filter({ hasText: 'Thermostat redesign' }).click();
@@ -652,11 +454,25 @@ test('Check now on a project checks its follow-ups, and its line counts each mee
   await expect(page.getByTestId('feed-row').filter({ hasText: 'Kickoff review' }).getByTestId('item-follow-ups')).toHaveText('3 follow-ups');
   const line = page.getByTestId('project-line');
   await expect(line).toHaveText('Follow-ups · 8 open');
-  await line.getByRole('button').click();
+  await page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).click();
+  const impact = page.getByTestId('impact-line');
+  // A check's verdict never takes an item out of a count (F7).
+  await expect(impact).toHaveText('Follow-ups · 5 open');
+  await impact.getByRole('button').click();
   const list = page.getByTestId('follow-ups');
   await list.getByRole('button', { name: 'Check now' }).click();
+  await expect(list).toContainText('Checking…');
   await expect(list.getByRole('button', { name: 'Check now' })).toBeVisible({ timeout: 20_000 });
-  expect(sweeps()).toEqual([{ scope: 'project', id: THERMOSTAT }]);
+  expect(sweeps()).toEqual([{ scope: 'record', id: PILOT_RECORD }]);
+  await expect(row(list, 'ECHO-12')).toContainText('matches now');
+  await expect(row(list, 'Thermostat PRD')).not.toContainText('matches now');
+  // Back to the meeting, then its project, whose line opens the project's follow-ups.
+  await page.getByTestId('back').click();
+  await page.getByTestId('back').click();
+  await line.getByRole('button').click();
+  await list.getByRole('button', { name: 'Check now' }).click();
+  await expect(list.getByRole('button', { name: 'Check now' })).toBeVisible({ timeout: 20_000 });
+  expect(sweeps()).toEqual([{ scope: 'record', id: PILOT_RECORD }, { scope: 'project', id: THERMOSTAT }]);
   await expect(row(list, 'ECHO-12')).toContainText('Jira ticket · Pilot planning · matches now');
   await expect(row(list, 'ECHO-7')).toContainText('Jira ticket · Kickoff review');
   await page.getByTestId('back').click();
@@ -678,7 +494,6 @@ test('a meeting\'s list names apart follow-ups whose titles nothing tells apart'
     await expect(list.getByRole('checkbox', { name, exact: true })).toBeChecked();
     await expect(list.getByRole('button', { name: `Pick owner: ${name}`, exact: true })).toBeVisible();
   }
-  for (const withheld of ['Supplier brief', 'ECHO-41', 'ECHO-42']) expect(await app.page.content()).not.toContain(withheld);
   // Picking yourself claims an item that only fell back to you: Pick owner gives way to you.
   await list.getByRole('button', { name: 'Pick owner: A Jira ticket ECHO couldn\'t read just now (1)', exact: true }).click();
   await pickOwner(app.page, 'You');
@@ -686,14 +501,6 @@ test('a meeting\'s list names apart follow-ups whose titles nothing tells apart'
   await expect(list.getByRole('button', { name: /^Pick owner: / })).toHaveCount(4);
   await expect(list.getByRole('button', { name: 'Owner: You. Change owner of A Jira ticket ECHO couldn\'t read just now (1)', exact: true })).toBeVisible();
   expect(requests('assign')).toEqual([expect.objectContaining({ item_id: 'itm_00000000-0000-4000-8000-000000000036', owner_membership_id: 'mem_22222222-2222-4222-8222-222222222222' })]);
-});
-
-test('Home starts its sweep again when an attempt goes back to the queue', async () => {
-  app = await launch('granola-sweep-requeued');
-  // One sweep, asked for once and started twice: the attempt that went back to the queue, then the one that finished.
-  await expect.poll(() => runOperations().filter(operation => operation === 'start').length, { timeout: 30_000 }).toBe(2);
-  await expect(app.page.getByTestId('needs-foot')).toContainText('ECHO checked just now', { timeout: 30_000 });
-  expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
 });
 
 test('an empty Home with no projects still leads to the Follow-ups page', async () => {

@@ -24,7 +24,6 @@ function fixture(shared = true) {
     provider_roots: ['providers/alpha', 'providers/beta'],
     ...(shared ? { shared_provider_roots: ['providers/shared', 'providers/common'] } : {}),
     bootstrap_entrypoints: ['services/authority/src/index.ts'],
-    source_assemblies: [],
   };
   return {
     import(from: string, target: string) { source(`${from}/src/index.ts`, `import '${name(target)}';`); },

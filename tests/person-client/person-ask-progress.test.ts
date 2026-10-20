@@ -30,7 +30,7 @@ import { runPersonClientCli } from '../../src/product/person-client/composition.
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 
 // Ask progress (ADR-0039) on the Person client: V3 on /v7 (research tool contract v1), V2 on /v6 (ADR-0040) and V1
-// on /v5, the opt-in streams, the /v7, /v6, /v5, /v4 fallback chain, and `person ask --live --progress`.
+// on /v5, the opt-in streams, the /v7, /v6, /v5, /v4 fallback chain, and `person ask --progress`.
 
 const ORIGIN = 'https://authority.example.test';
 const NOW = '2026-10-16T10:00:00.000Z';
@@ -99,6 +99,17 @@ const STEPS_V3: readonly PersonAskProgressStepEventV3[] = [
 const ANSWERED_V3: PersonAskProgressEventV3 = { type: 'answer', response: answerV8(), receipt: receiptV3() };
 const framesV3 = (events: readonly PersonAskProgressEventV3[]) => events.map(event => formatPersonAskProgressEventV3(event)).join('');
 const STREAM_V3 = `${framesV3(STEPS_V3.slice(0, 2))}${PERSON_ASK_PROGRESS_HEARTBEAT_V1}${framesV3(STEPS_V3.slice(2))}${framesV3([ANSWERED_V3])}`;
+
+// A Mine Ask's stream, in any version: only what the asker added, so meetings and documents, and never a live tool, a
+// follow-up or the workspace.
+const SEARCHED_MINE = { type: 'searched' as const, sources: [{ kind: 'meetings' as const }, { kind: 'documents' as const }], found: 1 };
+const READ_MINE = { type: 'read' as const, items: [decision] };
+const STEPS_MINE: readonly PersonAskProgressStepEventV1[] = [
+  { type: 'stage', stage: 'searching' }, SEARCHED_MINE, { type: 'stage', stage: 'reading', pending: 1 }, READ_MINE,
+  { type: 'stage', stage: 'writing' }, { type: 'stage', stage: 'checking_access' },
+];
+const receiptMine = () => ({ looked_through: 1, elapsed_ms: 12_000, rows: [SEARCHED_MINE, READ_MINE] });
+const answerMineV8 = () => ({ ...answer({ kind: 'mine' }), schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const });
 
 const encoder = new TextEncoder();
 const STREAM_HEADERS = { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' };
@@ -180,33 +191,11 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     }
   });
 
-  it('hands each step on as it arrives, before the stream has ended', async () => {
-    const stream = openStream();
-    const progress: PersonAskProgressStepEventV1[] = [];
-    const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
-      .askV5WithProgress('bearer', 'What did we decide?', undefined, undefined, event => progress.push(event));
-    stream.write(frames(STEPS.slice(0, 1)));
-    await vi.waitFor(() => expect(progress).toEqual(STEPS.slice(0, 1)));
-    stream.write(`${frames(STEPS.slice(1, 3))}${frames(STEPS.slice(3)).slice(0, 40)}`);
-    await vi.waitFor(() => expect(progress).toEqual(STEPS.slice(0, 3)));
-    stream.write(`${frames(STEPS.slice(3)).slice(40)}${frames([ANSWERED])}`);
-    stream.close();
-    await expect(pending).resolves.toEqual({ result: answer(), receipt: receipt() });
-    expect(progress).toEqual(STEPS);
-  });
-
+  // The decoder's own rules are the shared codec's (person-ask-progress-v1.test.ts in packages/organization-api).
   it.each([
-    ['another SSE field', 'event: stage\n\n'],
-    ['a second data line in one event', 'data: {"type":"stage","stage":"searching"}\ndata: {}\n\n'],
-    ['a carriage return', 'data: {"type":"stage","stage":"searching"}\r\n\r\n'],
-    ['an event that is not JSON', 'data: not json\n\n'],
     ['an event outside the contract', 'data: {"type":"stage","stage":"searching","notes":"Mara owns THERM-48"}\n\n'],
-    ['a planner round', 'data: {"type":"round","round":2}\n\n'],
     ['a step after the answer', `${frames([ANSWERED])}${frames(STEPS.slice(0, 1))}`],
-    ['a heartbeat after the answer', `${frames([ANSWERED])}${PERSON_ASK_PROGRESS_HEARTBEAT_V1}`],
-    ['two answers', frames([ANSWERED, ANSWERED])],
     ['an end without the result', frames(STEPS)],
-    ['an end inside an event', `${frames(STEPS)}data: {"type":"stage"`],
   ])('fails closed on %s with invalid_response', async (_name, body) => {
     await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(body)))
       .askV5WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined))
@@ -351,27 +340,6 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     expect(progress).toEqual(STEPS.slice(0, 2));
   });
 
-  it('reads a real streamed response to its answer', async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(200, STREAM_HEADERS);
-      const bytes = encoder.encode(STREAM);
-      // Uneven writes split frames and characters on the wire.
-      for (let at = 0; at < bytes.length; at += 997) response.write(bytes.slice(at, at + 997));
-      response.end();
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    try {
-      const { port } = server.address() as AddressInfo;
-      const progress: PersonAskProgressStepEventV1[] = [];
-      await expect(new PersonAuthorityClient({ authority_origin: `http://127.0.0.1:${port}`, allow_insecure_loopback: true })
-        .askV5WithProgress('bearer', 'What did we decide?', undefined, undefined, event => progress.push(event))).resolves.toEqual({ result: answer(), receipt: receipt() });
-      expect(progress).toEqual(STEPS);
-    } finally {
-      server.closeAllConnections();
-      await new Promise(resolve => server.close(resolve));
-    }
-  });
-
   it('reads a real streamed response as it is written, and a caller abort disconnects the Authority', async () => {
     const seen: { header?: string | undefined; closed: boolean } = { closed: false };
     let wrote!: (text: string) => void;
@@ -497,113 +465,12 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
   });
 });
 
-describe('Ask progress V2 on /v6 (ADR-0040)', () => {
-  it('opts in on /v6 with its own header value and reads follow-up names across any chunking', async () => {
-    const bytes = encoder.encode(STREAM_V2);
-    for (const size of [1, 3, 64, bytes.length]) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(bytes, size, { headers: V6_HEADERS }));
-      const progress: PersonAskProgressStepEventV2[] = [];
-      const result = await authority(fetch).askV6WithProgress('bearer', 'What is still open?', undefined, undefined, event => progress.push(event));
-      expect(result).toEqual({ result: answerV7(), receipt: receiptV2() });
-      expect(progress).toEqual(STEPS_V2);
-      const [url, init] = fetch.mock.calls[0]!;
-      expect(pathOf(url)).toBe('/v6/person/ask');
-      expect(headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('2');
-      expect(headersOf(init).get('accept')).toBe('text/event-stream, application/json');
-    }
-  });
-
-  it('fails closed on a /v6 stream that breaks progress V2, a V6 answer included', async () => {
-    for (const body of [
-      frames([ANSWERED]),
-      `${framesV2(STEPS_V2.slice(0, 1))}data: {"type":"read","items":[{"citation":{"kind":"follow_up","item_id":"itm_launch-1"},"kind":"follow_up","label":"x","visibility":"team"}]}\n\n`,
-      `${framesV2(STEPS_V2.slice(0, 1))}data: {"type":"searched","sources":[{"kind":"follow_ups","tool_id":"jira"}],"found":1}\n\n`,
-    ]) {
-      await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(body, undefined, { headers: V6_HEADERS })))
-        .askV6WithProgress('bearer', 'What is still open?', undefined, undefined, () => undefined)).rejects.toMatchObject({ code: 'invalid_response', status: 200 });
-    }
-  });
-
-  it('reads /v6 JSON as the V7 answer, in the scope asked, with or without progress', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answerV7(), 200, V6_HEADERS)).mockResolvedValueOnce(json(answerV7(), 200, V6_HEADERS));
-    await expect(authority(fetch).askV6('bearer', 'What is still open?')).resolves.toEqual(answerV7());
-    await expect(authority(fetch).askV6WithProgress('bearer', 'What is still open?', undefined, undefined, () => undefined)).resolves.toEqual({ result: answerV7() });
-    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v6/person/ask', '/v6/person/ask']);
-    expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
-    for (const body of [answer(), answerV7({ kind: 'mine' })]) {
-      await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body, 200, V6_HEADERS))).askV6('bearer', 'What is still open?'))
-        .rejects.toMatchObject({ code: 'invalid_response' });
-    }
-  });
-});
-
-describe('Ask progress V3 on /v7 (research tool contract v1)', () => {
-  it('opts in on /v7 with its own header value and reads workspace names across any chunking', async () => {
-    const bytes = encoder.encode(STREAM_V3);
-    for (const size of [1, 3, 64, bytes.length]) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(bytes, size, { headers: V7_HEADERS }));
-      const progress: PersonAskProgressStepEventV3[] = [];
-      const result = await authority(fetch).askV7WithProgress('bearer', 'Where is Thermal recovery tracked?', undefined, undefined, event => progress.push(event));
-      expect(result).toEqual({ result: answerV8(), receipt: receiptV3() });
-      expect(progress).toEqual(STEPS_V3);
-      const [url, init] = fetch.mock.calls[0]!;
-      expect(pathOf(url)).toBe('/v7/person/ask');
-      expect(headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
-      expect(headersOf(init).get('accept')).toBe('text/event-stream, application/json');
-    }
-  });
-
-  it('fails closed on a /v7 stream that breaks progress V3, a V7 answer included', async () => {
-    for (const body of [
-      framesV2([ANSWERED_V2]),
-      `${framesV3(STEPS_V3.slice(0, 1))}data: {"type":"read","items":[{"citation":{"kind":"project","project_id":"${projectId}"},"kind":"project","label":"x","visibility":"project"}]}\n\n`,
-      `${framesV3(STEPS_V3.slice(0, 1))}data: {"type":"searched","sources":[{"kind":"projects","tool_id":"jira"}],"found":1}\n\n`,
-    ]) {
-      await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(body, undefined, { headers: V7_HEADERS })))
-        .askV7WithProgress('bearer', 'Where is Thermal recovery tracked?', undefined, undefined, () => undefined)).rejects.toMatchObject({ code: 'invalid_response', status: 200 });
-    }
-  });
-
-  it('reads /v7 JSON as the V8 answer, in the scope asked, with or without progress', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answerV8(), 200, V7_HEADERS)).mockResolvedValueOnce(json(answerV8(), 200, V7_HEADERS));
-    await expect(authority(fetch).askV7('bearer', 'Where is Thermal recovery tracked?')).resolves.toEqual(answerV8());
-    await expect(authority(fetch).askV7WithProgress('bearer', 'Where is Thermal recovery tracked?', undefined, undefined, () => undefined)).resolves.toEqual({ result: answerV8() });
-    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask', '/v7/person/ask']);
-    expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
-    for (const body of [answerV7(), answerV8({ kind: 'mine' })]) {
-      await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body, 200, V7_HEADERS))).askV7('bearer', 'Where is Thermal recovery tracked?'))
-        .rejects.toMatchObject({ code: 'invalid_response' });
-    }
-  });
-});
-
-describe('person ask --live without progress (research tool contract v1, ADR-0040)', () => {
-  it('prefers /v7, and falls back to /v6, /v5 then /v4 only on a 404 without the route header', async () => {
-    for (const [replies, paths, result] of [
-      [() => [json(answerV8(), 200, V7_HEADERS)], ['/v7/person/ask'], answerV8()],
-      [() => [noRoute(), json(answerV7(), 200, V6_HEADERS)], ['/v7/person/ask', '/v6/person/ask'], answerV7()],
-      [() => [noRoute(), noRoute(), json(answer(), 200, { [PERSON_ANSWER_ROUTE_HEADER_V5]: '5' })], ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask'], answer()],
-      [() => [noRoute(), noRoute(), noRoute(), json(v5Answer())], ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask', '/v4/person/ask'], v5Answer()],
-    ] as const) {
-      const queue = replies();
-      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => queue.shift()!);
-      await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveSources('What is still open?')).resolves.toEqual(result);
-      expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(paths);
-    }
-    // /v7's own failure, route header and all, is the answer: no fallback.
-    for (const [status, code] of [[404, 'not_found'], [503, 'unavailable']] as const) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code, message: 'request failed' } }, status, V7_HEADERS));
-      await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveSources('What is still open?')).rejects.toMatchObject({ code, status });
-      expect(fetch).toHaveBeenCalledTimes(1);
-    }
-  });
-});
-
-describe('person ask --live --progress', () => {
+// `--live` once chose the newest route; every Ask asks it now, so the flag changes nothing (the desktop still sends it).
+describe('person ask --progress', () => {
   it('prints each step as its own line, then today\'s final line with the receipt, the workspace included', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(STREAM_V3, 7, { headers: V7_HEADERS }));
     const { output, run } = cli(sessionHome(), fetch);
-    await expect(run(['ask', '--question', 'Where is Thermal recovery tracked?', '--live', '--progress'])).resolves.toBe(0);
+    await expect(run(['ask', '--question', 'Where is Thermal recovery tracked?', '--progress'])).resolves.toBe(0);
     expect(output.stderr).toBe('');
     const printed = lines(output.stdout);
     expect(printed.slice(0, -1).map(line => validatePersonAskProgressLineV3(line))).toEqual(STEPS_V3.map(progress => ({ ok: true, progress })));
@@ -611,24 +478,6 @@ describe('person ask --live --progress', () => {
     expect(output.stdout.endsWith('\n')).toBe(true);
     expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
     expect(headersOf(fetch.mock.calls[0]![1]).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
-  });
-
-  it('prints a /v6 stream\'s V2 steps and its V7 answer with its V2 receipt on an Authority without /v7', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(sse(STREAM_V2, 7, { headers: V6_HEADERS }));
-    const { output, run } = cli(sessionHome(), fetch);
-    await expect(run(['ask', '--question', 'What is still open?', '--live', '--progress'])).resolves.toBe(0);
-    const printed = lines(output.stdout);
-    expect(printed.slice(0, -1)).toEqual(STEPS_V2.map(progress => ({ ok: true, progress })));
-    expect(validatePersonAskProgressResultLineV3(printed.at(-1))).toEqual({ ok: true, result: answerV7(), receipt: receiptV2() });
-  });
-
-  it('prints a /v5 stream\'s V1 steps and its V6 answer with its V1 receipt on an Authority without /v7 or /v6', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(noRoute()).mockResolvedValueOnce(sse(STREAM, 7));
-    const { output, run } = cli(sessionHome(), fetch);
-    await expect(run(['ask', '--question', 'What did we decide?', '--live', '--progress'])).resolves.toBe(0);
-    const printed = lines(output.stdout);
-    expect(printed.slice(0, -1)).toEqual(STEPS.map(progress => ({ ok: true, progress })));
-    expect(validatePersonAskProgressResultLineV3(printed.at(-1))).toEqual({ ok: true, result: answer(), receipt: receipt() });
   });
 
   it('keeps the project scope on the streamed request', async () => {
@@ -640,7 +489,7 @@ describe('person ask --live --progress', () => {
     expect(lines(output.stdout)).toEqual([{ ok: true, result: answerV8({ kind: 'project', project_id: project }), receipt: receiptV3() }]);
   });
 
-  it('prints exactly today\'s line from an Authority that does not stream, and from the V4 fallback', async () => {
+  it('prints exactly today\'s line from an Authority that does not stream, and from the V4 fallback, with or without --live', async () => {
     const home = sessionHome();
     for (const [replies, result] of [
       [() => [json(answerV8(), 200, V7_HEADERS)], answerV8()],
@@ -654,24 +503,44 @@ describe('person ask --live --progress', () => {
         await expect(run(argv)).resolves.toBe(0);
         return output;
       };
-      const today = await ask(['ask', '--question', 'What did we decide?', '--live']);
-      await expect(ask(['ask', '--question', 'What did we decide?', '--live', '--progress'])).resolves.toEqual(today);
+      const today = await ask(['ask', '--question', 'What did we decide?']);
+      for (const flags of [['--live'], ['--progress'], ['--live', '--progress']]) {
+        await expect(ask(['ask', '--question', 'What did we decide?', ...flags])).resolves.toEqual(today);
+      }
       expect(lines(today.stdout)).toEqual([{ ok: true, result }]);
     }
   });
 
-  it('sends no opt-in header and prints one line without --progress, and never streams Mine on V3', async () => {
-    for (const [argv, path, body] of [
-      [['ask', '--question', 'What did we decide?', '--live'], '/v7/person/ask', answerV8()],
-      [['ask', '--question', 'What did we decide?', '--mine'], '/v3/person/ask', { ...answer({ kind: 'mine' }), schema_version: 4, kind: 'echo-clean-person-answer-v4' }],
+  it('sends no opt-in header and prints one line without --progress, on the newest route in every scope, Mine included', async () => {
+    for (const [argv, body] of [
+      [['ask', '--question', 'What did we decide?'], answerV8()],
+      [['ask', '--question', 'What did we decide?', '--live'], answerV8()],
+      [['ask', '--question', 'What did we decide?', '--mine'], answerMineV8()],
     ] as const) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body));
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body, 200, V7_HEADERS));
       const { output, run } = cli(sessionHome(), fetch);
       await expect(run(argv)).resolves.toBe(0);
-      expect(pathOf(fetch.mock.calls[0]![0])).toBe(path);
+      expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
       expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
       expect(output.stdout).toBe(`${JSON.stringify({ ok: true, result: body })}\n`);
     }
+  });
+
+  // Mine streams as every scope does, on the newest route the Authority has: V3 on /v7, or V1 on /v5 from before /v6.
+  it.each([
+    { authority: 'with /v7', routes: ['/v7'], headers: ['3'], result: answerMineV8(),
+      replies: () => [sse(framesV3([...STEPS_MINE, { type: 'answer', response: answerMineV8(), receipt: receiptMine() }]), 7, { headers: V7_HEADERS })] },
+    { authority: 'from before /v6', routes: ['/v7', '/v6', '/v5'], headers: ['3', '2', '1'], result: answer({ kind: 'mine' }),
+      replies: () => [noRoute(), noRoute(), sse(frames([...STEPS_MINE, { type: 'answer', response: answer({ kind: 'mine' }), receipt: receiptMine() }]), 7)] },
+  ])('streams a Mine Ask with --progress alone from an Authority $authority', async ({ routes, headers, result, replies }) => {
+    const queue: Response[] = replies();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => queue.shift()!);
+    const { output, run } = cli(sessionHome(), fetch);
+    await expect(run(['ask', '--question', 'What did we decide?', '--progress', '--mine'])).resolves.toBe(0);
+    expect(output.stderr).toBe('');
+    expect(fetch.mock.calls.map(([url, init]) => [pathOf(url), headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1), JSON.parse(String(init?.body))]))
+      .toEqual(routes.map((route, index) => [`${route}/person/ask`, headers[index], { schema_version: 3, question: 'What did we decide?', mine: true }]));
+    expect(lines(output.stdout)).toEqual([...STEPS_MINE.map(progress => ({ ok: true, progress })), { ok: true, result, receipt: receiptMine() }]);
   });
 
   it('pins the streamed Ask to the expected account: another one signed in prints no step and sends nothing', async () => {
@@ -688,20 +557,22 @@ describe('person ask --live --progress', () => {
     await expect(pinned.run(['ask', '--question', 'What did we decide?', '--live', '--progress', ...pin(SESSION.membership_id)])).resolves.toBe(0);
     expect(lines(pinned.output.stdout)).toHaveLength(STEPS_V3.length + 1);
 
-    // Only a streamed Ask takes a pin: the others never check it.
-    const unpinned = cli(sessionHome(), vi.fn<typeof globalThis.fetch>());
-    await expect(unpinned.run(['ask', '--question', 'What did we decide?', '--live', ...pin(SESSION.membership_id)])).resolves.toBe(2);
-    expect(JSON.parse(unpinned.output.stderr)).toEqual({ ok: false, error: '--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`' });
+    // Only a streamed Ask takes a pin: the others never check it, --live or not.
+    for (const extra of [[], ['--live'], ['--tickets']]) {
+      const unpinned = cli(sessionHome(), vi.fn<typeof globalThis.fetch>());
+      await expect(unpinned.run(['ask', '--question', 'What did we decide?', ...extra, ...pin(SESSION.membership_id)])).resolves.toBe(2);
+      expect(JSON.parse(unpinned.output.stderr)).toEqual({ ok: false, error: '--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`' });
+    }
   });
 
-  it('refuses --progress without --live as a usage error before any request', async () => {
-    for (const extra of [[], ['--mine'], ['--tickets'], ['--project', 'prj_00000000-0000-4000-8000-000000000019']]) {
+  it('refuses --progress with --tickets, whose route never streams, as a usage error before any request', async () => {
+    for (const extra of [[], ['--live'], ['--mine'], ['--project', 'prj_00000000-0000-4000-8000-000000000019']]) {
       const fetch = vi.fn<typeof globalThis.fetch>();
       const { output, run } = cli(sessionHome(), fetch);
-      await expect(run(['ask', '--question', 'What did we decide?', '--progress', ...extra])).resolves.toBe(2);
+      await expect(run(['ask', '--question', 'What did we decide?', '--progress', '--tickets', ...extra])).resolves.toBe(2);
       expect(fetch).not.toHaveBeenCalled();
       expect(output.stdout).toBe('');
-      expect(JSON.parse(output.stderr)).toEqual({ ok: false, error: '--progress requires --live with `echo-brain person ask`' });
+      expect(JSON.parse(output.stderr)).toEqual({ ok: false, error: '--tickets and --progress cannot be combined with `echo-brain person ask`' });
     }
   });
 

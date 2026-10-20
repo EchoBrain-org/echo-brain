@@ -39,12 +39,11 @@ describe('Ticket-capable answer and evidence contracts', () => {
     expect(() => validatePersonAnswerResponseV5(v4)).toThrow();
   });
 
-  it('accepts existing approved-record and Slack citations together with tickets in V5', () => {
+  it('accepts existing approved-record citations together with tickets in V5', () => {
     const packet = response();
     const record = { citation: { kind: 'approved_record', atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Launch approval', visibility: 'team' };
-    const slack = { citation: { kind: 'slack_message', team_id: 'T001', channel_id: 'C001', message_ts: '1759276800.000001', permalink: 'https://fixture.slack.com/archives/C001/p1759276800000001', text_sha256: canonicalSha256({ text: 'Launch is Tuesday.' }) }, kind: 'slack_message', label: 'Launch discussion', visibility: 'team' };
-    expect(validatePersonAnswerResponseV5({ ...packet, citations: [cited, record, slack] }).citations).toHaveLength(3);
-    expect(validatePersonAnswerResponseV4({ ...packet, schema_version: 4, kind: 'echo-clean-person-answer-v4', citations: [record, slack], parts: [{ question: 'When is launch?', status: 'answered', statements: [{ text: 'Launch is Tuesday.', citation_indexes: [0, 1], private: false }] }] }).citations).toHaveLength(2);
+    expect(validatePersonAnswerResponseV5({ ...packet, citations: [cited, record] }).citations).toHaveLength(2);
+    expect(validatePersonAnswerResponseV4({ ...packet, schema_version: 4, kind: 'echo-clean-person-answer-v4', citations: [record], parts: [{ question: 'When is launch?', status: 'answered', statements: [{ text: 'Launch is Tuesday.', citation_indexes: [0], private: false }] }] }).citations).toHaveLength(1);
   });
 
   it('rejects inconsistent kinds, ticket-open references, unsafe links, duplicate coordinates and privacy mismatches', () => {

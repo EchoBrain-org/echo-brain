@@ -113,7 +113,6 @@ describe("research result beside Ask", () => {
       const calls: { tool: string; source?: string; kinds?: readonly string[]; item?: string }[] = [];
       const port: Partial<EvidenceDeskPortV2> = {
         scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" },
-        ticket_available: true,
         live_sources: [{ source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" }],
         search: async input => {
           calls.push({ tool: "search", source: input.source, kinds: input.kinds });
@@ -207,7 +206,7 @@ describe("research result beside Ask", () => {
         goal: { kind: "task", task: "Find the current approved evidence." },
         starting: [{ citation: full.citation, if_unreadable: "fail" }],
         budget: { deadline_ms: 90_000, max_rounds: 10, max_model_calls: 24, writer_reserve_ms: 25_000 },
-        options: { small_scope_preload: false },
+        options: {},
       },
     });
 
@@ -238,7 +237,7 @@ describe("research result beside Ask", () => {
 /** A research-only brief: a task naming its starting items, on the background budget. */
 const taskBrief = (task: string, citations: readonly unknown[], ifUnreadable: "fail" | "report" = "fail"): AgenticBriefV1 => ({
   goal: { kind: "task", task }, starting: citations.map(citation => ({ citation, if_unreadable: ifUnreadable })),
-  budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false },
+  budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {},
 });
 
 describe("research-only triggers", () => {
@@ -393,7 +392,7 @@ describe("task briefs with a renderer", () => {
 
   it("refuses a renderer for a question brief before any read", async () => {
     const h = harness([], {});
-    await expect(h.research.renderWithResearch({ trigger: "ask", brief: { goal: { kind: "question", question: "Why?" }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false } }, renderer: definition.renderer!, trigger_input: {} }))
+    await expect(h.research.renderWithResearch({ trigger: "ask", brief: { goal: { kind: "question", question: "Why?" }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {} }, renderer: definition.renderer!, trigger_input: {} }))
       .rejects.toThrow("research goal is invalid");
     expect(h.generate).not.toHaveBeenCalled();
     expect(h.audit).toEqual([]);

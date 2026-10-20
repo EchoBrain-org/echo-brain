@@ -6,7 +6,6 @@ import { afterEach, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
-import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
 import { applyOrganizationControlBaselineV4 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import type { SlackIdentityProviderV1 } from "../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { activateNangoSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
@@ -66,7 +65,6 @@ export function workflowOptions(
     organization_id: ORGANIZATION_ID,
     state_lineage_id: LINEAGE_ID,
     slack: context.slack,
-    authorization_fence: new ReadableSearchAuthorizationFence(),
     now: () => NOW,
     ...overrides,
   };

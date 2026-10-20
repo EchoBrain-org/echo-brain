@@ -1,9 +1,7 @@
 # Research trigger contract v1
 
-Status: written spec approved on 2026-10-06. Implementation plan:
-`docs/superpowers/plans/2026-10-06-research-trigger-contract.md`. Stacked on
-PR [#284](https://github.com/EchoBrain-org/echo-brain/pull/284) (research loop
-evaluation v1, branch `feat/research-loop-eval`).
+Status: approved on 2026-10-06; shipped in #287 and #290 (phases 4 to 6), on
+top of the [research loop evaluation v1](2026-10-06-research-loop-eval-v1.md).
 
 ## Goal
 
@@ -295,57 +293,11 @@ One commit per phase. The golden replay and `npm run check` pass after each.
   to it; no project, several readable projects, or only unreadable linked
   projects mean everything the approver can read (the desk is still
   access-checked). Graders should not read wider results as a bug.
-- Implementation note, 2026-10-08: the approved-record trigger now fires from
-  real approvals, and its results are stored. The after-record hook enqueues one
-  run per approved record in `authority_trigger_runs_v1`; the runs API
-  (`POST /v1/person/runs`) starts, retries and views it as the approver, and a
-  stored run keeps pointers and ECHO's own judgments only, re-released through
-  a fresh desk on every view
-  ([runs store spec](2026-10-07-runs-store-and-impact-card-v1.md),
-  [ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md)). "Not in this round"
-  above describes this round only.
-- Implementation note, 2026-10-08: Sweep now has a renderer
-  (`SWEEP_RENDERER_V1`). For each finding it gives a verdict (`landed`,
-  `still_open`, `changed` or `unreadable`) and one ECHO line, under the impact
-  card's screens. A finding's own items are its first citation and any further
-  Jira or Confluence item it cites. The renderer's rule would also count a
-  cited Slack message, but the `sweep` trigger refuses Slack message
-  citations: no reader in ECHO can open one yet, so the product leaves items
-  on a Slack message out of sweeps. A finding is judged only when all its own
-  items are in what the model is shown; otherwise it stays not assessed (no
-  verdict). A finding whose own item could not be read is `unreadable`
-  without a model call. The staging endpoint returns the sweep result, line
-  included. The product stores no line: a sweep run keeps only its counts by
-  verdict, and each open item keeps only its latest verdict as a shared last
-  check ([open items and Home v1](2026-10-08-open-items-and-home-v1.md),
-  section 6). Results reach owners through Send: the approver sends each open
-  item to its owner's Home, and everyone who sees the item sees its last check
-  ([ADR-0033](../decisions/ADR-0033-shared-open-items.md)). "Not in this
-  round" above describes this round only.
-- Implementation note, 2026-10-16: after the LangSmith audit of 42
-  `echo-staging` research traces, the founder approved these changes. A
-  definition's brief now receives the scope the run reads
-  (`brief(event, scope)`), and briefs have two more options. `planner: false`
-  reads the starting evidence in full and stops, with no planner call:
-  Sweep uses it, so a sweep re-reads its items and its renderer's one judge
-  call decides the verdicts. `list: false` makes research search-only, with
-  no list tool: the approved record uses it unless the run reads in the
-  record's one project, so a record in no project is searched by its own
-  terms and never by listing inventories, and "nothing affected" is a valid
-  result. The approved-record task no longer asks for owners or dates; the
-  card adds them from item details. The gate's check before each model call
-  re-reads only evidence released since the last check, plus the session,
-  membership, grant and connection, and retries a transient failure once;
-  the release step keeps the full check before and after the audit
-  ([ADR-0038](../decisions/ADR-0038-incremental-access-check-before-model-calls.md)).
-  Model calls run at temperature 0, skip the hosts measured as garbling
-  output and record the serving host
-  ([ADR-0037](../decisions/ADR-0037-openrouter-routing-for-research-calls.md)).
-  The impact card's fallback without a usable draft now also lists the
-  record's decisions and actions under what was decided. The sweep renderer
-  withholds a line that fails a screen without a repair, and a `landed` or
-  `changed` verdict must cite one of the finding's own items
-  ([open items and Home v1](2026-10-08-open-items-and-home-v1.md), section
-  6). A sweep run now keeps the ECHO ids of the items it could not read
-  beside its counts by verdict, still no line, and an `unreadable` verdict
-  never replaces an item's judged last check.
+- Later decisions changed this design: stored runs
+  ([ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md)), the sweep
+  renderer and shared open items
+  ([ADR-0033](../decisions/ADR-0033-shared-open-items.md),
+  [open items and Home v1](2026-10-08-open-items-and-home-v1.md) section 6 and
+  rulings R77 to R82), and the research call rules of
+  [ADR-0037](../decisions/ADR-0037-openrouter-routing-for-research-calls.md) and
+  [ADR-0038](../decisions/ADR-0038-incremental-access-check-before-model-calls.md).

@@ -12,8 +12,6 @@ import {
 /** The largest Slack interactivity request this pure boundary will retain. */
 export const PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 export const PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_AGE_SECONDS = 5 * 60;
-export type PrivateSlackApprovalInteractionRejectionStageV1 =
-  "unclassified" | "form" | "envelope" | "lookup" | "action" | "card" | "state";
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const USER = /^[UW][A-Z0-9]{2,255}$/;
@@ -29,9 +27,6 @@ const PROJECT =
 type RecordValue = Record<string, unknown>;
 interface VerifiedEvidence {
   readonly body: Uint8Array;
-  readonly request_timestamp: string;
-  readonly signature_sha256: `sha256:${string}`;
-  readonly raw_body_sha256: `sha256:${string}`;
 }
 const evidence = new WeakMap<
   VerifiedPrivateSlackApprovalRequestV1,
@@ -45,9 +40,7 @@ export class VerifiedPrivateSlackApprovalRequestV1 {
   }
 }
 export class PrivateSlackApprovalInteractionError extends Error {
-  constructor(
-    readonly rejection_stage: PrivateSlackApprovalInteractionRejectionStageV1 = "unclassified",
-  ) {
+  constructor() {
     super("private approval Slack interaction is invalid");
     this.name = "PrivateSlackApprovalInteractionError";
   }
@@ -94,15 +87,10 @@ export interface PrivateSlackApprovalPresentationChangeV1 {
 }
 export type PrivateSlackApprovalInteractionV1 =
   VerifiedSlackApprovalClickV1 | PrivateSlackApprovalPresentationChangeV1;
-function invalid(
-  stage: PrivateSlackApprovalInteractionRejectionStageV1 = "unclassified",
-): never {
-  throw new PrivateSlackApprovalInteractionError(stage);
+function invalid(): never {
+  throw new PrivateSlackApprovalInteractionError();
 }
-function record(
-  value: unknown,
-  stage: PrivateSlackApprovalInteractionRejectionStageV1,
-): RecordValue {
+function record(value: unknown): RecordValue {
   if (
     value === null ||
     typeof value !== "object" ||
@@ -110,28 +98,26 @@ function record(
     (Object.getPrototypeOf(value) !== Object.prototype &&
       Object.getPrototypeOf(value) !== null)
   )
-    invalid(stage);
+    invalid();
   return value as RecordValue;
 }
 function exact(
   value: unknown,
   required: readonly string[],
   allowed: readonly string[],
-  stage: PrivateSlackApprovalInteractionRejectionStageV1,
 ): RecordValue {
-  const found = record(value, stage),
+  const found = record(value),
     keys = Object.keys(found);
   if (
     required.some((key) => !Object.hasOwn(found, key)) ||
     keys.some((key) => !allowed.includes(key))
   )
-    invalid(stage);
+    invalid();
   return found;
 }
 function string(
   value: unknown,
   pattern: RegExp,
-  stage: PrivateSlackApprovalInteractionRejectionStageV1,
   maximum = 256,
 ): string {
   if (
@@ -139,14 +125,11 @@ function string(
     value.length > maximum ||
     !pattern.test(value)
   )
-    invalid(stage);
+    invalid();
   return value;
 }
-function plainText(
-  value: unknown,
-  stage: PrivateSlackApprovalInteractionRejectionStageV1,
-): void {
-  const text = exact(value, ["type", "text"], ["type", "text", "emoji"], stage);
+function plainText(value: unknown): void {
+  const text = exact(value, ["type", "text"], ["type", "text", "emoji"]);
   if (
     text.type !== "plain_text" ||
     typeof text.text !== "string" ||
@@ -154,21 +137,21 @@ function plainText(
     text.text.length > 75 ||
     (text.emoji !== undefined && typeof text.emoji !== "boolean")
   )
-    invalid(stage);
+    invalid();
 }
 function form(body: Uint8Array): unknown {
   let source: string;
   try {
     source = new TextDecoder("utf-8", { fatal: true }).decode(body);
   } catch {
-    return invalid("form");
+    return invalid();
   }
   const fields = [...new URLSearchParams(source).entries()];
-  if (fields.length !== 1 || fields[0]?.[0] !== "payload") invalid("form");
+  if (fields.length !== 1 || fields[0]?.[0] !== "payload") invalid();
   try {
     return JSON.parse(fields[0]![1]) as unknown;
   } catch {
-    return invalid("form");
+    return invalid();
   }
 }
 
@@ -215,12 +198,7 @@ export function verifyPrivateSlackApprovalRequestV1(
   const verified = VerifiedPrivateSlackApprovalRequestV1.create();
   evidence.set(
     verified,
-    Object.freeze({
-      body: Uint8Array.from(input.raw_body),
-      request_timestamp: timestamp,
-      signature_sha256: sha256Digest(signature),
-      raw_body_sha256: sha256Digest(input.raw_body),
-    }),
+    Object.freeze({ body: Uint8Array.from(input.raw_body) }),
   );
   return verified;
 }
@@ -271,46 +249,44 @@ const MESSAGE_METADATA_FIELDS = [
 ] as const;
 
 function lookup(payload: RecordValue): PrivateSlackApprovalLookupHintsV1 {
-  const user = exact(payload.user, ["id"], USER_METADATA_FIELDS, "lookup");
-  const team = exact(payload.team, ["id"], TEAM_METADATA_FIELDS, "lookup");
-  const channel = exact(payload.channel, ["id"], ["id", "name"], "lookup");
+  const user = exact(payload.user, ["id"], USER_METADATA_FIELDS);
+  const team = exact(payload.team, ["id"], TEAM_METADATA_FIELDS);
+  const channel = exact(payload.channel, ["id"], ["id", "name"]);
   const container = exact(
     payload.container,
     ["type", "channel_id", "message_ts"],
     ["type", "channel_id", "message_ts", "is_ephemeral"],
-    "lookup",
   );
   const message = exact(
     payload.message,
     ["type", "user", "ts", "app_id", "bot_id"],
     MESSAGE_METADATA_FIELDS,
-    "lookup",
   );
-  const workspace_id = string(team.id, TEAM, "lookup");
-  const slack_user_id = string(user.id, USER, "lookup");
-  const channel_id = string(channel.id, CHANNEL, "lookup");
-  const message_ts = string(message.ts, TS, "lookup", 32);
+  const workspace_id = string(team.id, TEAM);
+  const slack_user_id = string(user.id, USER);
+  const channel_id = string(channel.id, CHANNEL);
+  const message_ts = string(message.ts, TS, 32);
 
   if (
     payload.type !== "block_actions" ||
     container.type !== "message" ||
     message.type !== "message" ||
-    string(container.channel_id, CHANNEL, "lookup") !== channel_id ||
-    string(container.message_ts, TS, "lookup", 32) !== message_ts ||
+    string(container.channel_id, CHANNEL) !== channel_id ||
+    string(container.message_ts, TS, 32) !== message_ts ||
     (user.team_id !== undefined &&
-      string(user.team_id, TEAM, "lookup") !== workspace_id)
+      string(user.team_id, TEAM) !== workspace_id)
   )
-    invalid("lookup");
+    invalid();
 
   return Object.freeze({
-    api_app_id: string(payload.api_app_id, APP, "lookup"),
+    api_app_id: string(payload.api_app_id, APP),
     workspace_id,
     slack_user_id,
     channel_id,
     message_ts,
-    message_user_id: string(message.user, USER, "lookup"),
-    message_app_id: string(message.app_id, APP, "lookup"),
-    message_bot_id: string(message.bot_id, BOT, "lookup"),
+    message_user_id: string(message.user, USER),
+    message_app_id: string(message.app_id, APP),
+    message_bot_id: string(message.bot_id, BOT),
   });
 }
 function value(action: RecordValue): {
@@ -318,23 +294,22 @@ function value(action: RecordValue): {
   readonly snapshot_sha256: `sha256:${string}`;
 } {
   if (typeof action.value !== "string" || action.value.length > 1024)
-    invalid("card");
+    invalid();
   let parsed: unknown;
   try {
     parsed = JSON.parse(action.value);
   } catch {
-    return invalid("card");
+    return invalid();
   }
   const button = exact(
     parsed,
     ["schema_version", "approval_id", "snapshot_sha256"],
     ["schema_version", "approval_id", "snapshot_sha256"],
-    "card",
   );
-  if (button.schema_version !== 2) invalid("card");
-  const snapshot = string(button.snapshot_sha256, DIGEST, "card", 80);
+  if (button.schema_version !== 2) invalid();
+  const snapshot = string(button.snapshot_sha256, DIGEST, 80);
   return Object.freeze({
-    approval_id: string(button.approval_id, IDENTIFIER, "card"),
+    approval_id: string(button.approval_id, IDENTIFIER),
     snapshot_sha256: snapshot as `sha256:${string}`,
   });
 }
@@ -343,12 +318,11 @@ function selectedProjectId(option: unknown): string {
     option,
     ["text", "value"],
     ["text", "value", "description"],
-    "state",
   );
-  plainText(selected.text, "state");
+  plainText(selected.text);
   if (selected.description !== undefined)
-    plainText(selected.description, "state");
-  return string(selected.value, PROJECT, "state");
+    plainText(selected.description);
+  return string(selected.value, PROJECT);
 }
 function state(
   payload: RecordValue,
@@ -356,8 +330,7 @@ function state(
   action: "approve" | "reject",
 ) {
   const values = record(
-    exact(payload.state, ["values"], ["values"], "state").values,
-    "state",
+    exact(payload.state, ["values"], ["values"]).values,
   );
   const ids = {
     audience: slackApprovalActionIdV4(approval_id, "audience-select"),
@@ -369,22 +342,21 @@ function state(
     share_transcript: boolean | undefined;
   const owners: { signal_id: string; owner: string }[] = [];
   for (const block of Object.values(values)) {
-    const entry = record(block, "state"),
+    const entry = record(block),
       keys = Object.keys(entry);
-    if (keys.length !== 1) invalid("state");
+    if (keys.length !== 1) invalid();
     const key = keys[0]!;
-    const control = record(entry[key], "state");
+    const control = record(entry[key]);
     if (key === ids.audience) {
-      if (control.type !== "static_select") invalid("state");
+      if (control.type !== "static_select") invalid();
       const option = exact(
         control.selected_option,
         ["text", "value"],
         ["text", "value"],
-        "state",
       );
-      plainText(option.text, "state");
+      plainText(option.text);
       if (option.value !== "only-me" && option.value !== "projects")
-        invalid("state");
+        invalid();
       audience = option.value;
       continue;
     }
@@ -394,14 +366,14 @@ function state(
         !Array.isArray(control.selected_options) ||
         control.selected_options.length > 20
       )
-        invalid("state");
+        invalid();
       project_ids = control.selected_options.map(selectedProjectId).sort();
       if (
         project_ids.some(
           (id, index) => index > 0 && project_ids[index - 1] === id,
         )
       )
-        invalid("state");
+        invalid();
       continue;
     }
     if (key === ids.transcript) {
@@ -410,7 +382,7 @@ function state(
         !Array.isArray(control.selected_options) ||
         control.selected_options.length > 1
       )
-        invalid("state");
+        invalid();
       const selected =
         control.selected_options[0] === undefined
           ? undefined
@@ -418,23 +390,22 @@ function state(
               control.selected_options[0],
               ["text", "value"],
               ["text", "value"],
-              "state",
             );
-      if (selected !== undefined) plainText(selected.text, "state");
+      if (selected !== undefined) plainText(selected.text);
       share_transcript = selected?.value === "share-transcript-v1";
       if (share_transcript === false && control.selected_options.length === 1)
-        invalid("state");
+        invalid();
       continue;
     }
     const prefix = slackApprovalOwnerActionIdV4(approval_id, "");
-    if (!key.startsWith(prefix)) invalid("state");
+    if (!key.startsWith(prefix)) invalid();
     const signal_id = key.slice(prefix.length);
     if (
       !isApprovalSignalIdV1(signal_id) ||
       control.type !== "plain_text_input" ||
       (control.value !== null && !isApprovalOwnerTextV1(control.value))
     )
-      invalid("state");
+      invalid();
     if (control.value !== null)
       owners.push({ signal_id, owner: control.value });
   }
@@ -444,7 +415,7 @@ function state(
     owners.length > 40 ||
     new Set(owners.map((owner) => owner.signal_id)).size !== owners.length
   )
-    invalid("state");
+    invalid();
   if (action === "reject")
     return Object.freeze({
       audience: "only-me" as const,
@@ -459,7 +430,7 @@ function state(
       share_transcript,
       owners: Object.freeze(owners),
     });
-  if (project_ids.length === 0) invalid("state");
+  if (project_ids.length === 0) invalid();
   return Object.freeze({
     audience,
     project_ids: Object.freeze(project_ids),
@@ -539,33 +510,31 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
         "response_url",
         "token",
       ],
-      "envelope",
     );
     if (payload.hash !== undefined)
-      string(payload.hash, IDENTIFIER, "envelope");
+      string(payload.hash, IDENTIFIER);
     if (payload.token !== undefined)
-      string(payload.token, TOKEN, "envelope", 4096);
+      string(payload.token, TOKEN, 4096);
     const hints = lookup(payload);
     const actions = payload.actions;
-    if (!Array.isArray(actions) || actions.length !== 1) invalid("action");
+    if (!Array.isArray(actions) || actions.length !== 1) invalid();
     const selected = exact(
       actions[0],
       ["type", "action_id"],
       ["type", "action_id", "block_id", "text", "value", "action_ts", "style"],
-      "action",
     );
-    const action_id = string(selected.action_id, IDENTIFIER, "action");
-    const trigger_id = string(payload.trigger_id, TRIGGER, "action", 512);
+    const action_id = string(selected.action_id, IDENTIFIER);
+    const trigger_id = string(payload.trigger_id, TRIGGER, 512);
     if (selected.type !== "button") {
       if (!presentationChangeAction(action_id, selected.type))
-        invalid("action");
+        invalid();
       return Object.freeze({
         schema_version: 4,
         disposition: "presentation_change",
         lookup: hints,
       });
     }
-    plainText(selected.text, "action");
+    plainText(selected.text);
     const button = value(selected);
     const expected =
       selected.action_id ===
@@ -580,7 +549,7 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
       typeof selected.action_ts !== "string" ||
       !TS.test(selected.action_ts)
     )
-      invalid("action");
+      invalid();
     const choices = state(payload, button.approval_id, expected);
     return Object.freeze({
       schema_version: 4,

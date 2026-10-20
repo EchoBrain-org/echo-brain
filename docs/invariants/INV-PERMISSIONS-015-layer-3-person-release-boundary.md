@@ -107,39 +107,14 @@ out-of-part citations never establish support. Authorization, audit, snapshot
 and cancellation failures release no answer.
 
 [ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)
-adds one release path before the final response. A `POST /v5/person/ask`
-request that sends `x-echo-ask-progress: 1`, a `POST /v6/person/ask`
-request that sends `x-echo-ask-progress: 2` (progress V2, whose names may be
-follow-ups, ADR-0040), or a `POST /v7/person/ask` request that sends
-`x-echo-ask-progress: 3` (progress V3, whose names may also be projects,
-people, tools and tool containers, ADR-0042) receives progress events while
-it runs. Before the answer, an event may carry only:
-
-- the stage;
-- the source kinds a research step searched, from the request's own catalog,
-  with a count of distinct items those reads returned to this Person;
-- the number of items about to be read in full;
-- names of items whose complete released text the research model is about
-  to be given. Each name is the answer-citation projection: citation, kind,
-  label, visibility and open ref.
-
-A name is emitted only at the model gate's `before_call` point, after the
-access check before that call. Later per-call checks do not re-read the item.
-An item revoked after the check that covered it may therefore stay named, or
-be named for the first time, until the request ends, just as it may stay in
-model input. Only the final check keeps it out of the answer and out of the
-receipt. The receipt travels with the answer and is built after the final
-check.
-
-Progress events never carry notes, needs, plans, model-written or provider
-queries, bodies, excerpts, scratchpad or desk ids, round numbers, or counts
-that include unreadable items. A cancellation (the client disconnected)
-sends nothing further. The deadline, a refused check or any other failure
-sends no further progress event and no receipt: only the one terminal
-`error` event follows, with the status and body the JSON response would
-have had. The request's audit
-record, when one is written (released, cancelled or timed out), lists the
-named items as citation digests, never labels.
+adds one release path before the final response: a streamed Ask names an item
+only after the access check before the model call that reads it, by its
+citation projection alone, and only the final check keeps a since-revoked item
+out of the answer and its receipt. What an event may carry, the terminal error
+and the audit are ADR-0039's
+[Decision and consequences](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md#decision-and-consequences).
+Since 2026-10-19 only `/v6` and `/v7` stream; `/v5` answers in JSON
+([Later decisions](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md#later-decisions)).
 
 ADR-0026 extends this boundary to Jira live evidence on `POST /v4/person/ask`.
 The provider reads as the authenticated Person's current Jira grant. Audits commit
@@ -198,26 +173,14 @@ transaction, not inside it: access another process revokes in that instant is
 not seen, a known gap of open items and Home v1.
 
 [ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md) adds open
-items to Ask, as follow-ups, on V7 answers, served by the additive
-`POST /v6/person/ask`, which streams them under the ADR-0039 rules above in
-progress V2: a follow-up is named only after the access check before the call
-that reads it, by its citation projection alone, whose label is its title (ECHO's
-`expected` phrase when nothing was read live for it). The follow-ups source decides what it releases
-with the same open-items policy and assessment path as the runs API's `items`,
-so the asker gets exactly what that policy shows them, and nothing in Mine, in
-trigger research or in V4 to V6 answers. Its search matches only words ECHO
-holds and the policy shows the asker: the decision's title and first line, the
-`expected` phrase, the owner's name and a ticket key, the key only when the
-item was opened live. Outside titles and due dates come only from a live open
-in that request, through the request's own tool source, so they are that
-tool's audited releases and its checks recheck them; a search across sources
-reads none live. Every follow-up release is audited before its bytes leave
-Layer 3 with item ids and digests only. Each check before a model call puts
-the follow-ups released since the last check through the policy again, and the
-release check puts all of them through it; one the asker can no longer see
-refuses the answer. Its negative disclosure tests are
-`services/organization-authority/test/person-follow-ups-evidence-v1.test.ts`
-and `person-follow-ups-ask-integration.test.ts`.
+items to Ask as follow-ups, on V7 answers served by the additive
+`POST /v6/person/ask`. The follow-ups source releases exactly what the
+open-items policy shows the asker, and each check puts the follow-ups released
+since the last one through that policy again. Who sees what, its audit and its
+checks are ADR-0040's
+[Decision and consequences](../decisions/ADR-0040-follow-ups-as-ask-evidence.md#decision-and-consequences),
+and its negative disclosure tests are listed under
+[Migration, rollback, and evidence](../decisions/ADR-0040-follow-ups-as-ask-evidence.md#migration-rollback-and-evidence).
 
 [ADR-0042](../decisions/ADR-0042-research-tool-contract.md) adds the asker's
 workspace and their tools' containers to Ask on V8 answers, served by the
@@ -265,8 +228,7 @@ mine, one the reader approved) is waiting to be indexed.
 ADR-0024's mine scope on `POST /v3/person/ask` is a caller-selected narrowing
 of the same global readable set: the evidence desk pushes it into every store
 query, mine with a project is a 400, and mine without the composed approver
-projectors is a 503 rather than global. Mine reads no Slack and no shared
-transcript. The answer audit and the per-store release audits are unchanged.
+projectors is a 503 rather than global. Mine reads no shared transcript. The answer audit and the per-store release audits are unchanged.
 
 ## Verification and change procedure
 

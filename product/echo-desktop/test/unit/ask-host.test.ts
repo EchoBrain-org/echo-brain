@@ -1,7 +1,7 @@
 // The host's side of Ask progress (ADR-0039): the command an Ask runs, and
 // what of its printed lines reaches the page.
 import { describe, expect, it, vi } from 'vitest';
-import { askArgv, askProgressLines, askRecordArgv, askSourceArgv, askStreams } from '../../src/host/ask.js';
+import { askArgv, askProgressLines, askRecordArgv, askSourceArgv } from '../../src/host/ask.js';
 import type { AskProgressNotice, Expect } from '../../src/shared/protocol.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -12,15 +12,13 @@ const decision = { citation: { kind: 'approved_record', atom_id: sha('1'), recor
 const line = (value: unknown) => JSON.stringify(value);
 
 describe('the command an Ask runs', () => {
-  it('asks a live Ask for its progress, as the account the page shows, and never Mine', () => {
+  it('asks every Ask, Mine included, on the newest route with its progress, as the account the page shows', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
     // The client refuses to ask as any other account, so no step of another reaches the page.
-    const pin = [`--expected-membership-id=${EXPECT.membership_id}`, `--expected-authority=${EXPECT.authority}`];
-    expect(askArgv('What did we agree?', { kind: 'global' }, EXPECT)).toEqual(['ask', '--question=What did we agree?', '--live', '--progress', ...pin]);
-    expect(askArgv('What did we agree?', { kind: 'project', project_id: project }, EXPECT))
-      .toEqual(['ask', '--question=What did we agree?', '--live', '--progress', ...pin, `--project=${project}`]);
-    expect(askArgv('What did we agree?', { kind: 'mine' }, EXPECT)).toEqual(['ask', '--question=What did we agree?', '--mine']);
-    expect([askStreams({ kind: 'global' }), askStreams({ kind: 'project', project_id: project }), askStreams({ kind: 'mine' })]).toEqual([true, true, false]);
+    const asked = ['ask', '--question=What did we agree?', '--live', '--progress', `--expected-membership-id=${EXPECT.membership_id}`, `--expected-authority=${EXPECT.authority}`];
+    expect(askArgv('What did we agree?', { kind: 'global' }, EXPECT)).toEqual(asked);
+    expect(askArgv('What did we agree?', { kind: 'project', project_id: project }, EXPECT)).toEqual([...asked, `--project=${project}`]);
+    expect(askArgv('What did we agree?', { kind: 'mine' }, EXPECT)).toEqual([...asked, '--mine']);
   });
 
   it('reads what it cites: a meeting by its record, a passage where it was asked', () => {
@@ -54,42 +52,6 @@ describe('the progress lines of an Ask', () => {
       { cancel_id: CANCEL, expect: EXPECT, step: { type: 'read', items: [
         { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') },
       ] } },
-    ]);
-  });
-
-  it('post a /v6 step that searched follow-ups or read one, as the page opens it (ADR-0040)', () => {
-    const posted: AskProgressNotice[] = [];
-    const refused = vi.fn();
-    const read = askProgressLines(CANCEL, EXPECT, new AbortController().signal, notice => posted.push(notice), refused);
-    const followUp = { citation: { kind: 'follow_up', item_id: 'itm_launch-1' }, kind: 'follow_up', label: 'Ship the launch checklist', visibility: 'team', ref: 'follow_up:itm_launch-1' };
-    read(line({ ok: true, progress: { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 } }));
-    read(line({ ok: true, progress: { type: 'read', items: [followUp] } }));
-    // Nothing a follow-up's row holds travels in a step.
-    read(line({ ok: true, progress: { type: 'read', items: [{ ...followUp, owner: 'Mina Patel' }] } }));
-    expect(refused).toHaveBeenCalledTimes(1);
-    expect(posted.map(notice => notice.step)).toEqual([
-      { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 },
-      { type: 'read', items: [{ kind: 'follow_up', label: 'Ship the launch checklist', item_id: 'itm_launch-1' }] },
-    ]);
-  });
-
-  it('post a /v7 step that searched your workspace or read one of it, as the page opens it (research tool contract v1)', () => {
-    const posted: AskProgressNotice[] = [];
-    const refused = vi.fn();
-    const read = askProgressLines(CANCEL, EXPECT, new AbortController().signal, notice => posted.push(notice), refused);
-    const project = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
-    const cited = { citation: { kind: 'project', project_id: project }, kind: 'project', label: 'Thermal recovery', visibility: 'project', ref: `project:${project}` };
-    const container = { citation: { kind: 'tool_container', tool_id: 'jira', external_scope_id: 'cloud-1', container: 'jira_project', container_id: '10001',
-      permalink: 'https://example.atlassian.net/browse/THERM' }, kind: 'tool_container', label: 'Thermal', visibility: 'only_me', key: 'THERM' };
-    read(line({ ok: true, progress: { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 2 } }));
-    read(line({ ok: true, progress: { type: 'read', items: [cited, container] } }));
-    // Nothing a project holds travels in a step.
-    read(line({ ok: true, progress: { type: 'read', items: [{ ...cited, members: ['Mara Lind'] }] } }));
-    expect(refused).toHaveBeenCalledTimes(1);
-    expect(posted.map(notice => notice.step)).toEqual([
-      { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 2 },
-      { type: 'read', items: [{ kind: 'project', label: 'Thermal recovery', project_id: project },
-        { kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: 'https://example.atlassian.net/browse/THERM', container: 'jira_project', key: 'THERM' }] },
     ]);
   });
 

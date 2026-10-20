@@ -1,10 +1,7 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_CHANGES_AREAS_V1,
-  PERSON_CHANGES_CHECK_SECONDS_V1,
   PERSON_CHANGES_KIND_V1,
-  PERSON_CHANGES_ROUTE_V1,
   validatePersonChangesV1,
 } from '../src/person-changes-v1.js';
 import { validatePersonRunsRequestV1 } from '../src/person-runs-v1.js';
@@ -16,14 +13,6 @@ const areas = { projects: canonicalSha256(['projects']), follow_ups: canonicalSh
 const changes = (fields: Record<string, unknown> = {}) => ({ kind: PERSON_CHANGES_KIND_V1, areas, check_again_after_seconds: 60, ...fields });
 
 describe('Person change check (ADR-0036)', () => {
-  it('names one GET route, three areas and the server-paced wait', () => {
-    expect(PERSON_CHANGES_ROUTE_V1).toBe('/v1/person/changes');
-    expect(PERSON_CHANGES_KIND_V1).toBe('echo-person-changes-v1');
-    expect([...PERSON_CHANGES_AREAS_V1]).toEqual(['projects', 'follow_ups', 'reviews']);
-    expect(PERSON_CHANGES_CHECK_SECONDS_V1).toEqual({ min: 15, default: 60, max: 3600 });
-    expect(Object.isFrozen(PERSON_CHANGES_CHECK_SECONDS_V1)).toBe(true);
-  });
-
   it('accepts exactly its keys and returns a frozen copy', () => {
     const validated = validatePersonChangesV1(changes());
     expect(validated).toEqual(changes());

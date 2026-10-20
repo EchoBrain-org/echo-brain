@@ -8,7 +8,7 @@ import { createJiraPersonLiveEvidenceReaderV1 } from '@echo-brain/provider-jira/
 import type { PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import {
   CONFLUENCE_LIVE_CONNECTOR_V1, CONFLUENCE_PAGE_CAPABILITIES_V1, CONFLUENCE_SPACES_LIVE_CONNECTOR_V1, JIRA_ISSUE_CAPABILITIES_V1, JIRA_LIVE_CONNECTOR_V1,
-  JIRA_PROJECTS_LIVE_CONNECTOR_V1, TOOL_CONTAINER_CAPABILITIES_V1, personLiveConnectorDefinitionsV1,
+  JIRA_PROJECTS_LIVE_CONNECTOR_V1, personLiveConnectorDefinitionsV1,
 } from '../src/composition/person-live-connector-registry-v1.js';
 
 const CLOUD = '00000000-0000-4000-8000-000000000007';
@@ -45,13 +45,15 @@ function confluenceReader() {
   }) });
 }
 
-/** The reader applies a window on exactly the dates its source declares, and its items carry exactly those dates. */
+/** The reader applies a window, listed or searched, on exactly the dates its source declares, and its items carry exactly those dates. */
 async function expectReaderHonors(reader: PersonLiveEvidenceReaderV1, capabilities: EvidenceSourceCapabilitiesV1) {
   const declared = new Set<EvidenceDateSelectionV1>([...Object.keys(capabilities.dates) as EvidenceDateSelectionV1[], ...(capabilities.any_date ? [EVIDENCE_ANY_DATE_V1] : [])]);
   for (const date_field of [...EVIDENCE_DATE_FIELDS_V1, EVIDENCE_ANY_DATE_V1]) {
-    const read = reader.list({ since: '2026-10-01', until: '2026-10-03', date_field, limit: 5 });
-    if (declared.has(date_field)) expect((await read).items, date_field).toHaveLength(1);
-    else await expect(read, date_field).rejects.toMatchObject({ code: 'invalid_request' });
+    const dated = { since: '2026-10-01', until: '2026-10-03', date_field, limit: 5 };
+    for (const read of [() => reader.list(dated), () => reader.search({ ...dated, query: 'ECHO' })]) {
+      if (declared.has(date_field)) expect((await read()).items, date_field).toHaveLength(1);
+      else await expect(read(), date_field).rejects.toMatchObject({ code: 'invalid_request' });
+    }
   }
   const [item] = (await reader.list({ limit: 5 })).items;
   expect(Object.keys(item!.dates ?? {}).sort()).toEqual(Object.keys(capabilities.dates).sort());
@@ -61,16 +63,6 @@ const open: PersonLiveConnectorDefinitionV1['open'] = () => { throw new Error('A
 const register = (...entries: readonly unknown[]) => personLiveConnectorDefinitionsV1({ live_connectors: entries as readonly PersonLiveConnectorDefinitionV1[] });
 
 describe('live connector registrations (research tool contract v1)', () => {
-  it('declares capabilities beside each descriptor, and leaves dates out of its description', () => {
-    expect(JIRA_LIVE_CONNECTOR_V1.descriptor.capabilities).toBe(JIRA_ISSUE_CAPABILITIES_V1);
-    expect(CONFLUENCE_LIVE_CONNECTOR_V1.descriptor.capabilities).toBe(CONFLUENCE_PAGE_CAPABILITIES_V1);
-    expect(JIRA_PROJECTS_LIVE_CONNECTOR_V1.descriptor.capabilities).toBe(TOOL_CONTAINER_CAPABILITIES_V1);
-    expect(CONFLUENCE_SPACES_LIVE_CONNECTOR_V1.descriptor.capabilities).toBe(TOOL_CONTAINER_CAPABILITIES_V1);
-    for (const { descriptor } of [JIRA_LIVE_CONNECTOR_V1, CONFLUENCE_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1, CONFLUENCE_SPACES_LIVE_CONNECTOR_V1]) {
-      expect(descriptor.description).not.toMatch(/date_field|date filter/i);
-    }
-  });
-
   it('holds the Jira and Confluence readers to the dates their sources declare', async () => {
     await expectReaderHonors(await jiraReader(), JIRA_ISSUE_CAPABILITIES_V1);
     await expectReaderHonors(await confluenceReader(), CONFLUENCE_PAGE_CAPABILITIES_V1);

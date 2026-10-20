@@ -34,7 +34,7 @@ Desktop Ask selects the additive `/v7/person/ask` route with a strict V8 respons
 back on an older Authority as the
 [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
 describes.
-The CLI uses `echo-brain person ask --live --question '<question>'`, optionally
+The CLI uses `echo-brain person ask --question '<question>'`, optionally
 with `--project <id>`. Older ticket-only and local-context response contracts remain
 unchanged; an older Authority that has no new route receives the ticket-capable
 fallback. Permission failures never trigger that fallback.

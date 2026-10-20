@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
+import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { PERSON_LIST_PAGE_SIZE_V1 } from "@echo-brain/organization-api";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type Database from "better-sqlite3";
+import { appendAuditRowV1 } from "./audit-row-v1.js";
 import type { PersonListDirectoryPortV1, PersonListJoinedProjectV1 } from "../../../application/ports/person-list-v1.js";
 
 type JoinedRow = PersonListJoinedProjectV1 & { readonly project_membership_id: string };
@@ -53,9 +54,6 @@ export class SqlitePersonListDirectoryV1 implements PersonListDirectoryPortV1 {
       store_receipts: [...entry.store_receipts], response_sha256: entry.response_sha256, released_count: entry.released_count,
       checked_at: actor.checked_at,
     };
-    const row_sha256 = canonicalSha256(body);
-    this.database.prepare("INSERT INTO authority_project_read_audit_v1 (row_sha256, body_json, recorded_at) VALUES (?, ?, ?)")
-      .run(row_sha256, canonicalJson(body), actor.checked_at);
-    return row_sha256;
+    return appendAuditRowV1(this.database, "authority_project_read_audit_v1", body, actor.checked_at);
   }
 }

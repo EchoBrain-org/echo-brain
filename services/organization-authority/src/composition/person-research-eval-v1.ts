@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { validatePersonImpactCardV1, validatePersonSweepResultV1, type PersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
 import {
   AGENTIC_RESEARCH_BUDGETS_V1,
-  AgenticAskDeadlineErrorV1,
   createAgenticAskV5,
   createAgenticResearchV1,
   type AgenticResearchResultV1,
@@ -12,11 +11,13 @@ import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organiz
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { PersonAskScopeV2 } from '../application/ports/person-original-context-retrieval-v1.js';
-import { askerOf, scopeOf } from './person-answer-v3-route.js';
+import { askerOf, personAskRequestContextV1, scopeOf } from './person-answer-v3-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
-import type { PersonRecordProjectsV1 } from './person-record-search-route.js';
+import { personRecordRunScopeV1, type PersonRecordProjectsV1 } from './person-record-search-route.js';
 import type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
+import { taskLiveSourcesV1 } from './person-open-items-v1.js';
+import { checkRetainedResultReleaseV1, retainedResultFailureV1, type RetainedResultFailureCodeV1, type RetainedResultFailureV1 } from './person-retained-result-v1.js';
 
 export type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
 
@@ -46,7 +47,7 @@ type Run = {
   error?: NonNullable<PersonResearchEvalReadResponseV1['error']>;
 };
 
-const FAILURE_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+const FAILURE_MESSAGES: Readonly<Record<RetainedResultFailureCodeV1, string>> = Object.freeze({
   conflict: 'The research run conflicted with another operation',
   invalid_request: 'The research run request was not valid for this evidence',
   invalid_output: 'A source returned output the research run could not use',
@@ -63,14 +64,11 @@ const FAILURE_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
 function recordScope(records: PersonRecordProjectsV1, access_token: string, citation: unknown): PersonAskScopeV2 {
   const record = citation as { readonly kind?: unknown; readonly record_sha256?: unknown } | undefined;
   if (record?.kind !== 'approved_record' || typeof record.record_sha256 !== 'string') throw new AuthorityOperationError('invalid_request', 'Research evaluation record is invalid');
-  const projects = records.recordProjects({ access_token, record_sha256: record.record_sha256 as `sha256:${string}` });
-  return projects.length === 1 ? Object.freeze({ kind: 'project' as const, project_id: projects[0]! }) : Object.freeze({ kind: 'global' as const });
+  return personRecordRunScopeV1(records, access_token, record.record_sha256 as `sha256:${string}`);
 }
 
-function failure(error: unknown): NonNullable<PersonResearchEvalReadResponseV1['error']> {
-  const code = error instanceof AgenticAskDeadlineErrorV1 ? 'timed_out'
-    : error instanceof AuthorityOperationError && Object.hasOwn(FAILURE_MESSAGES, error.code) ? error.code : 'unavailable';
-  return Object.freeze({ code, message: FAILURE_MESSAGES[code]! });
+function failure(error: unknown): RetainedResultFailureV1 {
+  return retainedResultFailureV1(FAILURE_MESSAGES, error);
 }
 
 /**
@@ -87,7 +85,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
   // A question runs as `/v7` serves it: the V8 Ask, whose desk binds follow-ups, the workspace and tool containers
   // (research tool contract v1). A task reads what task research reads.
   const questionSources = (options.live_sources ?? []).filter(source => source.minimum_response_version <= WORKSPACE_MINIMUM_RESPONSE_VERSION_V1);
-  const taskSources = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
+  const taskSources = taskLiveSourcesV1(options.live_sources);
   const runs = new Map<string, Run>();
   const purge = () => {
     const current = now();
@@ -110,7 +108,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       // Checked as the widest scope would brief it; the run rebuilds its brief for the scope it reads.
       const defined = definition.brief(event, { kind: 'global' });
       // Ask's writer runs Ask's own brief, rebuilt from the question: anything more in a question brief would be dropped, so it is refused.
-      if (defined.goal.kind === 'question' && (defined.starting.length > 0 || !defined.options.small_scope_preload)) throw new AuthorityOperationError('invalid_request', 'Research evaluation brief is invalid');
+      if (defined.goal.kind === 'question' && defined.starting.length > 0) throw new AuthorityOperationError('invalid_request', 'Research evaluation brief is invalid');
       // Only a person's question reads their own additions alone; a task's starting items are shared evidence.
       // A record's run reads where the record is, so its request names no scope.
       if ((request.mine === true && defined.goal.kind !== 'question') || (definition.scope === 'record_project' && (request.mine === true || request.project_id !== undefined))) {
@@ -124,11 +122,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       const runId = `rr_${randomUUID()}`;
       const run: Run = { owner, controller: new AbortController(), status: 'running', expires_at: Number.POSITIVE_INFINITY };
       runs.set(runId, run);
-      const context = {
-        authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
-        principal_id: authorization.principal_id, membership_id: authorization.membership_id,
-        session_family_id: authorization.session_family_id, request_id: runId,
-      };
+      const context = personAskRequestContextV1(options, authorization, runId);
       const brief = request.budget === undefined ? defined : { ...defined, budget: AGENTIC_RESEARCH_BUDGETS_V1[request.budget] };
       const signal = run.controller.signal;
       // The run outlives this request: it is bound to its own controller, not the caller's connection.
@@ -143,9 +137,9 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
             { access_token: input.access_token, scope, signal, ...(question ? { response_version: WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } : {}) }, context);
           run.revalidate = readSignal => desk.revalidate({ ...(readSignal === undefined ? {} : { signal: readSignal }) });
           const asker = askerOf(options, authorization);
-          // Runs exactly as served: the brief asks for the small-scope preload where the deployment allows it.
+          // Runs exactly as served.
           const loopOptions = { desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
-            ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+            ...(asker === undefined ? {} : { asker }),
           };
           const loop = createAgenticResearchV1(loopOptions);
           if (brief.goal.kind === 'question') {
@@ -188,27 +182,13 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
         return Object.freeze({ ...base, status: 'failed' as const, error: run.error! });
       }
       // Access is rechecked before evidence leaves the Authority, as for every Ask response.
-      try { await run.revalidate!(input.signal); }
-      catch (error) {
-        const accessFailure = error instanceof AuthorityOperationError && ['unauthorized', 'stale_access_state', 'not_found'].includes(error.code);
-        if (!accessFailure && input.signal?.aborted && (error === input.signal.reason || (error instanceof Error && error.name === 'AbortError'))) throw error;
-        runs.delete(input.request.run_id);
-        const fenced = failure(error);
-        return Object.freeze({ ...base, status: 'failed' as const, error: fenced.code === 'unavailable' ? Object.freeze({ code: 'stale_access_state', message: FAILURE_MESSAGES.stale_access_state! }) : fenced });
-      }
-      // A close or expiry while the access check was in flight must not revive
-      // a removed run or release its retained content.
-      if (runs.get(input.request.run_id) !== run || run.expires_at <= now()) {
-        runs.delete(input.request.run_id);
-        throw new AuthorityOperationError('not_found', 'Research run is not available');
-      }
-      input.signal?.throwIfAborted();
-      // Source revalidation uses the execution session; recheck this reader too.
-      try {
-        if (ownerOf(options.sessions.authenticateAccess({ access_token: input.access_token })) !== run.owner) {
-          throw new AuthorityOperationError('unauthorized', 'Research run is not available');
-        }
-      } catch (error) { runs.delete(input.request.run_id); throw error; }
+      const refused = await checkRetainedResultReleaseV1({
+        fence: run.revalidate!, signal: input.signal, held: () => runs.get(input.request.run_id) === run && run.expires_at > now(),
+        drop: () => runs.delete(input.request.run_id),
+        reader: () => ownerOf(options.sessions.authenticateAccess({ access_token: input.access_token })), owner: run.owner,
+        failure, gone: 'Research run is not available', refused: 'Research run is not available',
+      });
+      if (refused !== undefined) return Object.freeze({ ...base, status: 'failed' as const, error: refused });
       // Only a delivered result starts the short, non-extending reread window.
       run.expires_at = Math.min(run.expires_at, now() + PERSON_RESEARCH_EVAL_REREAD_MS_V1);
       return Object.freeze({ ...base, status: 'completed' as const, research: JSON.parse(JSON.stringify(run.research)) as Readonly<Record<string, unknown>>,

@@ -17,10 +17,10 @@ export const WORKSPACE_SOURCE_KINDS_V1 = Object.freeze({ projects: 'project', pe
 
 /**
  * A workspace source's descriptor. Request-bound like follow-ups: ECHO's own
- * state, read as the asker, with no tool of its own, no channel and no default
- * age. Its list is not metadata only: an item carries its fields as text.
+ * state, read as the asker, with no tool of its own. Its list is not metadata
+ * only: an item carries its fields as text.
  */
-export interface WorkspaceSourceDescriptorV1 extends Omit<PersonLiveSourceDescriptorV2, 'source_id' | 'kind' | 'selector' | 'tool_id' | 'requires_channel' | 'default_since_days' | 'capabilities'> {
+export interface WorkspaceSourceDescriptorV1 extends Omit<PersonLiveSourceDescriptorV2, 'source_id' | 'kind' | 'selector' | 'tool_id' | 'capabilities'> {
   readonly source_id: WorkspaceSourceIdV1;
   readonly kind: (typeof WORKSPACE_SOURCE_KINDS_V1)[WorkspaceSourceIdV1];
   readonly selector: WorkspaceSourceIdV1;

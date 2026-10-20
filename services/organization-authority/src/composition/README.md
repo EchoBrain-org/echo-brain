@@ -15,7 +15,7 @@ import a provider implementation.
   presenter. It adds the Jira and Confluence Person runtimes
   (`jira-person-live-runtime-v1.ts`, `confluence-person-live-runtime-v1.ts`)
   as live connectors only when the service CLI supplies their explicit
-  configuration behind their release gates. Meetings come only from
+  configuration. Meetings come only from
   person-owned sources; there is no organization meeting source.
 - `organization-authority-service-cli.ts` instead opens
   `staging-connector-rehearsal-runtime.ts` when the staging host selects a
@@ -60,9 +60,8 @@ import a provider implementation.
 - The `person-*` modules wire Person routes and upload processing, the
   `readable-search-*` modules own search generations, the `*-journey-*`
   modules record Ask journeys, `staging/` holds the staging synthetic meeting
-  source selection and personal provider, the release canary with its private
-  socket control and client, and (in `staging/observability/`) the staging
-  journey content telemetry format, and `synthetic-demo-*` is the no-write
+  source selection and personal provider and the release canary with its
+  private socket control and client, and `synthetic-demo-*` is the no-write
   demo extraction evaluator.
 - `observability/` holds the journey metrics and telemetry transport and the
   optional staging LangSmith trace exporter (`langsmith-observer-v1.ts`,
@@ -103,9 +102,19 @@ known layering debt:
   adapters;
 - `person-record-search-route.ts`: record list, search and open (raw SQL on
   record-log tables), with `person-record-read-route.ts` and
-  `person-answer-v3-route.ts` (concrete SQLite audit adapters); and
+  `person-answer-v3-route.ts` (concrete SQLite audit adapters);
+- `person-follow-ups-evidence-v1.ts` and `person-workspace-evidence-v1.ts`:
+  the follow-ups and workspace research sources (typed against
+  `SqliteImpactItemsV1` and `SqliteOpenItemPeopleV1`);
+- `staging/staging-synthetic-personal-canary-v1.ts`: the staging release
+  canary (raw SQL on memberships, source progress, proposals and held
+  extractions); and
 - `readable-search-generation-composition.ts` and
   `readable-search-generation-reconciler.ts`: search generations (raw SQL).
+
+The composition root itself also runs three raw-SQL lookups for the Slack
+approval click and presenter: the organization's active memberships, one
+reviewer's membership type and the reviewer's active projects.
 
 A new module must not join this list quietly: add it here in the same change,
 or put its logic behind an application port.

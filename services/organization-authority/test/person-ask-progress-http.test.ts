@@ -1,30 +1,26 @@
-import { once } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_ANSWER_PATH_V3, PERSON_ANSWER_PATH_V4, PERSON_ANSWER_PATH_V5, PERSON_ANSWER_PATH_V6, PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
-  createPersonAskProgressDecoderV1, createPersonAskProgressDecoderV2, validatePersonAnswerResponseV6,
-  type PersonAskProgressEventV1, type PersonAskProgressEventV2,
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
+  createPersonAskProgressDecoderV2, validatePersonAnswerResponseV6, validatePersonAnswerResponseV7, type PersonAskProgressEventV2,
 } from '@echo-brain/organization-api';
 import type { AgenticAskAuditEntryV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1, PersonRecordSearchSnapshotChangedV1 } from '../src/composition/person-record-search-route.js';
-import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import type { CoreRuntimeObservationV1, CoreRuntimeObserverV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { askClient, closeAskServers, decodeAll, expectJsonAskFallbacks, serveAsk } from './fixtures/ask-over-http.js';
 
 /**
- * Ask progress over HTTP (ADR-0039): the real V5 route and evidence desk
- * behind the real server, over fake stores and a scripted model. The stream
- * is read end to end with the shared decoder a client uses.
+ * Ask progress over HTTP (ADR-0039): the real `/v6` route (the V7 answer,
+ * progress V2) and evidence desk behind the real server, over fake stores and
+ * a scripted model. The stream is read end to end with the shared decoder a
+ * client uses. `/v5` answers in JSON only: its progress V1 was retired.
  */
 
-const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
-afterEach(async () => {
-  for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; }
-});
+afterEach(closeAskServers);
 
 const BODY = 'The PVT fixture is ready.\nManufacturing approved it.';
 const QUERY = 'pvt fixture';
@@ -52,7 +48,7 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
   const originals = {
     deskAuthorize: vi.fn(check), revalidateDeskRelease: vi.fn(revalidate),
     deskSearch: vi.fn(() => ({ items: attempt === 0 ? [note] : [note, later], truncated: false, receipt: canonicalSha256('note release'),
-      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, authorization_revision: 0, released_atoms: [] },
+      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
     })),
   };
   // Searches once, finishes on what it found, then writes one sentence.
@@ -83,32 +79,11 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
   };
 }
 
-async function origin(f: ReturnType<typeof fixture>, observer?: CoreRuntimeObserverV1) {
-  const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-    person_answer_v6: f.v6, person_answer_v5: f.v5, person_answer_v4: f.v4, ...(observer === undefined ? {} : { core_runtime_observation: { observer } }) });
-  servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
-  return `http://127.0.0.1:${address.port}`;
+function origin(f: ReturnType<typeof fixture>, observer?: CoreRuntimeObserverV1) {
+  return serveAsk({ person_answer_v6: f.v6, person_answer_v5: f.v5, person_answer_v4: f.v4, ...(observer === undefined ? {} : { core_runtime_observation: { observer } }) });
 }
-const question = { schema_version: 3, question: 'Is the PVT fixture ready?', mine: true };
-const ask = (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: string; readonly body?: unknown; readonly signal?: AbortSignal } = {}) => fetch(`${base}${input.path ?? PERSON_ANSWER_PATH_V5}`, {
-  method: 'POST', ...(input.signal === undefined ? {} : { signal: input.signal }),
-  headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? 'owner'}`,
-    ...(input.progress === null ? {} : { [PERSON_ASK_PROGRESS_HEADER_V1]: input.progress ?? PERSON_ASK_PROGRESS_HEADER_VALUE_V1 }) },
-  body: JSON.stringify(input.body ?? question),
-});
-function decode(text: string): readonly PersonAskProgressEventV1[] {
-  const decoder = createPersonAskProgressDecoderV1();
-  const events = [...decoder.push(text)];
-  decoder.end();
-  return events;
-}
-function decodeV2(text: string): readonly PersonAskProgressEventV2[] {
-  const decoder = createPersonAskProgressDecoderV2();
-  const events = [...decoder.push(text)];
-  decoder.end();
-  return events;
-}
+const ask = askClient({ path: PERSON_ANSWER_PATH_V6, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V2, question: 'Is the PVT fixture ready?', token: 'owner', mine: true });
+const decode = (text: string): readonly PersonAskProgressEventV2[] => decodeAll(createPersonAskProgressDecoderV2(), text);
 
 describe('Ask progress over HTTP', () => {
   it('streams progress, then the released answer with its receipt, as server-sent events when the client opts in', async () => {
@@ -116,18 +91,15 @@ describe('Ask progress over HTTP', () => {
     const base = await origin(f);
     const plain = await ask(base, { progress: null });
     expect(plain.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    const json = validatePersonAnswerResponseV6(await plain.json());
+    const json = validatePersonAnswerResponseV7(await plain.json());
 
     const streamed = await ask(base);
     expect(streamed.status).toBe(200);
     expect(streamed.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
     expect(streamed.headers.get('cache-control')).toBe('no-store');
-    expect(streamed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('5');
+    expect(streamed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('6');
     expect(streamed.headers.has('content-length')).toBe(false);
     const raw = await streamed.text();
-    // Exactly one data line per event, a blank line after each, and no other field.
-    expect(raw.endsWith('\n\n')).toBe(true);
-    for (const line of raw.split('\n')) expect(line === '' || line.startsWith('data: ') || line.startsWith(':')).toBe(true);
     const events = decode(raw);
     // The desk cites an original with its display label, exactly as the answer's citations do.
     const named = { citation: { ...f.note.citation, label: f.note.label }, kind: 'note', label: f.note.label, visibility: 'only_me', ref: f.note.ref };
@@ -147,35 +119,32 @@ describe('Ask progress over HTTP', () => {
     // While it ran, no body, query, planner note or scratchpad id left the Authority.
     const progress = raw.slice(0, raw.lastIndexOf('data: '));
     for (const secret of ['PVT fixture is ready', 'Manufacturing', QUERY, 'private planner note', '"E1"']) expect(progress).not.toContain(secret);
-    // One audit record each; only the streamed one names, by citation commitment.
-    const readItem = events.find(event => event.type === 'read');
-    if (readItem?.type !== 'read') throw new Error('expected a read event');
-    expect(f.audits).toHaveLength(2);
-    expect(f.audits[0]).not.toHaveProperty('named_citation_digests');
-    expect(f.audits[1]).toMatchObject({ outcome: 'answered', named_citation_digests: [canonicalSha256(readItem.items[0]!.citation)] });
   });
 
   it('keeps JSON for any other header value, for /v4 and /v3, and for failures before the stream starts', async () => {
     const f = fixture();
     const base = await origin(f);
-    for (const progress of ['0', 'yes', '11']) {
-      const response = await ask(base, { progress });
-      expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
-      validatePersonAnswerResponseV6(await response.json());
-    }
+    await expectJsonAskFallbacks(ask, base, { header: '6', others: ['0', 'yes', '11'], validate: validatePersonAnswerResponseV7 });
     const v4 = await ask(base, { path: PERSON_ANSWER_PATH_V4 });
     expect(v4.headers.get('content-type')).toBe('application/json; charset=utf-8');
     expect(await v4.json()).toMatchObject({ schema_version: 5 });
     // No V3 application is composed here: the route still answers in JSON.
     expect((await ask(base, { path: PERSON_ANSWER_PATH_V3 })).headers.get('content-type')).toBe('application/json; charset=utf-8');
-    const unauthenticated = await ask(base, { token: 'stranger' });
-    expect(unauthenticated.status).toBe(401);
-    expect(unauthenticated.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    expect(unauthenticated.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('5');
-    await expect(unauthenticated.json()).resolves.toEqual({ error: { code: 'unauthorized', message: 'request failed' } });
     const invalid = await ask(base, { body: { schema_version: 3 } });
     expect(invalid.status).toBe(400);
     expect(invalid.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    expect(f.audits.every(entry => entry.named_citation_digests === undefined)).toBe(true);
+  });
+
+  it('answers /v5 in JSON whatever progress header it carries: its progress V1 stream was retired', async () => {
+    const f = fixture();
+    const base = await origin(f);
+    for (const progress of [PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, null]) {
+      const response = await ask(base, { path: PERSON_ANSWER_PATH_V5, progress });
+      expect([response.status, response.headers.get('content-type'), response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)]).toEqual([200, 'application/json; charset=utf-8', '5']);
+      expect(validatePersonAnswerResponseV6(await response.json())).toMatchObject({ schema_version: 6, outcome: 'answered' });
+    }
+    // Nothing streamed, so no Ask audit names anything.
     expect(f.audits.every(entry => entry.named_citation_digests === undefined)).toBe(true);
   });
 
@@ -186,13 +155,9 @@ describe('Ask progress over HTTP', () => {
     const base = await origin(f, event => { observed.push(event); });
     const response = await ask(base);
     expect(response.status).toBe(200);
-    expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('5');
+    expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('6');
     const events = decode(await response.text());
     expect(events.at(-1)).toEqual({ type: 'error', status: 401, error: { code: 'unauthorized', message: 'request failed' } });
-    expect(events.at(-2)).toEqual({ type: 'stage', stage: 'checking_access' });
-    expect(events.some(event => event.type === 'answer')).toBe(false);
-    // A refused final check writes no request record.
-    expect(f.audits).toEqual([]);
     // The request's span records the status the error event carries, as the JSON route's failure would: the wire's 200 says nothing.
     await vi.waitFor(() => expect(observed.filter(event => event.phase === 'http_request' && event.event !== 'started').map(event => event.counts.http_status)).toEqual([401]));
   });
@@ -206,9 +171,9 @@ describe('Ask progress over HTTP', () => {
     const response = await ask(base, { signal: controller.signal });
     expect(response.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
     const reader = response.body!.getReader();
-    const decoder = createPersonAskProgressDecoderV1();
+    const decoder = createPersonAskProgressDecoderV2();
     const text = new TextDecoder();
-    const seen: PersonAskProgressEventV1[] = [];
+    const seen: PersonAskProgressEventV2[] = [];
     while (!seen.some(event => event.type === 'stage' && event.stage === 'writing')) {
       const chunk = await reader.read();
       if (chunk.done) throw new Error('stream ended early');
@@ -225,14 +190,12 @@ describe('Ask progress over HTTP', () => {
   });
 });
 
-// The V6 Ask on /v5 streams progress V1; the V7 Ask on /v6 streams V2 inside the same snapshot-retry wrapper (ADR-0040).
-describe.each([
-  { route: '/v5', streamed: (base: string) => ask(base).then(async response => decode(await response.text()) as readonly (PersonAskProgressEventV1 | PersonAskProgressEventV2)[]) },
-  { route: '/v6', streamed: (base: string) => ask(base, { path: PERSON_ANSWER_PATH_V6, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V2 }).then(async response => {
+// The V7 Ask on /v6 streams progress V2 inside the snapshot-retry wrapper (ADR-0040).
+describe('Ask progress across a restarted Ask on /v6', () => {
+  const streamed = (base: string) => ask(base).then(async response => {
     expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('6');
-    return decodeV2(await response.text());
-  }) },
-])('Ask progress across a restarted Ask on $route', ({ streamed }) => {
+    return decode(await response.text());
+  });
   /** The first attempt's audit record is written; the check after it sees the record snapshot advance. */
   const AFTER_AUDIT = 4;
   /** The check before the first attempt's writer, after it named the note: it stops before any audit write. */

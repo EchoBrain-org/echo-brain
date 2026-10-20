@@ -1,18 +1,14 @@
 import { chmodSync, lstatSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
-
-/** The Authority's staging canary outcome; the receipt carries `kind` as its approval outcome. */
-export interface StagingSyntheticCanaryResultV1 {
-  readonly kind: "staged" | "not_actionable" | "not_staged";
-  readonly approval_id: string | null;
-}
+import type { StagingSyntheticCanaryOutcomeV1 } from "../organization-authority-runtime.js";
+import { CLEAN_V1_RELEASE_ID } from "../clean-v1-release-id.js";
 
 interface StagingCanaryRuntimeV1 {
   run_staging_synthetic_canary?: (
     release_id: string,
     options?: Readonly<{ signal?: AbortSignal }>,
-  ) => Promise<StagingSyntheticCanaryResultV1>;
+  ) => Promise<StagingSyntheticCanaryOutcomeV1>;
 }
 
 export const STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1 =
@@ -20,8 +16,7 @@ export const STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1 =
 
 export const STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 =
   STAGING_AUTHORITY_ORIGIN_V1;
-const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
-const STAGING_AUTHORITY_HOST = "authority-staging.echobrain.org";
+const STAGING_AUTHORITY_HOST = new URL(STAGING_AUTHORITY_ORIGIN_V1).hostname;
 const CONTROL_PATH = "/v1/run";
 const OPERATION_TIMEOUT_MS = 110_000;
 
@@ -53,7 +48,7 @@ function assertStagingControlInput(
   if (input.authority_host !== STAGING_AUTHORITY_HOST) {
     throw new Error("staging synthetic private-DM control host is invalid");
   }
-  if (!RELEASE_ID.test(input.release_id)) {
+  if (!CLEAN_V1_RELEASE_ID.test(input.release_id)) {
     throw new Error(
       "staging synthetic private-DM control release id is invalid",
     );
@@ -96,7 +91,7 @@ function noContent(response: ServerResponse): void {
 function receipt(
   response: ServerResponse,
   releaseId: string,
-  result: StagingSyntheticCanaryResultV1,
+  result: StagingSyntheticCanaryOutcomeV1,
 ): void {
   const body = Buffer.from(
     JSON.stringify({

@@ -71,8 +71,7 @@ The organization Granola credential, owner admission, and REST polling path
 have been removed. `providers/granola` now implements the personal Granola MCP
 connection through the shared Nango lifecycle, folder enumeration, meeting
 acquisition and normalization
-([ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md)), and
-keeps the generic context capture adapter. It owns transport and
+([ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md)). It owns transport and
 canonicalization, preserving semantic revisions and transcript attribution;
 custody, extraction and review stay in the Authority. The
 [Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)

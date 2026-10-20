@@ -1,6 +1,6 @@
 import type { PersonMeetingRefV1 } from './person-list-v1.js';
 import type { PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemVerdictV1 } from './person-runs-v1.js';
-import { asEnumerableRecord, assertDigest, assertExactKeys, assertTimestamp, fail } from './validation.js';
+import { asEnumerableRecord, assertDigest, assertExactKeys, assertTimestamp, boundedLine as line, fail, oneOf, openItemId as itemId } from './validation.js';
 
 /**
  * A shared follow-up (an open item, ADR-0033) as Ask evidence (ADR-0040).
@@ -76,27 +76,12 @@ export interface PersonFollowUpEvidenceV1 {
   readonly expected?: string;
 }
 
-const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const FOLLOW_UP_REF = /^follow_up:itm_[A-Za-z0-9-]{4,60}$/;
-const KINDS: readonly string[] = Object.keys({ action: true, ticket: true, page: true, slack_message: true, record: true, document: true } satisfies Record<PersonOpenItemKindV1, true>);
-const STATES: readonly string[] = Object.keys({ unsent: true, open: true, done: true, not_relevant: true } satisfies Record<PersonOpenItemStateV1, true>);
-const VERDICTS: readonly string[] = Object.keys({ landed: true, still_open: true, changed: true, unreadable: true } satisfies Record<PersonOpenItemVerdictV1, true>);
+const KINDS = Object.keys({ action: true, ticket: true, page: true, record: true, document: true } satisfies Record<PersonOpenItemKindV1, true>) as readonly PersonOpenItemKindV1[];
+const STATES = Object.keys({ unsent: true, open: true, done: true, not_relevant: true } satisfies Record<PersonOpenItemStateV1, true>) as readonly PersonOpenItemStateV1[];
+const VERDICTS = Object.keys({ landed: true, still_open: true, changed: true, unreadable: true } satisfies Record<PersonOpenItemVerdictV1, true>) as readonly PersonOpenItemVerdictV1[];
 const LIMITS = PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1;
 
-/** One trimmed NFC line of 1 to `maximum` characters, as the open items API bounds its lines. */
-function line(value: unknown, label: string, maximum: number): string {
-  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || value !== value.normalize('NFC') ||
-      /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) || [...value].length > maximum) fail(`${label} is invalid`);
-  return value;
-}
-function itemId(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !ITEM_ID.test(value)) fail(`${label} is invalid`);
-  return value;
-}
-function oneOf<T extends string>(value: unknown, allowed: readonly string[], label: string): T {
-  if (typeof value !== 'string' || !allowed.includes(value)) fail(`${label} is invalid`);
-  return value as T;
-}
 function optional(entry: Record<string, unknown>, keys: readonly string[]): string[] {
   return keys.filter(key => Object.hasOwn(entry, key));
 }
@@ -128,7 +113,7 @@ export function validatePersonFollowUpEvidenceV1(value: unknown): PersonFollowUp
     const raw = asEnumerableRecord(entry.check, 'Follow-up check');
     assertExactKeys(raw, ['verdict', 'checked_at'], 'Follow-up check');
     assertTimestamp(raw.checked_at, 'Follow-up checked_at');
-    check = Object.freeze({ verdict: oneOf<PersonOpenItemVerdictV1>(raw.verdict, VERDICTS, 'Follow-up check verdict'), checked_at: raw.checked_at });
+    check = Object.freeze({ verdict: oneOf(raw.verdict, VERDICTS, 'Follow-up check verdict'), checked_at: raw.checked_at });
   }
   let decision: PersonFollowUpDecisionV1 | undefined;
   if (Object.hasOwn(entry, 'decision')) {
@@ -146,10 +131,10 @@ export function validatePersonFollowUpEvidenceV1(value: unknown): PersonFollowUp
   if (expected === title) fail('Follow-up expected repeats its title');
   return Object.freeze({
     item_id: itemId(entry.item_id, 'Follow-up item_id'),
-    kind: oneOf<PersonOpenItemKindV1>(entry.kind, KINDS, 'Follow-up kind'),
+    kind: oneOf(entry.kind, KINDS, 'Follow-up kind'),
     title,
     owner: line(entry.owner, 'Follow-up owner', LIMITS.owner_chars),
-    status: oneOf<PersonOpenItemStateV1>(entry.status, STATES, 'Follow-up status'),
+    status: oneOf(entry.status, STATES, 'Follow-up status'),
     ...(Object.hasOwn(entry, 'created_at') ? { created_at: entry.created_at as string } : {}),
     ...(Object.hasOwn(entry, 'sent_at') ? { sent_at: entry.sent_at as string } : {}),
     ...(Object.hasOwn(entry, 'reassigned_at') ? { reassigned_at: entry.reassigned_at as string } : {}),

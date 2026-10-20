@@ -5,7 +5,7 @@ import type { SlackBotTokenSourceV1 } from "../organization-control-plane/applic
 import type { StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import type { PrivateSlackApprovalBlockKitCardInputV1 } from "./private-slack-approval-block-kit-card-v1.js";
-import { buildClosedApprovalCardV4, buildSlackApprovalCardV4, type SlackApprovalCardV4 } from "./slack-approval-card-v4.js";
+import { buildClosedApprovalCardV4, buildSlackApprovalCardV4, type SlackApprovalCardV4, type SlackApprovalOwnerProposalV4 } from "./slack-approval-card-v4.js";
 
 export interface SlackApprovalTargetV1 {
   readonly connection_id: string;
@@ -16,12 +16,7 @@ export interface SlackApprovalTargetV1 {
   readonly api_app_id: string;
 }
 
-export interface SlackApprovalPosterV1 {
-  openDirectMessage(subjectId: string, signal?: AbortSignal): Promise<{ kind: "opened"; channel_id: string } | { kind: "retry_allowed" }>;
-  postMarker(input: { approval_id: string; dm_channel_id: string }, signal?: AbortSignal): Promise<{ kind: "posted"; provider_message_ts: string } | { kind: "retry_allowed" } | { kind: "uncertain" }>;
-  reconcileMarker(input: { approval_id: string; dm_channel_id: string; post_started_at: string; reconciliation_started_at: string }, signal?: AbortSignal): Promise<{ kind: "posted"; provider_message_ts: string } | { kind: "retry_allowed" } | { kind: "uncertain" }>;
-  publish(input: { approval_id: string; dm_channel_id: string; provider_message_ts: string; card: SlackApprovalCardV4 }, signal?: AbortSignal): Promise<{ kind: "done" } | { kind: "uncertain" }>;
-}
+export type SlackApprovalPosterV1 = Pick<PrivateSlackApprovalCardPosterV1, "openDirectMessage" | "postMarker" | "reconcileMarker" | "publish">;
 
 function matchesTarget(connection: StoredSlackConnectionV1, target: SlackApprovalTargetV1): boolean {
   return connection.connection.connection_id === target.connection_id &&
@@ -41,7 +36,6 @@ export function createTargetBoundSlackApprovalPosterV1(input: {
   readonly botToken: SlackBotTokenSourceV1;
   readonly needsReinstall: (connection: StoredSlackConnectionV1) => boolean;
   readonly markNeedsReinstall: (connection: StoredSlackConnectionV1) => void;
-  readonly fetchImpl?: typeof fetch;
 }): SlackApprovalPosterV1 {
   const requireBoundConnection = (): StoredSlackConnectionV1 => {
     const connection = input.activeConnection();
@@ -59,7 +53,6 @@ export function createTargetBoundSlackApprovalPosterV1(input: {
     }
     return token;
   }, {
-    ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
     needs_reinstall: () => {
       const connection = input.activeConnection();
       return connection !== undefined && matchesTarget(connection, input.target) && input.needsReinstall(connection);
@@ -73,7 +66,6 @@ export function createTargetBoundSlackApprovalPosterV1(input: {
 
 export interface ApprovalPresenterV1 { reconcile(signal: AbortSignal): Promise<"rendered" | "idle" | "uncertain"> }
 export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
-export interface ApprovalOwnerProposalV1 { readonly signal_id: string; readonly action: string; readonly proposed: string }
 export interface ApprovalProposalViewV1 {
   readonly approval_id: string;
   readonly reviewer: ApprovalActorV1;
@@ -86,7 +78,7 @@ export interface ApprovalProposalViewV1 {
   readonly snapshot_json: string;
 }
 
-type ApprovalCoreV1 = Pick<{ proposal(id: string): ApprovalProposalViewV1 | undefined; ownerProposals(id: string): readonly ApprovalOwnerProposalV1[] }, "proposal" | "ownerProposals">;
+type ApprovalCoreV1 = Pick<{ proposal(id: string): ApprovalProposalViewV1 | undefined; ownerProposals(id: string): readonly SlackApprovalOwnerProposalV4[] }, "proposal" | "ownerProposals">;
 type Delivery = "opening" | "posting" | "posted" | "unrepresentable" | "failed";
 type MarkerState = "not_started" | "in_flight";
 type PresentationRow = {
@@ -105,8 +97,12 @@ type PresentationRow = {
 };
 
 const MAX_ATTEMPTS = 5;
+/** The longest Slack Retry-After a row waits out, so a huge one cannot park it for days, unretried and never failed. */
+const MAX_RETRY_AFTER_MS = 15 * 60_000;
 const asIso = (value: Date): string => value.toISOString();
-const nextRetryAt = (now: Date, attempts: number): string => new Date(now.getTime() + Math.min(60_000, 1_000 * 2 ** attempts)).toISOString();
+// Never sooner than Slack's Retry-After, up to the cap. Each step gets a fresh poster, so the row, not the poster, keeps it.
+const nextRetryAt = (now: Date, attempts: number, retryAfterMs = 0): string =>
+  new Date(now.getTime() + Math.max(Math.min(60_000, 1_000 * 2 ** attempts), Math.min(retryAfterMs, MAX_RETRY_AFTER_MS))).toISOString();
 
 function record(value: unknown, label: string): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`approval snapshot ${label} must be an object`);
@@ -225,11 +221,11 @@ export function createSlackApprovalPresenterV1(options: {
   const backoffUpdate = database.prepare(`UPDATE authority_approval_presentations_v1
     SET delivery=CASE WHEN ?>=? THEN 'failed' ELSE delivery END,attempts=?,retry_at=?,updated_at=?
     WHERE approval_id=? AND surface='slack'`);
-  const backoff = (row: PresentationRow, terminal = false) => {
+  const backoff = (row: PresentationRow, terminal = false, retryAfterMs?: number) => {
     const attempts = terminal ? MAX_ATTEMPTS : row.attempts + 1;
     const at = now();
     observeCoreRuntimeSyncV1("approval_delivery", () => {
-      backoffUpdate.run(attempts, MAX_ATTEMPTS, attempts, attempts >= MAX_ATTEMPTS ? null : nextRetryAt(at, attempts), asIso(at), row.approval_id);
+      backoffUpdate.run(attempts, MAX_ATTEMPTS, attempts, attempts >= MAX_ATTEMPTS ? null : nextRetryAt(at, attempts, retryAfterMs), asIso(at), row.approval_id);
       annotateCoreRuntimeV1({ approval_surface: "slack", attempt: attempts, result: attempts >= MAX_ATTEMPTS ? "failed" : "retry_pending" });
     }, { correlation: { approval_id: coreRuntimeIdentityV1("approval", row.approval_id) } });
   };
@@ -290,7 +286,7 @@ export function createSlackApprovalPresenterV1(options: {
           }
           try {
             const opened = await deliver(row, "open_dm", () => provider(target).openDirectMessage(target.slack_subject_id, signal));
-            if (!options.targetCurrent(target) || opened.kind !== "opened") { backoff(row); continue; }
+            if (!options.targetCurrent(target) || opened.kind !== "opened") { backoff(row, false, opened.kind === "retry_allowed" ? opened.retry_after_ms : undefined); continue; }
             if (!pendingActive(options.core.proposal(row.approval_id))) {
               if (finishUnposted.run(opened.channel_id, asIso(now()), row.approval_id).changes === 1) changed = true;
               continue;
@@ -320,9 +316,9 @@ export function createSlackApprovalPresenterV1(options: {
               if (posted.kind === "posted") {
                 if (persistMarker.run(posted.provider_message_ts, asIso(now()), row.approval_id).changes !== 1) { uncertain = true; continue; }
               } else if (posted.kind === "retry_allowed") {
-                resetMarker.run(asIso(now()), row.approval_id); backoff(inFlight);
+                resetMarker.run(asIso(now()), row.approval_id); backoff(inFlight, false, posted.retry_after_ms);
                 continue;
-              } else { backoff(inFlight); uncertain = true; continue; }
+              } else { backoff(inFlight, false, posted.retry_after_ms); uncertain = true; continue; }
             } catch (error) {
               if (isAborted(signal)) throw error;
               backoff(inFlight); uncertain = true; continue;
@@ -335,9 +331,9 @@ export function createSlackApprovalPresenterV1(options: {
               if (reconciled.kind === "posted") {
                 if (persistMarker.run(reconciled.provider_message_ts, asIso(now()), row.approval_id).changes !== 1) { uncertain = true; continue; }
               } else if (reconciled.kind === "retry_allowed") {
-                resetMarker.run(asIso(now()), row.approval_id); backoff(row);
+                resetMarker.run(asIso(now()), row.approval_id); backoff(row, false, reconciled.retry_after_ms);
                 continue;
-              } else { backoff(row); uncertain = true; continue; }
+              } else { backoff(row, false, reconciled.retry_after_ms); uncertain = true; continue; }
             } catch (error) {
               if (isAborted(signal)) throw error;
               backoff(row); uncertain = true; continue;
@@ -350,7 +346,7 @@ export function createSlackApprovalPresenterV1(options: {
             // Built inside the try: a card that cannot be built backs this row off instead of stalling the others.
             const publishedCard = shows === "open" ? card(liveProposal!) : buildClosedApprovalCardV4({ title: liveProposal?.title ?? "Meeting", outcome: shows, surface: liveProposal?.decided_on ?? "desktop", audience_label: liveProposal?.project_ids.length ? "Projects" : "Only me" });
             const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: message.dm_channel_id, provider_message_ts: message.message_ts, card: publishedCard }, signal));
-            if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row); uncertain = true; continue; }
+            if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row, false, published.kind === "uncertain" ? published.retry_after_ms : undefined); uncertain = true; continue; }
             persistCard.run(shows, canonicalSha256(publishedCard as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;
           } catch (error) {
             if (isAborted(signal)) throw error;
@@ -364,7 +360,7 @@ export function createSlackApprovalPresenterV1(options: {
         try {
           const redraw = shows === "open" ? card(proposal) : buildClosedApprovalCardV4({ title: proposal.title, outcome: shows, surface: proposal.decided_on ?? "desktop", audience_label: proposal.project_ids.length ? "Projects" : "Only me" });
           const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id!, provider_message_ts: row.message_ts!, card: redraw }, signal));
-          if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row); uncertain = true; continue; }
+          if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row, false, published.kind === "uncertain" ? published.retry_after_ms : undefined); uncertain = true; continue; }
           persistCard.run(shows, canonicalSha256(redraw as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;
         } catch (error) {
           if (isAborted(signal)) throw error;

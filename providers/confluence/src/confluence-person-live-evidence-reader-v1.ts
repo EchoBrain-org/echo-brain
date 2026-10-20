@@ -4,15 +4,13 @@ import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
-import { inBatchesOfFourV1 as parallel } from '@echo-brain/provider-runtime/person-provider-v1';
+import { boundUtf8V1, inBatchesOfFourV1 as parallel } from '@echo-brain/provider-runtime/person-provider-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
 import { normalizeConfluencePageDocumentV1 } from './confluence-page-text-v1.js';
 import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
-import { confluenceArray, confluenceFailure, confluenceRecord, confluenceString, copyConfluenceBindingV1 } from './confluence-validation-v1.js';
+import { CONFLUENCE_ID as ID, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString, copyConfluenceBindingV1 } from './confluence-validation-v1.js';
 
-const API_ORIGIN = 'https://api.atlassian.com';
-const ID = /^[1-9][0-9]{0,19}$/;
 const MAX_HANDLES = 512;
 /**
  * Content reads (search, list and open traffic) per request. Connection
@@ -44,11 +42,6 @@ function limit(value: number, maximum = 20): number {
 }
 function leftOut(left_out: boolean): { notice?: string } { return left_out ? { notice: SPACES_LEFT_OUT } : {}; }
 function quote(value: string): string { return `"${value.replace(/[\\"]/g, '\\$&')}"`; }
-function boundedLabel(value: string): string {
-  let result = '';
-  for (const point of value.normalize('NFC')) { if (Buffer.byteLength(result + point, 'utf8') > 256) break; result += point; }
-  return result;
-}
 function metadata(raw: unknown, body = false): Page {
   const record = confluenceRecord(raw);
   const version = confluenceRecord(record.version);
@@ -153,7 +146,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     issued.set(canonicalSha256(citation), saved);
     const label = item.section.startsWith('continue:') ? `Continue ${item.page.title} from section ${item.offset + 1}`
       : item.section === 'inventory' ? item.page.title : `${item.page.title} · section ${item.offset + 1}`;
-    return Object.freeze({ citation, handle, label: boundedLabel(label), visibility: 'only_me',
+    return Object.freeze({ citation, handle, label: boundUtf8V1(label, 256), visibility: 'only_me',
       attributes: Object.freeze({ status: item.page.status }), dates: item.page.dates, ...(item.page.occurred_at === undefined ? {} : { occurred_at: item.page.occurred_at, date_kind: item.page.date_kind }),
       ...(item.text === undefined ? {} : { text: item.text }) });
   }
@@ -164,17 +157,6 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     const number = match === null ? Number.NaN : Number(match[1]);
     if (!Number.isSafeInteger(number)) confluenceFailure('not_found');
     return Object.freeze({ page, section: citation.section_id, offset: number - 1 });
-  }
-  function nextToken(raw: unknown, path: string): string | undefined {
-    if (raw === undefined || raw === null) return undefined;
-    const link = confluenceString(raw, 8192);
-    let url: URL;
-    try { url = new URL(link, API_ORIGIN); } catch { confluenceFailure('invalid_output'); }
-    const allowed = [path, `/wiki${path}`, `/ex/confluence/${cloud}/wiki${path}`];
-    if (url.origin !== API_ORIGIN || url.username !== '' || url.password !== '' || url.hash !== '' || !allowed.includes(url.pathname) || url.searchParams.getAll('cursor').length !== 1) confluenceFailure('invalid_output');
-    // Atlassian repeats limit/status/space-id in next links. Preserve our own
-    // operation and scope; only the cursor token is consumed from this URL.
-    return confluenceString(url.searchParams.get('cursor'), 4096);
   }
   /**
    * The mapped spaces' current keys. Project members can view different mapped spaces, and Confluence answers 404 for a
@@ -240,7 +222,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     if (new Set(pages.map(page => page.id)).size !== pages.length) confluenceFailure('invalid_output');
     pages.forEach(inScope);
     const links = response._links === undefined ? {} : confluenceRecord(response._links);
-    const token = nextToken(links.next, path);
+    const token = confluenceNextCursorV1(links.next, cloud, path, 8192);
     return { pages, ...(token === undefined ? {} : { token }) };
   }
   async function revalidateMetadata(groups: readonly (readonly Item[])[], signal?: AbortSignal): Promise<void> {
@@ -268,7 +250,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
           returned.add(page.id);
         }
         const links = response._links === undefined ? {} : confluenceRecord(response._links);
-        cursor = nextToken(links.next, '/api/v2/pages');
+        cursor = confluenceNextCursorV1(links.next, cloud, '/api/v2/pages', 8192);
         if (cursor !== undefined) {
           // Each continuation must advance within the finite requested set.
           if (rows.length === 0 || returned.size === expected.size || tokens.has(cursor)) confluenceFailure('invalid_output');

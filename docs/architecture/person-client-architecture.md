@@ -27,14 +27,13 @@ release check before command dispatch. Its public publisher trust and local
 release checkpoint are separate from Person authorization state. macOS arm64
 and Linux x64 CLI-kit activation reuse their platform installers. The desktop
 app runs the same updater with its own installation adapter (see
-[Desktop updates](#desktop-updates)). The standalone Mac CLI root is
-separate from the retired Swift app's paired CLI. This adds no background
-runtime or automatic Person-request replay.
+[Desktop updates](#desktop-updates)). This adds no background runtime or
+automatic Person-request replay.
 
 ## Desktop app
 
 The Electron app in `product/echo-desktop` is the graphical interface, packaged
-for macOS arm64 and Linux x64; it replaced the retired Swift app. Its person
+for macOS arm64 and Linux x64. Its person
 host, an Electron utility process, loads this client's `composition.js` and
 runs the same commands in process, as the terminal CLI would. The host is the
 only process that reads the session or holds a token. It sends the app window
@@ -137,19 +136,23 @@ not claim that the employee is currently online or has a live device session.
 ## Account and answer Sources
 
 Ask uses the agentic routes ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md));
-the earlier `/v1` and `/v2/person/ask` routes are retired. The default CLI Ask and
-desktop Mine Ask use `/v3/person/ask` with V4 answers. Desktop global and project Ask
-selects `person ask --live`, using `/v7/person/ask` with V8 answers so the
-person's connected Jira and Confluence accounts can contribute live evidence
-when the Authority configures those sources, with ECHO's shared follow-ups
+the earlier `/v1` and `/v2/person/ask` routes are retired. Every Ask, the CLI's
+`person ask` and the desktop's in every scope, Mine included, uses
+`/v7/person/ask` with V8 answers so the person's connected Jira and Confluence
+accounts can contribute live evidence when the Authority configures those
+sources, with ECHO's shared follow-ups
 ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)) and the
 person's workspace: their projects, the people in their organization, their
 tools, and their connected tools' Jira projects and Confluence spaces
-([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). An older
-Authority without `/v7` gets `/v6/person/ask` with V7 answers, one without
-`/v6` `/v5/person/ask` with V6 answers, and one without `/v5` either
-`/v4/person/ask` with V5 answers; only a 404 without the route header falls
-back. A cited follow-up opens its item page, a project its project page and a
+([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). Mine reads none
+of these. An older Authority without `/v7` gets `/v6/person/ask` with V7
+answers, one without `/v6` `/v5/person/ask` with V6 answers, and one without
+`/v5` either `/v4/person/ask` with V5 answers; only a 404 without the route
+header falls back. `--live`, which once selected this route, is still accepted
+and changes nothing; `--tickets` keeps `/v4/person/ask` with V5 answers. Since
+2026-10-19 this client never asks `/v3/person/ask` (V4 answers, from the one
+Ask core with no access check after its audit write); the Authority still
+serves it for clients installed before. A cited follow-up opens its item page, a project its project page and a
 tool the Tools screen; a person opens nothing. Ticket and page citations, and
 cited Jira projects and Confluence spaces, open directly in Jira or
 Confluence; they are not retained originals. Project leads configure one Jira project from the project settings menu;
@@ -163,10 +166,11 @@ unapproved evidence. The source-card behavior below describes approved
 records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
-`person ask --live --progress` asks `/v7/person/ask` to stream its progress
+`person ask --progress` asks `/v7/person/ask` to stream its progress
 ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) in progress V3 by sending `x-echo-ask-progress: 3`;
 on an Authority without `/v7`, `/v6/person/ask` in V2 with `x-echo-ask-progress: 2`;
-and on one without `/v6`, `/v5/person/ask` in V1 with `x-echo-ask-progress: 1`.
+and on one without `/v6`, `/v5/person/ask` in V1 with `x-echo-ask-progress: 1`,
+which every Authority without `/v6` answers in JSON.
 
 - **Reading the stream.** The client reads the server-sent events with the
   shared decoder of the route's version in `@echo-brain/organization-api`.
@@ -179,14 +183,16 @@ and on one without `/v6`, `/v5/person/ask` in V1 with `x-echo-ask-progress: 1`.
   error the JSON error response would have produced.
 - **Older Authority.** It answers with JSON, so the command prints only
   today's final line.
-- **Flag rules.** `--progress` without `--live` is a usage error. Without the
-  flag, the output is unchanged.
+- **Flag rules.** `--progress` needs no `--live`. With `--tickets`, whose
+  route never streams, it is a usage error. Without the flag, the output is
+  unchanged.
 - **Pinned account.** Paired `--expected-membership-id` and
   `--expected-authority` (only with `--progress`) bind the Ask to the
   caller's account, as the desktop sends them: signed in as another, the
   client sends nothing and prints no step.
 
-The desktop runs this command for global and project Ask. Its host forwards
+The desktop runs this command, as `person ask --live --progress`, for every
+Ask, Mine included. Its host forwards
 the progress lines to the renderer as it already forwards sign-in phases, and
 drops lines that belong to an earlier Ask or another account.
 
@@ -200,9 +206,10 @@ audits continue to use server clocks. Older clients receive an explicit UTC
 server-time reference. Older Authorities ignore the optional headers, so this
 addition preserves the client-first transition in the release guide.
 
-With the Mine chip, the desktop sends `person ask --mine`: Ask reads only the
-person's own notes and uploads and the meetings they approved, and no Slack or
-shared transcript. A cited original from that answer is read under global scope,
+With the Mine chip, the desktop adds `--mine` to that command: Ask reads only
+the person's own notes and uploads and the meetings they approved, and no live
+tool, follow-up, workspace or shared transcript, and shows its progress as
+every Ask does. A cited original from that answer is read under global scope,
 which contains mine.
 
 The desktop app's **Account** menu uses the same Person client and session
@@ -243,8 +250,9 @@ An ECHO record approval does not establish who authorized its business decision.
 
 The client requests optional source metadata with
 `X-Echo-Person-Record-Version: 2`. Each readable record may then include
-`source_metadata.record_approved_by.display_name`, resolved from the private
-Slack approval's exact organization, principal, and membership tuple. The lookup
+`source_metadata.record_approved_by.display_name`, resolved from the approval
+core's recorded approver (the record approver projector): its exact
+organization, principal, and membership tuple. The lookup
 uses the current directory display name, including historical revoked tenures
 when they remain available; it supplies no job title, email, or authorization.
 Participants continue to come from the approved brief. The signed envelope and
@@ -365,7 +373,7 @@ an independent `--association-project-ids-json` set that does not change the
 audience. `status-v3` returns the durable receipt and optional enrichment
 progress. `search-v3` and `search` find original uploads, and
 `person open --ref note:<context-id>` reads one, under current membership and
-stored audience, without Slack approval or a model dependency. Content/search
+stored audience, without approval or a model dependency. Content/search
 releases revalidate the session and audit before returning. Unknown submissions
 require the same request ID and exact file, title, audience, and project
 coordinates on retry; no local queue or automatic upload exists. The V2
@@ -375,7 +383,7 @@ coordinates on retry; no local queue or automatic upload exists. The V2
 The current bounded text carrier does not decide the context taxonomy. Optional
 LLM search hints remain derived metadata. Uploads never become approved
 decision records; `person records` reads approved records only. The
-`/v3/person/ask` route behind `person ask` also retrieves authorized uploads
+Ask routes behind `person ask` also retrieve authorized uploads
 and usable document extraction as unapproved original evidence, filtered by
 stored audience and, for project scope, project association
 ([ADR-0015](../decisions/ADR-0015-global-and-project-scoped-person-ask.md)).

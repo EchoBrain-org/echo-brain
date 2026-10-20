@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { PrivateSlackApprovalCardPosterV1, type PrivateSlackApprovalCardPresentationV1 } from "../../../../../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+import { PrivateSlackApprovalCardPosterV1 } from "../../../../../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+import type { SlackApprovalCardV4 } from "../../../../../src/private-approval/slack-approval-card-v4.js";
 
-const CARD: PrivateSlackApprovalCardPresentationV1 = Object.freeze({
+const CARD: SlackApprovalCardV4 = Object.freeze({
   text: "Private meeting-owner approval requested.",
   blocks: Object.freeze([
     Object.freeze({
@@ -207,6 +208,7 @@ describe("private Slack approval card poster V1", () => {
       (poster: PrivateSlackApprovalCardPosterV1) => poster.postMarker({ approval_id: "apr_123", dm_channel_id: "D123" }),
       () => new Response(JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" })),
       { kind: "posted", provider_message_ts: "123.000001" },
+      "retry_allowed",
     ],
     [
       "a direct-message open",
@@ -216,8 +218,16 @@ describe("private Slack approval card poster V1", () => {
           headers: { "x-oauth-scopes": "im:write" },
         }),
       { kind: "opened", channel_id: "D123", user_id: "U123" },
+      "retry_allowed",
     ],
-  ])("honors Retry-After before retrying %s", async (_step, call, succeed, success) => {
+    [
+      "a card publish",
+      (poster: PrivateSlackApprovalCardPosterV1) => poster.publish({ approval_id: "apr_123", dm_channel_id: "D123", provider_message_ts: "123.000001", card: CARD }),
+      () => new Response(JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" })),
+      { kind: "done" },
+      "uncertain",
+    ],
+  ])("honors Retry-After before retrying %s, and says how long it still holds", async (_step, call, succeed, success, limited) => {
     let now = 10_000;
     let requests = 0;
     const poster = testPoster(
@@ -231,10 +241,11 @@ describe("private Slack approval card poster V1", () => {
       { now: () => now },
     );
 
-    await expect(call(poster)).resolves.toEqual({ kind: "retry_allowed" });
-    await expect(call(poster)).resolves.toEqual({ kind: "retry_allowed" });
+    await expect(call(poster)).resolves.toEqual({ kind: limited, retry_after_ms: 2_000 });
+    now += 500;
+    await expect(call(poster)).resolves.toEqual({ kind: limited, retry_after_ms: 1_500 });
     expect(requests).toBe(1);
-    now += 2_000;
+    now += 1_500;
     await expect(call(poster)).resolves.toEqual(success);
     expect(requests).toBe(2);
   });
@@ -315,10 +326,10 @@ describe("private Slack approval card poster V1", () => {
     const poster = testPoster(async () => {
       requests += 1;
       return new Response("", { status: 429, headers: { "retry-after": "60" } });
-    });
+    }, { now: () => 0 });
     const recovery = { approval_id: "apr_123", dm_channel_id: "D123", post_started_at: "2026-08-28T00:00:00.000Z", reconciliation_started_at: "2026-08-28T00:20:00.000Z" };
-    await expect(poster.reconcileMarker(recovery)).resolves.toEqual({ kind: "uncertain" });
-    await expect(poster.reconcileMarker(recovery)).resolves.toEqual({ kind: "uncertain" });
+    await expect(poster.reconcileMarker(recovery)).resolves.toEqual({ kind: "uncertain", retry_after_ms: 60_000 });
+    await expect(poster.reconcileMarker(recovery)).resolves.toEqual({ kind: "uncertain", retry_after_ms: 60_000 });
     expect(requests).toBe(1);
   });
 });

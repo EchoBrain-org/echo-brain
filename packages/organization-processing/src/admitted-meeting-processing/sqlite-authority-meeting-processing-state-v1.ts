@@ -30,7 +30,6 @@ import {
   reviewInputSha256V1,
   reviewLineageIdV1,
   reviewSemanticSha256V1,
-  type ReviewPolicySnapshotV1,
 } from "./review-lineage-semantics.js";
 import type {
   AdmittedMeetingProcessingAdmissionV1,
@@ -68,10 +67,6 @@ interface CandidateRow {
   readonly review_lineage_id: string;
   readonly review_input_sha256: string;
   readonly review_semantic_sha256: string;
-  readonly review_policy_id: ReviewPolicySnapshotV1["policy_id"];
-  readonly review_policy_contract_sha256: ReviewPolicySnapshotV1["policy_contract_sha256"];
-  readonly review_policy_consequence_text: string;
-  readonly review_policy_consequence_sha256: ReviewPolicySnapshotV1["policy_consequence_sha256"];
   readonly disposition: "actionable" | "coalesced" | "no_signals";
   readonly approval_id: string | null;
   readonly stage_command_id: string | null;
@@ -473,24 +468,6 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       if (row === undefined) return undefined;
       return this.readFrozenCandidateById(row.candidate_id);
     })();
-  }
-
-  approvalIsCurrent(approvalId: string): boolean {
-    const row = this.database
-      .prepare(
-        `SELECT 1
-           FROM authority_live_approval_outbox_v2 AS outbox
-           JOIN authority_live_source_candidates_v2 AS candidate
-             ON candidate.candidate_id = outbox.candidate_id
-           JOIN authority_live_source_review_lineage_heads_v2 AS head
-             ON head.review_lineage_id = candidate.review_lineage_id
-          WHERE outbox.approval_id = ?
-            AND candidate.admission_semantic_input_sha256 = (SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key = ?)
-            AND outbox.state != 'superseded'
-            AND head.candidate_id = candidate.candidate_id`,
-      )
-      .get(approvalId, this.sourceKey) as { readonly 1: number } | undefined;
-    return row !== undefined;
   }
 
   listPendingApprovalDeliveries(
@@ -898,10 +875,6 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
                 candidate.review_lineage_id, candidate.review_input_sha256,
                 candidate.review_semantic_sha256,
-                candidate.review_policy_id,
-                candidate.review_policy_contract_sha256,
-                candidate.review_policy_consequence_text,
-                candidate.review_policy_consequence_sha256,
                 candidate.disposition, outbox.approval_id,
                 outbox.stage_command_id,
                 COALESCE(outbox.state, candidate.disposition) AS state
@@ -967,10 +940,6 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
                 candidate.review_lineage_id, candidate.review_input_sha256,
                 candidate.review_semantic_sha256,
-                candidate.review_policy_id,
-                candidate.review_policy_contract_sha256,
-                candidate.review_policy_consequence_text,
-                candidate.review_policy_consequence_sha256,
                 candidate.disposition,
                 outbox.approval_id, outbox.stage_command_id, outbox.state,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,

@@ -2,7 +2,6 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   AgenticAskOutputErrorV1,
-  ASK_SEARCH_ONLY_STEP_PROMPT,
   ASK_STEP_PROMPT,
   answerSchema,
   cleanId,
@@ -12,11 +11,11 @@ import {
   parseStep,
   SEARCH_ONLY_STEP_PROMPT,
   STEP_PROMPT,
-  stepSchema,
   stripEvidenceIds,
 } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 
 type Schema = Readonly<Record<string, any>>;
+const stepSchema = createStepSchema(["meetings", "documents", "slack"]);
 
 /** Deterministic generator of values a JSON-schema-enforcing provider could legally return. */
 function generator(seed: number) {
@@ -107,10 +106,10 @@ describe("agentic Ask model protocol parity", () => {
     const rule = (prompt: string, number: number) => prompt.split("\n").find(line => line.startsWith(`${number}. `))!;
     const line = (prompt: string, start: string) => prompt.split("\n").find(value => value.startsWith(start))!;
     // Background task prompts stay byte-for-byte unchanged. Ask also explains its client-local date projection.
-    expect([STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT].map(prompt => canonicalSha256(prompt))).toEqual([
-      "sha256:8083e4e4f259bd9676bd3a685d30c3fb5b8a797ecd61727552488a31a5014d86", "sha256:d4d67ae7a306adbae70a9f5c2d5ebea59a9c9e69173657f82f7ccfac9e6bccaf", "sha256:92869f54b6f72de6f456267afbad8502ec212c306e0bf119cc1c7093632ffabe",
+    expect([STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT].map(prompt => canonicalSha256(prompt))).toEqual([
+      "sha256:8083e4e4f259bd9676bd3a685d30c3fb5b8a797ecd61727552488a31a5014d86", "sha256:d4d67ae7a306adbae70a9f5c2d5ebea59a9c9e69173657f82f7ccfac9e6bccaf",
     ]);
-    for (const prompt of [ASK_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain('already converted to the request time_zone');
+    expect(ASK_STEP_PROMPT).toContain('already converted to the request time_zone');
     // Research declares each need's kind, with an example of each; a list's id supports only the list kinds. Its examples name
     // nothing the research-loop evaluation asks about (tests/architecture/ask-kind-examples-eval-independence.test.ts).
     // Research tool contract v1: rules 1 to 4 are how to look (understand, look around, choose paths, dig).
@@ -133,15 +132,14 @@ describe("agentic Ask model protocol parity", () => {
     expect(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("Open those items before relying on what they say; a list's members need no open to show which items exist.");
     expect(line(ASK_STEP_PROMPT, "  When to use: before relying on")).toContain("before relying on what metadata-only items or incomplete previews say, or on a fact about one item; never only to show that a list's members exist or match its filter;");
     expect(line(STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("no body means metadata only. Open those items before relying on them.");
-    expect(rule(ASK_SEARCH_ONLY_STEP_PROMPT, 4).endsWith("then open the candidates. Stop as soon as every requested fact is supported.")).toBe(true);
     // The reply shape names all three kinds and shows none, so a model copying it copies no default; the example has one need of each.
     const shape = line(ASK_STEP_PROMPT, "{\"parts\":[{\"question\":\"<one part of the question>\"");
     expect(JSON.parse(shape).parts[0].needs).toEqual([{ id: "N1", need: "<a fact needed>", kind: "<which_items, which_say or content>", status: "open", evidence: [] }]);
     expect(ASK_STEP_PROMPT).toContain("A need's \"status\" is \"open\", \"found\" or \"not_found\". A need's \"kind\" is \"which_items\", \"which_say\" or \"content\". \"tool\" is");
     const example = JSON.parse(ASK_STEP_PROMPT.split("\n").at(-1)!) as { parts: { needs: { kind: string; evidence: string[] }[] }[] };
     expect(example.parts.flatMap(part => part.needs.map(need => [need.kind, need.evidence]))).toEqual([["which_items", ["L1"]], ["which_say", ["L1", "E3"]], ["content", ["E2"]]]);
-    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) expect(prompt).not.toMatch(/which_items|which_say|A need's "kind"|for a which_say need/u);
-    for (const prompt of [ASK_STEP_PROMPT, ASK_SEARCH_ONLY_STEP_PROMPT]) expect([prompt.includes("You may stop early"), prompt.includes("instead of paging through it")]).toEqual([false, false]);
+    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).not.toMatch(/which_items|which_say|A need's "kind"|for a which_say need/u);
+    expect([ASK_STEP_PROMPT.includes("You may stop early"), ASK_STEP_PROMPT.includes("instead of paging through it")]).toEqual([false, false]);
     for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain("You may stop early when the facts the question asks for are already supported.");
     // Ask's argument and recovery clarifications are covered by agentic-ask-tool-contracts.test.ts.
     // Background prompts above remain byte-for-byte pinned; Ask keeps the same discovery tools and evidence rules.
@@ -164,8 +162,8 @@ describe("agentic Ask model protocol parity", () => {
       const empty = (text: string) => text.trim().replace(/[\s\p{Cc}]+/gu, "").length === 0;
       const primary: Record<string, string> = { search: "query", open: "id", list: "source" };
       const blank = value.parts.some(part => empty(part.question)) || value.actions.some(action => action.tool !== "finish" && empty(action.args[primary[action.tool]!]!));
-      if (blank) expect(() => parseStep(value, { lists: true, kinds: true })).toThrow(AgenticAskOutputErrorV1);
-      else expect(() => parseStep(value, { lists: true, kinds: true })).not.toThrow();
+      if (blank) expect(() => parseStep(value, { lists: true })).toThrow(AgenticAskOutputErrorV1);
+      else expect(() => parseStep(value, { lists: true })).not.toThrow();
     }
   });
 
@@ -174,10 +172,10 @@ describe("agentic Ask model protocol parity", () => {
       parts: [{ question: "q", needs: [...values.map((kind, index) => ({ need: `n${index}`, ...(kind === undefined ? {} : { kind }), status: "open", evidence: [] })), "bare need"], notes: "" }], actions: [{ tool: "finish", args: {} }],
     }, options).parts[0]!.needs.map(need => "kind" in need ? need.kind : "none");
     // At most 6 needs a part: two parts' worth.
-    expect(kinds(["which_items", "Which Items", "which-items", " WHICH_ITEMS ", "which_say"], { lists: true, kinds: true })).toEqual(["which_items", "which_items", "which_items", "which_items", "which_say", "content"]);
-    expect(kinds(["Which-Say", "content", "list", "", 3], { lists: true, kinds: true })).toEqual(["which_say", "content", "content", "content", "content", "content"]);
-    // Without kinds (a task goal, or Ask without the list tool) no need has a kind, whatever the model wrote.
-    for (const options of [{ lists: true }, {}]) expect(kinds(["which_items"], options)).toEqual(["none", "none"]);
+    expect(kinds(["which_items", "Which Items", "which-items", " WHICH_ITEMS ", "which_say"], { lists: true })).toEqual(["which_items", "which_items", "which_items", "which_items", "which_say", "content"]);
+    expect(kinds(["Which-Say", "content", "list", "", 3], { lists: true })).toEqual(["which_say", "content", "content", "content", "content", "content"]);
+    // A task goal's needs have no kind, whatever the model wrote.
+    expect(kinds(["which_items"], {})).toEqual(["none", "none"]);
   });
 
   it("keeps list ids in a need's evidence only for Ask, within the 12-id cap", () => {
@@ -303,11 +301,11 @@ describe("agentic Ask model protocol parity", () => {
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
     const step = parseStep({ parts: [{ question: "q", needs: ["a fact"], notes: "" }], actions: [
-      { tool: "search", input: "fixture owner" }, { tool: "open", args: "E4" }, { tool: "browse", input: "meetings" }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: 7 } },
+      { tool: "search", input: "fixture owner" }, { tool: "open", args: "E4" }, { tool: "browse", input: "meetings" }, { tool: "list", args: { source: "documents", channel: "#hw-dvt", since: 7 } },
     ] });
     expect(step.parts[0]!.needs).toEqual([{ need: "a fact", status: "open", evidence: [] }]);
     expect(step.actions).toEqual([
-      { tool: "search", args: { query: "fixture owner" } }, { tool: "open", args: { id: "E4" } }, { tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: "7" } },
+      { tool: "search", args: { query: "fixture owner" } }, { tool: "open", args: { id: "E4" } }, { tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "documents", channel: "#hw-dvt", since: "7" } },
     ]);
   });
 

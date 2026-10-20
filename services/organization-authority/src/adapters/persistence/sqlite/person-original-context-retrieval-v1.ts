@@ -20,6 +20,7 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-authority-kernel/shared/released-source-context-v1";
 import type Database from "better-sqlite3";
+import { appendAuditRowV1 } from "./audit-row-v1.js";
 import { canonicalSourceContentV1, sourceContentSha256V1 } from "@echo-brain/organization-processing/core";
 import { assertCanonicalMeetingDocument, type MeetingDocument } from "@echo-brain/organization-processing/core";
 import type { PersonMeetingTranscriptCitationV1, PersonOpenRefV1 } from "@echo-brain/organization-api";
@@ -81,8 +82,7 @@ type OriginalScanRow = Pick<SourceRow, "source_id" | "revision_id" | "source_sha
 type DocumentScanRow = Pick<DocumentRow, "source_id" | "revision_id" | "source_sha256" | "representation_sha256" | "document_id" | "title" | "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor" | "received_at" | "visibility">;
 type OriginalScanIdentity = Omit<OriginalScanRow, "title" | "text">;
 type DocumentScanIdentity = Omit<DocumentScanRow, "title" | "text">;
-const ORIGINAL_TEXT_CUSTODY_V1 = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
-  UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
+const ORIGINAL_TEXT_CUSTODY_V1 = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2)`;
 
 type SourceRow = {
   readonly dates?: EvidenceDatesV1;
@@ -372,15 +372,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     readonly query?: string;
     readonly kinds?: readonly DeskKind[];
     readonly limit?: number;
-    readonly inventory_mode?: "items";
   }): OriginalContextDeskReleaseV1 {
     validateEvidenceDateFilterV1(input, input.source === "meeting" ? PERSON_MEETING_DATE_FIELDS_V1 : input.source === "document" ? PERSON_DOCUMENT_DATE_FIELDS_V1 : ANY_SOURCE_DATE_FIELDS);
     const limit = input.limit ?? (input.query === undefined ? 50 : 10);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > (input.query === undefined ? 50 : 10)) {
-      throw new AuthorityOperationError("invalid_request", "request is invalid");
-    }
-    if (input.inventory_mode !== undefined &&
-      (input.query !== undefined || input.inventory_mode !== "items")) {
       throw new AuthorityOperationError("invalid_request", "request is invalid");
     }
     const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
@@ -389,25 +384,11 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const terms = input.query === undefined ? [] : queryTerms(input.query);
     const filteredInventory = input.query === undefined && (input.source !== undefined || input.since !== undefined || input.until !== undefined);
     const candidates = input.query === undefined && !filteredInventory
-      ? this.deskInventoryRows(
-          actor,
-          input.scope,
-          limit + 1,
-          input.kinds,
-          input.inventory_mode === "items",
-        )
+      ? this.deskInventoryRows(actor, input.scope, limit + 1, input.kinds)
       : [];
-    // Complete-items inventory counts canonical desk packets, rather than
-    // extraction rows. A single long note or extracted chunk can contain many
-    // independently citable 3 KiB packets. The SQL candidates are already
-    // bounded to limit+1 rows; every row has at least one packet, so expanding
-    // then taking limit+1 is sufficient to prove truncation without an
-    // unbounded source scan.
     const expanded: DeskEntry[] = input.query !== undefined
       ? this.deskBm25Entries(actor, input.scope, terms, limit + 1, input.kinds, input)
       : filteredInventory ? this.deskFilteredInventory(actor, input.scope, limit + 1, input)
-      : input.inventory_mode === "items"
-      ? candidates.flatMap((row) => this.deskAtoms(row, [], true).map((atom) => ({ score: 0, received_at: row.received_at, atom, item: () => this.deskItem(row, atom, false) })))
       : candidates.map((row) => { const atom = this.deskAtom(row, []); return { score: row.lexical_score, received_at: row.received_at, atom, item: () => this.deskItem(row, atom, false) }; });
     const selected = expanded.slice(0, limit);
     annotateCoreRuntimeV1({ counts: { transcript_items: selected.filter((entry) => entry.transcript === true).length } });
@@ -520,9 +501,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       : this.revalidate({ access_token: input.access_token, release: input.release.release });
     const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
     // The release keeps its per-atom revalidation semantics.  The
-    // request-bound desk additionally pins the authorization revision so a
-    // later desk call cannot mix project-association snapshots.
-    if (this.authorizationRevision(actor.organization_id) !== input.release.release.authorization_revision) denied();
+    // request-bound desk additionally pins the caller's own project grants, so
+    // a later desk call cannot mix this caller's project-association
+    // snapshots. Not the org-wide revision: anyone's note or rename moves it.
+    if (this.grantsSha256(actor) !== input.release.release.grants_sha256) denied();
     if (input.items_checked === true) return checked;
     for (const item of input.release.items) {
       const atom = input.release.release.released_atoms.find((candidate) => this.citationMatches(candidate, item.citation));
@@ -657,10 +639,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       !this.database.prepare("SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active'").get(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type)) denied();
   }
 
-  private authorizationRevision(organizationId: string): number {
-    const row = this.database.prepare("SELECT revision FROM authority_project_authorization_state_v1 WHERE organization_id=?").get(organizationId) as { readonly revision: number } | undefined;
-    if (row === undefined || !Number.isSafeInteger(row.revision)) unavailable();
-    return row.revision;
+  /**
+   * The caller's active project grants, each by its grant row, so leaving and
+   * rejoining a project also moves it. Only this caller's grants change their
+   * access to a release; other people's writes do not.
+   */
+  private grantsSha256(actor: PersonAccessAuthorization): Sha256Digest {
+    return canonicalSha256(this.database.prepare("SELECT project_id,project_membership_id FROM authority_project_memberships_v1 WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active' ORDER BY project_id,project_membership_id")
+      .all(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type));
   }
 
   private projectGrant(actor: PersonAccessAuthorization, projectId: string): boolean {
@@ -761,7 +747,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private auditTranscriptRead(actor: PersonAccessAuthorization, response: ApprovedMeetingTranscriptReadV1): void {
     const body = { schema_version: 1, kind: "echo-person-approved-meeting-transcript-read-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope: response.scope, approval_id: response.citation.approval_id, source_id: response.citation.source_id, revision_id: response.citation.revision_id, source_sha256: response.citation.source_sha256, page_sha256: canonicalSha256(response.text), response_sha256: canonicalSha256({ schema_version: 1, kind: "echo-person-meeting-transcript-v1", ...response }), checked_at: actor.checked_at };
-    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(canonicalSha256(body), canonicalJson(body), actor.checked_at);
+    appendAuditRowV1(this.database, "authority_person_upload_read_audit_v1", body, actor.checked_at);
   }
 
   /**
@@ -909,25 +895,23 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     });
   }
 
-  private deskInventoryRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, limit: number, kinds: readonly DeskKind[] | undefined, allDocumentPassages: boolean): readonly (SourceRow | DocumentRow)[] {
-    // Ordinary source inventory exposes one stable representative passage per
-    // document. The internal complete-items mode needs every readable atom,
-    // but fetches only limit+1 rows from each sorted source before merging.
-    const sourceLimit = allDocumentPassages ? limit : 100;
+  private deskInventoryRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, limit: number, kinds: readonly DeskKind[] | undefined): readonly (SourceRow | DocumentRow)[] {
+    // Source inventory exposes one stable representative passage per document.
+    const sourceLimit = 100;
     const candidates = [
       ...this.textRows(actor, scope, [], { inventory: true, limit: sourceLimit }),
       // Transcript-only imports remain visible in the original-item list, but
       // have no notes passage to cite. Exclude them before applying the limit
       // so they neither break packet construction nor hide readable notes.
       ...this.imported.rows(actor, scope).filter(row => row.text.length > 0).slice(0, sourceLimit),
-      ...this.documentRows(actor, scope, [], { inventory: true, limit: sourceLimit, ...(allDocumentPassages ? {} : { first_document_passage: true }) }),
+      ...this.documentRows(actor, scope, [], { inventory: true, limit: sourceLimit, first_document_passage: true }),
     ]
       .filter((row) => kinds === undefined || kinds.includes("document_id" in row ? "document_passage" : row.api_version === 0 ? "imported_meeting" : "note"))
       .sort((left, right) => right.received_at.localeCompare(left.received_at) || left.source_id.localeCompare(right.source_id) || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0));
     const documents = new Set<string>();
     const selected: (SourceRow | DocumentRow)[] = [];
     for (const row of candidates) {
-      if (!allDocumentPassages && "document_id" in row) {
+      if ("document_id" in row) {
         if (documents.has(row.document_id)) continue;
         documents.add(row.document_id);
       }
@@ -938,15 +922,9 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private deskAtom(row: SourceRow | DocumentRow, terms: readonly string[]): ReleasedSourceContextAtomV1 {
-    return this.deskAtoms(row, terms, false)[0]!;
-  }
-
-  private deskAtoms(row: SourceRow | DocumentRow, terms: readonly string[], allPackets: boolean): readonly ReleasedSourceContextAtomV1[] {
-    const selected = allPackets
-      ? packets(row.title, row.text).map((text, index) => ({ index, text }))
-      : [wholeMatchingPacket(row.title, row.text, terms)];
+    const packet = wholeMatchingPacket(row.title, row.text, terms);
     this.assertRowRevision(row);
-    return Object.freeze(selected.map((packet) => originalPacketAtomV1(row, packet)));
+    return originalPacketAtomV1(row, packet);
   }
 
   /** A released packet's row must still match its immutable source revision. */
@@ -983,12 +961,12 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private commitDeskRelease(actor: PersonAccessAuthorization, accessToken: string, scope: PersonAskScopeV2, items: readonly OriginalContextDeskItemV1[], atoms: readonly ReleasedSourceContextAtomV1[], truncated = false, unchecked?: EvidenceDeskUncheckedV1): OriginalContextDeskReleaseV1 {
-    const release: OriginalContextReleaseV1 = Object.freeze({ authorization: Object.freeze({ principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, checked_at: actor.checked_at }), scope: Object.freeze({ ...scope }), authorization_revision: this.authorizationRevision(actor.organization_id), released_atoms: Object.freeze([...atoms]) });
+    const release: OriginalContextReleaseV1 = Object.freeze({ authorization: Object.freeze({ principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, checked_at: actor.checked_at }), scope: Object.freeze({ ...scope }), grants_sha256: this.grantsSha256(actor), released_atoms: Object.freeze([...atoms]) });
     this.releases.add(release);
     this.revalidate({ access_token: accessToken, release });
-    const audit = { schema_version: 1, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, authorization_revision: release.authorization_revision, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text, ref, dates }) => ({ citation, kind, visibility, label, received_at, version, ...(dates === undefined ? {} : { dates }), ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ...(ref === undefined ? {} : { ref }) }))), released_count: items.length, ...(unchecked === undefined ? {} : { unchecked }), checked_at: actor.checked_at };
-    const receipt = canonicalSha256(audit);
-    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(receipt, canonicalJson(audit), actor.checked_at);
+    // Version 2 commits the caller's grants digest; version 1 rows carry the org-wide authorization revision instead.
+    const audit = { schema_version: 2, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, grants_sha256: release.grants_sha256, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text, ref, dates }) => ({ citation, kind, visibility, label, received_at, version, ...(dates === undefined ? {} : { dates }), ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ...(ref === undefined ? {} : { ref }) }))), released_count: items.length, ...(unchecked === undefined ? {} : { unchecked }), checked_at: actor.checked_at };
+    const receipt = appendAuditRowV1(this.database, "authority_person_upload_read_audit_v1", audit, actor.checked_at);
     const result: OriginalContextDeskReleaseV1 = Object.freeze({ release, receipt, items: Object.freeze([...items]), truncated, ...(unchecked === undefined ? {} : { unchecked }) });
     this.deskReleases.add(result);
     return result;
@@ -1149,7 +1127,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private auditProofRead(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1): void {
     const body = { schema_version: 1, kind: "echo-person-original-context-proof-read-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, source_id: atom.source_id, revision_id: atom.revision_id, source_sha256: atom.source_sha256, representation_sha256: atom.representation_sha256, anchor_sha256: atom.anchor_sha256, checked_at: actor.checked_at };
-    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(canonicalSha256(body), canonicalJson(body), actor.checked_at);
+    appendAuditRowV1(this.database, "authority_person_upload_read_audit_v1", body, actor.checked_at);
   }
 
   private textBySource(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string): SourceRow | undefined {

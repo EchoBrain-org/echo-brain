@@ -138,7 +138,7 @@ const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const GLOBAL = Object.freeze({ kind: 'global' as const });
 /** Send row kinds in one fixed order: the meeting's own actions first. */
-const KIND_ORDER: readonly PersonOpenItemKindV1[] = ['action', 'ticket', 'page', 'slack_message', 'record', 'document'];
+const KIND_ORDER: readonly PersonOpenItemKindV1[] = ['action', 'ticket', 'page', 'record', 'document'];
 const UNKNOWN_MEMBER = 'Unknown member';
 /** The codes an Authority error can carry: an observation names one of these, else `error`, never a message. */
 const ERROR_CODES: readonly AuthorityErrorCode[] = ['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable'];
@@ -182,7 +182,7 @@ function invalidOutput(): never {
 export function openItemKindV1(pointer: Pointer): PersonOpenItemKindV1 {
   switch (pointer.kind) {
     case 'meeting_action': return 'action';
-    case 'ticket': case 'page': case 'slack_message': return pointer.kind;
+    case 'ticket': case 'page': return pointer.kind;
     case 'approved_record': return 'record';
     case 'source_revision': return 'document';
     default: return invalidOutput();
@@ -381,34 +381,48 @@ export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' 
 }
 
 /**
+ * Every row a paged read shows this viewer, with no bound before the policy: `read` returns the page after the previous
+ * page's last row, and each page goes through the same policy pass, so a change to a row the viewer cannot see never moves
+ * another into or out of view. A short page is the last.
+ */
+export function visibleOpenItemPagesV1<D extends DecisionProjects = PersonReadableDecisionV1>(
+  sources: { readonly records: OpenItemDecisionsReaderV1<D>; readonly people: OpenItemSourcesV1['people'] },
+  viewer: Viewer, page: number, read: (after: ImpactItemRowV1 | undefined) => readonly ImpactItemRowV1[]): OpenItemsContextV1<D> {
+  const decisions = new Map<Sha256Digest, D>();
+  const people = new Map<string, Person>();
+  const assessed: AssessedOpenItemV1[] = [];
+  for (let after: ImpactItemRowV1 | undefined; ;) {
+    const rows = read(after);
+    const context = assessOpenItemsV1(sources, viewer, rows);
+    for (const [record, decision] of context.decisions) decisions.set(record, decision);
+    for (const [membership, person] of context.people) people.set(membership, person);
+    assessed.push(...context.assessed.filter(entry => entry.access.see_row));
+    after = rows.at(-1);
+    if (rows.length < page || after === undefined) return { decisions, people, assessed };
+  }
+}
+
+/**
  * Every row a personal `items` scope shows this viewer, with no bound before the policy (ADR-0036): `mine` is what they sent or
  * own, and `involved` adds what they last handed on (`owner_set_by`). The rows are read a page at a time by (created_at,
- * item_id), each page through the same policy pass, so a change to a row the viewer cannot see never moves another into or out
- * of view. `items` lists and counts these, and the change check fingerprints `involved` from them.
+ * item_id). `items` lists and counts these, and the change check fingerprints `involved` from them.
  */
 export function visiblePersonalOpenItemsV1<D extends DecisionProjects = PersonReadableDecisionV1>(
   sources: { readonly items: Pick<SqliteImpactItemsV1, 'involving'>; readonly records: OpenItemDecisionsReaderV1<D>; readonly people: OpenItemSourcesV1['people'] },
   viewer: Viewer, scope: 'mine' | 'involved', page: number = PERSONAL_PAGE): OpenItemsContextV1<D> {
   if (!Number.isSafeInteger(page) || page < 1) throw new TypeError('A personal scope page must be a positive whole number');
-  const decisions = new Map<Sha256Digest, D>();
-  const people = new Map<string, Person>();
-  const assessed: AssessedOpenItemV1[] = [];
-  for (let after: { readonly created_at: string; readonly item_id: string } | undefined; ;) {
-    const rows = sources.items.involving(viewer.organization, viewer.membership, { states: STATES, limit: page, ...(scope === 'involved' ? { handed_on: true } : {}), ...(after === undefined ? {} : { after }) });
-    const context = assessOpenItemsV1(sources, viewer, rows);
-    for (const [record, decision] of context.decisions) decisions.set(record, decision);
-    for (const [membership, person] of context.people) people.set(membership, person);
-    assessed.push(...context.assessed.filter(entry => entry.access.see_row));
-    const last = rows.at(-1);
-    if (rows.length < page || last === undefined) return { decisions, people, assessed };
-    after = { created_at: last.created_at, item_id: last.item_id };
-  }
+  return visibleOpenItemPagesV1(sources, viewer, page, after => sources.items.involving(viewer.organization, viewer.membership, { states: STATES, limit: page,
+    ...(scope === 'involved' ? { handed_on: true } : {}), ...(after === undefined ? {} : { after: { created_at: after.created_at, item_id: after.item_id } }) }));
 }
 
 /** An item in an outside tool, which a desk reads through that tool's live source: `kind:tool_id`, else undefined. */
 function outsideToolOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefined {
   const { kind, tool_id: toolId } = row.pointer;
   return (kind === 'ticket' || kind === 'page') && typeof toolId === 'string' ? `${kind}:${toolId}` : undefined;
+}
+/** The live sources task research reads (trigger runs, sweeps, open items, the evaluation's tasks): those the V6 answer reads. */
+export function taskLiveSourcesV1(sources: CreatePersonLiveAnswerRouteOptionsV1['live_sources']): NonNullable<CreatePersonLiveAnswerRouteOptionsV1['live_sources']> {
+  return (sources ?? []).filter(source => source.minimum_response_version <= 6);
 }
 /**
  * The outside tools the viewer has connected, as `kind:tool_id`: each live source a desk binds (one of a known tool) whose tool
@@ -417,7 +431,7 @@ function outsideToolOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefine
  */
 async function connectedToolsV1(sources: Pick<OpenItemSourcesV1, 'live_sources' | 'on_live_failure'>, viewer: Viewer): Promise<ReadonlySet<string>> {
   const connected = new Set<string>();
-  for (const source of (sources.live_sources ?? []).filter(value => value.minimum_response_version <= 6)) {
+  for (const source of taskLiveSourcesV1(sources.live_sources)) {
     const { kind, tool_id: toolId } = source.descriptor;
     if (toolId === undefined || source.tools === undefined) continue;
     try {
@@ -434,13 +448,11 @@ function connectedToolsFor(sources: Pick<OpenItemSourcesV1, 'live_sources' | 'on
 /**
  * A sweep re-reads an item through its pointer, as a finding's citation the
  * sweep trigger takes: a ticket or a page in a tool the viewer has connected,
- * an ECHO record or document, and no Slack message today. An item on any
- * other pointer, a meeting action included, is never swept, so it never makes
- * a sweep due either.
+ * or an ECHO record or document. An item on any other pointer, a meeting
+ * action included, is never swept, so it never makes a sweep due either.
  */
 function sweepTakesItem(row: Pick<ImpactItemRowV1, 'pointer'>, connected: ReadonlySet<string>): boolean {
-  // A desk without the item's tool, or no Slack message (no desk can read a Slack citation yet), would always record it
-  // unreadable (R62).
+  // A desk without the item's tool would always record it unreadable.
   const tool = outsideToolOf(row);
   if (tool !== undefined && !connected.has(tool)) return false;
   try {
@@ -477,7 +489,7 @@ export async function sweepScopeOpenItemsV1(sources: OpenItemSourcesV1, viewer: 
 }
 
 export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options): PersonOpenItemsApplicationV1 {
-  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= 6);
+  const compatible = taskLiveSourcesV1(options.live_sources);
   const now = options.now ?? (() => new Date());
   const viewerOf = (access_token: string, signal?: AbortSignal): Viewer => {
     signal?.throwIfAborted();

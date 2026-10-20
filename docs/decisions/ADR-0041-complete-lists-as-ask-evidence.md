@@ -504,9 +504,15 @@ judge's "yes" (`tools/evals/research-loop/lib/checks.mjs`). The response
 does not say which statements code wrote, so the check reads names from what
 each statement says: a statement names a member only when it cites one of the
 member's items and its text names the member as code writes a name, the
-member's title on one line, cut to 120 characters (a cut title is matched on
-what stands before its ellipsis), ignoring case, members that share a label
-sharing the one name code merges them under. A name counts as a phrase of its
+member's title on one line, cut to 120 characters (a cut title is matched by
+code's cut name, ellipsis and all, or by its whole title), ignoring case,
+members that share a label sharing the one name code merges them under. When
+the statement cites members sharing a label that record another status, owner
+or due date, code keeps them apart and writes the facts that differ after each
+label, so the text names such a member only with its own complete detail,
+including the owner or due prefix, never a competing value inside it. The
+details follow code's limits (60 status, 80 owner, 40 due characters, including
+the ellipsis) and calendar-date formatting. A name counts as a phrase of its
 own, never inside a longer word or a longer name the text holds. Citing a
 member never names it alone: the 4-of-8 answer names 4 pages whether it cites
 their 4 sections or the 8 rows beside them (W1's row facts, or the private
@@ -938,4 +944,6 @@ is unchanged. No tools, access scope, research budgets, or stop rules change.
 ## Later decisions
 
 [ADR-0042](ADR-0042-research-tool-contract.md#one-outcome-per-filter) (2026-10-19)
-adds, for Ask, refused filters, `unchecked` counts and any-date windows.
+adds, for Ask, refused filters, `unchecked` counts and any-date windows, and
+raises Ask's limit of 4 actions per step, which "Safety rules kept" and the
+considered options above name, to 10.

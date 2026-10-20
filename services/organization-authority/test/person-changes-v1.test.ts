@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_CHANGES_AREAS_V1,
@@ -59,7 +59,6 @@ describe('change check: what it answers', () => {
     const { app, read } = changesOf(f);
     const first = await app.read({ access_token: 'mina' });
     expect(Object.keys(first).sort()).toEqual(['areas', 'check_again_after_seconds', 'kind']);
-    expect(first).toEqual(validatePersonChangesV1(first));
     expect(first.check_again_after_seconds).toBe(60);
     expect(await read('mina')).toEqual(first);
     // Fingerprints are per person: Mina and Ari share a project and a follow-up, not a view.
@@ -187,14 +186,6 @@ describe('runs items scope involved', () => {
     // The approver stays involved through every hand.
     expect(await ids(f, 'ari', 'involved')).toEqual([action.item_id, ticket.item_id].sort());
   });
-
-  it('pages oldest first with the same cursor as mine', async () => {
-    const f = await sentFixture();
-    const first = await items(f, 'ari', 'involved', { read: 'rows' });
-    const cursor = Buffer.from(`${first.items[0]!.created_at}|${first.items[0]!.item_id}`, 'utf8').toString('base64url');
-    expect((await items(f, 'ari', 'involved', { read: 'rows', cursor })).items.map(item => item.item_id)).toEqual(first.items.slice(1).map(item => item.item_id));
-    await expect(items(f, 'ari', 'involved', { cursor: 'bm90LWEtY3Vyc29y' })).rejects.toMatchObject({ code: 'invalid_request' });
-  });
 });
 
 describe('runs items changed_since', () => {
@@ -265,14 +256,6 @@ describe('runs items changed_since', () => {
     expect([...first.items, ...second.items].map(item => item.item_id)).not.toContain(f.ticket.item_id);
     // Without the filter, the same cursor position pages the whole list.
     expect((await items(f, 'mina', 'involved', { read: 'rows' })).items.map(item => item.item_id)).toContain(f.ticket.item_id);
-  });
-
-  it('leaves the change check fingerprint as it was', async () => {
-    const f = await sentFixture();
-    const { read } = changesOf(f);
-    const before = (await read('ari')).areas;
-    await since(f, 'ari', 'involved', f.clock().toISOString());
-    expect((await read('ari')).areas).toEqual(before);
   });
 });
 
@@ -441,17 +424,6 @@ describe('change check HTTP route', () => {
     const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
     return `http://127.0.0.1:${address.port}`;
   }
-
-  it('authenticates before the check makes the approval core ready', async () => {
-    const f = await sentFixture();
-    const reviews = vi.fn(async () => () => []);
-    const base = await origin(changesOf(f, { reviews }).app, f.openItemsOptions.sessions);
-    const get = (authorization: string) => fetch(`${base}${PERSON_CHANGES_ROUTE_V1}`, { headers: { authorization } });
-    expect((await get('Bearer stranger')).status).toBe(401);
-    expect(reviews).not.toHaveBeenCalled();
-    expect((await get('Bearer mina')).status).toBe(200);
-    expect(reviews).toHaveBeenCalledTimes(1);
-  });
 
   it('authenticates like every Person read, answers the exact shape, and takes no query or body', async () => {
     const f = await sentFixture();

@@ -13,10 +13,9 @@ import { detailsOfImpactItemV1, ownerOfImpactItemV1, statesImpactDateV1 } from "
 /**
  * The impact card as a run keeps it (runs store and impact card v1, section
  * 4, and ADR-0032). A stored card holds ECHO's own judgments and pointers and
- * never a word read from outside ECHO: Slack's API terms forbid persistent
- * copies, and ECHO keeps no Jira or Confluence excerpts. Every view opens each
- * cited item again as the viewer and rebuilds the outside parts from that
- * fresh read.
+ * never a word read from outside ECHO: ECHO keeps no Jira or Confluence
+ * excerpts. Every view opens each cited item again as the viewer and rebuilds
+ * the outside parts from that fresh read.
  */
 
 export interface StoredImpactCardV1 {
@@ -141,7 +140,6 @@ export interface FreshImpactItemV1 {
 const PRIMARY_ID: Readonly<Record<string, readonly string[]>> = Object.freeze({
   ticket: ["tool_id", "external_scope_id", "ticket_id"],
   page: ["tool_id", "external_scope_id", "page_id"],
-  slack_message: ["team_id", "channel_id", "message_ts"],
   approved_record: ["atom_id", "record_sha256"],
   source_revision: ["source_id", "revision_id"],
   meeting_action: ["record_sha256", "signal_id"],

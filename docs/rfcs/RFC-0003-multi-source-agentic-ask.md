@@ -415,7 +415,8 @@ decision.
 ### Model and provider
 
 - The model stays DeepSeek V3.2 through OpenRouter until the test set exists.
-  After that, models are compared on it.
+  After that, models are compared on it. (Since then the default is Claude
+  Sonnet 5.5, `OPENROUTER_ANSWER_COMPOSITION_MODEL_V1`.)
 - OpenRouter requests already set `provider.data_collection: "deny"`, so no
   host that trains on or retains prompts is used. This becomes a hard
   requirement once Slack text can reach a prompt.
@@ -428,7 +429,7 @@ decision.
 ### Observability
 
 - Staging records an agentic Ask as the Ask journey, so the
-  Explorer, dashboard and Ask alarms see it: retrieval is the research desk
+  dashboard and Ask alarms see it: retrieval is the research desk
   time, planner the research step calls, then context, answer, final fence,
   audit and the V4 outcome.
 - Each step, answer call and desk call is a linked core-runtime span; desk

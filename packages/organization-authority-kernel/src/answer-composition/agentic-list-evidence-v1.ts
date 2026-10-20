@@ -61,10 +61,9 @@ export interface AgenticListFilterV1 {
   /** open or done (meeting actions, follow-ups); active or archived (projects). */
   readonly status?: "open" | "done" | "active" | "archived";
   readonly owner?: string;
-  /** lead or member (projects, people), research tool contract v1. */
+  /** lead or member (projects), research tool contract v1. */
   readonly role?: "lead" | "member";
-  readonly channel?: string;
-  /** Inclusive YYYY-MM-DD bounds; a catalog default (Slack's 14 days) appears here unrequested. */
+  /** Inclusive YYYY-MM-DD bounds. */
   readonly since?: string;
   readonly until?: string;
   readonly date_field?: EvidenceDateSelectionV1;
@@ -179,7 +178,7 @@ export function agenticListNounV1(source: { readonly selector: string; readonly 
  */
 const KIND_NOUNS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
   imported_meeting: ["meetings", "meeting"], decision: ["decisions", "decision"], action: ["actions", "action"], rationale: ["rationales", "rationale"],
-  note: ["notes", "note"], document_passage: ["documents", "document"], slack_message: ["messages", "message"],
+  note: ["notes", "note"], document_passage: ["documents", "document"],
   ticket: ["tickets", "ticket"], page: ["pages", "page"], follow_up: ["follow-ups", "follow-up"],
   // The asker's workspace (research tool contract v1). A tool's containers are named by their source: "Jira projects".
   project: ["projects", "project"], person: ["people", "person"], tool: ["tools", "tool"],
@@ -203,7 +202,7 @@ export interface AgenticListNounFormsV1 {
 
 /**
  * A list's noun from what its members are (ADR-0041): their desk kinds, after the tool when the catalog names one
- * ("Jira tickets", "Slack messages"), so a meeting list of decisions says "decisions", never "meetings". Members of
+ * ("Jira tickets", "Confluence pages"), so a meeting list of decisions says "decisions", never "meetings". Members of
  * several kinds are "items from" the source's own noun; a list with no member keeps that noun. It reads the catalog
  * entry and the members' kinds only, never a source-specific rule.
  */
@@ -345,11 +344,11 @@ export function agenticOpenReadsV1(rounds: readonly { readonly actions: readonly
  * The fields that name the object a citation cites, by citation kind. A page's
  * section and version, a document passage's anchor and representation, and a
  * ticket's or follow-up's released text are parts of one object; each meeting
- * record and each message is its own. A kind not here is its own object only.
+ * record is its own. A kind not here is its own object only.
  */
 const CITED_OBJECT_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   page: ["tool_id", "external_scope_id", "page_id"], ticket: ["tool_id", "external_scope_id", "ticket_id"],
-  slack_message: ["team_id", "channel_id", "message_ts"], approved_record: ["atom_id"], source_revision: ["source_id", "revision_id"], follow_up: ["item_id"],
+  approved_record: ["atom_id"], source_revision: ["source_id", "revision_id"], follow_up: ["item_id"],
 });
 /** The object a citation cites (ADR-0041): its parts (a page's sections, a ticket's text) cite the same one. */
 export function agenticCitedObjectV1(citation: unknown): string | undefined {
@@ -580,9 +579,9 @@ function line(value: string, chars: number): string {
 }
 
 /**
- * What a list's applied filter says after its noun (ADR-0041): its channel, its
- * dates and its other fields, from the filter as applied, never the model's
- * arguments. " created on October 4, 2026", " with kind action and owner Mara".
+ * What a list's applied filter says after its noun (ADR-0041): its dates and its
+ * other fields, from the filter as applied, never the model's arguments.
+ * " created on October 4, 2026", " with kind action and owner Mara".
  */
 export function agenticListFilterPhraseV1(filter: AgenticListFilterV1): string {
   const fields = [
@@ -594,7 +593,6 @@ export function agenticListFilterPhraseV1(filter: AgenticListFilterV1): string {
   ];
   const range = dateRange(filter.since, filter.until);
   return [
-    ...(filter.channel === undefined ? [] : [` in #${filter.channel}`]),
     ...(range === undefined ? [] : [` ${filter.date_field === "any" ? "dated" : DATE_WORDS[filter.date_field ?? "occurred"]} ${range}`]),
     ...(fields.length === 0 ? [] : [` with ${joined(fields)}`]),
   ].join("");

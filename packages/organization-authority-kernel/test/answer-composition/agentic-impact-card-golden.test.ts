@@ -63,7 +63,7 @@ const LIVE_SOURCES: EvidenceDeskPortV2["live_sources"] = [
 /** The record opens to its decision and action; tickets list, pages search, and opens read what was listed. */
 function desk(options: { readonly list_more?: boolean; readonly gate_unreadable?: boolean } = {}): EvidenceDeskPortV2 {
   return {
-    scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" }, ticket_available: true, live_sources: LIVE_SOURCES,
+    scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" }, live_sources: LIVE_SOURCES,
     openCitation: async () => result([DECISION, ACTION]),
     list: async (_input: EvidenceDeskListInputV2) => result([TICKET_LISTED, TICKET_DONE], options.list_more === true ? { next_cursor: "page-2" } : {}),
     search: async () => result([PRD, TEST_PLAN, ...(options.gate_unreadable === true ? [GATE] : [])]),

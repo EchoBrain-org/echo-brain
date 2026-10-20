@@ -1,14 +1,15 @@
 import { rmSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { PERSON_EVIDENCE_OPEN_PATH_V1, PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonAnswerResponseV5, validatePersonEvidenceDeskResponseV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_OPEN_PATH_V1, PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonAnswerResponseV6, validatePersonEvidenceDeskResponseV1 } from '@echo-brain/organization-api';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
 import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import { allSourceAskFixture, crossSourceAuthorityFixture, DOCUMENT_TEXT, PRIVATE_DOCUMENT_TEXT, SLACK_LIVE_CONNECTOR } from './fixtures/cross-source-ask-runtime.js';
-import { JIRA_TEXT, SLACK_TEXT, SLACK_CHANNEL, SLACK_TEAM } from './fixtures/cross-source-live-fixture.js';
+import { allSourceAskFixture, crossSourceAuthorityFixture, DOCUMENT_TEXT, PRIVATE_DOCUMENT_TEXT } from './fixtures/cross-source-ask-runtime.js';
+import { CONFLUENCE_TEXT, JIRA_TEXT } from './fixtures/cross-source-live-fixture.js';
+import { FIXTURE_CONFLUENCE_CLOUD_V1, FIXTURE_CONFLUENCE_SITE_V1 } from './fixtures/fake-confluence-v1.js';
 import { FIXTURE_JIRA_CLOUD_V1, FIXTURE_JIRA_SITE_V1 } from './fixtures/fake-jira-v1.js';
 
 const roots: string[] = [];
@@ -20,25 +21,6 @@ function finishingModel() {
   const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
   return { generate, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } } };
 }
-
-it('selects the Slack live runtime for authenticated Ask without inventing a disconnected grant', async () => {
-  const f = await fixture();
-  const source = vi.fn(async () => undefined);
-  const close = vi.fn();
-  const slack_live_runtime_factory = vi.fn(() => ({ application: { source }, close }));
-  const dependencies = { oidc_provider: f.oidc, live_connectors: [{ ...SLACK_LIVE_CONNECTOR, open: slack_live_runtime_factory }], answer_composition_generation: finishingModel().answer_composition_generation };
-  const runtime = await startOrganizationAuthorityApiRuntime(f.config, dependencies);
-  try {
-    const origin = `http://127.0.0.1:${runtime.address.port}`;
-    const token = await f.login(origin);
-    const response = await fetch(`${origin}/v4/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
-    expect(response.status).toBe(200);
-    expect(slack_live_runtime_factory).toHaveBeenCalledTimes(1);
-    expect(source).toHaveBeenCalledTimes(1);
-    expect(await response.json()).toMatchObject({ citations: [] });
-  } finally { await runtime.close(); }
-  expect(close).toHaveBeenCalledTimes(1);
-});
 
 it('registers two page connectors through one lifecycle, catalog, HTTP and versioned Ask path', async () => {
   const f = await fixture();
@@ -185,19 +167,20 @@ it('closes already opened connectors if a later registered connector fails to st
   expect(close).toHaveBeenCalledTimes(1);
 });
 
-it('answers one authenticated HTTP question from approved Granola records, a document, Jira and Slack with current audited citations', async () => {
+it('answers one authenticated HTTP question from approved Granola records, a document, Jira and Confluence with current audited citations', async () => {
   const f = await allSourceFixture();
   try {
     const response = await f.ask();
     expect(response.status).toBe(200);
-    const answer = validatePersonAnswerResponseV5(response.body);
+    const answer = validatePersonAnswerResponseV6(response.body);
     expect(answer.outcome).toBe('answered');
-    expect(answer.citations.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'slack_message', 'slack_message', 'ticket']);
-    expect(answer.citations.map(item => item.citation.kind).sort()).toEqual(['approved_record', 'slack_message', 'slack_message', 'source_revision', 'ticket']);
+    expect(answer.citations.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'page', 'ticket']);
+    expect(answer.citations.map(item => item.citation.kind).sort()).toEqual(['approved_record', 'page', 'source_revision', 'ticket']);
     expect(answer.citations.find(item => item.kind === 'decision')?.citation).toMatchObject({ record_sha256: f.seeded.approved_record_sha256 });
     expect(answer.citations.find(item => item.kind === 'ticket')?.citation).toMatchObject({ tool_id: 'jira', ticket_id: '10001', external_scope_id: FIXTURE_JIRA_CLOUD_V1, permalink: `${FIXTURE_JIRA_SITE_V1}/browse/ECHO-1` });
-    expect(answer.citations.find(item => item.kind === 'slack_message')?.citation).toEqual({ kind: 'slack_message', team_id: SLACK_TEAM, channel_id: SLACK_CHANNEL, message_ts: f.live.ts, permalink: `https://crosssource.slack.com/archives/${SLACK_CHANNEL}/p${f.live.ts.replace('.', '')}`, text_sha256: sha256Digest(SLACK_TEXT) });
-    for (const text of [f.seeded.approved_text, DOCUMENT_TEXT, JIRA_TEXT, SLACK_TEXT]) expect(f.prompts.join('\n')).toContain(text);
+    expect(answer.citations.find(item => item.kind === 'page')?.citation).toMatchObject({ tool_id: 'confluence', page_id: '100', section_id: 's1', external_scope_id: FIXTURE_CONFLUENCE_CLOUD_V1,
+      permalink: `${FIXTURE_CONFLUENCE_SITE_V1}/wiki/pages/viewpage.action?pageId=100`, text_sha256: sha256Digest(CONFLUENCE_TEXT) });
+    for (const text of [f.seeded.approved_text, DOCUMENT_TEXT, JIRA_TEXT, CONFLUENCE_TEXT]) expect(f.prompts.join('\n')).toContain(text);
     expect(f.generate).toHaveBeenCalledTimes(4);
     const jiraSearches = f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/search/jql'));
     expect(jiraSearches).toHaveLength(1);
@@ -206,29 +189,17 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
     const rechecks = f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/issue/bulkfetch'));
     expect(rechecks.length).toBeGreaterThanOrEqual(2);
     for (const [, request] of rechecks) expect(JSON.parse(String(request?.body)).issueIdsOrKeys).toEqual(['10001']);
-    expect(f.live.slackCalls.some(call => call.method === 'revalidate')).toBe(true);
-    expect(f.live.slackCalls.length).toBeLessThanOrEqual(48);
+    // Confluence: one search, then the page's body read by the open and again by each check (research tool contract v1).
+    const confluencePaths = f.live.confluenceFetch.mock.calls.map(([url]) => new URL(String(url)).pathname);
+    expect(confluencePaths.filter(path => path.endsWith('/rest/api/search'))).toHaveLength(1);
+    expect(f.live.confluenceFetch.mock.calls.filter(([url]) => new URL(String(url)).searchParams.get('body-format') === 'atlas_doc_format').length).toBeGreaterThanOrEqual(3);
     const auditRows = f.database.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').all() as { body_json: string }[];
     const terminal = auditRows.map(row => JSON.parse(row.body_json) as Record<string, unknown>).find(row => row.kind === 'echo-person-agentic-ask-audit-v1');
     expect(terminal).toMatchObject({ outcome: 'answered', model_calls: 4, response_sha256: canonicalSha256(answer) });
-    for (const row of auditRows) for (const forbidden of [JIRA_TEXT, SLACK_TEXT, PRIVATE_DOCUMENT_TEXT, 'synthetic-jira-oauth-bearer']) expect(row.body_json).not.toContain(forbidden);
+    for (const row of auditRows) for (const forbidden of [JIRA_TEXT, CONFLUENCE_TEXT, PRIVATE_DOCUMENT_TEXT, 'synthetic-jira-oauth-bearer', 'synthetic-confluence-oauth-bearer']) expect(row.body_json).not.toContain(forbidden);
     const released = JSON.stringify(answer);
     expect(released).not.toContain(f.seeded.hidden_text); expect(released).not.toContain(PRIVATE_DOCUMENT_TEXT);
     expect(released).not.toContain(f.seeded.unapproved_text);
-  } finally { await f.close(); }
-});
-
-it('omits a disconnected Slack source without provider calls or fabricated Slack citations', async () => {
-  const f = await allSourceFixture();
-  try {
-    f.live.disconnectSlack();
-    const response = await f.ask();
-    expect(response.status).toBe(200);
-    const answer = validatePersonAnswerResponseV5(response.body);
-    expect(answer.citations.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'ticket']);
-    expect(f.live.slackRead).not.toHaveBeenCalled();
-    expect(f.prompts.join('\n')).not.toContain(SLACK_TEXT);
-    expect(f.generate).toHaveBeenCalledTimes(4);
   } finally { await f.close(); }
 });
 
@@ -252,54 +223,59 @@ it('returns a meeting record through the public evidence search and open doors w
   } finally { await f.close(); }
 });
 
-it('refuses unauthenticated Ask and revoked Slack reads without releasing provider evidence', async () => {
+it('refuses unauthenticated Ask and revoked Confluence reads without releasing provider evidence', async () => {
   const f = await allSourceFixture();
   try {
     const jiraBefore = f.live.jiraFetch.mock.calls.length;
-    expect((await f.post('/v4/person/ask', { schema_version: 3, question: 'Launchscope' }, 'invalid-person-session')).status).toBe(401);
-    expect(f.live.jiraFetch).toHaveBeenCalledTimes(jiraBefore); expect(f.live.slackRead).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
-    f.live.denySlack();
+    const confluenceBefore = f.live.confluenceFetch.mock.calls.length;
+    expect((await f.post('/v5/person/ask', { schema_version: 3, question: 'Launchscope' }, 'invalid-person-session')).status).toBe(401);
+    expect(f.live.jiraFetch).toHaveBeenCalledTimes(jiraBefore); expect(f.live.confluenceFetch).toHaveBeenCalledTimes(confluenceBefore); expect(f.generate).not.toHaveBeenCalled();
+    f.live.denyConfluence();
     const denied = await f.ask();
     expect(denied.status).toBe(401);
-    expect(f.live.slackRead).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
-    expect(JSON.stringify(denied.body)).not.toContain(SLACK_TEXT);
+    // The revoked connection failed its check when the request began: no page was searched or read, and no model was asked.
+    const read = f.live.confluenceFetch.mock.calls.slice(confluenceBefore).map(([url]) => new URL(String(url)).pathname);
+    expect(read.length).toBeGreaterThan(0);
+    expect(read.filter(path => path.includes('/api/v2/pages') || path.endsWith('/rest/api/search'))).toEqual([]);
+    expect(f.generate).not.toHaveBeenCalled();
+    expect(JSON.stringify(denied.body)).not.toContain(CONFLUENCE_TEXT);
   } finally { await f.close(); }
 });
 
-it.each(['slack', 'jira'] as const)('withholds %s evidence when permission fails during its provider read', async tool => {
+it.each(['confluence', 'jira'] as const)('withholds %s evidence when permission fails during its provider read', async tool => {
   const f = await allSourceFixture();
   try {
-    if (tool === 'slack') f.live.revokeSlackDuringRead();
+    if (tool === 'confluence') f.live.revokeConfluenceDuringRead();
     else f.live.denyJira();
     const response = await f.ask();
     expect(response.status).toBe(401);
     expect(f.generate).toHaveBeenCalledTimes(1);
-    const deniedText = tool === 'slack' ? SLACK_TEXT : JIRA_TEXT;
+    const deniedText = tool === 'confluence' ? CONFLUENCE_TEXT : JIRA_TEXT;
     expect(f.prompts.join('\n')).not.toContain(deniedText);
     expect(JSON.stringify(response.body)).not.toContain(deniedText);
   } finally { await f.close(); }
 });
 
-it('suppresses the completed answer when Slack permission is revoked during its final model call', async () => {
+it('suppresses the completed answer when Confluence permission is revoked during its final model call', async () => {
   const f = await allSourceFixture();
   try {
-    f.beforeAnswerReturn(() => f.live.denySlack());
+    f.beforeAnswerReturn(() => f.live.denyConfluence());
     const response = await f.ask();
     expect(response.status).toBe(401);
     expect(f.generate).toHaveBeenCalledTimes(4);
-    expect(f.prompts.at(-1)).toContain(SLACK_TEXT); // The earlier authorized release reached the answer model.
+    expect(f.prompts.at(-1)).toContain(CONFLUENCE_TEXT); // The earlier authorized release reached the answer model.
     const released = JSON.stringify(response.body);
-    for (const text of [SLACK_TEXT, JIRA_TEXT, DOCUMENT_TEXT, f.seeded.approved_text]) expect(released).not.toContain(text);
+    for (const text of [CONFLUENCE_TEXT, JIRA_TEXT, DOCUMENT_TEXT, f.seeded.approved_text]) expect(released).not.toContain(text);
     expect(response.body).not.toHaveProperty('citations');
     expect(f.database.prepare("SELECT count(*) AS n FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-agentic-ask-audit-v1%' AND body_json LIKE '%\"outcome\":\"answered\"%'").get()).toEqual({ n: 0 });
   } finally { await f.close(); }
 });
 
-it('withholds an audited answer when Jira disconnects during the last awaited Slack release fence', async () => {
+it('withholds an audited answer when Jira disconnects during the last awaited Confluence release fence', async () => {
   const f = await allSourceFixture();
   try {
     let disconnected = false;
-    f.live.beforeSlackResponse(async () => {
+    f.live.beforeConfluenceResponse(async () => {
       const terminal = f.database.prepare("SELECT 1 FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-agentic-ask-audit-v1%' AND body_json LIKE '%\"outcome\":\"answered\"%'").get();
       if (terminal === undefined || disconnected) return;
       disconnected = true;
@@ -313,6 +289,6 @@ it('withholds an audited answer when Jira disconnects during the last awaited Sl
     expect(f.generate).toHaveBeenCalledTimes(4);
     expect(response.body).not.toHaveProperty('citations');
     const released = JSON.stringify(response.body);
-    for (const text of [SLACK_TEXT, JIRA_TEXT, DOCUMENT_TEXT, f.seeded.approved_text]) expect(released).not.toContain(text);
+    for (const text of [CONFLUENCE_TEXT, JIRA_TEXT, DOCUMENT_TEXT, f.seeded.approved_text]) expect(released).not.toContain(text);
   } finally { await f.close(); }
 });

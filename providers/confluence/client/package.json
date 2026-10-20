@@ -5,7 +5,6 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./organization-api/confluence-person-connection-v1": { "types": "./dist/organization-api/confluence-person-connection-v1.d.ts", "import": "./dist/organization-api/confluence-person-connection-v1.js" },
     "./organization-api/confluence-project-mapping-v1": { "types": "./dist/organization-api/confluence-project-mapping-v1.d.ts", "import": "./dist/organization-api/confluence-project-mapping-v1.js" },
     "./person/confluence-tool-provider": { "types": "./dist/person/confluence-tool-provider.d.ts", "import": "./dist/person/confluence-tool-provider.js" }
   },

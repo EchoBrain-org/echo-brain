@@ -14,7 +14,7 @@ paraphrases, never copies of export pages.
 
 | File | What it is |
 | --- | --- |
-| `additions.json` | The S0 additions: the ECHO project mapping, the restricted project, Jira due dates and assignments (`jira_updates`), one Confluence paragraph (`confluence_updates`) and six meetings (`meetings`). Each meeting has notes, a transcript (one array entry per `Name: text` line) and the records the approved version must contain (`expected_records`). `workspace` holds what the open-ended cases add: accounts, projects with members, roles and tool mappings, tools and follow-ups (see "Workspace" below). |
+| `additions.json` | The S0 additions: the restricted project, Jira due dates and assignments (`jira_updates`), one Confluence paragraph (`confluence_updates`) and six meetings (`meetings`). Each meeting has notes, a transcript (one array entry per `Name: text` line) and the records the approved version must contain (`expected_records`). `workspace` holds what the open-ended cases add: accounts, projects with members, roles and tool mappings, tools and follow-ups (see "Workspace" below). |
 | `s1.json` | S1, the partial fixes the Sweep cases run against. `apply` moves S0 to S1 and `revert` restores S0. Description edits are exact find-and-replace pairs on the Jira description text, and `status` names the target workflow status. |
 | `../cases/development.json` | Cases that tuning sessions may open. |
 | `../cases/holdout.json` | Held-out cases. Tuning sessions do not open this file. That is a working rule, not access control. No other file quotes a held-out question, names a held-out case or gives its key: a test that needs them reads them from this file, and `npm run test:architecture` fails on a file that quotes one. |

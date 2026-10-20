@@ -1,6 +1,5 @@
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PROJECT_PAGE_MAX_ITEMS,
   validatePersonWorkspaceCitationV1,
   type OrganizationDirectoryEntryV1,
   type OrganizationPersonToolV4,
@@ -31,8 +30,9 @@ import {
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
 import type { PersonWorkspaceReleaseAuditV1, PersonWorkspaceReleaseV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { ProjectContextApplicationV1, ProjectContextRepositoryV1, ProjectMembershipGrantV1 } from '../application/ports/project-context-v1.js';
+import { samePersonV1 } from '../application/person-release-authorization-v1.js';
 import {
-  createEvidenceCursorsV1, evidenceInvalidV1 as invalid, evidenceNotFoundV1 as notFound, evidencePageSizeV1, evidenceTermsV1, evidenceWordsV1, newestFirstV1,
+  createEvidenceCursorsV1, createReleaseLedgerV1, everyProjectPageV1, evidenceInvalidV1 as invalid, evidenceNotFoundV1 as notFound, evidencePageSizeV1, evidenceTermsV1, evidenceWordsV1, newestFirstV1,
 } from './person-local-source-helpers-v1.js';
 
 /**
@@ -130,7 +130,6 @@ type Release =
   | { readonly kind: 'tool'; readonly tool_id: string; readonly connection: string; readonly setup: boolean };
 type Fields = Omit<EvidenceDeskItemV2, 'id' | 'receipt_sha256'>;
 type Shaped = { readonly id: string; readonly kind: WorkspaceItemKind; readonly key: string; readonly fields: Fields; readonly release: Release };
-type Ledger = { readonly released: Map<string, Release>; readonly unchecked: Set<string> };
 type CheckInput = Pick<EvidenceDeskRevalidateInputV1, 'mode' | 'signal'>;
 /**
  * How one source reads, from which `local` builds its search, list and open. By default a source refuses every date and
@@ -168,7 +167,7 @@ function refuseDates(input: EvidenceDateFilterV1, source: string): void {
 /** Refuses a filter of another source, or one this source does not take. */
 function otherFilters(input: EvidenceDeskListInputV2, source: WorkspaceSourceIdV1, takes: readonly ('status' | 'role')[]): void {
   const kind = WORKSPACE_SOURCE_KINDS_V1[source];
-  if (input.owner !== undefined || input.channel !== undefined || input.kinds?.some(value => value !== kind) ||
+  if (input.owner !== undefined || input.kinds?.some(value => value !== kind) ||
       (!takes.includes('status') && input.status !== undefined) || (!takes.includes('role') && input.role !== undefined)) {
     invalid(takes.length === 0 ? `${source} take no filters` : `${source} take only ${takes.join(' and ')}`);
   }
@@ -179,17 +178,6 @@ function named(values: readonly string[], maximum: number, counted = true): stri
 }
 /** Newest first, as the project list orders them; then by id. */
 const newestFirst = newestFirstV1<ProjectSummaryV2>(project => project.project_id);
-/** Every page of one of the project application's lists. */
-function everyPage<T>(read: (paging: { readonly limit: number; readonly cursor?: string }) => { readonly items: readonly T[]; readonly next_cursor: string | null }, signal?: AbortSignal): T[] {
-  const all: T[] = [];
-  for (let cursor: string | undefined; ;) {
-    signal?.throwIfAborted();
-    const page = read({ limit: PROJECT_PAGE_MAX_ITEMS, ...(cursor === undefined ? {} : { cursor }) });
-    all.push(...page.items);
-    if (page.next_cursor === null) return all;
-    cursor = page.next_cursor;
-  }
-}
 /** The connection a tool's release reflects: whether it is set up and linked, and to which site and account. */
 function connectionOf(tool: OrganizationPersonToolV4): string {
   return canonicalJson({ availability: tool.availability, personal_status: tool.personal_status, external_scope_id: tool.external_scope_id, external_subject_id: tool.external_subject_id });
@@ -216,15 +204,14 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   /** Each item released in this request, by desk id, so that the source of its kind can open it. */
   const issued = new Map<string, { readonly kind: WorkspaceItemKind; readonly key: string }>();
   /** What each source released, and what it released since its last successful check (ADR-0038). */
-  const ledger = (): Ledger => ({ released: new Map(), unchecked: new Set() });
-  const ledgers: Readonly<Record<WorkspaceSourceIdV1, Ledger>> = Object.freeze({ projects: ledger(), people: ledger(), tools: ledger() });
+  const ledgers = Object.freeze({ projects: createReleaseLedgerV1<Release>(), people: createReleaseLedgerV1<Release>(), tools: createReleaseLedgerV1<Release>() });
   const cursors = createEvidenceCursorsV1<string>();
 
   /** The asker's session, still the person these sources were bound to. */
   const current = (signal?: AbortSignal): PersonAccessAuthorization => {
     signal?.throwIfAborted();
     const authorization = options.authenticate();
-    if (authorization.organization_id !== bound.organization_id || authorization.principal_id !== bound.principal_id || authorization.membership_id !== bound.membership_id) stale();
+    if (!samePersonV1(authorization, bound)) stale();
     return authorization;
   };
   const inScope = (project_id: string) => scope.kind === 'global' || project_id === scope.project_id;
@@ -235,11 +222,11 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   const readView = (signal?: AbortSignal): View => {
     const authorization = current(signal);
     if (view !== undefined) return view;
-    const read = (['active', 'archived'] as const).flatMap(status => everyPage(paging => sources.projects.listProjectsV2(token, { status, ...paging }), signal));
+    const read = (['active', 'archived'] as const).flatMap(status => everyProjectPageV1(paging => sources.projects.listProjectsV2(token, { status, ...paging }), signal));
     // A project left between the two reads is not the asker's; one joined between them appears in the next request.
     const grants = grantsOf(authorization);
     const projects = Object.freeze(read.filter(project => grants.has(project.project_id) && inScope(project.project_id)).sort(newestFirst));
-    const members = new Map(projects.map(project => [project.project_id, Object.freeze(everyPage(paging => sources.projects.listMembers(token, { project_id: project.project_id, ...paging }), signal))]));
+    const members = new Map(projects.map(project => [project.project_id, Object.freeze(everyProjectPageV1(paging => sources.projects.listMembers(token, { project_id: project.project_id, ...paging }), signal))]));
     const memberships = new Map<string, { readonly project: ProjectSummaryV2; readonly role: ProjectRoleV1 }[]>();
     for (const project of projects) {
       for (const member of members.get(project.project_id)!) {
@@ -255,7 +242,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   /** The people a scope shows: the organization directory, or in a project its roster. The directory is read once a request. */
   const readPeople = (shown: View, signal?: AbortSignal): readonly Person[] => {
     if (scope.kind === 'project') return shown.members.get(scope.project_id) ?? [];
-    directory ??= Object.freeze(everyPage(paging => sources.projects.searchOrganizationDirectory(token, paging), signal));
+    directory ??= Object.freeze(everyProjectPageV1(paging => sources.projects.searchOrganizationDirectory(token, paging), signal));
     return directory;
   };
   let tools: readonly OrganizationPersonToolV4[] | undefined;
@@ -336,11 +323,9 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
     const ledger = ledgers[source];
     const out = (value: Shaped): EvidenceDeskItemV2 => {
       issued.set(value.id, Object.freeze({ kind: value.kind, key: value.key }));
-      const previous = ledger.released.get(value.id);
       // A person released again keeps every project any of its releases named.
-      ledger.released.set(value.id, previous?.kind === 'person' && value.release.kind === 'person'
+      ledger.record(value.id, previous => previous?.kind === 'person' && value.release.kind === 'person'
         ? Object.freeze({ ...value.release, projects: new Map([...previous.projects, ...value.release.projects]) }) : value.release);
-      ledger.unchecked.add(value.id);
       return Object.freeze({ id: value.id, ...value.fields, receipt_sha256: receipt });
     };
     const items = rows.map(out);
@@ -477,11 +462,8 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   function pending(source: WorkspaceSourceIdV1, input: CheckInput) {
     input.signal?.throwIfAborted();
     const ledger = ledgers[source];
-    const ids = [...(input.mode === 'incremental' ? ledger.unchecked : ledger.released.keys())];
-    return ids.length === 0 ? undefined : {
-      releases: () => ids.map(id => ledger.released.get(id)!),
-      checked: () => { for (const id of ids) ledger.unchecked.delete(id); },
-    };
+    const due = ledger.due(input.mode);
+    return due.ids.length === 0 ? undefined : { releases: () => due.ids.map(id => ledger.get(id)!), checked: due.checked };
   }
   /** A local source's check: the session, the asker's grants and each released person's membership, read now. */
   function check(source: 'projects' | 'people', input: CheckInput): void {

@@ -400,7 +400,6 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-control-plane",
-        "@echo-brain/organization-processing",
         "@echo-brain/organization-protocol",
         "@echo-brain/provider-runtime",
         "@echo-brain/provider-slack-client"
@@ -984,11 +983,6 @@ describe("workspace source boundaries", () => {
     const asset = "packages/federation-protocol/src/asset-probe.ts";
     const unregistered = "packages/unregistered/src/index.ts";
     const swift = "product/unregistered.swift";
-    const assemblyPath = "deploy/organization-authority/journey-explorer-assembly.v1.json";
-    const neutralAsset = "deploy/organization-authority/authority-staging-v1.example.json";
-    // The dangerous direction: provider code listed as a neutral source.
-    // Neutral sources must be .mjs, so the probe is a provider-owned module.
-    const providerModule = "providers/openrouter/src/assembly-probe.mjs";
     const composition = "services/organization-authority/src/composition";
     const directions = [
       ["neutral-to-bootstrap", "packages/organization-api/src/direction-probe.ts", `../../../${composition}/organization-authority-setup-cli.js`, "neutral module reaches bootstrap", `${composition}/organization-authority-setup-cli.ts`],
@@ -1010,13 +1004,6 @@ describe("workspace source boundaries", () => {
       mkdirSync(dirname(join(fixture, unregistered)), { recursive: true });
       write(unregistered, "export const value = 1;\n");
       write(swift, "struct Unregistered {}\n");
-      write(providerModule, "export const probe = 1;\n");
-      const assembly = readFixtureJson<{ neutral_sources: string[]; provider_assets: string[] }>(fixture, assemblyPath);
-      writeFixtureJson(fixture, assemblyPath, {
-        ...assembly,
-        neutral_sources: [...assembly.neutral_sources, providerModule],
-        provider_assets: [...assembly.provider_assets, neutralAsset],
-      });
       ownership = runBoundary(fixture);
 
       const directionFixture = fixtureRepository();
@@ -1035,9 +1022,6 @@ describe("workspace source boundaries", () => {
       ["a provider asset URL", reaches(asset, "providers/openrouter/assets/telemetry-vocabulary.v1.json")],
       ["a production module without an architecture owner", `production module has no architecture owner: ${unregistered}`],
       ["retired Swift source", `Swift source is retired and has no builder: ${swift}`],
-      ["a neutral asset listed as a provider asset", `assembly input has the wrong provider owner: ${neutralAsset}`],
-      ["a provider module listed as a neutral source", `assembly input has the wrong provider owner: ${providerModule}`],
-      ["a neutral source outside its assembly", `neutral assembly input escapes its owner: ${providerModule}`],
     ])("refuses %s", (_label, message) => {
       expect(ownership.status).not.toBe(0);
       expect(ownership.stdout, ownership.stderr).toContain(message);
@@ -1047,25 +1031,6 @@ describe("workspace source boundaries", () => {
       expect(direction.status).not.toBe(0);
       expect(direction.stdout, direction.stderr).toContain(`${failure}: ${path} -> ${resolved}`);
     });
-  });
-
-  it("enforces executable deployment assembly imports as well as workspace imports", () => {
-    const fixture = fixtureRepository();
-    const entry = join(fixture, "deploy/organization-authority/staging-journey-explorer-handler-v1.mjs");
-    const original = readFileSync(entry, "utf8");
-    for (const [probe, error] of [
-      ["const target = 'unexpected'; export const load = () => import(target);", "assembly forbids opaque module loading"],
-      ["import 'unexpected-provider-sdk';", "assembly import is not allowed"],
-      ["import 'node:fs';", "assembly import is not allowed"],
-      ["import '@aws-sdk/client-cloudwatch-logs/unreviewed';", "assembly import is not allowed"],
-      ["const load = process.getBuiltinModule;", "assembly forbids opaque module loading"],
-      ["import './unregistered.mjs';", "assembly import is not a declared input"],
-    ]) {
-      writeFileSync(entry, original + "\n" + probe);
-      const result = runBoundary(fixture);
-      expect(result.status, probe).not.toBe(0);
-      expect(result.stdout + result.stderr, probe).toContain(error);
-    }
   });
 
   it("builds neutral packages with no provider, Person or service workspace available", () => {

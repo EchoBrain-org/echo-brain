@@ -256,7 +256,6 @@ function selectedSource(kinds) {
   if (kinds.every((kind) => kind === "ticket")) return "ticket";
   if (kinds.every((kind) => ["decision", "action", "rationale"].includes(kind))) return "meeting";
   if (kinds.every((kind) => ["note", "document_passage"].includes(kind))) return "document";
-  if (kinds.every((kind) => kind === "slack_message")) return "slack";
   return "all";
 }
 
@@ -285,7 +284,7 @@ export function createFixtureDesk(caseDefinition) {
   const toMetadata = (values) => values.map(metadata);
   const ticketToolId = items.find((item) => item.kind === "ticket")?.citation.tool_id ?? caseDefinition.ticket_tool_id;
   const liveSources = caseDefinition.mode === "v2" && caseDefinition.ticket_available !== false && ticketToolId !== undefined
-    ? [{ source: "ticket", tool_id: ticketToolId }]
+    ? [{ source_id: "ticket", kind: "ticket", selector: "tickets", description: "Live work items: discover summaries, then open selected items for their current body and state.", metadata_only_list: true, tool_id: ticketToolId }]
     : [];
   return Object.freeze({
     desk: Object.freeze({
@@ -332,5 +331,5 @@ export function createFixtureDesk(caseDefinition) {
 }
 
 export function sourceForCitation(citation) {
-  return citation.kind === "ticket" ? "ticket" : citation.kind === "slack_message" ? "slack" : "meeting";
+  return citation.kind === "ticket" ? "ticket" : "meeting";
 }

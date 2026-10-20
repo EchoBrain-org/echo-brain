@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { Buffer } from 'node:buffer';
 import { createPublicKey, verify } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -9,7 +9,7 @@ import { initializeClientUpdateSigner, signClientUpdateFeed } from '../../tools/
 import { updateDigest } from '../../src/product/person-client/client-update-contract.js';
 import { cleanReleaseRecord } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
-import { desktopArtifacts } from '../support/client-update-desktop.js';
+import { cliKits, desktopArtifacts } from '../support/client-update-desktop.js';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const roots: string[] = [];
@@ -27,10 +27,12 @@ function temporary() {
   roots.push(root);
   return root;
 }
-function fixture() {
-  const root = temporary();
-  const signer = join(root, 'signer');
-  const metadata = initializeClientUpdateSigner({ directory: signer });
+// Preparing a feed is the slow part, so each test signs a copy of one prepared template.
+let template: ReturnType<typeof prepareTemplate> | undefined;
+function prepareTemplate() {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'echo-update-sign-template-'));
+  chmodSync(root, 0o700);
+  const metadata = initializeClientUpdateSigner({ directory: join(root, 'signer') });
   mkdirSync(join(root, 'package/dist'), { recursive: true, mode: 0o700 });
   save(join(root, 'package/dist/build-identity.v1.json'), { schema_version: 1, kind: 'echo-packaged-build-identity', product_version: '0.1.1', source_sha: sourceSha, source_kind: 'materialized-commit' });
   writeFileSync(join(root, 'package/dist/client-update-cli.js'), '/* synthetic updater */');
@@ -43,41 +45,31 @@ function fixture() {
   const configPath = join(root, 'config.json');
   const config = { schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://fixture.invalid/feed.json', public_key_spki: metadata.public_key_spki, minimum_sequence: 1, automatic: true, installation: 'cli-kit' };
   save(configPath, config);
-  const targets = [
-    { name: 'macos', platform: 'darwin', architecture: 'arm64', schema_version: 3, kind: 'echo-person-cli-kit-v1', startSource: 'deploy/release/start-person-cli-kit-macos.sh' },
-    { name: 'linux', platform: 'linux', architecture: 'x64', schema_version: 2, kind: 'echo-person-onboarding-kit-v2', startSource: 'deploy/release/start-person-onboarding-kit-linux.sh' },
-  ];
-  const archives = targets.flatMap(target => {
-    const directory = join(root, target.name);
-    const kit = join(directory, 'echo-person-onboarding-kit');
-    mkdirSync(kit, { recursive: true, mode: 0o700 });
-    for (const [file, source] of [['Start-ECHO.sh', target.startSource], ['clean-v1-release.mjs', 'tools/clean-v1-release.mjs'], ['verify-person-onboarding-kit.mjs', 'deploy/release/verify-person-onboarding-kit.mjs']]) {
-      writeFileSync(join(kit, file), committedSource(source), { mode: 0o600 });
-    }
-    writeFileSync(join(kit, 'release.json'), readFileSync(releasePath), { mode: 0o600 });
-    writeFileSync(join(kit, 'person-client.tgz'), readFileSync(client), { mode: 0o600 });
-    save(join(kit, 'build-identity.v1.json'), { schema_version: 1, kind: 'echo-person-onboarding-kit-identity-v1', product_version: '0.1.1', source_sha: sourceSha, platform: target.platform, architecture: target.architecture, release_id: release.release_id });
-    writeFileSync(join(kit, 'node'), `synthetic ${target.name} runtime`, { mode: 0o600 });
-    const digest = (file: string) => updateDigest(readFileSync(join(kit, file)));
-    save(join(kit, 'kit-manifest.v1.json'), { schema_version: target.schema_version, kind: target.kind, release_id: release.release_id, source_sha: sourceSha, release_record_sha256: digest('release.json'), person_client_artifact_sha256: clientHash, build_identity_sha256: digest('build-identity.v1.json'), runtime: { platform: target.platform, architecture: target.architecture, version: 'v22.22.1', node_sha256: digest('node') }, ...(target.name === 'linux' ? { update_bootstrap: config } : {}) });
-    const archive = join(root, `${target.name}.zip`);
-    execFileSync('zip', ['-qr', archive, 'echo-person-onboarding-kit'], { cwd: directory });
-    return [`--${target.name}-kit`, archive];
-  });
-  const desktops = desktopArtifacts({ root, clientArchive: client, release, releaseSha256: updateDigest(readFileSync(releasePath)), config, committed: committedSource });
-  archives.push('--macos-app', desktops['macos-app'].path, '--linux-deb', desktops['linux-deb'].path);
-  const prepared = join(root, 'prepared');
-  const prepare = spawnSync(process.execPath, [join(REPO, 'tools/client-update-feed.mjs'), 'prepare', '--config', configPath, '--release', releasePath, ...archives, '--sequence', '1', '--expires', new Date(Date.now() + 86_400_000).toISOString(), '--out', prepared], { cwd: REPO, encoding: 'utf8' });
+  const inputs = { root, clientArchive: client, release, releaseSha256: updateDigest(readFileSync(releasePath)), config, committed: committedSource };
+  const kits = cliKits(inputs);
+  const desktops = desktopArtifacts(inputs);
+  const archives = ['--macos-kit', kits.macos.zip, '--linux-kit', kits.linux.zip, '--macos-app', desktops['macos-app'].path, '--linux-deb', desktops['linux-deb'].path];
+  const prepare = spawnSync(process.execPath, [join(REPO, 'tools/client-update-feed.mjs'), 'prepare', '--config', configPath, '--release', releasePath, ...archives, '--sequence', '1', '--expires', new Date(Date.now() + 86_400_000).toISOString(), '--out', join(root, 'prepared')], { cwd: REPO, encoding: 'utf8' });
   expect(prepare.status, prepare.stderr).toBe(0);
-  const authorizationPath = join(root, 'authorization.json');
   const authorization = { kind: 'echo-staging-release-founder-authorization-v1', release_sha256: updateDigest(readFileSync(releasePath)), person_client_sha256: clientHash, slack_approved: true, person_records_passed: true, person_ask_passed: true, release_authorized: true };
-  save(authorizationPath, authorization);
+  save(join(root, 'authorization.json'), authorization);
+  return { root, metadata, config, authorization };
+}
+function fixture() {
+  const { root: source, metadata, config, authorization } = (template ??= prepareTemplate());
+  const root = temporary();
+  // cp -p keeps the private modes the signer checks.
+  execFileSync('cp', ['-Rp', ...['signer', 'prepared', 'authorization.json'].map(name => join(source, name)), root]);
+  const signer = join(root, 'signer');
+  const prepared = join(root, 'prepared');
+  const authorizationPath = join(root, 'authorization.json');
   const signaturePath = join(root, 'manifest.sig');
   const payload = readFileSync(join(prepared, 'manifest.json'));
   const options = { directory: signer, prepared, authorizationPath, signaturePath, approveManifest: updateDigest(payload) };
   return { root, signer, metadata, prepared, config, authorization, authorizationPath, signaturePath, payload, options };
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true }); });
+afterAll(() => { if (template) rmSync(template.root, { force: true, recursive: true }); });
 
 describe('local approved release signer', () => {
   it('creates one private identity and reports only its public identity', () => {
@@ -114,18 +106,15 @@ describe('local approved release signer', () => {
     expect(() => signClientUpdateFeed(f.options)).toThrow('signature_already_exists');
   });
 
-  type Artifact = { platform: string; installation: string };
-  it.each([
-    ['CLI-kit', (artifact: Artifact) => artifact.installation === 'cli-kit'],
-    ['Linux CLI-kit', (artifact: Artifact) => artifact.installation === 'cli-kit' && artifact.platform === 'linux'],
-    ['macOS CLI-kit', (artifact: Artifact) => artifact.installation === 'cli-kit' && artifact.platform === 'darwin'],
-    ['deb-less', (artifact: Artifact) => artifact.installation === 'cli-kit' || artifact.platform === 'darwin'],
-  ] as const)('rejects a manually reduced %s-only manifest, previewed or approved', (_, keep) => {
+  // The feed tests cover each reduction; this shows the signer requires every
+  // release target before it previews or signs.
+  it('rejects a manually reduced deb-less manifest, previewed or approved', () => {
     for (const approved of [false, true]) {
       const f = fixture();
       const manifestPath = join(f.prepared, 'manifest.json');
       const manifest = JSON.parse(f.payload.toString('utf8'));
-      manifest.artifacts = manifest.artifacts.filter(keep);
+      manifest.artifacts = manifest.artifacts.filter((artifact: { platform: string; installation: string }) =>
+        artifact.installation === 'cli-kit' || artifact.platform === 'darwin');
       save(manifestPath, manifest);
       const approveManifest = approved ? updateDigest(readFileSync(manifestPath)) : undefined;
       expect(() => signClientUpdateFeed({ ...f.options, approveManifest })).toThrow('all_release_targets_required');

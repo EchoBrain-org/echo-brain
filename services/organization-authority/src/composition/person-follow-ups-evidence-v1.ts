@@ -29,6 +29,7 @@ import type { ImpactItemRowV1, ImpactItemStateV1, SqliteImpactItemsV1 } from '..
 import type { PersonFollowUpReleaseAuditV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import { evidenceDateFieldsOfV1 } from '../adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { createUncheckedTallyV1 } from '../application/evidence-unchecked-v1.js';
+import { samePersonV1 } from '../application/person-release-authorization-v1.js';
 import {
   assessOpenItemsV1,
   errorCodeV1,
@@ -39,6 +40,7 @@ import {
   openItemKindV1,
   openItemLiveReadV1,
   openItemNameV1,
+  visibleOpenItemPagesV1,
   type AssessedOpenItemV1,
   type OpenItemDecisionsReaderV1,
   type OpenItemLiveReadV1,
@@ -48,7 +50,7 @@ import {
 } from './person-open-items-v1.js';
 import { openItemAccessV1 } from './open-items-policy-v1.js';
 import {
-  createEvidenceCursorsV1, evidenceInvalidV1 as invalid, evidenceNotFoundV1 as notFound, evidencePageSizeV1, evidenceTermsV1, evidenceWordsV1, newestFirstV1,
+  createEvidenceCursorsV1, createReleaseLedgerV1, evidenceInvalidV1 as invalid, evidenceNotFoundV1 as notFound, evidencePageSizeV1, evidenceTermsV1, evidenceWordsV1, newestFirstV1,
 } from './person-local-source-helpers-v1.js';
 import type { PersonReadableDecisionsV1, PersonReadableDecisionV1, PersonRecordAnchorV1 } from './person-record-search-route.js';
 
@@ -150,8 +152,8 @@ const DEFAULT_TITLE = 'Follow-up';
  * query and on the reads the request made before any key lookup, never on
  * whether a follow-up holds the key.
  */
-const KEY_ACROSS_SOURCES = 'Follow-ups are found by a ticket key only when follow_ups is searched on its own.';
-const KEY_PAST_READS = 'This request has read as many follow-up items as it can, so a ticket key may not find every follow-up.';
+export const FOLLOW_UPS_KEY_ACROSS_SOURCES_V1 = 'Follow-ups are found by a ticket key only when follow_ups is searched on its own.';
+export const FOLLOW_UPS_KEY_PAST_READS_V1 = 'This request has read as many follow-up items as it can, so a ticket key may not find every follow-up.';
 /** Private visibilities first: an answer statement citing any of them is private. */
 const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_only', 'project', 'projects', 'team'];
 
@@ -235,9 +237,7 @@ const newestFirst = newestFirstV1<Pick<ImpactItemRowV1, 'created_at' | 'item_id'
 export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollowUpsEvidenceSourceV1Options): PersonFollowUpsEvidenceSourceV1 {
   const { sources, viewer, scope } = options;
   /** Each follow-up released in this request, and whether any release of it carried its decision. */
-  const released = new Map<string, { decision: boolean }>();
-  /** Released since this source's last successful check (ADR-0038). */
-  const unchecked = new Set<string>();
+  const ledger = createReleaseLedgerV1<{ readonly decision: boolean }>();
   /** Desk id to item id, for `open`. */
   const issued = new Map<string, string>();
   /** One live read per tool item (`item_key`) in the request, at most `live_reads` of them. */
@@ -249,10 +249,10 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
   const waiting: (() => void)[] = [];
 
   /** The asker's session, still the person this desk was bound to. */
+  const asker = { organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership };
   const current = (signal?: AbortSignal): void => {
     signal?.throwIfAborted();
-    const authorization = options.authenticate();
-    if (authorization.organization_id !== viewer.organization || authorization.principal_id !== viewer.principal || authorization.membership_id !== viewer.membership) stale();
+    if (!samePersonV1(options.authenticate(), asker)) stale();
   };
   /** The asker's display name in the directory, as the Ask route names them to research. */
   const askerName = (): string => sources.people.people(viewer.organization, [viewer.membership]).get(viewer.membership)?.name ?? '';
@@ -265,19 +265,9 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const context = assessOpenItemsV1(sources, viewer, sources.items.forRecords([...projectRecords(scope.project_id)], { states: STATES, limit: PROJECT_ROWS_MAX }));
       return { ...context, assessed: context.assessed.filter(entry => entry.access.see_row) };
     }
-    // Every page of the organization, each through the same policy pass, so a row the asker cannot see never moves another out of view.
-    const decisions = new Map<Sha256Digest, PersonReadableDecisionV1>();
-    const people = new Map<string, NonNullable<ReturnType<Context['people']['get']>>>();
-    const assessed: Assessed[] = [];
-    for (let after: Assessed['row'] | undefined; ;) {
-      const rows = sources.items.inOrganization(viewer.organization, { states: STATES, limit: ORGANIZATION_PAGE, ...(after === undefined ? {} : { after }) });
-      const context = assessOpenItemsV1(sources, viewer, rows);
-      for (const [record, decision] of context.decisions) decisions.set(record, decision);
-      for (const [membership, person] of context.people) people.set(membership, person);
-      assessed.push(...context.assessed.filter(entry => entry.access.see_row));
-      after = rows.at(-1);
-      if (rows.length < ORGANIZATION_PAGE || after === undefined) return { decisions, people, assessed };
-    }
+    // Every page of the organization, each through the same policy pass.
+    return visibleOpenItemPagesV1(sources, viewer, ORGANIZATION_PAGE, after =>
+      sources.items.inOrganization(viewer.organization, { states: STATES, limit: ORGANIZATION_PAGE, ...(after === undefined ? {} : { after }) }));
   };
   let shown: View | undefined;
   /**
@@ -427,9 +417,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     const items = shaped.map(({ evidence, visibility, decision, record, follows }): EvidenceDeskItemV2 => {
       const id = `follow_up_${evidence.item_id}`;
       issued.set(id, evidence.item_id);
-      const previous = released.get(evidence.item_id);
-      released.set(evidence.item_id, { decision: decision || previous?.decision === true });
-      unchecked.add(evidence.item_id);
+      ledger.record(evidence.item_id, previous => ({ decision: decision || previous?.decision === true }));
       const decisionItems = decision ? decisions.get(record)?.items ?? [] : [];
       const followed = links ? follows : undefined;
       for (const item of [...decisionItems, ...(followed === undefined ? [] : [followed])]) linked.set(item.id, item);
@@ -498,7 +486,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       }
       input.signal?.throwIfAborted();
       // Each key may need one more read than the request had made before its lookup.
-      const notice = keys.length === 0 ? undefined : !live ? KEY_ACROSS_SOURCES : readBefore + keys.length > FOLLOW_UPS_LIMITS_V1.live_reads ? KEY_PAST_READS : undefined;
+      const notice = keys.length === 0 ? undefined : !live ? FOLLOW_UPS_KEY_ACROSS_SOURCES_V1 : readBefore + keys.length > FOLLOW_UPS_LIMITS_V1.live_reads ? FOLLOW_UPS_KEY_PAST_READS_V1 : undefined;
       // What the window could not test is counted over every follow-up the asker sees, as a meeting search's is, whatever its words
       // match. A search across sources links nothing: the desk keeps only some of its hits, so nothing is opened for them.
       return release('search', view, hits.slice(0, limit), wordsCut || hits.length > limit,
@@ -507,7 +495,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
 
     async list(input) {
       const window = windowOf(input);
-      if (input.channel !== undefined || input.kinds?.some(kind => kind !== FOLLOW_UP_EVIDENCE_KIND_V1)) invalid('follow-ups take only owner, status and their own dates');
+      if (input.kinds?.some(kind => kind !== FOLLOW_UP_EVIDENCE_KIND_V1)) invalid('follow-ups take only owner, status and their own dates');
       const size = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.list_page);
       const owner = input.owner === undefined ? undefined : input.owner.normalize('NFC').trim().replace(/^@/u, '').trim();
       if (owner !== undefined && (owner.length === 0 || owner.length > 80)) invalid('owner must be a person\'s name such as "Dana", or "me"');
@@ -550,20 +538,20 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
 
     revalidate(input) {
       input.signal?.throwIfAborted();
-      const ids = [...(input.mode === 'incremental' ? unchecked : released.keys())];
-      if (ids.length === 0) return;
+      const due = ledger.due(input.mode);
+      if (due.ids.length === 0) return;
       current(input.signal);
-      const rows = ids.map(id => sources.items.read(id) ?? stale());
+      const rows = due.ids.map(id => sources.items.read(id) ?? stale());
       const context = assessOpenItemsV1(sources, viewer, rows);
       if (context.assessed.length !== rows.length) stale();
       const inProject = scope.kind === 'project' ? projectRecords(scope.project_id) : undefined;
       for (const { row, access } of context.assessed) {
         // The row still shown, its decision still shown wherever a release carried it, and still in the Ask's project.
         // A state or owner changed meanwhile is not an access change.
-        if (!access.see_row || (released.get(row.item_id)!.decision && !access.see_decision) || (inProject !== undefined && !inProject.has(row.record_sha256))) stale();
+        if (!access.see_row || (ledger.get(row.item_id)!.decision && !access.see_decision) || (inProject !== undefined && !inProject.has(row.record_sha256))) stale();
       }
       input.signal?.throwIfAborted();
-      for (const id of ids) unchecked.delete(id);
+      due.checked();
     },
   });
 }

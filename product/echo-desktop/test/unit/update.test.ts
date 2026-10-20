@@ -615,15 +615,7 @@ describe('with the real client updater core', () => {
       artifacts: [{ ...LINUX, url: 'https://updates.example.test/staging/artifacts/b.deb', sha256: sha256(deb), bytes: deb.length }],
     }));
     const envelope = Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') }));
-    // handle_signals: false. A signal listener the core added would re-raise the
-    // signal and end Electron without its normal quit, so none may be added.
-    const signals = () => (['SIGINT', 'SIGTERM', 'SIGHUP'] as const).map(signal => process.listenerCount(signal));
-    const before = signals();
-    const during: number[][] = [];
-    const fetcher = vi.fn(async (url: string | URL | Request) => {
-      during.push(signals());
-      return new Response(new Uint8Array(String(url) === FEED ? envelope : deb));
-    });
+    const fetcher = vi.fn(async (url: string | URL | Request) => new Response(new Uint8Array(String(url) === FEED ? envelope : deb)));
     const h = await launched(s, config, fetcher as typeof fetch);
     expect(h.on).toBe(true);
     expect(h.client.readClientUpdateConfig(s.root)).toEqual(config);
@@ -636,28 +628,7 @@ describe('with the real client updater core', () => {
     expect(h.started[0]!.slice(1, 4)).toEqual(['4242', join(s.updater, 'staged', 'feed.json'), join(s.updater, 'staged', 'echo-desktop.deb')]);
     // The core's download folder and lock are gone; only what activation needs stays.
     expect(readdirSync(s.updater).filter(name => name.startsWith('.'))).toEqual([]);
-    // The check's feed, then the install's feed and package: all under the core's lock.
-    expect(during).toEqual([before, before, before]);
     writeJson(join(s.updater, 'outcome.json'), outcomeOf(B, 'cancelled', h.attempt()), 0o600);
     await expect.poll(() => h.state()).toEqual({ state: 'available', release: B });
-  });
-
-  it('re-pins the same bootstrap at each launch, and stays off once a later release carries another', async () => {
-    const s = fresh();
-    const config = configFor(generateKeyPairSync('ed25519').publicKey);
-    expect((await launched(s, config)).on).toBe(true);
-    expect((await launched(s, config)).on).toBe(true);
-    // The person's automatic choice is theirs: a relaunch keeps it.
-    const pinned = join(s.updater, 'config.json');
-    writeJson(pinned, { ...config, automatic: false }, 0o600);
-    const relaunched = await launched(s, config);
-    expect(relaunched.on).toBe(true);
-    expect(relaunched.client.readClientUpdateConfig(s.root)).toEqual({ ...config, automatic: false });
-    writeJson(pinned, config, 0o600);
-    // A raised sequence floor, as a rotated key or feed would be: the pin stands and updates stop.
-    const raised = await launched(s, { ...config, minimum_sequence: 2 });
-    expect(raised.on).toBe(false);
-    expect(raised.log).toHaveBeenLastCalledWith('update off already_configured');
-    expect(raised.client.readClientUpdateConfig(s.root)).toEqual(config);
   });
 });

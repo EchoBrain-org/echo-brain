@@ -1,5 +1,5 @@
 import { Fragment } from 'preact';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef } from 'preact/hooks';
 import type { Member, OpenItemView } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
@@ -8,10 +8,11 @@ import {
   ownerUnmatched, ownerWords, reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
 } from '../needs.js';
 import {
-  awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps, openImpactSource,
+  awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps,
   openListDecision, ownerChoices, pickFollowUpOwner, retryFollowUp, retryFollowUps, sendable, sendFollowUp, sendTicked, setFollowUpState, shownItem, tickFollowUp,
   toggleClosedGroup, toggleOwnerPicker, undoFollowUp, type FollowUpList, type ItemPage, type OwnerPicker as Picker, type Said, type State,
 } from '../store.js';
+import { OpenIn } from './ask.js';
 import { Face } from './card.js';
 import { within } from './change.js';
 import { Chevron } from './icons.js';
@@ -279,14 +280,9 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
  * just now: the tool checks your access when it opens.
  */
 function OpenInTool({ state, item }: { state: State; item: OpenItemView }) {
-  const [failed, setFailed] = useState(false);
   const source = item.reach === 'opened' ? item.current?.source : undefined;
   if (!source || !('permalink' in source)) return null;
-  return <>
-    <button type="button" class="link-button card-side-link" title={source.permalink}
-      onClick={async () => { setFailed(false); setFailed(!(await openImpactSource(source))); }}>Open in {externalSourceProvider(source, state.tools?.items)}</button>
-    {failed && <span class="error">The item could not be opened. Try again.</span>}
-  </>;
+  return <OpenIn source={source} provider={externalSourceProvider(source, state.tools?.items)} item />;
 }
 
 /**

@@ -3,7 +3,7 @@ import {
   annotateCoreRuntimeV1, coreRuntimeDiagnosticErrorKindV1, coreRuntimeIdentityV1,
   currentCoreRuntimeDetailV1, normalizeCoreRuntimeDetailV1,
   observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeSyncV1, observeCoreRuntimeV1,
-  withCoreRuntimeDiagnosticsV1, withoutCoreRuntimeContentV1,
+  withCoreRuntimeDiagnosticsV1,
   type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1,
 } from '../../src/shared/core-runtime-observation-v1.js';
 import { createJourneyTelemetryEventV1 } from '../../src/shared/journey-telemetry-v1.js';
@@ -63,17 +63,15 @@ describe('shared selected-run diagnostics', () => {
     expect(() => withCoreRuntimeDiagnosticsV1(observer, () => observeCoreRuntimeSyncV1('research_brief', () => { throw failure; }))).toThrow(failure);
   });
 
-  it('isolates nested and concurrent selections and preserves the live-content fence', async () => {
+  it('isolates nested and concurrent selections', async () => {
     const selected: CoreRuntimeDiagnosticObservationV1[][] = [[], []];
-    const legacy = vi.fn();
     await Promise.all(selected.map(events => observeCoreRuntimeV1('research_run', async () => {
       await Promise.resolve();
-      withoutCoreRuntimeContentV1(() => observeCoreRuntimeDiagnosticV1(payload()));
+      observeCoreRuntimeDiagnosticV1(payload());
       withCoreRuntimeDiagnosticsV1(undefined, () => observeCoreRuntimeDiagnosticV1(payload()));
-    }, { diagnostic_observer: event => { events.push(event); }, content_observer: legacy })));
+    }, { diagnostic_observer: event => { events.push(event); } })));
     expect(selected.map(events => events.length)).toEqual([1, 1]);
     expect(selected[0]![0]!.operation_id).not.toBe(selected[1]![0]!.operation_id);
-    expect(legacy).not.toHaveBeenCalled();
   });
 
   it('detaches background work from the HTTP lifetime and inherits metadata but not selected payload capture', async () => {

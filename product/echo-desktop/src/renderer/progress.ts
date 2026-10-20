@@ -1,5 +1,5 @@
 import type { AnswerSource, AskRead, AskReceipt, AskSearched, AskSearchedSource, AskStage, AskStep, ConnectedTool } from '../shared/protocol.js';
-import { documentName, groupKey } from './answer.js';
+import { documentName, externalSourceProvider, groupKey } from './answer.js';
 
 /**
  * What Ask shows while it works (Ask progress and internal links v1,
@@ -111,14 +111,13 @@ export function listWords(words: readonly string[]): string {
 
 /**
  * A searched source as a person says it: a tool by its own name, once its
- * list is read, whether its tickets, pages or containers (its Jira projects,
- * Confluence spaces or Slack channels) were searched; ECHO's follow-ups as
- * "follow-ups"; your projects, people and tools as those words.
+ * list is read, whether its tickets, pages or containers (its Jira projects or
+ * Confluence spaces) were searched; ECHO's follow-ups as "follow-ups"; your
+ * projects, people and tools as those words.
  */
 export function sourceWords(source: AskSearchedSource, tools?: readonly ConnectedTool[] | null): string {
-  if (!('tool_id' in source)) return source.kind === 'slack' ? 'Slack' : source.kind === 'follow_ups' ? 'follow-ups' : source.kind;
-  return tools?.find(tool => tool.tool_id === source.tool_id)?.name ??
-    source.tool_id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  if (!('tool_id' in source)) return source.kind === 'follow_ups' ? 'follow-ups' : source.kind;
+  return externalSourceProvider(source, tools);
 }
 
 /**

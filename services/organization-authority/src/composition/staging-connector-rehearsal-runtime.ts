@@ -25,8 +25,8 @@ import {
   type StagingConnectorReadReasonV1,
   type StagingConnectorReadResultV1,
 } from './staging-connector-rehearsal-protocol.js';
-import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveRuntimeSeamsV1, type OpenedJiraPersonLiveRuntimeV1 } from './jira-person-live-runtime-v1.js';
-import { JIRA_LIVE_CONNECTOR_V1 } from './person-live-connector-registry-v1.js';
+import type { PersonContextProjectNamesV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import { jiraPersonLiveConnectorsV1, openJiraPersonLiveRuntimeV1, type JiraPersonLiveRuntimeSeamsV1, type OpenedJiraPersonLiveRuntimeV1 } from './jira-person-live-runtime-v1.js';
 import {
   openOrganizationAuthorityService,
   type OrganizationAuthorityServiceConfig,
@@ -322,12 +322,13 @@ export async function openStagingConnectorRehearsalService(
         invalid();
       },
     });
-    const openJira = (sessions: Parameters<PersonHttpRuntimeFactory>[0], authorize_project?: PersonTicketProjectAuthorizationV1) => {
+    const openJira = (sessions: Parameters<PersonHttpRuntimeFactory>[0], authorize_project?: PersonTicketProjectAuthorizationV1, project_names?: PersonContextProjectNamesV1) => {
       authenticate = input => sessions.authenticateAccess(input);
       // The rehearsal's owner/project restrictions apply to its diagnostics.
       // Live Ask authenticates each Person and uses their own Jira connection.
       jira = openJiraPersonLiveRuntimeV1({
         ...(authorize_project === undefined ? {} : { authorize_project }),
+        ...(project_names === undefined ? {} : { project_names }),
         state_directory: config.state_directory,
         sessions: jiraAsk === undefined ? { authenticateAccess: input => requireOwner(input.access_token) } : sessions,
         configuration: { enabled: true, cloud_id: selected.profile.jira.cloud_id,
@@ -347,7 +348,8 @@ export async function openStagingConnectorRehearsalService(
     };
     runtime = await openOrganizationAuthorityService(serviceConfig, {
       ...dependencies,
-      api: { ...dependencies.api, person_http_runtime_factory: personFactory, ...(jiraAsk === undefined ? {} : { live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: openJira }] }) },
+      // Jira's issues and its projects, as production binds them (research tool contract v1).
+      api: { ...dependencies.api, person_http_runtime_factory: personFactory, ...(jiraAsk === undefined ? {} : { live_connectors: jiraPersonLiveConnectorsV1(openJira) }) },
     });
     let closing: Promise<void> | undefined;
     return Object.freeze({

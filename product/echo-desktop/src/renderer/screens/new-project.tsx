@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { MAX_PROJECT_FILES } from '../../shared/protocol.js';
 import { message } from '../messages.js';
 import {
   askSkip, canDropFiles, cancelSkip, checkFile, chooseFiles, closeSheet, confirmSkip, createProject, dropFiles, EXTRACTION, keepNewProject,
-  MAX_PROJECT_FILES, newProjectBusy, newProjectSteppable, newProjectUnsettled, pickable, pickPerson, projectName, removeRow, retryFile, retryPick, findPeople,
-  setNewProjectName, setPickQuery, unsent, type FindingSheet, type NewProjectSheet, type ProjectFile, type ProjectPick, type State,
+  newProjectBusy, newProjectSteppable, newProjectUnsettled, pickable, pickPerson, projectName, removeRow, retryFile, retryPick, findPeople,
+  setNewProjectName, setPickQuery, unsent, type NewProjectSheet, type ProjectFile, type ProjectPick, type State,
 } from '../store.js';
 import { trapTab } from './compose.js';
 import { Close, Doc, Saved, Warning } from './icons.js';
-import { Confirm, Face, Finder } from './people.js';
+import { Face } from './people.js';
 
 /** Where one file stands, in the app's own words. Before the project exists a file is only listed. */
 function fileLabel(file: ProjectFile, halted: boolean, queued: boolean): string {
@@ -230,9 +231,8 @@ function Foot({ sheet }: { sheet: NewProjectSheet }) {
  * usable from the start. Nothing is sent before Create. Create makes the
  * project; then, with a status on each row, each person is added and each
  * file saved, one at a time, and the project opens behind the sheet. Done
- * closes it. Without the organization's directory, people are added after
- * Create from the project's own, as People does. While another app is in
- * front its people are hidden; files still drop.
+ * closes it. While another app is in front its people are hidden; files
+ * still drop.
  */
 export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSheet }) {
   const box = useRef<HTMLDivElement>(null);
@@ -242,15 +242,15 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
   const made = sheet.project;
   // Whether the focus was last in the people listed, where an Add or a × takes its own button away.
   const inPeople = useRef(false);
-  // The name first. Once the project exists, a control you are in keeps the focus; else the project's directory where it is used, or the sheet.
+  // The name first. Once the project exists, a control you are in keeps the focus; else the sheet.
   useEffect(() => {
     const at = document.activeElement;
     if (made && at !== box.current && box.current?.contains(at)) return;
-    (made ? (sheet.peopleLater ? find.current : null) ?? box.current : name.current)?.focus();
+    (made ? box.current : name.current)?.focus();
   }, [made?.project_id]);
   // What had the focus went (an Add, a ×, Create, a Skip question): it goes back to finding people, or to the sheet, so Tab stays here.
   useEffect(() => {
-    if (sheet.skip !== null || sheet.confirm || !box.current || box.current.contains(document.activeElement)) return;
+    if (sheet.skip !== null || !box.current || box.current.contains(document.activeElement)) return;
     ((inPeople.current ? find.current : null) ?? box.current).focus();
   });
   const busy = newProjectBusy(sheet);
@@ -258,7 +258,6 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
   const queued = made !== null;
   const heldByPerson = sheet.picks.some(pick => pick.status === 'unknown');
   const halted = heldByPerson || sheet.files.some(file => file.status === 'unknown' || file.status === 'checking');
-  const finder = made && sheet.peopleLater ? sheet as FindingSheet : null;
   return (
     <div class="overlay top">
       <div
@@ -296,16 +295,7 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
         {!state.concealed && (
           <>
             <div class="section-label">People · optional</div>
-            {finder ? <Finder state={state} sheet={finder} menus={false} field={find} />
-              : sheet.peopleLater ? <div class="notice-line" data-testid="people-later">Add people after Create</div>
-              : <Picker state={state} sheet={sheet} field={find} queued={queued} halted={heldByPerson} busy={busy} />}
-            {/* Picks made before the directory stopped answering (an Authority rolled back mid-sheet) are still added after
-                Create, and one whose add is unknown holds back the rest: its row, Try again and Skip must stay in view. */}
-            {sheet.peopleLater && sheet.picks.length > 0 && (
-              <div class="people-list">
-                {sheet.picks.map(pick => <PickRow key={pick.id} pick={pick} halted={heldByPerson} queued={queued} busy={busy} />)}
-              </div>
-            )}
+            <Picker state={state} sheet={sheet} field={find} queued={queued} halted={heldByPerson} busy={busy} />
           </>
         )}
         <div class="section-label">Files · optional</div>
@@ -321,7 +311,6 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
         {sheet.notice && <div class="notice-line" data-testid="new-project-notice" aria-live="polite">{sheet.notice}</div>}
         <Foot sheet={sheet} />
       </div>
-      {sheet.confirm && finder && <Confirm sheet={finder} />}
       {sheet.skip !== null && <SkipConfirm sheet={sheet} />}
     </div>
   );

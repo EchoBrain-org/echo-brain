@@ -5,43 +5,24 @@ initialization, Person OIDC sessions, initial-owner Slack identity linking,
 admitted meeting processing, approval finalization, immutable V4 records, and
 permission-aware Person reads and answer composition. It also owns durable
 Person document and upload custody, projects with their association and
-audience, audited read/search, and optional search enrichment. Uploads do not
-require Slack approval. The current artifact is Authority V14 with control-plane
-V4, with project settings and one approval core for meetings (one proposal per
-meeting, multi-project audiences, confirmed owners). Runtime opening never migrates
-state. This release requires fresh databases; existing disposable rehearsal
-state uses the [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state).
+audience, audited read/search, and optional search enrichment. Uploads need
+no approval. Meetings go through one approval core (one proposal per meeting,
+multi-project audiences, confirmed owners). Runtime opening never migrates
+state; it requires the [current baselines](#state-and-baselines), and existing
+disposable rehearsal state uses the
+[authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state).
 
 For any deployed staging initial-owner setup, do not run the lower-level setup
 commands in this service reference. Start with the
-[deployment README](../../deploy/organization-authority/README.md) and its
-`onboard-clean-v1.sh doctor`, `prepare`, then `resume` flow. The
-[organization onboarding and employee rollout](../../docs/product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md)
-defines the supported operator and employee flow.
+[operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
+and the [deployment README](../../deploy/organization-authority/README.md)'s
+`onboard-clean-v1.sh doctor`, `prepare`, then `resume` flow.
 
 ## Runtime component map
 
-- `organization-authority-composition-root.ts` selects deployable providers.
-- `organization-authority-runtime.ts` composes the provider-neutral runtime.
-- `organization-authority-service-lifecycle.ts` owns worker and API lifecycle.
-- `organization-authority-api-runtime.ts` owns request-serving resources.
-- `organization-authority-http-server.ts` owns HTTP mechanics and dispatch.
-- `organization-authority-setup-cli.ts` coordinates organization setup.
-- `organization-authority-state-bootstrap.ts` bootstraps a new absent-state lineage.
-- `decision-processor-bundle-v1.ts` in
-  `packages/organization-processing/src/ports/` defines a provider-neutral
-  composition seam; `ApprovalWorkflowContextV1` in `approval-workflow-bundle-v1.ts`
-  is the approval seam the approval core (`approval-core-v1.ts`) is built on.
-- `providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts` owns
-  the selected decision processor. `approval-core-v1.ts` is the one approval
-  core and `approval-publisher-v1.ts` the one publisher, composed here. Slack is
-  an optional presenter on the core
-  (`providers/slack/server/src/private-approval/slack-approval-presenter-v1.ts`,
-  with clicks decided through `slack-approval-click-v1.ts`). Slack Person
-  identity composition is under `providers/slack/server/src/person-identity/`.
-  The provider-neutral staging release canary's private socket control and
-  client are `staging-release-canary-{control,client}-v1.ts` under
-  `src/composition/staging/`.
+The [composition README](src/composition/README.md) maps the runtime
+components, provider bundles and Person services. Two host rules sit here:
+
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
   and presentation-port components.
 - Identity and approval callbacks share the application-owned
@@ -73,12 +54,9 @@ Use these responsibility-named commands for new automation:
 - `echo-organization-authority-setup`
 - `echo-organization-authority-serve`
 
-The older `echo-organization-authority-init-clean-state`, `-clean-founder`,
-`-clean-person`, `-clean-live`, `-synthetic-quality`, and
-`-admit-clean-granola-source` alias binaries were retired on 2026-09-06. The
-checked-in deploy scripts, container entrypoint, and harnesses already call the
-names above; automation outside this repository must use them too. The
-standalone `echo-organization-authority-person-admin` and the organization Granola admission binary were retired later. `echo-organization-authority-setup` now runs Person credential setup and the initial-owner invitation; meeting intake is idle when no personal source is connected.
+The older `clean-*` alias binaries are retired; automation outside this
+repository must use the names above. `echo-organization-authority-setup` runs
+Person credential setup and the initial-owner invitation.
 
 Use absolute canonical paths. Private credential and invitation directories
 must be current-user `0700`; private input and invitation files must be
@@ -164,12 +142,8 @@ removed. Approval tests use the existing synthetic release canary and
 human approval, with separate evidence. The diagnostic profile alone does not
 enable Ask. See the
 [scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal).
-
-The V3 profile removes the organization Granola policy and inert Slack channel.
-Older V1/V2 profiles and their bindings are refused. A selected older profile
-requires a fresh rehearsal under the operator playbook; this code does not
-migrate retained state or deploy itself. New V3 connection bindings remain
-stable across ordinary restarts with the same profile.
+Connection bindings remain stable across ordinary restarts with the same
+profile.
 
 The EC2 Compose overlay additionally selects `ECHO_STAGING_JIRA_ASK_V1=true`
 when the fixed connector profile is present. The CLI validates that profile and
@@ -186,8 +160,8 @@ its diagnostic reads. Mine and unmapped projects exclude Jira.
 The same EC2 overlay selects `ECHO_STAGING_CONFLUENCE_ASK_V1=true` when the
 fixed connector profile is present. Confluence uses only that profile's
 Atlassian Cloud ID, with a separately configured Nango Cloud integration named
-`confluence`. It uses each Person's own Confluence grant and no Jira project or
-Slack channel restriction. Global Ask follows the person's Confluence access;
+`confluence`. It uses each Person's own Confluence grant and no Jira project
+restriction. Global Ask follows the person's Confluence access;
 project Ask filters discovery through the project's Confluence space mapping.
 Conflicting explicit Confluence flags refuse startup. Without the staging switch
 or both explicit Confluence flags, the Confluence source remains unconfigured.
@@ -221,7 +195,7 @@ canonical lowercase.
 ### 1. Bootstrap while stopped
 
 Bootstrap takes no Slack input. Slack is connected afterward, in the app
-(see [Slack setup, in the app](#slack-setup-in-the-app) below).
+(see [Slack setup, in the app](../../deploy/organization-authority/README.md#slack-setup-in-the-app)).
 
 ```sh
 echo-organization-authority-setup bootstrap \
@@ -260,27 +234,6 @@ echo-organization-authority-setup status \
 It reports the next step and durable readiness facts, but not credentials,
 grants, bearer values, generated internal IDs, or note content.
 
-### Slack setup, in the app
-
-Slack setup has no host-side steps left. An owner creates and installs the
-organization's Slack connection with the Person CLI's tools verbs (the ECHO
-desktop app's Connected tools page shows status only for now), through Nango
-([ADR-0025](../../docs/decisions/ADR-0025-nango-holds-slack-connection-credentials.md)):
-there is no Slack app scope to grant by hand, no separate signing-secret file,
-and no Interactivity Request URL to save — the app recipe sets all of that,
-including the four required bot scopes (`chat:write`, `im:history`,
-`im:write`, `users:read`) and the `openid` and `profile` user scopes that
-only the person's browser sign-in requests. The `im:*` scopes are required for
-the meeting-owner DM lane.
-
-Re-onboarding a staging lineage uses the same in-app setup and connect, but
-reuses the designated Slack app with `--existing-app <app-id>` (see the
-[existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection));
-it does not reuse a Slack app's scopes or token by hand. Use
-a wholly fresh Authority V14 staging lineage with the
-[current storage baselines](#state-and-baselines); use the supported
-rehearsal reset before preparing state from an earlier release.
-
 ### 2. Start Person service, sign in, set up and connect Slack
 
 Before finalization, the `echo-organization-authority-serve serve` command exposes the Person surface with an inert
@@ -312,7 +265,9 @@ echo-brain person tools connect --tool slack
 ```
 
 `person login` opens the OIDC authorization URL and receives the one-use
-session at a local loopback handoff; do not paste callback data. `person
+session at a local loopback handoff; do not paste callback data. Only the
+Person CLI sets up the organization's Slack app; the desktop Tools page
+connects each person's own tools. `person
 tools setup --tool slack` reads a Slack app configuration token from standard
 input — piped in, as above, or pasted at its hidden prompt — creates and
 installs the organization's private Slack app through Nango, and waits for
@@ -381,7 +336,7 @@ meeting qualification; its status reports `not_required` and keeps absent
 canary evidence false. Status emits only boolean or enum evidence, never record,
 reader, query, or timestamp data.
 
-Setup manifests now use V3 and setup status uses V2. Earlier manifests require
+Setup manifests use V3 and setup status uses V2. Earlier manifests require
 fresh setup; pinned Authority baseline SQL remains unchanged. The host release
 health reader accepts matched V1 or V2 status envelopes so rollback to an older
 accepted image can still be checked; this does not select a legacy connector.
@@ -462,30 +417,18 @@ operations:
 | `sweep` | Queues a re-check of the open items the caller can see in `mine` (what they sent or own), a record or a project, or answers `nothing_to_check` when there is none a sweep covers. Asked again while that scope's sweep is pending or running, it answers the same run. |
 
 `GET /v1/person/changes` (`echo-brain person changes`) is the change check
-([ADR-0036](../../docs/decisions/ADR-0036-person-change-check.md)). It answers
-`echo-person-changes-v1`: one fingerprint each for `projects` (the projects the
-caller is an active member of, active and archived, with name, status and role),
-`follow_ups` (what `items` `involved` lists, by id, state, owner, when the owner
-and the state were last set, and when it was sent; never a check) and `reviews`
-(the meetings `reviews` lists for the caller, by id and status), plus
-`check_again_after_seconds` (60 by default, within 15..3600). Each fingerprint
-is a SHA-256 over rows the caller may read under the same policy as that read,
-so it never moves with activity they cannot see (ADR-0012). It authenticates
-first, then reads in one Authority read transaction (the record check reads the
-record log on its own connection): no `BEGIN IMMEDIATE`, no live tool read and
-no audit row. `follow_ups` reads every involved row, a page at a time, with no
-bound before the policy pass, through the same reader as `items` `involved`, and
-asks the record check only which decisions the caller reads and their projects. The `owner_set_by` part has no index and scans
-the organization's items. Reviews that cannot be read just now count as none,
-and the other areas still answer.
+([ADR-0036](../../docs/decisions/ADR-0036-person-change-check.md)): one
+fingerprint each for the caller's `projects`, `follow_ups` (what `items`
+`involved` lists) and `reviews`, built under the same policy as those reads,
+plus `check_again_after_seconds`. It reads in one Authority read transaction
+with no live tool read and no audit row. Reviews that cannot be read just now
+count as none, and the other areas still answer.
 
 A sweep acts as the person who asked, with their access, and stores only
 verdicts and which items it could not read. It covers items on a Jira ticket
 or a page in a tool the caller has connected (a live source a desk binds is for
 that tool and the caller's link to it is live, read locally, never from the
-provider), or on an ECHO record or document. Items on a Slack message are left
-out, and the sweep trigger refuses a Slack message citation: no reader in ECHO
-can open one yet, so a sweep could only record it unreadable. At start it takes
+provider), or on an ECHO record or document. At start it takes
 up to 20 of the items the caller still sees, never checked first, then the
 oldest last check; an item one of their sweeps that finished in the last day
 could not read goes after all the others. It names the decision to research
@@ -514,7 +457,8 @@ Revoking a membership denies both list and search for that tenure. A newly
 invited employee gets a new membership tenure and may read only content allowed
 to that membership. The owner sees the current roster with
 `echo-brain person employee list`; invite, list, reissue, and revoke commands
-are documented in the [product onboarding flow](../../docs/product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md#employee-rehearsal-commands).
+are documented with the
+[employee handoff](../../deploy/release/README.md#employee-machine-requirements-and-handoff).
 
 ## State and baselines
 
@@ -523,9 +467,9 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses Authority V14, control-plane V4, record-log V4, retrieval
-facts V3, and retrieval lexical/content V2. The V2 root binds exactly these six
-roles. Per-database manifests remain V1; schema versions and digests identify
+Current state uses six byte-pinned baselines, one per role: Authority V14,
+control-plane V4, record-log V4, retrieval facts V3, retrieval lexical V2 and
+retrieval content V2. The V2 root binds exactly these six roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
 database. Old roots, retired databases, and mismatched schemas refuse before
 writable opening.
@@ -537,8 +481,8 @@ fit Slack's limits is marked unrepresentable in
 the proposal. A temporarily missing reviewer identity leaves the proposal queued
 for reconciliation.
 
-The checkout carries only the current V14 and control-plane V4 baselines. Earlier Authority
-baselines and their offline converters remain in Git history.
+The checkout carries only each role's current baseline. Earlier baselines and
+their offline converters remain in Git history.
 
 Routine releases use baseline-preserving image replacements through the
 [release procedure](../../deploy/release/README.md); that updater refuses

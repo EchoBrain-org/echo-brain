@@ -12,7 +12,7 @@ import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import type { PersonDiagnosticsHttpApplicationV1 } from '../src/presentation/person-diagnostics-http-application.js';
-import type { PersonAnswerV5HttpApplication } from '../src/presentation/person-answer-v5-http-application.js';
+import type { PersonAnswerV5HttpApplication } from '../src/presentation/person-live-answer-http-application.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../src/presentation/person-trigger-runs-http-application.js';
 
 const capture_id = 'cap_00000000-0000-4000-8000-000000000001';
@@ -52,7 +52,7 @@ function captureFixture() {
   const originals = {
     deskAuthorize, revalidateDeskRelease,
     deskSearch: vi.fn(() => ({ items: [note], truncated: false, receipt: canonicalSha256('note release'),
-      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, authorization_revision: 0, released_atoms: [] },
+      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
     })),
   };
   const replies: unknown[] = [];

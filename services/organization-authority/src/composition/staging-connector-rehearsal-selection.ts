@@ -2,6 +2,7 @@ import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } fro
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
 import { validateStagingConnectorRehearsalProfileV3 } from './staging-connector-rehearsal-protocol.js';
+import { CLEAN_V1_RELEASE_ID } from './clean-v1-release-id.js';
 
 const STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE = 'staging-connector-rehearsal.json';
 
@@ -20,7 +21,7 @@ export function readStagingConnectorRehearsalSelection(input: StagingConnectorRe
   const expected = join(dirname(input.state_directory), 'private', STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE);
   if (input.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 ||
       authority_host !== new URL(STAGING_AUTHORITY_ORIGIN_V1).hostname ||
-      !/^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/.test(release_id) ||
+      !CLEAN_V1_RELEASE_ID.test(release_id) ||
       !isAbsolute(input.state_directory) || resolve(input.state_directory) !== input.state_directory ||
       requested !== expected || realpathSync(requested) !== expected) {
     throw new Error('Staging connector rehearsal selection is invalid');

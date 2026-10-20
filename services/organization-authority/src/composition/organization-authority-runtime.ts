@@ -27,6 +27,7 @@ import {
   readableSearchGenerationContractV1,
   type ReadableSearchRelatedAtomProjectorBindingV1,
 } from "./readable-search-generation-composition.js";
+import type { ReadableSearchGenerationReconciliationV1 } from "./readable-search-generation-reconciler.js";
 import type { OrganizationAuthorityApiRuntimeConfig, OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
@@ -47,8 +48,6 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly oidc: PersonSessionOidcConfiguration;
   readonly client_authentication: OrganizationAuthorityApiRuntimeConfig["client_authentication"];
   readonly pkce_key_file: string;
-  /** Server-only agentic Ask experiment, off unless the serving profile opts in. */
-  readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Staging-only research evaluation endpoint; ignored for any other Authority origin. */
   readonly staging_research_eval_v1?: true;
   /** Explicit answer-composition bundle. This generic root does not select one. */
@@ -120,7 +119,7 @@ export interface OrganizationAuthorityRuntimeDependencies {
 }
 
 interface ReadableSearchReconcilerV1 {
-  reconcile(signal: AbortSignal): Promise<unknown>;
+  reconcile(signal: AbortSignal): Promise<ReadableSearchGenerationReconciliationV1>;
 }
 
 /**
@@ -130,42 +129,19 @@ interface ReadableSearchReconcilerV1 {
  */
 class OrganizationAuthorityProcessingCoordinator
   implements OrganizationAuthorityProcessingCycleV1 {
-  readonly hasFineGrainedSourceLifecycle = true;
   constructor(
     private readonly readableSearch: ReadableSearchReconcilerV1,
     private readonly updates: PersonUpdateProcessingBindingV1,
   ) {}
 
-  recoverV4Appends(): Promise<void> {
-    return Promise.resolve();
-  }
-
   pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void> {
     return this.updates.runOnce(signal);
   }
 
-  observeAndFinalizePendingApprovals(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  appendFinalizedApprovalsToV4(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  async reconcileReadableSearchGeneration(signal: AbortSignal): ReturnType<OrganizationAuthorityProcessingCycleV1["reconcileReadableSearchGeneration"]> {
-    const result = await this.readableSearch.reconcile(signal);
+  async reconcileReadableSearchGeneration(signal: AbortSignal): Promise<{ readonly status: ReadableSearchGenerationReconciliationV1["status"] }> {
+    const { status } = await this.readableSearch.reconcile(signal);
     signal.throwIfAborted();
-    if (
-      typeof result === "object" &&
-      result !== null &&
-      "status" in result &&
-      (result.status === "current" ||
-        result.status === "published" ||
-        result.status === "superseded")
-    ) {
-      return { status: result.status };
-    }
-    throw new TypeError("unrecognized readable-search reconciliation result");
+    return { status };
   }
 }
 
@@ -196,9 +172,6 @@ export async function openOrganizationAuthorityRuntime(
     record_input_codecs: config.record_input_codecs,
     ...(config.staging_research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1
       ? { research_eval_v1: true as const }
-      : {}),
-    ...(config.agentic_ask_v1_small_scope_shortcut === true
-      ? { agentic_ask_v1_small_scope_shortcut: true }
       : {}),
     ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
 

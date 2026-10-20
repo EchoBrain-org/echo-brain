@@ -11,10 +11,9 @@ import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging/staging-rele
 import { createJourneyTelemetryTransportFromEnvironmentV1 } from "./observability/journey-telemetry-transport-v1.js";
 import { createLangSmithRuntimeV1 } from './observability/langsmith-runtime-v1.js';
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
-import { JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 } from './jira-person-live-runtime-v1.js';
-import { CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 } from './confluence-person-live-runtime-v1.js';
 import { readStagingConnectorRehearsalSelection } from './staging-connector-rehearsal-selection.js';
 import { openStagingConnectorRehearsalService } from './staging-connector-rehearsal-runtime.js';
+import { CLEAN_V1_RELEASE_ID } from './clean-v1-release-id.js';
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
@@ -27,7 +26,6 @@ const USAGE =
 const STAGING_CANARY_USAGE =
   "usage: echo-organization-authority-serve staging-private-dm-canary " +
   "--release-id <canonical-clean-v1-release-id>";
-const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 
 interface OrganizationAuthorityServiceCliIo {
   readonly stdout: (value: string) => void;
@@ -121,7 +119,7 @@ function stagingCanaryReleaseId(argv: readonly string[]): string {
     argv.length !== 2 ||
     argv[0] !== "--release-id" ||
     argv[1] === undefined ||
-    !RELEASE_ID.test(argv[1])
+    !CLEAN_V1_RELEASE_ID.test(argv[1])
   ) {
     throw new Error(STAGING_CANARY_USAGE);
   }
@@ -170,11 +168,11 @@ export async function runOrganizationAuthorityServiceCli(
       );
     }
     const jiraRequested = [parsed['--jira-cloud-id'], parsed['--jira-nango-integration']].some(value => value !== undefined);
-    if (jiraRequested && (!JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 || parsed['--jira-cloud-id'] === undefined || parsed['--jira-nango-integration'] === undefined || (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev'))) {
+    if (jiraRequested && (parsed['--jira-cloud-id'] === undefined || parsed['--jira-nango-integration'] === undefined || (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev'))) {
       throw new Error('Jira live selection requires accepted ADR-0026, one configured cloud site and Nango Cloud');
     }
     const confluenceRequested = [parsed['--confluence-cloud-id'], parsed['--confluence-nango-integration']].some(value => value !== undefined);
-    if (confluenceRequested && (!CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 || parsed['--confluence-cloud-id'] === undefined || parsed['--confluence-nango-integration'] === undefined || (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev'))) {
+    if (confluenceRequested && (parsed['--confluence-cloud-id'] === undefined || parsed['--confluence-nango-integration'] === undefined || (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev'))) {
       throw new Error('Confluence live selection requires its accepted release gate, one configured cloud site and Nango Cloud');
     }
     // Read once into memory; the startup-failure event below never carries it.
@@ -187,8 +185,11 @@ export async function runOrganizationAuthorityServiceCli(
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
     // Agentic Ask is the only Ask (ADR-0022). ECHO_AGENTIC_ASK_V1 is still
     // written by older release records and profiles; it no longer has an effect.
-    const agenticAskSmallScopeShortcut =
-      process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT === "true";
+    // Release records still carry the removed small-scope shortcut's switch:
+    // false has no effect, and true is refused rather than ignored.
+    if (process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT === "true") {
+      throw new Error("the small-scope shortcut was removed; release records must set it to false");
+    }
     const environmentSyntheticMeetingsDirectory =
       process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR;
     const requestedSyntheticMeetingsDirectory =
@@ -219,7 +220,7 @@ export async function runOrganizationAuthorityServiceCli(
     if (stagingJiraAsk !== undefined && !['', 'false', 'true'].includes(stagingJiraAsk)) {
       throw new Error('Staging Jira Ask selection is invalid');
     }
-    if (stagingJiraAsk === 'true' && (connectorRehearsal === undefined || !JIRA_PERSON_LIVE_RELEASE_APPROVED_V1)) {
+    if (stagingJiraAsk === 'true' && connectorRehearsal === undefined) {
       throw new Error('Staging Jira Ask requires the fixed staging connector profile');
     }
     const stagingConfluenceAsk = process.env.ECHO_STAGING_CONFLUENCE_ASK_V1;
@@ -227,7 +228,6 @@ export async function runOrganizationAuthorityServiceCli(
       throw new Error('Staging Confluence Ask selection is invalid');
     }
     if (stagingConfluenceAsk === 'true' && (connectorRehearsal === undefined ||
-        !CONFLUENCE_PERSON_LIVE_RELEASE_APPROVED_V1 ||
         (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev') ||
         (parsed['--confluence-cloud-id'] !== undefined && parsed['--confluence-cloud-id'] !== connectorRehearsal.profile.jira.cloud_id) ||
         (parsed['--confluence-nango-integration'] !== undefined && parsed['--confluence-nango-integration'] !== 'confluence'))) {
@@ -283,9 +283,6 @@ export async function runOrganizationAuthorityServiceCli(
               ),
             },
       pkce_key_file: manifest.pkce_key_file,
-      ...(agenticAskSmallScopeShortcut
-        ? { agentic_ask_v1_small_scope_shortcut: true }
-        : {}),
       ...(stagingResearchEval === 'true' ? { staging_research_eval_v1: true as const } : {}),
       nango,
       ...(jiraCloudId === undefined ? {} : { jira_person_live: {

@@ -27,11 +27,13 @@ import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-
  * adapters own their respective stores: source cursor and staged approvals in
  * Authority/control, then the V4 record append outbox. Keeping those writes
  * behind this seam makes the process lifecycle independent of old runtime
- * installation, enrollment, lease, and record-writer machinery.
+ * installation, enrollment, lease, and record-writer machinery. Each
+ * processing implements the phases it has: the Authority's own runs notes and
+ * search, the personal meeting runtime runs meetings and their approvals.
  */
 export interface OrganizationAuthorityProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
-  recoverV4Appends(signal: AbortSignal): Promise<void>;
+  recoverV4Appends?(signal: AbortSignal): Promise<void>;
   /**
    * Polls admitted sources and durably stages their meetings for approval. Given `report`, it may leave passes
    * running after it returns, send their failures there and call `settled` as each one settles (neither throws);
@@ -43,10 +45,8 @@ export interface OrganizationAuthorityProcessingCycleV1 {
    * With `stop` (shutdown), no new lane starts from then on.
    */
   settle?(stop?: boolean): Promise<void>;
-  /** Observes one staged approval and commits its approve or reject result. */
-  observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
   /** Appends finalized actions to V4; rejected actions produce no readable fact. */
-  appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void>;
+  appendFinalizedApprovalsToV4?(signal: AbortSignal): Promise<void>;
   /**
    * Optional bounded provider presentation reconciliation after durable approval
    * work, never at startup. Confirmed progress schedules another bounded turn;
@@ -55,16 +55,14 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   reconcileApprovalPresentations?(signal: AbortSignal): Promise<ApprovalPresentationReconciliationResultV1 | void>;
   /**
    * Reconciles the immutable permission-aware search generation with the V4
-   * record head after the complete append phase. Implementations may no-op
-   * while the processing service is waiting for its activation prerequisites.
+   * record head after the complete append phase. Only the primary processing's
+   * runs.
    */
-  reconcileReadableSearchGeneration(signal: AbortSignal): Promise<{
+  reconcileReadableSearchGeneration?(signal: AbortSignal): Promise<{
     readonly status: "current" | "published" | "superseded";
   } | void>;
-  /** Optional composition seam for source/extraction/staging phase telemetry. */
+  /** Optional composition seam for source/extraction/staging phase telemetry; intake emits its own phases. */
   setWorkerLifecycle?(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void;
-  /** True only when the processing implementation emits its inner phases. */
-  readonly hasFineGrainedSourceLifecycle?: boolean;
 }
 
 export interface OrganizationAuthorityServiceLifecycleConfig {
@@ -151,11 +149,10 @@ export async function runOrganizationAuthorityProcessingCycleV1(
     name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
     operation: () => Promise<T>,
   ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
-  await exclusive(() => phase("recovery", async () => { await processing.recoverV4Appends(signal); await additional?.recoverV4Appends(signal); }));
+  await exclusive(() => phase("recovery", async () => { await processing.recoverV4Appends?.(signal); await additional?.recoverV4Appends?.(signal); }));
   signal.throwIfAborted();
   try {
-    if (processing.hasFineGrainedSourceLifecycle === true) await processing.pollAndStageAdmittedMeetings(signal);
-    else await phase("source_intake", () => processing.pollAndStageAdmittedMeetings(signal));
+    await processing.pollAndStageAdmittedMeetings(signal);
   } catch (failure) {
     if (report === undefined || signal.aborted) throw failure;
     report(failure);
@@ -188,12 +185,10 @@ export async function runOrganizationAuthorityApprovalPublicationV1(
     name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
     operation: () => Promise<T>,
   ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
-  await phase("approval_observation", async () => {
-    await processing.observeAndFinalizePendingApprovals(signal);
-    await additional?.observeAndFinalizePendingApprovals(signal);
-  });
+  // An approval is final when it is decided, so this phase does nothing; it stays so worker telemetry keeps its phases.
+  await phase("approval_observation", async () => undefined);
   signal.throwIfAborted();
-  await phase("record_append", async () => { await processing.appendFinalizedApprovalsToV4(signal); await additional?.appendFinalizedApprovalsToV4(signal); });
+  await phase("record_append", async () => { await processing.appendFinalizedApprovalsToV4?.(signal); await additional?.appendFinalizedApprovalsToV4?.(signal); });
   signal.throwIfAborted();
 }
 
@@ -225,7 +220,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     // it before validating the generation that will be served at startup.
     await lifecycle.runPhase(
       "recovery",
-      async () => { await dependencies.processing.recoverV4Appends(startup.signal); await dependencies.additional_processing?.recoverV4Appends(startup.signal); },
+      async () => { await dependencies.processing.recoverV4Appends?.(startup.signal); await dependencies.additional_processing?.recoverV4Appends?.(startup.signal); },
       startup.signal,
       false,
     );
@@ -237,7 +232,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     clearHandle();
     await lifecycle.runPhase(
       "search_reconciliation",
-      () => dependencies.processing.reconcileReadableSearchGeneration(startup.signal),
+      async () => dependencies.processing.reconcileReadableSearchGeneration?.(startup.signal),
       startup.signal,
       false,
     );
@@ -253,7 +248,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
       (signal) => observeCoreRuntimeRootV1("search_reconciliation", async () => {
         try {
           const result = await lifecycle.runPhase("search_reconciliation",
-            () => dependencies.processing.reconcileReadableSearchGeneration(signal), signal);
+            async () => dependencies.processing.reconcileReadableSearchGeneration?.(signal), signal);
           if (result !== undefined) annotateCoreRuntimeV1({ result: result.status });
           return result;
         } catch (error) {
@@ -280,7 +275,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     // The running cycle, so drain also waits for its ungated intake.
     let cycleTail: Promise<void> = Promise.resolve();
     // The personal intake's meeting lanes outlive the cycle that started them, on the worker's signal.
-    const meetingLanes = async (stop?: boolean): Promise<void> => { await (dependencies.additional_processing ?? startedApi.processing)?.settle?.(stop); };
+    const meetingLanes = async (stop?: boolean): Promise<void> => { await dependencies.additional_processing?.settle?.(stop); };
     const worker = new SerializedMeetingProcessingWorker({
       ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
@@ -295,7 +290,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
             dependencies.processing,
             signal,
             lifecycle,
-            dependencies.additional_processing ?? startedApi.processing,
+            dependencies.additional_processing,
             exclusive,
             reportError,
             // A lane that staged after its cycle returned gets its card now, not at the next cycle's wake.
@@ -388,7 +383,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
               dependencies.processing,
               signal,
               lifecycle,
-              dependencies.additional_processing ?? startedApi.processing,
+              dependencies.additional_processing,
             );
           })
           .catch((failure: unknown) => {

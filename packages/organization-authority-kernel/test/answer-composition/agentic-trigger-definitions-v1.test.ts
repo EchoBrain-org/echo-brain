@@ -29,13 +29,10 @@ describe("trigger definitions", () => {
   it("defines Ask, the approved record (which replaced Check) and Sweep; audit records name every one but Ask", () => {
     expect(AGENTIC_TRIGGER_DEFINITIONS_V1.map(value => value.name)).toEqual(["ask", "approved_record", "sweep"]);
     expect(AGENTIC_TRIGGER_NAMES_V1).toEqual(["approved_record", "sweep"]);
-    for (const value of AGENTIC_TRIGGER_DEFINITIONS_V1) {
-      expect(value.name).toMatch(/^[a-z_]{1,64}$/u);
-      expect(value.recipients).toBe("actor_only");
-    }
-    expect(definition("ask")).toMatchObject({ acts_as: "requester", scope: "requested" });
-    expect(definition("sweep")).toMatchObject({ acts_as: "requester", scope: "requested" });
-    expect(definition("approved_record")).toMatchObject({ acts_as: "approver", scope: "record_project" });
+    for (const value of AGENTIC_TRIGGER_DEFINITIONS_V1) expect(value.name).toMatch(/^[a-z_]{1,64}$/u);
+    expect(definition("ask")).toMatchObject({ scope: "requested" });
+    expect(definition("sweep")).toMatchObject({ scope: "requested" });
+    expect(definition("approved_record")).toMatchObject({ scope: "record_project" });
     // The approved record renders an impact card and Sweep its verdicts; Ask's writer is composed by the runner.
     expect(definition("approved_record").renderer).toBe(IMPACT_CARD_RENDERER_V1);
     expect(definition("sweep").renderer).toBe(SWEEP_RENDERER_V1);
@@ -53,9 +50,9 @@ describe("trigger definitions", () => {
 });
 
 describe("Ask definition", () => {
-  it("passes the question through as asked, with no starting evidence and the small-scope preload", () => {
+  it("passes the question through as asked, with no starting evidence", () => {
     expect(brief("ask", { question: "Why is the DVT gate on hold?" })).toEqual({
-      goal: { kind: "question", question: "Why is the DVT gate on hold?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { small_scope_preload: true },
+      goal: { kind: "question", question: "Why is the DVT gate on hold?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {},
     });
   });
 
@@ -69,7 +66,7 @@ describe("Approved record definition", () => {
     const value = brief("approved_record", { record });
     expect(value).toEqual({
       goal: { kind: "task", task: expect.any(String) }, starting: [{ citation: record, if_unreadable: "fail" }],
-      budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: { small_scope_preload: false },
+      budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {},
     });
     expect(filled(value, ["E1"])).toBe("A PM just approved record E1. Find the tickets, PRD sections and documents in this project whose current text its decisions confirm, contradict or make out of date. Search the record's distinctive terms and identifiers, then open the candidates and note what each says now. Finishing with nothing affected is a valid result after those searches.");
     // The impact card adds owners and dates from each item's own details: research never looks for them.
@@ -78,7 +75,7 @@ describe("Approved record definition", () => {
 
   it("searches a record in no project, never lists, and never says \"in this project\" (decision 2)", () => {
     const value = brief("approved_record", { record }, { kind: "global" });
-    expect(value.options).toEqual({ small_scope_preload: false, list: false });
+    expect(value.options).toEqual({ list: false });
     expect(filled(value, ["E1"])).toBe("A PM just approved record E1. Find the tickets, PRD sections and documents whose current text its decisions confirm, contradict or make out of date. Search the record's distinctive terms and identifiers, then open the candidates and note what each says now. Finishing with nothing affected is a valid result after those searches.");
   });
 
@@ -105,7 +102,7 @@ describe("Sweep definition", () => {
 
   it("runs no planner: research re-reads the cited items and looks for nothing newer (decision 3)", () => {
     const value = brief("sweep", { findings });
-    expect(value.options).toEqual({ small_scope_preload: false, planner: false });
+    expect(value.options).toEqual({ planner: false });
     // The task no longer says the items were already read and then asks to read them again, or to look for newer items.
     const task = filled(value, ["E1", null, "E3"]);
     for (const phrase of ["Make each finding one part", "Re-read the current items", "any newer item"]) expect(task).not.toContain(phrase);
@@ -116,16 +113,6 @@ describe("Sweep definition", () => {
     expect(value.starting).toEqual([{ citation: ticket, if_unreadable: "report" }]);
     expect(value.goal.kind === "task" && value.goal.task).not.toContain("Ship");
     expect(filled(value, ["E7"])).toContain('1. "Ship {{starting:1}} first" Expected: "{{starting:2}} done". Cited then: E7.');
-  });
-
-  it("refuses a finding that cites a Slack message: no desk can read one yet (R62)", () => {
-    const slack = { kind: "slack_message", team_id: "T0THERM", channel_id: "C0THERM", message_ts: "1700000000.000100",
-      permalink: "https://therm.slack.com/archives/C0THERM/p1700000000000100", text_sha256: canonicalSha256("slack") };
-    // Alone, or beside items a sweep does read.
-    for (const citations of [[slack], [slack, record], [ticket, slack]]) {
-      refused("sweep", { findings: [{ finding: "Launch moved in chat", expected: "launch next week", citations }] });
-    }
-    refused("sweep", { findings: [{ finding: "Firmware formats two decimals", expected: "SW-22b updated", citations: [ticket] }, { finding: "f", expected: "e", citations: [slack] }] });
   });
 
   it("refuses empty, unbounded or malformed findings", () => {

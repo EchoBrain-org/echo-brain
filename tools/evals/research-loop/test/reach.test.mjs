@@ -3,9 +3,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { main } from "../cli.mjs";
 import { datasetProblems, loadDataset, substitutePerson } from "../lib/dataset.mjs";
 import { itemMatches, meetingIndex } from "../lib/match.mjs";
 import { codeChecks } from "../lib/checks.mjs";
+import { JUDGE_SYSTEM, judgeInput } from "../lib/judge.mjs";
 import { aggregate, markdownReport } from "../lib/report.mjs";
 import { askedDays, collectionOfSource, collectionsLookedAt, reachChecks, refusalOf, traceCounts, uncheckedStated, windowOf } from "../lib/reach.mjs";
 import { langsmithTraces, releaseCheck, releaseCheckLines } from "../lib/release-check.mjs";
@@ -67,9 +69,9 @@ test("a structured refusal names its refused filters, and only the same refusal 
 });
 
 test("collections are named by source ids, selectors and the containers a source or item names", () => {
-  assert.deepEqual(["meetings", "meeting", "jira", "tickets", "confluence", "pages", "follow_ups", "projects", "people", "tools", "slack"].map(collectionOfSource),
-    ["meetings", "meetings", "tickets", "tickets", "pages", "pages", "follow_ups", "projects", "people", "tools", "slack"]);
-  assert.deepEqual(["jira_projects", "JIRA_PROJECTS", "confluence_spaces", "slack_channels", "calendar"].map(collectionOfSource), ["jira_projects", "jira_projects", "confluence_spaces", "slack_channels", null]);
+  assert.deepEqual(["meetings", "meeting", "jira", "tickets", "confluence", "pages", "follow_ups", "projects", "people", "tools"].map(collectionOfSource),
+    ["meetings", "meetings", "tickets", "tickets", "pages", "pages", "follow_ups", "projects", "people", "tools"]);
+  assert.deepEqual(["jira_projects", "JIRA_PROJECTS", "confluence_spaces", "calendar"].map(collectionOfSource), ["jira_projects", "jira_projects", "confluence_spaces", null]);
   const value = research([
     round(1, action("search", { query: "THERM" }, { items: ["E1", "E2"] }), action("list", { source: "pages" }, { error: "that request is not valid" })),
     finish(2),
@@ -146,7 +148,6 @@ test("research finishes within its rounds only with a finished stop, and a choic
   assert.deepEqual([reachChecks(key, completed(value)).within_rounds, reachChecks(key, completed(value)).met], [true, true]);
   const long = research([...[1, 2, 3, 4].map(number => round(number, action("list", { source: "projects" }))), finish(5)]);
   assert.equal(reachChecks(key, completed(long)).within_rounds, false);
-  assert.equal(reachChecks({ reach: { ...key.reach, max_rounds: 5 } }, completed(long)).within_rounds, true);
   assert.equal(reachChecks(key, completed({ ...value, stop: { reason: "step_limit", completed: false } })).within_rounds, false);
   const failed = reachChecks(key, { trial: 1, budget: "live", outcome: "failed", result: { status: "failed", error: { code: "timed_out" } } });
   assert.deepEqual([failed.looked_at_every_collection, failed.no_repeated_refusal, failed.unchecked_stated, failed.within_rounds, failed.met], [false, false, null, false, false]);
@@ -315,7 +316,6 @@ test("the release check names only open-ended development cases, runs from a pri
   const config = readJson(new URL("../release-check.json", import.meta.url).pathname);
   assert.ok(config.cases.length >= 2 && config.cases.length <= 3);
   for (const id of config.cases) assert.ok(dataset.cases.some(entry => entry.id === id && entry.split === "development" && entry.family === "open_ended"), id);
-  const { main } = await import("../cli.mjs");
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-release-check-")));
   const done = research([round(1, action("list", { source: "projects" }, { items: [] }), action("list", { source: "follow_ups", status: "open" }, { items: [] }),
     ...["meetings", "documents", "tickets", "pages"].map(source => action("list", { source, since: "2026-10-18", until: "2026-10-18" }))), finish(2)]);
@@ -328,8 +328,7 @@ test("the release check names only open-ended development cases, runs from a pri
   await assert.rejects(main(["release-check", "--out", out, "--runs", "../elsewhere.json"]), /inside --out/u);
 });
 
-test("the judge is told when the question was asked, since open-ended keys word time relative to it", async () => {
-  const { JUDGE_SYSTEM, judgeInput } = await import("../lib/judge.mjs");
+test("the judge is told when the question was asked, since open-ended keys word time relative to it", () => {
   const testCase = caseById("open-items-time-since-assigned");
   const value = research([round(1, action("list", { source: "follow_ups", status: "open" })), finish(2)]);
   const ask = { writer_evidence: [], response: { outcome: "answered", parts: [], citations: [] } };

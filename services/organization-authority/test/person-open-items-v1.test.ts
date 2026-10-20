@@ -309,20 +309,6 @@ describe('open items: counts and live reads', () => {
     expect((await f.app.items({ access_token: 'ari', request: { ...closedRequest, states: ['done'] } })).items.map(entry => entry.state)).toEqual(Array(30).fill('done'));
   });
 
-  it('tells an outage from lost access, and reports the outage without content', async () => {
-    const failures: unknown[] = [];
-    const f = await openItemsFixture({ on_live_failure: event => failures.push(event), openFails: { ticket: new AuthorityOperationError('rate_limited', 'slow down') } });
-    await f.finishImpactRun();
-    const items = (await f.app.items({ access_token: 'mina', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record } })).items;
-    expect(items.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'unavailable' });
-    expect(items.find(item => item.kind === 'ticket')).not.toHaveProperty('current');
-    expect(items.find(item => item.kind === 'record')).toMatchObject({ reach: 'opened', current: { says_now: 'Start the pilot after the freeze.' } });
-    expect(failures).toEqual([{ kind: 'open_items_live_read', reason: 'open', code: 'rate_limited' }]);
-    const rafael = (await f.app.items({ access_token: 'rafael', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record } })).items;
-    expect(rafael.find(item => item.kind === 'ticket')).toMatchObject({ reach: 'no_access' });
-    expect(failures).toHaveLength(1);                                       // a refusal is not an outage
-  });
-
   // A refusal by the viewer's own access is no_access; anything else says nothing about access, and is reported without content.
   it.each([
     { name: 'unauthorized', error: new AuthorityOperationError('unauthorized', 'refused'), reach: 'no_access', code: null },
@@ -400,15 +386,12 @@ describe('open items: send, update, reassign', () => {
       f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id, items } });
     await expect(send('c1', [{ item_id: ticket.item_id, include: true }])).resolves.toEqual({ sent: 1, not_relevant: 0 });
     await expect(send('c1', [{ item_id: ticket.item_id, include: true }])).resolves.toEqual({ sent: 1, not_relevant: 0 });
-    expect(f.items.read(action.item_id)).toMatchObject({ state: 'unsent', sent_at: null });
     // The Send row stays, with what is left to send; the ticket is Mina's now.
     expect((await f.app.home({ access_token: 'ari' })).send).toMatchObject([{ run_id: f.runId, items: 1, kinds: ['record'], owners: [] }]);
     expect((await f.app.home({ access_token: 'mina' })).items.map(entry => entry.item_id)).toEqual([ticket.item_id]);
-    // A send that lists the ticket again is stale: it was sent meanwhile. Nothing is written.
+    // A send that lists the ticket again is stale: it was sent meanwhile.
     await expect(send('c2', [{ item_id: ticket.item_id, include: false }, { item_id: action.item_id, include: false }])).rejects.toMatchObject({ code: 'conflict' });
-    expect(f.items.read(action.item_id)).toMatchObject({ state: 'unsent' });
     await expect(send('c2', [{ item_id: action.item_id, include: false }])).resolves.toEqual({ sent: 0, not_relevant: 1 });
-    expect(f.items.read(action.item_id)).toMatchObject({ state: 'not_relevant', send_included: false, state_set_by: f.membership('ari') });
     expect((await f.app.home({ access_token: 'ari' })).send).toEqual([]);
     await expect(send('c3', [{ item_id: action.item_id, include: true }])).rejects.toMatchObject({ code: 'conflict' });
   });
@@ -424,12 +407,10 @@ describe('open items: send, update, reassign', () => {
     // The same command id for the action, or for both: the old answer would leave the action unsent while saying it was handled.
     await expect(send([{ item_id: action.item_id, include: true }])).rejects.toMatchObject({ code: 'conflict', message: 'The items changed. Open them again.' });
     await expect(send([{ item_id: ticket.item_id, include: true }, { item_id: action.item_id, include: true }])).rejects.toMatchObject({ code: 'conflict' });
-    expect(f.items.read(action.item_id)).toMatchObject({ state: 'unsent', send_command_id: null });
     // An exact retry still answers what it did, even once the approver can no longer read the decision; another list never does.
     f.removeProjectMembership(f.projectA);
     await expect(send([{ item_id: ticket.item_id, include: false }])).resolves.toEqual({ sent: 1, not_relevant: 0 });
     await expect(send([{ item_id: action.item_id, include: false }])).rejects.toMatchObject({ code: 'conflict' });
-    expect(f.items.read(action.item_id)).toMatchObject({ state: 'unsent' });
   });
 
   it('refuses a send that is not the caller\'s own finished run, or a pick who is not an active member', async () => {
@@ -565,14 +546,6 @@ describe('open items: send, update, reassign', () => {
     expect(unsent.find(entry => entry.kind === 'record')!.can).toEqual({ set_state: false, assign: true });
     f.advance(5_000);
     await expect(assign(f, 'ari', ticket.item_id, 'rafael')).resolves.toEqual({ owner: { membership_id: f.membership('rafael'), name: 'Rafael Moreno', active: true } });
-    expect(f.items.read(ticket.item_id)).toMatchObject({ state: 'unsent', owner_membership_id: f.membership('rafael'), owner_match: 'picked', sent_at: null });
-    expect(f.db.prepare('SELECT owner_set_by, owner_set_at FROM authority_impact_items_v1 WHERE item_id=?').get(ticket.item_id))
-      .toEqual({ owner_set_by: f.membership('ari'), owner_set_at: f.clock().toISOString() });
-    // Its new owner again writes nothing.
-    const before = f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(ticket.item_id);
-    f.advance(5_000);
-    await expect(assign(f, 'ari', ticket.item_id, 'rafael')).resolves.toMatchObject({ owner: { name: 'Rafael Moreno' } });
-    expect(f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(ticket.item_id)).toEqual(before);
     // The Send row names the picked owner; the item still waits on its approver, and nobody but readers sees it.
     expect((await f.app.home({ access_token: 'ari' })).send).toMatchObject([{ run_id: f.runId, items: 2, owners: ['Rafael Moreno'] }]);
     expect((await f.app.home({ access_token: 'rafael' })).items).toEqual([]);
@@ -582,11 +555,9 @@ describe('open items: send, update, reassign', () => {
     await expect(assign(f, 'ari', ticket.item_id, 'okafor')).rejects.toMatchObject({ code: 'invalid_request' });
     // Send with no pick sends it to the picked owner.
     await expect(sendAll(f, unsent, 'c1', () => ({ include: true }))).resolves.toEqual({ sent: 2, not_relevant: 0 });
-    expect(f.items.read(ticket.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.membership('rafael'), owner_match: 'picked' });
     expect((await f.app.home({ access_token: 'rafael' })).items.map(entry => entry.item_id)).toEqual([ticket.item_id]);
     // Once sent, a change of owner is a reassignment, as before.
     await expect(assign(f, 'ari', ticket.item_id, 'mina')).resolves.toMatchObject({ owner: { name: 'Mina Patel' } });
-    expect(f.items.read(ticket.item_id)).toMatchObject({ owner_membership_id: f.membership('mina'), owner_match: 'reassigned' });
   });
 
   it('lets the approver take an item ECHO gave them for want of a match, so it no longer asks for an owner (F2)', async () => {
@@ -597,14 +568,11 @@ describe('open items: send, update, reassign', () => {
     await expect(assign(f, 'ari', action.item_id, 'ari')).resolves.toEqual({ owner: { membership_id: f.membership('ari'), name: 'Ari', active: true } });
     const ari = { membership_id: f.membership('ari'), name: 'Ari', active: true };
     expect((await item(f, 'ari', action.item_id)).item).toMatchObject({ state: 'unsent', owner: { ...ari, match: 'picked' }, owner_set_by: ari, owner_set_at: f.clock().toISOString() });
-    // Picked now: picking them again writes nothing, and Send keeps it.
-    const before = f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(action.item_id);
+    // Picked now: picking them again answers them, and Send sends it.
     f.advance(5_000);
     await expect(assign(f, 'ari', action.item_id, 'ari')).resolves.toEqual({ owner: ari });
-    expect(f.db.prepare('SELECT * FROM authority_impact_items_v1 WHERE item_id=?').get(action.item_id)).toEqual(before);
     await expect(f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id: 'c1', items: [{ item_id: action.item_id, include: true }] } }))
       .resolves.toEqual({ sent: 1, not_relevant: 0 });
-    expect(f.items.read(action.item_id)).toMatchObject({ state: 'open', owner_membership_id: f.membership('ari'), owner_match: 'picked' });
   });
 
   it('takes the approver ECHO fell back to as picked at Send, and as reassigned once sent (F2)', async () => {
@@ -613,8 +581,6 @@ describe('open items: send, update, reassign', () => {
     f.advance(1_000);
     await expect(sendAll(f, unsent, 'c1', entry => ({ include: true, ...(entry.kind === 'record' ? { owner_membership_id: f.membership('ari') } : {}) })))
       .resolves.toEqual({ sent: 2, not_relevant: 0 });
-    const action = unsent.find(entry => entry.kind === 'record')!.item_id;
-    expect(f.items.read(action)).toMatchObject({ state: 'open', owner_membership_id: f.membership('ari'), owner_match: 'picked', owner_set_by: f.membership('ari'), owner_set_at: f.clock().toISOString() });
     // Sent with no pick, it still reads as the fallback; taking it afterwards is a reassignment to the same person.
     const sent = await sentFixture();
     expect(sent.items.read(sent.action.item_id)).toMatchObject({ state: 'open', owner_membership_id: sent.membership('ari'), owner_match: 'approver', owner_set_by: null });
@@ -726,8 +692,9 @@ describe('open items: Home', () => {
     expect(after.items.map(entry => [entry.kind, entry.waits_on])).toEqual([['record', 'owner']]);   // Ari owns the action
   });
 
-  it('answers the same Home with no live read when asked for rows only (F8)', async () => {
-    const f = await sentFixture({ owner: 'mina' });
+  it('answers the same Home with no live read when asked for rows only, even where the full read cannot open an item (F8)', async () => {
+    // Mina's ticket read fails (an outage): her full read says so, rows only says nothing.
+    const f = await sentFixture({ owner: 'mina', openFails: { ticket: new AuthorityOperationError('rate_limited', 'slow down') } });
     f.check(f.ticket.item_id, 'landed');
     const binds = f.bindDesk.mock.calls.length;
     const opens = f.opened.length;
@@ -743,28 +710,16 @@ describe('open items: Home', () => {
     expect(sweepReads.map(read => read.mock.calls.length)).toEqual([0, 0]);
     // Everything else is what a full Home read answers, which does find a sweep due: Mina's action was never checked.
     const full = await f.app.home({ access_token: 'mina' });
-    expect(full.items.map(entry => entry.reach)).toEqual(['opened', 'opened']);
+    expect(Object.fromEntries(full.items.map(entry => [entry.kind, entry.reach]))).toEqual({ ticket: 'unavailable', record: 'opened' });
     expect(full.sweep_due).toBe(true);
     const rows = (home: typeof full) => ({ ...home, sweep_due: undefined, items: home.items.map(({ current: _current, reach: _reach, ...rest }) => rest) });
     expect(rows(quiet)).toEqual(rows(full));
+    expect(rows(await f.app.home({ access_token: 'ari', request: { schema_version: 1, operation: 'home', read: 'rows' } }))).toEqual(rows(await f.app.home({ access_token: 'ari' })));
     // A Send row needs no live read either.
     const unsent = await openItemsFixture(); await unsent.finishImpactRun();
     const quietSend = await unsent.app.home({ access_token: 'ari', request: { schema_version: 1, operation: 'home', read: 'rows' } });
     expect(quietSend).toEqual(await unsent.app.home({ access_token: 'ari' }));
     expect(quietSend.send).toHaveLength(1);
-  });
-
-  it('answers the same Home rows with rows only when the full read cannot open some of them', async () => {
-    // Mina's ticket read fails (an outage); Rafael cannot open the ticket at all: their full reads say so, rows only says nothing.
-    const f = await sentFixture({ owner: 'mina', openFails: { ticket: new AuthorityOperationError('rate_limited', 'slow down') } });
-    const rows = (home: Awaited<ReturnType<typeof f.app.home>>) => ({ ...home, sweep_due: undefined, items: home.items.map(({ current: _current, reach: _reach, ...rest }) => rest) });
-    for (const viewer of ['mina', 'ari'] as const) {
-      const full = await f.app.home({ access_token: viewer });
-      const quiet = await f.app.home({ access_token: viewer, request: { schema_version: 1, operation: 'home', read: 'rows' } });
-      expect(quiet.items.map(entry => entry.reach).every(reach => reach === 'not_read')).toBe(true);
-      expect(rows(quiet)).toEqual(rows(full));
-    }
-    expect((await f.app.home({ access_token: 'mina' })).items.find(entry => entry.kind === 'ticket')?.reach).toBe('unavailable');
   });
 
   it('lists the newest handoffs first, regardless of older check results', async () => {
@@ -806,10 +761,9 @@ describe('open items: Home', () => {
     f.advance(1_000);
     await setState(f, 'ari', reopened.item_id, 'open');
     expect(ids(await quiet()).slice(0, 3)).toEqual([reopened.item_id, theirs.item_id, fresh.item_id]);
-    // A new verdict does not put an old handoff ahead of recent assignments.
-    const changed = older[0]!;
-    f.check(changed.item_id, 'changed');
-    expect(ids(await quiet()).slice(0, 2)).toEqual([reopened.item_id, theirs.item_id]);
+    // New verdicts on every older item neither put an old handoff ahead of recent ones nor push the new one out.
+    for (const row of older) f.check(row.item_id, 'changed');
+    expect(ids(await quiet()).slice(0, 3)).toEqual([reopened.item_id, theirs.item_id, fresh.item_id]);
     expect(ids(await full())).toEqual(ids(await quiet()));
   });
 

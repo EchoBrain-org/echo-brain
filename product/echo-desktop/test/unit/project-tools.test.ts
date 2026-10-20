@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fail, flush, Held, ok, project, rpcFor, startStore, stubWindow } from './harness.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -13,10 +13,8 @@ let catalog: string[];
 let confluenceRead: () => unknown;
 const confluenceSets = () => rpc.mock.calls.filter(([method]) => method === 'projects.confluenceSet').map(([, params]) => (params as { space_ids: string[] | null }).space_ids);
 
+storeLifecycle();
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  stubWindow();
   held = new Held();
   jira = null;
   spaces = [];
@@ -32,8 +30,6 @@ beforeEach(() => {
     'projects.confluenceSet': params => { spaces = (params.space_ids as string[] | null) ?? []; return ok({ project_id: apollo.project_id, revision, mapping: spaces.length > 0 ? { space_ids: spaces } : null }); },
   }, () => ({ active: [apollo], archived: [] })));
 });
-
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 async function openTools() {
   const store = await startStore();
@@ -123,5 +119,28 @@ describe('your connections on Tools', () => {
     await flush();
     expect(store.getState().projectSettings?.tools?.items).toHaveLength(2);
     expect(store.getState().projectSettings?.tools?.failure).toBeUndefined();
+  });
+});
+
+describe('Tools and the project page\'s first reads', () => {
+  it('keeps saved settings when the initial project reads finish after Save', async () => {
+    jira = 'CURRENT';
+    spaces = ['1', '2'];
+    const store = await startStore();
+    const tools = held.hold('account.tools');
+    const jiraReply = held.hold('projects.jiraRead');
+    const confluence = held.hold('projects.confluenceRead');
+    await store.openProject(apollo);
+    store.openProjectTools(apollo);
+    await flush();
+    store.setProjectJira('SAVED');
+    await store.saveProjectTools();
+    expect(store.getState().projectSettings).toBeNull();
+    expect(store.getState().projectReads).toMatchObject({ jira: 'SAVED', confluence: 2 });
+    tools(ok({ tools: [] }));
+    jiraReply(ok({ mapping: { project_key: 'OLD' } }));
+    confluence(ok({ mapping: { space_ids: ['old'] } }));
+    await flush();
+    expect(store.getState().projectReads).toMatchObject({ available: true, jira: 'SAVED', confluence: 2 });
   });
 });

@@ -388,3 +388,8 @@ in `services/organization-authority/test/` unless shown in full:
 items read in full": progress V3's receipt counts every item research looked
 through, rows included, and every version's `found` counts only what its
 reads gave research.
+
+On 2026-10-19 the founder approved moving the desktop's Mine Ask and plain
+`person ask` to `/v7` too, with its fallbacks; `--live` then changes nothing.
+Mine still binds no workspace or container
+([Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)).

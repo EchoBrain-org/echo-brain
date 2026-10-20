@@ -37,7 +37,9 @@ describe("Person client help", () => {
     [["records", "--help"], "[--limit <1-100>] [--query <text>]"],
     [["status", "--help"], "echo-brain person status"],
     [["logout", "--help"], "echo-brain person logout"],
-    [["ask", "--help"], "echo-brain person ask --question <text> [--project <project-id> | --mine]"],
+    [["ask", "--help"], "echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --progress"],
+    // Every Ask asks the newest route; the flag that once chose it is kept so scripts keep working.
+    [["ask", "--help"], "--live, which once chose this route, is still accepted and changes nothing"],
     // A follow-up's ref is not one person open reads: its item page is the runs item read.
     [["ask", "--help"], `except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}'`],
     [["open", "--help"], "usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]"],
@@ -62,6 +64,10 @@ describe("Person client help", () => {
     [["updates", "--help"], "<submit-v3|status-v3|search|search-v3>"],
     [["documents", "--help"], "<upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate>"],
     [["projects", "--help"], "<list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2>"],
+    [["changes", "--help"], "usage: echo-brain person changes"],
+    [["changes", "--help"], "not_supported"],
+    [["--help"], "changes     Check what moved in your own view, with no content."],
+    [["runs", "--help"], "with scope mine, involved, run, record or project"],
   ])("documents %j with %s", async (argv, needle) => {
     await expect(help(argv)).resolves.toContain(needle);
   });
@@ -88,7 +94,7 @@ describe("Person client help", () => {
   it("documents list without overstating what it covers", async () => {
     // An agent reads this help: it must not overstate what list covers, and must say how a waiting page fails.
     const listHelp = await help(["list", "--help"]);
-    expect(listHelp).toContain("not Slack messages or shared transcripts");
+    expect(listHelp).toContain("not shared transcripts");
     expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
     expect(listHelp).toContain("usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]");
   });

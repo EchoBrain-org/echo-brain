@@ -2,10 +2,9 @@
 // again in one click; once a refresh ended the session, the sign-in page says
 // why (never that the account changed) and goes straight back to Google for the
 // same organization.
-import type { VNode } from 'preact';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppStatus } from '../../src/shared/protocol.js';
-import { ACCOUNT, Held, fail, flush, ok, rpcFor, startStore, stubWindow } from './harness.js';
+import { ACCOUNT, byTestId, fail, flush, Held, ok, rpcFor, startStore, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -21,10 +20,8 @@ let status: AppStatus;
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method);
 const order = () => rpc.mock.calls.map(([name]) => name as string).filter(name => name === 'account.signOut' || name === 'signin.begin');
 
+storeLifecycle();
 beforeEach(() => {
-  vi.resetModules();
-  vi.useFakeTimers();
-  stubWindow();
   status = signedIn(30 * HOUR);
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(new Held(), {
@@ -34,26 +31,6 @@ beforeEach(() => {
     'signin.begin': () => { status = signedIn(7 * 24 * HOUR); return ok(status); },
   }, () => ({ active: [], archived: [] })));
 });
-
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
-
-/** Every node under a rendered component, depth first. */
-function descendants(value: unknown): VNode<Record<string, unknown>>[] {
-  if (Array.isArray(value)) return value.flatMap(descendants);
-  if (!value || typeof value !== 'object' || !('props' in value)) return [];
-  const node = value as VNode<Record<string, unknown>>;
-  return [node, ...descendants(node.props.children)];
-}
-
-/** A node's text, as it reads. */
-function text(value: unknown): string {
-  if (typeof value === 'string' || typeof value === 'number') return String(value);
-  if (Array.isArray(value)) return value.map(text).join('');
-  if (!value || typeof value !== 'object' || !('props' in value)) return '';
-  return text((value as VNode<{ children?: unknown }>).props.children);
-}
-
-const byTestId = (tree: VNode<Record<string, unknown>>[], id: string) => tree.find(node => node.props['data-testid'] === id);
 
 describe('a day before the weekly sign-in', () => {
   it('says nothing earlier, and says so once that day starts with the window open all along', async () => {
@@ -97,12 +74,12 @@ describe('a day before the weekly sign-in', () => {
     status = signedIn(12 * HOUR);
     const store = await startStore();
     const { SignInDueRow } = await import('../../src/renderer/screens/sidebar.js');
-    const tree = descendants(SignInDueRow({ state: store.getState() }));
+    const tree = SignInDueRow({ state: store.getState() });
     expect(text(byTestId(tree, 'sidebar-sign-in-again'))).toMatch(/^Sign in again by .+ · Sign in$/);
     expect(text(byTestId(tree, 'sidebar-sign-in-note'))).toBe('ECHO asks you to sign in once a week.');
     // A save on its way is settled first, in the same words sign-out uses.
     const held = { ...store.getState(), signInDue: { at: DUE_AT, failure: { code: 'signout_held', retryable: true } } };
-    expect(text(byTestId(descendants(SignInDueRow({ state: held })), 'sidebar-sign-in-note'))).toBe(store.settleWords(held));
+    expect(text(byTestId(SignInDueRow({ state: held }), 'sidebar-sign-in-note'))).toBe(store.settleWords(held));
     expect(SignInDueRow({ state: { ...store.getState(), signInDue: null } })).toBeNull();
   });
 });
@@ -126,13 +103,13 @@ describe('a refresh that ended the session', () => {
     status = { ...signedOut, session_ended: { reason, authority: ACCOUNT.authority } };
     const store = await startStore();
     const { SignedOut } = await import('../../src/renderer/screens/signin.js');
-    const tree = descendants(SignedOut({ state: store.getState() }));
-    expect(text(tree[0]!)).toContain('Sign in again to use ECHO');
+    const tree = SignedOut({ state: store.getState() });
+    expect(text(tree)).toContain('Sign in again to use ECHO');
     expect(text(byTestId(tree, 'signin-reason'))).toBe(why);
-    expect(byTestId(tree, 'signin-open')).toBeUndefined();
-    const again = byTestId(tree, 'signin-again')!;
+    expect(byTestId(tree, 'signin-open')).toEqual([]);
+    const [again] = byTestId(tree, 'signin-again');
     expect(text(again)).toBe('Sign in again');
-    (again.props.onClick as () => void)();
+    (again!.props.onClick as () => void)();
     await flush();
     expect(calls('signin.begin')[0]![1]).toEqual({ authority_url: ACCOUNT.authority });
   });
@@ -141,9 +118,9 @@ describe('a refresh that ended the session', () => {
     status = signedOut;
     const store = await startStore();
     const { SignedOut } = await import('../../src/renderer/screens/signin.js');
-    const tree = descendants(SignedOut({ state: store.getState() }));
-    expect(text(tree[0]!)).toContain('Sign in to use ECHO');
-    expect(byTestId(tree, 'signin-reason')).toBeUndefined();
+    const tree = SignedOut({ state: store.getState() });
+    expect(text(tree)).toContain('Sign in to use ECHO');
+    expect(byTestId(tree, 'signin-reason')).toEqual([]);
     expect(text(byTestId(tree, 'signin-open'))).toBe('Sign in…');
   });
 });

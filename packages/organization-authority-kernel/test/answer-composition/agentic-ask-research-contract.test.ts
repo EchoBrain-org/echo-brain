@@ -4,11 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV4, createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
-import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
+import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from '../../src/shared/follow-up-evidence-v1.js';
 import { PEOPLE_SOURCE_DESCRIPTOR_V1, PROJECTS_SOURCE_DESCRIPTOR_V1 } from '../../src/shared/workspace-evidence-v1.js';
 import { agenticListMembersNounV1, agenticListNounV1 } from '../../src/answer-composition/agentic-list-evidence-v1.js';
-import { generation, listed } from './fixtures/agentic-scenarios.js';
+import { generation, listed, result } from './fixtures/agentic-scenarios.js';
 
 /**
  * The research tool contract v1 in Ask's research loop: each read checked against its source's capabilities, a refused
@@ -18,7 +18,6 @@ import { generation, listed } from './fixtures/agentic-scenarios.js';
 
 const checked = { checked_at: '2026-10-19T00:00:00.000Z' };
 const question = 'What happened yesterday?';
-const result = (items: readonly EvidenceDeskItemV2[], extra: Partial<EvidenceDeskResultV2> = {}): EvidenceDeskResultV2 => ({ items, truncated: false, receipt_digests: items.map(item => item.receipt_sha256), ...extra });
 /** An approved decision, as a list releases it: metadata only, with the dates the contract gives it. */
 const decision = (id: string, dates: EvidenceDeskItemV2['dates']): EvidenceDeskItemV2 => Object.freeze({ ...listed(id), dates, attributes: { participants: 'Mara Lind, Jules Park', approved_by: 'Mara Lind' } });
 function followUp(n: number, links?: EvidenceDeskItemV2['links']): EvidenceDeskItemV2 {

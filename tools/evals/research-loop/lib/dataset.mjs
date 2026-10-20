@@ -16,14 +16,14 @@ const PART_TYPES = new Set(["fact", "date", "owner", "status", "conflict", "chan
 const MEETING_ITEMS = new Set(["decision", "action", "rationale", "transcript"]);
 const VERDICTS = new Set(["landed", "not_landed", "no_evidence"]);
 /** The kinds an Ask need declares (ADR-0041): a case may name those its plan should declare. */
-const NEED_KINDS = new Set(["which_items", "which_say", "content"]);
+export const NEED_KINDS = Object.freeze(["which_items", "which_say", "content"]);
 /** A key drafted from the export that the founder has not confirmed yet. */
 const KEY_STATUSES = new Set(["awaiting_founder_confirmation"]);
 const RELATIONS = new Set(["confirms", "conflicts", "needs_updating"]);
 /** The open-ended family (research tool contract v1, "Testing open-ended questions") and what each of its cases tests. */
 const FAMILIES = new Set(["open_ended"]);
 const CATEGORIES = new Set(["goal", "time", "own_work", "structure", "reach", "tools"]);
-const CONTAINERS = new Set(["jira_project", "confluence_space", "slack_channel"]);
+const CONTAINERS = new Set(["jira_project", "confluence_space"]);
 
 /** Deep-replaces the signed-in person placeholder with their directory display name. */
 export function substitutePerson(value, name) {
@@ -37,10 +37,9 @@ export function substitutePerson(value, name) {
 /** Loads the world additions and both case splits. */
 export function loadDataset(root = DATASET_ROOT) {
   const additions = readJson(join(root, "world", "additions.json"));
-  const s1 = readJson(join(root, "world", "s1.json"));
   const splits = ["development", "holdout"].map(split => ({ split, file: readJson(join(root, "cases", `${split}.json`)) }));
   const cases = splits.flatMap(({ split, file }) => file.cases.map(entry => ({ ...entry, split })));
-  return { additions, s1, cases };
+  return { additions, cases };
 }
 
 const nonEmpty = value => typeof value === "string" && value.trim() !== "" && value.trim() === value;
@@ -114,8 +113,8 @@ function collectionEntryValid(entry) {
 
 /**
  * The open-ended family's fields (research tool contract v1): only Ask cases carry them, and a case of the family names
- * what it tests and its reach and cost keys: the collections holding part of its answer, an optional time window they
- * must be looked at in, and its rounds (4 unless it says otherwise).
+ * what it tests and its reach and cost keys: the collections holding part of its answer, and an optional time window
+ * they must be looked at in.
  */
 function openEndedProblems(entry) {
   const where = entry.id;
@@ -124,11 +123,10 @@ function openEndedProblems(entry) {
   if (entry.trigger !== "ask") problems.push(`${where}: only Ask cases are open-ended`);
   if (!FAMILIES.has(entry.family) || !CATEGORIES.has(entry.category)) problems.push(`${where}: an open-ended case names its family and one of the categories ${[...CATEGORIES].join(", ")}`);
   const reach = entry.reach;
-  if (reach === null || typeof reach !== "object" || Array.isArray(reach) || Object.keys(reach).some(key => !["collections", "window", "max_rounds"].includes(key))) problems.push(`${where}: reach takes collections, window and max_rounds`);
+  if (reach === null || typeof reach !== "object" || Array.isArray(reach) || Object.keys(reach).some(key => !["collections", "window"].includes(key))) problems.push(`${where}: reach takes collections and window`);
   else {
     if (!Array.isArray(reach.collections) || reach.collections.length === 0 || reach.collections.some(value => !collectionEntryValid(value))) problems.push(`${where}: reach names the collections holding part of the answer, from ${REACH_COLLECTIONS.join(", ")}`);
     if (reach.window !== undefined && !REACH_WINDOWS.includes(reach.window)) problems.push(`${where}: reach window must be ${REACH_WINDOWS.join(", ")}`);
-    if (reach.max_rounds !== undefined && (!Number.isSafeInteger(reach.max_rounds) || reach.max_rounds < 1 || reach.max_rounds > 10)) problems.push(`${where}: reach max_rounds must be 1 to 10`);
   }
   return problems;
 }
@@ -199,7 +197,7 @@ export function datasetProblems(dataset) {
     if (entry.expected_kinds !== undefined) {
       const kinds = entry.expected_kinds;
       if (entry.trigger !== "ask") problems.push(`${where}: only Ask cases name the need kinds their plan should declare`);
-      if (!Array.isArray(kinds) || kinds.length === 0 || new Set(kinds).size !== kinds.length || kinds.some(kind => !NEED_KINDS.has(kind))) problems.push(`${where}: expected_kinds must be distinct need kinds: which_items, which_say or content`);
+      if (!Array.isArray(kinds) || kinds.length === 0 || new Set(kinds).size !== kinds.length || kinds.some(kind => !NEED_KINDS.includes(kind))) problems.push(`${where}: expected_kinds must be distinct need kinds: which_items, which_say or content`);
     }
     if (entry.key_status !== undefined && !KEY_STATUSES.has(entry.key_status)) problems.push(`${where}: key_status can only be awaiting_founder_confirmation`);
     if ((entry.trigger === "approved_record") !== (entry.scope?.kind === "record")) problems.push(`${where}: approved records, and only they, take the record's scope`);
