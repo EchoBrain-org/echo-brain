@@ -279,12 +279,11 @@ missing dates and truncated inventories limit what an empty result proves.
 Live natural-language qualification remains part of staging, separate from
 scripted-model transport and retrieval tests.
 
-Date searches report when reader-visible meetings have no recorded event date.
-That notice reaches both the research model and answer writer, including an
-empty result. The model may then search without date bounds and use an explicit
-event date in source text. A meeting on a different day cannot answer the
-requested day or establish that nothing happened then. Missing date metadata
-is reported as a coverage gap, not a promise that retrying will repair it.
+A dated read counts the reader-visible items that lack the asked date as
+`unchecked` (ADR-0042, "Dates"); research and the writer see the count, and an
+answer that uses the list says how many were not checked, even for an empty
+list. A meeting on a different day cannot answer the requested day or
+establish that nothing happened then.
 Synthetic staging submissions accept optional `started_at`, `ended_at` and
 `time_zone` fields; the source preserves them as meeting time. Existing undated
 submissions stay undated, and capture/approval times never substitute for them.
