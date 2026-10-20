@@ -1,25 +1,18 @@
-import { once } from 'node:events';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_ANSWER_PATH_V6, PERSON_ANSWER_PATH_V7, PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   createPersonAskProgressDecoderV3, validatePersonAnswerResponseV7, validatePersonAnswerResponseV8,
-  type OrganizationPersonToolV4, type PersonAskProgressEventV3,
+  type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
-import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import { SqlitePersonAgenticAskAuditV1 } from '../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
-import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
-import { SqlitePersonSessionRepository } from '../src/adapters/persistence/sqlite/sqlite-person-session-repository.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
-import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { personWorkspaceGrantsV1 } from '../src/composition/person-workspace-evidence-v1.js';
-import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
-import { sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { askClient, auditBodies as audits, closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
+import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
  * The V8 Ask over HTTP (research tool contract v1): `POST /v7/person/ask`
@@ -30,12 +23,8 @@ import { sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixt
  * the project by its workspace citation and the ref that opens it.
  */
 
-const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
-afterEach(async () => {
-  for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; }
-});
+afterEach(closeAskServers);
 
-const empty = Object.freeze({ items: Object.freeze([]), truncated: false, receipt_digests: Object.freeze([]) });
 const QUESTION = 'Who leads Project A, and what are my open tasks?';
 type StepPrompt = { readonly question?: string; readonly asked_by?: string; readonly source_catalog?: readonly { readonly source: string }[];
   readonly last_results?: readonly { readonly tool: string; readonly args?: { readonly source?: string; readonly owner?: string }; readonly items?: readonly string[] }[] };
@@ -73,49 +62,18 @@ const tools = async (access_token: string): Promise<readonly OrganizationPersonT
   external_scope_id: '00000000-0000-4000-8000-0000000000c1', external_subject_id: `acct-${access_token}`, organization_setup: null,
 }];
 
-/** The `/v6` and `/v7` routes as the runtime composes them: Jira opened as the fixture's desk opens it, the follow-up sources and the workspace. */
-async function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mount: { readonly v7?: boolean } = {}) {
+/** The `/v6` and `/v7` routes as the runtime composes them, the asker's workspace beside the follow-up sources. */
+function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mount: { readonly v7?: boolean } = {}) {
   const sessions = f.openItemsOptions.sessions;
-  const jira = (name: FixturePerson): PersonLiveEvidenceSourceV1 => ({
-    tool_id: 'jira', search: vi.fn(async () => empty as never), open: vi.fn(async () => empty as never), list: vi.fn(async () => empty as never),
-    openCitation: vi.fn(async ({ citation }) => f.openCitation(name, citation as never) as never), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}),
-  });
-  const repository = new SqlitePersonSessionRepository(f.db);
   const projects = new SqliteProjectContextRepositoryV1(f.db);
-  const options: CreatePersonLiveAnswerRouteOptionsV1 = {
-    authority_id: 'authority', organization_id: f.person.organization_id, state_lineage_id: 'lineage',
-    sessions: sessions as never, originals: new SqlitePersonOriginalContextRetrievalV1(f.db, sessions, f.person.organization_id),
-    records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
-    model, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1_000 },
-    audit: new SqlitePersonAgenticAskAuditV1(f.db),
-    memberships: { membership: (id: string) => repository.read(transaction => transaction.membership(id)) },
-    live_sources: [{ ...JIRA_LIVE_CONNECTOR_V1, application: { source: async ({ access_token }) => jira(access_token as FixturePerson) } }],
-    follow_ups: { runs: f.runs, items: f.items, people: f.directory, records: f.records, on_live_failure: () => {} },
-    workspace: {
-      projects: createProjectContextApplicationV1({ authenticate: access_token => sessions.authenticateAccess({ access_token }), repository: projects }),
-      grants: personWorkspaceGrantsV1(projects), people: f.directory, tools,
-    },
-  };
-  const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-    person_answer_v6: createPersonLiveAnswerRouteV1(options, 7), ...(mount.v7 === false ? {} : { person_answer_v7: createPersonLiveAnswerRouteV1(options, 8) }) });
-  servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
-  return `http://127.0.0.1:${address.port}`;
+  const options: CreatePersonLiveAnswerRouteOptionsV1 = { ...liveAskOptions(f, model), workspace: {
+    projects: createProjectContextApplicationV1({ authenticate: access_token => sessions.authenticateAccess({ access_token }), repository: projects }),
+    grants: personWorkspaceGrantsV1(projects), people: f.directory, tools,
+  } };
+  return serveAsk({ person_answer_v6: createPersonLiveAnswerRouteV1(options, 7), ...(mount.v7 === false ? {} : { person_answer_v7: createPersonLiveAnswerRouteV1(options, 8) }) });
 }
-const ask = (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: FixturePerson | 'stranger'; readonly mine?: true } = {}) => fetch(`${base}${input.path ?? PERSON_ANSWER_PATH_V7}`, {
-  method: 'POST',
-  headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? 'mina'}`,
-    ...(input.progress === null ? {} : { [PERSON_ASK_PROGRESS_HEADER_V1]: input.progress ?? PERSON_ASK_PROGRESS_HEADER_VALUE_V3 }) },
-  body: JSON.stringify({ schema_version: 3, question: QUESTION, ...(input.mine === true ? { mine: true } : {}) }),
-});
-function decode(text: string): readonly PersonAskProgressEventV3[] {
-  const decoder = createPersonAskProgressDecoderV3();
-  const events = [...decoder.push(text)];
-  decoder.end();
-  return events;
-}
-const audits = (f: OpenItemsFixtureV1, kind: string) => (f.db.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").all() as { body_json: string }[])
-  .map(row => JSON.parse(row.body_json) as Record<string, unknown>).filter(body => body.kind === kind);
+const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: QUESTION });
+const decode = (text: string) => decodeAll(createPersonAskProgressDecoderV3(), text);
 
 describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
   it('cites a project by its workspace citation and ref, streams progress V3 that names the projects source, and audits each workspace release', async () => {

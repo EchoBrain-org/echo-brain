@@ -1,23 +1,15 @@
-import { once } from 'node:events';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import {
   PERSON_ANSWER_PATH_V5, PERSON_ANSWER_PATH_V6, PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2,
   createPersonAskProgressDecoderV1, createPersonAskProgressDecoderV2, validatePersonAnswerResponseV6, validatePersonAnswerResponseV7,
-  type PersonAskProgressEventV2,
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
-import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import { SqlitePersonAgenticAskAuditV1 } from '../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
-import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
-import { SqlitePersonSessionRepository } from '../src/adapters/persistence/sqlite/sqlite-person-session-repository.js';
-import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
-import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
-import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
-import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
-import { sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-answer-route-v1.js';
+import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
+import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
  * The V7 Ask over HTTP (ADR-0039, ADR-0040): `POST /v6/person/ask` behind the
@@ -28,12 +20,8 @@ import { sentFixture, type FixturePerson, type OpenItemsFixtureV1 } from './fixt
  * decision and check never do.
  */
 
-const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
-afterEach(async () => {
-  for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; }
-});
+afterEach(closeAskServers);
 
-const empty = Object.freeze({ items: Object.freeze([]), truncated: false, receipt_digests: Object.freeze([]) });
 type StepPrompt = { readonly question?: string; readonly asked_by?: string; readonly source_catalog?: readonly { readonly source: string }[];
   readonly last_results?: readonly { readonly tool: string; readonly args?: { readonly owner?: string }; readonly items?: readonly string[] }[] };
 
@@ -58,44 +46,14 @@ function myOpenTasks() {
   return { model, catalogs, reset() { steps = 0; mine = undefined; } };
 }
 
-/** The `/v5` and `/v6` routes as the runtime composes them: Jira opened as the fixture's desk opens it, and the follow-up sources. */
-async function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mount: { readonly v6?: boolean } = {}) {
-  const sessions = f.openItemsOptions.sessions;
-  const jira = (name: FixturePerson): PersonLiveEvidenceSourceV1 => ({
-    tool_id: 'jira', search: vi.fn(async () => empty as never), open: vi.fn(async () => empty as never), list: vi.fn(async () => empty as never),
-    openCitation: vi.fn(async ({ citation }) => f.openCitation(name, citation as never) as never), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}),
-  });
-  const repository = new SqlitePersonSessionRepository(f.db);
-  const options: CreatePersonLiveAnswerRouteOptionsV1 = {
-    authority_id: 'authority', organization_id: f.person.organization_id, state_lineage_id: 'lineage',
-    sessions: sessions as never, originals: new SqlitePersonOriginalContextRetrievalV1(f.db, sessions, f.person.organization_id),
-    records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
-    model, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1_000 },
-    audit: new SqlitePersonAgenticAskAuditV1(f.db),
-    memberships: { membership: (id: string) => repository.read(transaction => transaction.membership(id)) },
-    live_sources: [{ ...JIRA_LIVE_CONNECTOR_V1, application: { source: async ({ access_token }) => jira(access_token as FixturePerson) } }],
-    follow_ups: { runs: f.runs, items: f.items, people: f.directory, records: f.records, on_live_failure: () => {} },
-  };
-  const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-    person_answer_v5: createPersonLiveAnswerRouteV1(options, 6), ...(mount.v6 === false ? {} : { person_answer_v6: createPersonLiveAnswerRouteV1(options, 7) }) });
-  servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
-  return `http://127.0.0.1:${address.port}`;
+/** The `/v5` and `/v6` routes as the runtime composes them. */
+function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mount: { readonly v6?: boolean } = {}) {
+  const options = liveAskOptions(f, model);
+  return serveAsk({ person_answer_v5: createPersonLiveAnswerRouteV1(options, 6), ...(mount.v6 === false ? {} : { person_answer_v6: createPersonLiveAnswerRouteV1(options, 7) }) });
 }
-const ask = (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: FixturePerson | 'stranger' } = {}) => fetch(`${base}${input.path ?? PERSON_ANSWER_PATH_V6}`, {
-  method: 'POST',
-  headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? 'mina'}`,
-    ...(input.progress === null ? {} : { [PERSON_ASK_PROGRESS_HEADER_V1]: input.progress ?? PERSON_ASK_PROGRESS_HEADER_VALUE_V2 }) },
-  body: JSON.stringify({ schema_version: 3, question: 'What are my open tasks?' }),
-});
-function decode(text: string): readonly PersonAskProgressEventV2[] {
-  const decoder = createPersonAskProgressDecoderV2();
-  const events = [...decoder.push(text)];
-  decoder.end();
-  return events;
-}
-const askAudits = (f: OpenItemsFixtureV1) => (f.db.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").all() as { body_json: string }[])
-  .map(row => JSON.parse(row.body_json) as Record<string, unknown>).filter(body => body.kind === 'echo-person-agentic-ask-audit-v1');
+const ask = askClient({ path: PERSON_ANSWER_PATH_V6, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V2, question: 'What are my open tasks?' });
+const decode = (text: string) => decodeAll(createPersonAskProgressDecoderV2(), text);
+const askAudits = (f: OpenItemsFixtureV1) => auditBodies(f, 'echo-person-agentic-ask-audit-v1');
 
 describe('the V7 Ask streamed on /v6 (ADR-0039, ADR-0040)', () => {
   it('streams progress V2: searches name follow-ups, the follow-up it read is named and cited, and the receipt lists it', async () => {
