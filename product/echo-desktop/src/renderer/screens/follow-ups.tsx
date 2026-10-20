@@ -1,5 +1,5 @@
 import { Fragment } from 'preact';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef } from 'preact/hooks';
 import type { Member, OpenItemView } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
