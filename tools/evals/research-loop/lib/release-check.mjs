@@ -1,3 +1,4 @@
+import { sameName } from "./match.mjs";
 import { reachChecks, traceCounts } from "./reach.mjs";
 
 /**
@@ -67,9 +68,6 @@ export function langsmithTraces(value) {
   });
 }
 
-const sameQuestion = (left, right) => typeof left === "string" && typeof right === "string" &&
-  left.normalize("NFC").trim().replace(/\s+/gu, " ").toLowerCase() === right.normalize("NFC").trim().replace(/\s+/gu, " ").toLowerCase();
-
 /**
  * The release check: for each of its questions, the latest trace that asked it, checked as its case's reach and cost
  * keys say. A question with no trace, a trace from another release, or an incomplete capture fails the check.
@@ -77,7 +75,7 @@ const sameQuestion = (left, right) => typeof left === "string" && typeof right =
 export function releaseCheck(value, questions, { release_sha: releaseSha } = {}) {
   const traces = langsmithTraces(value);
   const results = questions.map(entry => {
-    const asked = traces.filter(trace => sameQuestion(trace.question, entry.question)).sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)));
+    const asked = traces.filter(trace => sameName(trace.question, entry.question)).sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)));
     const trace = asked[0];
     if (trace === undefined) return { case_id: entry.id, question: entry.question, found: false, problems: ["no trace asked this question"], passed: false };
     const run = { outcome: "completed", started_at: trace.started_at, result: { status: "completed", research: trace.research, ...(trace.answer === null ? {} : { ask: { response: trace.answer } }) } };

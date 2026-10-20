@@ -110,7 +110,7 @@ const METRICS = [
 
 const JUDGE_METRICS = [
   "planner_needs_covered", "planner_invented_needs", "research_established", "verdicts_correct",
-  "writer_parts_correct", "writer_unsupported_claims", "writer_false_abstention", "gaps_reported", "card_gaps_reported", "must_not_violations",
+  "writer_parts_correct", "writer_unsupported_claims", "false_abstention_runs", "gaps_reported", "card_gaps_reported", "must_not_violations",
 ];
 
 /** Sums one count over entries that have it; null when none does (no sweep was graded). */
@@ -185,9 +185,9 @@ export function aggregate(gradedRuns) {
   };
 }
 
-/** Preserve code checks while making every model-judge measure explicitly unknown. */
+/** Preserve code checks while making every model-judge measure an entry carries explicitly unknown. */
 export function withholdJudgeMetrics(report) {
-  const withhold = entry => ({ ...entry, ...Object.fromEntries(JUDGE_METRICS.map(metric => [metric, null])) });
+  const withhold = entry => ({ ...entry, ...Object.fromEntries(JUDGE_METRICS.filter(metric => Object.hasOwn(entry, metric)).map(metric => [metric, null])) });
   return { ...report, cases: report.cases.map(withhold), summary: withhold(report.summary) };
 }
 
@@ -294,7 +294,7 @@ function reachSection(report) {
   return [
     "## Reach and cost",
     "",
-    "Graded on what research reached and what it spent, never on the answer's wording (research tool contract v1). An open-ended case meets them when every collection holding part of its answer was looked at (within its time window, when it names one), no refused call was sent again, unchecked items were stated wherever its answer used a list that had them, and research finished within its rounds (4 unless the case says otherwise).",
+    "Graded on what research reached and what it spent, never on the answer's wording (research tool contract v1). An open-ended case meets them when every collection holding part of its answer was looked at (within its time window, when it names one), no refused call was sent again, unchecked items were stated wherever its answer used a list that had them, and research finished within 4 rounds.",
     "",
     `Open-ended cases meeting reach and cost in every run: **${s.open_ended_cases_met_in_every_run} of ${s.open_ended_cases}**.`,
     "",

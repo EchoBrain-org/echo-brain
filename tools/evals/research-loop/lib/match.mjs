@@ -19,8 +19,8 @@ function meetingTitle(meetings, id) {
   return lower(meeting.title);
 }
 
-/** A name compared as code shows it: one line, NFC, ignoring case and spacing. */
-const sameName = (left, right) => typeof left === "string" && typeof right === "string" &&
+/** A name compared as code shows it: one line, NFC, ignoring case and spacing. The release check compares questions so too. */
+export const sameName = (left, right) => typeof left === "string" && typeof right === "string" &&
   left.normalize("NFC").trim().replace(/\s+/gu, " ").toLowerCase() === right.normalize("NFC").trim().replace(/\s+/gu, " ").toLowerCase();
 
 /**

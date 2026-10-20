@@ -152,11 +152,10 @@ a `category` (`goal`, `time`, `own_work`, `structure`, `reach`, `tools`) and a
 `reach` key: the collections holding part of its answer (`meetings`,
 `documents`, `follow_ups`, `projects`, `people`, `tools`, `tickets`, `pages`,
 `slack`, `jira_projects`, `confluence_spaces`, `slack_channels`; an entry that
-lists several is met by any of them), an optional time `window` (`yesterday`,
-`this_week`, `last_week`) and its rounds (`max_rounds`, 4 unless it says
-otherwise). Its parts name workspace items as `world/README.md` ("Reading the
-keys") says. A case whose answer the world cannot fix in advance ("What
-happened yesterday?") has no parts.
+lists several is met by any of them) and an optional time `window`
+(`yesterday`, `this_week`, `last_week`). Its parts name workspace items as
+`world/README.md` ("Reading the keys") says. A case whose answer the world
+cannot fix in advance ("What happened yesterday?") has no parts.
 
 Every case of the family is graded on reach and cost, never on wording, by code
 reading the research result its run saves:
@@ -174,9 +173,12 @@ reading the research result its run saves:
   refusal.
 - **Unchecked items stated**: every list the answer uses (one the plan relied
   on, or one it cites a member of) whose `unchecked` count is above zero has
-  that count in the answer's text. Unknown, never a pass, when the answer used
-  no such list.
-- **Within rounds**: research stopped `finished` within its rounds.
+  that count in the answer's text. When the answer used no such list, nothing
+  needed stating: the check is unknown and leaves the run out of its rate (—
+  when no run counts), but it does not stop the run meeting reach and cost or
+  passing the release check. A failed run is left out of this rate too; it
+  meets nothing.
+- **Within rounds**: research stopped `finished` within 4 rounds.
 
 Every completed run of any case also reports what its trace counts: rounds,
 calls per round, collections looked at, refused calls, repeated refusals,
@@ -251,7 +253,16 @@ LangSmith traces, with the same four checks: see
    npm run eval:research-loop -- grade --judge-model <openrouter-claude-slug> --judge-credential-file ~/.config/echo/openrouter.credential --out ~/.local/state/echo-research-loop-eval-20261006
    ```
 
-   `--no-judge` grades code checks only (found, read, handed over, leaks, cost).
+   `--no-judge` grades code checks only, and the report then withholds every
+   judge measure: expected and invented needs, parts established, the judge's
+   Sweep verdicts, parts correct in the answer, unsupported claims, false
+   abstentions, gaps reported (Ask's and the card's) and must-not violations.
+   Complete and supported stays unknown unless the run failed or a code check
+   fails it: a leak, a citation of something research did not read, an
+   invented card item or person, or a list not named in full. The code checks
+   remain: found, read, handed over, need kinds, lists named, the card's items,
+   relations and owners, the sweep result's verdicts, leaks, noise, reach and
+   cost.
 8. **Calibrate the judge for this grading pass.** `calibrate sheet` requires 15
    judged runs and writes a blind sheet; answer every check `true` or `false`
    without opening `graded.json`, then `calibrate score`. The result is bound to

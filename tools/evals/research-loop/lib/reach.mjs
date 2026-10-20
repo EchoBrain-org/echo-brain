@@ -192,7 +192,7 @@ function uncheckedReports(research) {
 }
 
 /** Lists research's plan relied on: those a found which_items need cites (ADR-0041). */
-function reliedLists(research) {
+export function reliedLists(research) {
   return new Set((research?.plan ?? []).flatMap(part => part.needs ?? []).filter(need => need.status === "found" && need.kind === "which_items").flatMap(need => need.evidence ?? []));
 }
 
@@ -249,7 +249,7 @@ export function traceCounts(research) {
  */
 export function failedReach(testCase) {
   return {
-    expected: testCase.reach.collections, window: testCase.reach.window ?? null, max_rounds: testCase.reach.max_rounds ?? REACH_MAX_ROUNDS,
+    expected: testCase.reach.collections, window: testCase.reach.window ?? null, max_rounds: REACH_MAX_ROUNDS,
     looked_at: [], missing: testCase.reach.collections.map(group => [group].flat().join(" or ")),
     looked_at_every_collection: false, no_repeated_refusal: false, unchecked_stated: null, within_rounds: false, met: false,
   };
@@ -264,7 +264,6 @@ export function reachChecks(testCase, run) {
   const research = run?.result?.research;
   if (run?.outcome !== "completed" || run.result?.status !== "completed" || research === undefined) return failedReach(testCase);
   const { collections, window } = testCase.reach;
-  const maxRounds = testCase.reach.max_rounds ?? REACH_MAX_ROUNDS;
   const looked = collectionsLookedAt(research, { window, days: window === undefined ? [] : askedDays(run.started_at, research) });
   const missing = collections.map(group => [group].flat()).filter(group => !group.some(name => looked.has(name))).map(group => group.join(" or "));
   const counts = traceCounts(research);
@@ -273,10 +272,10 @@ export function reachChecks(testCase, run) {
     looked_at_every_collection: missing.length === 0,
     no_repeated_refusal: counts.repeated_refusals === 0,
     unchecked_stated: stated,
-    within_rounds: research.stop?.reason === "finished" && counts.rounds <= maxRounds,
+    within_rounds: research.stop?.reason === "finished" && counts.rounds <= REACH_MAX_ROUNDS,
   };
   return {
-    expected: collections, window: window ?? null, max_rounds: maxRounds, looked_at: [...looked].sort(), missing, ...checks,
+    expected: collections, window: window ?? null, max_rounds: REACH_MAX_ROUNDS, looked_at: [...looked].sort(), missing, ...checks,
     met: checks.looked_at_every_collection && checks.no_repeated_refusal && checks.unchecked_stated !== false && checks.within_rounds,
   };
 }
