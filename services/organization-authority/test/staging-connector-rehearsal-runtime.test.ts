@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   config: undefined as unknown,
   api: undefined as unknown,
   jira: 0,
+  jiraOpens: [] as Record<string, unknown>[],
   reads: [] as string[],
   readMode: 'normal' as 'normal' | 'revoke' | 'demote' | 'stall' | 'empty',
   grantRevoked: false,
@@ -33,7 +34,8 @@ vi.mock('../src/composition/organization-authority-setup-cli.js', () => ({
 }));
 vi.mock('../src/composition/jira-person-live-runtime-v1.js', async () => {
   const { AuthorityOperationError } = await import('@echo-brain/organization-authority-kernel/domain/errors');
-  return { openJiraPersonLiveRuntimeV1: () => ({
+  const actual = await vi.importActual<typeof import('../src/composition/jira-person-live-runtime-v1.js')>('../src/composition/jira-person-live-runtime-v1.js');
+  return { ...actual, openJiraPersonLiveRuntimeV1: (options: Record<string, unknown>) => (state.jiraOpens.push(options), {
     application: {
       captureStatus: () => ({ connected: true }),
       async captureConnection() {
@@ -85,12 +87,13 @@ vi.mock('../src/composition/organization-authority-composition-root.js', () => (
 }));
 
 import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
-import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
+import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
+import type { PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { STAGING_CONNECTOR_REHEARSAL_PATH_V1, STAGING_CONNECTOR_REHEARSAL_POLICY_V3 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 
 const roots: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.config = undefined; state.api = undefined; state.jira = 0;
+afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.config = undefined; state.api = undefined; state.jira = 0; state.jiraOpens = [];
   state.reads = []; state.readMode = 'normal'; state.grantRevoked = false; state.ownerRevoked = false;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -198,7 +201,18 @@ it('registers profile-bound Jira Ask and forwards Confluence alongside the fixed
   try {
     expect(state.config).toMatchObject({ confluence_person_live: { enabled: true, cloud_id: confluence.cloud_id, integration_id: confluence.integration_id } });
     expect(state.config).not.toHaveProperty('jira_person_live');
-    expect(state.api).toEqual({ person_http_runtime_factory: expect.any(Function), live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: expect.any(Function) }] });
+    // Jira's issues and its projects, as production binds them (research tool contract v1).
+    expect(state.api).toEqual({ person_http_runtime_factory: expect.any(Function), live_connectors: [
+      { ...JIRA_LIVE_CONNECTOR_V1, open: expect.any(Function) }, { ...JIRA_PROJECTS_LIVE_CONNECTOR_V1, open: expect.any(Function) }] });
+    const { live_connectors } = state.api as { live_connectors: readonly PersonLiveConnectorDefinitionV1[] };
+    const authorize_project = (() => undefined) as never;
+    const project_names = (() => new Map()) as never;
+    const sessions = { authenticateAccess: () => { throw new Error('unused'); } } as never;
+    const before = state.jiraOpens.length;
+    const connectors = live_connectors.map(connector => connector.open(sessions, authorize_project, project_names));
+    // Both open one Jira runtime, which can name the ECHO projects mapped to a Jira project.
+    expect(state.jiraOpens.slice(before)).toEqual([expect.objectContaining({ authorize_project, project_names })]);
+    for (const connector of connectors) connector.close();
   } finally { await opened.close(); }
 });
 
