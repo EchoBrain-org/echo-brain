@@ -13,6 +13,7 @@ import type { EvidenceDeskPortV2, EvidenceDeskSourceV2 } from "../shared/evidenc
 import type { EvidenceDeskPortV1 } from "../shared/evidence-desk-v1.js";
 import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1, FOLLOW_UPS_SOURCE_ID_V1 } from "../shared/follow-up-evidence-v1.js";
 import { DOCUMENTS_SOURCE_CAPABILITIES_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } from "../shared/source-capabilities-v1.js";
+import { evidenceDayV1 } from "../shared/temporal-query-v1.js";
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from "../shared/workspace-evidence-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
@@ -245,12 +246,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const tickets = responseVersion >= 5;
   const now = options.now_ms ?? (() => performance.now());
   const temporal = options.time_context;
-  const today = options.today ?? (() => {
-    if (temporal === undefined) return new Date().toISOString().slice(0, 10);
-    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: temporal.time_zone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(temporal.now));
-    const part = (kind: string) => parts.find(value => value.type === kind)!.value;
-    return `${part('year')}-${part('month')}-${part('day')}`;
-  });
+  // The HTTP boundary validates the time context, so its day always parses.
+  const today = options.today ?? (() => temporal === undefined ? new Date().toISOString().slice(0, 10) : evidenceDayV1(temporal.now, temporal.time_zone)!);
   const askedBy = askerName(options.asker);
   const liveCatalog: AgenticResearchSourceV1[] = (options.desk.live_sources ?? []).flatMap(descriptor => {
     // Citation compatibility belongs to the response version, never a provider name.
