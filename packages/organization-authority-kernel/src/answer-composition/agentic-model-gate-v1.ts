@@ -9,7 +9,7 @@ import {
   type StructuredGenerationPort,
   type StructuredGenerationUsageV1,
 } from "./structured-generation-v1.js";
-import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
+import { observeCoreModelCorrectionV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeModelCorrectionV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, repairInstruction } from "./agentic-ask-v1-model-protocol.js";
 import { coreRuntimeDiagnosticErrorKindV1, coreRuntimeModelRoutingV1 } from '../shared/core-runtime-diagnostics-v1.js';
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
@@ -58,9 +58,12 @@ export class AgenticAskDeadlineErrorV1 extends Error {
   }
 }
 
+/** What a retry or repair corrects, as observeCoreModelCorrectionV1 counts it. */
+type RecoveryCorrection = Extract<CoreRuntimeModelCorrectionV1, "model_retry" | "model_repair_json" | "model_repair_unfinished" | "model_repair_empty">;
+
 /** Recovery stays inside this request: repeat, repair the output, or use released evidence. */
 export class AgenticAskGenerationFailureV1 extends AgenticAskOutputErrorV1 {
-  constructor(message: string, readonly recovery: "retry" | "repair" | "fallback") { super(message); }
+  constructor(message: string, readonly recovery: "retry" | "repair" | "fallback", readonly correction?: RecoveryCorrection) { super(message); }
 }
 
 /**
@@ -97,23 +100,23 @@ function errorDiagnostic(error: unknown): { readonly failure_class: StructuredGe
 }
 function finishFailure(reason: string | null): AgenticAskGenerationFailureV1 {
   if (reason === "content_filter") return new AgenticAskGenerationFailureV1("the provider declined the reply", "fallback");
-  if (reason === "error") return new AgenticAskGenerationFailureV1("model was unavailable", "retry");
-  return new AgenticAskGenerationFailureV1("the reply did not finish; keep notes and sentences shorter", "repair");
+  if (reason === "error") return new AgenticAskGenerationFailureV1("model was unavailable", "retry", "model_retry");
+  return new AgenticAskGenerationFailureV1("the reply did not finish; keep notes and sentences shorter", "repair", "model_repair_unfinished");
 }
 /** Exhaustive over the port's failure classes: a new class does not compile until it is handled here. */
 function generationFailure(error: unknown): AgenticAskGenerationFailureV1 | null {
   const diagnostic = errorDiagnostic(error);
   const status = diagnostic.http_status;
   switch (diagnostic.failure_class) {
-    case "adapter_json": return new AgenticAskGenerationFailureV1("the reply was not valid JSON", "repair");
+    case "adapter_json": return new AgenticAskGenerationFailureV1("the reply was not valid JSON", "repair", "model_repair_json");
     case "adapter_finish": return finishFailure(diagnostic.finish_reason);
     case "adapter_refusal": return new AgenticAskGenerationFailureV1("the provider declined the reply", "fallback");
     case "adapter_response":
-      return status !== null && status >= 200 && status < 300 ? new AgenticAskGenerationFailureV1("the reply had no usable content", "repair") : null;
-    case "adapter_timeout": case "adapter_transport": return new AgenticAskGenerationFailureV1("model was unavailable", "retry");
+      return status !== null && status >= 200 && status < 300 ? new AgenticAskGenerationFailureV1("the reply had no usable content", "repair", "model_repair_empty") : null;
+    case "adapter_timeout": case "adapter_transport": return new AgenticAskGenerationFailureV1("model was unavailable", "retry", "model_retry");
     case "adapter_http": case "adapter_provider_error": {
       const temporary = status === null || (status >= 200 && status < 300) || status === 408 || status === 429 || (status >= 500 && status < 600);
-      return new AgenticAskGenerationFailureV1("model was unavailable", temporary ? "retry" : "fallback");
+      return temporary ? new AgenticAskGenerationFailureV1("model was unavailable", "retry", "model_retry") : new AgenticAskGenerationFailureV1("model was unavailable", "fallback");
     }
     // Local configuration/contract errors and unknown failures are terminal, not a model reply to repair.
     case null: return null;
@@ -323,16 +326,21 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       throw failure ?? error;
     }
   };
-  /** At most one extra call: temporary failures retry unchanged; invalid output gets repair guidance. */
+  /**
+   * At most one extra call: temporary failures retry unchanged; invalid output gets repair guidance. Each admitted extra
+   * call is counted by what it corrects; a caller's rejection is model_repair_rejected.
+   */
   const withRepair = async <T>(model_call: AgenticModelCallV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, parse: (value: unknown) => T, on_rejection?: (reason: string) => void): Promise<T> => {
     const { role } = model_call;
     let reason: string | null;
     let rejected: unknown;
+    let correction: CoreRuntimeModelCorrectionV1;
     try { rejected = await call(model_call, system, user, schema, timeout); return parse(rejected); }
     catch (error) {
       if (isAbort(error, options.input_signal) || options.is_deadline_expired() || !(error instanceof AgenticAskOutputErrorV1)) throw error;
       if (error instanceof AgenticAskGenerationFailureV1 && error.recovery === "fallback") throw error;
       reason = error instanceof AgenticAskGenerationFailureV1 && error.recovery === "retry" ? null : error.message;
+      correction = error instanceof AgenticAskGenerationFailureV1 ? error.correction ?? (error.recovery === "retry" ? "model_retry" : "model_repair_rejected") : "model_repair_rejected";
     }
     if (reason !== null) on_rejection?.(reason);
     const minimum = role === "step" ? AGENTIC_ASK_MIN_STEP_MS_V1 : AGENTIC_ASK_MIN_ANSWER_MS_V1;
@@ -346,7 +354,10 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       ...(rejected === undefined ? {} : { rejected_response: cleanLine(JSON.stringify(rejected), 4_000) }),
       validation_error: repairInstruction(reason),
     };
-    return parse(await call(model_call, system, repairUser, schema, timeout, true));
+    // Counted once the extra call is admitted past its access check, as the audit counts repairs.
+    const admitted = repairs;
+    try { return parse(await call(model_call, system, repairUser, schema, timeout, true)); }
+    finally { if (repairs > admitted) observeCoreModelCorrectionV1(correction); }
   };
   // SDK retries and auxiliary requests cannot share an admission. Serialize them so budget,
   // receipt admission and access failures have one order, even if the harness sends concurrently.

@@ -10,8 +10,8 @@ export const CORE_RUNTIME_PHASES_V1 = [
   "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor",
   "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery",
   "approval_delivery", "approval_review", "approval_observation", "record_append", "approval_action", "approval_terminal_update",
-  "search_reconciliation", "search_snapshot", "search_enrichment", "search_build",
-  "search_validation", "search_publication", "related_projection", "model_call",
+  "search_reconciliation", "search_snapshot", "search_build",
+  "search_validation", "search_publication", "model_call",
   "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer",
   // A research trigger renderer's model call (research trigger contract v1), such as the impact card's.
   "research_render", "research_run", "research_brief", "research_starting_read", "research_preload", "research_loop", "research_output", "research_output_view", "research_revalidation", "research_audit", "research_release",
@@ -21,8 +21,8 @@ export const CORE_RUNTIME_PHASES_V1 = [
 export type CoreRuntimePhaseV1 = (typeof CORE_RUNTIME_PHASES_V1)[number];
 export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "event_loop_delay_max_us", "active_models", "gate_wait_ms", "pending_depth", "oldest_age_ms", "scheduled_delay_ms", "wake_lateness_ms",
-  "unchanged_group_count", "changed_group_count", "newly_observed_group_count", "input_bytes", "output_bytes", "record_count", "atom_count", "visibility_groups",
-  "included_count", "excluded_count", "recomputed_count", "reused_count",
+  "input_bytes", "output_bytes", "record_count", "atom_count",
+  "included_count", "excluded_count",
   "captured_head", "current_head", "published_head", "http_status", "active_http",
   "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "provider_latency_ms",
   // One terminal research-run summary, shared by every trigger and output type.
@@ -44,6 +44,32 @@ export const CORE_RUNTIME_UPSTREAM_OPERATIONS_V1 = ["connection_read", "connecti
 export const CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1 = ["burst", "global_quota", "tenant_quota", "per_issue_write", "other"] as const;
 export const CORE_RUNTIME_RESEARCH_STOP_REASONS_V1 = Object.freeze(['finished', 'empty_catalog', 'no_progress', 'step_limit', 'budget', 'unusable_step'] as const);
 export const CORE_RUNTIME_RESEARCH_ADMISSIONS_V1 = Object.freeze(['post_revalidation_no_time'] as const);
+/**
+ * Code's corrections of model output: each name counts how often code changed, dropped or answered for what a model
+ * returned, so a correction can go once it stops firing on the current models (RB-OPERATIONS-001 defines each name).
+ * Names and counts only, never the text corrected.
+ */
+export const CORE_RUNTIME_MODEL_CORRECTIONS_V1 = Object.freeze([
+  // Meeting extraction (organization-processing llm-decision-processor.ts).
+  "extraction_item_set_aside", "extraction_repeat_dropped", "extraction_owner_cleared", "extraction_due_cleared", "extraction_due_coerced",
+  "extraction_decided_downgraded", "extraction_unit_id_respelled", "extraction_parent_unit_cited", "extraction_unknown_unit_dropped",
+  "extraction_confidence_cleared", "extraction_rationale_link_dropped",
+  // A research step's reads as the research loop runs them, and the loop's own guards and stops.
+  "step_source_alias", "step_title_as_id",
+  "research_repeat_search", "research_repeat_open", "research_repeat_list", "research_repeat_refusal", "research_finish_refused",
+  "research_no_progress_stop", "research_empty_catalog_stop", "research_unusable_step_stop",
+  // Any model reply: the model gate's retries and repairs, the adapter's JSON reading, and the reply parsers' cleanup.
+  "model_retry", "model_repair_json", "model_repair_unfinished", "model_repair_empty", "model_repair_rejected",
+  "model_json_fence_stripped", "model_json_outer_text_dropped",
+  "model_text_truncated", "model_items_capped", "model_entry_dropped", "model_repeat_dropped", "model_id_respelled", "model_enum_respelled", "model_bare_string",
+  "model_inline_ids_stripped",
+  // Renderers: Ask's writer, the impact card and the sweep.
+  "writer_repeat_dropped", "writer_unknown_id_dropped", "writer_uncited_sentence_dropped", "writer_fallback",
+  "card_line_screened", "card_unknown_id_dropped", "card_date_dropped", "card_fallback",
+  "sweep_line_withheld", "sweep_fallback",
+] as const);
+export type CoreRuntimeModelCorrectionV1 = (typeof CORE_RUNTIME_MODEL_CORRECTIONS_V1)[number];
+export type CoreRuntimeModelCorrectionsV1 = Readonly<Partial<Record<CoreRuntimeModelCorrectionV1, number>>>;
 /** Only registered labels and explicit opaque hashes may correlate business entities in metadata. */
 export interface CoreRuntimeCorrelationV1 {
   readonly meeting_id?: string;
@@ -70,6 +96,8 @@ export interface CoreRuntimeDetailV1 extends CoreRuntimeCorrelationV1 {
   readonly research_stop_reason?: (typeof CORE_RUNTIME_RESEARCH_STOP_REASONS_V1)[number];
   readonly research_admission?: (typeof CORE_RUNTIME_RESEARCH_ADMISSIONS_V1)[number];
   readonly grounding_stage?: (typeof CORE_RUNTIME_GROUNDING_STAGES_V1)[number];
+  /** Corrections of model output this span made, by name; absent when it made none. */
+  readonly model_corrections?: CoreRuntimeModelCorrectionsV1;
   readonly approval_surface?: "desktop" | "slack";
   readonly delivery_step?: "open_dm" | "post_marker" | "reconcile_marker" | "publish_card";
   readonly evidence_source?: "ticket" | "page" | "tool_container";
@@ -281,6 +309,7 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
     if (value !== null && (!Number.isSafeInteger(value) || value < 0)) throw new TypeError("invalid core runtime count");
     counts[key] = value;
   }
+  const modelCorrections = normalizedCorrections(input.model_corrections);
   return Object.freeze({ operation_id: input.operation_id, span_id: input.span_id, parent_span_id: input.parent_span_id,
     ...(input.parent_operation_id === undefined ? {} : { parent_operation_id: input.parent_operation_id }),
     ...correlation(input, admitted),
@@ -289,6 +318,7 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
     ...(input.research_stop_reason === undefined ? {} : { research_stop_reason: input.research_stop_reason }),
     ...(input.research_admission === undefined ? {} : { research_admission: input.research_admission }),
     ...(input.grounding_stage === undefined ? {} : { grounding_stage: input.grounding_stage }),
+    ...(modelCorrections === undefined ? {} : { model_corrections: modelCorrections }),
     ...(input.approval_surface === undefined ? {} : { approval_surface: input.approval_surface }),
     ...(input.delivery_step === undefined ? {} : { delivery_step: input.delivery_step }),
     ...(input.evidence_source === undefined ? {} : { evidence_source: input.evidence_source }),
@@ -317,6 +347,17 @@ function correlation(input: CoreRuntimeCorrelationV1, vocabulary: TelemetryVocab
   return value;
 }
 
+/** Each correction name the vocabulary admits, with a positive whole count, in vocabulary order; undefined when there is none. */
+function normalizedCorrections(input: CoreRuntimeModelCorrectionsV1 | undefined): CoreRuntimeModelCorrectionsV1 | undefined {
+  if (input === undefined) return undefined;
+  if (typeof input !== "object" || input === null || Array.isArray(input) ||
+      Object.entries(input).some(([name, count]) => !(CORE_RUNTIME_MODEL_CORRECTIONS_V1 as readonly string[]).includes(name) || !Number.isSafeInteger(count) || count < 1)) {
+    throw new TypeError("invalid core runtime correction");
+  }
+  const named = CORE_RUNTIME_MODEL_CORRECTIONS_V1.filter(name => Object.hasOwn(input, name));
+  return named.length === 0 ? undefined : Object.freeze(Object.fromEntries(named.map(name => [name, input[name]!])));
+}
+
 function opaque(value: string | null): string | null {
   if (value === null || value === undefined) return null;
   if (!/^[0-9a-f]{64}$/.test(value)) throw new TypeError("invalid opaque observation identity");
@@ -333,6 +374,19 @@ export function observeCoreModelMetadataV1(input: { provider: string; model: str
     model: telemetryLabelV1(input.model, vocabulary.models),
     ...(input.request_id === undefined ? {} : { provider_request: coreRuntimeIdentityV1("provider_request", input.request_id) }),
     ...(input.finish_reason === undefined ? {} : { finish_reason: ["stop", "length", "content_filter", "completed"].includes(input.finish_reason) ? input.finish_reason as NonNullable<CoreRuntimeDetailV1["finish_reason"]> : "other" }) });
+}
+
+/**
+ * Counts one of code's corrections of model output (CORE_RUNTIME_MODEL_CORRECTIONS_V1) on the current span. Outside a span,
+ * or for a name or count the vocabulary does not admit, it records nothing; it never changes the correction it counts.
+ */
+export function observeCoreModelCorrectionV1(correction: CoreRuntimeModelCorrectionV1, count = 1): void {
+  const detail = context.getStore()?.detail;
+  if (detail === undefined || !CORE_RUNTIME_MODEL_CORRECTIONS_V1.includes(correction) || !Number.isSafeInteger(count) || count < 1) return;
+  safe(() => {
+    const total = (detail.model_corrections?.[correction] ?? 0) + count;
+    if (Number.isSafeInteger(total)) Object.assign(detail, { model_corrections: { ...detail.model_corrections, [correction]: total } });
+  });
 }
 
 export function currentCoreRuntimeDetailV1(): CoreRuntimeDetailV1 | null {

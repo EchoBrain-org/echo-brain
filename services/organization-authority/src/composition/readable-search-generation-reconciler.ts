@@ -63,14 +63,6 @@ export interface ReadableSearchGenerationReconcilerV1Options<
   readonly read_record_head: () => ReadableSearchRecordHeadV1;
   /** Materializes the complete verified Layer 1 input and releases its read transaction. */
   readonly capture_snapshot: () => Snapshot;
-  /**
-   * Optionally derives disposable Layer 2 input after the verified record read
-   * transaction has closed. The returned snapshot must retain the exact head.
-   */
-  readonly enrich_snapshot?: (
-    snapshot: Snapshot,
-    signal: AbortSignal,
-  ) => Snapshot | Promise<Snapshot>;
   /** Builds and atomically renames immutable files, but never mutates the pointer. */
   readonly build_generation: (
     snapshot: Snapshot,
@@ -146,9 +138,9 @@ function pointerHead(
  * Exact-head reconciler for the admitted-search V1 flow. Callers serialize it.
  *
  * Startup runs before the API binds; the lifecycle search task owns every later
- * invocation. The writer can advance during enrichment. Snapshot capture closes
- * its read transaction before IO, and the final head check and pointer mutation
- * form one non-yielding critical section that fences obsolete generations.
+ * invocation. Snapshot capture closes its read transaction before IO, and the
+ * final head check and pointer mutation form one non-yielding critical section
+ * that fences obsolete generations.
  */
 export class ReadableSearchGenerationReconcilerV1<
   Snapshot extends ReadableSearchSnapshotV1,
@@ -210,10 +202,10 @@ export class ReadableSearchGenerationReconcilerV1<
       return Object.freeze({ status: "current", record_head: observedHead });
     }
 
-    const capturedSnapshot = observeCoreRuntimeSyncV1("search_snapshot", this.options.capture_snapshot);
-    annotateCoreRuntimeV1({ counts: { captured_head: capturedSnapshot.record_head.position } });
+    const snapshot = observeCoreRuntimeSyncV1("search_snapshot", this.options.capture_snapshot);
+    annotateCoreRuntimeV1({ counts: { captured_head: snapshot.record_head.position } });
     const capturedHead = head(
-      capturedSnapshot.record_head,
+      snapshot.record_head,
       "readable-search captured record head",
     );
     if (!sameHead(capturedHead, observedHead)) {
@@ -222,37 +214,6 @@ export class ReadableSearchGenerationReconcilerV1<
       );
     }
     signal.throwIfAborted();
-
-    const snapshot =
-      this.options.enrich_snapshot === undefined
-        ? capturedSnapshot
-        : await observeCoreRuntimeV1("search_enrichment", async () => this.options.enrich_snapshot!(capturedSnapshot, signal));
-    const enrichedHead = head(
-      snapshot.record_head,
-      "readable-search enriched snapshot head",
-    );
-    if (!sameHead(enrichedHead, capturedHead)) {
-      throw new Error(
-        "readable-search enrichment changed its captured record head",
-      );
-    }
-    signal.throwIfAborted();
-
-    // Provider IO may outlive several approvals. Retain valid enrichment for
-    // an unchanged segment on retry, but do not build/warm obsolete files.
-    const afterEnrichmentHead = head(
-      this.options.read_record_head(),
-      "readable-search post-enrichment record head",
-    );
-    if (!sameHead(afterEnrichmentHead, capturedHead)) {
-      annotateCoreRuntimeV1({ result: "superseded", counts: { current_head: afterEnrichmentHead.position } });
-      this.options.invalidate_generation?.();
-      return Object.freeze({
-        status: "superseded",
-        captured_head: capturedHead,
-        current_head: afterEnrichmentHead,
-      });
-    }
 
     const built = observeCoreRuntimeSyncV1("search_build", () => this.options.build_generation(snapshot));
     const builtHead = head(

@@ -453,6 +453,25 @@ describe("OpenRouter structured generation", () => {
     await expect(adapter.generate(structuredRequest)).resolves.toEqual({ queries: [] });
   });
 
+  it("counts a fence or surrounding text it read past on the reply's parse span, and nothing for a reply that is JSON", async () => {
+    const corrected = async (content: string) => {
+      const events: CoreRuntimeObservationV1[] = [];
+      const adapter = createOpenRouterStructuredGenerationAdapter({
+        credential_ref: "openrouter-production",
+        credential_resolver: () => "secret-not-in-errors",
+        fetch_impl: (async () => new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content } }] }), { status: 200 })) as typeof fetch,
+      });
+      await observeCoreRuntimeV1("ask_planner", () => adapter.generate(structuredRequest), { observer: event => { events.push(event); } }).catch(() => undefined);
+      return events.filter(event => event.event !== "started" && event.model_corrections !== undefined).map(event => [event.phase, event.model_corrections]);
+    };
+    expect(await corrected('{"queries":[]}')).toEqual([]);
+    expect(await corrected('```json\n{"queries":[]}\n```')).toEqual([["model_parse", { model_json_fence_stripped: 1 }]]);
+    expect(await corrected('Here is the JSON:\n{"queries":[]}')).toEqual([["model_parse", { model_json_outer_text_dropped: 1 }]]);
+    // A reply that stays unreadable is a failure, not a correction.
+    expect(await corrected("```json\n{\"queries\":\n```")).toEqual([]);
+    expect(await corrected("no json here")).toEqual([]);
+  });
+
   it("distinguishes a local timeout from another transport failure", async () => {
     const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",

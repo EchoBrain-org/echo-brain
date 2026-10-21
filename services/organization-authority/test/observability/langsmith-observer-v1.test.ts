@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  annotateCoreRuntimeV1, coreRuntimeDiagnosticErrorKindV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticToolV1,
-  type CoreRuntimeDiagnosticEventV1, type CoreRuntimePhaseV1,
+  annotateCoreRuntimeV1, coreRuntimeDiagnosticErrorKindV1, coreRuntimeIdentityV1, observeCoreModelCorrectionV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1,
+  observeCoreRuntimeSyncV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticToolV1, type CoreRuntimeDiagnosticEventV1, type CoreRuntimePhaseV1,
 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { observePersonResearchV1 } from '../../src/composition/person-research-observation-v1.js';
@@ -221,6 +221,23 @@ describe('LangSmith projection of the shared observer', () => {
     expect(models[0]!.extra.metadata.error_kind).toBe('adapter_json');
     expect(JSON.stringify(runs)).not.toContain('Brand New Host');
     expect(JSON.stringify(runs)).not.toContain('fixture-credential');
+  });
+
+  it('sums the corrections of model output every span of a run made onto its root, by name only', async () => {
+    const runs = await exported(async () => {
+      observeCoreModelCorrectionV1('research_no_progress_stop');
+      await stage('research', 'research_loop', {}, async () => {
+        observeCoreModelCorrectionV1('step_title_as_id', 2);
+        await observeCoreRuntimeV1('ask_planner', () => observeCoreRuntimeV1('model_call', async () => {
+          observeCoreRuntimeSyncV1('model_parse', () => observeCoreModelCorrectionV1('model_json_fence_stripped'));
+        }));
+      });
+      await stage('renderer', 'research_output', {}, async () => { observeCoreModelCorrectionV1('step_title_as_id'); observeCoreModelCorrectionV1('writer_fallback'); });
+    });
+    expect(runs[0]!.extra.metadata.model_corrections).toEqual({ step_title_as_id: 3, research_no_progress_stop: 1, model_json_fence_stripped: 1, writer_fallback: 1 });
+    // Another operation's corrections never reach the run, and a run that made none has no field.
+    const quiet = await exported(() => observeCoreRuntimeRootV1('worker_execution', async () => { observeCoreModelCorrectionV1('extraction_repeat_dropped'); }));
+    expect(quiet[0]!.extra.metadata).not.toHaveProperty('model_corrections');
   });
 
   it('keeps at most 512 runtime spans a run, and counts the rest', async () => {

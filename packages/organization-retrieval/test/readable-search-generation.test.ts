@@ -6,7 +6,6 @@ import { canonicalJson, sha256Digest } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReadableSearchGenerationV1,
-  expandReadableSearchRelatedAtomsV1,
   listReadableSearchGenerationRecordsV1,
   listReadableSearchGenerationV1,
   readReadableSearchGenerationAtomsV1,
@@ -22,7 +21,6 @@ import {
   warmReadableSearchActiveGenerationV1,
   type BuildReadableSearchGenerationV1Input,
   type ReadableSearchAtomV1,
-  type ReadableSearchRelatedAtomPairV1,
 } from "../src/readable-search-engine-v1.js";
 
 const digest = (value: string): `sha256:${string}` => sha256Digest(value);
@@ -173,17 +171,8 @@ function atomWith(
   return { ...value, text_sha256: digest(value.text) };
 }
 
-function relatedPair(
-  left: ReadableSearchAtomV1,
-  right: ReadableSearchAtomV1,
-): ReadableSearchRelatedAtomPairV1 {
-  return left.atom_id < right.atom_id
-    ? { left_atom_id: left.atom_id, right_atom_id: right.atom_id }
-    : { left_atom_id: right.atom_id, right_atom_id: left.atom_id };
-}
-
 describe("immutable readable-search generation v1", () => {
-  it("admits a project audience union, then narrows scores and adjacency by the authoritative project scope", () => {
+  it("admits a project audience union, then narrows scores by the authoritative project scope", () => {
     const directory = tempDirectory();
     const projectPolicy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
     const alpha = {
@@ -201,13 +190,9 @@ describe("immutable readable-search generation v1", () => {
       audience_project_ids: ["prj_alpha", "prj_beta"],
       association_project_ids: ["prj_beta"],
     };
-    const pair = [alpha, beta]
-      .map((value) => value.atom_id)
-      .sort() as [`sha256:${string}`, `sha256:${string}`];
     const built = buildReadableSearchGenerationV1({
       ...input(directory, [alpha, beta]),
       project_members_policy_contract_sha256: digest(`policy-${projectPolicy}`),
-      related_atom_pairs: [{ left_atom_id: pair[0], right_atom_id: pair[1] }],
     });
     const active = activeGeneration(built);
     warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation: active });
@@ -216,7 +201,6 @@ describe("immutable readable-search generation v1", () => {
     expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: alphaReader, project_id: "prj_alpha", query: "roadmap" }).items.map((item) => item.text)).toEqual(["alpha roadmap"]);
     expect(() => searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: alphaReader, project_id: "prj_beta", query: "roadmap" })).toThrow("project scope");
     expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: { ...alphaReader, project_ids: [] }, query: "roadmap" }).items).toEqual([]);
-    expect(expandReadableSearchRelatedAtomsV1({ state_directory: directory, active_generation: active, reader: alphaReader, project_id: "prj_alpha", anchor_atom_ids: [alpha.atom_id] }).items).toEqual([]);
   });
 
   it("fails closed when a project-policy atom lacks the frozen audience or association facts", () => {
@@ -475,146 +459,6 @@ describe("immutable readable-search generation v1", () => {
     expect(noisy.items[0]?.text).toBe("alpha beta");
   });
 
-  it("balances source-record packets without admitting restricted siblings or unknown anchors", () => {
-    const directory = tempDirectory();
-    const first = atomWith("first-anchor");
-    const second = atomWith("second-anchor", { record_position: 2 });
-    const siblings = [first, second].flatMap((anchor, index) =>
-      Array.from({ length: 5 }, (_, order) => atomWith(`sibling-${index}-${order}`, {
-        record_position: anchor.record_position, record_sha256: anchor.record_sha256, envelope_sha256: anchor.envelope_sha256,
-        atom_order: order + 1, item_kind: order === 0 ? "rationale" : "action",
-      })),
-    );
-    const restricted = atomWith("private-sibling", {
-      ...atom("private-sibling", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2),
-      record_position: first.record_position, record_sha256: first.record_sha256,
-      atom_order: 6, text: "Private commercial terms",
-    });
-    const built = buildReadableSearchGenerationV1({
-      ...input(directory, [first, second, ...siblings, restricted]),
-      related_atom_pairs: [relatedPair(first, siblings[6]!)],
-    });
-    const request = {
-      state_directory: directory,
-      active_generation: activeGeneration(built),
-      reader: { principal_id: "prn_reader", membership_id: "mem_reader" },
-      anchor_atom_ids: [first.atom_id, second.atom_id], limit: 4,
-    };
-    warmReadableSearchActiveGenerationV1(request);
-    expect(expandReadableSearchRelatedAtomsV1(request).items.map(item => item.atom_id))
-      .toEqual([siblings[6]!.atom_id]);
-    const packet = expandReadableSearchRelatedAtomsV1({ ...request, include_anchor_records: true });
-    expect(packet.items.map(item => item.atom_id)).toEqual([
-      siblings[1]!.atom_id, siblings[6]!.atom_id, siblings[2]!.atom_id, siblings[7]!.atom_id,
-    ]);
-    expect(expandReadableSearchRelatedAtomsV1({ ...request, include_anchor_records: true, limit: 16 }).items)
-      .toHaveLength(10);
-    for (const anchor of [restricted.atom_id, digest("unapproved")]) {
-      expect(expandReadableSearchRelatedAtomsV1({ ...request, include_anchor_records: true,
-        anchor_atom_ids: [anchor] }).items).toEqual([]);
-    }
-  });
-
-  it("keeps direct related expansion anchor-first at its shared cap", () => {
-    const directory = tempDirectory();
-    const first = atomWith("direct-first");
-    const second = atomWith("direct-second", { record_position: 2 });
-    const firstRelated = atomWith("direct-first-related", {
-      record_position: second.record_position,
-      record_sha256: second.record_sha256,
-      envelope_sha256: second.envelope_sha256,
-      atom_order: 1,
-    });
-    const secondRelated = atomWith("direct-second-related", {
-      record_position: first.record_position,
-      record_sha256: first.record_sha256,
-      envelope_sha256: first.envelope_sha256,
-      atom_order: 1,
-    });
-    const built = buildReadableSearchGenerationV1({
-      ...input(directory, [first, second, firstRelated, secondRelated]),
-      related_atom_pairs: [
-        relatedPair(first, firstRelated),
-        relatedPair(second, secondRelated),
-      ],
-    });
-    const request = {
-      state_directory: directory,
-      active_generation: activeGeneration(built),
-      reader: { principal_id: "prn_reader", membership_id: "mem_reader" },
-      anchor_atom_ids: [first.atom_id, second.atom_id],
-      limit: 1,
-    };
-    warmReadableSearchActiveGenerationV1(request);
-    expect(expandReadableSearchRelatedAtomsV1(request).items.map((item) => item.atom_id))
-      .toEqual([firstRelated.atom_id]);
-  });
-
-  it("stores a canonical segment-local pair and expands it from a warmed authorized anchor", () => {
-    const directory = tempDirectory();
-    const anchor = atomWith("anchor", { atom_order: 0, text: "Decision: launch only after readiness review." });
-    const first = atomWith("first-related", { atom_order: 1, text: "The readiness review requires the signed addendum." });
-    const second = atomWith("second-related", { atom_order: 2, text: "The signed addendum gates production access." });
-    const built = buildReadableSearchGenerationV1({
-      ...input(directory, [anchor, first, second]),
-      related_atom_pairs: [relatedPair(anchor, second), relatedPair(anchor, first)],
-    });
-    const active_generation = activeGeneration(built);
-    warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation });
-    expect(expandReadableSearchRelatedAtomsV1({
-      state_directory: directory,
-      active_generation,
-      reader: { principal_id: "prn_reader", membership_id: "mem_reader" },
-      anchor_atom_ids: [anchor.atom_id],
-    }).items.map((item) => item.atom_id)).toEqual([first.atom_id, second.atom_id]);
-  });
-
-  const pairAtoms = (): readonly [ReadableSearchAtomV1, ReadableSearchAtomV1] =>
-    [atomWith("pair-left", { atom_order: 0 }), atomWith("pair-right", { atom_order: 1 })];
-  const sameRecordAtoms = (): readonly [ReadableSearchAtomV1, ReadableSearchAtomV1] => {
-    const record_sha256 = digest("shared-pair-record");
-    return [
-      atomWith("same-record-left", { record_sha256, atom_order: 0 }),
-      atomWith("same-record-right", { record_sha256, atom_order: 1 }),
-    ];
-  };
-  it.each([
-    ["self", pairAtoms, (left: ReadableSearchAtomV1, _right: ReadableSearchAtomV1) => ({ left_atom_id: left.atom_id, right_atom_id: left.atom_id }),
-      "related atom pair must be canonical, non-self, and non-reversed"],
-    ["reversed", pairAtoms, (left: ReadableSearchAtomV1, right: ReadableSearchAtomV1) => {
-      const canonical = relatedPair(left, right);
-      return { left_atom_id: canonical.right_atom_id, right_atom_id: canonical.left_atom_id };
-    }, "related atom pair must be canonical, non-self, and non-reversed"],
-    ["dangling", pairAtoms, (left: ReadableSearchAtomV1, _right: ReadableSearchAtomV1) => ({ left_atom_id: left.atom_id, right_atom_id: digest("missing") }),
-      "related atom pair has a dangling atom"],
-    ["same-record", sameRecordAtoms, relatedPair, "related atom pair must cross source records"],
-  ])("rejects a %s related pair before staging", (_name, atoms, pair, message) => {
-    const directory = tempDirectory();
-    const [left, right] = atoms();
-    expect(() => buildReadableSearchGenerationV1({
-      ...input(directory, [left, right]),
-      related_atom_pairs: [pair(left, right)],
-    })).toThrow(message);
-    expect(existsSync(join(directory, "record-retrieval"))).toBe(false);
-  });
-
-  it("rejects cross-policy and duplicate related pairs without exposing a restricted endpoint", () => {
-    const directory = tempDirectory();
-    const member = atomWith("pair-member");
-    const reviewer = atom("pair-reviewer", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
-    const crossSegment = relatedPair(member, reviewer);
-    expect(() => buildReadableSearchGenerationV1({
-      ...input(directory, [member, reviewer]),
-      related_atom_pairs: [crossSegment],
-    })).toThrow("crosses policy segments");
-    const secondMember = atomWith("pair-second-member", { atom_order: 1 });
-    const duplicate = relatedPair(member, secondMember);
-    expect(() => buildReadableSearchGenerationV1({
-      ...input(directory, [member, secondMember]),
-      related_atom_pairs: [duplicate, duplicate],
-    })).toThrow("duplicate related atom pair");
-  });
-
   it("recalls decision-category atoms without source-word overlap, with exact reviewer controls and repeatable results", () => {
     const firstDirectory = tempDirectory();
     const secondDirectory = tempDirectory();
@@ -718,13 +562,12 @@ describe("immutable readable-search generation v1", () => {
     const REVIEWER = { principal_id: "prn_reviewer", membership_id: "mem_reviewer" };
     const ALPHA = { principal_id: "prn_alpha", membership_id: "mem_alpha", project_ids: ["prj_alpha"] };
 
-    function warmed(directory: string, atoms: readonly ReadableSearchAtomV1[], related: readonly ReadableSearchRelatedAtomPairV1[] = []) {
+    function warmed(directory: string, atoms: readonly ReadableSearchAtomV1[]) {
       const head = atoms.reduce((top, value) => value.record_position > top.record_position ? value : top);
       const built = buildReadableSearchGenerationV1({
         ...input(directory, atoms),
         exact_head: { ...input(directory).exact_head, position: head.record_position, record_sha256: head.record_sha256 },
         project_members_policy_contract_sha256: digest(`policy-${projectPolicy}`),
-        related_atom_pairs: related,
       });
       const active_generation = activeGeneration(built);
       warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation });
@@ -750,9 +593,9 @@ describe("immutable readable-search generation v1", () => {
       expect(records(MEMBER, { record_sha256s: [] })).toEqual([]);
     });
 
-    it("narrows search, list, read and expansion to the given records", () => {
+    it("narrows search, list and read to the given records", () => {
       const directory = tempDirectory();
-      const active = warmed(directory, [A0, A1, R0, P0, B0], [relatedPair(A0, B0)]);
+      const active = warmed(directory, [A0, A1, R0, P0, B0]);
       const onlyA = { record_sha256s: [A0.record_sha256] };
       const texts = (items: readonly { readonly text: string }[]) => items.map((item) => item.text);
       expect(texts(searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch" }).items)).toEqual(["beta launch", "alpha launch"]);
@@ -764,10 +607,6 @@ describe("immutable readable-search generation v1", () => {
       expect(texts(searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch", ...onlyA }).items)).toEqual(["alpha launch"]);
       expect(texts(listReadableSearchGenerationV1({ ...active, reader: MEMBER, ...onlyA }).items)).toEqual(["alpha launch", "alpha owner"]);
       expect(texts(readReadableSearchGenerationAtomsV1({ ...active, reader: MEMBER, atom_ids: [A0.atom_id, B0.atom_id], ...onlyA }).items)).toEqual(["alpha launch"]);
-      expect(texts(expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id] }).items)).toEqual(["beta launch"]);
-      expect(expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id], ...onlyA }).items).toEqual([]);
-      expect(texts(expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id], include_anchor_records: true, ...onlyA }).items)).toEqual(["alpha owner"]);
-      expect(expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id], record_sha256s: [B0.record_sha256] }).items).toEqual([]);
       for (const empty of [{ record_sha256s: [] }, { record_sha256s: [R0.record_sha256] }]) {
         expect(searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch", ...empty }).items).toEqual([]);
         expect(listReadableSearchGenerationV1({ ...active, reader: MEMBER, ...empty }).items).toEqual([]);
@@ -799,7 +638,6 @@ describe("immutable readable-search generation v1", () => {
         expect(() => searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch", ...narrowing })).toThrow("record narrowing");
         expect(() => listReadableSearchGenerationV1({ ...active, reader: MEMBER, ...narrowing })).toThrow("record narrowing");
         expect(() => readReadableSearchGenerationAtomsV1({ ...active, reader: MEMBER, atom_ids: [A0.atom_id], ...narrowing })).toThrow("record narrowing");
-        expect(() => expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id], ...narrowing })).toThrow("record narrowing");
       }
     });
   });

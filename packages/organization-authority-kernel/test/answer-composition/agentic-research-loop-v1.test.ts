@@ -844,3 +844,74 @@ describe("research loop: need kinds (ADR-0041)", () => {
     expect(plain.generate).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("research loop: corrections of model output (model scaffolding audit 2026-10-20)", () => {
+  const approved = record("display", "Approved: the display shows two decimals.");
+  /** Every correction of model output the run's spans counted, summed by name. */
+  async function corrected(run: () => Promise<unknown>): Promise<Record<string, number>> {
+    const sum: Record<string, number> = {};
+    await observeCoreRuntimeV1("research_run", run, { observer: event => {
+      if (event.event !== "started") for (const [name, count] of Object.entries(event.model_corrections ?? {})) sum[name] = (sum[name] ?? 0) + count;
+    } }).catch(() => undefined);
+    return sum;
+  }
+  const research = (h: ReturnType<typeof harness>) => () => h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+  /** The need research planned in its first step, found with the items it cites. */
+  const settled = (...evidence: readonly string[]) => step([part("What does E1 affect?", [need("tickets the record affects", "found", evidence)])], [{ tool: "finish", args: {} }]);
+
+  it("counts each repeat list answered from what was listed, and the stop that follows", async () => {
+    const again = reads("open", [{ tool: "list", args: { source: "meetings" } }]);
+    const list = vi.fn(async () => result([record("action", "Mara will publish the dashboard.", { kind: "action" })]));
+    const h = harness([again, again, again, affects("not_found")], { openCitation: async () => result([approved]), list });
+    expect(await corrected(research(h))).toEqual({ research_repeat_list: 2, research_no_progress_stop: 1 });
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a repeated search and an open of an item already in full, each answered without a read", async () => {
+    const search = vi.fn(async () => result([listed("vendor")]));
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "vendor" } }, { tool: "open", args: { id: "E1" } }]),
+      reads("open", [{ tool: "search", args: { query: "vendor" } }]),
+      settled("E1"),
+    ], { openCitation: async () => result([approved]), search });
+    expect(await corrected(research(h))).toEqual({ research_repeat_open: 1, research_repeat_search: 1 });
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a loose source name, an id in another spelling, and a title passed as an id", async () => {
+    const [first, second] = [listed("display-a"), listed("display-b")];
+    const open = vi.fn(async (input: { readonly item: string }) => result([record(input.item === first.id ? "display-a" : "display-b", "Decided: two decimals.")]));
+    const h = harness([
+      reads("open", [{ tool: "search", args: { query: "display", source: "Meetings" } }]),
+      reads("open", [{ tool: "open", args: { id: "e2" } }, { tool: "open", args: { id: second.label } }]),
+      settled("E2", "E3"),
+    ], { openCitation: async () => result([approved]), search: async () => result([first, second]), open });
+    expect(await corrected(research(h))).toEqual({ step_source_alias: 1, model_id_respelled: 1, step_title_as_id: 1 });
+    expect(open.mock.calls.map(([input]) => input.item)).toEqual([first.id, second.id]);
+  });
+
+  it("counts a finish code did not accept, and the repair it asked for", async () => {
+    const h = harness([settled("E9"), settled("E1")], { openCitation: async () => result([approved]) });
+    expect(await corrected(research(h))).toEqual({ research_finish_refused: 1, model_repair_rejected: 1 });
+    expect(h.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts a list filter value in another spelling once per read, though a read's arguments are normalized twice", async () => {
+    const list = vi.fn(async () => result([]));
+    const h = harness([reads("open", [{ tool: "list", args: { source: "meetings", kind: "Decisions", status: "Completed" } }]), affects("not_found")], { openCitation: async () => result([approved]), list });
+    expect(await corrected(research(h))).toEqual({ model_enum_respelled: 2 });
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ kinds: ["decision"] }));
+  });
+
+  it("counts research code ended on a catalog read empty, and on a step no repair could use", async () => {
+    const empty = harness([reads("open", [{ tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "documents" } }])]);
+    expect(await corrected(() => empty.research.research({ trigger: "approved_record", brief: brief("Find what was decided.", []) }))).toEqual({ research_empty_catalog_stop: 1 });
+    const unusable = harness([{ thoughts: "no parts" }, { still: "no parts" }], { openCitation: async () => result([approved]) });
+    expect(await corrected(research(unusable))).toEqual({ model_repair_rejected: 1, research_unusable_step_stop: 1 });
+  });
+
+  it("counts nothing for a run whose replies needed no correction", async () => {
+    const h = harness([reads("open", [{ tool: "search", args: { query: "display", source: "meetings" } }]), settled("E1")], { openCitation: async () => result([approved]) });
+    expect(await corrected(research(h))).toEqual({});
+  });
+});
