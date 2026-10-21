@@ -60,7 +60,9 @@ export async function startClaudeModelTransportV1(input: {
   const prefix = `/${randomBytes(24).toString('hex')}`, pending = new Set<AbortController>();
   let stopped = false, forwarded = 0;
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? '', 'http://127.0.0.1');
+    let url: URL;
+    try { url = new URL(req.url ?? '', 'http://127.0.0.1'); }
+    catch { res.writeHead(404); res.end(); return; }
     const path = url.pathname.slice(prefix.length);
     if (!url.pathname.startsWith(`${prefix}/`) || req.method !== 'POST' || !['/v1/messages', '/v1/messages/count_tokens'].includes(path)) { res.writeHead(404); res.end(); return; }
     const abort = new AbortController(); pending.add(abort);

@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import type { Options, query } from '@anthropic-ai/claude-agent-sdk';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
@@ -23,6 +24,13 @@ it('fences every exact request including retries and count_tokens, and closes on
     }
     expect(bodies).toEqual(['initial', 'retry', 'count']); expect(calls).toBe(3);
     expect((await fetch(`${fence.base_url}/v1/models`)).status).toBe(404);
+    // A malformed absolute-form HTTP target must not reject the server's async handler.
+    const address = new URL(fence.base_url);
+    const malformed = await new Promise<number | undefined>((resolve, reject) => {
+      const request = httpRequest({ hostname: address.hostname, port: address.port, method: 'POST', path: 'http://[' }, response => { response.resume(); resolve(response.statusCode); });
+      request.on('error', reject); request.end();
+    });
+    expect(malformed).toBe(404);
     revoked = true;
     expect((await fetch(`${fence.base_url}/v1/messages`, { method: 'POST', body: 'blocked' })).status).toBe(403);
     expect(calls).toBe(3);

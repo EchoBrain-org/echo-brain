@@ -34,6 +34,9 @@ const ALLOWED_LEAF_IMPORTS = new Set([
   "node:fs",
   "node:fs/promises",
   "node:http",
+  "node:https",
+  "node:child_process",
+  "node:string_decoder",
   "node:net",
   "node:os",
   "node:path",
@@ -41,6 +44,9 @@ const ALLOWED_LEAF_IMPORTS = new Set([
   "openid-client",
   "fast-xml-parser",
   "eventsource-parser",
+  // The provider owns the packaged research harness and its MCP schemas.
+  "@anthropic-ai/claude-agent-sdk",
+  "zod",
 ]);
 
 const FORBIDDEN_SELECTED_MODULES = [
