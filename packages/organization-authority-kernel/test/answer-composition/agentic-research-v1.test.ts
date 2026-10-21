@@ -205,7 +205,7 @@ describe("research result beside Ask", () => {
       brief: {
         goal: { kind: "task", task: "Find the current approved evidence." },
         starting: [{ citation: full.citation, if_unreadable: "fail" }],
-        budget: { deadline_ms: 90_000, max_rounds: 10, max_model_calls: 24, writer_reserve_ms: 25_000 },
+        budget: { deadline_ms: 90_000, max_rounds: 10, max_model_calls: 24, writer_reserve_ms: 25_000, max_receipts: 128 },
         options: {},
       },
     });

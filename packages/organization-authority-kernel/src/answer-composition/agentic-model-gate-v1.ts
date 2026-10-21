@@ -42,6 +42,9 @@ export interface AgenticModelCallV1 {
 }
 
 export interface AgenticAskGenerationObservationV1 {
+  /** External harness calls name their actual route; legacy writer observations remain unchanged. */
+  readonly engine?: 'external_research';
+  readonly model?: string;
   readonly role: AgenticAskModelRoleV1;
   readonly finish_reason: string | null;
   readonly usage: StructuredGenerationUsageV1 | null;
@@ -73,6 +76,11 @@ export class AgenticAskPostRevalidationNoTimeErrorV1 extends AgenticAskGeneratio
     super("no time left for generation after revalidation", "fallback");
     this.name = "AgenticAskPostRevalidationNoTimeErrorV1";
   }
+}
+
+/** Research used up its calls or its time; the writer answers from what was released. */
+export class AgenticResearchBudgetErrorV1 extends AgenticAskGenerationFailureV1 {
+  constructor(message = 'research call budget exhausted') { super(message, 'fallback'); }
 }
 
 export function object(value: unknown): Record<string, unknown> | null {
@@ -177,9 +185,25 @@ export interface AgenticModelGateStatsV1 {
 }
 
 export interface AgenticModelGateV1 {
+  /** A harness transport calls this before forwarding each exact body, never once per SDK session. */
+  external<T>(request: AgenticExternalModelRequestV1, forward: (signal: AbortSignal) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>): Promise<T>;
   call(model_call: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery?: boolean): Promise<unknown>;
   withRepair<T>(model_call: AgenticModelCallV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, parse: (value: unknown) => T, on_rejection?: (reason: string) => void): Promise<T>;
   stats(): AgenticModelGateStatsV1;
+}
+
+/** Only a digest of the exact outbound bytes is retained; credentials never enter this contract. */
+export interface AgenticExternalModelRequestV1 {
+  /** Optional model payload for the existing selected private diagnostic sink; never audit or metrics. */
+  readonly diagnostic_input?: import('../shared/core-runtime-diagnostics-v1.js').CoreRuntimeDiagnosticModelInputV1;
+  readonly model: string;
+  readonly body_sha256: Sha256Digest;
+  readonly operation: 'messages' | 'count_tokens';
+  readonly timeout: () => number;
+  /** Evidence packets actually present in this outbound body, identified by the harness transport. */
+  readonly payload_digests?: readonly Sha256Digest[];
+  /** Server-owned admission after revalidation, immediately before forwarding. */
+  readonly before_forward?: () => void;
 }
 
 /** The pause before the one retry of an access check that failed transiently. */
@@ -221,6 +245,8 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
   const { budget, now, deadline } = options;
   const activeSignal = options.signal;
   let calls = 0; let repairs = 0; let generationStopped = false;
+  let externalFailure: unknown;
+  let externalQueue: Promise<unknown> = Promise.resolve();
   const generations: AgenticAskGenerationObservationV1[] = [];
   const invocationDigests: Sha256Digest[] = [];
   const remaining = () => deadline - now();
@@ -336,8 +362,62 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     try { return parse(await call(model_call, system, repairUser, schema, timeout, true)); }
     finally { if (repairs > admitted) observeCoreModelCorrectionV1(correction); }
   };
+  // SDK retries and auxiliary requests cannot share an admission. Serialize them so budget,
+  // receipt admission and access failures have one order, even if the harness sends concurrently.
+  const external: AgenticModelGateV1['external'] = (request, forward) => {
+    const run = externalQueue.then(async () => {
+      if (externalFailure !== undefined) throw externalFailure;
+      assertLive();
+      if (calls + 2 >= budget.max_model_calls) throw new AgenticResearchBudgetErrorV1();
+      if (!/^[a-zA-Z0-9_.:/-]{1,200}$/u.test(request.model) || !/^sha256:[a-f0-9]{64}$/u.test(request.body_sha256)) throw new Error('Invalid external model invocation');
+      try {
+        const validated = await revalidateWithTransientRetryV1(() => observeAgenticLifecycleV1('revalidation', 'research_revalidation',
+          { purpose: 'model', mode: 'incremental', role: 'step', next_call_id: calls + 1 },
+          () => raceAbort(activeSignal, options.desk_revalidate({ signal: activeSignal, mode: 'incremental' })), value => ({ checked_at: value.checked_at })),
+        { signal: activeSignal, assert_live: assertLive, remaining });
+        options.on_checked(validated.checked_at); assertLive();
+      } catch (error) { externalFailure = error; throw error; }
+      const timeoutMs = Math.min(request.timeout(), remaining());
+      if (timeoutMs < AGENTIC_ASK_MIN_STEP_MS_V1) throw new AgenticAskPostRevalidationNoTimeErrorV1();
+      calls += 1;
+      invocationDigests.push(canonicalSha256({ engine: 'external_research', model: request.model, body_sha256: request.body_sha256, operation: request.operation }));
+      // Count-token requests carry evidence but do not mean the reasoning model read it.
+      if (request.operation === 'messages') { request.before_forward?.(); options.before_call?.('step'); }
+      const started = now();
+      const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
+      const signal = AbortSignal.any([activeSignal, timeoutSignal]);
+      try {
+        const result = await observeCoreRuntimeV1('ask_planner', async () => {
+          options.on_span?.({ role: 'step', phase: 'enter' });
+          const observed = request.diagnostic_input !== undefined;
+          if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_request', call_id: calls, role: 'step', recovery: false, input: request.diagnostic_input! });
+          try {
+            const result = await raceAbort(signal, forward(signal));
+            if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: calls, role: 'step', value: result.value ?? null,
+              ...(result.usage === undefined ? {} : { usage: result.usage }), finish_reason: result.finish_reason === 'stop' || result.finish_reason === 'length' ? result.finish_reason : 'other' });
+            return result;
+          } catch (error) {
+            // This request's timer is the caller's research time: a budget stop, not a provider failure,
+            // so it keeps the writer's reserve without pausing other calls. Caller/deadline stops win.
+            if (timeoutSignal.aborted && !activeSignal.aborted) {
+              try { assertLive(); error = new AgenticResearchBudgetErrorV1('research time exhausted'); } catch (stopped) { error = stopped; }
+            }
+            if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: calls, role: 'step', error_kind: error instanceof AgenticResearchBudgetErrorV1 ? 'adapter_timeout' : coreRuntimeDiagnosticErrorKindV1(error) });
+            throw error;
+          }
+        });
+        generations.push(Object.freeze({ role: 'step', engine: 'external_research', model: request.model, finish_reason: result.finish_reason ?? null, usage: result.usage ?? null }));
+        return result.value;
+      } catch (error) {
+        generations.push(Object.freeze({ role: 'step', engine: 'external_research', model: request.model, finish_reason: null, usage: null }));
+        throw error;
+      } finally { options.on_span?.({ role: 'step', phase: 'exit', elapsed_ms: Math.max(0, now() - started) }); }
+    });
+    externalQueue = run.catch(() => undefined);
+    return run;
+  };
   return Object.freeze({
-    call, withRepair,
+    call, withRepair, external,
     stats: (): AgenticModelGateStatsV1 => Object.freeze({
       calls, repairs, generations: Object.freeze([...generations]), invocation_digests: Object.freeze([...invocationDigests]), stopped: generationStopped,
     }),

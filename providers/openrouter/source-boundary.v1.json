@@ -22,11 +22,20 @@
     "@echo-brain/federation-protocol"
   ],
   "allowed_external_packages": [
-    "better-sqlite3"
+    "better-sqlite3",
+    "@anthropic-ai/claude-agent-sdk",
+    "zod"
   ],
   "allowed_node_builtins": [
     "path",
-    "fs"
+    "fs",
+    "crypto",
+    "http",
+    "https",
+    "fs/promises",
+    "os",
+    "child_process",
+    "string_decoder"
   ],
   "runtime_assets": [
     "providers/openrouter/assets/telemetry-vocabulary.v1.json"
@@ -44,11 +53,20 @@
         "@echo-brain/federation-protocol"
       ],
       "allowed_external_packages": [
-        "better-sqlite3"
+        "better-sqlite3",
+        "@anthropic-ai/claude-agent-sdk",
+        "zod"
       ],
       "allowed_node_builtins": [
         "path",
-        "fs"
+        "fs",
+        "crypto",
+        "http",
+        "https",
+        "fs/promises",
+        "os",
+        "child_process",
+        "string_decoder"
       ]
     }
   ],

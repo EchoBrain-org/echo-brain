@@ -286,11 +286,13 @@ audit or public door sees it.
   research read, at most 5, with the lists the plan's `which_items` and
   `which_say` needs cite first. Each shows its id, source, filter,
   `filter_applied`, `complete`, count, checked count, `read_at`, whether it is
-  stated (a found or open `which_items` need cites it), and up to 100 members
+  stated (a found or open `which_items` need cites it), and its members
   (`AgenticWriterListMemberV1`: id, kind, title, dates, status, owner, due
-  date, checked). Members never carry text; `members_omitted` counts any
-  members past 100. Built: the rows take at most half of the writer's prompt
-  room; a smaller context window halves how many members of each list it
+  date, checked). Members never carry text. The fixed 100-row writer cutoff
+  was removed on 2026-10-20: a complete 105-ticket inventory otherwise became
+  a false five-ticket gap even though all rows fit. `members_omitted` counts
+  only rows actually left out by the prompt budget. The rows take at most
+  half of the writer's prompt room; a smaller context window halves how many members of each list it
   shows, never how many lists, and code still names members from every row.
   The 5-list bound is the writer's view only: code reads every list research
   read, so it states, notes and filters each list the plan's kinds read, past

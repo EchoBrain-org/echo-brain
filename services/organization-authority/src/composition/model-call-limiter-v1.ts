@@ -1,4 +1,5 @@
 import type { StructuredGenerationFailureDiagnosticV1, StructuredGenerationInput, StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
+import type { AgenticResearchDriverV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 
 export type ModelCallPriorityV1 = "interactive" | "background";
 /** Runs one model call when a slot is free. Provider code receives only this, never the limiter. */
@@ -7,8 +8,9 @@ export interface ModelCallLimiterV1 {
   run<T>(priority: ModelCallPriorityV1, signal: AbortSignal | undefined, op: () => Promise<T>): Promise<T>;
 }
 
-const MAX_CONCURRENT = 6;
-const MAX_BACKGROUND = 4;
+const MODEL_CALL_LIMITS = Object.freeze({ concurrent: 6, background: 4 });
+/** Each SDK research session runs a Claude Code process (about 210 MB resident). */
+export const RESEARCH_SESSION_LIMITS_V1 = Object.freeze({ concurrent: 3, background: 2 });
 const COOLDOWN_MIN_MS = 5_000;
 const COOLDOWN_MAX_MS = 60_000;
 
@@ -31,7 +33,7 @@ function transient(error: unknown): boolean {
  * 60 s until a call succeeds. Callers wrap the call itself, so time spent
  * queued never counts against its own timeout.
  */
-export function createModelCallLimiterV1(): ModelCallLimiterV1 {
+export function createModelCallLimiterV1(limits: { readonly concurrent: number; readonly background: number } = MODEL_CALL_LIMITS): ModelCallLimiterV1 {
   let active = 0;
   let background = 0;
   let cooldownMs = 0;
@@ -41,8 +43,8 @@ export function createModelCallLimiterV1(): ModelCallLimiterV1 {
   let wake: ReturnType<typeof setTimeout> | undefined;
   const waiting: Record<ModelCallPriorityV1, (() => void)[]> = { interactive: [], background: [] };
   const pump = (): void => {
-    while (active < MAX_CONCURRENT) {
-      const next = waiting.interactive[0] ?? (background < MAX_BACKGROUND && Date.now() >= pausedUntil ? waiting.background[0] : undefined);
+    while (active < limits.concurrent) {
+      const next = waiting.interactive[0] ?? (background < limits.background && Date.now() >= pausedUntil ? waiting.background[0] : undefined);
       if (next === undefined) break;
       next();
     }
@@ -96,4 +98,19 @@ export function limitStructuredGenerationPortV1(port: StructuredGenerationPort, 
   return Object.freeze(observed === undefined ? { generate } : {
     generate, generate_with_observation: (input: StructuredGenerationInput) => limit(input.signal, () => observed.call(port, input)),
   });
+}
+
+/**
+ * Each SDK session waits for a session slot. Its requests queue one at a time before a call slot, so none holds a
+ * slot behind its own session's stream, and before the access check, so waiting never makes an authorization stale.
+ */
+export function limitResearchDriverV1(driver: AgenticResearchDriverV1, limit: ModelCallLimitV1, sessions: ModelCallLimitV1): AgenticResearchDriverV1 {
+  return { run: session => sessions(session.signal, () => {
+    let queue: Promise<unknown> = Promise.resolve();
+    return driver.run({ ...session, model_request: (request, forward) => {
+      const next = queue.then(() => limit(session.signal, () => session.model_request(request, forward)));
+      queue = next.catch(() => undefined);
+      return next;
+    } });
+  }) };
 }

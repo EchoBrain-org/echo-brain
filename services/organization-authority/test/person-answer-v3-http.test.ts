@@ -13,6 +13,7 @@ import {
   validatePersonEvidenceDeskResponseV1,
 } from "@echo-brain/organization-api";
 import type { StructuredGenerationInput } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
+import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 
 /** Retired Ask paths (ADR-0022): no route, so the canonical not-found reply. */
@@ -156,7 +157,7 @@ describe("Agentic Ask HTTP capability gate", () => {
  * The real V3 route and evidence desk behind the real HTTP server, over fake
  * stores: one only-me note of the asker's, and records still indexing.
  */
-function mineFixture() {
+function mineFixture(nativeDriver = false) {
   const checked_at = "2026-09-27T00:00:00.000Z";
   const note: OriginalContextDeskItemV1 = Object.freeze({
     kind: "note", text: "I decided to launch on Tuesday.", visibility: "only_me", label: "My launch note",
@@ -194,6 +195,12 @@ function mineFixture() {
     sessions: { authenticateAccess: () => ({ principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker" }) } as never,
     originals: originals as unknown as PersonOriginalContextEvidenceDeskPortV1, records: records as unknown as PersonEvidenceDeskRecordsV1,
     model: { generate }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
+    ...(nativeDriver ? { research_driver: { run: async (session: AgenticResearchDriverSessionV1) => {
+      expect(JSON.stringify(session.initial)).toContain('only what the asker added');
+      const read = await session.call('search', { query: 'launch' });
+      await session.model_request({ model: 'fixture', body_sha256: canonicalSha256(read), payload_digests: [canonicalSha256(session.initial), canonicalSha256(read)], operation: 'messages', timeout: session.remaining }, async () => ({ value: true }));
+      expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
+    } } } : {}),
     audit: { forRequest: () => ({ append: vi.fn() }) } as never,
   });
   // The desk cites an original with its display label.
@@ -206,6 +213,21 @@ async function post(url: string, path: string, body: unknown): Promise<{ readonl
 }
 
 describe("Ask with mine, and citation refs (ADR-0024)", () => {
+  it('serves the native research driver through the existing authenticated HTTP route and writer', async () => {
+    const f = mineFixture(true);
+    const value = await server({ application: f.route });
+    try {
+      const answer = await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: 'What did I decide?', mine: true });
+      expect(answer.status).toBe(200);
+      const validated = validatePersonAnswerResponseV4(answer.body);
+      expect(validated.outcome).toBe('answered');
+      expect(validated.scope).toEqual({ kind: 'mine' });
+      expect(validated.citations).toEqual([{ citation: f.cited, kind: 'note', label: 'My launch note', visibility: 'only_me', ref: f.note.ref }]);
+      expect(f.generate).toHaveBeenCalledTimes(1);
+      expect(f.originals.revalidateDeskRelease).toHaveBeenCalled();
+    } finally { await value.close(); }
+  });
+
   it("builds a mine desk for every store, echoes mine, and cites with a ref", async () => {
     const f = mineFixture();
     const value = await server({ application: f.route });

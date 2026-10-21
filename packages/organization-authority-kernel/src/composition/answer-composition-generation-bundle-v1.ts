@@ -1,4 +1,5 @@
 import type { StructuredGenerationPort } from "../answer-composition/structured-generation-v1.js";
+import type { AgenticResearchDriverV1 } from "../answer-composition/agentic-research-driver-v1.js";
 
 /**
  * The complete non-secret selection that binds answer composition to its
@@ -22,6 +23,7 @@ export interface AnswerCompositionGenerationProfileV1 {
 export interface AnswerCompositionGenerationBindingV1 {
   readonly structured_output: StructuredGenerationPort;
   readonly generation: AnswerCompositionGenerationProfileV1;
+  readonly research_driver?: AgenticResearchDriverV1;
 }
 
 /** Defers provider access until the admitted runtime loads its generation binding. */

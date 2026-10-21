@@ -1,6 +1,7 @@
+import { parseAgenticDriverFinishV1, type AgenticResearchDriverV1 } from './agentic-research-driver-v1.js';
 import { calendarDateV1, EVIDENCE_ANY_DATE_V1, evidenceDateFilterV1, matchedEvidenceDatesV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1 } from "../shared/temporal-query-v1.js";
 import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1, type AskResearchObservationV1 } from './agentic-ask-research-state-v1.js';
-import type { Sha256Digest } from "@echo-brain/federation-protocol";
+import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   evidenceDeskSourceV2,
   type EvidenceDeskItemV2,
@@ -51,6 +52,7 @@ import {
   AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_ASK_MIN_STEP_MS_V1,
   AgenticAskPostRevalidationNoTimeErrorV1,
+  AgenticResearchBudgetErrorV1,
   isAbort,
   object,
   raceAbort,
@@ -102,6 +104,8 @@ const OPEN_EXTRA_ITEMS = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
 const OPEN_NEIGHBOURS = 2;
 const OPEN_BYTES = 24 * 1024;
+/** The SDK hands a tool result over 50,000 characters to the model only as a file it cannot open. */
+const DRIVEN_RESULT_CHARS = 45_000;
 /** Starting reads in flight at once: as many as one planner step's reads, so a sweep of many items never floods a source. */
 const STARTING_READS_AT_ONCE = AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
 const MAX_SEEN_ENTRIES = 300;
@@ -138,6 +142,7 @@ export interface AgenticResearchCatalogV1 {
 }
 
 export interface CreateAgenticResearchLoopV1Options {
+  readonly driver?: AgenticResearchDriverV1;
   /** The request's access-checked desk; it binds the person and the scope. */
   readonly desk: EvidenceDeskPortV2;
   /** What to research: the goal, starting evidence, budget and options. */
@@ -1161,9 +1166,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** Which list member each item is, or is part of: an opened page's section is its page (ADR-0041). */
   const listMembership = (lists: readonly { readonly id: AgenticListIdV1; readonly members: readonly string[] }[]) => agenticListMembershipV1(lists, [...entries.values()]);
   /** A question goal's finish check, by each need's declared kind; membership only words a refusal (ADR-0041). */
-  const questionCompletionProblems = (parts: readonly { readonly needs: readonly NeedState[] }[]) => {
+  const questionCompletionProblems = (parts: readonly { readonly needs: readonly NeedState[] }[], observations: readonly AskResearchObservationV1[] = researchObservations) => {
     const checked = listsForCheck();
-    return askQuestionCompletionProblemsV1(parts, researchObservations, checked, citable, listMembership(checked).in);
+    return askQuestionCompletionProblemsV1(parts, observations, checked, citable, listMembership(checked).in);
   };
 
   // ---- scratchpad ------------------------------------------------------
@@ -1256,6 +1261,26 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   let goal: AgenticResearchGoalV1 = brief.goal;
   const goalFields = (): Record<string, unknown> => goal.kind === "question" ? { question: goal.question } : { task: goal.task };
 
+  const checkCompletion = (completionPlan: readonly PartState[], finishAvailable: boolean, observations: readonly AskResearchObservationV1[] = researchObservations) => {
+    // A question goal's needs are checked by their declared kinds (ADR-0041); a task goal's need an item read in full.
+    const problems = [...(ask
+      ? questionCompletionProblems(completionPlan, observations)
+      : askResearchCompletionProblemsV1(completionPlan, observations, citable, listAvailable))];
+    if (completionPlan.some(part => part.needs.some(need => need.status === 'not_found'))) {
+      if (entries.size > 0 && [...entries.values()].every(entry => entry.item.text === undefined)) {
+        problems.unshift('discovered items have metadata only; open potentially relevant discovered items before concluding that it is absent');
+      }
+      const unread = blockingInventories();
+      const unsearched = [...new Set(unread.filter(state => sourcesById.get(state.source)?.metadata_only_list === true).map(state => state.args.source))];
+      if (unread.length > 0) problems.unshift(`listed inventory still has unread pages; repeat list with ${unread.slice(0, 3).map(state => JSON.stringify(state.args)).join(' or ')}${unsearched.length === 0 ? '' : `, or search ${unsearched.join(' and ')} for the fact`}`);
+    }
+    if (!finishAvailable) problems.unshift(`no source has been read; use ${listAvailable ? 'search or list' : 'search'} first`);
+    if (problems.length > 0) {
+      observeCoreModelCorrectionV1('research_finish_refused');
+      throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. ${listAvailable ? 'Search, list or open more' : 'Search or open more'}, or correct the need status and evidence.`);
+    }
+  };
+
   /** The research phase: starting reads, then the loop until a stop rule fires. */
   const research = async (gate: AgenticModelGateV1): Promise<void> => {
     // ---- starting evidence: read fresh through the access-checked desk ----
@@ -1340,6 +1365,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       return;
     }
 
+    if (options.driver !== undefined) {
+      await drivenResearch(gate, options.driver);
+      return;
+    }
+
     // ---- research loop --------------------------------------------------
     /** What the last step's reads returned, as the next step sees it, and the ids of the items they returned. */
     let results: readonly ToolResult[] = [];
@@ -1401,23 +1431,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           }
           if (parsed.actions.every(action => action.tool === 'finish')) {
             const completionPlan = proposedPlan(parsed.parts);
-            // A question goal's needs are checked by their declared kinds (ADR-0041); a task goal's need an item read in full.
-            const problems = [...(ask
-              ? questionCompletionProblems(completionPlan)
-              : askResearchCompletionProblemsV1(completionPlan, researchObservations, citable, listAvailable))];
-            if (completionPlan.some(part => part.needs.some(need => need.status === 'not_found'))) {
-              if (entries.size > 0 && [...entries.values()].every(entry => entry.item.text === undefined)) {
-                problems.unshift('discovered items have metadata only; open potentially relevant discovered items before concluding that it is absent');
-              }
-              const unread = blockingInventories();
-              const unsearched = [...new Set(unread.filter(state => sourcesById.get(state.source)?.metadata_only_list === true).map(state => state.args.source))];
-              if (unread.length > 0) problems.unshift(`listed inventory still has unread pages; repeat list with ${unread.slice(0, 3).map(state => JSON.stringify(state.args)).join(' or ')}${unsearched.length === 0 ? '' : `, or search ${unsearched.join(' and ')} for the fact`}`);
-            }
-            if (!finishAvailable) problems.unshift(`no source has been read; use ${listAvailable ? 'search or list' : 'search'} first`);
-            if (problems.length > 0) {
-              observeCoreModelCorrectionV1("research_finish_refused");
-              throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. ${listAvailable ? 'Search, list or open more' : 'Search or open more'}, or correct the need status and evidence.`);
-            }
+            checkCompletion(completionPlan, finishAvailable);
           }
           return parsed;
         }, reason => stepRejections.push(cleanLine(reason, 600)));
@@ -1485,6 +1499,127 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     }
     if (plan.length === 0) plan = proposedPlan([{ question: partQuestion(goal.kind === "question" ? goal.question : goal.task), needs: [], notes: "" }]);
   };
+  /** Native-tool harness over the same source filters, pagination, ids and evidence bookkeeping. */
+  const drivenResearch = async (gate: AgenticModelGateV1, driver: AgenticResearchDriverV1): Promise<void> => {
+    let serial: Promise<unknown> = Promise.resolve();
+    let terminal: unknown;
+    let finished = false;
+    const packets = new Map<Sha256Digest, { readonly read: readonly Entry[]; readonly shown: readonly Entry[]; readonly observations: readonly AskResearchObservationV1[] }>();
+    const seenObservations = new Set<AskResearchObservationV1>();
+    const researchTime = () => remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
+    // A round is one model turn: the reads it asked for are recorded together when the next turn starts.
+    let turnActions: AgenticResearchActionV1[] = [], turnStarted = 0;
+    const closeTurn = () => { if (turnActions.length > 0) recordRound(turnStarted, turnActions); turnActions = []; };
+    const addAction = (started: number, action: AgenticResearchActionV1) => {
+      if (turnActions.length === 0) turnStarted = started;
+      turnActions.push(action);
+      mostReadsInAStep = Math.max(mostReadsInAStep, turnActions.filter(value => value.tool !== 'finish').length);
+    };
+    // The SDK keeps earlier tool results: send this read's entries and the list it read, within the size the
+    // SDK hands over whole. Bodies past it become previews the model can open one by one.
+    const view = (selected: readonly Entry[], extra: ToolResult = {}, observations: readonly AskResearchObservationV1[] = [], lists?: readonly string[]) => {
+      let read = selected.filter(entry => entry.item.text !== undefined && (entry.opened || bytes(entry.item.text) <= PASSAGE_BYTES));
+      const listed = ask ? listView(new Set([...packets.values()].flatMap(value => value.shown).concat(selected))).filter(list => lists === undefined || lists.includes(list.id)) : [];
+      const build = () => ({ ...extra,
+        items: selected.map(entry => ({ ...describe(entry), ...(read.includes(entry) ? { text: entry.item.text, full: true } :
+          { full: false, ...(entry.item.text === undefined ? {} : { preview: queryPreview(entry.item.text, entry.query) }) }) })),
+        ...(ask ? { lists: listed } : { inventories: inventoryView() }),
+      });
+      let payload = build();
+      if ('result' in extra) {
+        const sent = new Set([...packets.values()].flatMap(value => value.read));
+        read.sort((left, right) => Number(sent.has(left)) - Number(sent.has(right)));
+        while (read.length > 0 && JSON.stringify(payload).length > DRIVEN_RESULT_CHARS) { read = read.slice(0, -1); payload = build(); }
+      }
+      report?.before_check(read.filter(entry => entry.direct === true).map(entry => entry.item));
+      packets.set(canonicalSha256(payload), { read, shown: selected, observations });
+      return payload;
+    };
+    const initial = view([...entries.values()], { ...goalFields(), ...context, scope, source_catalog: sourceCatalog });
+    // Research time ends the SDK session even while it waits to retry; the writer keeps its reserve.
+    const timeUp = new AbortController();
+    const timer = setTimeout(() => timeUp.abort(new AgenticResearchBudgetErrorV1('research time exhausted')), Math.max(0, researchTime()));
+    try {
+      await driver.run({ initial, list_available: listAvailable, question: ask, signal: AbortSignal.any([activeSignal, timeUp.signal]), remaining: researchTime,
+        model_request: (request, forward) => gate.external({ ...request, timeout: () => Math.min(request.timeout(), researchTime()), before_forward: () => {
+          closeTurn(); steps += 1;
+          const present = (request.payload_digests ?? []).map(digest => packets.get(digest)).filter(value => value !== undefined);
+          researchPromptEntries = [...new Set(present.flatMap(value => value.read))];
+          researchPromptShown = [...new Set(present.flatMap(value => value.shown))];
+          // Only an admitted inference carrying the actual result observes a read.
+          // Same-turn tools, token counting and omitted packets cannot establish absence.
+          for (const observation of present.flatMap(value => value.observations)) seenObservations.add(observation);
+        } }, forward),
+        call(tool, args) {
+          const next = serial.then(async () => {
+            if (terminal !== undefined) throw terminal;
+            assertLive();
+            if (finished) return { accepted: true, finished: true };
+            const started = now();
+            try {
+              if (tool === 'finish') {
+                const value = parseAgenticDriverFinishV1(args, ask);
+                // SDK needs are declared at finish; any read actually observed in
+                // this request can support them, but unseen tool results cannot.
+                const candidate = proposedPlan(value.parts).map(part => ({ ...part, needs: part.needs.map(need => ({ ...need, observations_before: 0 })) }));
+                for (const part of candidate) for (const need of part.needs) for (const id of need.evidence) {
+                  if (entryOf(id) === undefined && !listsInOrder().some(list => list.id === id)) throw new AgenticAskOutputErrorV1('Cite only returned E/L ids');
+                }
+                if (value.completed) checkCompletion(candidate, seenObservations.size > 0 || [...entries.values()].some(entry => entry.full), [...seenObservations]);
+                // An honest completed=false still finished; incompleteness travels as researchIncomplete.
+                plan = candidate; finished = true; researchIncomplete = !value.completed; researchStop = 'finished';
+                addAction(started, roundView('finish', {}, undefined));
+                return { accepted: true, completed: value.completed };
+              }
+              if (tool !== 'search' && tool !== 'open' && tool !== 'list') throw new AgenticAskOutputErrorV1('Unknown research tool');
+              if (tool === 'list' && !listAvailable) throw new AgenticAskOutputErrorV1(LIST_UNAVAILABLE);
+              const parsed = parseStep({ parts: [], actions: [{ tool, args }] }, { lists: ask });
+              const action = parsed.actions[0]!;
+              if (tool === 'open' && entryOf(action.args.id ?? '') === undefined) throw new AgenticAskOutputErrorV1('Open only a returned E id');
+              // A read adds at most one release receipt per item it returns; stop before the audit row would overflow.
+              if (receipts.length + OPEN_EXTRA_ITEMS + 1 > budget.max_receipts) throw new AgenticAskOutputErrorV1('The read budget is used up; finish with the evidence already gathered.');
+              report?.reads(tool !== 'open');
+              const observationsBefore = researchObservations.length;
+              let raw: ToolResult;
+              try { raw = await run(action); } finally { report?.reads_done(); }
+              assertLive();
+              const summarized = lastResult(action, raw);
+              const ids = new Set(['results', 'items', 'linked', 'opened'].flatMap(key => Array.isArray(summarized[key]) ? summarized[key] as string[] : []));
+              if (tool === 'open' && action.args.id !== undefined) ids.add(action.args.id);
+              const payload = view([...entries.values()].filter(entry => ids.has(entry.short)), { result: summarized }, researchObservations.slice(observationsBefore),
+                typeof summarized.list === 'string' ? [summarized.list] : []);
+              addAction(started, roundView(tool, action.args, summarized, raw));
+              return payload;
+            } catch (error) {
+              // Ordinary argument/completion mistakes go back to the model; access and transport
+              // failures remain terminal even if the SDK would otherwise continue calling tools.
+              if (!(error instanceof AgenticAskOutputErrorV1)) { terminal = error; throw error; }
+              stepRejections.push(cleanLine(error.message, 600));
+              return { error: error.message };
+            }
+          });
+          serial = next.catch(() => undefined);
+          return next;
+        },
+      });
+      await serial;
+      if (terminal !== undefined) throw terminal;
+      assertLive();
+      if (!finished) { fallbacks += 1; researchStop = 'unusable_step'; observeCoreModelCorrectionV1('research_unusable_step_stop'); }
+    } catch (error) {
+      await serial;
+      if (terminal !== undefined) throw terminal;
+      if (isAbort(error, activeSignal) || !(error instanceof AgenticAskOutputErrorV1)) throw error;
+      // An accepted finish stands: a later SDK turn's failure does not relabel it.
+      if (!finished) {
+        researchStop = error instanceof AgenticAskPostRevalidationNoTimeErrorV1 || error instanceof AgenticResearchBudgetErrorV1 ? 'budget' : 'unusable_step';
+        if (error instanceof AgenticAskPostRevalidationNoTimeErrorV1) researchAdmission = 'post_revalidation_no_time';
+        if (researchStop !== 'budget') { fallbacks += 1; observeCoreModelCorrectionV1('research_unusable_step_stop'); }
+      }
+    } finally { clearTimeout(timer); closeTurn(); }
+    if (plan.length === 0) plan = proposedPlan([{ question: partQuestion(goal.kind === 'question' ? goal.question : goal.task), needs: [], notes: '' }]);
+  };
+
   /** Everything research gathered, as the server holds it; built once research stops. */
   const evidenceBundle = (gate: AgenticModelGateV1, researchStartedAt: number): Omit<AgenticEvidenceBundleV1, "trigger"> => {
     const cited = citedShorts();

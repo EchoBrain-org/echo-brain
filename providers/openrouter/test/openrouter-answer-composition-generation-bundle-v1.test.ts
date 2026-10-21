@@ -24,6 +24,15 @@ function credentialFile(): string {
 }
 
 describe("OpenRouter answer-composition generation bundle", () => {
+  it("selects the SDK explicitly while keeping the normal writer and deferring credential access", () => {
+    const ordinary = createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: '/missing' }).load();
+    const sdk = createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: '/missing', research_engine: 'claude-sdk' }).load();
+    expect(ordinary.research_driver).toBeUndefined();
+    expect(sdk.research_driver?.run).toBeTypeOf('function');
+    expect(sdk.generation.generation_adapter_id).toBe('openrouter-claude-sdk-v1');
+    expect(sdk.generation.answer_model).toBe(ordinary.generation.answer_model);
+    expect(sdk.structured_output.generate).toBeTypeOf('function');
+  });
   it("owns credential resolution, structured-output construction, and the Sonnet 5.5 generation profile", () => {
     const bundle = createOpenRouterAnswerCompositionGenerationBundleV1({
       credential_file: credentialFile(),
