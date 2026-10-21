@@ -196,7 +196,7 @@ grant: check `extraction-attempts` for `pending` attempts before granting.
 
 **Model calls.** One process-wide limiter admits the Authority's OpenRouter
 generation calls: at most six at once, at most four of them background
-(extraction, notes, search projection, impact research). Interactive Ask is
+(extraction, notes, impact research). Interactive Ask is
 served first and may use every slot. A 429, a 5xx, a temporary failure or a
 timeout pauses background admission once per episode, 5 s doubling to 60 s
 until a call succeeds; the limiter never retries. Time spent queued does not

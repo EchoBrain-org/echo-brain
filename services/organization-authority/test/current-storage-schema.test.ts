@@ -6,12 +6,18 @@ import { afterEach, expect, it } from "vitest";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { organizationRecordLogBaselineSha256V4 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { READABLE_SEARCH_FACTS_BASELINE_V3, readableSearchPlaneBaselineSha256 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 it("pins the current record-log baseline bytes", () => {
   expect(organizationRecordLogBaselineSha256V4()).toBe("sha256:b98091c9073ca1d1146d9f2b6d6b0cb7c950e829dbf26c7c431485370c76e52a");
+});
+
+it("pins the readable-search facts baseline bytes, retired related-atom table included", () => {
+  // The state-lineage guard checks every stored generation against these bytes (ADR-0044).
+  expect(readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V3)).toBe("sha256:0674d0feedc6609a5a7d08059a6ea9ca25f25c73ac31f8429fe6f88e4f87ff46");
 });
 
 it("initializes only the active storage roles and tables", () => {

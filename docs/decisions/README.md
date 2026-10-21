@@ -32,7 +32,7 @@ separately.
 | [ADR-0007](ADR-0007-lean-layer-4-answer-composition-v1.md)               | Lean Layer 4 answer composition V1               | accepted   |
 | [ADR-0008](ADR-0008-echo-hosted-authority-by-default.md)                 | ECHO-hosted Authority by default                  | accepted   |
 | [ADR-0009](ADR-0009-retained-authority-data-volume-boundary.md)          | Retained Authority data-volume boundary          | accepted   |
-| [ADR-0010](ADR-0010-disposable-related-atom-projection-v1.md)           | Disposable related-atom projection V1            | accepted   |
+| [ADR-0010](ADR-0010-disposable-related-atom-projection-v1.md)           | Disposable related-atom projection V1            | superseded |
 | [ADR-0011](ADR-0011-bm25-lexical-scoring-v1.md)                         | BM25 lexical scoring V1                          | accepted   |
 | [ADR-0012](ADR-0012-person-public-response-privacy.md) | Person public response privacy and internal release witnesses | accepted |
 | [ADR-0013](ADR-0013-project-context-v1-contract.md) | Project context V1 contract | accepted |
@@ -66,6 +66,7 @@ separately.
 | [ADR-0041](ADR-0041-complete-lists-as-ask-evidence.md) | A complete list is Ask evidence of which items exist | accepted |
 | [ADR-0042](ADR-0042-research-tool-contract.md) | Ask reads every source by what it declares, and reaches the asker's workspace | accepted |
 | [ADR-0043](ADR-0043-ask-receipt-counts-what-research-looked-through.md) | The Ask receipt counts every item research looked through | proposed |
+| [ADR-0044](ADR-0044-search-rebuilds-make-no-model-call.md) | Search rebuilds make no model call; the related-atom projection is removed | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

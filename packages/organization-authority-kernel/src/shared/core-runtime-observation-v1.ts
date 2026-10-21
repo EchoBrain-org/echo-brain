@@ -10,8 +10,8 @@ export const CORE_RUNTIME_PHASES_V1 = [
   "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor",
   "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery",
   "approval_delivery", "approval_review", "approval_observation", "record_append", "approval_action", "approval_terminal_update",
-  "search_reconciliation", "search_snapshot", "search_enrichment", "search_build",
-  "search_validation", "search_publication", "related_projection", "model_call",
+  "search_reconciliation", "search_snapshot", "search_build",
+  "search_validation", "search_publication", "model_call",
   "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer",
   // A research trigger renderer's model call (research trigger contract v1), such as the impact card's.
   "research_render", "research_run", "research_brief", "research_starting_read", "research_preload", "research_loop", "research_output", "research_output_view", "research_revalidation", "research_audit", "research_release",
@@ -21,8 +21,8 @@ export const CORE_RUNTIME_PHASES_V1 = [
 export type CoreRuntimePhaseV1 = (typeof CORE_RUNTIME_PHASES_V1)[number];
 export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "event_loop_delay_max_us", "active_models", "gate_wait_ms", "pending_depth", "oldest_age_ms", "scheduled_delay_ms", "wake_lateness_ms",
-  "unchanged_group_count", "changed_group_count", "newly_observed_group_count", "input_bytes", "output_bytes", "record_count", "atom_count", "visibility_groups",
-  "included_count", "excluded_count", "recomputed_count", "reused_count",
+  "input_bytes", "output_bytes", "record_count", "atom_count",
+  "included_count", "excluded_count",
   "captured_head", "current_head", "published_head", "http_status", "active_http",
   "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "provider_latency_ms",
   // One terminal research-run summary, shared by every trigger and output type.

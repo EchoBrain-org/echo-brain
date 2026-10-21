@@ -177,3 +177,9 @@ garbling or slow host.
 2026-10-19: the staging Journey Explorer was retired, so its template is no
 longer regenerated. The journey telemetry writer still reads the closed
 OpenRouter vocabulary above.
+
+2026-10-20: [ADR-0044](ADR-0044-search-rebuilds-make-no-model-call.md)
+removed the related-atom projection. The `planner_model` no longer feeds
+readable-search generation or the setup canary's retrieval-contract
+fingerprint, so changing it no longer rebuilds search. It still feeds
+person-update search hints.
