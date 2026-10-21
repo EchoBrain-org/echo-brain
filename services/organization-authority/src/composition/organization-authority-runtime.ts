@@ -27,7 +27,7 @@ import type { ReadableSearchGenerationReconciliationV1 } from "./readable-search
 import type { OrganizationAuthorityApiRuntimeConfig, OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
-import { createModelCallLimiterV1, limitStructuredGenerationPortV1, limitResearchDriverV1, type ModelCallLimiterV1, type ModelCallPriorityV1 } from "./model-call-limiter-v1.js";
+import { createModelCallLimiterV1, limitStructuredGenerationPortV1, limitResearchDriverV1, RESEARCH_SESSION_LIMITS_V1, type ModelCallLimiterV1, type ModelCallPriorityV1 } from "./model-call-limiter-v1.js";
 
 /** The staging release canary's outcome; the deploy receipt reads `approval_outcome = kind` and `approval_id`. */
 export interface StagingSyntheticCanaryOutcomeV1 {
@@ -185,9 +185,11 @@ export async function openOrganizationAuthorityRuntime(
       dependencies.api?.answer_composition_generation ??
       config.answer_composition_generation_bundle.load();
     const limiter = config.model_call_limiter ?? createModelCallLimiterV1();
+    const researchSessions = createModelCallLimiterV1(RESEARCH_SESSION_LIMITS_V1);
     const limited = (priority: ModelCallPriorityV1): AnswerCompositionGenerationBindingV1 => Object.freeze({ ...answerGeneration,
       structured_output: limitStructuredGenerationPortV1(answerGeneration.structured_output, (signal, op) => limiter.run(priority, signal, op)),
-      ...(answerGeneration.research_driver === undefined ? {} : { research_driver: limitResearchDriverV1(answerGeneration.research_driver, (signal, op) => limiter.run(priority, signal, op)) }),
+      ...(answerGeneration.research_driver === undefined ? {} : { research_driver: limitResearchDriverV1(answerGeneration.research_driver,
+        (signal, op) => limiter.run(priority, signal, op), (signal, op) => researchSessions.run(priority, signal, op)) }),
     });
     // Ask is interactive; notes and trigger research wait behind it.
     const backgroundGeneration = limited("background");
