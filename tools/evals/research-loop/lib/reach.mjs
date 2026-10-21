@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from "node:util";
  * answer, for the count code writes into it.
  */
 
-/** Research finishes within this many rounds, the finish step included (research tool contract v1). */
+/** Evaluation cost benchmark, the finish step included; release acceptance can omit this cap. */
 export const REACH_MAX_ROUNDS = 4;
 
 /**
@@ -245,9 +245,9 @@ export function traceCounts(research) {
  * A run that delivered no research scores zero on every reach and cost check. It used no list, so whether it stated
  * unchecked items is unknown, never a pass: it meets nothing.
  */
-export function failedReach(testCase) {
+export function failedReach(testCase, maxRounds = REACH_MAX_ROUNDS) {
   return {
-    expected: testCase.reach.collections, window: testCase.reach.window ?? null, max_rounds: REACH_MAX_ROUNDS,
+    expected: testCase.reach.collections, window: testCase.reach.window ?? null, max_rounds: maxRounds,
     looked_at: [], missing: testCase.reach.collections.map(group => [group].flat().join(" or ")),
     looked_at_every_collection: false, no_repeated_refusal: false, unchecked_stated: null, within_rounds: false, met: false,
   };
@@ -257,10 +257,11 @@ export function failedReach(testCase) {
  * The four reach and cost checks of an open-ended case (research tool contract v1): every collection holding part of
  * the answer was looked at (an entry listing several is met by any of them, and a key's window by calls that hold
  * it); no refused call was sent again; unchecked items were stated; research finished within its rounds.
+ * A null maximum retains the finish requirement without imposing an evaluation round cap.
  */
-export function reachChecks(testCase, run) {
+export function reachChecks(testCase, run, { max_rounds: maxRounds = REACH_MAX_ROUNDS } = {}) {
   const research = run?.result?.research;
-  if (run?.outcome !== "completed" || run.result?.status !== "completed" || research === undefined) return failedReach(testCase);
+  if (run?.outcome !== "completed" || run.result?.status !== "completed" || research === undefined) return failedReach(testCase, maxRounds);
   const { collections, window } = testCase.reach;
   const looked = collectionsLookedAt(research, { window, days: window === undefined ? [] : askedDays(run.started_at, research) });
   const missing = collections.map(group => [group].flat()).filter(group => !group.some(name => looked.has(name))).map(group => group.join(" or "));
@@ -270,10 +271,10 @@ export function reachChecks(testCase, run) {
     looked_at_every_collection: missing.length === 0,
     no_repeated_refusal: counts.repeated_refusals === 0,
     unchecked_stated: stated,
-    within_rounds: research.stop?.reason === "finished" && counts.rounds <= REACH_MAX_ROUNDS,
+    within_rounds: research.stop?.reason === "finished" && (maxRounds === null || counts.rounds <= maxRounds),
   };
   return {
-    expected: collections, window: window ?? null, max_rounds: REACH_MAX_ROUNDS, looked_at: [...looked].sort(), missing, ...checks,
+    expected: collections, window: window ?? null, max_rounds: maxRounds, looked_at: [...looked].sort(), missing, ...checks,
     met: checks.looked_at_every_collection && checks.no_repeated_refusal && checks.unchecked_stated !== false && checks.within_rounds,
   };
 }

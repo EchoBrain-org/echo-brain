@@ -197,12 +197,24 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       };
 
       // ---- final answer ---------------------------------------------------
+      // A page with more rows is not a truncated final list. Keep page history
+      // in diagnostics; give the writer the final state of each filtered list.
+      // Failed reads and notices still matter, including reads with no list.
+      const listedSources = new Set(lists.map(list => list.source));
+      const reads = [
+        ...bundle.coverage.reads.filter(read => read.tool !== "list" || read.unavailable || read.notice || !listedSources.has(read.source)),
+        ...lists.map(list => ({
+          tool: "list", list: list.id, source: list.source, filter: list.filter,
+          returned_items: list.members.length, complete: list.complete, truncated: list.truncated,
+          notice: false, unavailable: !list.available,
+        })),
+      ];
       const answerContext = {
         question: askedQuestion, ...options.context, scope: options.scope, source_catalog: options.source_catalog,
         // Planner need text is intentionally excluded. Lists carry their filters (ADR-0041); this describes what
         // research read, not whether an arbitrary fact exists.
         research: {
-          completed: !researchIncomplete, stop_reason: bundle.stop.reason, reads: bundle.coverage.reads,
+          completed: !researchIncomplete, stop_reason: bundle.stop.reason, reads,
           notices: [...bundle.coverage.notices], omitted_evidence_items: bundle.items.filter(entry => entry.item.text !== undefined).length,
         },
       };

@@ -199,7 +199,12 @@ seeded (`world/README.md`, "Workspace").
 
 `release-check` checks the staging release's open-ended Asks
 (`release-check.json` names the development cases it asks) from their
-LangSmith traces, with the same four checks: see
+LangSmith traces. For the current release trial, it requires the same source
+coverage, no repeated refusal, unchecked-item disclosure, and a `finished`
+research stop, but imposes no round-count limit. Its report keeps the round
+counts and records `max_rounds: null`. The evaluation's four-round cost
+benchmark above and the live request's time and usage budgets are unchanged.
+See
 [the release guide](../../../deploy/release/README.md#open-ended-ask-check).
 
 ## What is where

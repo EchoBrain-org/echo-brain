@@ -285,6 +285,28 @@ test("the release check reads each open-ended question's latest staging trace an
   assert.deepEqual(partial.questions[0].problems, ["the trace's capture is not confirmed complete"]);
 });
 
+test("the release check accepts finished research without a round cap and still rejects unfinished research", () => {
+  const question = caseById("current-projects-and-leads");
+  for (const count of [8, 24]) {
+    const rounds = Array.from({ length: count - 1 }, (_, index) => round(index + 1, action("list", { source: "projects" }, { items: [] })));
+    const value = research([...rounds, finish(count)]);
+    const runs = langsmithAsk({ trace: "t", question: question.question, started: "2026-10-19T18:00:00.000Z", research: value, answer: null });
+    const report = releaseCheck(runs, [question], { release_sha: "abc1234" });
+    assert.equal(report.passed, true);
+    assert.equal(report.questions[0].counts.rounds, count);
+    assert.equal(report.questions[0].reach.max_rounds, null);
+    assert.equal(report.questions[0].reach.met, true);
+    assert.equal(reachChecks(question, completed(value)).within_rounds, false, "the evaluation keeps its four-round cost benchmark");
+  }
+  for (const reason of ["budget", "step_limit", "no_progress", "unusable_step"]) {
+    const value = research([round(1, action("list", { source: "projects" }))], { stop: { reason, completed: false } });
+    const runs = langsmithAsk({ trace: "t", question: question.question, started: "2026-10-19T18:00:00.000Z", research: value, answer: null });
+    const report = releaseCheck(runs, [question], { release_sha: "abc1234" });
+    assert.equal(report.passed, false);
+    assert.deepEqual(report.questions[0].problems, ["research did not finish"]);
+  }
+});
+
 test("the release check requires explicit capture completion even when reach and release identity pass", () => {
   const question = caseById("current-projects-and-leads");
   const good = research([round(1, action("list", { source: "projects", status: "active" }, { items: [] })), finish(2)]);
@@ -305,7 +327,7 @@ test("a trace whose research run was not captured is rebuilt from its tool runs,
   assert.deepEqual([trace.rebuilt_from_tools, trace.question, trace.stop_reason, trace.research.rounds.length], [true, question, "no_progress", 5]);
   const result = releaseCheck(runs, [{ id: "current-projects-and-leads", question, reach: { collections: ["projects"] } }]).questions[0];
   assert.deepEqual([result.counts.refused, result.counts.repeated_refusals, result.counts.rounds], [7, 6, 5]);
-  assert.deepEqual(result.problems, ["collections not looked at: projects", "a refused call was sent again", "research did not finish within 4 rounds"]);
+  assert.deepEqual(result.problems, ["collections not looked at: projects", "a refused call was sent again", "research did not finish"]);
   // An API page names its runs `runs` and keeps metadata under `extra`, with a trace id and one parent.
   const api = runs.map(({ metadata, is_root: _root, parent_run_ids: parents, ...run }) => ({ ...run, trace_id: "t1", parent_run_id: parents.at(-1) ?? null, extra: { metadata } }));
   assert.equal(langsmithTraces({ runs: api })[0].research.rounds.length, 5);

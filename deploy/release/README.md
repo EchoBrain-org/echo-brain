@@ -446,11 +446,14 @@ npm run eval:research-loop -- release-check --out /absolute/private/release-ask-
 
 It prints one line per question from its latest trace, with the trace's
 counts, and writes `release-check.json` beside the runs. A question passes
-when its trace ran the candidate, its capture is complete, and it meets the
-four checks of the research-loop evaluation's
-[open-ended family](../../tools/evals/research-loop/README.md#open-ended-family);
-otherwise the command exits non-zero and names what failed. Keep its output
-with the canary evidence. A candidate that
+when its trace ran the candidate, its capture is complete, research stopped
+`finished`, and it meets the source-coverage, no-repeated-refusal, and
+unchecked-item-disclosure checks of the research-loop evaluation's
+[open-ended family](../../tools/evals/research-loop/README.md#open-ended-family).
+For the current release trial, round count is recorded without an acceptance
+limit (`max_rounds: null`); the live request's time and usage budgets are unchanged.
+If any required check fails, the command exits non-zero and names what failed.
+Keep its output with the canary evidence. A candidate that
 ships the research tool contract must pass it, and a failure stops acceptance
 like any failing required check; for an earlier candidate, record the result,
 which is expected to fail.
