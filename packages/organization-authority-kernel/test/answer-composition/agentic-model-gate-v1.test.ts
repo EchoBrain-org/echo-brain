@@ -243,6 +243,56 @@ describe("agentic model gate", () => {
     expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1, stopped: false });
   });
 
+  describe("counts each retry and repair it makes, by why it was needed", () => {
+    const failure = (failure_class: string, extra: Record<string, unknown> = {}) =>
+      Object.assign(new Error("private provider text"), { diagnostic: { failure_class, http_status: null, finish_reason: null, ...extra } });
+    /** The corrections the caller's span counted while the gate ran one call and its recovery. */
+    const corrected = async (options: Parameters<typeof harness>[0], timeout: () => number = () => 20_000) => {
+      const { gate } = harness(options);
+      const events: CoreRuntimeObservationV1[] = [];
+      await observeCoreRuntimeV1("research_loop", () => gate.withRepair(STEP, "system", {}, schema, timeout, reply => {
+        if ((reply as { bad?: boolean }).bad) throw new AgenticAskOutputErrorV1("needs are missing");
+        return reply;
+      }), { observer: event => { events.push(event); } }).catch(() => undefined);
+      return events.find(event => event.phase === "research_loop" && event.event !== "started")!.model_corrections ?? {};
+    };
+
+    it.each([
+      ["a reply its caller rejects", [{ bad: true }, { good: true }], { model_repair_rejected: 1 }],
+      ["a reply that is not JSON", [failure("adapter_json"), { good: true }], { model_repair_json: 1 }],
+      ["a reply with no usable content", [failure("adapter_response", { http_status: 200 }), { good: true }], { model_repair_empty: 1 }],
+      ["a reply cut off at its length", [failure("adapter_finish", { finish_reason: "length" }), { good: true }], { model_repair_unfinished: 1 }],
+      ["a provider timeout", [failure("adapter_timeout"), { good: true }], { model_retry: 1 }],
+      ["a temporary provider error", [failure("adapter_http", { http_status: 503 }), { good: true }], { model_retry: 1 }],
+      ["a repair whose reply is rejected again", [{ bad: true }, { bad: true }], { model_repair_rejected: 1 }],
+      ["a permanent provider error, which is never repaired", [failure("adapter_http", { http_status: 401 })], {}],
+      ["a declined reply, which is never repaired", [failure("adapter_refusal")], {}],
+      ["a usable reply", [{ good: true }], {}],
+    ])("for %s", async (_name, replies, expected) => {
+      expect(await corrected({ replies })).toEqual(expected);
+    });
+
+    it("counts a reply an observing adapter reports cut off", async () => {
+      const replies = [{ partial: true }, { good: true }];
+      const usage = { input_tokens: 10, output_tokens: 5, total_tokens: 15, cached_input_tokens: null, reasoning_tokens: null };
+      let calls = 0;
+      expect(await corrected({ model: {
+        generate: async () => { throw new Error("value-only method must not be used"); },
+        generate_with_observation: async () => ({ value: replies[calls], usage, provider_latency_ms: 1, finish_reason: calls++ === 0 ? "length" : "stop" }),
+      } })).toEqual({ model_repair_unfinished: 1 });
+    });
+
+    it("counts no repair the gate could not admit", async () => {
+      expect(await corrected({ replies: [{ bad: true }], max_model_calls: 1 })).toEqual({});
+      let available = 20_000;
+      let checks = 0;
+      expect(await corrected({ replies: [{ bad: true }], desk_revalidate: async () => {
+        if (++checks === 2) available = 3_999;
+        return { checked_at: "2026-10-06T00:00:00.000Z" };
+      } }, () => available)).toEqual({});
+    });
+  });
+
   it("fingerprints every admitted call exactly as the Ask audit does", async () => {
     const { gate, inputs } = harness({ replies: [{ a: 1 }] });
     await gate.call(STEP, "system", { q: 1 }, schema, () => 20_000);

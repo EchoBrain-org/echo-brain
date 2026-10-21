@@ -93,6 +93,13 @@ function alone(input: { readonly bundle?: AgenticEvidenceBundleV1; readonly repl
   return { render, trace, inputs, gate, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, unknown> };
 }
 
+/** A render in its output span, and the corrections of model output that span counted (an empty object for none). */
+async function observed<T>(render: () => Promise<T>): Promise<{ readonly rendered: T; readonly corrections: Readonly<Record<string, number>> }> {
+  const events: CoreRuntimeObservationV1[] = [];
+  const rendered = await observeCoreRuntimeV1("research_output", render, { observer: event => { events.push(event); } });
+  return { rendered, corrections: events.find(event => event.phase === "research_output" && event.event !== "started")!.model_corrections ?? {} };
+}
+
 /**
  * The renderer over E1 (the record's decision), E2 (THERM-46) and E3 (the PRD
  * display page), with a gate that answers `reply`, plus the decided line, to
@@ -164,7 +171,10 @@ describe("impact card renderer", () => {
   });
 
   it("keeps only bundle items, takes owners and people from item details alone, and lays the card out in code", async () => {
-    const rendered = await alone({ replies: [REPLY] }).render();
+    const run = alone({ replies: [REPLY] });
+    const { rendered, corrections } = await observed(() => run.render());
+    // Decided lines for E3 (no record item) and E99, affected rows for E1 (the record), E42, and E3's repeat.
+    expect(corrections).toEqual({ card_unknown_id_dropped: 4, model_repeat_dropped: 1 });
     const card = rendered.result;
     expect(card).toEqual({
       status: "assessed",
@@ -238,7 +248,8 @@ describe("impact card renderer", () => {
 
   it("falls back without a model: what the record decided in its own words, the cited items with their details and owners, not yet assessed, plus the notes", async () => {
     const run = alone({ replies: [{ wrong: true }, { still: "wrong" }] });
-    const rendered = await run.render();
+    const { rendered, corrections } = await observed(() => run.render());
+    expect(corrections).toEqual({ model_repair_rejected: 1, card_fallback: 1 });
     expect(run.trace.filter(event => event === "generate")).toHaveLength(2);
     expect(rendered.result).toEqual({
       status: "not_assessed",
@@ -275,7 +286,8 @@ describe("impact card renderer", () => {
   it("falls back to the same card when the provider fails rather than the reply, and counts one fallback", async () => {
     const refused = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class: "adapter_http", http_status: 401 } });
     const run = alone({ replies: [refused] });
-    const rendered = await run.render();
+    const { rendered, corrections } = await observed(() => run.render());
+    expect(corrections).toEqual({ card_fallback: 1 });
     // A permanent provider refusal is not repeated.
     expect(run.inputs).toHaveLength(1);
     expect(rendered).toMatchObject({ outcome: "partial", fallbacks: 1, result: { status: "not_assessed" } });
@@ -311,9 +323,11 @@ describe("impact card renderer", () => {
     expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain("never what to change");
     expect(rendered.result.status).toBe("assessed");
     expect(JSON.stringify(rendered.result)).not.toContain(text);
-    const twice = await alone({ replies: [edit, edit] }).render();
+    const { rendered: twice, corrections } = await observed(() => alone({ replies: [edit, edit] }).render());
     expect(twice).toMatchObject({ fallbacks: 1, result: { status: "not_assessed" } });
     expect(JSON.stringify(twice.result)).not.toContain(text);
+    // The line is screened in each reply; the first rejection costs the one repair, the second the fallback.
+    expect(corrections).toEqual({ card_line_screened: 2, model_repair_rejected: 1, card_fallback: 1 });
   });
 
   it("sends back a line that says who owns or is assigned an item: owners come only from item details", async () => {
@@ -451,6 +465,19 @@ describe("impact card renderer", () => {
     });
   });
 
+  it.each([
+    ["a relation in another spelling", { affected: [affected("E2", "THERM-46 asks for one decimal", "Needs Updating")] }, { model_enum_respelled: 1 }],
+    ["an id in another spelling", { affected: [affected("e2", "THERM-46 asks for one decimal", "conflicts")] }, { model_id_respelled: 1 }],
+    ["an evidence id written into a line", { affected: [affected("E2", "THERM-46 asks for one decimal (E2)", "conflicts")] }, { model_inline_ids_stripped: 1 }],
+    ["a line past its cap", { affected: [affected("E2", `THERM-46 asks for one decimal ${"and more ".repeat(40)}`, "conflicts")] }, { model_text_truncated: 1 }],
+    ["entries with no id, line or known relation", { affected: [affected("THERM-46", "x", "conflicts"), affected("E2", " ", "conflicts"), affected("E3", "y", "replaces")] }, { model_entry_dropped: 3 }],
+    ["a date at risk with no milestone", { affected: [affected("E2", "THERM-46 asks for one decimal", "conflicts", "2026-10-15")] }, { card_date_dropped: 1 }],
+  ])("counts %s, and nothing else", async (_name, reply, expected) => {
+    const answer = { decided: [{ id: "E1", text: "Show two decimals on the display from DVT." }], ...reply };
+    const run = alone({ bundle: bundle({ items: [ITEMS[0]!, ITEMS[2]!, ITEMS[3]!], cited: ["E1", "E2", "E3"] }), replies: [answer, answer] });
+    expect((await observed(() => run.render())).corrections).toEqual(expected);
+  });
+
   it("keeps the expected phrase for a conflict and drops it for a confirmation", async () => {
     const { card } = await renderWith({ affected: [
       { id: "E2", says_now: "THERM-46 asks for one decimal", relation: "conflicts", date_at_risk: "", milestone: "", expected: "two decimals from DVT" },
@@ -480,12 +507,14 @@ describe("impact card renderer", () => {
   });
 
   it("keeps a date at risk only when the item itself states it: its due date, or the date in its title or text", async () => {
-    const rendered = await alone({ replies: [{ decided: REPLY.decided, affected: [
+    const { rendered, corrections } = await observed(() => alone({ replies: [{ decided: REPLY.decided, affected: [
       affected("E3", "THERM-46 formats one decimal.", "conflicts", "2026-10-15", "DVT gate"),
       affected("E4", "The PRD display section specifies one decimal.", "needs_updating", "2026-11-01", "PRD sign-off"),
       affected("E8", "TC-D-06 expects one decimal.", "needs_updating", "2026-10-20", "Test review"),
       affected("E5", "THERM-47 is still to do.", "confirms", "2026-10-15", "DVT gate"),
-    ] }] }).render();
+    ] }] }).render());
+    // Two dates no item states, and REPLY's two decided lines for items that are no record item.
+    expect(corrections).toEqual({ card_date_dropped: 2, card_unknown_id_dropped: 2 });
     expect(rendered.result.affected.map(value => [value.says_now.slice(0, 8), value.date_at_risk ?? null])).toEqual([
       // THERM-46's due date.
       ["THERM-46", { date: "2026-10-15", milestone: "DVT gate" }],

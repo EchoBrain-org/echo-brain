@@ -7,11 +7,12 @@ import {
   type PersonImpactCardV1,
   type PersonImpactRelationV1,
 } from "@echo-brain/organization-api";
-import { AgenticAskOutputErrorV1, cleanId, cleanLine, stripEvidenceIds } from "../agentic-ask-v1-model-protocol.js";
+import { AgenticAskOutputErrorV1, cleanId, cleanLine, cleanModelId, cleanModelLine, stripEvidenceIds } from "../agentic-ask-v1-model-protocol.js";
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
 import { object, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import type { StructuredGenerationJsonSchema } from "../structured-generation-v1.js";
+import { observeCoreModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
 
 /**
  * The approved record's impact card (research trigger contract v1, section
@@ -99,7 +100,7 @@ const IMPACT_CARD_SCHEMA: StructuredGenerationJsonSchema = Object.freeze({
 });
 
 function bytes(value: string): number { return Buffer.byteLength(value, "utf8"); }
-const line = (value: unknown, maximum: number): string => stripEvidenceIds(cleanLine(value, maximum));
+const line = (value: unknown, maximum: number): string => stripEvidenceIds(cleanModelLine(value, maximum));
 
 /** A screen a line fails: an edit or an ownership claim, and the words of the line it matched. */
 export interface ImpactLineScreenFailureV1 { readonly screen: "edit" | "ownership"; readonly words: string }
@@ -188,18 +189,25 @@ type QuoteSources = (id: string, part: "decided" | "affected" | "expected") => r
 function parseCard(value: unknown, sourcesOf: QuoteSources): Draft {
   const body = object(value);
   if (body === null || !Array.isArray(body.decided) || !Array.isArray(body.affected)) throw new AgenticAskOutputErrorV1("the reply must be a JSON object with \"decided\" and \"affected\" arrays");
+  for (const [entries, most] of [[body.decided, LIMITS.decided], [body.affected, LIMITS.affected]] as const) {
+    if (entries.length > most) observeCoreModelCorrectionV1("model_items_capped", entries.length - most);
+  }
   const decided = body.decided.slice(0, LIMITS.decided).flatMap((raw: unknown) => {
-    const entry = object(raw); const id = cleanId(entry?.id); const text = line(entry?.text, LIMITS.line_chars);
-    return id === null || text.length === 0 ? [] : [{ id, text }];
+    const entry = object(raw); const id = cleanModelId(entry?.id); const text = line(entry?.text, LIMITS.line_chars);
+    if (id === null || text.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); return []; }
+    return [{ id, text }];
   });
   const affected = body.affected.slice(0, LIMITS.affected).flatMap((raw: unknown) => {
-    const entry = object(raw); const id = cleanId(entry?.id); const saysNow = line(entry?.says_now, LIMITS.line_chars);
+    const entry = object(raw); const id = cleanModelId(entry?.id); const saysNow = line(entry?.says_now, LIMITS.line_chars);
     const relation = RELATIONS.find(value => value === cleanLine(entry?.relation, 32).toLowerCase().replace(/[\s-]+/gu, "_"));
-    if (id === null || saysNow.length === 0 || relation === undefined) return [];
+    if (id === null || saysNow.length === 0 || relation === undefined) { observeCoreModelCorrectionV1("model_entry_dropped"); return []; }
+    if (relation !== entry?.relation) observeCoreModelCorrectionV1("model_enum_respelled");
     // What the record requires is kept only for an item it conflicts with or changes.
     const expected = relation === "confirms" ? "" : line(entry?.expected, LIMITS.expected_chars);
-    const date = cleanLine(entry?.date_at_risk, 10); const milestone = line(entry?.milestone, LIMITS.milestone_chars);
-    return [{ id, says_now: saysNow, relation, ...(expected.length > 0 ? { expected } : {}), ...(isPersonImpactCardDateV1(date) && milestone.length > 0 ? { date_at_risk: { date, milestone } } : {}) }];
+    const date = cleanModelLine(entry?.date_at_risk, 10); const milestone = line(entry?.milestone, LIMITS.milestone_chars);
+    const atRisk = isPersonImpactCardDateV1(date) && milestone.length > 0;
+    if (date.length > 0 && !atRisk) observeCoreModelCorrectionV1("card_date_dropped");
+    return [{ id, says_now: saysNow, relation, ...(expected.length > 0 ? { expected } : {}), ...(atRisk ? { date_at_risk: { date, milestone } } : {}) }];
   });
   // The free text a model writes: decided lines, what items say now, what the record expects of them, milestones. The relation is a closed value.
   // A decided line may quote its record item's text, what the record expects the record's text, and an item's other lines its title and text.
@@ -213,6 +221,7 @@ function parseCard(value: unknown, sourcesOf: QuoteSources): Draft {
   const failures = lines.flatMap(({ text, sources }) => { const failure = screenImpactLineV1(text, sources); return failure === null ? [] : [{ ...failure, text }]; });
   const failure = failures.find(entry => entry.screen === "edit") ?? failures[0];
   if (failure !== undefined) {
+    observeCoreModelCorrectionV1("card_line_screened", failures.length);
     throw new AgenticAskOutputErrorV1(`${failure.screen === "edit" ? EDIT_REASON : OWNERSHIP_REASON}. The line "${cleanLine(failure.text, REPAIR_LINE_CHARS)}" says "${failure.words}".`);
   }
   return { decided, affected };
@@ -308,6 +317,7 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
 
     const written = record.length === 0 ? null : await callRendererModelV1(input, RENDER_CALL, IMPACT_CARD_PROMPT, { task, record: record.map(view), items: items.map(view) }, IMPACT_CARD_SCHEMA, value => parseCard(value, sourcesOf));
     const draft = written?.value ?? null;
+    if (written?.value === null) observeCoreModelCorrectionV1("card_fallback");
 
     // ---- layout (code, not model) ---------------------------------------
     const used: Entry[] = [];
@@ -320,13 +330,21 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
     if (draft !== null) {
       // Only items the model was shown: a record item is decided, any other may be affected, each once.
       const isRecord = (id: string) => record.some(entry => entry.short === id);
-      decided = draft.decided.filter(value => isRecord(value.id)).map(value => ({ text: value.text, citation_index: cite(shown.get(value.id)!) }));
+      const recorded = draft.decided.filter(value => isRecord(value.id));
+      if (recorded.length < draft.decided.length) observeCoreModelCorrectionV1("card_unknown_id_dropped", draft.decided.length - recorded.length);
+      decided = recorded.map(value => ({ text: value.text, citation_index: cite(shown.get(value.id)!) }));
       const kept = new Map<string, Draft["affected"][number]>();
-      for (const value of draft.affected) if (shown.has(value.id) && !isRecord(value.id) && !kept.has(value.id)) kept.set(value.id, value);
+      for (const value of draft.affected) {
+        if (!shown.has(value.id) || isRecord(value.id)) observeCoreModelCorrectionV1("card_unknown_id_dropped");
+        else if (kept.has(value.id)) observeCoreModelCorrectionV1("model_repeat_dropped");
+        else kept.set(value.id, value);
+      }
       // A date the item does not state is dropped; the item stays.
       rows = [...kept.values()].sort((left, right) => RELATIONS.indexOf(left.relation) - RELATIONS.indexOf(right.relation)).map(({ id, date_at_risk: risk, ...value }) => {
         const entry = shown.get(id)!;
-        return { entry, ...value, ...(risk !== undefined && statesImpactDateV1(entry.item, risk.date) ? { date_at_risk: risk } : {}) };
+        const stated = risk !== undefined && statesImpactDateV1(entry.item, risk.date);
+        if (risk !== undefined && !stated) observeCoreModelCorrectionV1("card_date_dropped");
+        return { entry, ...value, ...(stated ? { date_at_risk: risk } : {}) };
       });
     } else {
       // What was decided needs no model: the record's own approved words. Then possibly affected, not yet assessed: what research cited, with its details.

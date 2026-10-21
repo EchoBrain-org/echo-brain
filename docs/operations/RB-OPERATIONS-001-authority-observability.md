@@ -479,6 +479,7 @@ build number, and every business or person identifier are never dimensions.
 | `LlmTotalTokensAvailable` | `1` only when that attempt has a non-null total-token value | `stage`, `provider`, `model` |
 | `RetrievalPlannedQueries`, `RetrievalQueryHits`, `RetrievalReleasedAtoms`, `RetrievalContextAtoms`, `RetrievalCitations` | the respective non-null counter once per `research_run`; historical journey events retain their original projection | `workflow`, `stage` |
 | `ApprovalHumanWaitMs` | retained historical `queue_age_ms` from card staging to verified action | `workflow`, `stage` |
+| `ModelCorrections` | the count of one named correction of model output on a span's terminal event ([counting code's corrections](#count-codes-corrections-of-model-output)) | `correction` |
 | `JourneyTelemetryAlive`, `WorkerCycleCompleted` | `1` for liveness output and a completed worker cycle, respectively | none |
 
 `tokens per total-token-available LLM attempt` means the sum of `LlmTotalTokens`
@@ -631,6 +632,104 @@ is an `ask_planner` or `ask_answer` span with its provider `model_call` inside
 Desk spans carry `included_count` and, by source, `meeting_items` and
 `document_items`; `transcript_items` is the shared-transcript
 subset of `document_items`. The evidence HTTP doors use the same desk spans.
+
+#### Count code's corrections of model output
+
+Code corrects model output in many places: it drops a repeated item, reads
+`[T12]` as `T12`, cuts a field to its cap, answers a repeated search from
+memory, repairs a malformed reply or withholds a line. Each such correction
+counts itself by name on the core runtime span that made it, as
+`model_corrections`, from the closed list `CORE_RUNTIME_MODEL_CORRECTIONS_V1`.
+Only names and counts are recorded, never the text corrected, and counting
+never changes a correction. A span that corrected nothing has no
+`model_corrections`. A reply that is then rejected still counts what code read
+of it. The counters exist so each correction can be retired once it stops
+firing on the current models (model scaffolding audit, 2026-10-20).
+
+| Where | What it shows |
+| --- | --- |
+| Journey logs | `diagnostic.model_corrections` on a span's `succeeded` or `failed` event: `model_grounding` for meeting extraction, `research_loop` for research steps and the loop, `research_output` for renderers, `model_parse` for the adapter's JSON reading. |
+| Journey metrics | One `ModelCorrections` value per name and terminal event, with the single dimension `correction`. Metrics outlive the 14-day log retention. |
+| LangSmith traces | The root of a captured research run (Ask, impact card, sweep) carries `model_corrections`, the sum over every span of that run. Meeting extraction is not exported to LangSmith. |
+
+```
+fields @timestamp, diagnostic.model_corrections.extraction_repeat_dropped as repeats
+| filter kind = "echo-authority-journey-stage-v1" and ispresent(repeats)
+| stats sum(repeats) by bin(1d)
+```
+
+Meeting extraction (`llm-decision-processor.ts`):
+
+| Name | What code did |
+| --- | --- |
+| `extraction_item_set_aside` | Set aside a malformed or ungrounded item; its reason and cited units reach only a selected private capture |
+| `extraction_repeat_dropped` | Dropped a repeated item: the same kind, text and units, or the same id after evidence trimming |
+| `extraction_owner_cleared` | Cleared a proposed action owner that no cited unit names |
+| `extraction_due_cleared` | Cleared a due date that is not a date or falls before the meeting |
+| `extraction_due_coerced` | Stored a date-only due date as the meeting's local noon |
+| `extraction_decided_downgraded` | Stored a decided decision that cites only questions as proposed |
+| `extraction_unit_id_respelled` | Read a cited unit id in another spelling (`[T12]`, ` t12 `) as its unit |
+| `extraction_parent_unit_cited` | Read a split unit's parent id (`T12`) as all its parts |
+| `extraction_unknown_unit_dropped` | Dropped a cited unit id that names no unit from an item it kept |
+| `extraction_confidence_cleared` | Cleared a confidence that is not a number from 0 to 1 |
+| `extraction_rationale_link_dropped` | Dropped a rationale's repeated link, or a link to no kept decision |
+
+Research steps and the research loop (`agentic-research-loop-v1.ts`):
+
+| Name | What code did |
+| --- | --- |
+| `step_source_alias` | Read a loose source name (`docs`, `Meetings`) as an advertised source |
+| `step_title_as_id` | Read an item's title, given to open in place of its id, as that item |
+| `research_repeat_search` | Answered a repeated search "already searched", unsent |
+| `research_repeat_open` | Answered an open of an item already in full "already open", unsent |
+| `research_repeat_list` | Answered a repeat of a list with nothing left to show "already listed", unsent |
+| `research_repeat_refusal` | Answered a refused read sent again from memory, unsent; Ask also counts it as `repeated_refusal_count` |
+| `research_finish_refused` | Refused a finish and sent it back for repair |
+| `research_no_progress_stop` | Stopped research after steps that found nothing new (`research_stop_reason` `no_progress`) |
+| `research_empty_catalog_stop` | Stopped research on a catalog read empty to its end (`empty_catalog`) |
+| `research_unusable_step_stop` | Stopped research on a step no repair made usable (`unusable_step`) |
+
+Any model reply: the model gate (`agentic-model-gate-v1.ts`), the OpenRouter
+adapter (`openrouter-structured-generation-adapter.ts`) and the reply parsers
+(`agentic-ask-v1-model-protocol.ts` and the renderers):
+
+| Name | What code did |
+| --- | --- |
+| `model_retry` | Retried a call unchanged after a temporary provider failure |
+| `model_repair_json` | Asked again after a reply that was not valid JSON |
+| `model_repair_unfinished` | Asked again after a reply cut off at its length |
+| `model_repair_empty` | Asked again after a reply with no usable content |
+| `model_repair_rejected` | Asked again after its caller's checks rejected a reply, naming the problem |
+| `model_json_fence_stripped` | Read a reply from inside a Markdown fence |
+| `model_json_outer_text_dropped` | Dropped text around a reply's JSON object |
+| `model_text_truncated` | Cut a model-written field to its character cap |
+| `model_items_capped` | Dropped entries past a reply's maximum count |
+| `model_entry_dropped` | Dropped a malformed entry: not an object, no text or id, an unreadable id or selection, or an argument with no text or one its tool does not take |
+| `model_repeat_dropped` | Dropped a repeated need, id, phrase, list use or card row within one reply |
+| `model_id_respelled` | Read an id in another spelling (`e4`, `[E4]`, `4`, ` n2 `, `[L3]`) as its id |
+| `model_enum_respelled` | Read a closed value (a tool, a need's status or kind, a list's kind, status or role filter, a selection field, a relation, a verdict) given in another spelling, as an alias (`browse`, `decisions`) or not at all, as a known value or its default |
+| `model_bare_string` | Read a bare string where an object belongs: a tool's args or the old `input` field, a need, a list use |
+| `model_inline_ids_stripped` | Removed evidence ids written into model text, such as `(E4)` |
+
+Before these counters, retries and repairs were recorded only as `repairs` in
+the durable Ask audit and the research result's `cost`, and as `recovery` on a
+LangSmith model run. A gate counter is counted once the extra call is admitted
+past its access check, as the audit counts repairs.
+
+Renderers (`ask-renderer-v1.ts`, `impact-card-renderer-v1.ts`, `sweep-renderer-v1.ts`):
+
+| Name | What code did |
+| --- | --- |
+| `writer_repeat_dropped` | Dropped an Ask statement that exactly repeats an earlier one (the temporary exact-repeat guard, ADR-0041) |
+| `writer_unknown_id_dropped` | Dropped an id the writer was not shown from a sentence, a list use or a list's members |
+| `writer_uncited_sentence_dropped` | Left out a writer sentence that cites no evidence text it read |
+| `writer_fallback` | Stated lists or records in place of a writer that gave no usable reply |
+| `card_line_screened` | Sent back an impact-card line that suggests an edit or claims ownership |
+| `card_unknown_id_dropped` | Dropped a decided or affected entry naming an item the model was not shown, or the wrong kind of item |
+| `card_date_dropped` | Dropped a date at risk that the item does not state, that is not a date, or that has no milestone |
+| `card_fallback` | Showed the record's approved lines, not assessed, in place of a card with no usable reply |
+| `sweep_line_withheld` | Withheld a sweep line that suggests an edit or claims ownership, keeping its verdict |
+| `sweep_fallback` | Left findings not assessed after a sweep with no usable reply |
 
 #### Live Jira and Confluence reads in Ask
 

@@ -243,6 +243,13 @@ export function formatJourneyTelemetryMetricsV1(
     if (metrics.length > 0) records.push(record(namespace, timestamp, workflowStage, metrics));
   }
 
+  // Code's corrections of model output, each by its closed name alone, counted once on the span that made them.
+  if (event.event !== "started") {
+    for (const [correction, count] of Object.entries(diagnostic.model_corrections ?? {})) {
+      records.push(record(namespace, timestamp, { correction }, [["ModelCorrections", count, "Count"]]));
+    }
+  }
+
   return Object.freeze(records);
 }
 

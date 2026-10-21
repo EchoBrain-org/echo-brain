@@ -1,4 +1,4 @@
-import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { observeCoreModelCorrectionV1, observeCoreModelMetadataV1, annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { claudeStructuredSchema } from "./claude-structured-schema.js";
 import {
   type StructuredGenerationFailureClassV1,
@@ -257,16 +257,25 @@ function finishReason(value: unknown): OpenRouterFinishReason | null {
 /**
  * Parses model content as JSON. Some routed providers wrap a schema-valid
  * object in a Markdown fence or a short preamble even under json_schema
- * mode; the enclosed object is taken only when the whole content is not JSON.
- * Callers still validate the parsed value against their own protocol.
+ * mode; the enclosed object is taken only when the whole content is not JSON,
+ * and each such reading is counted by name. Callers still validate the parsed
+ * value against their own protocol.
  */
 export function parseModelJson(content: string): unknown {
   try { return JSON.parse(content) as unknown; } catch (error) {
     const fenced = /^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/iu.exec(content);
-    if (fenced !== null) return JSON.parse(fenced[1]!) as unknown;
+    if (fenced !== null) {
+      const value = JSON.parse(fenced[1]!) as unknown;
+      observeCoreModelCorrectionV1("model_json_fence_stripped");
+      return value;
+    }
     const start = content.indexOf("{");
     const end = content.lastIndexOf("}");
-    if (start >= 0 && end > start) return JSON.parse(content.slice(start, end + 1)) as unknown;
+    if (start >= 0 && end > start) {
+      const value = JSON.parse(content.slice(start, end + 1)) as unknown;
+      observeCoreModelCorrectionV1("model_json_outer_text_dropped");
+      return value;
+    }
     throw error;
   }
 }

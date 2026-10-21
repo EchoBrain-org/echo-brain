@@ -68,7 +68,7 @@ import type {
   AgenticResearchRoundV1,
 } from "./agentic-research-v1.js";
 import { AuthorityOperationError } from "../domain/errors.js";
-import { observeCoreRuntimeDiagnosticV1, withCoreRuntimeDiagnosticToolV1 } from '../shared/core-runtime-observation-v1.js';
+import { observeCoreModelCorrectionV1, observeCoreRuntimeDiagnosticV1, withCoreRuntimeDiagnosticToolV1 } from '../shared/core-runtime-observation-v1.js';
 import { coreRuntimeDiagnosticErrorKindV1 } from '../shared/core-runtime-diagnostics-v1.js';
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 
@@ -643,10 +643,16 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   });
 
   // ---- tools ---------------------------------------------------------
+  /** A read's source as the model named it: a name other than the advertised selector is counted (a loose source name). */
+  const sourceOf = (args: StepArgs): string | undefined => {
+    const source = readSource(args.source);
+    if (source !== undefined && args.source !== sourcesById.get(source)?.selector) observeCoreModelCorrectionV1("step_source_alias");
+    return source;
+  };
   const search = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
     const query = normalizeQuery(args.query);
     if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
-    const source = readSource(args.source);
+    const source = sourceOf(args);
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
     // Ask checks a dated search against the source's capabilities (research tool contract v1): a date it does not record
     // refuses the read, and a window with no date field reads any of an item's dates where the source declares that.
@@ -666,7 +672,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const repeat = searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase() && JSON.stringify(evidenceDateFilterV1(previous)) === JSON.stringify(dates));
     // A source that could not be searched then (a notice) may answer now, so one repeat runs again; a complete or truncated
     // result would come back the same, and a notice that persists (an index still catching up) is not paid for every round.
-    if (repeat && !noticedSearches.has(fingerprint)) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
+    if (repeat && !noticedSearches.has(fingerprint)) {
+      observeCoreModelCorrectionV1("research_repeat_search");
+      return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
+    }
     if (!repeat) searchesRun.push({ query, ...dates, ...(source === undefined ? {} : { source }) });
     noticedSearches.delete(fingerprint);
     const result = await raceAbort(signal, desk.search({ query, ...dates, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: SEARCH_LIMIT, signal }));
@@ -705,12 +714,18 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   const open = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
     const raw = args.id ?? "";
-    const entry = entryOf(raw) ?? entryByTitle(raw);
+    const byId = entryOf(raw);
+    const entry = byId ?? entryByTitle(raw);
     if (entry === undefined) return { tool: "open", args, error: "unknown id; pass an id such as E4 from your scratchpad" };
+    if (byId === undefined) observeCoreModelCorrectionV1("step_title_as_id");
+    else if (raw !== entry.short) observeCoreModelCorrectionV1("model_id_respelled");
     // Like a repeated search: an item already read around whose full text was in the scratchpad the planner just read is
     // not read again (the access check before every model call already covers it), and adds nothing new. An item an open
     // cut (for a task goal, any truncated open) or noticed is still read again: only a clean open of it resolves that limit.
-    if (anchorsRead.has(entry.item.id) && researchPromptEntries.includes(entry) && !limitedOpens.has(entry.item.id)) return { tool: "open", id: entry.short, note: "already open; its full text is in your scratchpad" };
+    if (anchorsRead.has(entry.item.id) && researchPromptEntries.includes(entry) && !limitedOpens.has(entry.item.id)) {
+      observeCoreModelCorrectionV1("research_repeat_open");
+      return { tool: "open", id: entry.short, note: "already open; its full text is in your scratchpad" };
+    }
     let result: EvidenceDeskResultV2;
     try { result = await raceAbort(signal, desk.open({ item: entry.item.id, neighbours: OPEN_NEIGHBOURS, signal })); }
     catch (error) {
@@ -760,10 +775,16 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   const list = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
     if (!listAvailable) return { tool: "list", args, error: LIST_UNAVAILABLE };
+    // Counted here, once per read: the arguments are normalized again to order a step's reads.
+    sourceOf(args);
     const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource, ask);
     if ("error" in normalized) return { tool: "list", args, error: normalized.error };
     if ("refused" in normalized) return refusedResult("list", args, normalized);
     const { notes, applied, status, owner, role, limit, ...selection } = normalized;
+    // A filter value in another spelling ("Decisions", "Completed"), applied as the value it names.
+    const respelledFilters = ([["kind", selection.kinds?.[0]], ["status", status], ["role", role]] as const)
+      .filter(([field, value]) => value !== undefined && args[field] !== undefined && applied[field] === "applied" && args[field] !== value).length;
+    if (respelledFilters > 0) observeCoreModelCorrectionV1("model_enum_respelled", respelledFilters);
     // For Ask a source's own filters are the desk's, applied before anything is released, except meetings': meeting actions
     // are filtered here, after each page (research tool contract v1).
     const deskFilters = ask && selection.source !== "meeting" && sourcesById.get(selection.source)?.capabilities !== undefined;
@@ -890,6 +911,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // of an inventory read to its end makes no desk call and no progress, and says so; only a complete one is "in full".
       // For a question goal, an exactly full last page is not trusted as the end (addition 1).
       const unverified = ask && !more && currentState.unverified_end;
+      // A repeat of an inventory with nothing left to show is answered from it, unsent.
+      if (result === undefined && page.length === 0 && !more) observeCoreModelCorrectionV1("research_repeat_list");
       // A page the source could not read completely (a notice) is never "nothing more": its list is incomplete.
       const emptyNote = page.length > 0 ? [] : more ? ["this page was empty (for example because of a date filter); more pages remain"]
         : result !== undefined ? [currentState.available ? "nothing more to list" : "this source could not be read completely, so its list is incomplete; use search"]
@@ -943,6 +966,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const refusedBefore = ask ? refusedReads.get(key) : undefined;
       if (refusedBefore !== undefined) {
         repeatedRefusals += 1;
+        observeCoreModelCorrectionV1("research_repeat_refusal");
         const again = "refused again: this exact request was already refused in this Ask, so it was not sent; change the source, the filter or the approach";
         const value: ToolResult = Object.freeze({ ...refusedBefore, note: typeof refusedBefore.note === "string" ? `${refusedBefore.note}; ${again}` : again });
         observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result: lastResult(action, value) });
@@ -1390,7 +1414,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               if (unread.length > 0) problems.unshift(`listed inventory still has unread pages; repeat list with ${unread.slice(0, 3).map(state => JSON.stringify(state.args)).join(' or ')}${unsearched.length === 0 ? '' : `, or search ${unsearched.join(' and ')} for the fact`}`);
             }
             if (!finishAvailable) problems.unshift(`no source has been read; use ${listAvailable ? 'search or list' : 'search'} first`);
-            if (problems.length > 0) throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. ${listAvailable ? 'Search, list or open more' : 'Search or open more'}, or correct the need status and evidence.`);
+            if (problems.length > 0) {
+              observeCoreModelCorrectionV1("research_finish_refused");
+              throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. ${listAvailable ? 'Search, list or open more' : 'Search or open more'}, or correct the need status and evidence.`);
+            }
           }
           return parsed;
         }, reason => stepRejections.push(cleanLine(reason, 600)));
@@ -1409,6 +1436,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         }
         // A research step that cannot finish stops research; the answer uses what was found.
         fallbacks += 1; researchStop = 'unusable_step';
+        observeCoreModelCorrectionV1("research_unusable_step_stop");
         stepRejections.push(cleanLine(error.message, 600)); recordRound(roundStartedAt, []);
         break;
       }
@@ -1445,6 +1473,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       if (catalogIsExhaustivelyEmpty) {
         researchIncomplete = false;
         researchStop = 'empty_catalog';
+        observeCoreModelCorrectionV1("research_empty_catalog_stop");
         break;
       }
       const progressed = (hadCitableEvidence ? novelty() : retrievalProgress) > before;
@@ -1452,7 +1481,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // New metadata-only items are not progress, but the planner may still open what the streak discovered, even after
       // another read first (a search that found titles, then an empty search, then a not_found finish).
       idleDiscovered = !progressed && (idleDiscovered || entries.size > entriesBefore);
-      if (idleSteps >= (idleDiscovered ? 3 : 2)) { researchStop = 'no_progress'; break; }
+      if (idleSteps >= (idleDiscovered ? 3 : 2)) { researchStop = 'no_progress'; observeCoreModelCorrectionV1("research_no_progress_stop"); break; }
     }
     if (plan.length === 0) plan = proposedPlan([{ question: partQuestion(goal.kind === "question" ? goal.question : goal.task), needs: [], notes: "" }]);
   };

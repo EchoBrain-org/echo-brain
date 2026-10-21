@@ -13,6 +13,7 @@ import {
   STEP_PROMPT,
   stripEvidenceIds,
 } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { observeCoreRuntimeSyncV1, type CoreRuntimeModelCorrectionsV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 
 type Schema = Readonly<Record<string, any>>;
 const stepSchema = createStepSchema(["meetings", "documents", "slack"]);
@@ -361,6 +362,73 @@ describe("agentic Ask model protocol parity", () => {
   it("accepts common id spellings and ignores the rest", () => {
     expect(["E4", "e4", "[E4]", " E4 ", "4", 4].map(cleanId)).toEqual(["E4", "E4", "E4", "E4", "E4", "E4"]);
     expect(["desk_abc", "E", "item 4", ""].map(cleanId)).toEqual([null, null, null, null]);
+  });
+
+  describe("counts each correction it makes, by name (model scaffolding audit 2026-10-20)", () => {
+    /** What code corrected while `read` read a reply: an empty object when the reply needed nothing. */
+    const corrected = (read: () => unknown): CoreRuntimeModelCorrectionsV1 => {
+      const events: CoreRuntimeObservationV1[] = [];
+      observeCoreRuntimeSyncV1("research_loop", read, { observer: event => { events.push(event); } });
+      return events.at(-1)!.model_corrections ?? {};
+    };
+    const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
+    const need = { id: "N1", need: "owner of OPS-17", kind: "content", status: "open", evidence: ["E1"] };
+    const step = (overrides: Record<string, unknown> = {}) => ({ parts: [{ question: "Who owns OPS-17?", needs: [need], notes: "E1 is OPS-17." }], actions: [{ tool: "open", args: { id: "E1" } }], ...overrides });
+    const needs = (values: readonly unknown[]) => step({ parts: [{ question: "q", needs: values, notes: "" }] });
+    const actions = (values: readonly unknown[]) => step({ actions: values });
+    const content = (fields: Record<string, unknown>) => ({ kind: "content", status: "open", evidence: [], ...fields });
+    const ask = { lists: true }, task = {};
+
+    it.each([
+      ["a step the schema already holds", step(), ask, {}],
+      ["a tool in another case", actions([{ tool: " Search ", args: { query: "OPS-17" } }]), ask, { model_enum_respelled: 1 }],
+      ["browse for list", actions([{ tool: "browse", args: { source: "meetings" } }]), ask, { model_enum_respelled: 1 }],
+      ["the A2 input field", actions([{ tool: "search", input: "fixture owner" }]), ask, { model_bare_string: 1 }],
+      ["a bare string for args", actions([{ tool: "open", args: "E4" }]), ask, { model_bare_string: 1 }],
+      ["a bare string for a need", needs(["a fact"]), ask, { model_bare_string: 1 }],
+      ["need statuses in other spellings, unknown or missing", needs([content({ need: "A", status: "Answered" }), content({ need: "B", status: "not found" }), content({ need: "C", status: "??" }), content({ need: "D", status: undefined })]), ask, { model_enum_respelled: 4 }],
+      ["need kinds in another spelling, unknown or missing", needs([content({ need: "A", kind: "Which Items" }), content({ need: "B", kind: "list" }), content({ need: "C", kind: undefined })]), ask, { model_enum_respelled: 3 }],
+      ["a task need's kind, which is never read", needs([content({ need: "A", kind: "Which Items" })]), task, {}],
+      ["need ids in other spellings, or unreadable", needs([content({ id: " n2 ", need: "A" }), content({ id: 4, need: "B" }), content({ id: "E5", need: "C" })]), ask, { model_id_respelled: 2, model_entry_dropped: 1 }],
+      ["evidence ids respelled, repeated or unreadable", needs([content({ need: "A", evidence: ["e4", "E4", "THERM-48"] })]), ask, { model_id_respelled: 1, model_repeat_dropped: 1, model_entry_dropped: 1 }],
+      ["more evidence ids than a need holds", needs([content({ need: "A", evidence: items(1, 13) })]), ask, { model_items_capped: 1 }],
+      ["more evidence ids than a task need holds", needs([content({ need: "A", evidence: items(1, 13) })]), task, { model_items_capped: 1 }],
+      ["a blank or repeated need", needs([content({ need: " " }), content({ need: "A" }), content({ need: "a" })]), ask, { model_entry_dropped: 1, model_repeat_dropped: 1 }],
+      ["more needs than a part holds", needs(Array.from({ length: 7 }, (_, index) => content({ need: `need ${index}` }))), ask, { model_items_capped: 1 }],
+      ["more parts than a step holds", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, { model_items_capped: 1 }],
+      ["more actions than an Ask step runs", actions(Array.from({ length: 11 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), ask, { model_items_capped: 1 }],
+      ["more actions than a task step runs", actions(Array.from({ length: 5 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), task, { model_items_capped: 1 }],
+      ["text past its cap", step({ parts: [{ question: "q".repeat(401), needs: [content({ need: "n".repeat(201) })], notes: "n".repeat(801) }], actions: [{ tool: "search", args: { query: "x".repeat(241) } }] }), ask, { model_text_truncated: 4 }],
+      ["an argument with no text, or one its tool does not take", actions([{ tool: "search", args: { query: "OPS-17", since: "" } }, { tool: "open", args: { id: "E1", query: "OPS-17" } }]), ask, { model_entry_dropped: 2 }],
+    ] as const)("in a step: %s", (_name, value, options, expected) => {
+      expect(corrected(() => parseStep(value, options))).toEqual(expected);
+    });
+
+    const answer = (overrides: Record<string, unknown>) => ({ lists: [], sentences: [], not_found: [], ...overrides });
+    it.each([
+      ["an answer the schema already holds", answer({ lists: [{ id: "L1" }], sentences: [{ text: "Mara owns OPS-17.", evidence: ["E1", "L1"] }] }), {}],
+      ["evidence ids written into a sentence", answer({ sentences: [{ text: "Mara owns OPS-17 (E1).", evidence: ["E1"] }] }), { model_inline_ids_stripped: 1 }],
+      ["a sentence that is not an object, or has no text", answer({ sentences: ["Mara owns it.", { text: " ", evidence: [] }, { text: "Mara owns OPS-17.", evidence: ["E1"] }] }), { model_entry_dropped: 2 }],
+      ["more sentences than an answer holds", answer({ sentences: Array.from({ length: 12 }, (_, index) => ({ text: `Fact ${index}.`, evidence: ["E1"] })) }), { model_items_capped: 2 }],
+      ["a blank, repeated or extra not_found phrase", answer({ not_found: ["", "owner", "owner", "a", "b", "c", "d", "e"] }), { model_entry_dropped: 1, model_repeat_dropped: 1, model_items_capped: 1 }],
+      ["sentence evidence ids in other spellings", answer({ sentences: [{ text: "Done.", evidence: ["e2", "[E3]"] }] }), { model_id_respelled: 2 }],
+      ["a list used as a bare id", answer({ lists: ["L2"] }), { model_bare_string: 1 }],
+      ["a list id in another spelling", answer({ lists: [{ id: "[L3]" }] }), { model_id_respelled: 1 }],
+      ["a list use that names no list", answer({ lists: [{ id: "E6" }, 7] }), { model_entry_dropped: 2 }],
+      ["a where field in another case", answer({ lists: [{ id: "L1", where: { field: "Owner", value: "Dana Lee" } }] }), { model_enum_respelled: 1 }],
+      ["a where code cannot read, so the list is used in full", answer({ lists: [{ id: "L1", where: { field: "title", value: "PRD" } }] }), { model_entry_dropped: 1 }],
+      ["a date bound past its cap", answer({ lists: [{ id: "L1", where: { field: "due", until: "2026-10-18T00:00:00Z" } }] }), { model_text_truncated: 1, model_entry_dropped: 1 }],
+      ["members respelled, repeated or unreadable", answer({ lists: [{ id: "L1", members: ["e5", "E5", "[E7]", "L2", 9] }] }), { model_id_respelled: 3, model_repeat_dropped: 1, model_entry_dropped: 1 }],
+      ["more members than a use names", answer({ lists: [{ id: "L3", members: items(1, 30) }] }), { model_items_capped: 5 }],
+      ["a list used twice the same way, or past five lists", answer({ lists: ["L1", "L1", "L2", "L3", "L4", "L5", "L6"].map(id => ({ id })) }), { model_repeat_dropped: 1, model_items_capped: 1 }],
+    ] as const)("in an answer: %s", (_name, value, expected) => {
+      expect(corrected(() => parseAnswer(value))).toEqual(expected);
+    });
+
+    it("counts what it reads of a reply it then rejects, and nothing outside a span", () => {
+      expect(corrected(() => { try { parseStep({ parts: [{ question: "q".repeat(401), needs: [], notes: "" }], actions: [{ tool: "delete", args: {} }] }); } catch { /* rejected */ } })).toEqual({ model_text_truncated: 1 });
+      expect(() => parseStep(actions([{ tool: "browse", args: { source: "meetings" } }]), ask)).not.toThrow();
+    });
   });
 
   it("validates bounded queries without rewriting their meaning", () => {

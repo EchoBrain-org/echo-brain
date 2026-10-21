@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   annotateCoreRuntimeV1,
+  observeCoreModelCorrectionV1,
   observeCoreRuntimeSyncV1,
 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
@@ -165,6 +166,40 @@ describe("journey EMF metrics v1", () => {
       expect.objectContaining({ TerminalOutcome: 1, outcome: "partial", stage: "research_run" }),
       expect.objectContaining({ RetrievalPlannedQueries: 9, RetrievalCitations: 4 }),
     ]));
+  });
+
+  it("carries a span's corrections of model output from its counter to the journey log and its metric", async () => {
+    const lines: string[] = [];
+    const transport = createJourneyTelemetryTransportV1(
+      "staging",
+      { release_sha: RELEASE_SHA, build_number: 123 },
+      { write: line => { lines.push(line); }, now: () => OBSERVED_AT },
+    );
+    observeCoreRuntimeSyncV1("model_grounding", () => { observeCoreModelCorrectionV1("extraction_decided_downgraded"); }, transport.core_runtime);
+    await Promise.resolve();
+    transport.close();
+    const records = lines.map(line => JSON.parse(line) as Record<string, unknown>);
+    const done = records.find(record => record.kind === "echo-authority-journey-stage-v1" && record.event === "succeeded") as unknown as JourneyTelemetryEventV1;
+    expect(done.diagnostic.model_corrections).toEqual({ extraction_decided_downgraded: 1 });
+    expect(records).toContainEqual(expect.objectContaining({ correction: "extraction_decided_downgraded", ModelCorrections: 1 }));
+  });
+
+  it("counts each correction of model output by its name alone, on the span's terminal event", () => {
+    const corrected = (event: Record<string, unknown>) => formatJourneyTelemetryMetricsV1(journey({
+      ...event, diagnostic: detail({ root: false, phase: "model_grounding", purpose: "model_grounding", result: null, model_corrections: { extraction_repeat_dropped: 2, extraction_owner_cleared: 1 } }),
+    })).filter(record => "ModelCorrections" in record);
+    expect(corrected({})).toEqual([
+      expect.objectContaining({ correction: "extraction_repeat_dropped", ModelCorrections: 2 }),
+      expect.objectContaining({ correction: "extraction_owner_cleared", ModelCorrections: 1 }),
+    ]);
+    // The name is the record's only dimension: never the span, the workflow or anything the model wrote.
+    for (const record of corrected({})) {
+      expect(record._aws.CloudWatchMetrics[0].Dimensions).toEqual([["correction"]]);
+      expect(record._aws.CloudWatchMetrics[0].Metrics).toEqual([{ Name: "ModelCorrections", Unit: "Count" }]);
+    }
+    expect(corrected({ event: "failed", elapsed_ms: 4, failure_class: "unknown", retryable: false })).toHaveLength(2);
+    // A span that made no correction adds no record.
+    expect(formatJourneyTelemetryMetricsV1(journey()).filter(record => "ModelCorrections" in record)).toEqual([]);
   });
 
   it("records research-loop failures separately from the stage failure breakdown", () => {

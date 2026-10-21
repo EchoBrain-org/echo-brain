@@ -2,6 +2,7 @@ import {
   annotateCoreRuntimeV1,
   coreRuntimeIdentityV1,
   normalizeCoreRuntimeDetailV1,
+  observeCoreModelCorrectionV1,
   observeCoreRuntimeSyncV1,
   observeCoreRuntimeV1,
   type CoreRuntimeObservationV1
@@ -128,5 +129,38 @@ describe("core runtime observations", () => {
     }
     expect(events).toContainEqual(expect.objectContaining({ phase: "worker_request", event: "succeeded", counts: expect.objectContaining({ gate_wait_ms: expect.any(Number), pending_depth: 1 }) }));
     await worker.close();
+  });
+
+  it("counts named corrections of model output on the span that made them, by name only", async () => {
+    const events: CoreRuntimeObservationV1[] = [];
+    observeCoreModelCorrectionV1("step_title_as_id");
+    await observeCoreRuntimeV1("research_loop", async () => {
+      observeCoreModelCorrectionV1("step_title_as_id");
+      observeCoreModelCorrectionV1("model_text_truncated", 3);
+      observeCoreModelCorrectionV1("step_title_as_id");
+      await observeCoreRuntimeV1("research_output", async () => { observeCoreModelCorrectionV1("writer_fallback"); });
+      // A name outside the vocabulary or a count that is not a positive whole number is never recorded.
+      observeCoreModelCorrectionV1("PRIVATE QUOTE" as "writer_fallback");
+      observeCoreModelCorrectionV1("model_retry", 0);
+      observeCoreModelCorrectionV1("model_retry", 1.5);
+    }, { observer: event => { events.push(event); } });
+    const terminal = (phase: string) => events.find(event => event.phase === phase && event.event === "succeeded")!;
+    expect(terminal("research_loop").model_corrections).toEqual({ step_title_as_id: 2, model_text_truncated: 3 });
+    expect(terminal("research_output").model_corrections).toEqual({ writer_fallback: 1 });
+    expect(events.filter(event => event.event === "started").every(event => event.model_corrections === undefined)).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("PRIVATE");
+  });
+
+  it("admits only the closed correction vocabulary with positive whole counts", async () => {
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1("model_grounding", async () => { observeCoreModelCorrectionV1("extraction_repeat_dropped"); }, { observer: event => { events.push(event); } });
+    const done = events.at(-1)!;
+    expect(normalizeCoreRuntimeDetailV1(events[0]!)).not.toHaveProperty("model_corrections");
+    expect(normalizeCoreRuntimeDetailV1(done).model_corrections).toEqual({ extraction_repeat_dropped: 1 });
+    expect(normalizeCoreRuntimeDetailV1({ ...done, model_corrections: {} })).not.toHaveProperty("model_corrections");
+    expect(() => normalizeCoreRuntimeDetailV1({ ...done, model_corrections: { "PRIVATE QUOTE": 1 } as never })).toThrow("invalid core runtime correction");
+    expect(() => normalizeCoreRuntimeDetailV1({ ...done, model_corrections: { extraction_repeat_dropped: 0 } })).toThrow("invalid core runtime correction");
+    expect(() => normalizeCoreRuntimeDetailV1({ ...done, model_corrections: { extraction_repeat_dropped: 2.5 } })).toThrow("invalid core runtime correction");
+    expect(() => normalizeCoreRuntimeDetailV1({ ...done, model_corrections: "PRIVATE" as never })).toThrow("invalid core runtime correction");
   });
 });
