@@ -245,6 +245,9 @@ Retries and compaction requests get independent admissions. The transport
 identifies exact released initial/tool packets present in the outbound body;
 only packets carried by an admitted inference mark items read. A token count
 or a compaction request omitting a new tool packet cannot mark it read.
+The same rule applies to search/list observations used to claim absence: tools
+in the same model turn cannot justify a not-found finish before their results
+reach a later inference.
 The gate records call counts, invocation digests, per-request usage when supplied,
 and finish metadata. The loopback proxy requests identity encoding to read SSE
 usage metadata without retaining generated text; missing usage stays unknown.
@@ -288,6 +291,9 @@ are acquired before the access check, including SDK retries. HTTP refusals reach
 the SDK's retry policy and the shared background cooldown; authorization loss
 and cancellation stop the request. Temporary files and child processes are
 cleaned up after completion or failure.
+When those provider retries end in a reported SDK error, ECHO retains its normal
+research fallback and can write from already released evidence. Unknown process
+errors and access failures remain terminal, and raw SDK error text is discarded.
 
 The selected private trace sink receives admitted model input and visible
 text/tool output. Ordinary audit and metrics receive digests, counts and usage,

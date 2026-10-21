@@ -104,6 +104,53 @@ it('aborts in-flight provider work and closes the request gateway when the calle
   finally { transport.close(); }
 });
 
+it('classifies exhausted SDK provider retries for ECHO research fallback without exposing SDK error text', async () => {
+  const fake = (() => Object.assign((async function* () {
+    yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['private provider detail'] };
+  })(), { close() {} })) as unknown as typeof query;
+  const driver = createClaudeResearchDriverV1({ model,
+    forward: async ({ res }) => { res.writeHead(503); res.end('{}'); throw new ClaudeModelResponseErrorV1(503); },
+    run: async input => {
+      for (let i = 0; i < 2; i++) expect((await fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) })).status).toBe(503);
+      await runClaudeResearchV1(input, fake);
+    },
+  });
+  const pending = driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
+    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => (await send(new AbortController().signal)).value });
+  await expect(pending).rejects.toMatchObject({ recovery: 'fallback' });
+  await expect(pending).rejects.not.toThrow('private provider detail');
+});
+
+it.each(['revoked', 'process failure'] as const)('does not reinterpret %s as provider fallback after an earlier provider refusal', async failure => {
+  const terminal = new Error(failure);
+  let requests = 0;
+  const driver = createClaudeResearchDriverV1({ model,
+    forward: async ({ res }) => { res.writeHead(503); res.end('{}'); throw new ClaudeModelResponseErrorV1(503); },
+    run: async input => {
+      const send = () => fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
+      await send();
+      if (failure === 'revoked') await send().catch(() => undefined);
+      throw terminal;
+    },
+  });
+  await expect(driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
+    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+      if (++requests === 2) throw terminal;
+      return (await send(new AbortController().signal)).value;
+    } })).rejects.toBe(terminal);
+});
+
+it('classifies a provider refusal reported by the actual packaged SDK', async () => {
+  const signal = AbortSignal.timeout(20_000);
+  const driver = createClaudeResearchDriverV1({ model, forward: async ({ res }) => {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Synthetic provider refusal' } }));
+    throw new ClaudeModelResponseErrorV1(400);
+  } });
+  await expect(driver.run({ initial: { question: 'Synthetic refusal fixture' }, question: true, list_available: false, signal,
+    remaining: () => 20_000, call: async () => ({}), model_request: async (_request, send) => (await send(signal)).value })).rejects.toMatchObject({ recovery: 'fallback' });
+}, 25_000);
+
 it('admits the exact initial packet and refuses an unexpected model before forwarding', async () => {
   const initial = { question: 'synthetic only' }, requests: unknown[] = [];
   let forwarded = 0;

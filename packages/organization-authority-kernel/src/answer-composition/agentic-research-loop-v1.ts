@@ -1164,9 +1164,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   /** Which list member each item is, or is part of: an opened page's section is its page (ADR-0041). */
   const listMembership = (lists: readonly { readonly id: AgenticListIdV1; readonly members: readonly string[] }[]) => agenticListMembershipV1(lists, [...entries.values()]);
   /** A question goal's finish check, by each need's declared kind; membership only words a refusal (ADR-0041). */
-  const questionCompletionProblems = (parts: readonly { readonly needs: readonly NeedState[] }[]) => {
+  const questionCompletionProblems = (parts: readonly { readonly needs: readonly NeedState[] }[], observations: readonly AskResearchObservationV1[] = researchObservations) => {
     const checked = listsForCheck();
-    return askQuestionCompletionProblemsV1(parts, researchObservations, checked, citable, listMembership(checked).in);
+    return askQuestionCompletionProblemsV1(parts, observations, checked, citable, listMembership(checked).in);
   };
 
   // ---- scratchpad ------------------------------------------------------
@@ -1259,11 +1259,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   let goal: AgenticResearchGoalV1 = brief.goal;
   const goalFields = (): Record<string, unknown> => goal.kind === "question" ? { question: goal.question } : { task: goal.task };
 
-  const checkCompletion = (completionPlan: readonly PartState[], finishAvailable: boolean) => {
+  const checkCompletion = (completionPlan: readonly PartState[], finishAvailable: boolean, observations: readonly AskResearchObservationV1[] = researchObservations) => {
     // A question goal's needs are checked by their declared kinds (ADR-0041); a task goal's need an item read in full.
     const problems = [...(ask
-      ? questionCompletionProblems(completionPlan)
-      : askResearchCompletionProblemsV1(completionPlan, researchObservations, citable, listAvailable))];
+      ? questionCompletionProblems(completionPlan, observations)
+      : askResearchCompletionProblemsV1(completionPlan, observations, citable, listAvailable))];
     if (completionPlan.some(part => part.needs.some(need => need.status === 'not_found'))) {
       if (entries.size > 0 && [...entries.values()].every(entry => entry.item.text === undefined)) {
         problems.unshift('discovered items have metadata only; open potentially relevant discovered items before concluding that it is absent');
@@ -1502,11 +1502,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     let serial: Promise<unknown> = Promise.resolve();
     let terminal: unknown;
     let finished = false;
-    const packets = new Map<Sha256Digest, { readonly read: readonly Entry[]; readonly shown: readonly Entry[] }>();
+    const packets = new Map<Sha256Digest, { readonly read: readonly Entry[]; readonly shown: readonly Entry[]; readonly observations: readonly AskResearchObservationV1[] }>();
+    const seenObservations = new Set<AskResearchObservationV1>();
     const researchTime = () => remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
     // The SDK retains prior tool messages. Send only this read's entries; do not repeatedly
     // copy the whole scratchpad or silently apply the old 300-seen-items window to a later page.
-    const view = (selected: readonly Entry[], extra: ToolResult = {}) => {
+    const view = (selected: readonly Entry[], extra: ToolResult = {}, observations: readonly AskResearchObservationV1[] = []) => {
       const read = selected.filter(entry => entry.item.text !== undefined && (entry.opened || bytes(entry.item.text) <= PASSAGE_BYTES));
       report?.before_check(read.filter(entry => entry.direct === true).map(entry => entry.item));
       const payload = { ...extra,
@@ -1514,7 +1515,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           { full: false, ...(entry.item.text === undefined ? {} : { preview: queryPreview(entry.item.text, entry.query) }) }) })),
         ...(ask ? { lists: listView(new Set([...packets.values()].flatMap(value => value.shown).concat(selected))) } : { inventories: inventoryView() }),
       };
-      packets.set(canonicalSha256(payload), { read, shown: selected });
+      packets.set(canonicalSha256(payload), { read, shown: selected, observations });
       return payload;
     };
     const initial = view([...entries.values()], { ...goalFields(), ...context, scope, source_catalog: sourceCatalog });
@@ -1524,6 +1525,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           const present = (request.payload_digests ?? []).map(digest => packets.get(digest)).filter(value => value !== undefined);
           researchPromptEntries = [...new Set(present.flatMap(value => value.read))];
           researchPromptShown = [...new Set(present.flatMap(value => value.shown))];
+          // Only an admitted inference carrying the actual result observes a read.
+          // Same-turn tools, token counting and omitted packets cannot establish absence.
+          for (const observation of present.flatMap(value => value.observations)) seenObservations.add(observation);
         } }, signal => { steps += 1; return forward(signal); }),
         call(tool, args) {
           const next = serial.then(async () => {
@@ -1535,11 +1539,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               if (tool === 'finish') {
                 const value = parseAgenticDriverFinishV1(args, ask);
                 const parsed = value;
+                // SDK needs are declared at finish; any read actually observed in
+                // this request can support them, but unseen tool results cannot.
                 const candidate = proposedPlan(parsed.parts).map(part => ({ ...part, needs: part.needs.map(need => ({ ...need, observations_before: 0 })) }));
                 for (const part of candidate) for (const need of part.needs) for (const id of need.evidence) {
                   if (entryOf(id) === undefined && !listsInOrder().some(list => list.id === id)) throw new AgenticAskOutputErrorV1('Cite only returned E/L ids');
                 }
-                if (value.completed) checkCompletion(candidate, researchObservations.length > 0 || [...entries.values()].some(entry => entry.full));
+                if (value.completed) checkCompletion(candidate, seenObservations.size > 0 || [...entries.values()].some(entry => entry.full), [...seenObservations]);
                 plan = candidate; finished = true; researchIncomplete = !value.completed;
                 researchStop = value.completed ? 'finished' : 'unusable_step';
                 recordRound(started, [roundView('finish', {}, undefined)]);
@@ -1551,13 +1557,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               const action = parsed.actions[0]!;
               if (tool === 'open' && entryOf(action.args.id ?? '') === undefined) throw new AgenticAskOutputErrorV1('Open only a returned E id');
               report?.reads(tool !== 'open');
+              const observationsBefore = researchObservations.length;
               let raw: ToolResult;
               try { raw = await run(action); } finally { report?.reads_done(); }
               assertLive();
               const summarized = lastResult(action, raw);
               const ids = new Set(['results', 'items', 'linked', 'opened'].flatMap(key => Array.isArray(summarized[key]) ? summarized[key] as string[] : []));
               if (tool === 'open' && action.args.id !== undefined) ids.add(action.args.id);
-              const payload = view([...entries.values()].filter(entry => ids.has(entry.short)), { result: summarized });
+              const payload = view([...entries.values()].filter(entry => ids.has(entry.short)), { result: summarized }, researchObservations.slice(observationsBefore));
               mostReadsInAStep = Math.max(mostReadsInAStep, 1);
               recordRound(started, [roundView(tool, action.args, summarized, raw)]);
               return payload;
@@ -1576,14 +1583,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       await serial;
       if (terminal !== undefined) throw terminal;
       assertLive();
-      if (!finished) { fallbacks += 1; researchStop = 'unusable_step'; }
+      if (!finished) { fallbacks += 1; researchStop = 'unusable_step'; observeCoreModelCorrectionV1('research_unusable_step_stop'); }
     } catch (error) {
       await serial;
       if (terminal !== undefined) throw terminal;
       if (isAbort(error, activeSignal) || !(error instanceof AgenticAskOutputErrorV1)) throw error;
       researchStop = error instanceof AgenticAskPostRevalidationNoTimeErrorV1 || error instanceof AgenticResearchCallBudgetErrorV1 ? 'budget' : 'unusable_step';
       if (error instanceof AgenticAskPostRevalidationNoTimeErrorV1) researchAdmission = 'post_revalidation_no_time';
-      if (researchStop !== 'budget') fallbacks += 1;
+      if (researchStop !== 'budget') { fallbacks += 1; observeCoreModelCorrectionV1('research_unusable_step_stop'); }
     }
     if (plan.length === 0) plan = proposedPlan([{ question: partQuestion(goal.kind === 'question' ? goal.question : goal.task), needs: [], notes: '' }]);
   };

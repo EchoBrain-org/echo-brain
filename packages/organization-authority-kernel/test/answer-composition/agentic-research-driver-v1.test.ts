@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { createAgenticAskV5, createAgenticResearchV1, type AgenticAskAuditEntryV1 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { AgenticAskGenerationFailureV1, createAgenticAskV5, createAgenticResearchV1, type AgenticAskAuditEntryV1 } from '../../src/answer-composition/agentic-ask-v1.js';
 import { parseAgenticDriverFinishV1, type AgenticResearchDriverSessionV1 } from '../../src/answer-composition/agentic-research-driver-v1.js';
 import type { EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from '../../src/answer-composition/agentic-research-v1.js';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
+import { observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { checked, generation, record, result } from './fixtures/agentic-scenarios.js';
 
 const evidence = record('driver', 'Approved: calibrate every unit.');
@@ -26,6 +27,44 @@ function harness(run: (session: AgenticResearchDriverSessionV1) => Promise<void>
 }
 
 describe('native research harness shares the real ECHO tool state', () => {
+  it('keeps released evidence available to the writer when the native provider exhausts retries', async () => {
+    const h = harness(async session => {
+      await admit(session);
+      await session.call('search', { query: 'calibrate' });
+      await admit(session, 'read');
+      throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
+    });
+    let fallbackCorrections = 0;
+    const output = await observeCoreRuntimeV1('research_run', h.ask, { observer: event => {
+      if (event.event !== 'started') fallbackCorrections += event.model_corrections?.research_unusable_step_stop ?? 0;
+    } });
+    expect(output.research.stop.reason).toBe('unusable_step');
+    expect(output.research.items[0]).toMatchObject({ read_in_full: true });
+    expect(output.response.citations).toHaveLength(1);
+    expect(h.generate).toHaveBeenCalledTimes(1);
+    expect(h.audit).toHaveLength(1);
+    expect(fallbackCorrections).toBe(1);
+  });
+
+  it.each(['search', 'list'] as const)('does not let unseen %s results establish absence, including same-turn tool batches', async tool => {
+    const h = harness(async session => {
+      await admit(session);
+      const absent = { completed: true, parts: [{ question: 'Absent record', notes: '', needs: [{ need: 'record', kind: 'content', status: 'not_found', evidence: [] }] }] };
+      if (tool === 'search') {
+        await session.call('search', { query: 'absent' });
+        await session.call('search', { query: 'missing' });
+      } else await session.call('list', { source: 'meetings' });
+      expect(await session.call('finish', absent)).toHaveProperty('error');
+      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('count only'), payload_digests: (packets.get(session) ?? []).map(canonicalSha256), operation: 'count_tokens', timeout: () => 10_000 }, async () => ({ value: true }));
+      expect(await session.call('finish', absent)).toHaveProperty('error');
+      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('omitted'), operation: 'messages', timeout: () => 10_000 }, async () => ({ value: true }));
+      expect(await session.call('finish', absent)).toHaveProperty('error');
+      await admit(session, 'observed reads');
+      expect(await session.call('finish', absent)).toMatchObject({ accepted: true });
+    }, { search: async () => result([]), list: async () => result([]) });
+    expect((await h.ask()).response.outcome).toBe('not_found');
+  });
+
   it('hands released evidence to the unchanged writer, progress and audited release', async () => {
     const h = harness(async session => {
       await admit(session, 'initial');

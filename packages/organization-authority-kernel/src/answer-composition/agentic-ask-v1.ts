@@ -57,7 +57,7 @@ import {
 
 // Other workspaces reach these through this entry point.
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
-export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
+export { AgenticAskDeadlineErrorV1, AgenticAskGenerationFailureV1 } from "./agentic-model-gate-v1.js";
 export type { AgenticResearchDriverV1, AgenticResearchDriverSessionV1 } from './agentic-research-driver-v1.js';
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
 export type {

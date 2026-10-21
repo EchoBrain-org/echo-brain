@@ -363,3 +363,13 @@ for these source checks. Real provider compatibility, source canaries, long
 context compaction and concurrent live load are not established by synthetic
 protocol replies. Staging and final release remain subject to the existing
 operator playbook and exact candidate evidence.
+
+The PR review exposed two additional regressions. Same-turn search/list results
+could satisfy an absence claim before any inference saw them; completion now
+uses only observations bound to result packets admitted to an inference.
+Reported SDK provider failures also lost the existing research fallback; they
+now retain already released evidence for the writer while access revocation
+and unknown process failures remain terminal. Both issues were reproduced with
+failing focused tests. The provider fix is also exercised through the actual
+packaged SDK against a synthetic local HTTP refusal, including its thrown
+`error_result` form. No real provider request was needed for those proofs.

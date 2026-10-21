@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { AgenticResearchDriverV1, AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
-import { runClaudeResearchV1 } from './sdk-client.js';
+import { AgenticAskGenerationFailureV1, type AgenticResearchDriverV1, type AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { ClaudeResearchResultErrorV1, runClaudeResearchV1 } from './sdk-client.js';
 import { ClaudeModelResponseErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
 
 const SYSTEM = [
@@ -33,6 +33,7 @@ export function createClaudeResearchDriverV1(options: {
     const stop = new AbortController();
     const signal = AbortSignal.any([session.signal, stop.signal]);
     let terminal: unknown;
+    let providerFailure: ClaudeModelResponseErrorV1 | undefined;
     const packets = new Map([[JSON.stringify(session.initial), canonicalSha256(session.initial)]]);
     const fail = (error: unknown) => { terminal ??= error; stop.abort(error); };
     const fence = await startClaudeModelTransportV1({ signal, forward: options.forward,
@@ -48,8 +49,12 @@ export function createClaudeResearchDriverV1(options: {
             operation, timeout: session.remaining,
             ...(operation === 'messages' ? { diagnostic_input: { model: options.model, system_prompt: JSON.stringify(payload.system ?? []),
               user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0, timeout_ms: session.remaining() } } : {}),
-          }, async admittedSignal => { const result = await forward(admittedSignal); return { ...result, value: result.content ?? null }; });
-        } catch (error) { if (!(error instanceof ClaudeModelResponseErrorV1)) fail(error); throw error; }
+          }, async admittedSignal => { const result = await forward(admittedSignal); providerFailure = undefined; return { ...result, value: result.content ?? null }; });
+        } catch (error) {
+          if (error instanceof ClaudeModelResponseErrorV1) providerFailure = error;
+          else fail(error);
+          throw error;
+        }
       },
     });
     const handler = (name: Parameters<AgenticResearchDriverSessionV1['call']>[0]) => async (args: unknown) => {
@@ -74,7 +79,13 @@ export function createClaudeResearchDriverV1(options: {
         tools: tools.map(value => `mcp__echo_research__${value.name}`) });
       if (terminal) throw terminal;
       if (fence.forwarded() === 0) throw new Error('SDK did not use the research model gate');
-    } catch (error) { throw terminal ?? error; }
+    } catch (error) {
+      if (terminal !== undefined) throw terminal;
+      if (error instanceof ClaudeResearchResultErrorV1 && providerFailure !== undefined) {
+        throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
+      }
+      throw error;
+    }
     finally { fence.close(); }
   } };
 }

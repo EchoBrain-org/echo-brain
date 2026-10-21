@@ -14,6 +14,11 @@ export interface ClaudeResearchRunV1 {
   readonly tools: readonly string[];
 }
 
+/** A reported SDK execution failure, distinct from process/configuration errors. */
+export class ClaudeResearchResultErrorV1 extends Error {
+  constructor() { super('Claude research did not complete'); this.name = 'ClaudeResearchResultErrorV1'; }
+}
+
 /** The packaged SDK owns its executable. Each request gets an empty, temporary home and only ECHO tools. */
 export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: typeof query = query): Promise<void> {
   input.signal.throwIfAborted();
@@ -50,9 +55,20 @@ export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: 
         return child;
       },
     } });
-    for await (const message of session) if (message.type === 'result') result = message;
+    try {
+      for await (const message of session) if (message.type === 'result') result = message;
+    } catch (error) {
+      input.signal.throwIfAborted();
+      // The pinned SDK may throw its reported error result when the child exits,
+      // instead of returning it from the iterator. Never retain that result text.
+      if ((result !== undefined && (result.subtype !== 'success' || result.is_error)) ||
+          (typeof error === 'object' && error !== null && 'errorClass' in error && error.errorClass === 'error_result')) {
+        throw new ClaudeResearchResultErrorV1();
+      }
+      throw error;
+    }
     input.signal.throwIfAborted();
-    if (result?.subtype !== 'success' || result.is_error) throw new Error('Claude research did not complete');
+    if (result?.subtype !== 'success' || result.is_error) throw new ClaudeResearchResultErrorV1();
   } finally {
     input.signal.removeEventListener('abort', cancel);
     session?.close();
