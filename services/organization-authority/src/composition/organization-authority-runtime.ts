@@ -186,8 +186,14 @@ export async function openOrganizationAuthorityRuntime(
       config.answer_composition_generation_bundle.load();
     const limiter = config.model_call_limiter ?? createModelCallLimiterV1();
     const researchSessions = createModelCallLimiterV1(RESEARCH_SESSION_LIMITS_V1);
-    const limited = (priority: ModelCallPriorityV1): AnswerCompositionGenerationBindingV1 => Object.freeze({ ...answerGeneration,
+    const { personal_research: personalResearch, ...sharedGeneration } = answerGeneration;
+    const limited = (priority: ModelCallPriorityV1): AnswerCompositionGenerationBindingV1 => Object.freeze({ ...sharedGeneration,
       structured_output: limitStructuredGenerationPortV1(answerGeneration.structured_output, (signal, op) => limiter.run(priority, signal, op)),
+      ...(personalResearch === undefined || priority !== 'interactive' ? {} : { personal_research: {
+        ...personalResearch,
+        driver: limitResearchDriverV1(personalResearch.driver,
+          (signal, op) => limiter.run(priority, signal, op), (signal, op) => researchSessions.run(priority, signal, op)),
+      } }),
       ...(answerGeneration.research_driver === undefined ? {} : { research_driver: limitResearchDriverV1(answerGeneration.research_driver,
         (signal, op) => limiter.run(priority, signal, op), (signal, op) => researchSessions.run(priority, signal, op)) }),
     });

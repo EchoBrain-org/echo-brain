@@ -370,6 +370,7 @@ export async function startOrganizationAuthorityApiRuntime(
       memberships,
       model: dependencies.answer_composition_generation.structured_output,
       generation: dependencies.answer_composition_generation.generation,
+      ...(dependencies.answer_composition_generation.personal_research === undefined ? {} : { personal_research: dependencies.answer_composition_generation.personal_research }),
       ...(dependencies.answer_composition_generation.research_driver === undefined ? {} : { research_driver: dependencies.answer_composition_generation.research_driver }),
       audit: new SqlitePersonAgenticAskAuditV1(database),
       ...(diagnostics === undefined ? {} : { diagnostics }),

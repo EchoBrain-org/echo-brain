@@ -26,16 +26,38 @@ export class ClaudeModelTransportErrorV1 extends Error {
 
 /** Fixed upstream, no redirects; the service credential never enters the SDK child, logs or returned errors. */
 export function openRouterClaudeForwarderV1(credential: () => string, model: string): ClaudeModelForwarderV1 {
+  return providerForwarderV1({ model, provider: 'openrouter', hostname: 'openrouter.ai', path_prefix: '/api',
+    authorization: () => `Bearer ${credential()}` });
+}
+
+/** The user's native Claude process supplies its own auth; it is forwarded only to Anthropic and never retained. */
+export function claudeAccountForwarderV1(model: string): ClaudeModelForwarderV1 {
+  return providerForwarderV1({ model, provider: 'anthropic', hostname: 'api.anthropic.com', path_prefix: '',
+    authorization: req => {
+      const value = req.headers.authorization;
+      if (typeof value !== 'string' || !value.startsWith('Bearer ') || value === 'Bearer echo-loopback-only' || req.headers['x-api-key'] !== undefined) {
+        throw new Error('Personal Claude authentication unavailable');
+      }
+      return value;
+    } });
+}
+
+function providerForwarderV1(options: {
+  readonly model: string; readonly provider: 'openrouter' | 'anthropic';
+  readonly hostname: string; readonly path_prefix: string;
+  readonly authorization: (req: IncomingMessage) => string;
+}): ClaudeModelForwarderV1 {
+  const { model, provider } = options;
   return input => observeCoreRuntimeV1('model_call', async () => {
-    observeCoreModelMetadataV1({ provider: 'openrouter', model });
+    observeCoreModelMetadataV1({ provider, model });
     const result = await new Promise<ClaudeMessageMetadataV1>((resolve, reject) => {
       const transportFailed = () => reject(input.signal.aborted ? input.signal.reason : new ClaudeModelTransportErrorV1());
-      const headers: Record<string, string> = { authorization: `Bearer ${credential()}`, 'content-type': 'application/json',
+      const headers: Record<string, string> = { authorization: options.authorization(input.req), 'content-type': 'application/json',
         'content-length': String(input.body.length), 'accept-encoding': 'identity' };
-      for (const key of ['anthropic-version', 'anthropic-beta']) {
+      for (const key of ['anthropic-version', 'anthropic-beta', ...(provider === 'anthropic' ? ['user-agent', 'x-app'] : [])]) {
         const value = input.req.headers[key]; if (typeof value === 'string') headers[key] = value;
       }
-      const upstream = request({ hostname: 'openrouter.ai', port: 443, method: 'POST', path: `/api${input.path}`, headers, signal: input.signal }, reply => {
+      const upstream = request({ hostname: options.hostname, port: 443, method: 'POST', path: `${options.path_prefix}${input.path}`, headers, signal: input.signal }, reply => {
         annotateCoreRuntimeV1({ counts: { http_status: reply.statusCode ?? 0 } });
         const usage = messageUsageObserverV1(true);
         reply.on('data', chunk => usage.write(chunk));
@@ -52,7 +74,7 @@ export function openRouterClaudeForwarderV1(credential: () => string, model: str
       upstream.on('error', transportFailed);
       upstream.end(input.body);
     });
-    observeCoreModelMetadataV1({ provider: 'openrouter', model, ...(result.finish_reason === undefined ? {} : { finish_reason: result.finish_reason }) });
+    observeCoreModelMetadataV1({ provider, model, ...(result.finish_reason === undefined ? {} : { finish_reason: result.finish_reason }) });
     if (result.usage !== undefined) annotateCoreRuntimeV1({ counts: { ...result.usage } });
     return result;
   });

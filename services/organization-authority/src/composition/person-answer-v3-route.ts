@@ -22,6 +22,13 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import type { PersonDiagnosticCaptureHandleV1, PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
+/** Call only after session authentication. Identity never comes from question text or client preferences. */
+export function personResearchDriverV1(options: Pick<CreatePersonAnswerV3RouteOptions, 'research_driver' | 'personal_research' | 'generation'>, membershipId: string) {
+  const personal = options.personal_research?.membership_id === membershipId ? options.personal_research : undefined;
+  const driver = personal?.driver ?? options.research_driver;
+  return { generation: personal?.generation ?? options.generation, ...(driver === undefined ? {} : { research_driver: driver }) };
+}
+
 export interface CreatePersonAnswerV3RouteOptions {
   readonly authority_id: string;
   readonly organization_id: string;
@@ -31,6 +38,7 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly records: PersonEvidenceDeskRecordsV1;
   readonly model: StructuredGenerationPort;
   readonly research_driver?: import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').AgenticResearchDriverV1;
+  readonly personal_research?: import('@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1').AnswerCompositionGenerationBindingV1['personal_research'];
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
   readonly diagnostics?: PersonDiagnosticsV1;
@@ -151,7 +159,7 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
         return createAgenticAskV1({
           ...(asker === undefined ? {} : { asker }),
           ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
-          ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+          ...personResearchDriverV1(options, context.membership_id), desk, model: options.model, audit: options.audit.forRequest(context),
         }).answer({ question: input.request.question, signal });
       });
     },

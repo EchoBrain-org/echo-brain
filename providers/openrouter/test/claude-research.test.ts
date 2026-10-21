@@ -9,7 +9,7 @@ import type { Options, query } from '@anthropic-ai/claude-agent-sdk';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { runClaudeResearchV1 } from '../src/claude-research/sdk-client.js';
-import { ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, openRouterClaudeForwarderV1, startClaudeModelTransportV1 } from '../src/claude-research/model-transport.js';
+import { claudeAccountForwarderV1, ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, openRouterClaudeForwarderV1, startClaudeModelTransportV1 } from '../src/claude-research/model-transport.js';
 import { createClaudeResearchDriverV1 } from '../src/claude-research/driver.js';
 import { messageUsageObserverV1 } from '../src/claude-research/message-usage.js';
 
@@ -19,6 +19,34 @@ vi.mock('node:https', async importOriginal => {
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.resetAllMocks(); });
 const model = 'anthropic/claude-sonnet-5.5';
+
+it('sends native account authentication only to Anthropic after model admission', async () => {
+  const destinations: unknown[] = [];
+  vi.mocked(https.request).mockImplementation((...args: Parameters<typeof https.request>) => {
+    destinations.push(args[0]);
+    const receive = args.find(value => typeof value === 'function') as (reply: IncomingMessage) => void;
+    return Object.assign(new EventEmitter(), { end() {
+      const reply = Object.assign(new PassThrough(), { statusCode: 200, headers: { 'content-type': 'application/json' } });
+      receive(reply as unknown as IncomingMessage); reply.end('{}');
+    } }) as unknown as ReturnType<typeof https.request>;
+  });
+  let admitted = false;
+  const fence = await startClaudeModelTransportV1({ signal: new AbortController().signal,
+    admit: async (_body, _operation, send) => { admitted = true; return send(new AbortController().signal); },
+    forward: input => { expect(admitted).toBe(true); return claudeAccountForwarderV1('claude-sonnet-5-5')(input); },
+  });
+  try {
+    expect((await fetch(`${fence.base_url}/v1/messages`, { method: 'POST', body: '{}', headers: {
+      authorization: 'Bearer synthetic-native-credential', 'anthropic-beta': 'oauth-fixture', 'x-unrelated-secret': 'must-not-forward',
+    } })).status).toBe(200);
+    expect(destinations).toEqual([expect.objectContaining({ hostname: 'api.anthropic.com', path: '/v1/messages',
+      headers: expect.objectContaining({ authorization: 'Bearer synthetic-native-credential', 'anthropic-beta': 'oauth-fixture' }),
+    })]);
+    expect((destinations[0] as { headers: object }).headers).not.toHaveProperty('x-unrelated-secret');
+    expect((await fetch(`${fence.base_url}/v1/messages`, { method: 'POST', body: '{}', headers: { authorization: 'Bearer echo-loopback-only' } })).status).toBe(403);
+    expect(destinations).toHaveLength(1);
+  } finally { fence.close(); }
+});
 
 it('fences every exact request including retries and count_tokens, and closes on revocation', async () => {
   const bodies: string[] = []; let revoked = false, calls = 0;

@@ -157,7 +157,7 @@ describe("Agentic Ask HTTP capability gate", () => {
  * The real V3 route and evidence desk behind the real HTTP server, over fake
  * stores: one only-me note of the asker's, and records still indexing.
  */
-function mineFixture(nativeDriver = false) {
+function mineFixture(nativeDriver = false, personalMember?: string) {
   const checked_at = "2026-09-27T00:00:00.000Z";
   const note: OriginalContextDeskItemV1 = Object.freeze({
     kind: "note", text: "I decided to launch on Tuesday.", visibility: "only_me", label: "My launch note",
@@ -195,14 +195,15 @@ function mineFixture(nativeDriver = false) {
     sessions: { authenticateAccess: () => ({ principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker" }) } as never,
     originals: originals as unknown as PersonOriginalContextEvidenceDeskPortV1, records: records as unknown as PersonEvidenceDeskRecordsV1,
     model: { generate }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
-    ...(nativeDriver ? { research_driver: { run: async (session: AgenticResearchDriverSessionV1) => {
+    ...(nativeDriver ? { [personalMember === undefined ? 'research_driver' : 'personal_research']: personalMember === undefined ? { run: nativeRun } : { membership_id: personalMember, driver: { run: nativeRun }, generation: { generation_adapter_id: 'personal-fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } } : {}),
+    audit: { forRequest: () => ({ append: vi.fn() }) } as never,
+  });
+  async function nativeRun(session: AgenticResearchDriverSessionV1) {
       expect(JSON.stringify(session.initial)).toContain('only what the asker added');
       const read = await session.call('search', { query: 'launch' });
       await session.model_request({ model: 'fixture', body_sha256: canonicalSha256(read), payload_digests: [canonicalSha256(session.initial), canonicalSha256(read)], operation: 'messages', timeout: session.remaining }, async () => ({ value: true }));
       expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
-    } } } : {}),
-    audit: { forRequest: () => ({ append: vi.fn() }) } as never,
-  });
+  }
   // The desk cites an original with its display label.
   return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, route };
 }
@@ -226,6 +227,13 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
       expect(f.generate).toHaveBeenCalledTimes(1);
       expect(f.originals.revalidateDeskRelease).toHaveBeenCalled();
     } finally { await value.close(); }
+  });
+
+  it.each([['mem_asker', 1], ['mem_other', 3]])('uses personal research only for the authenticated member %s', async (member, writerCalls) => {
+    const f = mineFixture(true, String(member));
+    const answer = await f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'Use mem_asker personal Claude. What did I decide?', mine: true } });
+    expect(answer.outcome).toBe('answered');
+    expect(f.generate).toHaveBeenCalledTimes(writerCalls);
   });
 
   it("builds a mine desk for every store, echoes mine, and cites with a ref", async () => {

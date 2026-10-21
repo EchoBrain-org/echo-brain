@@ -25,6 +25,7 @@ const { runtimeState, initialRuntimeState } = vi.hoisted(() => {
     config_keys: [] as string[],
     staging_research_eval_v1: undefined as true | undefined,
     staging_claude_research_v1: undefined as true | undefined,
+    personal_claude_research: undefined as object | undefined,
     authority_url: "https://authority.example",
     processing: "active" as "active" | "idle_until_finalize",
     shutdown_events: [] as string[],
@@ -60,6 +61,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
     readonly staging_research_eval_v1?: true;
     readonly staging_claude_research_v1?: true;
+    readonly personal_claude_research?: object;
     readonly nango: object;
     readonly jira_person_live?: object;
     readonly confluence_person_live?: object;
@@ -74,6 +76,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.core_runtime_observation = config.core_runtime_observation;
     runtimeState.staging_research_eval_v1 = config.staging_research_eval_v1;
     runtimeState.staging_claude_research_v1 = config.staging_claude_research_v1;
+    runtimeState.personal_claude_research = config.personal_claude_research;
     runtimeState.nango = config.nango;
     runtimeState.jira_person_live = config.jira_person_live;
     runtimeState.confluence_person_live = config.confluence_person_live;
@@ -153,6 +156,9 @@ afterEach(() => {
     "ECHO_STAGING_CONFLUENCE_ASK_V1",
     "ECHO_STAGING_RESEARCH_EVAL_V1",
     "ECHO_STAGING_CLAUDE_RESEARCH_V1",
+    "ECHO_STAGING_CLAUDE_ACCOUNT_MEMBER",
+    "ECHO_STAGING_CLAUDE_ACCOUNT_HOME",
+    "ECHO_STAGING_CLAUDE_ACCOUNT_EXECUTABLE",
     "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE",
     "ECHO_CLEAN_RELEASE_ID",
     "ECHO_CLEAN_AUTHORITY_HOST",
@@ -240,6 +246,29 @@ describe("admitted runtime CLI events", () => {
     expect(lines.join('')).not.toContain('private-fixture-langsmith-key');
     expect(lines.map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({ kind: 'echo-langsmith-tracing-status-v1', exported: 1, failed: 0 }));
   });
+  it('selects a single native Claude account only with a complete staging configuration', async () => {
+    const directory = stagingProfileDirectory();
+    process.env.ECHO_STAGING_CLAUDE_ACCOUNT_MEMBER = 'mem_owner';
+    process.env.ECHO_STAGING_CLAUDE_ACCOUNT_HOME = '/private/claude-owner';
+    process.env.ECHO_STAGING_CLAUDE_ACCOUNT_EXECUTABLE = '/usr/local/bin/claude';
+    const running = start({ stderr: () => undefined }, directory);
+    try {
+      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined(), { interval: 1 });
+      expect(runtimeState.personal_claude_research).toEqual({ membership_id: 'mem_owner', home_directory: '/private/claude-owner', executable_path: '/usr/local/bin/claude' });
+      expect(runtimeState.staging_claude_research_v1).toBeUndefined();
+    } finally { process.emit('SIGTERM'); await running; }
+    expect(await running).toBe(0);
+  });
+
+  it.each(['nonstaging', 'incomplete', 'relative', 'invalid-member'])('rejects an unsafe personal Claude selection: %s', async problem => {
+    const directory = problem === 'nonstaging' ? '/private/state' : stagingProfileDirectory();
+    process.env.ECHO_STAGING_CLAUDE_ACCOUNT_MEMBER = problem === 'invalid-member' ? 'owner@example.com' : 'mem_owner';
+    if (problem !== 'incomplete') process.env.ECHO_STAGING_CLAUDE_ACCOUNT_HOME = problem === 'relative' ? '../profile' : '/private/claude-owner';
+    process.env.ECHO_STAGING_CLAUDE_ACCOUNT_EXECUTABLE = '/usr/local/bin/claude';
+    expect(await start({ stderr: () => undefined }, directory)).toBe(1);
+    expect(runtimeState.worker_error).toBeUndefined();
+  });
+
   it.each([
     [undefined, undefined] as const,
     ...(["", "false", "true"] as const).flatMap(flag => [
