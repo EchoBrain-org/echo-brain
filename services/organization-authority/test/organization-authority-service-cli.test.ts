@@ -24,6 +24,7 @@ const { runtimeState, initialRuntimeState } = vi.hoisted(() => {
     core_runtime_observation: undefined as CoreRuntimeObservationScopeV1 | undefined,
     config_keys: [] as string[],
     staging_research_eval_v1: undefined as true | undefined,
+    staging_claude_research_v1: undefined as true | undefined,
     authority_url: "https://authority.example",
     processing: "active" as "active" | "idle_until_finalize",
     shutdown_events: [] as string[],
@@ -58,6 +59,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
     readonly staging_research_eval_v1?: true;
+    readonly staging_claude_research_v1?: true;
     readonly nango: object;
     readonly jira_person_live?: object;
     readonly confluence_person_live?: object;
@@ -71,6 +73,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.config_keys = Object.keys(config);
     runtimeState.core_runtime_observation = config.core_runtime_observation;
     runtimeState.staging_research_eval_v1 = config.staging_research_eval_v1;
+    runtimeState.staging_claude_research_v1 = config.staging_claude_research_v1;
     runtimeState.nango = config.nango;
     runtimeState.jira_person_live = config.jira_person_live;
     runtimeState.confluence_person_live = config.confluence_person_live;
@@ -149,6 +152,7 @@ afterEach(() => {
     "ECHO_STAGING_JIRA_ASK_V1",
     "ECHO_STAGING_CONFLUENCE_ASK_V1",
     "ECHO_STAGING_RESEARCH_EVAL_V1",
+    "ECHO_STAGING_CLAUDE_RESEARCH_V1",
     "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE",
     "ECHO_CLEAN_RELEASE_ID",
     "ECHO_CLEAN_AUTHORITY_HOST",
@@ -242,6 +246,7 @@ describe("admitted runtime CLI events", () => {
       ["ECHO_STAGING_JIRA_ASK_V1", flag],
       ["ECHO_STAGING_CONFLUENCE_ASK_V1", flag],
       ["ECHO_STAGING_RESEARCH_EVAL_V1", flag],
+      ["ECHO_STAGING_CLAUDE_RESEARCH_V1", flag],
     ] as const),
   ])("composes each staging-profile Jira, Confluence or research capability only with its own switch (%s=%s)", async (env, flag) => {
     const directory = stagingProfileDirectory();
@@ -260,6 +265,7 @@ describe("admitted runtime CLI events", () => {
       });
       else expect(runtimeState.confluence_person_live).toBeUndefined();
       expect(runtimeState.staging_research_eval_v1).toBe(enabled === "ECHO_STAGING_RESEARCH_EVAL_V1" ? true : undefined);
+      expect(runtimeState.staging_claude_research_v1).toBe(enabled === "ECHO_STAGING_CLAUDE_RESEARCH_V1" ? true : undefined);
     } finally { process.emit("SIGTERM"); await running; }
     expect(await running, errors.join("")).toBe(0);
   });
@@ -271,6 +277,8 @@ describe("admitted runtime CLI events", () => {
     ["ECHO_STAGING_CONFLUENCE_ASK_V1", "invalid"],
     ["ECHO_STAGING_RESEARCH_EVAL_V1", "true"],
     ["ECHO_STAGING_RESEARCH_EVAL_V1", "yes"],
+    ["ECHO_STAGING_CLAUDE_RESEARCH_V1", "true"],
+    ["ECHO_STAGING_CLAUDE_RESEARCH_V1", "yes"],
   ])("refuses a staging switch without its fixed profile or staging Authority, or with an invalid value (%s=%s)", async (env, flag) => {
     process.env[env] = flag;
     expect(await start({ stderr: () => undefined })).toBe(1);

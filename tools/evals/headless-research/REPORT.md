@@ -1,6 +1,7 @@
 # Claude research-loop feasibility trial
 
-The latest follow-up is the [local staging comparison](#local-staging-comparison).
+The latest source candidate is the [staging service integration](#staging-service-integration-2026-10-20).
+The earlier [local staging comparison](#local-staging-comparison) used a local client.
 The earlier [limit-removal comparison](#limit-removal-comparison) confirms that
 numerical caps can truncate a complete inventory and stop a successful research
 path. Both earlier synthetic trials below are retained as historical evidence.
@@ -318,7 +319,7 @@ they appear as outbound requests, while `repairs` remains ECHO's explicit repair
 counter. Compaction admission has a deterministic transport test, not a live
 long-context stress run.
 
-The service composition exposes this only as an operator-injected staging
+At that integration checkpoint, the service composition exposed this only as an operator-injected staging
 **evaluation** driver. The shipped bootstrap does not select it, and ordinary
 Ask/trigger dispatch keeps the existing engine. The SDK adapter/dependencies
 remain in the evaluation package. Server packaging, provider authentication,
@@ -339,3 +340,26 @@ Validation of this integration candidate on 2026-10-20:
   and staging-evaluation tests passed before the full run.
 - `npm run check:docs` and `git diff --check` passed after the report and aggregate
   result artifact were added. No deployment or update-feed operation was run.
+
+## Staging service integration, 2026-10-20
+
+The follow-up candidate includes #349's removal of related-atom projection and
+#348's correction telemetry. It packages the SDK in the OpenRouter provider and
+selects it for ordinary staging Ask and background research when the fixed
+connector rehearsal profile is active. The old engine remains selected outside
+staging. The existing service credential authenticates the parent's native
+Anthropic Messages requests; the SDK child receives only a loopback placeholder.
+The developer's Claude sign-in is not the service authentication mechanism.
+
+Source checks now cover the shared model queue before authorization, cancellation,
+provider-rate-limit retries, per-call private traces, isolated process environment,
+temporary-home cleanup and the authenticated Ask route's unchanged cited answer.
+The packaged executable has also completed search and finish through its real
+MCP transport using synthetic local Messages replies. That local smoke observed
+three model requests, all three admitted, and both requested tool calls.
+
+No live deployment, feed publication or new OpenRouter model inference was run
+for these source checks. Real provider compatibility, source canaries, long
+context compaction and concurrent live load are not established by synthetic
+protocol replies. Staging and final release remain subject to the existing
+operator playbook and exact candidate evidence.

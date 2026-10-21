@@ -236,6 +236,9 @@ export async function runOrganizationAuthorityServiceCli(
     if (connectorRehearsal !== undefined && stagingSyntheticMeetingsDirectory !== undefined) {
       throw new Error('Staging connector rehearsal cannot select another synthetic source profile');
     }
+    const stagingClaudeResearch = process.env.ECHO_STAGING_CLAUDE_RESEARCH_V1;
+    if (stagingClaudeResearch !== undefined && !['', 'false', 'true'].includes(stagingClaudeResearch)) throw new Error('Staging Claude research selection is invalid');
+    if (stagingClaudeResearch === 'true' && manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) throw new Error('Claude research is available only on the staging Authority');
     const stagingResearchEval = process.env.ECHO_STAGING_RESEARCH_EVAL_V1;
     if (stagingResearchEval !== undefined && !['', 'false', 'true'].includes(stagingResearchEval)) {
       throw new Error('Staging research evaluation selection is invalid');
@@ -284,6 +287,7 @@ export async function runOrganizationAuthorityServiceCli(
             },
       pkce_key_file: manifest.pkce_key_file,
       ...(stagingResearchEval === 'true' ? { staging_research_eval_v1: true as const } : {}),
+      ...(stagingClaudeResearch === 'true' ? { staging_claude_research_v1: true as const } : {}),
       nango,
       ...(jiraCloudId === undefined ? {} : { jira_person_live: {
         enabled: true as const,

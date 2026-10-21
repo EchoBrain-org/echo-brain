@@ -190,6 +190,7 @@ export async function openOrganizationAuthorityService(
   const modelCalls = createModelCallLimiterV1();
   const decisionProcessor = createOpenRouterDecisionProcessorBundleV1({
     credential_file: openrouter_credential_file,
+          ...(sharedConfig.staging_claude_research_v1 === true && sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? { research_engine: 'claude-sdk' as const } : {}),
     limit: (signal, op) => modelCalls.run("background", signal, op),
   });
   // One instance for the personal appender and the Authority's readers.
@@ -463,6 +464,7 @@ export async function openOrganizationAuthorityService(
       answer_composition_generation_bundle:
         createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
+          ...(sharedConfig.staging_claude_research_v1 === true && sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? { research_engine: 'claude-sdk' as const } : {}),
         }),
       model_call_limiter: modelCalls,
       record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,

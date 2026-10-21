@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createModelCallLimiterV1, type ModelCallPriorityV1 } from '../src/composition/model-call-limiter-v1.js';
+import { createModelCallLimiterV1, limitResearchDriverV1, type ModelCallPriorityV1 } from '../src/composition/model-call-limiter-v1.js';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 
 afterEach(() => { vi.useRealTimers(); });
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -16,6 +18,32 @@ function held(limiter = createModelCallLimiterV1()) {
 }
 
 describe('model call limiter', () => {
+  it('checks SDK access after queuing so a revocation while waiting prevents forwarding', async () => {
+    const f = held();
+    const occupied = ['i1', 'i2', 'i3', 'i4', 'i5', 'i6'];
+    const active = occupied.map(name => f.call(name, 'interactive'));
+    let revoked = false, checks = 0, forwarded = false;
+    const session: AgenticResearchDriverSessionV1 = {
+      initial: {}, question: true, list_available: true, signal: new AbortController().signal,
+      remaining: () => 60_000, call: async () => ({}),
+      model_request: async (_request, send) => {
+        checks++; if (revoked) throw new Error('revoked while queued');
+        return (await send(new AbortController().signal)).value;
+      },
+    };
+    const driver = limitResearchDriverV1({ run: async current => {
+      await current.model_request({ model: 'fixture', body_sha256: canonicalSha256({}), operation: 'messages', timeout: current.remaining }, async () => { forwarded = true; return { value: true }; });
+    } }, (signal, op) => f.limiter.run('interactive', signal, op));
+    const pending = driver.run(session);
+    const rejected = expect(pending).rejects.toThrow('revoked while queued');
+    await flush(); expect(checks).toBe(0);
+    revoked = true;
+    await f.release('i1'); await rejected;
+    expect(checks).toBe(1); expect(forwarded).toBe(false);
+    for (const name of occupied.slice(1)) await f.release(name);
+    await Promise.all(active);
+  });
+
   it('serves queued interactive calls before background ones, and gives them every slot', async () => {
     const f = held();
     for (const name of ['i1', 'i2', 'i3', 'i4', 'i5', 'i6']) void f.call(name, 'interactive');

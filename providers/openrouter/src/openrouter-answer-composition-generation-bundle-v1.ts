@@ -1,6 +1,8 @@
 import { readPrivateAuthorityCredential } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { createOpenRouterStructuredGenerationAdapter } from "./adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 import type { AnswerCompositionGenerationBundleV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
+import { createClaudeResearchDriverV1 } from './claude-research/driver.js';
+import { openRouterClaudeForwarderV1 } from './claude-research/model-transport.js';
 
 export const OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1 =
   "openrouter" as const;
@@ -16,11 +18,16 @@ export const OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 = 131_072;
  */
 export function createOpenRouterAnswerCompositionGenerationBundleV1(input: {
   readonly credential_file: string;
+  readonly research_engine?: 'claude-sdk';
 }): AnswerCompositionGenerationBundleV1 {
   return Object.freeze({
     load() {
       const credentialReference = `file:${input.credential_file}`;
       return Object.freeze({
+        ...(input.research_engine === 'claude-sdk' ? { research_driver: createClaudeResearchDriverV1({
+          model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+          forward: openRouterClaudeForwarderV1(() => readPrivateAuthorityCredential(credentialReference), OPENROUTER_ANSWER_COMPOSITION_MODEL_V1),
+        }) } : {}),
         // Startup must not depend on an installed model credential. The API and
         // non-model maintenance lanes are useful during bootstrap; resolve and
         // validate the private file only when a request actually uses the model.
@@ -32,7 +39,7 @@ export function createOpenRouterAnswerCompositionGenerationBundleV1(input: {
         }),
         generation: Object.freeze({
           generation_adapter_id:
-            OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+            input.research_engine === 'claude-sdk' ? 'openrouter-claude-sdk-v1' : OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
           planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
           answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
           timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,

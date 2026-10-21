@@ -27,7 +27,7 @@ import type { ReadableSearchGenerationReconciliationV1 } from "./readable-search
 import type { OrganizationAuthorityApiRuntimeConfig, OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
-import { createModelCallLimiterV1, limitStructuredGenerationPortV1, type ModelCallLimiterV1, type ModelCallPriorityV1 } from "./model-call-limiter-v1.js";
+import { createModelCallLimiterV1, limitStructuredGenerationPortV1, limitResearchDriverV1, type ModelCallLimiterV1, type ModelCallPriorityV1 } from "./model-call-limiter-v1.js";
 
 /** The staging release canary's outcome; the deploy receipt reads `approval_outcome = kind` and `approval_id`. */
 export interface StagingSyntheticCanaryOutcomeV1 {
@@ -46,6 +46,7 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly pkce_key_file: string;
   /** Staging-only research evaluation endpoint; ignored for any other Authority origin. */
   readonly staging_research_eval_v1?: true;
+  readonly staging_claude_research_v1?: true;
   /** Explicit answer-composition bundle. This generic root does not select one. */
   readonly answer_composition_generation_bundle: AnswerCompositionGenerationBundleV1;
   /** The one model-call limiter, shared with extraction by the root that selects the provider; one is made when absent. */
@@ -185,7 +186,9 @@ export async function openOrganizationAuthorityRuntime(
       config.answer_composition_generation_bundle.load();
     const limiter = config.model_call_limiter ?? createModelCallLimiterV1();
     const limited = (priority: ModelCallPriorityV1): AnswerCompositionGenerationBindingV1 => Object.freeze({ ...answerGeneration,
-      structured_output: limitStructuredGenerationPortV1(answerGeneration.structured_output, (signal, op) => limiter.run(priority, signal, op)) });
+      structured_output: limitStructuredGenerationPortV1(answerGeneration.structured_output, (signal, op) => limiter.run(priority, signal, op)),
+      ...(answerGeneration.research_driver === undefined ? {} : { research_driver: limitResearchDriverV1(answerGeneration.research_driver, (signal, op) => limiter.run(priority, signal, op)) }),
+    });
     // Ask is interactive; notes and trigger research wait behind it.
     const backgroundGeneration = limited("background");
     const readableSearch = createReadableSearchGenerationReconcilerV1({
@@ -216,6 +219,7 @@ export async function openOrganizationAuthorityRuntime(
           ...(preparedPerson === undefined ? {} : { person_http_runtime_factory: preparedPerson.attach }),
           answer_composition_generation: limited("interactive"),
           answer_composition_background: backgroundGeneration.structured_output,
+          ...(backgroundGeneration.research_driver === undefined ? {} : { research_background_driver: backgroundGeneration.research_driver }),
         },
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,

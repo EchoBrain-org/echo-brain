@@ -51,6 +51,17 @@ function harness(options: {
 }
 
 describe("agentic model gate", () => {
+  it('pairs native SDK payloads and visible responses in the private trace without adding content to the audit', async () => {
+    const { gate } = harness();
+    const events: CoreRuntimeDiagnosticObservationV1[] = [];
+    const request = { model: 'claude-fixture', body_sha256: canonicalSha256('synthetic'), operation: 'messages' as const, timeout: () => 20_000,
+      diagnostic_input: { model: 'claude-fixture', system_prompt: 'synthetic system', user_prompt: 'private fixture', schema: {}, max_output_tokens: 100, timeout_ms: 20_000 } };
+    await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.external(request, async () => ({ value: [{ type: 'text', text: 'private answer' }], finish_reason: 'end_turn' })));
+    expect(events.filter(event => event.kind === 'model_request')).toEqual([expect.objectContaining({ call_id: 1, input: request.diagnostic_input })]);
+    expect(events.filter(event => event.kind === 'model_response')).toEqual([expect.objectContaining({ call_id: 1, value: [{ type: 'text', text: 'private answer' }], finish_reason: 'stop' })]);
+    expect(JSON.stringify(gate.stats())).not.toMatch(/private fixture|private answer|synthetic system/);
+  });
+
   it('fences and audits every external inference, retry and token count with its actual body digest', async () => {
     const { gate, trace } = harness();
     const body_sha256 = canonicalSha256({ messages: ['synthetic evidence'] });

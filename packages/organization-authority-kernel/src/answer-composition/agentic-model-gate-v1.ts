@@ -193,6 +193,8 @@ export interface AgenticModelGateV1 {
 
 /** Only a digest of the exact outbound bytes is retained; credentials never enter this contract. */
 export interface AgenticExternalModelRequestV1 {
+  /** Optional model payload for the existing selected private diagnostic sink; never audit or metrics. */
+  readonly diagnostic_input?: import('../shared/core-runtime-diagnostics-v1.js').CoreRuntimeDiagnosticModelInputV1;
   readonly model: string;
   readonly body_sha256: Sha256Digest;
   readonly operation: 'messages' | 'count_tokens';
@@ -386,7 +388,17 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       try {
         const result = await observeCoreRuntimeV1('ask_planner', async () => {
           options.on_span?.({ role: 'step', phase: 'enter' });
-          return raceAbort(signal, forward(signal));
+          const observed = request.diagnostic_input !== undefined;
+          if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_request', call_id: calls, role: 'step', recovery: false, input: request.diagnostic_input! });
+          try {
+            const result = await raceAbort(signal, forward(signal));
+            if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: calls, role: 'step', value: result.value ?? null,
+              ...(result.usage === undefined ? {} : { usage: result.usage }), finish_reason: result.finish_reason === 'end_turn' || result.finish_reason === 'tool_use' ? 'stop' : result.finish_reason === 'max_tokens' ? 'length' : 'other' });
+            return result;
+          } catch (error) {
+            if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: calls, role: 'step', error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
+            throw error;
+          }
         });
         generations.push(Object.freeze({ role: 'step', engine: 'external_research', model: request.model, finish_reason: result.finish_reason ?? null, usage: result.usage ?? null }));
         return result.value;

@@ -8,6 +8,8 @@ services:
       ECHO_STAGING_CONFLUENCE_ASK_V1: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:+true}"
       # The reviewed connector rehearsal selects evaluation too; no host environment edit.
       ECHO_STAGING_RESEARCH_EVAL_V1: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:+true}"
+      # This release selects the SDK only on the reviewed staging connector rehearsal.
+      ECHO_STAGING_CLAUDE_RESEARCH_V1: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:+true}"
     ports: !override
       - name: tunnel-origin
         target: 80

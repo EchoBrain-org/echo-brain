@@ -1,4 +1,5 @@
 import type { StructuredGenerationFailureDiagnosticV1, StructuredGenerationInput, StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
+import type { AgenticResearchDriverV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 
 export type ModelCallPriorityV1 = "interactive" | "background";
 /** Runs one model call when a slot is free. Provider code receives only this, never the limiter. */
@@ -96,4 +97,11 @@ export function limitStructuredGenerationPortV1(port: StructuredGenerationPort, 
   return Object.freeze(observed === undefined ? { generate } : {
     generate, generate_with_observation: (input: StructuredGenerationInput) => limit(input.signal, () => observed.call(port, input)),
   });
+}
+
+/** Queue each SDK request before its access check; waiting for a slot never makes an authorization stale. */
+export function limitResearchDriverV1(driver: AgenticResearchDriverV1, limit: ModelCallLimitV1): AgenticResearchDriverV1 {
+  return { run: session => driver.run({ ...session,
+    model_request: (request, forward) => limit(session.signal, () => session.model_request(request, forward)),
+  }) };
 }

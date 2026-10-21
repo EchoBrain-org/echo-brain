@@ -30,6 +30,7 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly originals: PersonOriginalContextEvidenceDeskPortV1;
   readonly records: PersonEvidenceDeskRecordsV1;
   readonly model: StructuredGenerationPort;
+  readonly research_driver?: import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').AgenticResearchDriverV1;
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
   readonly diagnostics?: PersonDiagnosticsV1;
@@ -150,7 +151,7 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
         return createAgenticAskV1({
           ...(asker === undefined ? {} : { asker }),
           ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
-          desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+          ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
         }).answer({ question: input.request.question, signal });
       });
     },

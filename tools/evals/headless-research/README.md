@@ -220,13 +220,11 @@ investigation. Ask and trigger renderers consume the normal evidence bundle;
 planner-disabled sweeps never start the SDK.
 
 The staging evaluation composition accepts `research_eval_driver` from its
-operator dependencies, never from a Person HTTP request. It is still gated by
-the existing staging origin and evaluation opt-in. The normal Ask routes,
-trigger dispatch, deployed bootstrap, image dependencies and default engine
-are unchanged. **This candidate is not yet a deployed SDK service:** the adapter
-remains in the isolated evaluation package. Packaging and supported service
-provider authentication must be reviewed before installing it on staging.
-The developer's Claude sign-in is only for these local trials.
+operator dependencies, never from a Person HTTP request. It remains gated by
+the existing staging origin and evaluation opt-in. The commands below use the
+developer's Claude sign-in only for local trials. The service adapter described
+below instead uses the Authority's provider binding. Neither source integration
+nor a passing local test is a staging deployment.
 
 ```sh
 npm run build:workspaces
@@ -269,3 +267,45 @@ results, no-planner/search-only triggers, cancellation, concurrent gate admissio
 revocation and the persisted audit format. Real provider retry/compaction loads,
 host lifecycle/concurrency and supported server authentication still need staged
 qualification; a mocked compaction request is not a live compaction stress test.
+
+## Staging service adapter
+
+`providers/openrouter/src/claude-research` packages SDK `0.3.305` in the Authority
+dependency closure. `ECHO_STAGING_CLAUDE_RESEARCH_V1=true` selects that researcher
+for ordinary Ask, evaluation and background research only at the fixed staging
+Authority origin. The EC2 connector-rehearsal compose overlay selects it with the
+existing profile. It does not enable the SDK on other Authorities. The shared
+writer, trigger dispatch, no-planner sweeps and client response contracts stay
+the same. No database baseline changes are required.
+
+Each request starts the packaged SDK executable in a temporary empty home,
+without inherited host credentials, plugins, built-in tools or persisted
+sessions. Its only model endpoint is a random request-local loopback path.
+The parent forwards admitted requests to OpenRouter's native Anthropic Messages
+endpoint with the existing service credential; no provider credential enters
+the child. Every request uses the configured Sonnet model. Global model slots
+are acquired before the access check, including SDK retries. HTTP refusals reach
+the SDK's retry policy and the shared background cooldown; authorization loss
+and cancellation stop the request. Temporary files and child processes are
+cleaned up after completion or failure.
+
+The selected private trace sink receives admitted model input and visible
+text/tool output. Ordinary audit and metrics receive digests, counts and usage,
+not those payloads. Shared tool and completion corrections still use #348's
+named counters. SDK-owned corrections are not reported as ECHO corrections.
+
+After building the service, the packaged executable and MCP transport can be
+checked without credentials, external network requests or user records:
+
+```sh
+npm run build --workspace @echo-brain/organization-authority
+node tools/evals/headless-research/service-package-smoke.mjs
+```
+
+The same smoke script can be mounted read-only at its `/app/tools/evals/...`
+path inside the built Authority image and run with `--network none`. It exercises
+search, finish, structured completion and per-request evidence admission against
+a local synthetic Messages responder. It proves packaging and protocol wiring,
+not real model quality or OpenRouter provider compatibility. Those require the
+live source canaries through the existing operator release lane. Long-context
+compaction and concurrent live request load remain separate qualification work.
