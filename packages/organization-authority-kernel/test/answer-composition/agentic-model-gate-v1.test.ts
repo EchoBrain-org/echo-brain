@@ -51,6 +51,49 @@ function harness(options: {
 }
 
 describe("agentic model gate", () => {
+  it('fences and audits every external inference, retry and token count with its actual body digest', async () => {
+    const { gate, trace } = harness();
+    const body_sha256 = canonicalSha256({ messages: ['synthetic evidence'] });
+    for (const operation of ['messages', 'messages', 'count_tokens'] as const) {
+      await gate.external({ model: 'claude-fixture', body_sha256, operation, timeout: () => 20_000 }, async () => {
+        trace.push('forward'); return { value: true, finish_reason: 'end_turn' };
+      });
+    }
+    expect(trace).toEqual(['revalidate', 'forward', 'revalidate', 'forward', 'revalidate', 'forward']);
+    expect(gate.stats()).toMatchObject({ calls: 3, generations: Array.from({ length: 3 }, () => ({ role: 'step', finish_reason: 'end_turn', usage: null })) });
+    expect(gate.stats().invocation_digests).toEqual(['messages', 'messages', 'count_tokens'].map(operation => canonicalSha256({ engine: 'external_research', model: 'claude-fixture', body_sha256, operation })));
+  });
+
+  it('latches external access loss across concurrent calls even if access later returns', async () => {
+    let revoked = true; let forwarded = 0;
+    const { gate } = harness({ desk_revalidate: async () => {
+      if (revoked) throw new AuthorityOperationError('unauthorized', 'revoked'); return { checked_at: 'now' };
+    } });
+    const send = () => gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages', timeout: () => 20_000 }, async () => { forwarded++; return { value: true }; });
+    const results = await Promise.allSettled([send(), send()]);
+    expect(results.every(result => result.status === 'rejected')).toBe(true);
+    revoked = false;
+    await expect(send()).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(forwarded).toBe(0); expect(gate.stats().calls).toBe(0);
+  });
+
+  it('keeps the writer call reserve under concurrent external admissions', async () => {
+    const { gate } = harness({ max_model_calls: 3, replies: [{ answer: true }] });
+    let forwarded = 0;
+    const send = () => gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages', timeout: () => 20_000 }, async () => { forwarded++; return { value: true }; });
+    const results = await Promise.allSettled([send(), send()]);
+    expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
+    expect(forwarded).toBe(1);
+    await expect(gate.call(ANSWER, 'answer', {}, schema, () => 20_000)).resolves.toEqual({ answer: true });
+  });
+
+  it('does not forward an external request after cancellation during its access check', async () => {
+    const controller = new AbortController(); let forwarded = false;
+    const { gate } = harness({ signal: controller.signal, desk_revalidate: async () => { controller.abort(); return { checked_at: 'now' }; } });
+    await expect(gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages', timeout: () => 20_000 }, async () => { forwarded = true; return { value: true }; })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(forwarded).toBe(false);
+  });
+
   it("revalidates the desk once before every model call and reports the check time", async () => {
     const { gate, trace, checked } = harness({ replies: [{ a: 1 }, { b: 2 }] });
     await gate.call(STEP, "system", { q: 1 }, schema, () => 20_000);

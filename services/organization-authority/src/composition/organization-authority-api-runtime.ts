@@ -133,6 +133,8 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
    * Composed only for the staging Authority origin and only with the answer model.
    */
   readonly research_eval_v1?: true;
+  /** Staging evaluation only. Ordinary Ask and trigger dispatch keep the deployed engine. */
+  readonly research_eval_driver?: import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').AgenticResearchDriverV1;
   /** Historical record protocol projection, independent of live ingress. */
   readonly record_approver?: RecordApproverProjectorV1;
   /**
@@ -397,7 +399,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const workspace = { projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools };
     // The staging research evaluation asks a question as `/v7` does, on the same sources.
     const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
-      ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources, ...(followUps === undefined ? {} : { follow_ups: followUps }), workspace })
+      ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources, ...(dependencies.research_eval_driver === undefined ? {} : { research_driver: dependencies.research_eval_driver }), ...(followUps === undefined ? {} : { follow_ups: followUps }), workspace })
       : undefined;
     const triggerRuns: PersonTriggerRunsHttpApplicationV1 = answerOptions === undefined || runs === undefined ? unavailablePersonTriggerRunsV1(sessions) : (() => {
       // Ticket assignees match impact owners only when a live connector that reads them is configured.

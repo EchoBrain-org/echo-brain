@@ -78,6 +78,24 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
 }
 
 describe('staging research evaluation runs', () => {
+  it('injects the candidate harness only after binding the authenticated person and retains result ownership', async () => {
+    const catalogs: string[][] = [];
+    const run = vi.fn(async (session: Parameters<NonNullable<CreatePersonResearchEvalOptionsV1['research_driver']>['run']>[0]) => {
+      catalogs.push((session.initial.source_catalog as { source: string }[]).map(value => value.source));
+      expect(JSON.stringify(session.initial)).not.toContain('token-a');
+      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('request'), operation: 'messages', timeout: () => 10_000 }, async () => ({ value: true }));
+      await session.call('finish', { completed: false, parts: [{ question: 'Projects', notes: 'No data was read.', needs: [{ need: 'projects', kind: 'which_items', status: 'open', evidence: [] }] }] });
+    });
+    const h = harness({ extra: { research_driver: { run }, workspace: { projects: {} as never, grants: () => [], people: { people: () => new Map() } as never, tools: async () => [] } } });
+    const started = await h.application.start({ access_token: 'token-a', request: ask('What are my projects?') });
+    expect(await h.settled('token-a', started.run_id)).toMatchObject({ status: 'completed', ask: { response: { schema_version: 8 } } });
+    expect(catalogs[0]).toEqual(expect.arrayContaining(['projects', 'people', 'tools']));
+    expect(run).toHaveBeenCalledOnce();
+    await expect(h.read('token-b', started.run_id)).rejects.toMatchObject({ code: 'not_found' });
+    h.revoke();
+    await expect(h.read('token-a', started.run_id)).resolves.toMatchObject({ status: 'failed', error: { code: 'unauthorized' } });
+  });
+
   it('runs an Ask in the background and delivers its research result, readable again only briefly', async () => {
     const h = harness();
     const receipt = await h.application.start({ access_token: 'token-a', request: ask('Why is DVT on hold?') });

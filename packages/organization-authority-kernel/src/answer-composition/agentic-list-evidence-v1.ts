@@ -405,8 +405,6 @@ export const AGENTIC_LIST_NAMED_MAX_V1 = 25;
 export const AGENTIC_LIST_NAME_CHARS_V1 = 120;
 /** Lists the writer sees, the plan's first. */
 export const AGENTIC_LIST_WRITER_LISTS_MAX_V1 = 5;
-/** Members of one list the writer sees as rows; `members_omitted` counts the rest. */
-export const AGENTIC_LIST_WRITER_MEMBERS_MAX_V1 = 100;
 
 /** A list member as the writer sees it: its row facts only. It never carries text. */
 export interface AgenticWriterListMemberV1 {
@@ -444,7 +442,7 @@ export interface AgenticWriterListV1 {
   readonly read_at: string;
   /** Code states it: a which_items need research has not given up on cites it (ADR-0041). */
   readonly stated: boolean;
-  /** At most AGENTIC_LIST_WRITER_MEMBERS_MAX_V1 members, in list order. */
+  /** Members that fit the writer prompt, in list order. */
   readonly members: readonly AgenticWriterListMemberV1[];
   /** Members past the writer's bound; present only when some were left out. */
   readonly members_omitted?: number;
@@ -478,13 +476,13 @@ export function agenticWriterListMemberV1(entry: { readonly short: string; reado
 /**
  * A list for the writer. `members` are every member's rows in list order; the
  * checked count covers all of them, and the writer sees the first
- * `max_members` (at most AGENTIC_LIST_WRITER_MEMBERS_MAX_V1; fewer when the
- * writer's prompt has less room).
+ * `max_members` when the writer's prompt has less room. The default includes
+ * every row: an unrelated fixed row ceiling must not invent a coverage gap.
  */
-export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], stated: boolean, max_members: number = AGENTIC_LIST_WRITER_MEMBERS_MAX_V1): AgenticWriterListV1 {
+export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], stated: boolean, max_members: number = members.length): AgenticWriterListV1 {
   if (members.length !== list.members.length || members.some((member, index) => member.id !== list.members[index])) invalid("writer members must be the list's members, in order");
   if (!Number.isSafeInteger(max_members) || max_members < 0) invalid("max_members must be a whole, non-negative count");
-  const shown = members.slice(0, Math.min(max_members, AGENTIC_LIST_WRITER_MEMBERS_MAX_V1));
+  const shown = members.slice(0, max_members);
   return Object.freeze({
     id: list.id, source: list.source, filter: list.filter, filter_applied: list.filter_applied, complete: list.complete,
     count: list.members.length, checked: members.filter(member => member.checked).length, read_at: list.read_at, stated,

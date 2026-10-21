@@ -26,6 +26,16 @@ function openedDatabase() {
 }
 
 describe("agentic Ask audit", () => {
+  it('records native research calls under the call budget with their actual model identity', () => {
+    const database = openedDatabase(), store = new SqlitePersonAgenticAskAuditV1(database);
+    const native = { ...entry, rounds: 13, model_calls: 13, generations: Array.from({ length: 13 }, () => ({ role: 'step' as const, engine: 'external_research' as const, model: 'claude-sonnet-fixture', finish_reason: 'tool_use', usage: null })) };
+    store.forRequest(requestContext).append(native);
+    const row = database.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').get() as { body_json: string };
+    expect(JSON.parse(row.body_json)).toMatchObject({ rounds: 13, model_calls: 13, generations: native.generations });
+    expect(() => store.forRequest({ ...requestContext, request_id: 'over' }).append({ ...native, rounds: 25, model_calls: 25, generations: Array.from({ length: 25 }, () => native.generations[0]!) })).toThrow('audit entry is invalid');
+    expect(() => store.forRequest({ ...requestContext, request_id: 'legacy' }).append({ ...native, generations: native.generations.map(({ engine: _engine, model: _model, ...entry }) => entry) })).toThrow('audit entry is invalid');
+  });
+
   it("writes a content-free success terminal witness to the existing immutable table", () => {
     const database = openedDatabase();
     const context = { ...requestContext };

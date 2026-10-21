@@ -266,3 +266,76 @@ including Jira/Confluence and follow-ups, a per-request permission check tied to
 that desk, supported service authentication, and the shared progress/audit and
 trigger lifecycle. The local smoke results justify that work, but do not yet
 satisfy the release gate for making the SDK the staging agentic engine.
+
+## Native research integration, 2026-10-20
+
+The next candidate connects the SDK to the actual ECHO research tool state,
+request model gate, writer and release audit. It does not construct synthetic
+invocation receipts in the old bridge. The model ran locally through the SDK;
+source data in this round was synthetic. The preceding local staging reads
+remain a separate, narrower test. No live staging deployment or default-engine
+change took place.
+
+| Case | Final result | Time |
+|---|---|---:|
+| Active projects and leads | Correct Atlas/Beacon leads and asker roles | 7.4 s |
+| Yesterday across sources | Meeting decision/action, Jira update and Confluence change, client-local day | 11.6 s |
+| Open items across 105 tickets | All six open tickets, including DEMO-102, plus the meeting action and owners | 23.3 s |
+| Planner-disabled sweep | Existing sweep output says still open; SDK researcher not invoked | 2.3 s |
+
+All four final smoke checks passed. The final answers were also inspected, not
+only keyword-scored. This is one final run per case, not a latency benchmark or
+proof across all real provider data. Projects/yesterday were rerun after exact
+outbound evidence-packet admission was added. The sweep predates that change,
+which it cannot exercise because its brief disables planning. Evidence metadata
+is in [engine-integration-results.json](engine-integration-results.json); raw
+synthetic outputs and logs stay in the ignored results directory.
+
+The open-items case failed twice before the writer fix. Research had all 105
+rows and the six open tickets, but the writer saw only 100 metadata rows. It
+reported a false five-ticket gap. The first run also used `which_say` for a
+status/owner metadata selection; clearer need-kind guidance corrected that in
+the second run, which still failed at the row ceiling. Removing only the fixed
+writer row ceiling resolved the remaining gap. The writer's actual context
+budget still applies and accurately reports omitted rows. A focused regression
+first failed with 100 versus 105 rows, then passed. Answer layout, citation and
+response-size limits are unchanged.
+
+The SDK harness uses the same scoped source catalog, normalized tools, list
+continuations, known-id opens, starting evidence, completion checks and progress
+as the existing loop. Each exact outbound body has a real audit digest; every
+request is access-checked, including repeated requests and token counting.
+Only released evidence packets actually present in an admitted inference count
+as read. Streaming input/output/cache usage and actual model identity are
+recorded when supplied. An audit update accommodates native request counts
+without pretending they are old ECHO planner rounds. The normal final release
+and retained-evaluation-result checks still run.
+
+There is no additional SDK turn/cost limit or old numerical research-note cap.
+The production request call/deadline budget, writer reserve, tool bounds and
+output contracts remain. SDK-internal repair/retry classification is not inferred:
+they appear as outbound requests, while `repairs` remains ECHO's explicit repair
+counter. Compaction admission has a deterministic transport test, not a live
+long-context stress run.
+
+The service composition exposes this only as an operator-injected staging
+**evaluation** driver. The shipped bootstrap does not select it, and ordinary
+Ask/trigger dispatch keeps the existing engine. The SDK adapter/dependencies
+remain in the evaluation package. Server packaging, provider authentication,
+host concurrency/cancellation and live source canaries are the remaining
+integration/release work. OpenRouter documents native Claude Agent SDK support
+through its Anthropic Messages endpoint, which offers a candidate path for the
+existing service provider binding; it has not been exercised by this candidate
+([OpenRouter guide](https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration)).
+
+Validation of this integration candidate on 2026-10-20:
+
+- `npm run check` passed: 367 files, 5,858 passing tests, two expected failures
+  and two skipped tests. Architecture, documentation, lint, build and TypeScript
+  checks passed in that same run. The local evidence is
+  `results/integration-full-check.log`.
+- The isolated evaluation package's 32 Node tests passed, including the outbound
+  authorization fence and streaming usage parser. Focused core, audit, renderer
+  and staging-evaluation tests passed before the full run.
+- `npm run check:docs` and `git diff --check` passed after the report and aggregate
+  result artifact were added. No deployment or update-feed operation was run.

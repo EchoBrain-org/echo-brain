@@ -46,6 +46,7 @@ import type {
 import { createAgenticAskProgressRecorderV1 } from "./agentic-ask-progress-recorder-v1.js";
 import type { AgenticRendererV1, AgenticRenderOutputV1 } from "./agentic-renderer-v1.js";
 import { createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
+import type { AgenticResearchDriverV1 } from './agentic-research-driver-v1.js';
 import { createAskRendererV1 } from "./renderers/ask-renderer-v1.js";
 import {
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
@@ -57,6 +58,7 @@ import {
 // Other workspaces reach these through this entry point.
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
 export { AgenticAskDeadlineErrorV1 } from "./agentic-model-gate-v1.js";
+export type { AgenticResearchDriverV1 } from './agentic-research-driver-v1.js';
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
 export type {
   AgenticAskAnswerWithReceiptV2, AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV2, AgenticAskProgressInputV3,
@@ -87,6 +89,8 @@ export function agenticAskContextBudgetBytesV1(contextTokens: number | undefined
 }
 
 export interface CreateAgenticAskV1Options {
+  /** Operator-injected research harness; absent keeps the existing engine. */
+  readonly research_driver?: AgenticResearchDriverV1;
   readonly desk: EvidenceDeskPortV1;
   readonly model: StructuredGenerationPort;
   /** The existing provider binding; every role uses answer_model. */
@@ -364,6 +368,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       const researchStep = !researchOnly ? prompts.ask : brief.options.list === false ? prompts.search_only_task : prompts.task;
       const loop = createAgenticResearchLoopV1({
         desk, brief,
+        ...(options.research_driver === undefined ? {} : { driver: options.research_driver }),
         ...researchStep, step_span: "ask_planner",
         context: context(requestDay), scope, catalog,
         now, remaining, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),

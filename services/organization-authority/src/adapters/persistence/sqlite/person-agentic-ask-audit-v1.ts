@@ -166,6 +166,10 @@ export class SqlitePersonAgenticAskAuditV1 {
     const limits = background
       ? { rounds: 20, model_calls: 48, receipts: 512, citations: 360 }
       : { rounds: 10, model_calls: 24, receipts: 128, citations: 40 };
+    // A native harness has no ECHO planner-step counter; it reports its outbound
+    // research calls, already bounded by the shared request's call budget.
+    const external = Array.isArray(entry.generations) && entry.generations.some(value => value.engine === 'external_research');
+    const roundLimit = external ? limits.model_calls : limits.rounds;
     if (
       entry.kind !== "echo-agentic-ask-audit-v1" ||
       (entry.trigger !== undefined && !AGENTIC_TRIGGER_NAMES_V1.includes(entry.trigger)) ||
@@ -176,13 +180,15 @@ export class SqlitePersonAgenticAskAuditV1 {
       !entry.receipt_digests.every((digest) => /^sha256:[a-f0-9]{64}$/.test(digest)) ||
       ![entry.rounds, entry.model_calls, entry.repairs, entry.fallbacks, entry.citation_count]
         .every((value) => Number.isSafeInteger(value) && value >= 0) ||
-      entry.rounds > limits.rounds || entry.model_calls > limits.model_calls || entry.repairs > limits.model_calls || entry.fallbacks > 16 || entry.citation_count > limits.citations ||
+      entry.rounds > roundLimit || (external && entry.rounds > entry.model_calls) || entry.model_calls > limits.model_calls || entry.repairs > limits.model_calls || entry.fallbacks > 16 || entry.citation_count > limits.citations ||
       (entry.checked_at !== null && new Date(entry.checked_at).toISOString() !== entry.checked_at) ||
       ![entry.prompt_sha256, entry.answer_sha256, entry.response_sha256]
         .every((digest) => digest === null || /^sha256:[a-f0-9]{64}$/.test(digest)) ||
       ((entry.outcome === "cancelled" || entry.outcome === "timed_out") && (entry.prompt_sha256 !== null || entry.answer_sha256 !== null || entry.response_sha256 !== null)) ||
       !Array.isArray(entry.generations) || entry.generations.length !== entry.model_calls ||
       entry.generations.some((generation) => !["step", "answer"].includes(generation.role) ||
+        (generation.engine !== undefined && generation.engine !== 'external_research') ||
+        (generation.engine === 'external_research' && (generation.role !== 'step' || typeof generation.model !== 'string' || !/^[a-zA-Z0-9_.:/-]{1,200}$/u.test(generation.model))) ||
         (generation.finish_reason !== null && (typeof generation.finish_reason !== "string" || generation.finish_reason.length > 128)) ||
         (generation.usage !== null && ![generation.usage.input_tokens, generation.usage.output_tokens, generation.usage.total_tokens]
           .every((value) => value === null || (Number.isSafeInteger(value) && value >= 0)))) ||

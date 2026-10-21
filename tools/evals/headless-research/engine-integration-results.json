@@ -1,0 +1,157 @@
+{
+  "kind": "echo-native-sdk-integration-evidence-v1",
+  "date": "2026-10-20",
+  "fixture": "synthetic-v1",
+  "live_staging_sources": false,
+  "default_engine_changed": false,
+  "cases": [
+    {
+      "case": "projects",
+      "elapsed_ms": 7439.44725,
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": true,
+        "passed": true
+      },
+      "stop": {
+        "reason": "finished",
+        "completed": true
+      },
+      "model_calls": 3,
+      "tool_reads": 1,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "audit_calls": 4,
+      "usage_available": true,
+      "source_lists": [
+        {
+          "source": "projects",
+          "rows": 2,
+          "complete": true
+        }
+      ],
+      "evidence_file": "results/engine-projects-final.json"
+    },
+    {
+      "case": "yesterday",
+      "elapsed_ms": 11577.239458,
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": true,
+        "passed": true
+      },
+      "stop": {
+        "reason": "finished",
+        "completed": true
+      },
+      "model_calls": 5,
+      "tool_reads": 7,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "audit_calls": 6,
+      "usage_available": true,
+      "source_lists": [
+        {
+          "source": "meetings",
+          "rows": 2,
+          "complete": true
+        },
+        {
+          "source": "tickets",
+          "rows": 1,
+          "complete": true
+        },
+        {
+          "source": "pages",
+          "rows": 1,
+          "complete": true
+        }
+      ],
+      "evidence_file": "results/engine-yesterday-final.json"
+    },
+    {
+      "case": "open_items",
+      "elapsed_ms": 23296.681416,
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": true,
+        "passed": true
+      },
+      "stop": {
+        "reason": "finished",
+        "completed": true
+      },
+      "model_calls": 7,
+      "tool_reads": 7,
+      "models": [
+        "claude-sonnet-5-5"
+      ],
+      "audit_calls": 8,
+      "usage_available": true,
+      "source_lists": [
+        {
+          "source": "meetings",
+          "rows": 1,
+          "complete": true
+        },
+        {
+          "source": "tickets",
+          "rows": 105,
+          "complete": true
+        }
+      ],
+      "evidence_file": "results/engine-open_items-final.json"
+    },
+    {
+      "case": "sweep",
+      "elapsed_ms": 2285.762125,
+      "checks": {
+        "research_completed": true,
+        "expected_facts_present": true,
+        "missing": [],
+        "output_contract_accepted": true,
+        "answer_complete": true,
+        "passed": true
+      },
+      "stop": {
+        "reason": "finished",
+        "completed": true
+      },
+      "model_calls": 0,
+      "tool_reads": 0,
+      "models": [],
+      "audit_calls": 1,
+      "usage_available": true,
+      "source_lists": [],
+      "evidence_file": "results/engine-sweep.json"
+    }
+  ],
+  "earlier_failures": [
+    {
+      "file": "results/engine-open_items.json",
+      "cause": "Metadata enumeration classified as which_say; writer also omitted rows beyond 100."
+    },
+    {
+      "file": "results/engine-open_items2.json",
+      "cause": "Correct which_items classification, but writer still omitted five rows beyond 100."
+    }
+  ],
+  "fix": "Writer metadata includes all available members that fit the prompt budget; no separate 100-row ceiling.",
+  "limitations": [
+    "No live Jira/Confluence end-to-end staging test in this candidate.",
+    "No server SDK package or service-authentication binding yet.",
+    "No actual compaction or provider retry stress test; network-gate coverage tested with synthetic requests.",
+    "Existing provider page/body limits, request budget and final answer bounds remain."
+  ]
+}

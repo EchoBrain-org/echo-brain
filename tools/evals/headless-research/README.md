@@ -1,8 +1,9 @@
 # Headless research experiment
 
-An isolated feasibility trial of Claude Agent SDK in the research-loop position.
-No production module imports this directory. Authority, staging, triggers, client
-feeds and output renderers are unchanged. The original and limit-comparison
+Claude Agent SDK feasibility and integration trials in the research-loop position.
+No production module imports this directory. The native-harness candidate adds an
+operator-injected staging-evaluation port to the core and removes the writer's
+fixed 100-row input cutoff; deployed engines and client feeds are unchanged. The original and limit-comparison
 runners use invented fixtures and have no live endpoint argument. A separate
 [local staging comparison](#local-staging-comparison) uses the existing Person
 client's authenticated reads; it cannot select a server engine.
@@ -208,3 +209,63 @@ The routing follows Anthropic's [gateway connection documentation](https://code.
 and [gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol).
 Only this local experiment uses the developer's existing client sign-in. A
 deployed Agent SDK engine needs its own supported service authentication.
+
+## Native research integration candidate
+
+`engine-driver.mjs` implements the real `AgenticResearchDriverV1` port. It no
+longer constructs an evidence bundle in the synthetic bridge. ECHO's existing
+research code owns search/open/list, source capabilities, pagination, links,
+short ids, receipts, completion validation and progress. The SDK owns the
+investigation. Ask and trigger renderers consume the normal evidence bundle;
+planner-disabled sweeps never start the SDK.
+
+The staging evaluation composition accepts `research_eval_driver` from its
+operator dependencies, never from a Person HTTP request. It is still gated by
+the existing staging origin and evaluation opt-in. The normal Ask routes,
+trigger dispatch, deployed bootstrap, image dependencies and default engine
+are unchanged. **This candidate is not yet a deployed SDK service:** the adapter
+remains in the isolated evaluation package. Packaging and supported service
+provider authentication must be reviewed before installing it on staging.
+The developer's Claude sign-in is only for these local trials.
+
+```sh
+npm run build:workspaces
+node tools/evals/headless-research/engine-trial.mjs projects
+node tools/evals/headless-research/engine-trial.mjs yesterday
+node tools/evals/headless-research/engine-trial.mjs open_items
+node tools/evals/headless-research/engine-trial.mjs sweep
+```
+
+These commands use the live SDK/model with **synthetic sources**, through the
+actual request lifecycle, writer and release audit. They do not contact staging
+Jira/Confluence. Use a fresh third argument for repeat evidence files. Earlier
+`run.mjs` and limit comparisons retain their historical synthetic bridge.
+
+Every outbound SDK Messages or count-token request passes through the shared
+request gate with the digest of its exact body and its actual model name.
+Retries and compaction requests get independent admissions. The transport
+identifies exact released initial/tool packets present in the outbound body;
+only packets carried by an admitted inference mark items read. A token count
+or a compaction request omitting a new tool packet cannot mark it read.
+The gate records call counts, invocation digests, per-request usage when supplied,
+and finish metadata. The loopback proxy requests identity encoding to read SSE
+usage metadata without retaining generated text; missing usage stays unknown.
+Full revalidation and the normal audit still precede release.
+
+There is no additional SDK turn/cost ceiling, old planner-round limit or old
+numerical research-note limit. The shared request deadline/call budget and writer
+reserve still apply (live 90 seconds/24 calls; background 300 seconds/48 calls,
+with two calls reserved for writing). Existing source page/body bounds, completion
+rules and final answer contracts remain. Lists may span arbitrarily many source
+pages within that request budget. Writer rows now use the actual prompt budget
+rather than a separate 100-row ceiling; genuinely omitted rows remain explicit.
+
+The SDK adapter is invocation-local, uses only the four ECHO MCP tools, and
+inherits the isolated client's no-builtins/no-plugins/no-persistent-session setup.
+Provider retry responses pass through; access failures cancel the SDK and remain
+terminal. Local tests cover native evidence admission, source/scope parity,
+unknown ids, metadata-only reads, pagination, source filter refusal, negative
+results, no-planner/search-only triggers, cancellation, concurrent gate admission,
+revocation and the persisted audit format. Real provider retry/compaction loads,
+host lifecycle/concurrency and supported server authentication still need staged
+qualification; a mocked compaction request is not a live compaction stress test.

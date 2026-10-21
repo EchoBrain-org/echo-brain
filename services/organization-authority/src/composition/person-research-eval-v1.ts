@@ -5,6 +5,7 @@ import {
   createAgenticAskV5,
   createAgenticResearchV1,
   type AgenticResearchResultV1,
+  type AgenticResearchDriverV1,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
@@ -28,6 +29,8 @@ export const PERSON_RESEARCH_EVAL_REREAD_MS_V1 = 60_000;
 const PURGE_INTERVAL_MS = 60_000;
 
 export interface CreatePersonResearchEvalOptionsV1 extends CreatePersonLiveAnswerRouteOptionsV1 {
+  /** Local/operator composition only: never selected from a Person request. */
+  readonly research_driver?: AgenticResearchDriverV1;
   /** The desk's records, plus where an approved record's run reads. */
   readonly records: CreatePersonLiveAnswerRouteOptionsV1['records'] & PersonRecordProjectsV1;
   /** Wall clock for result expiry; tests pin it. */
@@ -139,6 +142,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
           const asker = askerOf(options, authorization);
           // Runs exactly as served.
           const loopOptions = { desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+            ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }),
             ...(asker === undefined ? {} : { asker }),
           };
           const loop = createAgenticResearchV1(loopOptions);

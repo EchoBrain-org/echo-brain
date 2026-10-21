@@ -26,7 +26,6 @@ import { compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-respon
 import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_WRITER_LISTS_MAX_V1,
-  AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
   agenticListCheckedNoteV1,
   agenticListFilterNoticeV1,
   agenticListUncheckedNoticeV1,
@@ -208,7 +207,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       };
       const contextBudget = Math.max(0, input.prompt_budget(options.answer_prompt) - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
       // Lists' rows take at most half the room; a smaller window shows fewer members of each, never fewer lists.
-      let memberCap = AGENTIC_LIST_WRITER_MEMBERS_MAX_V1;
+      let memberCap = Math.max(0, ...writerOrder.map(list => list.members.length));
       let writerLists: readonly AgenticWriterListV1[] = writerListsWith(memberCap);
       while (memberCap > 0 && bytes(JSON.stringify(writerLists)) > contextBudget / 2) { memberCap = Math.floor(memberCap / 2); writerLists = writerListsWith(memberCap); }
       const writerBudget = Math.max(0, contextBudget - bytes(JSON.stringify(writerLists)));

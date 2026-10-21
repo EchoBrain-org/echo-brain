@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
 import { request as upstreamRequest } from 'node:https';
 import { randomBytes } from 'node:crypto';
+import { messageUsageObserver } from './message-usage.mjs';
 
 /** A local experiment transport. Never log/persist headers, credentials, request bodies or the private route. */
-export async function startModelFence({ check, signal, onEvent = () => {}, forward = forwardAnthropic }) {
+export async function startModelFence({ check, signal, onEvent = () => {}, forward = forwardAnthropic, around }) {
   const prefix = `/${randomBytes(24).toString('hex')}`, pending = new Set();
   let terminal, closed = false, requests = 0, forwarded = 0, denied = 0;
   const server = createServer(async (req, res) => {
@@ -24,8 +25,13 @@ export async function startModelFence({ check, signal, onEvent = () => {}, forwa
       const body = Buffer.concat(chunks);
       await check();
       if (terminal || closed || signal?.aborted || abort.signal.aborted) throw new Error('model_access_stopped');
-      forwarded++; onEvent({ event: 'model_request_authorized', request: requests, operation: path.endsWith('count_tokens') ? 'count_tokens' : 'messages' });
-      await forward({ req, res, path: `${path}${url.search}`, body, signal: abort.signal });
+      const send = async (checkedSignal = abort.signal) => {
+        const active = AbortSignal.any([abort.signal, checkedSignal]);
+        active.throwIfAborted();
+        forwarded++; onEvent({ event: 'model_request_authorized', request: requests, operation: path.endsWith('count_tokens') ? 'count_tokens' : 'messages' });
+        return forward({ req, res, path: `${path}${url.search}`, body, signal: active });
+      };
+      if (around) await around({ body, path, forward: send }); else await send();
     } catch {
       terminal = new Error('model_access_stopped'); denied++;
       onEvent({ event: 'model_request_stopped', request: requests });
@@ -47,11 +53,13 @@ export async function startModelFence({ check, signal, onEvent = () => {}, forwa
 /** Fixed HTTPS upstream; credentials stay in transport memory and are never returned to an agent. No redirects. */
 function forwardAnthropic({ req, res, path, body, signal }) {
   return new Promise((resolve, reject) => {
-    const headers = { ...req.headers, host: 'api.anthropic.com', 'content-length': String(body.length) };
+    const headers = { ...req.headers, host: 'api.anthropic.com', 'content-length': String(body.length), 'accept-encoding': 'identity' };
     for (const name of ['connection', 'transfer-encoding', 'proxy-authorization', 'proxy-connection']) delete headers[name];
     const upstream = upstreamRequest({ hostname: 'api.anthropic.com', port: 443, method: 'POST', path, headers, signal }, reply => {
+      const usage = messageUsageObserver();
+      reply.on('data', chunk => usage.write(chunk));
       res.writeHead(reply.statusCode, reply.headers); reply.pipe(res);
-      reply.on('end', resolve); reply.on('error', reject);
+      reply.on('end', () => resolve(usage.end())); reply.on('error', reject);
     });
     upstream.on('error', reject); upstream.end(body);
   });

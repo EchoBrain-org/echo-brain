@@ -2,7 +2,7 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import {
-  AGENTIC_LIST_FILTER_FIELDS_V1, AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_STATEMENT_BYTES_V1, AGENTIC_LIST_WRITER_MEMBERS_MAX_V1,
+  AGENTIC_LIST_FILTER_FIELDS_V1, AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_STATEMENT_BYTES_V1,
   agenticCalendarDayV1, agenticListCheckedNoteV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
   agenticListMembersNounV1, agenticListMembershipV1, agenticListNameSharesV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListStatementV1,
   agenticNeedReadsListV1, agenticOpenReadsV1, agenticPlanListsV1, agenticWriterListMemberV1, agenticWriterListV1, createAgenticListEvidenceV1, parseAgenticListIdV1,
@@ -242,7 +242,16 @@ describe("the writer's view", () => {
     expect(agenticWriterListMemberV1({ short: "E2", item: unowned }, false)).toMatchObject({ owner: "none recorded", due: "2026-09-12" });
   });
 
-  it("bounds a long list's members and counts the rest, with checks counted over all members, and shows fewer when the prompt has less room", () => {
+  it('keeps all 105 rows available to the writer before applying its actual prompt budget', () => {
+    const ids = Array.from({ length: 105 }, (_, index) => `E${index + 1}`);
+    const list = createAgenticListEvidenceV1({ ...OCTOBER_4, members: ids, shown: 105 });
+    const rows = ids.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, false));
+    const view = agenticWriterListV1(list, rows, true);
+    expect(view.members).toHaveLength(105);
+    expect(view).not.toHaveProperty('members_omitted');
+  });
+
+  it("preserves a long list and counts all checked members, reducing rows only for an explicit prompt bound", () => {
     const short = createAgenticListEvidenceV1(OCTOBER_4);
     const eight = short.members.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, false));
     expect(agenticWriterListV1(short, eight, true, 3)).toMatchObject({ count: 8, members: eight.slice(0, 3), members_omitted: 5 });
@@ -253,8 +262,9 @@ describe("the writer's view", () => {
     const list = createAgenticListEvidenceV1({ ...OCTOBER_4, members: ids, shown: 120 });
     const rows = ids.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, index === 0 || index === 110));
     const view = agenticWriterListV1(list, rows, true);
-    expect(view).toMatchObject({ id: "L1", source: "pages", complete: true, count: 120, checked: 2, stated: true, members_omitted: 20, read_at: OCTOBER_4.read_at });
-    expect(view.members).toHaveLength(AGENTIC_LIST_WRITER_MEMBERS_MAX_V1);
+    expect(view).toMatchObject({ id: "L1", source: "pages", complete: true, count: 120, checked: 2, stated: true, read_at: OCTOBER_4.read_at });
+    expect(view.members).toHaveLength(120);
+    expect(view).not.toHaveProperty("members_omitted");
     expect(() => agenticWriterListV1(list, [...rows].reverse(), true)).toThrow(/the list's members, in order/u);
   });
 
