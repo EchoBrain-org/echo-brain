@@ -25,7 +25,7 @@ function transient(error: unknown): boolean {
 /**
  * One process-wide gate for the Authority's model calls, which share one
  * OpenRouter credential. Interactive calls (Ask) are served first and may use
- * every slot; background calls (extraction, notes, search, trigger research)
+ * every slot; background calls (extraction, notes, trigger research)
  * use at most four. It never retries: a 429, a 5xx, a temporary failure or a
  * timeout only pauses background admission, once per episode, 5 s doubling to
  * 60 s until a call succeeds. Callers wrap the call itself, so time spent

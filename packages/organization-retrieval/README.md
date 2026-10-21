@@ -8,8 +8,7 @@ validation error shared by the analyzer and persistence layers.
 ## Readable-search capacity budget
 
 The current capacity contract admits at most 1,024 atoms, 32 permission
-segments, 4,096 UTF-8 bytes per atom, 17,408 lexical postings, and 4,096
-segment-local related-atom pairs. Admission is
+segments, 4,096 UTF-8 bytes per atom, and 17,408 lexical postings. Admission is
 checked before a staging directory is created. The exact budget and the
 one-entry reader behavior are inputs to both the Authority retrieval contract
 and builder artifact identity.

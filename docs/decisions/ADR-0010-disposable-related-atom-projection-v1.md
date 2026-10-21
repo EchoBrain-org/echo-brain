@@ -9,9 +9,10 @@ component_ids:
 created_at: 2026-09-01
 reviewed_at: 2026-09-01
 reviewed_ref: f7018e16232aa11d24f9ecc880943b0bbb8c6ea2
-status: accepted
+status: superseded
 supersedes: []
-superseded_by: []
+superseded_by:
+  - ADR-0044
 updates:
   - ADR-0007
 ---
@@ -111,3 +112,12 @@ model/profile and projection-release identity must participate in the fresh
 generation contract so a configuration change cannot silently reuse an older
 relation graph. Acceptance is not deployment, qualification, or a claim that
 the projected links are complete or semantically correct.
+
+## Lifecycle update
+
+Superseded on 2026-10-20 by
+[ADR-0044](ADR-0044-search-rebuilds-make-no-model-call.md). After V1 Ask was
+retired (ADR-0022, 2026-09-28), desk open was the only reader, and it kept
+only the anchor's own record, so no projected link reached Ask or a person
+while rebuilds still called the model. The projector, its model call and the
+stored pairs are removed; search rebuilds make no model call.

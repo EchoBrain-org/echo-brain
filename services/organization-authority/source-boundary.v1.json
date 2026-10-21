@@ -357,7 +357,8 @@
       "services/organization-authority/src/clean-person-main.ts",
       "services/organization-authority/src/clean-granola-source-main.ts",
       "services/organization-authority/src/application/person-updates.ts",
-      "services/organization-authority/src/adapters/persistence/sqlite/person-update-inbox-v1.ts"
+      "services/organization-authority/src/adapters/persistence/sqlite/person-update-inbox-v1.ts",
+      "services/organization-authority/src/composition/related-atom-projector-v1.ts"
     ]
   },
   "layer_rules": [

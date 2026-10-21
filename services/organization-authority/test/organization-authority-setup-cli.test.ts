@@ -36,7 +36,6 @@ import { issueSetupOwnerInvitation } from "../src/composition/organization-autho
 import { initializePersonSessionCredentials } from "../src/composition/person-onboarding-service.js";
 import {bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
 import {
   readStagingSyntheticCheckpointV1,
@@ -189,7 +188,6 @@ function canaryFreeDeps(): OrganizationAuthoritySetupCliDependencies {
 interface DurableCanaryFixtureOptions {
   readonly pointer_current?: boolean;
   readonly pointer_current_contract?: boolean;
-  readonly pointer_uses_disabled_projector_contract?: boolean;
   readonly layer1_result_count?: number | null;
   readonly layer2_result_count?: number | null;
   readonly layer1_owner_tuple?: "owner" | "other";
@@ -207,19 +205,8 @@ function buildInputForCanary(
   state: string,
   manifest: ReturnType<typeof readOrganizationAuthoritySetupManifest>,
   recordHead: Readonly<{ position: number; record_sha256: Sha256Digest }>,
-  projectorEnabled: boolean,
 ) {
-  const contract = readableSearchGenerationContractV1(
-    projectorEnabled
-      ? {
-          related_atom_projector: {
-            generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-            model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-            timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-          },
-        }
-      : {},
-  );
+  const contract = readableSearchGenerationContractV1();
   const plane = (
     role: string,
     schemaSha256: Sha256Digest,
@@ -440,12 +427,7 @@ function installDurableCanaryFixture(
     semantic_sha256: sha256Digest("founder-canary-semantic"),
   }]);
   const built = buildReadableSearchGenerationV1(
-    buildInputForCanary(
-      state,
-      manifest,
-      head,
-      !options.pointer_uses_disabled_projector_contract,
-    ),
+    buildInputForCanary(state, manifest, head),
   );
   const authority = new Database(join(state, "authority.sqlite"));
   try {
@@ -621,7 +603,7 @@ function installSyntheticFixtureApprovalEvidence(
     })),
   );
   const built = buildReadableSearchGenerationV1(
-    buildInputForCanary(state, manifest, head, true),
+    buildInputForCanary(state, manifest, head),
   );
   const authority = new Database(join(state, "authority.sqlite"));
   try {
@@ -1194,22 +1176,13 @@ describe("Organization Authority setup coordinator", () => {
   it.each([
     ["complete", {}, true, true, true, true, true],
     [
-      "expects the active projector contract without the owner's synthetic source",
+      "keeps a current generation without the owner's synthetic source",
       { synthetic_canary: "none" },
       false,
       true,
       true,
       true,
       true,
-    ],
-    [
-      "rejects a disabled projector contract",
-      { pointer_uses_disabled_projector_contract: true },
-      true,
-      true,
-      false,
-      false,
-      false,
     ],
     ["requires a synthetic proposal rather than another meeting tool's", { synthetic_canary: "granola" }, false, true, true, true, true],
     ["rejects a stale record-head pointer", { pointer_current: false }, true, true, false, false, false,],

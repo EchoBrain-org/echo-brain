@@ -67,7 +67,6 @@ export const READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
   maximum_segments: 32,
   maximum_atom_text_utf8_bytes: 4_096,
   maximum_postings: 17_408,
-  maximum_related_atom_pairs: 4_096,
 });
 
 export const READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
@@ -130,11 +129,6 @@ export interface ReadableSearchAtomV1 {
   /** Immutable placement facts; never returned to a reader. */
   readonly association_project_ids?: readonly string[];
 }
-/** One canonical, undirected link proposed by the disposable Layer 2 projector. */
-export interface ReadableSearchRelatedAtomPairV1 {
-  readonly left_atom_id: Sha256Digest;
-  readonly right_atom_id: Sha256Digest;
-}
 export interface ReadableSearchAnalyzerV1 {
   readonly analyzer_contract_sha256: Sha256Digest;
   readonly analyzer_source_sha256: Sha256Digest;
@@ -157,8 +151,6 @@ export interface BuildReadableSearchGenerationV1Input {
   readonly builder_artifact_sha256: Sha256Digest;
   readonly sqlite_version: string;
   readonly atoms: readonly ReadableSearchAtomV1[];
-  /** Must be canonical and policy-segment local; omitted means no expansion. */
-  readonly related_atom_pairs?: readonly ReadableSearchRelatedAtomPairV1[];
 }
 export interface ReadableSearchSegmentManifestV1 {
   readonly schema_version: 1;
@@ -174,7 +166,6 @@ export interface ReadableSearchSegmentManifestV1 {
   readonly content_root: Sha256Digest;
   readonly lexical_root: Sha256Digest;
   readonly fact_count: number;
-  readonly related_atom_pair_count: number;
   readonly content_count: number;
   readonly document_count: number;
   readonly posting_count: number;
@@ -461,16 +452,6 @@ function atomSegmentId(
     projectAudience(atom),
   ).segment_id;
 }
-/** Canonical related-pair order: left atom, then right atom, in byte order. */
-function compareRelatedPairs(
-  left: ReadableSearchRelatedAtomPairV1,
-  right: ReadableSearchRelatedAtomPairV1,
-): number {
-  return (
-    Buffer.compare(Buffer.from(left.left_atom_id), Buffer.from(right.left_atom_id)) ||
-    Buffer.compare(Buffer.from(left.right_atom_id), Buffer.from(right.right_atom_id))
-  );
-}
 function contentBinding(atom: ReadableSearchAtomV1): Sha256Digest {
   return canonicalSha256({
     schema_version: 1,
@@ -603,7 +584,7 @@ function generationRoots(
   return {
     facts_root: canonicalSha256({
       schema_version: 1,
-      kind: "clean-readable-search-generation-facts-root-v2",
+      kind: "clean-readable-search-generation-facts-root-v1",
       segments,
     }),
     content_root: canonicalSha256({
@@ -618,40 +599,6 @@ function generationRoots(
     }),
   };
 }
-function relatedPairsBySegment(
-  input: BuildReadableSearchGenerationV1Input,
-): ReadonlyMap<Sha256Digest, readonly ReadableSearchRelatedAtomPairV1[]> {
-  const pairs = input.related_atom_pairs ?? [];
-  if (pairs.length > READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_related_atom_pairs)
-    throw new Error("readable-search generation exceeds maximum_related_atom_pairs");
-  const atomById = new Map(input.atoms.map((atom) => [atom.atom_id, atom]));
-  const result = new Map<Sha256Digest, ReadableSearchRelatedAtomPairV1[]>();
-  const seen = new Set<string>();
-  for (const pair of pairs) {
-    validDigest(pair.left_atom_id, "related left_atom_id");
-    validDigest(pair.right_atom_id, "related right_atom_id");
-    if (pair.left_atom_id >= pair.right_atom_id)
-      throw new Error("related atom pair must be canonical, non-self, and non-reversed");
-    const left = atomById.get(pair.left_atom_id);
-    const right = atomById.get(pair.right_atom_id);
-    if (left === undefined || right === undefined)
-      throw new Error("related atom pair has a dangling atom");
-    if (left.record_sha256 === right.record_sha256)
-      throw new Error("related atom pair must cross source records");
-    const leftSegment = atomSegmentId(input.lineage, left);
-    const rightSegment = atomSegmentId(input.lineage, right);
-    if (leftSegment !== rightSegment)
-      throw new Error("related atom pair crosses policy segments");
-    const identity = `${pair.left_atom_id}:${pair.right_atom_id}`;
-    if (seen.has(identity)) throw new Error("duplicate related atom pair");
-    seen.add(identity);
-    const segmentPairs = result.get(leftSegment);
-    if (segmentPairs === undefined) result.set(leftSegment, [pair]);
-    else segmentPairs.push(pair);
-  }
-  for (const segmentPairs of result.values()) segmentPairs.sort(compareRelatedPairs);
-  return result;
-}
 function buildSegment(
   staging: string,
   lineage: ReadableSearchLineageV1,
@@ -662,7 +609,6 @@ function buildSegment(
   reviewer_membership_id: string | null,
   audience_project_ids: readonly string[],
   atoms: readonly ReadableSearchAtomV1[],
-  relatedAtomPairs: readonly ReadableSearchRelatedAtomPairV1[],
 ): ReadableSearchGenerationManifestV1["segments"][number] {
   const identity = segmentIdentity(
     lineage,
@@ -705,9 +651,6 @@ function buildSegment(
     const insertFact = facts.prepare(
       `INSERT INTO retrieval_permission_fact (atom_id, authority_id, organization_id, state_lineage_id, envelope_sha256, log_position, record_hash, atom_order, signal_id_sha256, item_kind, approval_id, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, audience_project_ids_json, association_project_ids_json, authorization_audit_event_id, authorization_audit_sequence, authorization_audit_entry_sha256, provider_action_sha256, authorization_proof_sha256, content_binding_sha256, provenance_binding_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    const insertRelatedAtomPair = facts.prepare(
-      "INSERT INTO retrieval_related_atom_pair (left_atom_id, right_atom_id) VALUES (?, ?)",
-    );
     const insertContent = content.prepare(
       `INSERT INTO retrieval_content_atom (atom_id, log_position, record_hash, atom_order, item_kind, text, text_sha256, content_binding_sha256, provenance_binding_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
@@ -745,8 +688,6 @@ function buildSegment(
           content_binding_sha256,
           provenance_binding_sha256,
         );
-      for (const pair of relatedAtomPairs)
-        insertRelatedAtomPair.run(pair.left_atom_id, pair.right_atom_id);
     })();
     content.transaction(() => {
       for (const { atom, content_binding_sha256, provenance_binding_sha256 } of boundAtoms)
@@ -780,10 +721,6 @@ function buildSegment(
       facts,
       "SELECT * FROM retrieval_permission_fact ORDER BY log_position, atom_order, atom_id",
     );
-    const relatedAtomPairRows = rows(
-      facts,
-      "SELECT * FROM retrieval_related_atom_pair ORDER BY left_atom_id, right_atom_id",
-    );
     const contentRows = rows(
       content,
       "SELECT * FROM retrieval_content_atom ORDER BY log_position, atom_order, atom_id",
@@ -797,9 +734,9 @@ function buildSegment(
       "SELECT * FROM retrieval_term_posting ORDER BY CAST(term AS BLOB), atom_id",
     );
     const facts_root = root(
-      "clean-readable-search-facts-root-v2",
+      "clean-readable-search-facts-root-v1",
       identity.segment_id,
-      [{ facts: factRows, related_atom_pairs: relatedAtomPairRows }],
+      factRows,
     );
     const content_root = root(
       "clean-readable-search-content-root-v1",
@@ -833,7 +770,6 @@ function buildSegment(
       content_root,
       lexical_root,
       fact_count: factRows.length,
-      related_atom_pair_count: relatedAtomPairRows.length,
       content_count: contentRows.length,
       document_count: documents.length,
       posting_count: postings.length,
@@ -867,14 +803,12 @@ function inputRoot(
       left.atom_order - right.atom_order ||
       Buffer.compare(Buffer.from(left.atom_id), Buffer.from(right.atom_id)),
   );
-  const related_atom_pairs = [...(input.related_atom_pairs ?? [])].sort(compareRelatedPairs);
   return canonicalSha256({
     schema_version: 1,
     kind: "clean-readable-search-input-root-v1",
     lineage: input.lineage,
     exact_head: input.exact_head,
     atoms,
-    related_atom_pairs,
   });
 }
 
@@ -969,7 +903,6 @@ export function buildReadableSearchGenerationV1(
       throw new Error("duplicate readable-search engine atom identity");
     seen.add(atom.atom_id);
   }
-  const relatedAtomPairs = relatedPairsBySegment(input);
   assertWithinAdmissionBudget(input);
   const root = join(input.state_directory, RETRIEVAL_DIRECTORY);
   const generations = join(root, GENERATIONS_DIRECTORY);
@@ -1042,7 +975,7 @@ export function buildReadableSearchGenerationV1(
     const groupsOrdered = [...groups].sort(([left], [right]) =>
       Buffer.compare(Buffer.from(left), Buffer.from(right)),
     );
-    const segments = groupsOrdered.map(([segmentId, group]) =>
+    const segments = groupsOrdered.map(([, group]) =>
       buildSegment(
         staging,
         input.lineage,
@@ -1053,7 +986,6 @@ export function buildReadableSearchGenerationV1(
         group.reviewer_membership_id,
         group.audience_project_ids,
         group.atoms,
-        relatedAtomPairs.get(segmentId) ?? [],
       ),
     );
     const roots = generationRoots(segments);
@@ -1253,22 +1185,6 @@ export interface ReadReadableSearchGenerationAtomsV1Input {
   readonly record_sha256s?: readonly Sha256Digest[];
 }
 
-/** Expands direct, already-authorized related facts from at most three anchors. */
-export interface ExpandReadableSearchRelatedAtomsV1Input {
-  readonly state_directory: string;
-  readonly active_generation: ReadableSearchActiveGenerationV1;
-  readonly reader: ReadableSearchReaderV1;
-  readonly anchor_atom_ids: readonly Sha256Digest[];
-  /** Authority-authorized project scope. It narrows association only. */
-  readonly project_id?: string;
-  /** Layer 4 packet: include approved source-record siblings, balanced across anchors. */
-  readonly include_anchor_records?: true;
-  /** Defaults to 16 and bounds the entire expansion, not each anchor. */
-  readonly limit?: number;
-  /** Authority-derived record narrowing (mine); sorted, unique; never client input; narrows admitted facts only. */
-  readonly record_sha256s?: readonly Sha256Digest[];
-}
-
 interface ReadableSearchFactRow {
   readonly atom_id: Sha256Digest;
   readonly authority_id: string;
@@ -1342,18 +1258,12 @@ interface ReadableSearchTermPostingRow {
   readonly term_frequency: number;
 }
 
-interface ReadableSearchRelatedAtomPairRow {
-  readonly left_atom_id: Sha256Digest;
-  readonly right_atom_id: Sha256Digest;
-}
-
 interface ReadableSearchSegmentRows {
   readonly manifest: ReadableSearchSegmentManifestV1;
   readonly facts: readonly ReadableSearchFactRow[];
   readonly facts_by_atom: ReadonlyMap<Sha256Digest, ReadableSearchFactRow>;
   readonly content_by_atom: ReadonlyMap<Sha256Digest, ReadableSearchContentRow>;
   readonly postings: readonly ReadableSearchTermPostingRow[];
-  readonly related_atom_pairs: readonly ReadableSearchRelatedAtomPairRow[];
   /**
    * Derived once from the validated immutable postings. Scoring merges these
    * across the segments one reader may read, so no statistic ever crosses a
@@ -1480,7 +1390,6 @@ function scopedSegments(
       facts,
       facts_by_atom: new Map(facts.map((fact) => [fact.atom_id, fact])),
       postings,
-      related_atom_pairs: segment.related_atom_pairs.filter((pair) => atomIds.has(pair.left_atom_id) && atomIds.has(pair.right_atom_id)),
       ...segmentStatistics(postings, facts.length),
     };
   });
@@ -1737,7 +1646,6 @@ function assertSegmentManifest(
   validDigest(manifest.lexical_root, "segment lexical root");
   for (const [value, label] of [
     [manifest.fact_count, "fact_count"],
-    [manifest.related_atom_pair_count, "related_atom_pair_count"],
     [manifest.content_count, "content_count"],
     [manifest.document_count, "document_count"],
     [manifest.posting_count, "posting_count"],
@@ -1987,10 +1895,6 @@ function readAndValidateReadableSearchSegment(
       databases.get("facts")!,
       "SELECT * FROM retrieval_permission_fact ORDER BY log_position, atom_order, atom_id",
     ) as unknown as readonly ReadableSearchFactRow[];
-    const relatedAtomPairs = rows(
-      databases.get("facts")!,
-      "SELECT * FROM retrieval_related_atom_pair ORDER BY left_atom_id, right_atom_id",
-    ) as unknown as readonly ReadableSearchRelatedAtomPairRow[];
     const content = rows(
       databases.get("content")!,
       "SELECT * FROM retrieval_content_atom ORDER BY log_position, atom_order, atom_id",
@@ -2005,14 +1909,13 @@ function readAndValidateReadableSearchSegment(
     ) as unknown as readonly ReadableSearchTermPostingRow[];
     if (
       facts.length !== segment.fact_count ||
-      relatedAtomPairs.length !== segment.related_atom_pair_count ||
       content.length !== segment.content_count ||
       documents.length !== segment.document_count ||
       postings.length !== segment.posting_count ||
       root(
-        "clean-readable-search-facts-root-v2",
+        "clean-readable-search-facts-root-v1",
         segment.segment_id,
-        [{ facts, related_atom_pairs: relatedAtomPairs }],
+        facts,
       ) !== segment.facts_root ||
       root(
         "clean-readable-search-content-root-v1",
@@ -2072,25 +1975,12 @@ function readAndValidateReadableSearchSegment(
           "readable-search engine fact/content/lexical binding is invalid",
         );
     }
-    const factByAtom = new Map(facts.map((fact) => [fact.atom_id, fact]));
-    for (const pair of relatedAtomPairs) {
-      const left = factByAtom.get(pair.left_atom_id);
-      const right = factByAtom.get(pair.right_atom_id);
-      if (
-        pair.left_atom_id >= pair.right_atom_id ||
-        left === undefined ||
-        right === undefined ||
-        left.record_hash === right.record_hash
-      )
-        throw new Error("readable-search engine related atom pair is invalid");
-    }
     return {
       manifest: segment,
       facts,
-      facts_by_atom: factByAtom,
+      facts_by_atom: new Map(facts.map((fact) => [fact.atom_id, fact])),
       content_by_atom: contentByAtom,
       postings,
-      related_atom_pairs: relatedAtomPairs,
       ...segmentStatistics(postings, facts.length),
     };
   } finally {
@@ -2221,15 +2111,10 @@ function validateAndWarmReadableSearchGenerationV1(
     (sum, segment) => sum + segment.postings.length,
     0,
   );
-  const relatedAtomPairCount = validatedSegments.reduce(
-    (sum, segment) => sum + segment.related_atom_pairs.length,
-    0,
-  );
   if (
     seenAtoms.size > budget.maximum_atoms ||
     validatedSegments.length > budget.maximum_segments ||
     postingCount > budget.maximum_postings ||
-    relatedAtomPairCount > budget.maximum_related_atom_pairs ||
     validatedSegments.some((segment) =>
       [...segment.content_by_atom.values()].some(
         (item) =>
@@ -2269,120 +2154,6 @@ export function warmReadableSearchActiveGenerationV1(input: {
     reader: { principal_id: "warm-validator", membership_id: "warm-validator" },
     query: "warm",
     limit: 1,
-  });
-}
-
-/**
- * Expands only links held by policy segments already admitted to this reader.
- * It uses the warmed immutable handle and never opens a database on demand.
- */
-export function expandReadableSearchRelatedAtomsV1(
-  input: ExpandReadableSearchRelatedAtomsV1Input,
-): ReadableSearchResultV1 {
-  assertReader(input.reader);
-  const records = readerRecordNarrowing(input.record_sha256s);
-  if (
-    !Array.isArray(input.anchor_atom_ids) ||
-    input.anchor_atom_ids.length < 1 ||
-    input.anchor_atom_ids.length > 3
-  )
-    throw new Error("related atom expansion requires one through three anchors");
-  const anchors = new Set<Sha256Digest>();
-  for (const atomId of input.anchor_atom_ids) {
-    validDigest(atomId, "related atom expansion anchor");
-    if (anchors.has(atomId))
-      throw new Error("related atom expansion anchors must be unique");
-    anchors.add(atomId);
-  }
-  const limit = input.limit ?? 16;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16)
-    throw new Error("related atom expansion limit must be a safe integer from one through sixteen");
-  const handle = activeGenerationHandle(input.active_generation);
-  const admitted = scopedSegments(
-    handle.segments,
-    input.reader,
-    input.project_id,
-    records,
-  );
-  const segmentsByAnchor = new Map<Sha256Digest, ReadableSearchSegmentRows>();
-  for (const segment of admitted)
-    for (const fact of segment.facts)
-      if (anchors.has(fact.atom_id)) segmentsByAnchor.set(fact.atom_id, segment);
-  const expanded = new Set<Sha256Digest>();
-  const items: ReadableSearchResultItemV1[] = [];
-  type RelatedCandidate = {
-    readonly fact: ReadableSearchFactRow;
-    readonly content: ReadableSearchContentRow;
-  };
-  const groups: RelatedCandidate[][] = [];
-  // Source packets share the bound across anchors; direct-link callers keep
-  // their existing anchor-first ordering. Deduplicate at selection time so
-  // overlapping neighborhoods do not consume another anchor's share.
-  const select = (candidate: RelatedCandidate): void => {
-    if (items.length === limit || expanded.has(candidate.fact.atom_id)) return;
-    expanded.add(candidate.fact.atom_id);
-    items.push(resultItem(candidate.fact, candidate.content));
-  };
-  for (const anchor of input.anchor_atom_ids) {
-    const segment = segmentsByAnchor.get(anchor);
-    if (segment === undefined) continue;
-    const candidates: RelatedCandidate[] = [];
-    const candidateIds = new Set<Sha256Digest>();
-    if (input.include_anchor_records === true) {
-      const source = segment.facts_by_atom.get(anchor)!;
-      for (const fact of segment.facts) {
-        if (fact.record_hash === source.record_hash) candidateIds.add(fact.atom_id);
-      }
-    }
-    for (const pair of segment.related_atom_pairs) {
-      const atomId =
-        pair.left_atom_id === anchor
-          ? pair.right_atom_id
-          : pair.right_atom_id === anchor
-            ? pair.left_atom_id
-            : null;
-      if (atomId !== null) candidateIds.add(atomId);
-    }
-    for (const atomId of candidateIds) {
-      if (anchors.has(atomId)) continue;
-      const fact = segment.facts_by_atom.get(atomId);
-      const content = segment.content_by_atom.get(atomId);
-      if (fact !== undefined && content !== undefined) candidates.push({ fact, content });
-    }
-    const kindOrder = { decision: 0, action: 1, rationale: 2 };
-    candidates.sort((left, right) =>
-      (input.include_anchor_records === true
-        ? Number(left.fact.record_hash !== segment.facts_by_atom.get(anchor)!.record_hash)
-          - Number(right.fact.record_hash !== segment.facts_by_atom.get(anchor)!.record_hash)
-          || kindOrder[left.content.item_kind] - kindOrder[right.content.item_kind]
-        : 0) || compareReadableSearchCandidates(
-        { score: 1, log_position: left.fact.log_position, atom_order: left.fact.atom_order, atom_id: left.fact.atom_id },
-        { score: 1, log_position: right.fact.log_position, atom_order: right.fact.atom_order, atom_id: right.fact.atom_id },
-      ),
-    );
-    if (input.include_anchor_records === true) {
-      groups.push(candidates);
-    } else {
-      for (const candidate of candidates) {
-        select(candidate);
-        if (items.length === limit) break;
-      }
-      if (items.length === limit) break;
-    }
-  }
-  if (input.include_anchor_records === true) {
-    const longestGroup = Math.max(0, ...groups.map((group) => group.length));
-    for (let index = 0; index < longestGroup && items.length < limit; index += 1)
-      for (const group of groups) {
-        const candidate = group[index];
-        if (candidate !== undefined) select(candidate);
-        if (items.length === limit) break;
-      }
-  }
-  return Object.freeze({
-    generation_id: handle.manifest.generation_id,
-    exact_head: handle.manifest.exact_head,
-    items: Object.freeze(items),
   });
 }
 
