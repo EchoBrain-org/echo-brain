@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
-import { promisify } from 'node:util';
 import { userInfo } from 'node:os';
 
 /** Non-secret operator selection. Only the unmodified Claude binary reads its own sign-in. */
@@ -36,8 +35,10 @@ export async function claudeAccountEnvironmentV1(profile: ClaudeAccountProfileV1
     signal.throwIfAborted();
     const directory = await lstat(config);
     if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o022) !== 0 || directory.uid !== process.getuid?.()) throw new Error('unsafe profile');
-    const { stdout } = await promisify(execFile)(profile.executable_path, ['auth', 'status', '--json'], {
-      env, cwd: profile.home_directory, signal, timeout: 15_000, maxBuffer: 64 * 1024,
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(profile.executable_path, ['auth', 'status', '--json'], {
+        env, cwd: profile.home_directory, signal, timeout: 15_000, maxBuffer: 64 * 1024,
+      }, (error, output) => error === null ? resolve(output) : reject(new Error('native auth unavailable')));
     });
     const status: unknown = JSON.parse(stdout);
     if (status === null || typeof status !== 'object' || !('loggedIn' in status) || status.loggedIn !== true ||
