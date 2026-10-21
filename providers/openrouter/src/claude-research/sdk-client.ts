@@ -14,7 +14,7 @@ export interface ClaudeResearchRunV1 {
   readonly tools: readonly string[];
 }
 
-/** A reported SDK execution failure, distinct from process/configuration errors. */
+/** A started SDK session failed: an error result (provider refusals after its retry, output retries) or the child exited. */
 export class ClaudeResearchResultErrorV1 extends Error {
   constructor() { super('Claude research did not complete'); this.name = 'ClaudeResearchResultErrorV1'; }
 }
@@ -36,6 +36,10 @@ export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: 
     ANTHROPIC_DEFAULT_HAIKU_MODEL: input.model, ANTHROPIC_DEFAULT_FABLE_MODEL: input.model,
     CLAUDE_CODE_SUBAGENT_MODEL: input.model, ANTHROPIC_SMALL_FAST_MODEL: input.model,
     DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CODE_GATEWAY_HINT_HEADERS: '1',
+    // Source text and questions are not the operator's input: never read `@path` mentions from the host.
+    CLAUDE_CODE_DISABLE_FILE_MENTIONS: '1',
+    // One retry, as the native engine; every retry is another admitted call against the request budget.
+    CLAUDE_CODE_MAX_RETRIES: '1',
   };
   let session: ReturnType<typeof query> | undefined;
   let child: ChildProcessWithoutNullStreams | undefined, exited: Promise<void> | undefined;
@@ -44,7 +48,7 @@ export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: 
     session = sdkQuery({ prompt: input.prompt, options: {
       cwd, env, model: input.model, systemPrompt: input.system, abortController,
       tools: [], allowedTools: [...input.tools, 'StructuredOutput'], mcpServers: input.servers,
-      strictMcpConfig: true, settingSources: [], plugins: [], persistSession: false, permissionMode: 'dontAsk',
+      strictMcpConfig: true, settingSources: [], plugins: [], persistSession: false, permissionMode: 'dontAsk', verbatimPrompts: true,
       outputFormat: { type: 'json_schema', schema: { type: 'object', additionalProperties: false, required: ['finished'], properties: { finished: { type: 'boolean' } } } },
       // Explicit spawn environment prevents the SDK's parent environment merge from leaking host credentials/config.
       spawnClaudeCodeProcess: options => {
@@ -59,15 +63,10 @@ export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: 
     } });
     try {
       for await (const message of session) if (message.type === 'result') result = message;
-    } catch (error) {
+    } catch {
       input.signal.throwIfAborted();
-      // The pinned SDK may throw its reported error result when the child exits,
-      // instead of returning it from the iterator. Never retain that result text.
-      if ((result !== undefined && (result.subtype !== 'success' || result.is_error)) ||
-          (typeof error === 'object' && error !== null && 'errorClass' in error && error.errorClass === 'error_result')) {
-        throw new ClaudeResearchResultErrorV1();
-      }
-      throw error;
+      // A started session failed: an error result, or the child exited. Never retain its text.
+      throw new ClaudeResearchResultErrorV1();
     }
     input.signal.throwIfAborted();
     if (result?.subtype !== 'success' || result.is_error) throw new ClaudeResearchResultErrorV1();

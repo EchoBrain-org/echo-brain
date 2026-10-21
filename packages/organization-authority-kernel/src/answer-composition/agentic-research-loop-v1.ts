@@ -52,7 +52,7 @@ import {
   AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_ASK_MIN_STEP_MS_V1,
   AgenticAskPostRevalidationNoTimeErrorV1,
-  AgenticResearchCallBudgetErrorV1,
+  AgenticResearchBudgetErrorV1,
   isAbort,
   object,
   raceAbort,
@@ -104,6 +104,8 @@ const OPEN_EXTRA_ITEMS = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
 const OPEN_NEIGHBOURS = 2;
 const OPEN_BYTES = 24 * 1024;
+/** The SDK hands a tool result over 50,000 characters to the model only as a file it cannot open. */
+const DRIVEN_RESULT_CHARS = 45_000;
 /** Starting reads in flight at once: as many as one planner step's reads, so a sweep of many items never floods a source. */
 const STARTING_READS_AT_ONCE = AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
 const MAX_SEEN_ENTRIES = 300;
@@ -1505,30 +1507,49 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const packets = new Map<Sha256Digest, { readonly read: readonly Entry[]; readonly shown: readonly Entry[]; readonly observations: readonly AskResearchObservationV1[] }>();
     const seenObservations = new Set<AskResearchObservationV1>();
     const researchTime = () => remaining() - budget.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
-    // The SDK retains prior tool messages. Send only this read's entries; do not repeatedly
-    // copy the whole scratchpad or silently apply the old 300-seen-items window to a later page.
-    const view = (selected: readonly Entry[], extra: ToolResult = {}, observations: readonly AskResearchObservationV1[] = []) => {
-      const read = selected.filter(entry => entry.item.text !== undefined && (entry.opened || bytes(entry.item.text) <= PASSAGE_BYTES));
-      report?.before_check(read.filter(entry => entry.direct === true).map(entry => entry.item));
-      const payload = { ...extra,
+    // A round is one model turn: the reads it asked for are recorded together when the next turn starts.
+    let turnActions: AgenticResearchActionV1[] = [], turnStarted = 0;
+    const closeTurn = () => { if (turnActions.length > 0) recordRound(turnStarted, turnActions); turnActions = []; };
+    const addAction = (started: number, action: AgenticResearchActionV1) => {
+      if (turnActions.length === 0) turnStarted = started;
+      turnActions.push(action);
+      mostReadsInAStep = Math.max(mostReadsInAStep, turnActions.filter(value => value.tool !== 'finish').length);
+    };
+    // The SDK keeps earlier tool results: send this read's entries and the list it read, within the size the
+    // SDK hands over whole. Bodies past it become previews the model can open one by one.
+    const view = (selected: readonly Entry[], extra: ToolResult = {}, observations: readonly AskResearchObservationV1[] = [], lists?: readonly string[]) => {
+      let read = selected.filter(entry => entry.item.text !== undefined && (entry.opened || bytes(entry.item.text) <= PASSAGE_BYTES));
+      const listed = ask ? listView(new Set([...packets.values()].flatMap(value => value.shown).concat(selected))).filter(list => lists === undefined || lists.includes(list.id)) : [];
+      const build = () => ({ ...extra,
         items: selected.map(entry => ({ ...describe(entry), ...(read.includes(entry) ? { text: entry.item.text, full: true } :
           { full: false, ...(entry.item.text === undefined ? {} : { preview: queryPreview(entry.item.text, entry.query) }) }) })),
-        ...(ask ? { lists: listView(new Set([...packets.values()].flatMap(value => value.shown).concat(selected))) } : { inventories: inventoryView() }),
-      };
+        ...(ask ? { lists: listed } : { inventories: inventoryView() }),
+      });
+      let payload = build();
+      if ('result' in extra) {
+        const sent = new Set([...packets.values()].flatMap(value => value.read));
+        read.sort((left, right) => Number(sent.has(left)) - Number(sent.has(right)));
+        while (read.length > 0 && JSON.stringify(payload).length > DRIVEN_RESULT_CHARS) { read = read.slice(0, -1); payload = build(); }
+      }
+      report?.before_check(read.filter(entry => entry.direct === true).map(entry => entry.item));
       packets.set(canonicalSha256(payload), { read, shown: selected, observations });
       return payload;
     };
     const initial = view([...entries.values()], { ...goalFields(), ...context, scope, source_catalog: sourceCatalog });
+    // Research time ends the SDK session even while it waits to retry; the writer keeps its reserve.
+    const timeUp = new AbortController();
+    const timer = setTimeout(() => timeUp.abort(new AgenticResearchBudgetErrorV1('research time exhausted')), Math.max(0, researchTime()));
     try {
-      await driver.run({ initial, list_available: listAvailable, question: ask, signal: activeSignal, remaining: researchTime,
+      await driver.run({ initial, list_available: listAvailable, question: ask, signal: AbortSignal.any([activeSignal, timeUp.signal]), remaining: researchTime,
         model_request: (request, forward) => gate.external({ ...request, timeout: () => Math.min(request.timeout(), researchTime()), before_forward: () => {
+          closeTurn(); steps += 1;
           const present = (request.payload_digests ?? []).map(digest => packets.get(digest)).filter(value => value !== undefined);
           researchPromptEntries = [...new Set(present.flatMap(value => value.read))];
           researchPromptShown = [...new Set(present.flatMap(value => value.shown))];
           // Only an admitted inference carrying the actual result observes a read.
           // Same-turn tools, token counting and omitted packets cannot establish absence.
           for (const observation of present.flatMap(value => value.observations)) seenObservations.add(observation);
-        } }, signal => { steps += 1; return forward(signal); }),
+        } }, forward),
         call(tool, args) {
           const next = serial.then(async () => {
             if (terminal !== undefined) throw terminal;
@@ -1538,17 +1559,16 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
             try {
               if (tool === 'finish') {
                 const value = parseAgenticDriverFinishV1(args, ask);
-                const parsed = value;
                 // SDK needs are declared at finish; any read actually observed in
                 // this request can support them, but unseen tool results cannot.
-                const candidate = proposedPlan(parsed.parts).map(part => ({ ...part, needs: part.needs.map(need => ({ ...need, observations_before: 0 })) }));
+                const candidate = proposedPlan(value.parts).map(part => ({ ...part, needs: part.needs.map(need => ({ ...need, observations_before: 0 })) }));
                 for (const part of candidate) for (const need of part.needs) for (const id of need.evidence) {
                   if (entryOf(id) === undefined && !listsInOrder().some(list => list.id === id)) throw new AgenticAskOutputErrorV1('Cite only returned E/L ids');
                 }
                 if (value.completed) checkCompletion(candidate, seenObservations.size > 0 || [...entries.values()].some(entry => entry.full), [...seenObservations]);
-                plan = candidate; finished = true; researchIncomplete = !value.completed;
-                researchStop = value.completed ? 'finished' : 'unusable_step';
-                recordRound(started, [roundView('finish', {}, undefined)]);
+                // An honest completed=false still finished; incompleteness travels as researchIncomplete.
+                plan = candidate; finished = true; researchIncomplete = !value.completed; researchStop = 'finished';
+                addAction(started, roundView('finish', {}, undefined));
                 return { accepted: true, completed: value.completed };
               }
               if (tool !== 'search' && tool !== 'open' && tool !== 'list') throw new AgenticAskOutputErrorV1('Unknown research tool');
@@ -1556,6 +1576,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               const parsed = parseStep({ parts: [], actions: [{ tool, args }] }, { lists: ask });
               const action = parsed.actions[0]!;
               if (tool === 'open' && entryOf(action.args.id ?? '') === undefined) throw new AgenticAskOutputErrorV1('Open only a returned E id');
+              // A read adds at most one release receipt per item it returns; stop before the audit row would overflow.
+              if (receipts.length + OPEN_EXTRA_ITEMS + 1 > budget.max_receipts) throw new AgenticAskOutputErrorV1('The read budget is used up; finish with the evidence already gathered.');
               report?.reads(tool !== 'open');
               const observationsBefore = researchObservations.length;
               let raw: ToolResult;
@@ -1564,9 +1586,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               const summarized = lastResult(action, raw);
               const ids = new Set(['results', 'items', 'linked', 'opened'].flatMap(key => Array.isArray(summarized[key]) ? summarized[key] as string[] : []));
               if (tool === 'open' && action.args.id !== undefined) ids.add(action.args.id);
-              const payload = view([...entries.values()].filter(entry => ids.has(entry.short)), { result: summarized }, researchObservations.slice(observationsBefore));
-              mostReadsInAStep = Math.max(mostReadsInAStep, 1);
-              recordRound(started, [roundView(tool, action.args, summarized, raw)]);
+              const payload = view([...entries.values()].filter(entry => ids.has(entry.short)), { result: summarized }, researchObservations.slice(observationsBefore),
+                typeof summarized.list === 'string' ? [summarized.list] : []);
+              addAction(started, roundView(tool, action.args, summarized, raw));
               return payload;
             } catch (error) {
               // Ordinary argument/completion mistakes go back to the model; access and transport
@@ -1588,10 +1610,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       await serial;
       if (terminal !== undefined) throw terminal;
       if (isAbort(error, activeSignal) || !(error instanceof AgenticAskOutputErrorV1)) throw error;
-      researchStop = error instanceof AgenticAskPostRevalidationNoTimeErrorV1 || error instanceof AgenticResearchCallBudgetErrorV1 ? 'budget' : 'unusable_step';
-      if (error instanceof AgenticAskPostRevalidationNoTimeErrorV1) researchAdmission = 'post_revalidation_no_time';
-      if (researchStop !== 'budget') { fallbacks += 1; observeCoreModelCorrectionV1('research_unusable_step_stop'); }
-    }
+      // An accepted finish stands: a later SDK turn's failure does not relabel it.
+      if (!finished) {
+        researchStop = error instanceof AgenticAskPostRevalidationNoTimeErrorV1 || error instanceof AgenticResearchBudgetErrorV1 ? 'budget' : 'unusable_step';
+        if (error instanceof AgenticAskPostRevalidationNoTimeErrorV1) researchAdmission = 'post_revalidation_no_time';
+        if (researchStop !== 'budget') { fallbacks += 1; observeCoreModelCorrectionV1('research_unusable_step_stop'); }
+      }
+    } finally { clearTimeout(timer); closeTurn(); }
     if (plan.length === 0) plan = proposedPlan([{ question: partQuestion(goal.kind === 'question' ? goal.question : goal.task), needs: [], notes: '' }]);
   };
 

@@ -3,7 +3,7 @@ import type { WorkspaceSourceDescriptorV1, WorkspaceSourceIdV1 } from '@echo-bra
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import { appendAuditRowV1 } from "./audit-row-v1.js";
-import type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticAskAuditEntryV1, type AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
 import { PERSON_ASK_PROGRESS_NAMED_MAX_V1, validatePersonWorkspaceCitationV1 } from "@echo-brain/organization-api";
 
@@ -163,9 +163,8 @@ export class SqlitePersonAgenticAskAuditV1 {
   private appendBound(context: AgenticAskAuditRequestContextV1, entry: AgenticAskAuditEntryV1): Sha256Digest {
     // Research-only triggers and background-budget Ask runs (research loop evaluation v1).
     const background = entry.trigger !== undefined || entry.budget !== undefined;
-    const limits = background
-      ? { rounds: 20, model_calls: 48, receipts: 512, citations: 360 }
-      : { rounds: 10, model_calls: 24, receipts: 128, citations: 40 };
+    const budget = AGENTIC_RESEARCH_BUDGETS_V1[background ? "background" : "live"];
+    const limits = { rounds: budget.max_rounds, model_calls: budget.max_model_calls, receipts: budget.max_receipts, citations: background ? 360 : 40 };
     // A native harness has no ECHO planner-step counter; it reports its outbound
     // research calls, already bounded by the shared request's call budget.
     const external = Array.isArray(entry.generations) && entry.generations.some(value => value.engine === 'external_research');

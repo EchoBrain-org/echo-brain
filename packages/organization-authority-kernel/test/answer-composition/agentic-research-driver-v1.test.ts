@@ -27,7 +27,7 @@ function harness(run: (session: AgenticResearchDriverSessionV1) => Promise<void>
 }
 
 describe('native research harness shares the real ECHO tool state', () => {
-  it.each(['provider retries', 'request timeout'] as const)('keeps released evidence available to the writer after native %s', async failure => {
+  it.each([['provider retries', 'unusable_step', 1], ['request timeout', 'budget', 0]] as const)('keeps released evidence available to the writer after native %s', async (failure, stop, corrections) => {
     const h = harness(async session => {
       await admit(session);
       await session.call('search', { query: 'calibrate' });
@@ -47,12 +47,12 @@ describe('native research harness shares the real ECHO tool state', () => {
     const output = await observeCoreRuntimeV1('research_run', h.ask, { observer: event => {
       if (event.event !== 'started') fallbackCorrections += event.model_corrections?.research_unusable_step_stop ?? 0;
     } });
-    expect(output.research.stop.reason).toBe('unusable_step');
+    expect(output.research.stop.reason).toBe(stop);
     expect(output.research.items[0]).toMatchObject({ read_in_full: true });
     expect(output.response.citations).toHaveLength(1);
     expect(h.generate).toHaveBeenCalledTimes(1);
     expect(h.audit).toHaveLength(1);
-    expect(fallbackCorrections).toBe(1);
+    expect(fallbackCorrections).toBe(corrections);
   });
 
   it.each(['search', 'list'] as const)('does not let unseen %s results establish absence, including same-turn tool batches', async tool => {
@@ -91,6 +91,43 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect(h.audit[0]).toMatchObject({ model_calls: 3 });
     expect(JSON.stringify(progress)).toContain(evidence.label);
     expect(h.revalidate.mock.calls.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('records one round per model turn and keeps an accepted finish through a later SDK failure', async () => {
+    const h = harness(async session => {
+      await admit(session, 'turn 1');
+      await session.call('search', { query: 'calibrate' });
+      await session.call('list', { source: 'meetings' });
+      await admit(session, 'turn 2');
+      expect(await session.call('finish', finish(['E1'], false))).toMatchObject({ accepted: true, completed: false });
+      await admit(session, 'structured output');
+      throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
+    });
+    const { research } = await h.ask();
+    expect(research.rounds.map(round => round.actions.map(action => action.tool))).toEqual([['search', 'list'], ['finish']]);
+    expect(research.stop).toMatchObject({ reason: 'finished', completed: false });
+  });
+
+  it('refuses reads before the audit row would overflow, and the model can still finish', async () => {
+    const h = harness(async session => {
+      await admit(session);
+      expect(await session.call('search', { query: 'calibrate' })).not.toHaveProperty('error');
+      expect(await session.call('search', { query: 'again' })).toMatchObject({ error: expect.stringContaining('read budget') });
+      await admit(session, 'after');
+      expect(await session.call('finish', finish())).toMatchObject({ accepted: true });
+    });
+    const { research } = await createAgenticAskV5(h.options).answerWithResearch({ question: 'What was decided?', budget: { ...AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, max_receipts: 21 } });
+    expect(research.stop.reason).toBe('finished');
+  });
+
+  it('ends an SDK session still waiting when research time runs out, and the writer answers', async () => {
+    const h = harness(async session => {
+      await session.call('search', { query: 'calibrate' });
+      await new Promise((_resolve, reject) => session.signal.addEventListener('abort', () => reject(session.signal.reason), { once: true }));
+    });
+    const { research } = await createAgenticAskV5(h.options).answerWithResearch({ question: 'What was decided?', budget: { ...AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, deadline_ms: 27_300 } });
+    expect(research.stop.reason).toBe('budget');
+    expect(h.generate).toHaveBeenCalledTimes(1);
   });
 
   it('does not mark a body read before an outbound inference has passed the access gate', async () => {

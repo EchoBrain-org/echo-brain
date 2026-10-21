@@ -15,16 +15,18 @@ export interface AgenticResearchBudgetV1 {
   readonly max_model_calls: number;
   /** Time research leaves for the consumer's writer call. */
   readonly writer_reserve_ms: number;
+  /** Release receipts one request's audit row holds. */
+  readonly max_receipts: number;
 }
 
 /** Ask in the app: the Cloudflare proxy drops responses after 100 s (ADR-0022). */
 export const AGENTIC_RESEARCH_LIVE_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({
-  deadline_ms: 90_000, max_rounds: 10, max_model_calls: 24, writer_reserve_ms: 25_000,
+  deadline_ms: 90_000, max_rounds: 10, max_model_calls: 24, writer_reserve_ms: 25_000, max_receipts: 128,
 });
 
 /** Background triggers: starting values, tuned by the evaluation. */
 export const AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({
-  deadline_ms: 300_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000,
+  deadline_ms: 300_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000, max_receipts: 512,
 });
 
 /** The one place a budget profile's label becomes its limits: trigger definitions and the staging request's override both read it. */

@@ -208,9 +208,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       };
       const contextBudget = Math.max(0, input.prompt_budget(options.answer_prompt) - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
       // Lists' rows take at most half the room; a smaller window shows fewer members of each, never fewer lists.
-      let memberCap = Math.max(0, ...writerOrder.map(list => list.members.length));
-      let writerLists: readonly AgenticWriterListV1[] = writerListsWith(memberCap);
-      while (memberCap > 0 && bytes(JSON.stringify(writerLists)) > contextBudget / 2) { memberCap = Math.floor(memberCap / 2); writerLists = writerListsWith(memberCap); }
+      // The largest per-list cap that fits (binary search), so no list loses rows that would have fit.
+      const fits = (cap: number) => bytes(JSON.stringify(writerListsWith(cap))) <= contextBudget / 2;
+      let low = 0, high = Math.max(0, ...writerOrder.map(list => list.members.length));
+      while (low < high) { const mid = Math.ceil((low + high) / 2); if (fits(mid)) low = mid; else high = mid - 1; }
+      const writerLists: readonly AgenticWriterListV1[] = writerListsWith(low);
       const writerBudget = Math.max(0, contextBudget - bytes(JSON.stringify(writerLists)));
       const writerById = new Map(writerLists.map(list => [list.id, list]));
       // What the plan cites and research read in full, in the plan's order.

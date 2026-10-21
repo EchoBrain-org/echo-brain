@@ -78,8 +78,9 @@ export class AgenticAskPostRevalidationNoTimeErrorV1 extends AgenticAskGeneratio
   }
 }
 
-export class AgenticResearchCallBudgetErrorV1 extends AgenticAskGenerationFailureV1 {
-  constructor() { super('research call budget exhausted', 'fallback'); }
+/** Research used up its calls or its time; the writer answers from what was released. */
+export class AgenticResearchBudgetErrorV1 extends AgenticAskGenerationFailureV1 {
+  constructor(message = 'research call budget exhausted') { super(message, 'fallback'); }
 }
 
 export function object(value: unknown): Record<string, unknown> | null {
@@ -367,7 +368,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     const run = externalQueue.then(async () => {
       if (externalFailure !== undefined) throw externalFailure;
       assertLive();
-      if (calls + 2 >= budget.max_model_calls) throw new AgenticResearchCallBudgetErrorV1();
+      if (calls + 2 >= budget.max_model_calls) throw new AgenticResearchBudgetErrorV1();
       if (!/^[a-zA-Z0-9_.:/-]{1,200}$/u.test(request.model) || !/^sha256:[a-f0-9]{64}$/u.test(request.body_sha256)) throw new Error('Invalid external model invocation');
       try {
         const validated = await revalidateWithTransientRetryV1(() => observeAgenticLifecycleV1('revalidation', 'research_revalidation',
@@ -393,19 +394,15 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
           try {
             const result = await raceAbort(signal, forward(signal));
             if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: calls, role: 'step', value: result.value ?? null,
-              ...(result.usage === undefined ? {} : { usage: result.usage }), finish_reason: result.finish_reason === 'end_turn' || result.finish_reason === 'tool_use' ? 'stop' : result.finish_reason === 'max_tokens' ? 'length' : 'other' });
+              ...(result.usage === undefined ? {} : { usage: result.usage }), finish_reason: result.finish_reason === 'stop' || result.finish_reason === 'length' ? result.finish_reason : 'other' });
             return result;
           } catch (error) {
-            // This request's timer spends only research time. Preserve the
-            // overall Ask signal and writer reserve; caller/deadline stops win.
+            // This request's timer is the caller's research time: a budget stop, not a provider failure,
+            // so it keeps the writer's reserve without pausing other calls. Caller/deadline stops win.
             if (timeoutSignal.aborted && !activeSignal.aborted) {
-              try {
-                assertLive();
-                error = Object.assign(new AgenticAskGenerationFailureV1('research model request timed out', 'fallback'),
-                  { diagnostic: { failure_class: 'adapter_timeout', http_status: null } });
-              } catch (stopped) { error = stopped; }
+              try { assertLive(); error = new AgenticResearchBudgetErrorV1('research time exhausted'); } catch (stopped) { error = stopped; }
             }
-            if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: calls, role: 'step', error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
+            if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: calls, role: 'step', error_kind: error instanceof AgenticResearchBudgetErrorV1 ? 'adapter_timeout' : coreRuntimeDiagnosticErrorKindV1(error) });
             throw error;
           }
         });

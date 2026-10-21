@@ -25,7 +25,9 @@ export function messageUsageObserverV1(capture = false) {
       input = count(usage.input_tokens) ?? input; output = count(usage.output_tokens) ?? output;
       cached = count(usage.cache_read_input_tokens) ?? cached; created = count(usage.cache_creation_input_tokens) ?? created;
     }
-    if (event?.type === 'message_delta' && typeof event.delta?.stop_reason === 'string') finish = event.delta.stop_reason;
+    // ECHO's vocabulary: end_turn and tool_use are normal stops, max_tokens a length stop.
+    const stop = event?.type === 'message_delta' ? event.delta?.stop_reason : undefined;
+    if (typeof stop === 'string') finish = stop === 'end_turn' || stop === 'tool_use' ? 'stop' : stop === 'max_tokens' ? 'length' : stop;
   };
   const accept = (text: string) => { pending += text; let end; while ((end = pending.indexOf('\n')) !== -1) { line(pending.slice(0, end)); pending = pending.slice(end + 1); } };
   return {

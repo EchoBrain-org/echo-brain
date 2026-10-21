@@ -52,7 +52,8 @@ export function openRouterClaudeForwarderV1(credential: () => string, model: str
       upstream.on('error', transportFailed);
       upstream.end(input.body);
     });
-    observeCoreModelMetadataV1({ provider: 'openrouter', model, ...(result.usage === undefined ? {} : { usage: result.usage }), ...(result.finish_reason === undefined ? {} : { finish_reason: result.finish_reason }) });
+    observeCoreModelMetadataV1({ provider: 'openrouter', model, ...(result.finish_reason === undefined ? {} : { finish_reason: result.finish_reason }) });
+    if (result.usage !== undefined) annotateCoreRuntimeV1({ counts: { ...result.usage } });
     return result;
   });
 }

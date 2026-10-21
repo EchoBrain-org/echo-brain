@@ -33,7 +33,6 @@ export function createClaudeResearchDriverV1(options: {
     const stop = new AbortController();
     const signal = AbortSignal.any([session.signal, stop.signal]);
     let terminal: unknown;
-    let providerFailure: ClaudeModelResponseErrorV1 | ClaudeModelTransportErrorV1 | undefined;
     const packets = new Map([[JSON.stringify(session.initial), canonicalSha256(session.initial)]]);
     const fail = (error: unknown) => { terminal ??= error; stop.abort(error); };
     const fence = await startClaudeModelTransportV1({ signal, forward: options.forward,
@@ -49,10 +48,10 @@ export function createClaudeResearchDriverV1(options: {
             operation, timeout: session.remaining,
             ...(operation === 'messages' ? { diagnostic_input: { model: options.model, system_prompt: JSON.stringify(payload.system ?? []),
               user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0, timeout_ms: session.remaining() } } : {}),
-          }, async admittedSignal => { const result = await forward(admittedSignal); providerFailure = undefined; return { ...result, value: result.content ?? null }; });
+          }, async admittedSignal => { const result = await forward(admittedSignal); return { ...result, value: result.content ?? null }; });
         } catch (error) {
-          if (error instanceof ClaudeModelResponseErrorV1 || error instanceof ClaudeModelTransportErrorV1) providerFailure = error;
-          else fail(error);
+          // Provider replies already reached the SDK, which owns its one retry; anything else stops research.
+          if (!(error instanceof ClaudeModelResponseErrorV1 || error instanceof ClaudeModelTransportErrorV1)) fail(error);
           throw error;
         }
       },
@@ -81,9 +80,8 @@ export function createClaudeResearchDriverV1(options: {
       if (fence.forwarded() === 0) throw new Error('SDK did not use the research model gate');
     } catch (error) {
       if (terminal !== undefined) throw terminal;
-      if (error instanceof ClaudeResearchResultErrorV1 && providerFailure !== undefined) {
-        throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
-      }
+      // The engine failed, not access: the writer still answers from evidence already released.
+      if (error instanceof ClaudeResearchResultErrorV1 && fence.forwarded() > 0) throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
       throw error;
     }
     finally { fence.close(); }

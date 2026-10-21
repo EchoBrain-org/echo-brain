@@ -61,7 +61,8 @@ it('isolates the packaged SDK environment and removes its temporary home after c
   }) as unknown as typeof query;
   await runClaudeResearchV1({ prompt: 'synthetic', system: 'synthetic', model, base_url: 'http://127.0.0.1:1/fixture',
     signal: new AbortController().signal, servers: {}, tools: ['mcp__echo_research__search'] }, fake);
-  expect(options).toMatchObject({ tools: [], settingSources: [], plugins: [], persistSession: false, permissionMode: 'dontAsk' });
+  expect(options).toMatchObject({ tools: [], settingSources: [], plugins: [], persistSession: false, permissionMode: 'dontAsk', verbatimPrompts: true });
+  expect(options!.env).toMatchObject({ CLAUDE_CODE_DISABLE_FILE_MENTIONS: '1', CLAUDE_CODE_MAX_RETRIES: '1' });
   expect(options!.pathToClaudeCodeExecutable).toBeUndefined();
   expect(options!.maxTurns).toBeUndefined(); expect(options!.maxBudgetUsd).toBeUndefined();
   expect(existsSync(options!.cwd!)).toBe(false);
@@ -271,7 +272,7 @@ it('counts streaming usage and captures visible tool output without reasoning or
   ];
   const bytes = Buffer.from(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
   for (const byte of bytes) observer.write(Buffer.from([byte]));
-  expect(observer.end()).toEqual({ finish_reason: 'tool_use', usage: { input_tokens: 60, output_tokens: 5, total_tokens: 65, cached_input_tokens: 20, reasoning_tokens: null },
+  expect(observer.end()).toEqual({ finish_reason: 'stop', usage: { input_tokens: 60, output_tokens: 5, total_tokens: 65, cached_input_tokens: 20, reasoning_tokens: null },
     content: [{ type: 'tool_use', id: 'tool1', name: 'search', input: { query: 'synthetic é' } }] });
 });
 

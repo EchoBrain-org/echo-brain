@@ -1,7 +1,7 @@
 import { EvidenceDeskSnapshotChangedV1 } from "../../src/shared/evidence-desk-v1.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
-import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskDeadlineErrorV1, AgenticAskPostRevalidationNoTimeErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskDeadlineErrorV1, AgenticAskPostRevalidationNoTimeErrorV1, AgenticResearchBudgetErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
@@ -56,7 +56,7 @@ describe("agentic model gate", () => {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const request = { model: 'claude-fixture', body_sha256: canonicalSha256('synthetic'), operation: 'messages' as const, timeout: () => 20_000,
       diagnostic_input: { model: 'claude-fixture', system_prompt: 'synthetic system', user_prompt: 'private fixture', schema: {}, max_output_tokens: 100, timeout_ms: 20_000 } };
-    await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.external(request, async () => ({ value: [{ type: 'text', text: 'private answer' }], finish_reason: 'end_turn' })));
+    await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.external(request, async () => ({ value: [{ type: 'text', text: 'private answer' }], finish_reason: 'stop' })));
     expect(events.filter(event => event.kind === 'model_request')).toEqual([expect.objectContaining({ call_id: 1, input: request.diagnostic_input })]);
     expect(events.filter(event => event.kind === 'model_response')).toEqual([expect.objectContaining({ call_id: 1, value: [{ type: 'text', text: 'private answer' }], finish_reason: 'stop' })]);
     expect(JSON.stringify(gate.stats())).not.toMatch(/private fixture|private answer|synthetic system/);
@@ -118,7 +118,8 @@ describe("agentic model gate", () => {
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         queueMicrotask(() => timer.abort(new DOMException('local timer', 'TimeoutError')));
       })));
-      await expect(pending).rejects.toMatchObject({ recovery: 'fallback', diagnostic: { failure_class: 'adapter_timeout' } });
+      await expect(pending).rejects.toBeInstanceOf(AgenticResearchBudgetErrorV1);
+      await expect(pending).rejects.not.toHaveProperty('diagnostic');
       expect(caller.signal.aborted).toBe(false);
       expect(gate.stats()).toMatchObject({ calls: 1, stopped: false, generations: [{ role: 'step', finish_reason: null }] });
       expect(events.filter(event => event.kind === 'model_error')).toEqual([expect.objectContaining({ error_kind: 'adapter_timeout' })]);

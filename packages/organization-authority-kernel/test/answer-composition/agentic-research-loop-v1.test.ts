@@ -730,7 +730,7 @@ describe("research loop: need ids", () => {
 
 describe("research loop: step time", () => {
   /** Ask's 90 s deadline with room for 20 rounds, so only time stops research. */
-  const timed: AgenticBriefV1 = { ...brief("Find what changed.", []), budget: { deadline_ms: 90_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000 } };
+  const timed: AgenticBriefV1 = { ...brief("Find what changed.", []), budget: { deadline_ms: 90_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000, max_receipts: 512 } };
   const searching = (index: number) => reads("open", [{ tool: "search", args: { query: `term ${index}` } }]);
   const search = async (input: { readonly query?: string }) => result([record(`hit-${input.query ?? ""}`)]);
 
