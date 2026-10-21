@@ -77,13 +77,15 @@ headers. Requests, including retries, still revalidate the exact evidence packet
 before sending it; choosing a personal account grants no additional source access.
 The SDK uses `claude-sonnet-5-5` and records Anthropic as the research provider.
 
-This is a service capability, not a host sign-in or deployment command. Existing
-installed host wrappers do not yet provision a personal Claude profile. A hosted
-rollout needs a reviewed profile/sign-in provision through the
-[operator playbook](../../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md),
-followed by the normal canary and release checks. Do not copy a laptop session
-into the host or change the host environment outside that lane. The default
-release profile remains unchanged.
+For hosted staging, the reviewed [personal Claude setup](../../../deploy/organization-authority/README.md#personal-claude-staging-research)
+uses native `login`, then `enable --member` and `status` on the installed
+onboarding wrapper. Compose selects the optional non-secret binding through
+`ECHO_STAGING_CLAUDE_ACCOUNT_FILE`; its native home and executable are fixed.
+The file and the three explicit settings above cannot both select an account.
+An absent file leaves the existing provider route unchanged. Do not copy a
+laptop session into the host or change the host environment outside the
+[operator playbook](../../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
+The normal canary and release checks still follow host sign-in and enablement.
 
 Claude Agent SDK has no separate harness fee; model access uses the selected
 subscription limits or API billing, and infrastructure has its own costs.

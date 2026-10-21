@@ -10,6 +10,8 @@ services:
       ECHO_STAGING_RESEARCH_EVAL_V1: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:+true}"
       # This release selects the SDK only on the reviewed staging connector rehearsal.
       ECHO_STAGING_CLAUDE_RESEARCH_V1: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:+true}"
+      # The human host wrapper writes only a member binding; native Claude owns sign-in.
+      ECHO_STAGING_CLAUDE_ACCOUNT_FILE: /echo-clean/private/personal-claude-research.json
     ports: !override
       - name: tunnel-origin
         target: 80

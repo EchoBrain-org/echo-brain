@@ -44,6 +44,7 @@ LABEL org.echobrain.authority.build-number="${ECHO_BUILD_NUMBER}"
 LABEL org.echobrain.authority.telemetry.staging-journey-v1="true"
 LABEL org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1="true"
 LABEL org.echobrain.authority.config-capability.langsmith-persistent-v1="true"
+LABEL org.echobrain.authority.config-capability.personal-claude-v1="true"
 ENV NODE_ENV=production \
     ECHO_STAGING_JOURNEY_TELEMETRY_V1="true" \
     ECHO_SOURCE_SHA="${ECHO_SOURCE_SHA}" \
@@ -53,6 +54,11 @@ RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/node_modules ./node_modules
+# EC2 runs as UID 999 / GID 988. Native account discovery requires a passwd identity;
+# the default local node user remains available at UID 1000.
+RUN groupadd --gid 988 echo-authority \
+  && useradd --uid 999 --gid 988 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin echo-authority \
+  && node -e 'const fs = require("node:fs"); const binary = `/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-${process.arch}/claude`; fs.accessSync(binary, fs.constants.X_OK); fs.symlinkSync(binary, "/usr/local/bin/echo-claude-native");'
 
 COPY --from=build /app/packages/federation-protocol/package.json ./packages/federation-protocol/package.json
 COPY --from=build /app/packages/federation-protocol/dist ./packages/federation-protocol/dist

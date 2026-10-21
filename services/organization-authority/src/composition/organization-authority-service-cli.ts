@@ -15,6 +15,7 @@ import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/stagin
 import { readStagingConnectorRehearsalSelection } from './staging-connector-rehearsal-selection.js';
 import { openStagingConnectorRehearsalService } from './staging-connector-rehearsal-runtime.js';
 import { CLEAN_V1_RELEASE_ID } from './clean-v1-release-id.js';
+import { readPersonalClaudeSelectionV1 } from './personal-claude-selection-v1.js';
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
@@ -243,9 +244,12 @@ export async function runOrganizationAuthorityServiceCli(
     const personalMember = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_MEMBER;
     const personalHome = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_HOME;
     const personalExecutable = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_EXECUTABLE;
-    const personalClaude = [personalMember, personalHome, personalExecutable].every(value => value === undefined) ? undefined : {
+    const hostedClaude = readPersonalClaudeSelectionV1(process.env.ECHO_STAGING_CLAUDE_ACCOUNT_FILE, manifest.authority_url);
+    const explicitPersonalClaude = [personalMember, personalHome, personalExecutable].every(value => value === undefined) ? undefined : {
       membership_id: personalMember ?? '', home_directory: personalHome ?? '', executable_path: personalExecutable ?? '',
     };
+    if (hostedClaude !== undefined && explicitPersonalClaude !== undefined) throw new Error('Personal Claude research has conflicting selections');
+    const personalClaude = hostedClaude ?? explicitPersonalClaude;
     if (personalClaude !== undefined) {
       if (manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) throw new Error('Personal Claude research is available only on the staging Authority');
       assertPersonalClaudeResearchV1(personalClaude);
