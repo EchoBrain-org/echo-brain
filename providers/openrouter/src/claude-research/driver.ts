@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AgenticAskGenerationFailureV1, type AgenticResearchDriverV1, type AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { ClaudeResearchResultErrorV1, runClaudeResearchV1 } from './sdk-client.js';
+import type { ClaudeAccountProfileV1 } from './account-profile.js';
 import { ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
 
 const SYSTEM = [
@@ -28,6 +29,7 @@ export function createClaudeResearchDriverV1(options: {
   readonly model: string;
   readonly forward: ClaudeModelForwarderV1;
   readonly run?: typeof runClaudeResearchV1;
+  readonly account?: ClaudeAccountProfileV1;
 }): AgenticResearchDriverV1 {
   return { async run(session) {
     const stop = new AbortController();
@@ -74,6 +76,7 @@ export function createClaudeResearchDriverV1(options: {
     ];
     try {
       await (options.run ?? runClaudeResearchV1)({ prompt: JSON.stringify(session.initial), system: SYSTEM, model: options.model, base_url: fence.base_url,
+        ...(options.account === undefined ? {} : { account: options.account }),
         signal, servers: { echo_research: createSdkMcpServer({ name: 'echo_research', version: '1.0.0', tools }) },
         tools: tools.map(value => `mcp__echo_research__${value.name}`) });
       if (terminal) throw terminal;

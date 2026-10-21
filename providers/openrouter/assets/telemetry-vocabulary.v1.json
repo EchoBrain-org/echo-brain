@@ -1,11 +1,13 @@
 {
   "schema_version": 1,
   "providers": [
-    "openrouter"
+    "openrouter",
+    "anthropic"
   ],
   "models": [
     "anthropic/claude-sonnet-4.6",
     "anthropic/claude-sonnet-5.5",
+    "claude-sonnet-5-5",
     "deepseek/deepseek-v3.2"
   ]
 }

@@ -17,7 +17,7 @@ import {
   type OpenedOrganizationAuthorityRuntime,
 } from "./organization-authority-runtime.js";
 import { createOpenRouterDecisionProcessorBundleV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1";
-import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
+import { createOpenRouterAnswerCompositionGenerationBundleV1, type PersonalClaudeResearchV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 import {
   HttpNangoConnectionClientV1,
@@ -87,6 +87,8 @@ export interface OrganizationAuthorityServiceConfig extends Omit<
   /** Staging-origin guarded: fixture meetings the owner's synthetic personal source may queue. */
   readonly staging_synthetic_meetings_directory?: string;
   readonly openrouter_credential_file: string;
+  /** One end user's native Claude profile, for that member's interactive research only. */
+  readonly personal_claude_research?: PersonalClaudeResearchV1;
   /** Jira remains absent unless this explicit selection is supplied after release approval. */
   readonly jira_person_live?: JiraPersonLiveConfigurationV1;
   /** Explicit Confluence Cloud selection. It is absent unless an operator enables live page reads. */
@@ -174,6 +176,9 @@ export async function openOrganizationAuthorityService(
   config: OrganizationAuthorityServiceConfig,
   dependencies: OrganizationAuthorityServiceDependencies = {},
 ): Promise<OpenedOrganizationAuthorityRuntime> {
+  if (config.personal_claude_research !== undefined && config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) {
+    throw new Error('Personal Claude research is available only on the staging Authority');
+  }
   const {
     staging_synthetic_meetings_directory,
     openrouter_credential_file,
@@ -463,6 +468,7 @@ export async function openOrganizationAuthorityService(
       answer_composition_generation_bundle:
         createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
+          ...(sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && sharedConfig.personal_claude_research !== undefined ? { personal_claude_research: sharedConfig.personal_claude_research } : {}),
           ...(sharedConfig.staging_claude_research_v1 === true && sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? { research_engine: 'claude-sdk' as const } : {}),
         }),
       model_call_limiter: modelCalls,

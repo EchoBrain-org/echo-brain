@@ -24,6 +24,12 @@ export interface AnswerCompositionGenerationBindingV1 {
   readonly structured_output: StructuredGenerationPort;
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly research_driver?: AgenticResearchDriverV1;
+  /** Selected only by authenticated interactive Ask routes, never by a prompt or background job. */
+  readonly personal_research?: {
+    readonly membership_id: string;
+    readonly driver: AgenticResearchDriverV1;
+    readonly generation: AnswerCompositionGenerationProfileV1;
+  };
 }
 
 /** Defers provider access until the admitted runtime loads its generation binding. */

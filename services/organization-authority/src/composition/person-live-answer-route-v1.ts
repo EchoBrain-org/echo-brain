@@ -12,7 +12,7 @@ import { samePersonV1 } from '../application/person-release-authorization-v1.js'
 import type {
   PersonAnswerHttpInputV1, PersonAnswerV4HttpApplication, PersonAnswerV5HttpApplication, PersonAnswerV6HttpApplication, PersonAnswerV7HttpApplication,
 } from '../presentation/person-live-answer-http-application.js';
-import { askerOf, runPersonAskV1, scopeOf, type CreatePersonAnswerV3RouteOptions } from './person-answer-v3-route.js';
+import { askerOf, personResearchDriverV1, runPersonAskV1, scopeOf, type CreatePersonAnswerV3RouteOptions } from './person-answer-v3-route.js';
 import { createPersonEvidenceDeskV1 } from './person-evidence-desk-v1.js';
 import { createPersonFollowUpsEvidenceSourceV1, type PersonFollowUpsSourcesV1 } from './person-follow-ups-evidence-v1.js';
 import { createRegisteredPersonLiveEvidenceDeskV2, type RegisteredPersonLiveEvidenceSourceV2 } from './person-live-evidence-desk-v2.js';
@@ -145,7 +145,7 @@ export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAn
       const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, response_version, signal }, context);
       capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
-      const askOptions = { ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }), ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context),
+      const askOptions = { ...personResearchDriverV1(options, context.membership_id), ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, model: options.model, audit: options.audit.forRequest(context),
         ...(asker === undefined ? {} : { asker }),
       };
       // Each attempt audits what it named; only the released attempt's receipt is returned.

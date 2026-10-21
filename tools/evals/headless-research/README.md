@@ -44,6 +44,52 @@ Existing request deadlines/call budgets, writer reserve, source bounds and
 answer contracts remain. Writer rows use the actual context budget instead of
 a separate 100-row cutoff; omitted rows remain explicit.
 
+## Personal Claude account selection
+
+An optional staging selection binds **interactive Ask research for one authenticated
+ECHO membership** to that person's own native Claude Code sign-in. It does not
+replace OpenRouter: other members, background research, evaluation, extraction
+and the final answer writer keep their existing provider. The account is never
+selected by question text, a client header, or a project lead's identity.
+
+The service accepts these three non-secret settings together, only at the fixed
+staging origin:
+
+| Setting | Meaning |
+| --- | --- |
+| `ECHO_STAGING_CLAUDE_ACCOUNT_MEMBER` | Exact ECHO membership ID allowed to use the profile |
+| `ECHO_STAGING_CLAUDE_ACCOUNT_HOME` | Absolute home of that person's native Claude installation |
+| `ECHO_STAGING_CLAUDE_ACCOUNT_EXECUTABLE` | Absolute path to the unmodified Claude Code executable |
+
+The person signs into that executable through Anthropic's own `claude auth login`
+flow on the machine running it. A Mac sign-in does not sign the staging host in.
+ECHO does not import credential files or accept an OAuth token in configuration.
+Native `auth status --json` must report `claude.ai` before a run; an absent sign-in
+or a cached API-key route stops the personal request rather than changing its
+billing route. Native Claude Code owns credential refresh. Its home is preserved;
+each request still uses an empty working directory, ECHO-only tools, disabled
+settings/plugins and no persisted SDK conversation. On macOS the OS username
+and default config location preserve the existing Keychain identity.
+
+Native authenticated model requests pass through the same request-local access
+gate, then go only to `api.anthropic.com`. ECHO does not retain authentication
+headers. Requests, including retries, still revalidate the exact evidence packet
+before sending it; choosing a personal account grants no additional source access.
+The SDK uses `claude-sonnet-5-5` and records Anthropic as the research provider.
+
+This is a service capability, not a host sign-in or deployment command. Existing
+installed host wrappers do not yet provision a personal Claude profile. A hosted
+rollout needs a reviewed profile/sign-in provision through the
+[operator playbook](../../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md),
+followed by the normal canary and release checks. Do not copy a laptop session
+into the host or change the host environment outside that lane. The default
+release profile remains unchanged.
+
+Claude Agent SDK has no separate harness fee; model access uses the selected
+subscription limits or API billing, and infrastructure has its own costs.
+See Anthropic's [subscription usage guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+and [native sign-in and hosting conditions](https://code.claude.com/docs/en/legal-and-compliance).
+
 ## Offline package check
 
 From the repository root, after installing the production dependencies:

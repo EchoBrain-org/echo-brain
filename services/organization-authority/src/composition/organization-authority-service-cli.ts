@@ -1,4 +1,5 @@
 import { OPENROUTER_TELEMETRY_VOCABULARY_V1 } from "@echo-brain/provider-openrouter/openrouter-telemetry-vocabulary-v1";
+import { assertPersonalClaudeResearchV1 } from '@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { readPrivateAuthorityCredential, readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
@@ -239,6 +240,16 @@ export async function runOrganizationAuthorityServiceCli(
     const stagingClaudeResearch = process.env.ECHO_STAGING_CLAUDE_RESEARCH_V1;
     if (stagingClaudeResearch !== undefined && !['', 'false', 'true'].includes(stagingClaudeResearch)) throw new Error('Staging Claude research selection is invalid');
     if (stagingClaudeResearch === 'true' && manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) throw new Error('Claude research is available only on the staging Authority');
+    const personalMember = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_MEMBER;
+    const personalHome = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_HOME;
+    const personalExecutable = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_EXECUTABLE;
+    const personalClaude = [personalMember, personalHome, personalExecutable].every(value => value === undefined) ? undefined : {
+      membership_id: personalMember ?? '', home_directory: personalHome ?? '', executable_path: personalExecutable ?? '',
+    };
+    if (personalClaude !== undefined) {
+      if (manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) throw new Error('Personal Claude research is available only on the staging Authority');
+      assertPersonalClaudeResearchV1(personalClaude);
+    }
     const stagingResearchEval = process.env.ECHO_STAGING_RESEARCH_EVAL_V1;
     if (stagingResearchEval !== undefined && !['', 'false', 'true'].includes(stagingResearchEval)) {
       throw new Error('Staging research evaluation selection is invalid');
@@ -288,6 +299,7 @@ export async function runOrganizationAuthorityServiceCli(
       pkce_key_file: manifest.pkce_key_file,
       ...(stagingResearchEval === 'true' ? { staging_research_eval_v1: true as const } : {}),
       ...(stagingClaudeResearch === 'true' ? { staging_claude_research_v1: true as const } : {}),
+      ...(personalClaude === undefined ? {} : { personal_claude_research: personalClaude }),
       nango,
       ...(jiraCloudId === undefined ? {} : { jira_person_live: {
         enabled: true as const,
